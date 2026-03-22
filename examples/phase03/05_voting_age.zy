@@ -1,0 +1,14 @@
+// Phase 3: Voting age checker
+<< "Enter your age: " edad_input
+
+// Convert string to integer (for now, just use the value)
+edad = edad_input
+
+>> "Your age is: " edad ¶
+
+? edad >= 18 {
+    >> "You are eligible to vote!" ¶
+}
+_{
+    >> "You are not yet eligible to vote." ¶
+}

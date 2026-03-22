@@ -1,0 +1,14 @@
+// Phase 9: Function with mutable parameter (~)
+// Example: Mutable parameter allows local modification but does NOT affect caller
+
+calcular(num~, cantidad) {
+    num = num + cantidad        // ✅ OK: num is mutable locally
+    >> "Dentro: num = " num ¶   // Shows 15
+    <~ num * 2                  // Return modified value
+}
+
+x = 10
+>> "Antes: x = " x ¶
+resultado = calcular(x, 5)
+>> "Después: x = " x ¶          // x is still 10 (NOT modified)
+>> "Resultado: " resultado ¶    // 30 (returned value)

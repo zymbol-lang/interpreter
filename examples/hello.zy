@@ -1,0 +1,6 @@
+# hello
+// Basic Hello World program in Zymbol-Lang
+
+>> "Hello, World!"
+>> "Welcome to Zymbol-Lang!"
+>> "A symbolic programming language with no keywords"

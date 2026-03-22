@@ -1,0 +1,19 @@
+// Phase 7: For-each with break and continue
+// Skip even numbers, stop at 15
+
+>> "Odd numbers up to 15:" ¶
+
+@ n:1..20 {
+    ? n > 15 {
+        @!  // Break when n > 15
+    }
+
+    ? n % 2 == 0 {
+        @>  // Skip even numbers
+    }
+
+    >> n " "
+}
+
+¶
+>> "Done!" ¶

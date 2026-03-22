@@ -1,0 +1,12 @@
+// Phase 9: Function with output parameters (<~)
+// Example: Function that returns multiple values via output parameters
+
+dividir(a, b, cociente<~, resto<~) {
+    cociente = a / b
+    resto = a % b
+}
+
+c = 0
+r = 0
+dividir(17, 5, c, r)
+>> "17 / 5 = " c " remainder " r ¶

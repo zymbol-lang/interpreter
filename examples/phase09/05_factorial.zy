@@ -1,0 +1,13 @@
+// Phase 9: Recursive function
+// Example: Calculate factorial
+
+factorial(n) {
+    ? n <= 1 {
+        <~ 1
+    }
+    resultado = factorial(n - 1)
+    <~ n * resultado
+}
+
+>> "Factorial de 5 = " factorial(5) ¶
+>> "Factorial de 10 = " factorial(10) ¶

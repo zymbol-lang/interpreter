@@ -1,0 +1,26 @@
+// Phase 4: Complex arithmetic expression
+a = 5
+b = 3
+c = 2
+d = 10
+
+// Complex expression: (a + b) * c - d / 2
+// Breaking it down step by step
+step1 = a + b
+step2 = step1 * c
+step3 = d / 2
+result = step2 - step3
+
+>> "a = " a ¶
+>> "b = " b ¶
+>> "c = " c ¶
+>> "d = " d ¶
+>> "" ¶
+>> "Expression: (a + b) * c - d / 2" ¶
+>> "Result: " result ¶
+>> "" ¶
+>> "Step by step:" ¶
+>> "1. a + b = " step1 ¶
+>> "2. (a + b) * c = " step2 ¶
+>> "3. d / 2 = " step3 ¶
+>> "4. Final result = " result ¶

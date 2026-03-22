@@ -1,0 +1,35 @@
+// Example demonstrating unused value warning
+// When match returns values but is not assigned, a warning is shown
+
+>> "=== Unused Value Warning Example ===" ¶ ¶
+
+// ❌ BAD: Match returns values but result is unused (shows warning)
+score = 85
+?? score {
+    90..100 : "A"
+    80..89  : "B"
+    70..79  : "C"
+    _       : "F"
+}
+// Warning: match expression returns values but result is unused
+
+>> "After first match" ¶ ¶
+
+// ✅ GOOD: Assign the result to use it (no warning)
+grade = ?? score {
+    90..100 : "A"
+    80..89  : "B"
+    70..79  : "C"
+    _       : "F"
+}
+>> "Grade: " grade ¶ ¶
+
+// ✅ GOOD: Use execution-only form for side effects (no warning)
+?? score {
+    90..100 : { >> "Excellent work!" ¶ }
+    80..89  : { >> "Good job!" ¶ }
+    70..79  : { >> "Keep trying!" ¶ }
+    _       : { >> "Need improvement" ¶ }
+}
+
+>> "Done" ¶

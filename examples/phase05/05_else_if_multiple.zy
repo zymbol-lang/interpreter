@@ -1,0 +1,35 @@
+// Phase 5: Multiple else-if chains
+// Demonstrates multiple conditions
+
+age = 16
+
+? age >= 18 {
+    >> "You can vote!" ¶
+}
+_? age >= 16 {
+    >> "You can drive (with permit)!" ¶
+}
+_? age >= 13 {
+    >> "You are a teenager!" ¶
+}
+_{
+    >> "You are a child!" ¶
+}
+
+¶
+
+// Another example with numbers
+num = 7
+
+? num > 10 {
+    >> "Greater than 10" ¶
+}
+_? num > 5 {
+    >> "Greater than 5 but not more than 10" ¶
+}
+_? num > 0 {
+    >> "Positive but 5 or less" ¶
+}
+_{
+    >> "Zero or negative" ¶
+}

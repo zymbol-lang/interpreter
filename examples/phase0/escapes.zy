@@ -1,0 +1,5 @@
+// Test escape sequences
+
+>> "Hello\nWorld" ¶
+>> "Tab:\there" ¶
+>> "Quote: \"text\"" ¶

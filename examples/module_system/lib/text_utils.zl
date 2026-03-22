@@ -1,0 +1,41 @@
+# text_utils
+
+#> {
+    uppercase
+    lowercase
+    trim
+    concat
+    MAX_LENGTH
+}
+
+// Public constant
+MAX_LENGTH := 1000
+
+// Private constant
+DEFAULT_SEPARATOR := " "
+
+// Public functions
+uppercase(text) {
+    // Simplified - would use actual string manipulation
+    <~ text
+}
+
+lowercase(text) {
+    <~ text
+}
+
+trim(text) {
+    <~ text
+}
+
+concat(a, b) {
+    // Simplified implementation - returns first argument only
+    // Note: Comma operator not yet implemented for expressions
+    // For full concatenation, use Haskell-style in output: >> a " " b
+    <~ a
+}
+
+// Private helper function
+is_whitespace(char) {
+    <~ char == ' '
+}

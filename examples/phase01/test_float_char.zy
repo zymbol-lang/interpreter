@@ -1,0 +1,80 @@
+// Float and Char Data Types Demo
+// This example demonstrates Float and Char literals in Zymbol-Lang
+// NOTE: Arithmetic operations with Float are not yet implemented in the interpreter
+
+>> "=== FLOAT EXAMPLES ===" ¶
+¶
+
+// Simple decimal floats
+PI := 3.14159
+>> "PI: " PI ¶
+
+temperature = 25.5
+>> "Temperature: " temperature " C" ¶
+
+// Scientific notation
+speed_of_light = 3e8
+>> "Speed of light: " speed_of_light " m/s" ¶
+
+avogadro = 6.022e23
+>> "Avogadro's number: " avogadro ¶
+
+electron_mass = 9.109E-31
+>> "Electron mass: " electron_mass " kg" ¶
+
+small_value = 2.5e-3
+>> "Small value: " small_value ¶
+
+¶
+>> "=== CHAR EXAMPLES ===" ¶
+¶
+
+// Simple char literals
+letter = 'A'
+>> "Letter: " letter ¶
+
+lowercase = 'z'
+>> "Lowercase: " lowercase ¶
+
+// Unicode emoji
+smiley = '😀'
+>> "Smiley: " smiley ¶
+
+rocket = '🚀'
+>> "Rocket: " rocket ¶
+
+heart = '❤'
+>> "Heart: " heart ¶
+
+// Char with escape sequences
+newline = '\n'
+>> "Char is newline (ASCII 10)" ¶
+
+tab = '\t'
+>> "Char is tab (ASCII 9)" ¶
+
+quote = '\''
+>> "Single quote char: " quote ¶
+
+¶
+>> "=== MIXED TYPES ===" ¶
+¶
+
+// Array with mixed types
+mixed = [42, 3.14, "text", 'A', #1]
+>> "Mixed array: " mixed ¶
+
+// Float and int are different types
+int_value = 5
+float_value = 5.0
+>> "Integer: " int_value ¶
+>> "Float: " float_value ¶
+
+// Char and string are different types
+char_a = 'a'
+string_a = "a"
+>> "Char 'a': " char_a ¶
+>> "String \"a\": " string_a ¶
+
+¶
+>> "=== DONE ===" ¶

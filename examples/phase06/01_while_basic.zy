@@ -1,0 +1,10 @@
+// Phase 6: Basic while loop
+// Count from 0 to 4
+
+x = 0
+@ x < 5 {
+    >> "Count: " x ¶
+    x = x + 1
+}
+
+>> "Done!" ¶

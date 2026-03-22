@@ -1,0 +1,30 @@
+// Phase 4: Comparisons with arithmetic
+a = 10
+b = 20
+
+sum = a + b
+product = a * b
+
+>> "a = " a ¶
+>> "b = " b ¶
+>> "sum = " sum ¶
+>> "product = " product ¶
+>> "" ¶
+
+? sum > 25 {
+    >> "Sum is greater than 25" ¶
+}
+
+? product == 200 {
+    >> "Product is exactly 200" ¶
+}
+
+? a * 3 > b {
+    >> "a * 3 is greater than b" ¶
+}
+_? a * 2 == b {
+    >> "a * 2 equals b" ¶
+}
+_{
+    >> "Neither condition met" ¶
+}

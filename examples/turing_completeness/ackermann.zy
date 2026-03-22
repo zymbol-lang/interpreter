@@ -1,0 +1,44 @@
+// Ackermann Function - Proof of Turing Completeness
+// The Ackermann function is not primitive recursive
+// It requires true recursion capabilities
+
+ackermann(m, n) {
+    ? m == 0 {
+        <~ n + 1
+    }
+    _? n == 0 {
+        <~ ackermann(m - 1, 1)
+    }
+    _{
+        <~ ackermann(m - 1, ackermann(m, n - 1))
+    }
+}
+
+>> "=== ACKERMANN FUNCTION ===" ¶
+>> "Proof of Turing Completeness" ¶
+¶
+
+>> "A(0,0) = " ackermann(0, 0) ¶
+>> "A(0,1) = " ackermann(0, 1) ¶
+>> "A(0,2) = " ackermann(0, 2) ¶
+¶
+
+>> "A(1,0) = " ackermann(1, 0) ¶
+>> "A(1,1) = " ackermann(1, 1) ¶
+>> "A(1,2) = " ackermann(1, 2) ¶
+¶
+
+>> "A(2,0) = " ackermann(2, 0) ¶
+>> "A(2,1) = " ackermann(2, 1) ¶
+>> "A(2,2) = " ackermann(2, 2) ¶
+>> "A(2,3) = " ackermann(2, 3) ¶
+¶
+
+>> "A(3,0) = " ackermann(3, 0) ¶
+>> "A(3,1) = " ackermann(3, 1) ¶
+>> "A(3,2) = " ackermann(3, 2) ¶
+¶
+
+// Note: A(4,2) = 2^65536 - 3 (too large!)
+// The fact that we can express it proves Turing completeness
+>> "Zymbol-Lang can compute ANY computable function!" ¶

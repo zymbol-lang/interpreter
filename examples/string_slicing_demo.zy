@@ -1,0 +1,48 @@
+// String Slicing Demo - Like ABAP but with Zymbol syntax
+// Compare: ABAP uses t+0(4), Zymbol uses t$[0..4]
+
+>> "========================================" ¶
+>> "  STRING SLICING DEMO" ¶
+>> "========================================" ¶
+¶
+
+text = "holamundo!"
+>> "Original text: " text ¶
+¶
+
+// Extract first 4 characters (like ABAP's t+0(4))
+primeros = text$[0..4]
+>> "First 4 chars: " primeros ¶
+¶
+
+// Extract last 5 characters
+ultimos = text$[5..]
+>> "Last 5 chars: " ultimos ¶
+¶
+
+// Extract middle section
+medio = text$[4..9]
+>> "Middle [4..9]: " medio ¶
+¶
+
+// Practical example: Parse email
+email = "user@example.com"
+arroba_pos = 4  // Position of @ (would normally find this)
+username = email$[0..4]
+domain = email$[5..]
+>> "Email: " email ¶
+>> "  Username: " username ¶
+>> "  Domain: " domain ¶
+¶
+
+// URL parsing
+url = "https://www.example.com/page"
+protocol = url$[0..5]   // "https"
+rest = url$[8..]        // "www.example.com/page"
+>> "URL: " url ¶
+>> "  Protocol: " protocol ¶
+>> "  Rest: " rest ¶
+¶
+
+>> "========================================" ¶
+>> "✓ String slicing works like ABAP!" ¶

@@ -1,0 +1,26 @@
+// Phase 7: FizzBuzz using for-each loop
+// Clean implementation with ranges
+
+>> "FizzBuzz (1-30):" ¶
+
+@ n:1..30 {
+    div_by_3 = n % 3 == 0
+    div_by_5 = n % 5 == 0
+
+    ? div_by_3 {
+        ? div_by_5 {
+            >> "FizzBuzz" ¶
+        }
+        _{
+            >> "Fizz" ¶
+        }
+    }
+    _? div_by_5 {
+        >> "Buzz" ¶
+    }
+    _{
+        >> n ¶
+    }
+}
+
+>> "Complete!" ¶

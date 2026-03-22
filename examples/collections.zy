@@ -1,0 +1,73 @@
+// Working with arrays and tuples
+
+// Arrays
+numbers = [1, 2, 3, 4, 5]
+>> "Array: " numbers ¶
+>> "Length: " (numbers$#) ¶
+>> "First: " numbers[0] ¶
+
+// Append to array
+numbers = numbers$+ 6
+>> "After append: " numbers ¶
+
+// Slice array
+slice = numbers$[1..4]
+>> "Slice [1..4]: " slice ¶
+
+// Multi-dimensional array (matrix)
+matrix = [
+    [1, 2, 3],
+    [4, 5, 6],
+    [7, 8, 9]
+]
+
+>> ¶
+>> "Matrix:" ¶
+@ row:matrix {
+    >> row ¶
+}
+
+>> ¶
+>> "Element at [1][2]: " matrix[1][2] ¶
+
+// Tuples
+point = (10, 20)
+>> ¶
+>> "Point: " point ¶
+>> "X: " point[0] ", Y: " point[1] ¶
+
+person = ("Alice", 25, #1)
+>> ¶
+>> "Person: " person ¶
+
+// Iterate over string
+text = "Zymbol"
+>> ¶
+>> "Characters in '" text "':" ¶
+@ char:text {
+    >> "  " char ¶
+}
+
+// Array operations with collection operators
+// Filter even numbers using $| and map using $>
+arr = [1, 2, 3, 4, 5]
+filtered = arr$| (x -> x % 2 == 0)
+mapped = filtered$> (x -> x * 2)
+
+>> ¶
+>> "Original array: " arr ¶
+>> "Filtered (even): " filtered ¶
+>> "Mapped (*2): " mapped ¶
+
+// Filter then map via intermediate variables
+source = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+evens = source$| (x -> x % 2 == 0)
+result = evens$> (x -> x * 3)
+
+>> ¶
+>> "Chained filter+map: " result ¶
+
+// Reduce example: sum all elements
+nums = [1, 2, 3, 4, 5]
+total = nums$< (0, (acc, x) -> acc + x)
+>> "Sum of [1,2,3,4,5]: " total ¶

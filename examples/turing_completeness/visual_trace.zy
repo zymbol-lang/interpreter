@@ -1,0 +1,148 @@
+// Visual Trace: Showing the difference between primitive and general recursion
+
+>> "╔═══════════════════════════════════════════════════════════╗" ¶
+>> "║  VISUAL TRACE: Primitive vs General Recursion            ║" ¶
+>> "╚═══════════════════════════════════════════════════════════╝" ¶
+¶
+
+>> "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" ¶
+>> "EXAMPLE 1: factorial(5) - PRIMITIVE RECURSION" ¶
+>> "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" ¶
+¶
+
+>> "Call tree (arguments always DECREASE):" ¶
+>> "" ¶
+>> "factorial(5)" ¶
+>> "  ↓ calls factorial(4)" ¶
+>> "  5 * factorial(4)" ¶
+>> "        ↓ calls factorial(3)" ¶
+>> "        4 * factorial(3)" ¶
+>> "              ↓ calls factorial(2)" ¶
+>> "              3 * factorial(2)" ¶
+>> "                    ↓ calls factorial(1)" ¶
+>> "                    2 * factorial(1)" ¶
+>> "                          ↓ base case" ¶
+>> "                          1" ¶
+>> "" ¶
+>> "Arguments: 5 → 4 → 3 → 2 → 1 (always decreasing)" ¶
+>> "Max depth: 5 (predictable from input)" ¶
+>> "Result: " 5 * 4 * 3 * 2 * 1 ¶
+¶
+
+>> "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" ¶
+>> "EXAMPLE 2: ackermann(3, 2) - GENERAL RECURSION" ¶
+>> "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" ¶
+¶
+
+>> "Call tree (arguments can GROW!):" ¶
+>> "" ¶
+>> "ackermann(3, 2)" ¶
+>> "  ↓ needs ackermann(3, 1) first" ¶
+>> "  ackermann(2, ackermann(3, 1))" ¶
+>> "                 ↓ needs ackermann(3, 0) first" ¶
+>> "                 ackermann(2, ackermann(3, 0))" ¶
+>> "                                ↓ needs ackermann(2, 1)" ¶
+>> "                                ackermann(2, 1)" ¶
+>> "                                ↓ = 5" ¶
+>> "                 ackermann(2, 5)" ¶
+>> "                 ↓ = 13" ¶
+>> "  ackermann(2, 13)  ← LOOK! Argument GREW from 2 to 13!" ¶
+>> "  ↓ = 29" ¶
+>> "" ¶
+>> "Arguments visited: 2 → 1 → 0 → ... → 5 → ... → 13" ¶
+>> "                   ^^^^^^^^^^^^         ^^^^" ¶
+>> "                   decreased           INCREASED!" ¶
+>> "" ¶
+>> "This is IMPOSSIBLE in primitive recursion!" ¶
+>> "Result: " 29 ¶
+¶
+
+>> "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" ¶
+>> "KEY INSIGHT" ¶
+>> "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" ¶
+¶
+
+>> "The critical line in Ackermann:" ¶
+>> "" ¶
+>> "  ackermann(m - 1, ackermann(m, n - 1))" ¶
+>> "                   ^^^^^^^^^^^^^^^^^^^" ¶
+>> "                   This inner call can return" ¶
+>> "                   a value MUCH LARGER than n" ¶
+>> "" ¶
+>> "Example with m=3, n=2:" ¶
+>> "  - Inner call: ackermann(3, 1) = 13" ¶
+>> "  - Outer call: ackermann(2, 13)" ¶
+>> "  - Started with n=2, ended with 13!" ¶
+¶
+
+>> "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" ¶
+>> "GROWTH COMPARISON" ¶
+>> "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" ¶
+¶
+
+ackermann(m, n) {
+    ? m == 0 {
+        <~ n + 1
+    }
+    _? n == 0 {
+        <~ ackermann(m - 1, 1)
+    }
+    _{
+        <~ ackermann(m - 1, ackermann(m, n - 1))
+    }
+}
+
+>> "Level 0 (m=0): Linear growth" ¶
+>> "  ackermann(0, n) = n + 1" ¶
+@ i:0..5 {
+    >> "  ackermann(0, " i ") = " ackermann(0, i) ¶
+}
+¶
+
+>> "Level 1 (m=1): Addition" ¶
+>> "  ackermann(1, n) = n + 2" ¶
+@ i:0..5 {
+    >> "  ackermann(1, " i ") = " ackermann(1, i) ¶
+}
+¶
+
+>> "Level 2 (m=2): Multiplication" ¶
+>> "  ackermann(2, n) = 2*n + 3" ¶
+@ i:0..5 {
+    >> "  ackermann(2, " i ") = " ackermann(2, i) ¶
+}
+¶
+
+>> "Level 3 (m=3): Exponentiation" ¶
+>> "  ackermann(3, n) ≈ 2^(n+3) - 3" ¶
+@ i:0..5 {
+    >> "  ackermann(3, " i ") = " ackermann(3, i) ¶
+}
+¶
+
+>> "Level 4 (m=4): TETRATION (tower of powers)" ¶
+>> "  ackermann(4, 0) = " ackermann(4, 0) ¶
+>> "  ackermann(4, 1) = 65533 (2^16 - 3, too deep to compute at runtime)" ¶
+>> "  ackermann(4, 2) = 2^65536 - 3 (TOO BIG TO COMPUTE!)" ¶
+¶
+
+>> "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" ¶
+>> "CONCLUSION" ¶
+>> "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" ¶
+¶
+
+>> "✅ Primitive Recursion:" ¶
+>> "   - Predictable, bounded depth" ¶
+>> "   - Arguments always decrease" ¶
+>> "   - NOT Turing complete alone" ¶
+¶
+
+>> "✅ General Recursion (Ackermann):" ¶
+>> "   - Unpredictable depth" ¶
+>> "   - Arguments can grow via nested calls" ¶
+>> "   - IS Turing complete" ¶
+¶
+
+>> "✅ Zymbol-Lang successfully computes Ackermann!" ¶
+>> "   → Proves it has GENERAL recursion" ¶
+>> "   → Proves it is TURING COMPLETE! 🎉" ¶

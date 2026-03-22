@@ -1,0 +1,62 @@
+// Phase 1: Test IMPLEMENTED data types
+// Testing: String, Int, Bool, Array
+
+>> "=== TESTING IMPLEMENTED DATA TYPES ===" ¶
+¶
+
+// 1. STRING
+>> "1. STRING TYPE:" ¶
+texto = "Hola, Zymbol-Lang"
+>> "  texto = " texto ¶
+vacio = ""
+>> "  vacio = '" vacio "'" ¶
+con_espacios = "  espacios  "
+>> "  con_espacios = '" con_espacios "'" ¶
+unicode = "Hello mundo"
+>> "  unicode = " unicode ¶
+¶
+
+// 2. INTEGER
+>> "2. INTEGER TYPE:" ¶
+positivo = 42
+>> "  positivo = " positivo ¶
+cero = 0
+>> "  cero = " cero ¶
+grande = 999999999
+>> "  grande = " grande ¶
+negativo = 0 - 100
+>> "  negativo = " negativo ¶
+¶
+
+// 3. BOOLEAN
+>> "3. BOOLEAN TYPE:" ¶
+verdadero = #1
+>> "  verdadero = " verdadero ¶
+falso = #0
+>> "  falso = " falso ¶
+¶
+
+// 4. ARRAY
+>> "4. ARRAY TYPE:" ¶
+numeros = [1, 2, 3, 4, 5]
+>> "  numeros = " numeros ¶
+strings = ["uno", "dos", "tres"]
+>> "  strings = " strings ¶
+bools = [#1, #0, #1]
+>> "  bools = " bools ¶
+mixto = [1, "texto", #1, 42, "otro"]
+>> "  mixto = " mixto ¶
+vacio_arr = []
+>> "  vacio_arr = " vacio_arr ¶
+anidado = [[1, 2], [3, 4], [5, 6]]
+>> "  anidado = " anidado ¶
+¶
+
+// 5. STRING INTERPOLATION
+>> "5. STRING INTERPOLATION:" ¶
+nombre = "Alice"
+edad = 25
+>> "  Hola, {nombre}! Tienes {edad} años." ¶
+¶
+
+>> "=== ALL IMPLEMENTED TYPES TESTED ===" ¶

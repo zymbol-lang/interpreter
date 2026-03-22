@@ -1,0 +1,29 @@
+// Fibonacci sequence calculator
+
+// Recursive version
+fib(n) {
+    ? n <= 1 {
+        <~ n
+    }
+    _{
+        <~ fib(n - 1) + fib(n - 2)
+    }
+}
+
+// Print first 10 Fibonacci numbers
+>> "First 10 Fibonacci numbers:" ¶
+@ i:0..10 {
+    >> "fib(" + i + ") = " + fib(i) ¶
+}
+
+// Alternative: using a helper function for lambda-style recursion
+// Note: Lambdas with control flow blocks are not supported,
+// so we use a regular function instead
+fib_alt(n) {
+    ? n <= 1 { <~ n }
+    _ { <~ fib_alt(n - 1) + fib_alt(n - 2) }
+}
+
+>> ¶
+>> "Using alternative function:" ¶
+>> "fib(8) = " + fib_alt(8) ¶

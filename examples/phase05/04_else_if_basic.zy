@@ -1,0 +1,20 @@
+// Phase 5: Else-if statement
+// Basic else-if example
+
+score = 85
+
+? score >= 90 {
+    >> "Grade: A (Excellent!)" ¶
+}
+_? score >= 80 {
+    >> "Grade: B (Good!)" ¶
+}
+_? score >= 70 {
+    >> "Grade: C (Fair)" ¶
+}
+_? score >= 60 {
+    >> "Grade: D (Pass)" ¶
+}
+_{
+    >> "Grade: F (Fail)" ¶
+}

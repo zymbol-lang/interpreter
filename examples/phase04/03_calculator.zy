@@ -1,0 +1,22 @@
+// Phase 4: Simple calculator
+a = 15
+b = 4
+
+>> "Calculator Demo" ¶
+>> "===============" ¶
+>> "" ¶
+>> "a = " a ¶
+>> "b = " b ¶
+>> "" ¶
+
+sum_ab = a + b
+diff_ab = a - b
+mult_ab = a * b
+div_ab = a / b
+mod_ab = a % b
+
+>> "Addition: " a " + " b " = " sum_ab ¶
+>> "Subtraction: " a " - " b " = " diff_ab ¶
+>> "Multiplication: " a " * " b " = " mult_ab ¶
+>> "Division: " a " / " b " = " div_ab ¶
+>> "Modulo: " a " % " b " = " mod_ab ¶

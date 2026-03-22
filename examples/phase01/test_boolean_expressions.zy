@@ -1,0 +1,139 @@
+// Boolean Expressions and Comparison Assignments
+// Demonstrates direct assignment of comparison results
+
+>> "=== BOOLEAN EXPRESSIONS ===" ¶
+¶
+
+// ===== DIRECT COMPARISON ASSIGNMENTS =====
+>> "--- Float Comparisons ---" ¶
+
+esVerdad = 5.5 > 3.2
+>> "5.5 > 3.2 = " esVerdad ¶
+
+esFalso = 2.5 > 10.0
+>> "2.5 > 10.0 = " esFalso ¶
+
+sonIguales = 3.14 == 3.14
+>> "3.14 == 3.14 = " sonIguales ¶
+
+¶
+>> "--- Integer Comparisons ---" ¶
+
+mayor = 100 > 50
+>> "100 > 50 = " mayor ¶
+
+menor = 10 < 20
+>> "10 < 20 = " menor ¶
+
+igual = 42 == 42
+>> "42 == 42 = " igual ¶
+
+diferente = 10 <> 20
+>> "10 <> 20 = " diferente ¶
+
+mayorIgual = 15 >= 15
+>> "15 >= 15 = " mayorIgual ¶
+
+menorIgual = 5 <= 10
+>> "5 <= 10 = " menorIgual ¶
+
+¶
+>> "--- Mixed Type Comparisons (Int and Float) ---" ¶
+
+// Type promotion en comparaciones
+mixto1 = 5 < 5.5
+>> "5 < 5.5 = " mixto1 ¶
+
+mixto2 = 10.0 == 10
+>> "10.0 == 10 = " mixto2 ¶
+
+mixto3 = 3 > 2.5
+>> "3 > 2.5 = " mixto3 ¶
+
+¶
+>> "=== USING BOOLEAN VARIABLES IN CONDITIONS ===" ¶
+¶
+
+// Asignar comparación
+estaAprobado = 85 >= 60
+>> "Score 85 >= 60: " estaAprobado ¶
+
+// Usar variable booleana en if
+? estaAprobado {
+    >> "Student PASSED!" ¶
+}
+
+// Negación implícita
+estaReprobado = 45 >= 60
+>> "Score 45 >= 60: " estaReprobado ¶
+
+? estaReprobado {
+    >> "This won't print" ¶
+}
+_{
+    >> "Student FAILED!" ¶
+}
+
+¶
+>> "=== COMPLEX BOOLEAN LOGIC ===" ¶
+¶
+
+// Comparaciones con resultados de operaciones
+temperatura = 25.5
+estaCaliente = temperatura > 30.0
+>> "Temperature " temperatura " > 30.0: " estaCaliente ¶
+
+estaTemplado = temperatura >= 20.0
+>> "Temperature " temperatura " >= 20.0: " estaTemplado ¶
+
+// Usar en condicionales
+? estaCaliente {
+    >> "It's HOT!" ¶
+}
+_? estaTemplado {
+    >> "It's WARM!" ¶
+}
+_{
+    >> "It's COLD!" ¶
+}
+
+¶
+>> "=== SCIENTIFIC COMPARISONS ===" ¶
+¶
+
+// Con notación científica
+velocidadLuz = 3e8
+velocidadSonido = 343.0
+
+esMasRapida = velocidadLuz > velocidadSonido
+>> "Light faster than sound: " esMasRapida ¶
+
+// Comparación de números muy pequeños
+electronMasa = 9.109e-31
+protonMasa = 1.672e-27
+
+electronMasLigero = electronMasa < protonMasa
+>> "Electron lighter than proton: " electronMasLigero ¶
+
+¶
+>> "=== PRACTICAL EXAMPLES ===" ¶
+¶
+
+// Validación de rango
+edad = 25
+esMayorDeEdad = edad >= 18
+>> "Age " edad " >= 18: " esMayorDeEdad ¶
+
+// Validación de límite
+saldo = 1500.50
+tieneSaldoPositivo = saldo > 0.0
+>> "Balance positive: " tieneSaldoPositivo ¶
+
+// Comparación de precios
+precio = 99.99
+limite = 100.0
+estaDentroPresupuesto = precio <= limite
+>> "Price " precio " within budget " limite ": " estaDentroPresupuesto ¶
+
+¶
+>> "=== DONE ===" ¶

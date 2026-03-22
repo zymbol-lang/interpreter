@@ -1,0 +1,27 @@
+// Phase 3: All comparison operators
+a = 10
+b = 20
+
+? a == b {
+    >> "a equals b"
+}
+
+? a <> b {
+    >> "a does not equal b"
+}
+
+? a < b {
+    >> "a is less than b"
+}
+
+? a > b {
+    >> "a is greater than b"
+}
+
+? a <= b {
+    >> "a is less than or equal to b"
+}
+
+? a >= b {
+    >> "a is greater than or equal to b"
+}

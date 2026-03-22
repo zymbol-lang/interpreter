@@ -1,0 +1,29 @@
+// Phase 6: TIMES vs WHILE comparison
+// Muestra la inferencia automática
+
+>> "=== TIMES Loop (evalúa una vez) ===" ¶
+n = 3
+count = 0
+
+@ n {
+    count = count + 1
+    >> "TIMES iteration: " count ¶
+    n = n - 1  // Esto NO afecta el número de iteraciones
+}
+
+>> "TIMES final count: " count ¶
+>> "TIMES final n: " n ¶
+¶
+
+>> "=== WHILE Loop (re-evalúa cada vez) ===" ¶
+n = 3
+count = 0
+
+@ n > 0 {
+    count = count + 1
+    >> "WHILE iteration: " count ¶
+    n = n - 1  // Esto SÍ afecta, termina cuando n=0
+}
+
+>> "WHILE final count: " count ¶
+>> "WHILE final n: " n ¶

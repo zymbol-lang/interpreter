@@ -1,0 +1,22 @@
+// Phase 5: String Interpolation Demo
+
+name = "Alice"
+age = 25
+city = "Madrid"
+
+// Simple interpolation
+>> "Hello {name}!" ¶
+
+// Multiple variables
+>> "{name} is {age} years old and lives in {city}." ¶
+
+// Mixed with Haskell-style
+>> "Name: {name}" " (verified)" ¶
+
+// Escape braces
+>> "Use \{curly braces\} for interpolation" ¶
+>> "Example: {name} becomes " name ¶
+
+// With input
+<< "Enter your hobby {name}: " hobby
+>> "{name}'s hobby is {hobby}" ¶

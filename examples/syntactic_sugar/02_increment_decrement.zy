@@ -1,0 +1,54 @@
+// Increment and Decrement Operators
+// Syntactic sugar for adding/subtracting 1
+// x++ is equivalent to x = x + 1
+// x-- is equivalent to x = x - 1
+
+>> "=== Increment/Decrement Examples ===" ¶
+
+// Increment (++)
+counter = 0
+>> "counter = " counter ¶
+counter++
+>> "counter++ -> counter = " counter ¶
+counter++
+>> "counter++ -> counter = " counter ¶
+counter++
+>> "counter++ -> counter = " counter ¶
+
+¶
+
+// Decrement (--)
+value = 10
+>> "value = " value ¶
+value--
+>> "value-- -> value = " value ¶
+value--
+>> "value-- -> value = " value ¶
+value--
+>> "value-- -> value = " value ¶
+
+¶
+>> "=== Practical Example: Countdown ===" ¶
+countdown = 5
+@ countdown > 0 {
+    >> countdown " " ¶
+    countdown--
+}
+¶
+>> "Blast off!" ¶
+
+¶
+>> "=== Practical Example: Loop Counter ===" ¶
+i = 0
+@ i < 5 {
+    >> "Iteration " i ¶
+    i++
+}
+
+¶
+>> "=== Combining with TIMES loop ===" ¶
+count = 0
+@ 3 {
+    count++
+    >> "Count: " count ¶
+}

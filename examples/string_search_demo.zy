@@ -1,0 +1,108 @@
+// String Search Demo - Using the $? operator
+
+>> "========================================" ¶
+>> "  STRING SEARCH ($?) DEMO" ¶
+>> "========================================" ¶
+¶
+
+// ===== BASIC CHARACTER SEARCH =====
+>> "--- Character Search ---" ¶
+texto = "holamundo"
+
+? texto$? 'o' {
+    >> "✓ Found 'o' in 'holamundo'" ¶
+}
+
+? texto$? 'x' {
+    >> "Found 'x'" ¶
+}
+_{
+    >> "✓ 'x' not found (correct)" ¶
+}
+¶
+
+// ===== SUBSTRING SEARCH =====
+>> "--- Substring Search ---" ¶
+
+? texto$? "hola" {
+    >> "✓ Found 'hola' at beginning" ¶
+}
+
+? texto$? "mun" {
+    >> "✓ Found 'mun' in middle" ¶
+}
+
+? texto$? "undo" {
+    >> "✓ Found 'undo' at end" ¶
+}
+
+? texto$? "xyz" {
+    >> "Found 'xyz'" ¶
+}
+_{
+    >> "✓ 'xyz' not found (correct)" ¶
+}
+¶
+
+// ===== PRACTICAL EXAMPLE: EMAIL VALIDATION =====
+>> "--- Email Validation ---" ¶
+email = "user@example.com"
+
+tiene_arroba = email$? '@'
+tiene_punto = email$? '.'
+
+? tiene_arroba && tiene_punto {
+    >> "✓ Email '" email "' has valid format" ¶
+}
+_{
+    >> "✗ Invalid email format" ¶
+}
+¶
+
+// ===== PRACTICAL EXAMPLE: URL PROTOCOL =====
+>> "--- URL Protocol Detection ---" ¶
+url = "https://www.example.com"
+
+? url$? "https://" {
+    >> "✓ Secure connection (HTTPS)" ¶
+}
+_? url$? "http://" {
+    >> "⚠ Unsecure connection (HTTP)" ¶
+}
+_{
+    >> "Unknown protocol" ¶
+}
+¶
+
+// ===== PRACTICAL EXAMPLE: FILE EXTENSION =====
+>> "--- File Extension Check ---" ¶
+archivos = ["document.pdf", "image.png", "data.txt", "script.zy"]
+
+>> "PDF files:" ¶
+@ archivo:archivos {
+    ? archivo$? ".pdf" {
+        >> "  - " archivo ¶
+    }
+}
+¶
+
+// ===== PRACTICAL EXAMPLE: KEYWORD FILTER =====
+>> "--- Keyword Filter ---" ¶
+mensajes = [
+    "Error: Connection failed",
+    "Info: Started successfully",
+    "Warning: Low memory",
+    "Info: Processing data"
+]
+
+>> "Error messages:" ¶
+@ msg:mensajes {
+    ? msg$? "Error" {
+        >> "  ⚠ " msg ¶
+    }
+}
+¶
+
+>> "========================================" ¶
+>> "✓ String search is easy with $?" ¶
+>> "========================================" ¶

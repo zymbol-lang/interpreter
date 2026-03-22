@@ -1,0 +1,66 @@
+# core_library
+
+#> {
+    // Re-export FUNCTIONS with original names (use ::)
+    math::add
+    math::multiply
+    text::uppercase
+    text::lowercase
+
+    // Re-export CONSTANTS with original names (use .)
+    math.PI
+    math.E
+    text.MAX_LENGTH
+
+    // Re-export FUNCTIONS with renamed aliases (use ::)
+    math::subtract <= minus
+    text::trim <= strip
+    text::concat <= join
+    cfg::get_config_path <= config_path
+
+    // Re-export CONSTANTS with renamed aliases (use .)
+    cfg.APP_NAME <= APPLICATION_NAME
+    cfg.VERSION <= APP_VERSION
+    cfg.DEBUG_MODE <= DEBUG
+
+    // Own functions
+    process_data
+    calculate_area
+
+    // Own constant
+    LIBRARY_VERSION
+}
+
+<# ./math_utils <= math
+<# ./text_utils <= text
+<# ../utils/config <= cfg
+
+// Own constant
+LIBRARY_VERSION := "2.0.0"
+
+// Private constant
+CACHE_SIZE := 50
+PI := 3.14159
+
+// Own function - uses math module functions
+process_data(value) {
+    result = math::add(value, 10)
+    doubled = math::multiply(result, 2)
+    <~ doubled
+}
+
+// Own function - uses own constant
+calculate_area(radius) {
+    area = PI * radius * radius
+    <~ area
+}
+
+// Private helper function
+validate_input(data) {
+    ? data <> "" {
+        <~ #1
+    }
+    _{
+        <~ #0
+    }
+}

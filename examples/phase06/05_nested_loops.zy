@@ -1,0 +1,25 @@
+// Phase 6: Nested loops with labels
+// Demonstrates @ @label and labeled break
+
+i = 0
+@ @outer i < 3 {
+    >> "Outer loop: " i ¶
+
+    j = 0
+    @ j < 3 {
+        >> "  Inner loop: " j ¶
+
+        ? i == 1 {
+            ? j == 1 {
+                >> "  Breaking outer loop at i=" i " j=" j ¶
+                @! outer
+            }
+        }
+
+        j = j + 1
+    }
+
+    i = i + 1
+}
+
+>> "Done with nested loops!" ¶

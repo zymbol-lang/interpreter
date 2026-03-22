@@ -1,0 +1,10 @@
+// Phase 6: TIMES loop with literal number
+// Repeat 5 times
+
+>> "Using TIMES loop (literal 5):" ¶
+
+@ 5 {
+    >> "Hello!" ¶
+}
+
+>> "Done!" ¶

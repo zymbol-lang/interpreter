@@ -1,0 +1,104 @@
+// Comparison: Primitive Recursion vs General Recursion
+// This demonstrates the difference between limited and unlimited recursion
+
+>> "=== PRIMITIVE RECURSION (Limited) ===" ¶
+¶
+
+// Example 1: Factorial - Only calls with smaller arguments
+factorial(n) {
+    ? n <= 1 {
+        <~ 1
+    }
+    // Only recurses with n-1 (always smaller)
+    <~ n * factorial(n - 1)
+}
+
+>> "Factorial (primitive recursive):" ¶
+>> "  factorial(5) = " factorial(5) ¶
+>> "  factorial(10) = " factorial(10) ¶
+¶
+
+// Example 2: Fibonacci - Multiple calls, but all with smaller args
+fib(n) {
+    ? n <= 1 {
+        <~ n
+    }
+    // Both calls have arguments < n
+    <~ fib(n - 1) + fib(n - 2)
+}
+
+>> "Fibonacci (primitive recursive):" ¶
+>> "  fib(10) = " fib(10) ¶
+¶
+
+// Example 3: Sum - Decreases second argument
+suma(a, b) {
+    ? b == 0 {
+        <~ a
+    }
+    // Recurses with b-1 (always smaller)
+    <~ suma(a + 1, b - 1)
+}
+
+>> "Sum (primitive recursive):" ¶
+>> "  suma(100, 50) = " suma(100, 50) ¶
+¶
+
+>> "=== GENERAL RECURSION (Unlimited) ===" ¶
+¶
+
+// The Ackermann function - NOT primitive recursive!
+// It can call itself with LARGER arguments
+ackermann(m, n) {
+    ? m == 0 {
+        <~ n + 1
+    }
+    _? n == 0 {
+        <~ ackermann(m - 1, 1)
+    }
+    _{
+        // THIS IS THE KEY LINE:
+        // Calls ackermann(m, n-1) and uses the RESULT
+        // as an argument - result can be MUCH larger than n!
+        <~ ackermann(m - 1, ackermann(m, n - 1))
+    }
+}
+
+>> "Ackermann (GENERAL recursion - NOT primitive!):" ¶
+¶
+
+>> "Small values:" ¶
+>> "  ackermann(0, 5) = " ackermann(0, 5) ¶
+>> "  ackermann(1, 5) = " ackermann(1, 5) ¶
+>> "  ackermann(2, 5) = " ackermann(2, 5) ¶
+¶
+
+>> "Watch the explosive growth:" ¶
+>> "  ackermann(3, 0) = " ackermann(3, 0) ¶
+>> "  ackermann(3, 1) = " ackermann(3, 1) ¶
+>> "  ackermann(3, 2) = " ackermann(3, 2) ¶
+>> "  ackermann(3, 3) = " ackermann(3, 3) ¶
+>> "  ackermann(3, 4) = " ackermann(3, 4) ¶
+¶
+
+>> "Why ackermann(3,2) is special:" ¶
+>> "  It starts with n=2" ¶
+>> "  But internally computes ackermann(2, 13)" ¶
+>> "  The argument GREW from 2 to 13!" ¶
+>> "  This is IMPOSSIBLE in primitive recursion!" ¶
+¶
+
+>> "=== THE DIFFERENCE ===" ¶
+¶
+>> "Primitive Recursion:" ¶
+>> "  - Arguments always DECREASE" ¶
+>> "  - Depth is BOUNDED by input" ¶
+>> "  - Example: factorial(5) calls factorial(4,3,2,1)" ¶
+¶
+>> "General Recursion:" ¶
+>> "  - Arguments can INCREASE (via nested calls)" ¶
+>> "  - Depth is UNPREDICTABLE" ¶
+>> "  - Example: ackermann(3,2) internally needs ackermann(2,13)" ¶
+¶
+>> "Turing Completeness requires GENERAL recursion!" ¶
+>> "Zymbol-Lang HAS IT - proven by Ackermann working! ✅" ¶

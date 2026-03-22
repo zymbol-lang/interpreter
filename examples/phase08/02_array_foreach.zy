@@ -1,0 +1,52 @@
+// Phase 8: For-each loops over arrays
+// Iterate through array elements
+
+>> "=== For-Each over Arrays ===" ¶
+
+// Iterate over numbers
+numeros = [10, 20, 30, 40, 50]
+>> "Numbers:" ¶
+@ num:numeros {
+    >> "  " num ¶
+}
+
+¶
+>> "=== Iterate over Strings ===" ¶
+
+frutas = ["apple", "banana", "orange", "grape"]
+>> "Fruits:" ¶
+@ fruta:frutas {
+    >> "  - " fruta ¶
+}
+
+¶
+>> "=== Sum Array Elements ===" ¶
+
+valores = [5, 10, 15, 20, 25]
+suma = 0
+@ valor:valores {
+    suma += valor
+}
+>> "Sum of " valores " = " suma ¶
+
+¶
+>> "=== Count Elements ===" ¶
+
+items = ["a", "b", "c", "d", "e"]
+contador = 0
+@ item:items {
+    contador++
+}
+>> "Array has " contador " elements" ¶
+
+¶
+>> "=== Find Maximum ===" ¶
+
+nums = [45, 23, 89, 12, 67, 34]
+maximo = nums[0]
+@ n:nums {
+    ? n > maximo {
+        maximo = n
+    }
+}
+>> "Maximum value: " maximo ¶

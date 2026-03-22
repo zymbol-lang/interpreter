@@ -1,0 +1,90 @@
+// Expression Statements Example
+// Functions called for side effects without capturing return value
+
+// Define helper functions
+greet(name) {
+    >> "Hello, " name "!" ¶
+    <~ #1  // Return value will be discarded
+}
+
+log_message(level, msg) {
+    >> "[" level "] " msg ¶
+}
+
+factorial(n) {
+    ? n <= 1 {
+        <~ 1
+    }
+    <~ n * factorial(n - 1)
+}
+
+// Test 1: Simple function call statements
+>> "=== Test 1: Simple Calls ===" ¶
+greet("Alice")
+greet("Bob")
+greet("Charlie")
+¶
+
+// Test 2: Function calls with multiple parameters
+>> "=== Test 2: Logging ===" ¶
+log_message("INFO", "Application started")
+log_message("DEBUG", "Loading configuration")
+log_message("INFO", "Ready to process")
+¶
+
+// Test 3: Function calls that return values (discarded)
+>> "=== Test 3: Discarded Returns ===" ¶
+factorial(5)  // Calculates 120, but result is discarded
+factorial(3)  // Calculates 6, but result is discarded
+>> "Factorials calculated (results discarded)" ¶
+¶
+
+// Test 4: Expression statements in conditionals
+>> "=== Test 4: In Conditionals ===" ¶
+score = 85
+? score >= 90 {
+    log_message("INFO", "Grade: A")
+}
+_? score >= 80 {
+    log_message("INFO", "Grade: B")
+}
+_{
+    log_message("INFO", "Grade: C or lower")
+}
+¶
+
+// Test 5: Expression statements in loops
+>> "=== Test 5: In Loops ===" ¶
+@ i:1..5 {
+    greet("User")
+}
+¶
+
+// Test 6: Expression statements with output parameters
+>> "=== Test 6: Output Parameters ===" ¶
+swap(a, b, x<~, y<~) {
+    x = b
+    y = a
+    >> "Swapped: " a " <-> " b ¶
+}
+
+first = 100
+second = 200
+swap(first, second, first, second)
+>> "Result: first=" first " second=" second ¶
+¶
+
+// Test 7: Chained expression statements
+>> "=== Test 7: Chained Calls ===" ¶
+count(n) {
+    >> "Counting: " n ¶
+}
+
+count(1)
+count(2)
+count(3)
+count(4)
+count(5)
+¶
+
+>> "=== All Tests Complete ===" ¶

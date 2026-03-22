@@ -1,0 +1,47 @@
+// Phase 8: Basic array operations
+// Arrays are collections of values
+
+>> "=== Array Basics ===" ¶
+
+// Empty array
+vacio = []
+>> "Empty array: " vacio ¶
+
+// Array with integers
+numeros = [1, 2, 3, 4, 5]
+>> "Numbers: " numeros ¶
+
+// Array with strings
+nombres = ["Alice", "Bob", "Charlie"]
+>> "Names: " nombres ¶
+
+// Mixed types
+mezclado = [1, "hello", #1, 42]
+>> "Mixed: " mezclado ¶
+
+¶
+>> "=== Array Indexing ===" ¶
+
+// Access elements by index (0-based)
+primero = numeros[0]
+>> "First number: " primero ¶
+
+segundo = numeros[1]
+>> "Second number: " segundo ¶
+
+ultimo = numeros[4]
+>> "Last number: " ultimo ¶
+
+// String arrays
+nombre = nombres[1]
+>> "Second name: " nombre ¶
+
+¶
+>> "=== Array in Variables ===" ¶
+
+// Store in variable and access
+frutas = ["apple", "banana", "orange"]
+>> "Fruits: " frutas ¶
+>> "First fruit: " frutas[0] ¶
+>> "Second fruit: " frutas[1] ¶
+>> "Third fruit: " frutas[2] ¶

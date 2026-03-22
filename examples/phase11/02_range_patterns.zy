@@ -1,0 +1,54 @@
+// Phase 11: Range Pattern Matching
+// Demonstrates range patterns in match expressions
+
+>> "=== Range Pattern Matching ===" ¶
+
+// Numeric range matching
+score = 85
+grade = ?? score {
+    90..100 : 'A'
+    80..89  : 'B'
+    70..79  : 'C'
+    60..69  : 'D'
+    0..59   : 'F'
+    _       : '?'
+}
+
+>> "Score " score " gets grade: " grade ¶
+
+// Character range matching
+letter = 'm'
+category = ?? letter {
+    'a'..'f' : "First group"
+    'g'..'m' : "Second group"
+    'n'..'t' : "Third group"
+    'u'..'z' : "Fourth group"
+    _        : "Not a lowercase letter"
+}
+
+>> "Letter '" letter "' is in: " category ¶
+
+// Age categories
+age = 25
+age_group = ?? age {
+    0..12   : "Child"
+    13..19  : "Teenager"
+    20..64  : "Adult"
+    65..120 : "Senior"
+    _       : "Invalid age"
+}
+
+>> "Age " age " is: " age_group ¶
+
+// Temperature classification (using ranges - Celsius scale shifted to positive)
+temp = 15
+classification = ?? temp {
+    0..10   : "Freezing"
+    11..15  : "Cold"
+    16..25  : "Moderate"
+    26..35  : "Hot"
+    36..50  : "Very hot"
+    _       : "Extreme"
+}
+
+>> "Temperature " temp "°C is: " classification ¶

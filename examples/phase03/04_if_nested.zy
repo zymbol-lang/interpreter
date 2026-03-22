@@ -1,0 +1,17 @@
+// Phase 3: Nested if statements
+edad = 25
+estudiante = #1
+
+? edad >= 18 {
+    >> "You are an adult"
+
+    ? estudiante {
+        >> "You are also a student"
+    }
+    _{
+        >> "You are not a student"
+    }
+}
+_{
+    >> "You are a minor"
+}

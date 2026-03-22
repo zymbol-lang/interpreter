@@ -1,0 +1,10 @@
+// Phase 7: Basic range and for-each loop
+// Print numbers from 1 to 10
+
+>> "Counting from 1 to 10:" ¶
+
+@ i:1..10 {
+    >> "Number: " i ¶
+}
+
+>> "Done!" ¶

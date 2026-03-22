@@ -1,0 +1,41 @@
+// Reassignment test
+
+x = "Primero"
+>> x ¶
+
+x = "Segundo"
+>> x ¶
+
+x = "Tercero"
+>> x ¶
+
+x = "1" // String
+>> x ¶
+
+x = 1  // Integer
+>> x ¶
+
+x = #1 // Boolean true = #1 / false = #0
+>> x ¶
+
+x = 1.2 // Float
+>> x ¶
+
+x = 'A' // Character
+>> x ¶
+
+x = (1, 2, 3) // Tuple
+>> x ¶  
+
+x = [1, 2, 3] // List
+>> x ¶
+
+x = (Objet: "Value") // Object:Value
+>> x ¶
+
+ƒ(a){ <~ a + 1 } // Function assigned to x
+x = ƒ(5) // Call function to verify reassignment worked
+>> x ¶
+
+x = "ƒ(a)\{ <~ a + 1 \}; x = ƒ(5) = " + x
+>> x ¶

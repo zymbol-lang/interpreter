@@ -1,0 +1,15 @@
+// Phase 4: Operator precedence
+// Multiplication has higher precedence than addition
+result1 = 5 + 3 * 2
+>> "5 + 3 * 2 = " result1 ¶
+
+// Explicit grouping would be: 5 + (3 * 2) = 11
+>> "Expected: 11" ¶
+
+result2 = 10 - 2 * 3
+>> "10 - 2 * 3 = " result2 ¶
+>> "Expected: 4" ¶
+
+result3 = 20 / 4 + 2
+>> "20 / 4 + 2 = " result3 ¶
+>> "Expected: 7" ¶

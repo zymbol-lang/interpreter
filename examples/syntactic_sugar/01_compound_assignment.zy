@@ -1,0 +1,54 @@
+// Compound Assignment Operators
+// Syntactic sugar for common arithmetic and assignment patterns
+// a += b is equivalent to a = a + b
+
+>> "=== Compound Assignment Examples ===" ¶
+
+// Addition assignment (+=)
+x = 10
+>> "x = " x ¶
+x += 5
+>> "x += 5 -> x = " x ¶
+
+// Subtraction assignment (-=)
+y = 20
+>> "y = " y ¶
+y -= 8
+>> "y -= 8 -> y = " y ¶
+
+// Multiplication assignment (*=)
+z = 3
+>> "z = " z ¶
+z *= 4
+>> "z *= 4 -> z = " z ¶
+
+// Division assignment (/=)
+w = 100
+>> "w = " w ¶
+w /= 5
+>> "w /= 5 -> w = " w ¶
+
+// Modulo assignment (%=)
+m = 17
+>> "m = " m ¶
+m %= 5
+>> "m %= 5 -> m = " m ¶
+
+¶
+>> "=== Practical Example: Counter ===" ¶
+counter = 0
+>> "Initial counter: " counter ¶
+
+counter += 10
+>> "After += 10: " counter ¶
+
+counter *= 2
+>> "After *= 2: " counter ¶
+
+counter -= 5
+>> "After -= 5: " counter ¶
+
+counter /= 3
+>> "After /= 3: " counter ¶
+
+>> "Final counter: " counter ¶

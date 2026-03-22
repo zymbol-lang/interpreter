@@ -1,0 +1,43 @@
+// Test base character literals (Zenith-Lang style)
+
+// ===== ASCII CHARACTER IN DIFFERENT BASES =====
+// All create the same character 'A' (ASCII 65)
+
+>> "Testing base character literals:" ¶
+¶
+
+// Hexadecimal (most common)
+letra_hex = 0x41
+>> "Hexadecimal (0x41): " letra_hex ¶
+
+// Decimal
+letra_dec = 0d65
+>> "Decimal (0d65): " letra_dec ¶
+
+// Octal
+letra_oct = 0o0101
+>> "Octal (0o0101): " letra_oct ¶
+
+// Binary
+letra_bin = 0b01000001
+>> "Binary (0b01000001): " letra_bin ¶
+
+¶
+>> "All should print 'A': " letra_hex " " letra_dec " " letra_oct " " letra_bin ¶
+¶
+
+// ===== UNICODE EMOJIS =====
+>> "Testing Unicode emojis:" ¶
+
+sonrisa = 0x1F600
+cohete = 0x1F680
+check = 0x2705
+corazon = 0x2764
+
+>> "Smile: " sonrisa ¶
+>> "Rocket: " cohete ¶
+>> "Check: " check ¶
+>> "Heart: " corazon ¶
+
+¶
+>> "All together: " sonrisa " " cohete " " check " " corazon ¶

@@ -1,0 +1,15 @@
+// Phase 7: Multiplication table using nested for-each loops
+// Print a simple multiplication table
+
+>> "Multiplication Table (1-5):" ¶
+¶
+
+@ i:1..5 {
+    @ j:1..5 {
+        product = i * j
+        >> product " "
+    }
+    ¶
+}
+
+>> "Done!" ¶

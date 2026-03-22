@@ -1,0 +1,6 @@
+// Phase 2: Multiple inputs
+<< "Enter your name: " nombre
+<< "Enter your age: " edad
+
+>> "Name: " nombre ¶
+>> "Age: " edad ¶

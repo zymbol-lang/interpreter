@@ -1,0 +1,14 @@
+// Phase 6: Break statement
+// Count to 10 but break at 5
+
+x = 0
+@ x < 10 {
+    ? x == 5 {
+        >> "Breaking at " x ¶
+        @!
+    }
+    >> "Count: " x ¶
+    x = x + 1
+}
+
+>> "Loop ended!" ¶

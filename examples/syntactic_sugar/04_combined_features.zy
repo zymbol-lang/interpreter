@@ -1,0 +1,95 @@
+// Combined Syntactic Sugar Features
+// Demonstrating compound assignment, increment/decrement, and power operator together
+
+>> "=== Game Score Calculator ===" ¶
+
+// Initial score
+score = 100
+>> "Initial score: " score ¶
+
+// Earn bonus points
+bonus = 50
+score += bonus
+>> "After +50 bonus: " score ¶
+
+// Lose points in penalty
+penalty = 20
+score -= penalty
+>> "After -20 penalty: " score ¶
+
+// Double score power-up
+score *= 2
+>> "After 2x multiplier: " score ¶
+
+// Level up - increment
+level = 1
+>> "Current level: " level ¶
+level++
+>> "Level up! New level: " level ¶
+
+¶
+>> "=== Exponential Growth Simulation ===" ¶
+
+// Population that doubles each generation
+population = 1000
+generation = 0
+
+@ generation < 5 {
+    >> "Generation " generation ": " population " individuals" ¶
+    population *= 2
+    generation++
+}
+
+¶
+>> "=== Compound Interest Calculator ===" ¶
+
+// Simple compound interest: A = P * (1 + r)^t
+principal = 1000
+rate = 2  // 2x multiplier per period (simplified)
+periods = 5
+
+@ i:0..periods {
+    amount = principal * rate^i
+    >> "After " i " periods: $" amount ¶
+}
+
+¶
+>> "=== Power and Assignment Together ===" ¶
+
+x = 2
+>> "x = " x ¶
+
+x = x^3
+>> "x = x^3 -> x = " x ¶
+
+x *= 2
+>> "x *= 2 -> x = " x ¶
+
+x++
+>> "x++ -> x = " x ¶
+
+¶
+>> "=== Factorial with Increment ===" ¶
+
+n = 5
+factorial = 1
+i = 1
+
+@ i <= n {
+    factorial *= i
+    >> "Factorial of " i " = " factorial ¶
+    i++
+}
+
+¶
+>> "=== Powers Table ===" ¶
+
+>> "Powers of numbers 1-5:" ¶
+@ base:1..5 {
+    >> base ": " ¶
+    @ exp:0..4 {
+        result = base^exp
+        >> result " " ¶
+    }
+    ¶
+}

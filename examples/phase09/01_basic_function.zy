@@ -1,0 +1,9 @@
+// Phase 9: Basic function with return
+// Example: Simple function that returns a value
+
+suma(a, b) {
+    <~ a + b
+}
+
+resultado = suma(5, 3)
+>> "5 + 3 = " resultado ¶

@@ -1,0 +1,10 @@
+// Phase 1: Unicode support in identifiers
+año = 2024
+país = "España"
+emoji = "😀🐭"
+🐭 = "🐭: Mouse"
+
+>> "Año: " año ¶
+>> "País: " país ¶
+>> "Emoji: " emoji ¶
+>> 🐭 ¶

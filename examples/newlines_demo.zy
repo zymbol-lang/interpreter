@@ -1,0 +1,38 @@
+// Demonstration of newline handling in Zymbol-Lang
+// Three ways to create newlines:
+// 1. >> ¶  - output followed by explicit newline
+// 2. ¶    - standalone explicit newline
+// 3. >> "" ¶ - output empty string then newline (equivalent to #1)
+
+>> "=== Newline Variations ===" ¶
+
+// Standard output with newline
+>> "Line 1" ¶
+>> "Line 2" ¶
+
+// Empty output with newline (creates blank line)
+>> ¶
+
+// Another line
+>> "Line 4" ¶
+
+// Multiple standalone newlines
+¶
+¶
+
+>> "Line 7 (after 2 blank lines)" ¶
+
+// Mixing styles
+>> "Before blank" ¶
+>> ¶
+¶
+>> "After blanks" ¶
+
+// In loops
+>> "Numbers with spacing:" ¶
+@ i:1..5 {
+    >> "Number: " i ¶
+    >> ¶
+}
+
+>> "Done!" ¶

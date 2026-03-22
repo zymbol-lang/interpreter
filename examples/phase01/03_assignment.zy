@@ -1,0 +1,4 @@
+// Phase 1: Variable assignment and usage
+mensaje = "Hola, Mundo"
+>> mensaje
+¶

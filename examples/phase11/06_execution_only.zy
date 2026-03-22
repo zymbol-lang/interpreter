@@ -1,0 +1,76 @@
+// Phase 11: Execution-Only Pattern Matching
+// Demonstrates match without return value (execution only)
+
+>> "=== Execution-Only Match ===" ¶
+¶
+
+// Example 1: Simple execution based on score
+score = 95
+>> "Score: " score ¶
+
+?? score {
+    90..100 : {
+        >> "  Grade: A" ¶
+        >> "  Excellent work!" ¶
+    }
+    80..89 : {
+        >> "  Grade: B" ¶
+        >> "  Good job!" ¶
+    }
+    70..79 : {
+        >> "  Grade: C" ¶
+        >> "  Satisfactory" ¶
+    }
+    60..69 : {
+        >> "  Grade: D" ¶
+        >> "  Needs improvement" ¶
+    }
+    _ : {
+        >> "  Grade: F" ¶
+        >> "  Failed" ¶
+    }
+}
+
+¶
+// Example 2: Day of week display
+day = 3
+>> "Day number: " day ¶
+
+?? day {
+    1 : { >> "  Monday" ¶ }
+    2 : { >> "  Tuesday" ¶ }
+    3 : { >> "  Wednesday" ¶ }
+    4 : { >> "  Thursday" ¶ }
+    5 : { >> "  Friday" ¶ }
+    6 : { >> "  Saturday (Weekend!)" ¶ }
+    7 : { >> "  Sunday (Weekend!)" ¶ }
+    _ : { >> "  Invalid day" ¶ }
+}
+
+¶
+// Example 3: Status messages
+status = "PROCESSING"
+>> "Order status: " status ¶
+
+?? status {
+    "PENDING" : {
+        >> "  Status: Order pending" ¶
+        >> "  Action: Send confirmation email" ¶
+    }
+    "PROCESSING" : {
+        >> "  Status: Order being processed" ¶
+        >> "  Action: Update inventory" ¶
+    }
+    "SHIPPED" : {
+        >> "  Status: Order shipped" ¶
+        >> "  Action: Send tracking information" ¶
+    }
+    "DELIVERED" : {
+        >> "  Status: Order delivered" ¶
+        >> "  Action: Request feedback" ¶
+    }
+    _ : {
+        >> "  Status: Unknown" ¶
+        >> "  Action: Review manually" ¶
+    }
+}

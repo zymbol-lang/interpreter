@@ -1,0 +1,14 @@
+// Phase 7: Range with variables
+// Use variables for range bounds
+
+start = 5
+end = 15
+
+>> "Counting from " start " to " end ":" ¶
+
+@ num:start..end {
+    >> num " "
+}
+
+¶
+>> "Complete!" ¶

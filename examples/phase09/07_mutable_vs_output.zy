@@ -1,0 +1,31 @@
+// Phase 9: Difference between Mutable (~) and Output (<~)
+// Example showing the semantic difference
+
+// Mutable parameter (~): allows local mutation, does NOT affect caller
+con_mutable(x~) {
+    x = x + 10
+    >> "Dentro con_mutable: x = " x ¶
+    // x modificado localmente, pero NO se refleja fuera
+}
+
+// Output parameter (<~): creates/modifies variable in caller scope
+con_output(y<~) {
+    y = y + 10
+    >> "Dentro con_output: y = " y ¶
+    // y SÍ se refleja en el caller
+}
+
+// Test mutable parameter
+valor1 = 5
+>> "MUTABLE PARAMETER (~):" ¶
+>> "Antes: valor1 = " valor1 ¶
+con_mutable(valor1)
+>> "Después: valor1 = " valor1 ¶  // Sigue siendo 5
+¶
+
+// Test output parameter
+valor2 = 5
+>> "OUTPUT PARAMETER (<~):" ¶
+>> "Antes: valor2 = " valor2 ¶
+con_output(valor2)
+>> "Después: valor2 = " valor2 ¶  // Ahora es 15

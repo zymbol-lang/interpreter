@@ -1,0 +1,11 @@
+// Phase 7: Calculate sum of numbers in a range
+// Sum numbers from 1 to 100
+
+sum = 0
+
+@ n:1..100 {
+    sum = sum + n
+}
+
+>> "Sum of numbers from 1 to 100: " sum ¶
+>> "Expected: 5050" ¶

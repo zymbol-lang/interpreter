@@ -1,0 +1,6 @@
+// Phase 1: Variables with concatenation
+nombre = "Zymbol"
+saludo = "Hola"
+
+>> saludo ", " nombre "!" ¶
+>> "Bienvenido a " nombre "-Lang" ¶

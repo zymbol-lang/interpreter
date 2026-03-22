@@ -1,0 +1,15 @@
+// Phase 6: TIMES loop with variable
+// Inferencia: @ numero → TIMES (evalúa una vez)
+
+times = 3
+x = 0
+
+>> "Repeating " times " times:" ¶
+
+@ times {
+    x = x + 1
+    >> "Iteration: " x ¶
+}
+
+>> "Final x: " x ¶
+>> "Done!" ¶

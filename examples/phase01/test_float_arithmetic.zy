@@ -1,0 +1,155 @@
+// Float Arithmetic Operations
+// Demonstrates all arithmetic operations with Float types
+// Including scientific notation: 1.5e5, etc.
+
+>> "=== BASIC FLOAT ARITHMETIC ===" ¶
+¶
+
+// Addition
+a = 3.14
+b = 2.86
+sum = a + b
+>> "Addition: " a " + " b " = " sum ¶
+
+// Subtraction
+c = 10.5
+d = 3.25
+diff = c - d
+>> "Subtraction: " c " - " d " = " diff ¶
+
+// Multiplication
+e = 2.5
+f = 4.0
+product = e * f
+>> "Multiplication: " e " * " f " = " product ¶
+
+// Division
+g = 15.0
+h = 3.0
+quotient = g / h
+>> "Division: " g " / " h " = " quotient ¶
+
+// Modulo
+i = 7.5
+j = 2.0
+remainder = i % j
+>> "Modulo: " i " % " j " = " remainder ¶
+
+// Power
+base = 2.0
+exp = 3.0
+power = base ^ exp
+>> "Power: " base " ^ " exp " = " power ¶
+
+¶
+>> "=== SCIENTIFIC NOTATION ===" ¶
+¶
+
+// Large numbers with scientific notation
+speed_light = 3e8
+>> "Speed of light: " speed_light " m/s" ¶
+
+// Equivalent to 150,000.0 or 150000.0
+large_num = 1.5e5
+>> "1.5e5 = " large_num ¶
+
+// Same value without scientific notation
+same_value = 150000.0
+>> "150000.0 = " same_value ¶
+
+// Verify they're equal
+? large_num == same_value {
+    >> "1.5e5 equals 150000.0: TRUE" ¶
+}
+
+// Small numbers
+small = 2.5e-3
+>> "2.5e-3 = " small ¶
+
+¶
+>> "=== TYPE PROMOTION (Int + Float) ===" ¶
+¶
+
+// Int + Float → Float
+int_val = 5
+float_val = 2.5
+mixed_sum = int_val + float_val
+>> "Int + Float: " int_val " + " float_val " = " mixed_sum ¶
+
+// Float + Int → Float
+mixed_sum2 = float_val + int_val
+>> "Float + Int: " float_val " + " int_val " = " mixed_sum2 ¶
+
+// Int * Float → Float
+mixed_product = int_val * float_val
+>> "Int * Float: " int_val " * " float_val " = " mixed_product ¶
+
+// Int / Float → Float
+mixed_div = int_val / float_val
+>> "Int / Float: " int_val " / " float_val " = " mixed_div ¶
+
+¶
+>> "=== COMPLEX EXPRESSIONS ===" ¶
+¶
+
+// Multiple operations
+result1 = 2.0 * 3.0 + 4.0
+>> "2.0 * 3.0 + 4.0 = " result1 ¶
+
+result2 = 10.0 / 2.0 - 3.0
+>> "10.0 / 2.0 - 3.0 = " result2 ¶
+
+// With scientific notation
+result3 = 1e3 + 5e2
+>> "1e3 + 5e2 = " result3 ¶
+
+// Negative exponents now work!
+result4 = 1e3 * 2e2
+>> "1e3 * 2e2 = " result4 " " ¶
+
+¶
+>> "=== COMPARISONS WITH FLOAT ===" ¶
+¶
+
+x = 5.5
+y = 3.2
+
+? x > y {
+    >> x " > " y ": TRUE" ¶
+}
+
+? x < y {
+    >> x " < " y ": TRUE" ¶
+}
+_{
+    >> x " < " y ": FALSE" ¶
+}
+
+// Compare Int with Float
+int_x = 10
+float_y = 10.0
+
+? int_x == float_y {
+    >> int_x " == " float_y ": TRUE (type promotion)" ¶
+}
+
+¶
+>> "=== SCIENTIFIC CALCULATIONS ===" ¶
+¶
+
+// Avogadro's number
+avogadro = 6.022e23
+>> "Avogadro's number: " avogadro ¶
+
+// Planck constant
+planck = 6.626e-34
+>> "Planck constant: " planck " J·s" ¶
+
+// Calculate energy: E = h * f
+// where f = frequency = 5e14 Hz
+frequency = 5e14
+energy = planck * frequency
+>> "Energy at 5e14 Hz: " energy " J" ¶
+
+¶
+>> "=== DONE ===" ¶

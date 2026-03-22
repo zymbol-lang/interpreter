@@ -1,0 +1,63 @@
+// Power/Exponentiation Operator (^)
+// Compute base raised to exponent power
+// 2^3 means 2 * 2 * 2 = 8
+
+>> "=== Power Operator Examples ===" ¶
+
+// Basic powers
+>> "2^3 = " (2^3) ¶
+>> "5^2 = " (5^2) ¶
+>> "10^4 = " (10^4) ¶
+
+¶
+
+// Power of 0
+>> "5^0 = " (5^0) ¶
+>> "100^0 = " (100^0) ¶
+
+¶
+
+// Power of 1
+>> "7^1 = " (7^1) ¶
+>> "42^1 = " (42^1) ¶
+
+¶
+
+// Using variables
+base = 3
+exp = 4
+result = base^exp
+>> base "^" exp " = " result ¶
+
+¶
+>> "=== Right-Associative: 2^3^2 ===" ¶
+>> "2^3^2 is evaluated as 2^(3^2) = 2^9" ¶
+>> "Result: " (2^3^2) ¶
+>> "NOT (2^3)^2 = 8^2 = 64" ¶
+
+¶
+>> "=== Powers in Expressions ===" ¶
+r1 = 2 + 3^2
+r2 = 2 * 3^2
+>> "2 + 3^2 = " r1 " (power before addition)" ¶
+>> "2 * 3^2 = " r2 " (power before multiplication)" ¶
+
+¶
+>> "=== Practical Example: Area Calculation ===" ¶
+lado = 5
+area = lado^2
+>> "Square with side " lado " has area " area ¶
+
+¶
+>> "=== Practical Example: Volume Calculation ===" ¶
+arista = 4
+volumen = arista^3
+>> "Cube with edge " arista " has volume " volumen ¶
+
+¶
+>> "=== Practical Example: Powers of 2 ===" ¶
+>> "Powers of 2:" ¶
+@ i:0..10 {
+    potencia = 2^i
+    >> "2^" i " = " potencia ¶
+}

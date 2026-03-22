@@ -1,0 +1,15 @@
+// Phase 6: Infinite loop with break
+// Demonstrates @ { } without condition
+
+count = 0
+@ {
+    >> "Iteration: " count ¶
+    count = count + 1
+
+    ? count == 3 {
+        >> "Exiting infinite loop!" ¶
+        @!
+    }
+}
+
+>> "Escaped the infinite loop" ¶

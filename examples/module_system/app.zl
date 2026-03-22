@@ -1,0 +1,69 @@
+// Consumer script demonstrating module re-exports
+// Tests facade pattern with core_library re-exporting from multiple modules
+
+<# ./lib/core_library <= core
+<# ./utils/config <= config
+
+>> "===== RE-EXPORTED FUNCTIONS (original names) =====" ¶
+sum = core::add(5, 3)
+product = core::multiply(10, 2)
+upper = core::uppercase("hello")
+lower = core::lowercase("WORLD")
+
+>> "Sum (5 + 3): {sum}" ¶
+>> "Product (10 * 2): {product}" ¶
+>> "Uppercase: '{upper}'" ¶
+>> "Lowercase: '{lower}'" ¶
+¶
+
+>> "===== RE-EXPORTED CONSTANTS (original names) =====" ¶
+pi = core.PI
+e = core.E
+max_len = core.MAX_LENGTH
+
+>> "PI: {pi}" ¶
+>> "E: {e}" ¶
+>> "Max Length: {max_len}" ¶
+¶
+
+>> "===== RE-EXPORTED FUNCTIONS (renamed) =====" ¶
+difference = core::minus(10, 3)
+trimmed = core::strip("  text  ")
+joined = core::join("Hello", " World")
+path = core::config_path()
+
+>> "Difference (10 - 3): {difference}" ¶
+>> "Trimmed: '{trimmed}'" ¶
+>> "Joined: '{joined}'" ¶
+>> "Config path: {path}" ¶
+¶
+
+>> "===== RE-EXPORTED CONSTANTS (renamed) =====" ¶
+app_name = core.APPLICATION_NAME
+version = core.APP_VERSION
+debug = core.DEBUG
+
+>> "Application: {app_name}" ¶
+>> "Version: {version}" ¶
+>> "Debug mode: {debug}" ¶
+¶
+
+>> "===== OWN FUNCTIONS from core_library =====" ¶
+processed = core::process_data(100)
+area = core::calculate_area(5)
+
+>> "Processed data: {processed}" ¶
+>> "Circle area (r=5): {area}" ¶
+¶
+
+>> "===== OWN CONSTANT from core_library =====" ¶
+lib_ver = core.LIBRARY_VERSION
+>> "Core library version: {lib_ver}" ¶
+¶
+
+>> "===== DIRECT MODULE ACCESS (bypass facade) =====" ¶
+app_name_direct = config.APP_NAME
+connections = config.MAX_CONNECTIONS
+
+>> "Direct access - App: {app_name_direct}" ¶
+>> "Max connections: {connections}" ¶

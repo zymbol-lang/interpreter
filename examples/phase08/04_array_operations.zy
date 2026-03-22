@@ -1,0 +1,90 @@
+// Phase 8: Array operations
+// Practical examples using arrays
+
+>> "=== Array Statistics ===" ¶
+
+datos = [15, 23, 8, 42, 16, 30, 11]
+>> "Data: " datos ¶
+
+// Calculate sum
+suma = 0
+@ n:datos {
+    suma += n
+}
+>> "Sum: " suma ¶
+
+// Calculate average (manually count elements)
+total = 0
+contador = 0
+@ n:datos {
+    total += n
+    contador++
+}
+promedio = total / contador
+>> "Average: " promedio ¶
+
+// Find min and max
+minimo = datos[0]
+maximo = datos[0]
+@ n:datos {
+    ? n < minimo {
+        minimo = n
+    }
+    ? n > maximo {
+        maximo = n
+    }
+}
+>> "Min: " minimo ¶
+>> "Max: " maximo ¶
+
+¶
+>> "=== Filter Even Numbers ===" ¶
+
+numeros = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+>> "All numbers: " numeros ¶
+>> "Even numbers:" ¶
+@ num:numeros {
+    ? num % 2 == 0 {
+        >> " " num
+    }
+}
+¶
+
+¶
+>> "=== Count Occurrences ===" ¶
+
+letras = ["a", "b", "a", "c", "a", "b", "d", "a"]
+>> "Letters: " letras ¶
+
+// Count how many 'a's
+buscar = "a"
+contador_a = 0
+@ letra:letras {
+    ? letra == buscar {
+        contador_a++
+    }
+}
+>> "Count of '" buscar "': " contador_a ¶
+
+¶
+>> "=== Fibonacci Sequence ===" ¶
+
+// Generate first 10 Fibonacci numbers
+fib = [0, 1]
+>> "Starting: " fib ¶
+
+// We need to manually build since we can't append yet
+// For now, just iterate and show first elements
+>> "Fibonacci sequence:" ¶
+>> fib[0] " " fib[1] " " ¶
+
+// Calculate next 8 numbers
+a = 0
+b = 1
+@ 8 {
+    siguiente = a + b
+    >> siguiente " " ¶
+    a = b
+    b = siguiente
+}
+¶

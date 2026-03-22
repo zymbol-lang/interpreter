@@ -1,0 +1,9 @@
+// Phase 3: If with comparison
+edad = 25
+
+? edad > 18 {
+    >> "You are an adult"
+}
+_{
+    >> "You are a minor"
+}

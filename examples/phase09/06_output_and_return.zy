@@ -1,0 +1,11 @@
+// Phase 9: Function with both output parameters and return value
+// Example: Division with remainder as output parameter and quotient as return
+
+dividir_con_retorno(a, b, resto<~) {
+    resto = a % b
+    <~ a / b
+}
+
+resto_val = 0
+cociente_val = dividir_con_retorno(17, 5, resto_val)
+>> "17 / 5 = " cociente_val " remainder " resto_val ¶

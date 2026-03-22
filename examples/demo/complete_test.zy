@@ -1,0 +1,46 @@
+// Programa de prueba completo para el compilador Zymbol-Lang
+// Demuestra Phase 0 y Phase 1 completamente
+
+// Phase 0: Output de strings con escapes
+>> "╔════════════════════════════════════════╗"
+>> "║  COMPILADOR ZYMBOL-LANG - DEMO TEST   ║"
+>> "╚════════════════════════════════════════╝"
+>> ""
+
+// Phase 1: Variables y reasignación
+titulo = "Prueba de Compilación"
+>> titulo
+>> ""
+
+// Variables con Unicode
+mensaje = "¡Hola Mundo desde Zymbol! 🚀"
+>> mensaje
+
+// Reasignación
+mensaje = "El compilador funciona perfectamente ✅"
+>> mensaje
+>> ""
+
+// Múltiples variables
+autor = "Rakzo"
+version = "v0.1.0"
+fecha = "2025-12-10"
+
+>> "Autor: "
+>> autor
+>> "Versión: "
+>> version
+>> "Fecha: "
+>> fecha
+>> ""
+
+// Strings con escapes
+>> "Escape sequences:"
+>> "  - Newline: \n    (funciona)"
+>> "  - Tab:\ttabulado"
+>> "  - Quote: \"comillas\""
+>> ""
+
+>> "╔════════════════════════════════════════╗"
+>> "║  ✅ TEST COMPLETADO EXITOSAMENTE      ║"
+>> "╚════════════════════════════════════════╝"

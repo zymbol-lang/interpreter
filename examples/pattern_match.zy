@@ -1,0 +1,48 @@
+// Pattern matching example with grade calculation
+
+// Grade a student based on score
+grade(score) {
+    result = ?? score {
+        90..100 : 'A' { >> "Excellent!" ¶ }
+        80..89  : 'B' { >> "Great job!" ¶ }
+        70..79  : 'C' { >> "Good work!" ¶ }
+        60..69  : 'D' { >> "Needs improvement" ¶ }
+        _       : 'F' { >> "Please study more" ¶ }
+    }
+
+    <~ result
+}
+
+// Test different scores
+scores = [95, 87, 72, 65, 45]
+
+>> "Grade Report:" ¶
+@ score:scores {
+    g = grade(score)
+    >> "Score: " + score + " -> Grade: " + g ¶
+}
+
+// Day of week example using guards for multiple values
+day = 3
+day_type = ?? day {
+    _ ? day == 1 || day == 7 : "Weekend"
+    2..6                     : "Weekday"
+    _                        : "Invalid day"
+}
+
+>> ¶
+>> "Day " + day + " is: " + day_type ¶
+
+// Another example: FizzBuzz using pattern matching
+>> ¶
+>> "FizzBuzz (1-15):" ¶
+@ n:1..15 {
+    result = ?? n {
+        _ ? n % 15 == 0 : "FizzBuzz"
+        _ ? n % 3 == 0  : "Fizz"
+        _ ? n % 5 == 0  : "Buzz"
+        _               : n
+    }
+    >> result + " "
+}
+>> ¶

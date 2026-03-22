@@ -1,0 +1,52 @@
+// Phase 8: Nested arrays (matrices)
+// Arrays can contain other arrays
+
+>> "=== 2D Arrays (Matrices) ===" ¶
+
+// Matrix 3x3
+matriz = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+>> "Matrix: " matriz ¶
+
+// Access rows
+fila1 = matriz[0]
+>> "First row: " fila1 ¶
+
+fila2 = matriz[1]
+>> "Second row: " fila2 ¶
+
+¶
+>> "=== Access Individual Elements ===" ¶
+
+// Chained indexing for matrix elements
+elemento00 = matriz[0][0]
+>> "Element [0][0]: " elemento00 ¶
+
+elemento12 = matriz[1][2]
+>> "Element [1][2]: " elemento12 ¶
+
+elemento22 = matriz[2][2]
+>> "Element [2][2]: " elemento22 ¶
+
+¶
+>> "=== Iterate over Matrix ===" ¶
+
+>> "Matrix elements:" ¶
+@ fila:matriz {
+    @ elem:fila {
+        >> elem " "
+    }
+    ¶
+}
+
+¶
+>> "=== Table Data ===" ¶
+
+// Represent table data with arrays
+personas = [["Alice", 25], ["Bob", 30], ["Charlie", 35]]
+
+>> "People table:" ¶
+@ persona:personas {
+    nombre = persona[0]
+    edad = persona[1]
+    >> "  " nombre " - " edad " years old" ¶
+}

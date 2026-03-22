@@ -1,0 +1,28 @@
+# config
+
+#> {
+    APP_NAME
+    VERSION
+    DEBUG_MODE
+    MAX_CONNECTIONS
+    get_config_path
+}
+
+// Public constants
+APP_NAME := "Zymbol App"
+VERSION := "1.1.0"
+DEBUG_MODE := #1
+MAX_CONNECTIONS := 100
+
+// Private constant
+INTERNAL_KEY := "secret_key_123"
+
+// Public function
+get_config_path() {
+    <~ "/etc/zymbol/config.zl"
+}
+
+// Private function
+validate_config() {
+    <~ DEBUG_MODE == #1
+}

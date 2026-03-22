@@ -1,0 +1,9 @@
+// Phase 3: If with boolean literal
+activo = #1
+
+? activo {
+    >> "System is active"
+}
+_{
+    >> "System is inactive"
+}

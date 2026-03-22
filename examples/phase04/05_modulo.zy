@@ -1,0 +1,24 @@
+// Phase 4: Modulo operator demonstration
+num = 17
+divisor = 5
+
+quotient = num / divisor
+remainder = num % divisor
+
+>> "Number: " num ¶
+>> "Divisor: " divisor ¶
+>> "Quotient: " quotient ¶
+>> "Remainder: " remainder ¶
+>> "" ¶
+
+// Calculate verification manually
+verification = quotient * divisor + remainder
+>> "Verification: " quotient " * " divisor " + " remainder " = " verification ¶
+
+// Even/odd check
+? num % 2 == 0 {
+    >> "Number is even" ¶
+}
+_{
+    >> "Number is odd" ¶
+}

@@ -1,0 +1,5 @@
+// Phase 1: Output string concatenation
+// Antes se veia así:
+// >> "Hola", ", ", "Mundo", "!"
+// Ahora se ve:
+>> "Hola" " " "Mundo" "!" ¶

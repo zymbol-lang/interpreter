@@ -1,0 +1,16 @@
+// Phase 6: Continue statement
+// Skip even numbers
+
+x = 0
+@ x < 10 {
+    x = x + 1
+
+    // Skip even numbers
+    ? x % 2 == 0 {
+        @>
+    }
+
+    >> "Odd number: " x ¶
+}
+
+>> "Done!" ¶

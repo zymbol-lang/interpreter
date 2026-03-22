@@ -1,0 +1,53 @@
+// Phase 1: Test all data types
+// Testing: String, Int, Float, Char, Bool, Array
+
+>> "=== TESTING ALL DATA TYPES ===" ¶
+¶
+
+// 1. STRING
+>> "1. STRING TYPE:" ¶
+texto = "Hola, Zymbol-Lang"
+>> "  texto = " texto ¶
+¶
+
+// 2. INTEGER
+>> "2. INTEGER TYPE:" ¶
+entero = 42
+>> "  entero = " entero ¶
+negativo = -100
+>> "  negativo = " negativo ¶
+¶
+
+// 3. FLOAT (if supported in lexer)
+>> "3. FLOAT TYPE:" ¶
+decimal = 3.14159
+>> "  decimal = " decimal ¶
+cientifico = 2.5e10
+>> "  cientifico = " cientifico ¶
+¶
+
+// 4. CHAR (if supported in lexer)
+>> "4. CHAR TYPE:" ¶
+letra = 'A'
+>> "  letra = " letra ¶
+emoji = '😀'
+>> "  emoji = " emoji ¶
+¶
+
+// 5. BOOLEAN
+>> "5. BOOLEAN TYPE:" ¶
+verdadero = #1
+>> "  verdadero = " verdadero ¶
+falso = #0
+>> "  falso = " falso ¶
+¶
+
+// 6. ARRAY
+>> "6. ARRAY TYPE:" ¶
+numeros = [1, 2, 3, 4, 5]
+>> "  numeros = " numeros ¶
+mixto = [1, "texto", #1, 'X']
+>> "  mixto = " mixto ¶
+¶
+
+>> "=== ALL TYPES TESTED ===" ¶

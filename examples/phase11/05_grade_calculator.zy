@@ -1,0 +1,73 @@
+// Phase 11: Grade Calculator with Side Effects
+// Demonstrates match expressions with optional blocks for side effects
+
+>> "=== Student Grade Calculator ===" ¶
+¶
+
+// Student 1
+score1 = 92
+>> "Student 1 - Score: " score1 ¶
+grade1 = ?? score1 {
+    90..100 : 'A' { >> "  Excellent work!" ¶ }
+    80..89  : 'B' { >> "  Good job!" ¶ }
+    70..79  : 'C' { >> "  Satisfactory" ¶ }
+    60..69  : 'D' { >> "  Needs improvement" ¶ }
+    0..59   : 'F' { >> "  Failed - please retake" ¶ }
+    _       : '?' { >> "  Invalid score" ¶ }
+}
+>> "  Grade: " grade1 ¶
+¶
+
+// Student 2
+score2 = 75
+>> "Student 2 - Score: " score2 ¶
+grade2 = ?? score2 {
+    90..100 : 'A' { >> "  Excellent work!" ¶ }
+    80..89  : 'B' { >> "  Good job!" ¶ }
+    70..79  : 'C' { >> "  Satisfactory" ¶ }
+    60..69  : 'D' { >> "  Needs improvement" ¶ }
+    0..59   : 'F' { >> "  Failed - please retake" ¶ }
+    _       : '?' { >> "  Invalid score" ¶ }
+}
+>> "  Grade: " grade2 ¶
+¶
+
+// Student 3
+score3 = 45
+>> "Student 3 - Score: " score3 ¶
+grade3 = ?? score3 {
+    90..100 : 'A' { >> "  Excellent work!" ¶ }
+    80..89  : 'B' { >> "  Good job!" ¶ }
+    70..79  : 'C' { >> "  Satisfactory" ¶ }
+    60..69  : 'D' { >> "  Needs improvement" ¶ }
+    0..59   : 'F' { >> "  Failed - please retake" ¶ }
+    _       : '?' { >> "  Invalid score" ¶ }
+}
+>> "  Grade: " grade3 ¶
+¶
+
+// Classification with multiple messages
+age = 17
+>> "Age verification for " age " years old:" ¶
+status = ?? age {
+    0..12   : "Child" {
+        >> "  - Cannot drive" ¶
+        >> "  - Special supervision required" ¶
+    }
+    13..17  : "Minor" {
+        >> "  - Cannot drive (learner's permit possible)" ¶
+        >> "  - Parental consent required" ¶
+    }
+    18..64  : "Adult" {
+        >> "  - Full privileges" ¶
+        >> "  - Can vote and drive" ¶
+    }
+    65..120 : "Senior" {
+        >> "  - Full privileges" ¶
+        >> "  - Senior benefits available" ¶
+    }
+    _       : "Invalid" {
+        >> "  - Age out of range" ¶
+    }
+}
+>> "Status: " status ¶

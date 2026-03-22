@@ -1,0 +1,59 @@
+// Phase 11: Pattern Guards
+// Demonstrates pattern matching with guard conditions
+
+>> "=== Pattern Guards ===" ¶
+
+// Guard on literal pattern
+number = 10
+even_or_odd = ?? number {
+    _ ? number % 2 == 0 : "Even number"
+    _ ? number % 2 == 1 : "Odd number"
+    _ : "Not a number"
+}
+
+>> "Number " number " is: " even_or_odd ¶
+
+// Guard on range with additional condition
+value = 25
+category = ?? value {
+    0..50   ? value % 5 == 0 : "Multiple of 5 in low range"
+    0..50   : "Low range"
+    51..100 ? value % 10 == 0 : "Multiple of 10 in high range"
+    51..100 : "High range"
+    _ : "Out of range"
+}
+
+>> "Value " value " category: " category ¶
+
+// Guard for value classification
+num = 15
+classification = ?? num {
+    _ ? num > 10  : "High"
+    _ ? num > 0   : "Low but positive"
+    _ ? num == 0  : "Zero"
+    _ : "Unknown"
+}
+
+>> "Number " num " is: " classification ¶
+
+// Multiple guards on same value
+score = 95
+performance = ?? score {
+    _ ? score >= 90 : "Excellent"
+    _ ? score >= 80 : "Good"
+    _ ? score >= 70 : "Fair"
+    _ ? score >= 60 : "Pass"
+    _ : "Fail"
+}
+
+>> "Score " score " performance: " performance ¶
+
+// Guards with boolean patterns
+flag = #1
+result = ?? flag {
+    #1 ? #1 : "True and condition true"
+    #0 ? #0 : "False and condition false"
+    _ : "Other"
+}
+
+>> "Flag result: " result ¶

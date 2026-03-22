@@ -1,0 +1,20 @@
+// Phase 5: Explicit Newlines Demo
+
+// NO automatic newlines in Zymbol!
+>> "Line 1" ¶
+>> "Line 2" \\
+>> "Line 3" ¶
+
+// Without newline - stays on same line
+>> "Hello"
+>> " "
+>> "World"
+¶
+
+// Chaining outputs
+>> "A" >> "B" >> "C" ¶
+
+// Blank lines
+>> "Before blank" ¶
+¶
+>> "After blank" ¶

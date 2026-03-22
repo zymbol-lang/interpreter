@@ -1,0 +1,23 @@
+// Phase 5: Haskell-Style Concatenation (No Commas)
+
+name = "Alice"
+age = 25
+score = 95
+
+// No commas needed - just place expressions next to each other
+>> "Hello " name "!" ¶
+
+// Spaces must be explicit
+>> "Name:" name ¶           // No space: Name:Alice
+>> "Name: " name ¶          // With space: Name: Alice
+
+// Mix literals and variables
+>> "Score: " score "/100 (" "Grade A" ")" ¶
+
+// Complex example
+>> "Student: " name " | Age: " age " | Score: " score ¶
+
+// With arithmetic
+total = 100
+percent = score
+>> "Percentage: " percent "/" total ¶

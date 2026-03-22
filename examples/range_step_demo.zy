@@ -1,0 +1,137 @@
+// Range Step Feature Demo
+// Demonstrates forward, reverse, and stepped ranges
+
+>> "╔═══════════════════════════════════════════════════╗" ¶
+>> "║  ZYMBOL-LANG: Range Step Feature Demonstration  ║" ¶
+>> "╚═══════════════════════════════════════════════════╝" ¶
+¶
+
+// ===== BASIC RANGES =====
+>> "1. BASIC FORWARD RANGE (1..10):" ¶
+>> "   "
+@ i:1..10 {
+    >> i " "
+}
+¶
+¶
+
+>> "2. BASIC REVERSE RANGE (10..1):" ¶
+>> "   "
+@ i:10..1 {
+    >> i " "
+}
+¶
+¶
+
+// ===== STEPPED RANGES =====
+>> "3. FORWARD WITH STEP (1..20:2 - Odd Numbers):" ¶
+>> "   "
+@ i:1..20:2 {
+    >> i " "
+}
+¶
+¶
+
+>> "4. FORWARD WITH STEP (0..20:2 - Even Numbers):" ¶
+>> "   "
+@ i:0..20:2 {
+    >> i " "
+}
+¶
+¶
+
+>> "5. REVERSE WITH STEP (20..0:3 - Countdown by 3):" ¶
+>> "   "
+@ i:20..0:3 {
+    >> i " "
+}
+¶
+¶
+
+// ===== PRACTICAL EXAMPLES =====
+>> "6. MULTIPLES OF 5 (0..100:5):" ¶
+>> "   "
+@ i:0..100:5 {
+    >> i " "
+}
+¶
+¶
+
+>> "7. COUNTDOWN FROM 100 BY 10:" ¶
+>> "   "
+@ i:100..0:10 {
+    >> i " "
+}
+¶
+¶
+
+>> "8. LARGE STEP (1..100:25):" ¶
+>> "   "
+@ i:1..100:25 {
+    >> i " "
+}
+¶
+¶
+
+// ===== WITH VARIABLES =====
+>> "9. USING VARIABLES:" ¶
+start = 10
+end = 50
+step = 8
+>> "   start={start}, end={end}, step={step}" ¶
+>> "   "
+@ i:start..end:step {
+    >> i " "
+}
+¶
+¶
+
+// ===== PRACTICAL: FIZZBUZZ WITH STEPPED RANGE =====
+>> "10. FIZZBUZZ (1..30:1):" ¶
+@ i:1..30 {
+    result = ?? i {
+        _ ? i % 15 == 0 : "FizzBuzz"
+        _ ? i % 3 == 0  : "Fizz"
+        _ ? i % 5 == 0  : "Buzz"
+        _               : i
+    }
+    >> "    {i}: {result}" ¶
+}
+¶
+
+// ===== PRACTICAL: EVEN/ODD SEPARATION =====
+>> "11. EVEN NUMBERS (0..20:2):" ¶
+>> "   "
+@ i:0..20:2 {
+    >> i " "
+}
+¶
+
+>> "12. ODD NUMBERS (1..20:2):" ¶
+>> "   "
+@ i:1..20:2 {
+    >> i " "
+}
+¶
+¶
+
+// ===== EDGE CASES =====
+>> "13. SINGLE ELEMENT (5..5):" ¶
+>> "   "
+@ i:5..5 {
+    >> i " "
+}
+¶
+¶
+
+>> "14. STEP LARGER THAN RANGE (1..10:20):" ¶
+>> "   "
+@ i:1..10:20 {
+    >> i " "
+}
+¶
+¶
+
+>> "╔═══════════════════════════════════════════════════╗" ¶
+>> "║              Demo Complete! ✓                    ║" ¶
+>> "╚═══════════════════════════════════════════════════╝" ¶

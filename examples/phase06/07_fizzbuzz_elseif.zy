@@ -1,0 +1,26 @@
+// Phase 6: FizzBuzz using loops with else-if
+// Classic FizzBuzz from 1 to 15 - Now with cleaner else-if syntax!
+
+n = 1
+@ n <= 15 {
+    div3 = n % 3 == 0
+    div5 = n % 5 == 0
+
+    // Check divisibility with else-if (cleaner than nested ifs!)
+    ? div3 {
+        ? div5 {
+            >> "FizzBuzz" ¶
+        }
+        _{
+            >> "Fizz" ¶
+        }
+    }
+    _? div5 {
+        >> "Buzz" ¶
+    }
+    _{
+        >> n ¶
+    }
+
+    n = n + 1
+}

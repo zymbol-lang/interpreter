@@ -1,0 +1,42 @@
+// Simple example demonstrating basic module usage
+
+<# ./lib/math_utils <= math
+<# ./lib/text_utils <= text
+
+// Use math functions with ::
+result1 = math::add(10, 20)
+result2 = math::subtract(50, 15)
+result3 = math::multiply(7, 8)
+
+>> "10 + 20 = {result1}" ¶
+>> "50 - 15 = {result2}" ¶
+>> "7 * 8 = {result3}" ¶
+¶
+
+// Use math constants with .
+circle_radius = 10
+circumference = 2 * math.PI * circle_radius
+area = math.PI * circle_radius * circle_radius
+
+>> "Circle with radius {circle_radius}:" ¶
+>> "  Circumference: {circumference}" ¶
+>> "  Area: {area}" ¶
+¶
+
+// Use text functions
+name = "alice"
+message = "  hello world  "
+
+name_upper = text::uppercase(name)
+message_trimmed = text::trim(message)
+full_text = text::concat("Hello, ", name_upper)
+
+>> "Original: '{name}'" ¶
+>> "Uppercase: '{name_upper}'" ¶
+>> "Trimmed: '{message_trimmed}'" ¶
+>> "Concatenated: '{full_text}'" ¶
+¶
+
+// Use text constant
+max = text.MAX_LENGTH
+>> "Maximum text length: {max}" ¶

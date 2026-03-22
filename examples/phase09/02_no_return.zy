@@ -1,0 +1,9 @@
+// Phase 9: Function without return (void function)
+// Example: Function that only has side effects
+
+saludar(nombre) {
+    >> "Hola, " nombre "!" ¶
+}
+
+saludar("Alice")
+saludar("Bob")

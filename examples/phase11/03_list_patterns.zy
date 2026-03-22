@@ -1,0 +1,22 @@
+// Phase 11: List Pattern Matching
+// Demonstrates array/list pattern matching
+
+>> "=== List Pattern Matching ===" ¶
+
+// Match empty list
+empty = []
+result1 = ?? empty {
+    [] : "Empty array"
+    _  : "Non-empty array"
+}
+
+>> "Empty array: " result1 ¶
+
+// Match single-element list
+single = [42]
+single_result = ?? single {
+    [42] : "The answer"
+    _    : "Something else"
+}
+
+>> "Single element result: " single_result ¶
