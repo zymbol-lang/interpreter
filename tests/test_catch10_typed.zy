@@ -1,0 +1,20 @@
+// Test: Typed catch clauses
+// Expected output:
+// trying...
+// generic catch executed
+// done
+
+arr = [1]
+
+!? {
+    >> "trying..." ¶
+    x = arr[50]
+} :! ##IO {
+    >> "io catch executed" ¶
+} :! ##Network {
+    >> "network catch executed" ¶
+} :! {
+    >> "generic catch executed" ¶
+}
+
+>> "done" ¶

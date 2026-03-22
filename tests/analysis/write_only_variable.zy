@@ -1,0 +1,23 @@
+// Test: Write-only variable detection (assigned but never read)
+
+// Variable assigned but never read (should warn)
+write_only = 10
+write_only = 20
+write_only = 30
+
+// Variable assigned and then used (should NOT warn)
+normal_var = 5
+normal_var = normal_var + 10
+>> "Result: " normal_var ¶
+
+// Variable in loop - assigned but never read (should warn)
+? #1 {
+    loop_temp = 42
+    loop_temp = 100
+}
+
+// Variable in loop - assigned and used (should NOT warn)
+? #1 {
+    loop_used = 50
+    >> "Loop value: " loop_used ¶
+}

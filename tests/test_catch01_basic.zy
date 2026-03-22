@@ -1,0 +1,12 @@
+// Test: Basic try-catch functionality
+// Expected output:
+// try block
+// finally block
+
+!? {
+    >> "try block" ¶
+} :! {
+    >> "catch block" ¶
+} :> {
+    >> "finally block" ¶
+}

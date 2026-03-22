@@ -1,0 +1,28 @@
+// Test 6: Nested Named Tuples
+// Expected: Named tuples can contain other named tuples
+
+address = (street: "Main St", number: 123)
+person = (name: "Alice", age: 30, address: address)
+
+// Access nested via intermediate variable (MVP approach)
+addr = person.address
+? addr.street == "Main St" {
+    >> "✓ Nested tuple access works" ¶
+}
+
+? addr.number == 123 {
+    >> "✓ Nested field access works" ¶
+}
+
+// Direct nested tuple literal
+employee = (
+    id: 1,
+    info: (name: "Bob", dept: "IT")
+)
+
+info_data = employee.info
+? info_data.name == "Bob" {
+    >> "✓ Inline nested tuple works" ¶
+}
+
+>> "Test 6 PASSED" ¶

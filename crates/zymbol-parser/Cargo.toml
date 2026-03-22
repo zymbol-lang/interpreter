@@ -1,0 +1,13 @@
+[package]
+name = "zymbol-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Parser for Zymbol-Lang"
+
+[dependencies]
+zymbol-span.workspace = true
+zymbol-common.workspace = true
+zymbol-error.workspace = true
+zymbol-ast.workspace = true
+zymbol-lexer.workspace = true

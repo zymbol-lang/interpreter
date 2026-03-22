@@ -1,0 +1,5 @@
+// Test closure - lambda capturing outer variable
+multiplier = 10
+make_multiplier = x -> x * multiplier
+result = make_multiplier(5)
+>> result ¶

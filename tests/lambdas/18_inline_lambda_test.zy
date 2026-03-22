@@ -1,0 +1,18 @@
+// Test inline lambda with map
+>> "Testing inline lambda..." ¶
+
+sales = [(100, 5), (250, 3), (75, 10)]
+
+// Use inline lambda
+revenues = sales$> (sale -> {
+    price = sale[0]
+    quantity = sale[1]
+    result = price * quantity
+    <~ result
+})
+
+>> "Revenues: "
+@ r:revenues {
+    >> r " "
+}
+¶

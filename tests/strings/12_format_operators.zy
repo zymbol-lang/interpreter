@@ -1,0 +1,23 @@
+// Test: Format operators e|, c|, and precision #.N|, #!N|
+pi = 3.14159265358979
+
+r2 = #.2|pi|
+>> r2 ¶
+
+r4 = #.4|pi|
+>> r4 ¶
+
+t2 = #!2|pi|
+>> t2 ¶
+
+big = 1234567890
+fc = c|big|
+>> fc ¶
+
+medium = 9876.54321
+fe = e|medium|
+>> fe ¶
+
+// From string
+rs = #.2|"19.876"|
+>> rs ¶

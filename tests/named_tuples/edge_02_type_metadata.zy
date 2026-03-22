@@ -1,0 +1,27 @@
+// Edge Case Test 2: Type Metadata on Named Tuples
+// Expected: #? operator returns correct type info
+
+person = (name: "Alice", age: 25)
+
+meta = person#?
+
+type_symbol = meta[0]
+count = meta[1]
+
+? type_symbol == "##)" {
+    >> "✓ Type symbol for named tuple is ##)" ¶
+}
+
+? count == 2 {
+    >> "✓ Count returns number of fields" ¶
+}
+
+// Compare with positional tuple
+pos_tuple = (10, 20)
+pos_meta = pos_tuple#?
+
+? pos_meta[0] == "##)" {
+    >> "✓ Positional and named tuples have same type symbol" ¶
+}
+
+>> "Edge Test 2 PASSED" ¶

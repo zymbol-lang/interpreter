@@ -1,0 +1,39 @@
+# test_bash
+
+// Test bash command execution with <\ command \>
+
+>> "=== Prueba de ejecución de comandos bash ===" ¶
+¶
+
+// Test 1: Simple ls command
+>> "Test 1: Listar archivos del directorio actual" ¶
+resultado_ls = <\ ls \>
+>> resultado_ls ¶
+
+// Test 2: echo command
+>> "Test 2: Echo simple" ¶
+mensaje = <\ echo "Hola desde bash" \>
+>> "Capturado: " mensaje ¶
+
+// Test 3: pwd command
+>> "Test 3: Directorio actual" ¶
+dir_actual = <\ pwd \>
+>> "PWD: " dir_actual ¶
+
+// Test 4: Command with pipe
+>> "Test 4: Comando con pipe" ¶
+archivos = <\ ls | head -n 5 \>
+>> "Primeros 5 archivos:" ¶
+>> archivos ¶
+
+// Test 5: Command with options
+>> "Test 5: Listar con opciones" ¶
+detallado = <\ ls -la \>
+>> detallado ¶
+
+// Test 6: Execute and use in condition
+>> "Test 6: Verificar si un archivo existe" ¶
+existe = <\ test -f calculator.zy && echo "existe" || echo "no existe" \>
+>> "El archivo calculator.zy " existe ¶
+
+>> "=== Fin de las pruebas ===" ¶

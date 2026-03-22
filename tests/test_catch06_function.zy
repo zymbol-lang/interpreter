@@ -1,0 +1,21 @@
+// Test: Try-catch inside function (safe access pattern)
+// Expected output:
+// get(0): 100
+// get(1): 200
+// get(5): -1
+// get(99): -1
+
+safe_get(arr, idx) {
+    !? {
+        <~ arr[idx]
+    } :! {
+        <~ -1
+    }
+}
+
+numbers = [100, 200, 300]
+
+>> "get(0): " + safe_get(numbers, 0) ¶
+>> "get(1): " + safe_get(numbers, 1) ¶
+>> "get(5): " + safe_get(numbers, 5) ¶
+>> "get(99): " + safe_get(numbers, 99) ¶

@@ -1,0 +1,9 @@
+// Error Test 2: Member Access on Positional Tuple
+// Expected: Runtime error explaining positional tuples don't have fields
+
+point = (10, 20)
+
+// This should error: positional tuples don't support field access
+x = point.x
+
+>> "This should not print" ¶

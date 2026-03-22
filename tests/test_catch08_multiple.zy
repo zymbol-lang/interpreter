@@ -1,0 +1,32 @@
+// Test: Multiple sequential try-catch blocks
+// Expected output:
+// block 1: success
+// block 2: error caught
+// block 3: success
+// all done
+
+arr = [1, 2, 3]
+
+// Block 1: no error
+!? {
+    >> "block 1: success" ¶
+} :! {
+    >> "block 1: error" ¶
+}
+
+// Block 2: error occurs
+!? {
+    x = arr[999]
+    >> "block 2: success" ¶
+} :! {
+    >> "block 2: error caught" ¶
+}
+
+// Block 3: no error
+!? {
+    >> "block 3: success" ¶
+} :! {
+    >> "block 3: error" ¶
+}
+
+>> "all done" ¶

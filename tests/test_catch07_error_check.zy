@@ -1,0 +1,26 @@
+// Test: Error check operator $!
+// Expected output:
+// 42 is not error
+// hello is not error
+// array is not error
+
+x = 42
+? x$! {
+    >> x + " is error" ¶
+} _ {
+    >> x + " is not error" ¶
+}
+
+y = "hello"
+? y$! {
+    >> y + " is error" ¶
+} _ {
+    >> y + " is not error" ¶
+}
+
+arr = [1, 2]
+? arr$! {
+    >> "array is error" ¶
+} _ {
+    >> "array is not error" ¶
+}

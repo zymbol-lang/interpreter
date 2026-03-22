@@ -1,0 +1,15 @@
+// Test: match on boolean values
+flag = #1
+result = ?? flag {
+    #1 : "true"
+    #0 : "false"
+}
+>> result ¶
+
+x = 10
+is_big = x > 5
+label = ?? is_big {
+    #1 : "big"
+    #0 : "small"
+}
+>> label ¶

@@ -1,0 +1,15 @@
+// Test: String $?? find all positions
+s = "hello world"
+pos_l = s$?? "l"
+>> pos_l ¶
+
+pos_o = s$?? "o"
+>> pos_o ¶
+
+pos_none = s$?? "xyz"
+>> pos_none ¶
+
+// Multiple char search
+s2 = "abababab"
+pos_a = s2$?? "a"
+>> pos_a ¶

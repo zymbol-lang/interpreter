@@ -1,0 +1,26 @@
+// TEST: Nested blocks and variable visibility
+// Inner blocks should see outer block variables
+// But outer blocks should NOT see inner variables
+
+>> "=== Test: Nested block scoping ===" ¶
+
+outer = "outer scope"
+
+? #1 {
+    middle = "middle scope"
+    >> "Middle can see outer: " outer ¶
+    >> "Middle has middle: " middle ¶
+
+    ? #1 {
+        inner = "inner scope"
+        >> "Inner can see outer: " outer ¶
+        >> "Inner can see middle: " middle ¶
+        >> "Inner has inner: " inner ¶
+    }
+
+    // This should FAIL - 'inner' should be destroyed
+    >> "Middle trying to access inner: " inner ¶
+}
+
+// This should FAIL - 'middle' should be destroyed
+>> "Outer trying to access middle: " middle ¶

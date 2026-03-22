@@ -1,0 +1,26 @@
+// Test currying - functions returning functions
+>> "=== Currying Tests ===" ¶
+
+// Simple curry
+curry_add = a -> b -> a + b
+add_five = curry_add(5)
+result1 = add_five(10)
+>> "curry_add(5)(10): " >> result1 ¶
+
+// Direct call
+result2 = curry_add(3)(7)
+>> "curry_add(3)(7): " >> result2 ¶
+
+// Triple curry
+curry3 = a -> b -> c -> a + b + c
+result3 = curry3(1)(2)(3)
+>> "curry3(1)(2)(3): " >> result3 ¶
+
+// Curry with closure
+make_multiplier = factor -> x -> x * factor
+double = make_multiplier(2)
+triple = make_multiplier(3)
+>> "double(5): " >> double(5) ¶
+>> "triple(5): " >> triple(5) ¶
+
+>> "=== All currying tests passed! ===" ¶

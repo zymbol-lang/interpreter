@@ -1,0 +1,66 @@
+// CORRECT: Lambdas with proper parameter usage
+// Demonstrates how to use lambdas WITHOUT relying on scope capture
+
+>> "=== Correct Lambda Usage ===" ¶
+>> "Lambdas receive all data via parameters" ¶
+¶
+
+>> "--- Test 1: Simple lambda with parameter ---" ¶
+
+double = x -> x * 2
+result = double(5)
+>> "double(5) = " result ¶
+>> "Expected: 10" ¶
+¶
+
+>> "--- Test 2: Lambda with multiple parameters ---" ¶
+
+add = (a, b) -> a + b
+sum = add(3, 7)
+>> "add(3, 7) = " sum ¶
+>> "Expected: 10" ¶
+¶
+
+>> "--- Test 3: Using lambda as multiplier factory ---" ¶
+
+// INCORRECT (old way with capture):
+// multiplier = 10
+// make_mult = x -> x * multiplier  // ERROR: can't see 'multiplier'
+
+// CORRECT (pass multiplier as parameter):
+make_multiplier = (multiplier, x) -> x * multiplier
+result1 = make_multiplier(10, 5)
+result2 = make_multiplier(3, 7)
+>> "make_multiplier(10, 5) = " result1 ¶
+>> "make_multiplier(3, 7) = " result2 ¶
+>> "Expected: 50 and 21" ¶
+¶
+
+>> "--- Test 4: Higher-order function ---" ¶
+
+// Function that takes another function as parameter
+apply_twice = (func, value) -> {
+    first = func(value)
+    <~ func(first)
+}
+
+increment = x -> x + 1
+result = apply_twice(increment, 5)
+>> "apply_twice(increment, 5) = " result ¶
+>> "Expected: 7" ¶
+¶
+
+>> "--- Test 5: Lambda with calculation ---" ¶
+
+base = 100
+offset = 20
+
+// INCORRECT: calculate = x -> base + x + offset  // ERROR
+// CORRECT: Pass base and offset as parameters
+calculate = (base, offset, x) -> base + x + offset
+result = calculate(base, offset, 5)
+>> "calculate(100, 20, 5) = " result ¶
+>> "Expected: 125" ¶
+¶
+
+>> "=== All tests passed! ===" ¶

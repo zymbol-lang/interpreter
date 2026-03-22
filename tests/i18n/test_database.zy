@@ -1,0 +1,71 @@
+# test_database
+
+// Test de interacción con base de datos SQLite
+// Demuestra CRUD completo usando interpolación de variables
+
+<# ./matematicas/db <= db
+
+>> "=== Test de Base de Datos SQLite ===" ¶
+¶
+
+// Nombre de la BD de prueba
+database = "test_zymbol.db"
+
+>> "1. Creando base de datos: " database ¶
+dummy = db::crear_db(database)
+>> "   Base de datos creada" ¶
+¶
+
+>> "2. Creando tabla usuarios..." ¶
+dummy = db::crear_tabla_usuarios(database)
+>> "   Tabla creada" ¶
+¶
+
+>> "3. Insertando usuarios..." ¶
+dummy = db::insertar_usuario(database)
+dummy = db::insertar_usuario(database)
+dummy = db::insertar_usuario(database)
+>> "   3 usuarios insertados" ¶
+¶
+
+>> "4. Consultando todos los usuarios:" ¶
+usuarios = db::consultar_usuarios(database)
+>> usuarios ¶
+¶
+
+>> "5. Consultando usuario por ID:" ¶
+usuario = db::consultar_usuario_por_id(database)
+>> usuario ¶
+¶
+
+>> "6. Actualizando usuario..." ¶
+dummy = db::actualizar_usuario(database)
+>> "   Usuario actualizado" ¶
+>> "   Verificando cambios:" ¶
+usuario_actualizado = db::consultar_usuario_por_id(database)
+>> usuario_actualizado ¶
+¶
+
+>> "7. Consultas personalizadas:" ¶
+total = <\ sqlite3 {database} "SELECT COUNT(*) FROM usuarios;" \>
+>> "   Total de usuarios: " total ¶
+
+mayores = <\ sqlite3 {database} "SELECT nombre, edad FROM usuarios WHERE edad > 25;" \>
+>> "   Usuarios mayores de 25:" ¶
+>> mayores ¶
+¶
+
+>> "8. Eliminando usuario..." ¶
+dummy = db::eliminar_usuario(database)
+>> "   Usuario eliminado" ¶
+>> "   Verificando:" ¶
+usuarios_final = db::consultar_usuarios(database)
+>> usuarios_final ¶
+¶
+
+>> "9. Limpieza - eliminando base de datos de prueba" ¶
+dummy = <\ rm "-f" {database} \>
+>> "   Base de datos eliminada" ¶
+¶
+
+>> "=== Fin del Test de Base de Datos ===" ¶

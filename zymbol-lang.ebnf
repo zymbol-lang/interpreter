@@ -1,0 +1,602 @@
+(*
+  Zymbol-Lang EBNF Grammar
+  Version: 2.0.0
+  Sprint: 5I (feature-complete)
+
+  A minimalist symbolic programming language.
+  No keywords — pure symbolic syntax with full Unicode support.
+
+  Implementation: Rust workspace (17 crates)
+  Test coverage:  99/99 vm_compare PASS | 88/88 E2E PASS
+  Execution:      Tree-walker (default) | Register VM (--vm)
+
+  IMPLEMENTATION STATUS: Feature-complete as of Sprint 5I.
+  All rules in this grammar are implemented unless marked [NOT IMPLEMENTED].
+
+  Version History:
+    2.0.0 (Sprint 5I)  — Authoritative clean grammar. Indexed assign, comma concat,
+                          guard patterns, range step, base conversion, labeled loops,
+                          string interpolation in all contexts.
+    1.7.0              — Error handling: !? / :! / :> / $! / $!!
+    1.6.0              — Precision operators: #.N|x| and #!N|x|
+    1.5.0              — String operators: $?? $++[..] $--[..] $~~[..]
+    1.4.0              — Shell integration: <\ \> and </ />
+    1.3.0              — Functional: lambdas, HOF ($> $| $<), closures, pipe |>
+    1.2.0              — Collections: arrays, tuples, named tuples
+    1.1.0              — Module system: # / #> / <# / <= / :: / .
+*)
+
+(* =========================================================================
+   PROGRAM STRUCTURE
+   ========================================================================= *)
+
+program        = [ module_decl ] ,
+                 { import_stmt } ,
+                 [ export_block ] ,
+                 { statement } ;
+
+(* Module declaration — must be at absolute start of file, match filename *)
+module_decl    = "#" , identifier ;
+
+(* Export block — must appear before function/constant definitions *)
+export_block   = "#>" , "{" , { export_item , [ "," ] } , "}" ;
+
+export_item    = identifier                                           (* own name *)
+               | identifier , "<=" , identifier                      (* renamed: internal <= public *)
+               | identifier , "::" , identifier                      (* re-export function *)
+               | identifier , "." , identifier                       (* re-export constant *)
+               | identifier , "::" , identifier , "<=" , identifier  (* re-export + rename *)
+               | identifier , "." , identifier , "<=" , identifier ; (* re-export const + rename *)
+
+(* Import — alias is required *)
+import_stmt    = "<#" , import_path , "<=" , identifier ;
+
+import_path    = [ "./" | "../" | { "../" } ] ,
+                 identifier ,
+                 { "/" , identifier } ;
+
+(* =========================================================================
+   STATEMENTS
+   ========================================================================= *)
+
+statement      = ( assignment
+               | indexed_assign
+               | const_decl
+               | update_op
+               | output_stmt
+               | input_stmt
+               | cli_args_capture
+               | newline_stmt
+               | if_stmt
+               | match_stmt
+               | loop_stmt
+               | break_stmt
+               | continue_stmt
+               | try_stmt
+               | function_def
+               | return_stmt
+               | lifetime_end
+               | expr_stmt ) , [ ";" ] ;
+
+(* Semicolons are optional — statements can be separated by newlines *)
+
+(* --- Assignment --- *)
+assignment     = identifier , "=" , expr ;
+
+(* Indexed assignment — direct element update *)
+indexed_assign = identifier , { "[" , expr , "]" } , "=" , expr ;
+(*
+  arr[0] = 99
+  matrix[1][2] = 0
+*)
+
+(* Constant declaration — immutable, cannot be reassigned *)
+const_decl     = identifier , ":=" , expr ;
+
+(* Compound assignment — desugared to assignment by parser *)
+(* x += n  →  x = x + n  |  x -= n  →  x = x - n  |  x *= n  →  x = x * n
+   x /= n  →  x = x / n  |  x %= n  →  x = x % n  |  x ^= n  →  x = x ^ n
+   x++     →  x = x + 1  |  x--     →  x = x - 1                           *)
+update_op      = identifier , ( "+=" | "-=" | "*=" | "/=" | "%=" | "^=" ) , expr
+               | identifier , ( "++" | "--" ) ;
+
+(* --- Output --- *)
+(* No automatic newlines. Multiple expressions concatenated by juxtaposition. *)
+output_stmt    = ">>" , primary_item , { primary_item } ;
+
+(* In output context, postfix operators require parentheses:
+   >> (arr$#) ¶   ✅
+   >> arr$# ¶     ❌ parser error                                             *)
+primary_item   = grouped_expr | literal | identifier | function_call
+               | bash_exec_expr | script_exec_expr
+               | numeric_eval_expr | type_metadata_expr | format_expr
+               | base_conv_expr | round_expr | trunc_expr ;
+
+(* --- Newline --- *)
+(* ¶ = pilcrow (U+00B6, AltGr+R on Spanish keyboard) or \\ (double backslash) *)
+newline_stmt   = ( "¶" | "\\\\" ) ;
+
+(* --- Input --- *)
+input_stmt     = "<<" , [ string_literal ] , identifier ;
+(*
+  << name                          — no prompt
+  << "Enter name: " name           — with prompt
+  << "Hello {user}: " response     — interpolated prompt
+*)
+
+(* --- CLI Arguments --- *)
+(* Captures command-line arguments as array of strings. Tree-walker only. *)
+cli_args_capture = "><" , identifier ;
+
+(* --- Explicit lifetime end --- *)
+lifetime_end   = "\\" , identifier ;
+
+(* --- Expression statement --- *)
+expr_stmt      = expr ;
+
+(* =========================================================================
+   CONTROL FLOW
+   ========================================================================= *)
+
+(* Conditional — braces required even for single-statement bodies *)
+if_stmt        = "?" , expr , block ,
+                 { "_?" , expr , block } ,
+                 [ "_" , block ] ;
+
+block          = "{" , { statement } , "}" ;
+
+(* Pattern matching — can be used as both statement and expression *)
+match_stmt     = "??" , expr , "{" , { match_case } , "}" ;
+
+match_case     = pattern , ":" , ( expr | block ) ;
+
+pattern        = range_pattern                (* 90..100 *)
+               | guard_pattern                (* _? condition *)
+               | literal_pattern             (* 42, "red", 'A', #1 *)
+               | wildcard_pattern ;           (* _ *)
+
+literal_pattern = literal ;
+range_pattern   = range_bound , ".." , range_bound ;
+range_bound     = literal | identifier ;
+guard_pattern   = "_?" , expr ;              (* arbitrary condition *)
+wildcard_pattern = "_" ;
+
+(* [NOT IMPLEMENTED] multi-value arm:  1, 2 : "low"     *)
+(* [NOT IMPLEMENTED] binding pattern:  n : n * 2        *)
+
+(* =========================================================================
+   LOOPS
+   ========================================================================= *)
+
+(* Universal loop — form inferred from specifier *)
+loop_stmt      = "@" , [ loop_spec ] , [ loop_label ] , block ;
+
+loop_spec      = identifier , ":" , iterable   (* for-each / range *)
+               | expr ;                         (* while condition *)
+(* "@" alone (no spec) = infinite loop *)
+
+iterable       = range_expr | expr ;            (* array, string, or range *)
+
+loop_label     = "@" , identifier ;
+
+break_stmt     = "@!" , [ identifier ] ;        (* @! or @! label *)
+continue_stmt  = "@>" , [ identifier ] ;        (* @> or @> label *)
+
+(* =========================================================================
+   ERROR HANDLING
+   ========================================================================= *)
+
+try_stmt       = "!?" , block ,
+                 { catch_clause } ,
+                 [ finally_clause ] ;
+
+catch_clause   = ":!" , [ error_type ] , block ;
+error_type     = "##" , identifier ;
+(*
+  Built-in error types:
+    ##IO       — file / stream operations
+    ##Network  — network / HTTP errors
+    ##Parse    — parsing / conversion failure
+    ##Index    — array / tuple index out of bounds
+    ##Type     — type mismatch
+    ##Div      — division by zero
+    ##_        — generic catch-all
+
+  _err variable is bound to the error message inside :! blocks.
+*)
+
+finally_clause = ":>" , block ;
+
+(* =========================================================================
+   FUNCTIONS
+   ========================================================================= *)
+
+(* Traditional function — isolated scope, no closure capture *)
+function_def   = identifier , "(" , [ param_list ] , ")" , func_block ;
+
+param_list     = param , { "," , param } ;
+param          = identifier                   (* normal parameter *)
+               | identifier , "<~" ;          (* output parameter — passed by reference *)
+
+func_block     = "{" , { statement } , "}" ;
+
+return_stmt    = "<~" , [ expr ] ;
+
+(* Lambda — captures outer scope (closure) *)
+lambda         = simple_lambda | block_lambda ;
+
+simple_lambda  = lambda_params , "->" , expr ;          (* implicit return *)
+block_lambda   = lambda_params , "->" , func_block ;    (* explicit <~ required *)
+
+lambda_params  = identifier
+               | "(" , identifier , { "," , identifier } , ")" ;
+
+(* Lambdas do NOT support output parameters (<~) in parameter list *)
+
+(* =========================================================================
+   EXPRESSIONS — OPERATOR PRECEDENCE (lowest to highest)
+   =========================================================================
+   1.  , (comma)          — string/value concatenation — assignment context only
+   2.  |> (pipe)          — function composition
+   3.  || (logical or)
+   4.  && (logical and)
+   5.  == != (equality)
+   6.  < > <= >= (comparison)
+   7.  + - (addition)
+   8.  * / % (multiplication)
+   9.  ^ (exponentiation)  — right-associative
+   10. ! - + (unary)
+   11. . (member access)
+   12. [] () $op #? (postfix)
+   ========================================================================= *)
+
+expr           = comma_expr ;
+
+(* Comma — string/value concatenation in assignment context *)
+comma_expr     = base_expr , { "," , base_expr } ;
+(*
+  msg = "Hello ", name, "!"          ✅ valid
+  TITLE := "Mr. ", name              ✅ valid
+  >> "a" , "b" ¶                     ❌ not valid in output context
+*)
+
+base_expr      = pipe_expr ;
+
+(* Pipe — value |> function(_) *)
+pipe_expr      = logic_or , { "|>" , pipe_call } ;
+
+pipe_call      = identifier , "(" , pipe_args , ")"
+               | lambda , "(" , pipe_args , ")" ;
+
+pipe_args      = pipe_arg , { "," , pipe_arg } ;
+pipe_arg       = "_"                            (* placeholder for piped value *)
+               | base_expr ;
+
+(* Binary operators *)
+logic_or       = logic_and , { "||" , logic_and } ;
+logic_and      = equality  , { "&&" , equality } ;
+equality       = comparison , { ( "==" | "!=" | "<>" ) , comparison } ;
+comparison     = addition  , { ( "<" | ">" | "<=" | ">=" ) , addition } ;
+addition       = multiplication , { ( "+" | "-" ) , multiplication } ;
+multiplication = exponentiation , { ( "*" | "/" | "%" ) , exponentiation } ;
+exponentiation = unary , { "^" , unary } ;     (* right-associative *)
+
+(* Unary *)
+unary          = [ "!" | "-" | "+" ] , member_access_expr ;
+
+(* Member access — unified for modules and named tuples *)
+member_access_expr = postfix_expr , { "." , identifier } ;
+(*
+  person.name     — named tuple field
+  m.CONST         — module constant  [NOTE: currently broken — use getter function]
+*)
+
+(* Postfix *)
+postfix_expr   = primary_expr ,
+                 { index_suffix
+                 | call_suffix
+                 | collection_op_suffix
+                 | error_op_suffix
+                 | type_metadata_suffix } ;
+
+index_suffix   = "[" , expr , "]" ;             (* arr[0], matrix[1][2] *)
+call_suffix    = "(" , [ arg_list ] , ")" ;     (* func()(args) — chained calls *)
+
+arg_list       = arg , { "," , arg } ;
+arg            = expr
+               | identifier , "<~" ;            (* output argument *)
+
+(* =========================================================================
+   PRIMARY EXPRESSIONS
+   ========================================================================= *)
+
+primary_expr   = literal
+               | identifier
+               | array_literal
+               | positional_tuple
+               | named_tuple
+               | range_expr
+               | match_stmt
+               | lambda
+               | grouped_expr
+               | numeric_eval_expr
+               | type_metadata_expr
+               | format_expr
+               | base_conv_expr
+               | round_expr
+               | trunc_expr
+               | bash_exec_expr
+               | script_exec_expr
+               | function_call ;
+
+grouped_expr   = "(" , expr , ")" ;
+
+(* =========================================================================
+   COLLECTIONS
+   ========================================================================= *)
+
+(* Array literal — elements must be homogeneous type *)
+array_literal  = "[" , [ expr , { "," , expr } ] , "]" ;
+
+(* Positional tuple — minimum 2 elements; (a) is grouping, not tuple *)
+positional_tuple = "(" , expr , "," , expr , { "," , expr } , ")" ;
+
+(* Named tuple *)
+named_tuple    = "(" , named_field , { "," , named_field } , ")" ;
+named_field    = identifier , ":" , expr ;
+
+(* Range expression — both ends inclusive *)
+range_expr     = range_bound , ".." , range_bound , [ ":" , range_bound ] ;
+(*
+  1..10          — 1 to 10 inclusive
+  10..1          — 10 to 1 inclusive (reverse)
+  1..10:2        — 1, 3, 5, 7, 9 (step 2)
+  10..1:3        — 10, 7, 4, 1 (reverse, step 3)
+  Range bounds must be clean: literals or identifiers only, no arithmetic.
+*)
+
+(* Function call *)
+function_call  = callable , "(" , [ arg_list ] , ")" ;
+
+callable       = identifier
+               | module_call
+               | function_call     (* chained: func()() *)
+               | index_suffix      (* calling from index: arr[0]() *)
+               | member_access_expr ;
+
+module_call    = identifier , "::" , identifier ;
+(*
+  m::add(5, 3)   — call exported function via alias
+*)
+
+(* =========================================================================
+   COLLECTION OPERATORS
+   ========================================================================= *)
+
+(* All collection operators use $ prefix and are postfix *)
+collection_op_suffix
+               = "$#"                                                  (* length *)
+               | "$+" , expr                                           (* append → new collection *)
+               | "$-" , expr                                           (* remove by index → new collection *)
+               | "$?" , expr                                           (* contains → Bool *)
+               | "$[" , [ expr ] , ".." , [ expr ] , "]"              (* slice → new collection *)
+               | "$>" , lambda                                         (* map → new array *)
+               | "$|" , lambda                                         (* filter → new array *)
+               | "$<" , "(" , expr , "," , lambda , ")"               (* reduce → scalar *)
+               | "$~" , expr                                           (* functional update → new collection *)
+               | string_op_suffix ;
+
+(* String-specific operators *)
+string_op_suffix
+               = "$??" , expr                                          (* find all positions → [Int] *)
+               | "$++" , "[" , expr , ":" , expr , "]"                (* insert at pos → new string *)
+               | "$--" , "[" , expr , ":" , expr , "]"                (* remove N chars from pos → new string *)
+               | "$~~" , "[" , expr , ":" , expr , [ ":" , expr ] , "]" ; (* replace [pattern:repl:count?] *)
+
+(* Error check operators — postfix *)
+error_op_suffix
+               = "$!"                                                  (* is_error → Bool *)
+               | "$!!" ;                                               (* propagate error to caller *)
+
+(* Update operation — indexed functional update *)
+(* arr[i]$~ val  →  returns new array with element i replaced *)
+(* Note: arr[i] = val (indexed_assign) is the preferred imperative form *)
+
+(* =========================================================================
+   DATA OPERATORS
+   ========================================================================= *)
+
+(* Numeric evaluation — fail-safe string-to-number *)
+numeric_eval_expr = "#|" , expr , "|" ;
+(*
+  #|"42"|    → 42     (Int)
+  #|"3.14"|  → 3.14   (Float)
+  #|"abc"|   → "abc"  (unchanged — no error)
+  #|99|      → 99     (pass-through)
+*)
+
+(* Type metadata — returns (type_symbol, digits, value) *)
+type_metadata_suffix = "#?" ;
+(*
+  42#?        → (###, 2, 42)
+  3.14#?      → (##., 4, 3.14)
+  "hello"#?   → (##", 5, hello)
+  'A'#?       → (##', 1, A)
+  #1#?        → (##?, 1, #1)
+  [1,2,3]#?  → (##], 3, [1, 2, 3])
+  (1,2)#?    → (##), 2, (1, 2))
+
+  Type symbols (language-agnostic):
+    ###  = Int      ##.  = Float    ##"  = String   ##'  = Char
+    ##?  = Bool     ##]  = Array    ##)  = Tuple     ##_  = Unit
+*)
+
+(* Format expressions *)
+format_expr    = format_prefix , "|" , expr , "|" ;
+format_prefix  = "e"                                    (* scientific: e|12345.0| → "1.2345e4" *)
+               | "c" ;                                  (* comma-sep: c|1234567| → "1,234,567" *)
+
+(* Precision expressions *)
+round_expr     = "#." , precision , "|" , expr , "|" ;  (* round to N decimal places *)
+trunc_expr     = "#!" , precision , "|" , expr , "|" ;  (* truncate to N decimal places *)
+precision      = digit , { digit } ;
+
+(*
+  #.2|3.14159|  → 3.14   (rounds)
+  #!2|3.14159|  → 3.14   (truncates)
+  #.0|19.9|     → 20.0   (rounds to integer, returns Float)
+  #!0|19.9|     → 19.0   (truncates to integer, returns Float)
+*)
+
+(* Base conversion — tridirectional *)
+base_conv_expr = base_prefix , "|" , expr , "|" ;
+
+base_prefix    = "0b"          (* binary *)
+               | "0o"          (* octal *)
+               | "0d"          (* decimal *)
+               | "0x" ;        (* hexadecimal + Unicode *)
+
+(*
+  Direction 1 — Int → Char:     0x|65| → 'A'      0x|128512| → '😀'
+  Direction 2 — Char → String:  0x|'A'| → "0x41"  0x|'😀'| → "0x1F600"
+  Direction 3 — String → Char:  0x|"41"| → 'A'
+*)
+
+(* =========================================================================
+   SHELL INTEGRATION
+   ========================================================================= *)
+
+(* BashExec — execute shell command, capture stdout + stderr *)
+bash_exec_expr = "<\\" , { bash_content } , "\\>" ;
+
+bash_content   = bash_interpolation            (* {variable} substitution *)
+               | ? any character except \> ? ;
+
+bash_interpolation = "{" , identifier , "}" ;
+
+(*
+  Output always includes trailing \n.
+  Works in both tree-walker and VM modes.
+
+  <\ date +%Y-%m-%d \>                  — system date
+  <\ cat {filename} \>                  — file contents with variable
+  <\ echo "scale=2; 355/113" | bc \>    — arithmetic via bc
+*)
+
+(* Script execution — run another .zy file, capture its output *)
+script_exec_expr = "</" , script_path , "/>" ;
+
+script_path    = [ "./" | "../" , { "../" } ] ,
+                 identifier ,
+                 { "/" , identifier } ,
+                 ".zy" ;
+
+(*
+  </ ./subscript.zy />     — execute script, return output as string
+  </ ../utils/helper.zy /> — relative path
+
+  Differences from module import:
+    </ f.zy />   — execute once, capture output
+    <# f <= m    — import for repeated function calls
+*)
+
+(* =========================================================================
+   LITERALS
+   ========================================================================= *)
+
+literal        = integer
+               | float
+               | string_literal
+               | char_literal
+               | boolean
+               | base_char_literal ;
+
+(* Integer — 64-bit signed *)
+integer        = [ "-" ] , digit , { digit } ;
+
+(* Float — 64-bit double *)
+float          = [ "-" ] , digit , { digit } , "." , digit , { digit } , [ exponent ]
+               | [ "-" ] , digit , { digit } , exponent ;
+
+exponent       = ( "e" | "E" ) , [ "+" | "-" ] , digit , { digit } ;
+
+(* String — double-quoted, supports interpolation *)
+string_literal = '"' , { string_part } , '"' ;
+
+string_part    = string_char
+               | "{" , identifier , "}" ;        (* variable interpolation *)
+
+string_char    = ? any Unicode character except " { \ ?
+               | escape_sequence ;
+
+escape_sequence = "\\n"                          (* newline *)
+                | "\\t"                          (* tab *)
+                | '\\"'                          (* double quote *)
+                | "\\'"                          (* single quote *)
+                | "\\\\"                         (* backslash *)
+                | "\\{"                          (* literal { *)
+                | "\\}"                          (* literal } *)
+                | "\\u{" , hex_digit , { hex_digit } , "}" ; (* Unicode codepoint *)
+
+(* Character — single Unicode codepoint *)
+char_literal   = "'" , ( char_content | escape_sequence ) , "'" ;
+char_content   = ? any Unicode character except ' and \ ? ;
+
+(* Base character literal — numeric code in specified base *)
+base_char_literal = "0b" , binary_digit , { binary_digit }   (* binary:  0b01000001 → 'A' *)
+                  | "0o" , octal_digit  , { octal_digit }    (* octal:   0o101 → 'A'      *)
+                  | "0d" , digit        , { digit }           (* decimal: 0d65 → 'A'       *)
+                  | "0x" , hex_digit    , { hex_digit } ;     (* hex/uni: 0x41 → 'A'
+                                                                           0x1F600 → '😀'  *)
+
+(* Boolean — language-agnostic (NOT numeric) *)
+boolean        = "#1"          (* true  *)
+               | "#0" ;        (* false *)
+
+(* =========================================================================
+   LEXICAL ELEMENTS
+   ========================================================================= *)
+
+(* Identifier — full Unicode including emojis *)
+identifier     = id_start , { id_continue } ;
+
+id_start       = unicode_letter | "_" ;
+id_continue    = unicode_letter | unicode_digit | "_" ;
+
+unicode_letter = ? any Unicode letter category (Lu Ll Lt Lm Lo) or emoji ? ;
+unicode_digit  = ? any Unicode decimal digit (Nd) ? ;
+
+(* Digits *)
+digit          = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+binary_digit   = "0" | "1" ;
+octal_digit    = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" ;
+hex_digit      = digit | "A" | "B" | "C" | "D" | "E" | "F"
+                       | "a" | "b" | "c" | "d" | "e" | "f" ;
+
+(* Comments *)
+line_comment   = "//" , { ? any character except newline ? } ;
+block_comment  = "/*" , { ? any character ? - "*/" } , "*/" ;
+
+(* Whitespace — insignificant except as token separator *)
+whitespace     = " " | "\t" | "\r" | "\n" ;
+
+(* =========================================================================
+   NOT IMPLEMENTED
+   ========================================================================= *)
+
+(* The following rules are defined in the spec but not yet implemented.
+   They will be accepted by this grammar when added to the interpreter. *)
+
+(* [NOT IMPLEMENTED] Post-condition loop (do-while):
+   block_post_cond = "{" , { statement } , "}" , "~>" , expr ;
+*)
+
+(* [NOT IMPLEMENTED] Match multi-value arm:
+   multi_value_arm = expr , { "," , expr } , ":" , ( expr | block ) ;
+*)
+
+(* [NOT IMPLEMENTED] Match identifier binding:
+   binding_pattern = identifier , ":" , expr ;
+*)
+
+(* END OF GRAMMAR *)

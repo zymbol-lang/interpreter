@@ -1,0 +1,108 @@
+// CORRECT: Common patterns with isolated scopes
+// Shows how to work effectively without global variables
+
+>> "=== Correct Patterns for Scope Isolation ===" ¶
+¶
+
+>> "--- Pattern 1: Configuration via parameters ---" ¶
+
+// INCORRECT (old way):
+// MAX_RETRIES = 3  // function tries to use this directly
+
+// CORRECT: Pass configuration as parameters
+retry_operation(max_retries, operation_name) {
+    attempts = 0
+    @ attempts < max_retries {
+        attempts = attempts + 1
+        >> "Attempt " attempts " of " max_retries ": " operation_name ¶
+    }
+    <~ attempts
+}
+
+total = retry_operation(3, "connect to server")
+>> "Total attempts: " total ¶
+¶
+
+>> "--- Pattern 2: State management via return values ---" ¶
+
+// INCORRECT: Modify external counter variable
+
+// CORRECT: Return new state
+increment_counter(current_value, amount) {
+    <~ current_value + amount
+}
+
+counter = 0
+counter = increment_counter(counter, 1)
+counter = increment_counter(counter, 5)
+counter = increment_counter(counter, 3)
+>> "Counter: " counter ¶
+>> "Expected: 9" ¶
+¶
+
+>> "--- Pattern 3: Data transformation pipeline ---" ¶
+
+// Each function receives data and returns transformed data
+
+clean_string(text) {
+    // In real code, would do trimming, etc.
+    <~ text
+}
+
+validate_input(text, min_length) {
+    len = text$#
+    ? len >= min_length {
+        <~ text
+    }
+    _{
+        <~ ""
+    }
+}
+
+process_text(text, min_len) {
+    cleaned = clean_string(text)
+    validated = validate_input(cleaned, min_len)
+    <~ validated
+}
+
+input = "Hello World"
+result = process_text(input, 5)
+>> "Processed: '" result "'" ¶
+>> "Expected: 'Hello World'" ¶
+¶
+
+>> "--- Pattern 4: Array of operations ---" ¶
+
+// Since lambdas don't capture, use arrays to store operations
+
+operations = [
+    x -> x + 10,
+    x -> x * 2,
+    x -> x - 5
+]
+
+value = 10
+result1 = operations[0](value)  // Add 10
+result2 = operations[1](value)  // Multiply by 2
+result3 = operations[2](value)  // Subtract 5
+
+>> "operations[0](10) = " result1 ¶
+>> "operations[1](10) = " result2 ¶
+>> "operations[2](10) = " result3 ¶
+>> "Expected: 20, 20, 5" ¶
+¶
+
+>> "--- Pattern 5: Explicit state passing ---" ¶
+
+// When you need a value, pass it explicitly each time
+add_amount = (amount, x) -> x + amount
+
+// Use the same lambda with different amounts
+result1 = add_amount(10, 7)
+result2 = add_amount(5, 3)
+>> "add_amount(10, 7) = " result1 ¶
+>> "add_amount(5, 3) = " result2 ¶
+>> "Expected: 17 and 8" ¶
+¶
+
+>> "=== All patterns work correctly! ===" ¶

@@ -1,0 +1,18 @@
+[package]
+name = "zymbol-formatter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Code formatter for Zymbol-Lang"
+
+[dependencies]
+zymbol-span.workspace = true
+zymbol-common.workspace = true
+zymbol-error.workspace = true
+zymbol-ast.workspace = true
+zymbol-lexer.workspace = true
+zymbol-parser.workspace = true
+
+thiserror.workspace = true
+
+[dev-dependencies]

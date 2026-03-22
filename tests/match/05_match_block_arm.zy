@@ -1,0 +1,29 @@
+// Test: match arms with block bodies
+x = 15
+?? x {
+    1..10 : {
+        >> "small" ¶
+    }
+    11..20 : {
+        >> "medium" ¶
+    }
+    _ : {
+        >> "large" ¶
+    }
+}
+
+// Match as statement with multiple statements in arm
+val = 2
+?? val {
+    1 : {
+        a = "one"
+        >> a ¶
+    }
+    2 : {
+        a = "two"
+        >> a ¶
+    }
+    _ : {
+        >> "other" ¶
+    }
+}

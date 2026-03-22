@@ -1,0 +1,11 @@
+[package]
+name = "zymbol-lexer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Lexical analysis for Zymbol-Lang"
+
+[dependencies]
+zymbol-span.workspace = true
+zymbol-common.workspace = true
+zymbol-error.workspace = true

@@ -1,0 +1,129 @@
+// ============================================================================
+// ZYMBOL-LANG — String Modification Stress Test
+// Operators: $~~ (replace)  $?? (find positions)
+//            $++ (insert)   $-- (remove)
+//
+// Run (WT):  time zymbol run tests/scripts/bench_strings_modify.zy
+// Run (VM):  time zymbol run --vm tests/scripts/bench_strings_modify.zy
+// ============================================================================
+
+<# ./lib_time <= T
+
+>> "=== Zymbol String Modify Stress ===" ¶
+
+t_total = T::now()
+
+// ── M1: Replace all — char pattern ───────────────────────────────────────────
+// Replace every space with underscore in a long sentence, 3 000 times
+t = T::now()
+base_str = "the quick brown fox jumps over the lazy dog near the river bank"
+total_len = 0
+@ i:0..2999 {
+    result = base_str$~~[' ':"_"]
+    total_len = total_len + result$#
+}
+>> "M1_replace_char:    len=" + total_len + "  " + T::elapsed(t) ¶
+
+// ── M2: Replace all — string pattern ─────────────────────────────────────────
+// Replace substring "the" with "a" in a sentence, 2 000 times
+t = T::now()
+sentence = "the cat sat on the mat near the hat by the flat"
+total_len = 0
+@ i:0..1999 {
+    result = sentence$~~["the":"a"]
+    total_len = total_len + result$#
+}
+>> "M2_replace_str:     len=" + total_len + "  " + T::elapsed(t) ¶
+
+// ── M3: Replace N — limit replacements ───────────────────────────────────────
+// Replace first 2 occurrences of "o" in each of 2 000 iterations
+t = T::now()
+text = "the quick brown fox jumps over the dog on the floor of the room"
+total_len = 0
+@ i:0..1999 {
+    result = text$~~['o':"0":2]
+    total_len = total_len + result$#
+}
+>> "M3_replace_n:       len=" + total_len + "  " + T::elapsed(t) ¶
+
+// ── M4: Find positions — char pattern ────────────────────────────────────────
+// Find all positions of 'a' in a sentence, 3 000 times
+t = T::now()
+haystack = "a man a plan a canal panama"
+total_hits = 0
+@ i:0..2999 {
+    positions = haystack$??'a'
+    total_hits = total_hits + positions$#
+}
+>> "M4_findpos_char:    hits=" + total_hits + "  " + T::elapsed(t) ¶
+
+// ── M5: Find positions — string pattern ──────────────────────────────────────
+// Find all positions of "an" in a sentence, 2 000 times
+t = T::now()
+corpus = "a man a plan a canal panama banana"
+total_hits = 0
+@ i:0..1999 {
+    positions = corpus$??"an"
+    total_hits = total_hits + positions$#
+}
+>> "M5_findpos_str:     hits=" + total_hits + "  " + T::elapsed(t) ¶
+
+// ── M6: Insert — build structured strings ────────────────────────────────────
+// Insert a tag at position 0 of each string, 2 000 times
+t = T::now()
+base = "content goes here for this item"
+total_len = 0
+@ i:0..1999 {
+    tagged = base$++[0:"[ITEM] "]
+    total_len = total_len + tagged$#
+}
+>> "M6_insert_front:    len=" + total_len + "  " + T::elapsed(t) ¶
+
+// ── M7: Insert — middle insertion ────────────────────────────────────────────
+// Insert separator at position 5, 2 000 times
+t = T::now()
+word = "helloworld"
+total_len = 0
+@ i:0..1999 {
+    spaced = word$++[5:" "]
+    total_len = total_len + spaced$#
+}
+>> "M7_insert_mid:      len=" + total_len + "  " + T::elapsed(t) ¶
+
+// ── M8: Remove — strip prefix ────────────────────────────────────────────────
+// Remove first 4 chars (">>> ") from 3 000 log lines
+t = T::now()
+log_line = ">>> ERROR: connection timeout at host 192.168.1.1"
+total_len = 0
+@ i:0..2999 {
+    stripped = log_line$--[0:4]
+    total_len = total_len + stripped$#
+}
+>> "M8_remove_prefix:   len=" + total_len + "  " + T::elapsed(t) ¶
+
+// ── M9: Remove — strip from middle ───────────────────────────────────────────
+// Remove 6 chars starting at position 10, 2 000 times
+t = T::now()
+data = "field_name:HIDDEN:field_value"
+total_len = 0
+@ i:0..1999 {
+    cleaned = data$--[11:6]
+    total_len = total_len + cleaned$#
+}
+>> "M9_remove_mid:      len=" + total_len + "  " + T::elapsed(t) ¶
+
+// ── M10: Pipeline — replace + find + measure ─────────────────────────────────
+// Normalize text then count token positions: 1 000 iterations
+t = T::now()
+raw = "  Hello,  World!  How   are   you  today?  "
+total_positions = 0
+@ i:0..999 {
+    step1 = raw$~~["  ":" "]
+    step2 = step1$~~[",":" "]
+    step3 = step2$~~["!":" "]
+    positions = step3$??' '
+    total_positions = total_positions + positions$#
+}
+>> "M10_pipeline:       pos=" + total_positions + "  " + T::elapsed(t) ¶
+
+>> "=== Done (" + T::total(t_total) + ") ===" ¶

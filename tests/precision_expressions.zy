@@ -1,0 +1,85 @@
+// Precision Expression Test File
+// Tests #.N|expr| (round) and #!N|expr| (truncate)
+
+// ===== ROUNDING (#.N|expr|) =====
+>> "=== Rounding Tests ===" ¶
+
+// Basic rounding
+valor = 19.876543
+>> "Original value: " valor ¶
+>> "Round to 2 decimals: " #.2|valor| ¶    // 19.88
+>> "Round to 3 decimals: " #.3|valor| ¶    // 19.877
+>> "Round to 0 decimals: " #.0|valor| ¶    // 20
+
+// Rounding down (value < 5)
+valor2 = 19.874
+>> "Value 19.874 to 2 decimals: " #.2|valor2| ¶  // 19.87
+
+// Rounding up (value >= 5)
+valor3 = 19.875
+>> "Value 19.875 to 2 decimals: " #.2|valor3| ¶  // 19.88
+
+// ===== TRUNCATION (#!N|expr|) =====
+>> "" ¶
+>> "=== Truncation Tests ===" ¶
+
+// Basic truncation
+precio = 19.879999
+>> "Original price: " precio ¶
+>> "Truncate to 2 decimals: " #!2|precio| ¶    // 19.87
+>> "Truncate to 3 decimals: " #!3|precio| ¶    // 19.879
+>> "Truncate to 0 decimals: " #!0|precio| ¶    // 19
+
+// ===== COMPARISON: ROUND VS TRUNCATE =====
+>> "" ¶
+>> "=== Round vs Truncate Comparison ===" ¶
+
+test_value = 19.999
+>> "Value: " test_value ¶
+>> "Rounded to 2: " #.2|test_value| ¶      // 20.00
+>> "Truncated to 2: " #!2|test_value| ¶    // 19.99
+
+// ===== FINANCIAL CALCULATIONS =====
+>> "" ¶
+>> "=== Financial Calculation Example ===" ¶
+
+precio_unitario = 19.876543
+cantidad = 4
+
+// Method 1: Round final total
+total_final = #.2|precio_unitario * cantidad|
+>> "Unit price: " precio_unitario ¶
+>> "Quantity: " cantidad ¶
+>> "Total (round final): " total_final ¶   // 79.51
+
+// Method 2: Round intermediate then multiply
+precio_redondeado = #.3|precio_unitario|
+total_intermedio = #.2|precio_redondeado * cantidad|
+>> "Rounded unit price: " precio_redondeado ¶   // 19.877
+>> "Total (round intermediate): " total_intermedio ¶  // 79.51
+
+// ===== WITH EXPRESSIONS =====
+>> "" ¶
+>> "=== With Expressions ===" ¶
+
+a = 10.5
+b = 3.7
+>> "a = " a ", b = " b ¶
+>> "Round a + b to 1 decimal: " #.1|a + b| ¶       // 14.2
+>> "Round a * b to 2 decimals: " #.2|a * b| ¶     // 38.85
+>> "Truncate a / b to 2 decimals: " #!2|a / b| ¶  // 2.83
+
+// ===== PI APPROXIMATION =====
+>> "" ¶
+>> "=== PI Approximation ===" ¶
+
+pi = 3.141592653589793
+>> "PI = " pi ¶
+>> "PI to 1 decimal: " #.1|pi| ¶    // 3.1
+>> "PI to 2 decimals: " #.2|pi| ¶   // 3.14
+>> "PI to 3 decimals: " #.3|pi| ¶   // 3.142
+>> "PI to 4 decimals: " #.4|pi| ¶   // 3.1416
+>> "PI to 5 decimals: " #.5|pi| ¶   // 3.14159
+
+>> "" ¶
+>> "=== Tests Complete ===" ¶

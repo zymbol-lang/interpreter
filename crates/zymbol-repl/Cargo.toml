@@ -1,0 +1,15 @@
+[package]
+name = "zymbol-repl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Interactive REPL for Zymbol-Lang"
+
+[dependencies]
+zymbol-lexer.workspace = true
+zymbol-parser.workspace = true
+zymbol-interpreter.workspace = true
+zymbol-error.workspace = true
+zymbol-span.workspace = true
+crossterm = "0.28"
+arboard = "3.4"

@@ -1,0 +1,23 @@
+// Test: Nested try-catch blocks
+// Expected output:
+// outer try
+// inner try
+// inner error caught
+// outer finally
+
+arr = [1]
+
+!? {
+    >> "outer try" ¶
+    !? {
+        >> "inner try" ¶
+        x = arr[99]
+        >> "inner success" ¶
+    } :! {
+        >> "inner error caught" ¶
+    }
+} :! {
+    >> "outer error caught" ¶
+} :> {
+    >> "outer finally" ¶
+}

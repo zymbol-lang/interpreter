@@ -1,0 +1,49 @@
+// Test: Module functions with scope system
+// Verify that module functions can see module variables
+// but NOT main program variables
+
+<# ./math_test <= math
+
+>> "=== Test 1: Module function using module constants ===" ¶
+
+result = math::add(5, 3)
+>> "Result: " result ¶
+
+¶
+
+>> "=== Test 2: Module function using module variables ===" ¶
+
+result2 = math::multiply(4, 7)
+>> "Result: " result2 ¶
+
+¶
+
+>> "=== Test 3: Module function using private module variable ===" ¶
+
+area = math::calculate_area(5)
+>> "Scaled area: " area ¶
+
+¶
+
+>> "=== Test 4: Access module constants from main ===" ¶
+
+pi_value = math.PI
+version = math.VERSION
+>> "PI: " pi_value ¶
+>> "Version: " version ¶
+
+¶
+
+>> "=== Test 5: Module function in IF block ===" ¶
+
+? #1 {
+    block_result = math::add(10, 20)
+    >> "Block result: " block_result ¶
+}
+
+// block_result should be destroyed here
+// >> block_result ¶  // This would error
+
+¶
+
+>> "=== All module tests passed! ===" ¶

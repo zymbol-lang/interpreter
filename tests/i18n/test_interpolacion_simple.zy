@@ -1,0 +1,53 @@
+# test_interpolacion_simple
+
+// Test simple de interpolación de variables en bash
+
+>> "=== Test Interpolacion Bash ===" ¶
+¶
+
+// Test 1: Variable simple
+archivo = "calculator.zy"
+>> "Test 1: cat con variable" ¶
+contenido = <\ cat {archivo} \>
+>> "Contenido: " ¶
+>> contenido ¶
+¶
+
+// Test 2: Dos variables
+lineas = 3
+archivo2 = "README.md"
+>> "Test 2: head con dos variables" ¶
+resultado = <\ head "-n" {lineas} {archivo2} \>
+>> "Resultado: " ¶
+>> resultado ¶
+¶
+
+// Test 3: Variable con opción
+opcion = "-lh"
+>> "Test 3: ls con opcion variable" ¶
+listado = <\ ls {opcion} \>
+>> "Listado: " ¶
+>> listado ¶
+¶
+
+// Test 4: Número
+num = 5
+>> "Test 4: head con numero" ¶
+primeras = <\ ls | head "-n" {num} \>
+>> "Primeros archivos: " ¶
+>> primeras ¶
+¶
+
+// Test 5: Crear archivo con variable
+nombre = "test_temp.txt"
+texto = "Contenido de prueba"
+>> "Test 5: crear archivo" ¶
+crear_cmd = <\ echo {texto} > {nombre} \>
+leer = <\ cat {nombre} \>
+>> "Leido: " ¶
+>> leer ¶
+borrar_cmd = <\ rm "-f" {nombre} \>
+>> "Archivo eliminado" ¶
+¶
+
+>> "=== Tests completados ===" ¶

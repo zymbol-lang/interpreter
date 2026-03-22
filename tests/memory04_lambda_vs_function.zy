@@ -1,0 +1,43 @@
+// TEST: Compare lambda capture vs function isolation
+// This test shows the INCONSISTENCY in current implementation
+
+>> "=== Comparing Lambda vs Function variable access ===" ¶
+
+global_value = 42
+
+¶
+
+>> "--- Test with TRADITIONAL FUNCTION ---" ¶
+
+traditional_func() {
+    // Functions create NEW scope, can't see global_value
+    // Uncommenting this would cause error:
+    // >> "Global value: " global_value ¶
+
+    >> "Traditional function: isolated scope ✓" ¶
+    <~ #1
+}
+
+traditional_func()
+
+¶
+
+>> "--- Test with LAMBDA ---" ¶
+
+// Lambda CAPTURES global_value (current behavior)
+// Note: uses dummy parameter since we can't have zero params
+lambda_func = dummy -> {
+    // This works because lambda captures the environment
+    >> "Global value from lambda: " global_value ¶
+    <~ global_value
+}
+
+result = lambda_func(0)
+>> "Lambda result: " result ¶
+
+¶
+
+>> "=== INCONSISTENCY DEMONSTRATED ===" ¶
+>> "Traditional function: NO access to outer scope ✓" ¶
+>> "Lambda: HAS access to outer scope (via capture) ✗" ¶
+>> "Expected behavior: BOTH should be isolated" ¶

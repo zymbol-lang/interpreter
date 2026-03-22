@@ -1,0 +1,79 @@
+// ============================================================================
+// ZYMBOL-LANG BENCHMARK: String Operations
+// Run: time ./target/release/zymbol run tests/scripts/bench_strings.zy
+// ============================================================================
+
+<# ./lib_time <= T
+
+>> "=== Zymbol Benchmark: Strings ===" ¶
+
+t_total = T::now()
+
+t = T::now()
+s = ""
+@ i:0..2000 { s = s + "x" }
+s_len = s$#
+>> "string_concat: len = " + s_len + "  " + T::elapsed(t) ¶
+
+t = T::now()
+csv = "one,two,three,four,five,six,seven,eight,nine,ten"
+total_parts = 0
+@ i:0..1000 {
+    parts = csv / ','
+    p_len = parts$#
+    total_parts = total_parts + p_len
+}
+>> "split_ops: total_parts = " + total_parts + "  " + T::elapsed(t) ¶
+
+t = T::now()
+long_str = "abcdefghijklmnopqrstuvwxyz"
+slice_chars = 0
+@ i:0..2000 {
+    sl = long_str$[0..13]
+    sl_len = sl$#
+    slice_chars = slice_chars + sl_len
+}
+>> "slice_ops: slice_chars = " + slice_chars + "  " + T::elapsed(t) ¶
+
+t = T::now()
+words = ["hello", "world", "zymbol", "lang", "symbolic", "unicode"]
+total_len = 0
+@ i:0..5000 {
+    w = words[i % 6]
+    w_len = w$#
+    total_len = total_len + w_len
+}
+>> "length_ops: total_len = " + total_len + "  " + T::elapsed(t) ¶
+
+t = T::now()
+sentence = "a man a plan a canal panama"
+total_a = 0
+@ _iter:0..500 {
+    @ ch:sentence {
+        ? ch == 'a' { total_a = total_a + 1 }
+    }
+}
+>> "char_iter: total_a = " + total_a + "  " + T::elapsed(t) ¶
+
+t = T::now()
+haystack = "the quick brown fox jumps over the lazy dog"
+needles = ['a', 'e', 'i', 'o', 'u', 'z', 'x', 'q']
+contain_hits = 0
+@ i:0..2000 {
+    needle = needles[i % 8]
+    ? haystack$? needle { contain_hits = contain_hits + 1 }
+}
+>> "string_contains: " + contain_hits + " hits  " + T::elapsed(t) ¶
+
+t = T::now()
+prefix = "Zymbol"
+suffix = "lang"
+build_total = 0
+@ i:0..1999 {
+    token = prefix + "-" + suffix + "-" + i
+    tok_len = token$#
+    build_total = build_total + tok_len
+}
+>> "multi_token_build: total_chars = " + build_total + "  " + T::elapsed(t) ¶
+
+>> "=== Done (" + T::total(t_total) + ") ===" ¶

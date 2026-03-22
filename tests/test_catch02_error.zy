@@ -1,0 +1,15 @@
+// Test: Catching index out of bounds error
+// Expected output:
+// caught error
+// cleanup done
+
+arr = [1, 2, 3]
+
+!? {
+    x = arr[100]
+    >> "no error" ¶
+} :! {
+    >> "caught error" ¶
+} :> {
+    >> "cleanup done" ¶
+}

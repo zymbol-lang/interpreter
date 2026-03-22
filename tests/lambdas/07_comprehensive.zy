@@ -1,0 +1,46 @@
+// Comprehensive lambda test combining multiple features
+>> "=== Lambda Functions & Higher-Order Operations ===" ¶
+
+// Test simple lambda
+double = x -> x * 2
+>> "Double 5: " >> double(5) ¶
+
+// Test multi-param lambda
+add = (a, b) -> a + b
+>> "Add 3 + 7: " >> add(3, 7) ¶
+
+// Test closure
+multiplier = 10
+make_mult = x -> x * multiplier
+>> "Closure 5 * 10: " >> make_mult(5) ¶
+
+// Test map
+numbers = [1, 2, 3, 4, 5]
+doubled = numbers$> (x -> x * 2)
+>> "Map [1-5] * 2: "
+@ n:doubled {
+    >> n " "
+}
+¶
+
+// Test filter
+all_nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+evens = all_nums$| (x -> x % 2 == 0)
+>> "Filter evens: "
+@ n:evens {
+    >> n " "
+}
+¶
+
+// Test reduce
+sum = numbers$< (0, (acc, x) -> acc + x)
+>> "Sum [1-5]: " >> sum ¶
+
+// Test chaining collection operations
+result = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+filtered = result$| (x -> x % 2 == 0)
+mapped = filtered$> (x -> x * x)
+total = mapped$< (0, (acc, x) -> acc + x)
+>> "Chain (filter evens, square, sum): " >> total ¶
+
+>> "=== All tests passed! ===" ¶

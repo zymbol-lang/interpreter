@@ -1,0 +1,7 @@
+// Test: Array creation, access, length
+arr = [10, 20, 30, 40, 50]
+>> arr ¶
+>> arr[0] ¶
+>> arr[4] ¶
+n = arr$#
+>> n ¶

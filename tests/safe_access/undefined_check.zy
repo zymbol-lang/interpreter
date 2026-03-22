@@ -1,0 +1,55 @@
+// TEST: Safe access to undefined variables with #?
+// Variables that don't exist return ("##_", 0, Unit)
+
+>> "=== Test 1: Check undefined variable ===" ¶
+
+// Variable never created
+info = nonexistent#?
+
+>> "Type symbol: " info[0] ¶
+>> "Count: " info[1] ¶
+
+? info[0] == "##_" {
+    >> "✅ Variable is undefined (as expected)" ¶
+}
+_{
+    >> "❌ ERROR: Variable should be undefined" ¶
+}
+
+¶
+
+>> "=== Test 2: Check variable destroyed by scope ===" ¶
+
+? #0 {
+    destroyed_var = "temporary"
+}
+
+// Variable was auto-destroyed when IF block ended
+check = destroyed_var#?
+
+? check[0] == "##_" {
+    >> "✅ Variable was auto-destroyed (as expected)" ¶
+}
+_{
+    >> "❌ ERROR: Variable should be auto-destroyed" ¶
+}
+
+¶
+
+>> "=== Test 3: Check existing variable ===" ¶
+
+existing = 42
+exists_check = existing#?
+
+>> "Type: " exists_check[0] ¶
+>> "Value: " exists_check[2] ¶
+
+? exists_check[0] == "###" {
+    >> "✅ Existing variable detected correctly" ¶
+}
+_{
+    >> "❌ ERROR: Should detect existing integer" ¶
+}
+
+¶
+>> "=== All tests completed ===" ¶

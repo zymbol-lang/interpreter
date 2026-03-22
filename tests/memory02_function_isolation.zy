@@ -1,0 +1,51 @@
+// TEST: Traditional function isolation
+// Functions should NOT see variables from main program
+// Everything must be passed via parameters
+
+>> "=== Test 1: Function trying to access main variable ===" ¶
+
+main_variable = "I'm in main scope"
+
+// This function should NOT be able to see main_variable
+try_access() {
+    // Uncommenting this should cause an error
+    // >> main_variable ¶
+
+    >> "Function executed (not trying to access main_variable)" ¶
+    <~ #1
+}
+
+try_access()
+
+¶
+
+>> "=== Test 2: Function with parameter (CORRECT WAY) ===" ¶
+
+process_value(value) {
+    >> "Received value: " value ¶
+    <~ value + " [processed]"
+}
+
+data = "Hello"
+result = process_value(data)
+>> "Result: " result ¶
+
+¶
+
+>> "=== Test 3: Function accessing own local variables only ===" ¶
+
+calculate(a, b) {
+    local_sum = a + b
+    local_product = a * b
+
+    >> "Sum: " local_sum ¶
+    >> "Product: " local_product ¶
+
+    <~ local_sum + local_product
+}
+
+result = calculate(5, 3)
+>> "Final result: " result ¶
+
+// This should fail - local_sum is not visible here
+// >> local_sum ¶

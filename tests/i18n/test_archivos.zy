@@ -1,0 +1,125 @@
+# test_archivos
+
+// Test del módulo de archivos
+// Demuestra operaciones de archivos y carpetas usando <\ \>
+// IMPORTANTE: Usa strings para rutas y flags
+
+<# ./matematicas/archivos <= arch
+
+>> "=== Test de Módulo de Archivos ===" ¶
+¶
+
+// ===== CONSULTA DE INFORMACIÓN =====
+>> "1. Consultas básicas:" ¶
+¶
+
+>> "   ¿Existe calculator.zy? " arch::existe_archivo() ¶
+>> "   ¿Existe directorio matematicas? " arch::existe_directorio() ¶
+¶
+
+// ===== LEER ARCHIVOS =====
+>> "2. Leer contenido de archivos:" ¶
+¶
+
+>> "   Contenido de calculator.zy:" ¶
+contenido = <\ cat "calculator.zy" \>
+>> contenido ¶
+¶
+
+>> "   Primeras 3 líneas de README.md:" ¶
+primeras = <\ head "-n" 3 "README.md" \>
+>> primeras ¶
+¶
+
+// ===== CREAR Y MANIPULAR ARCHIVOS =====
+>> "3. Crear archivos:" ¶
+¶
+
+>> "   Creando archivo de prueba..." ¶
+crear = <\ echo "Hola desde Zymbol" > "test_archivo.txt" && echo "Creado" \>
+>> "   " crear ¶
+
+>> "   Verificando contenido:" ¶
+verificar = <\ cat "test_archivo.txt" \>
+>> "   " verificar ¶
+¶
+
+>> "   Agregando más contenido:" ¶
+agregar = <\ echo "Segunda linea" >> "test_archivo.txt" && echo "Agregado" \>
+>> "   " agregar ¶
+
+>> "   Contenido completo:" ¶
+completo = <\ cat "test_archivo.txt" \>
+>> completo ¶
+¶
+
+// ===== INFORMACIÓN DE ARCHIVOS =====
+>> "4. Información de archivos:" ¶
+¶
+
+info = arch::info_archivo()
+>> info ¶
+¶
+
+// ===== BUSCAR ARCHIVOS =====
+>> "5. Búsqueda de archivos .zy:" ¶
+¶
+
+busqueda = arch::buscar_zy()
+>> busqueda ¶
+¶
+
+// ===== ESTRUCTURA DE DIRECTORIOS =====
+>> "6. Estructura de directorios:" ¶
+¶
+
+estructura = arch::estructura_directorios()
+>> estructura ¶
+¶
+
+// ===== OPERACIONES CON DIRECTORIOS =====
+>> "7. Operaciones con directorios:" ¶
+¶
+
+>> "   Creando directorio temporal..." ¶
+mkdir_result = <\ mkdir "-p" "prueba_dir" && echo "Directorio creado" \>
+>> "   " mkdir_result ¶
+
+>> "   Creando archivo dentro..." ¶
+touch_result = <\ touch "prueba_dir/archivo.txt" && echo "Archivo creado" \>
+>> "   " touch_result ¶
+
+>> "   Listando contenido:" ¶
+ls_dir = <\ ls "prueba_dir" \>
+>> "   " ls_dir ¶
+¶
+
+// ===== COPIAR Y MOVER =====
+>> "8. Copiar y mover archivos:" ¶
+¶
+
+>> "   Copiando test_archivo.txt..." ¶
+cp_result = <\ cp "test_archivo.txt" "copia.txt" && echo "Copiado" \>
+>> "   " cp_result ¶
+
+>> "   Moviendo la copia..." ¶
+mv_result = <\ mv "copia.txt" "prueba_dir/" && echo "Movido" \>
+>> "   " mv_result ¶
+
+>> "   Verificando:" ¶
+verify = <\ ls "prueba_dir" \>
+>> "   " verify ¶
+¶
+
+// ===== LIMPIAR =====
+>> "9. Limpieza:" ¶
+¶
+
+clean1 = <\ rm "-f" "test_archivo.txt" && echo "Limpiado" \>
+>> "   " clean1 ¶
+
+clean2 = <\ rm "-rf" "prueba_dir" && echo "Directorio eliminado" \>
+>> "   " clean2 ¶
+¶
+
+>> "=== Fin del Test ===" ¶

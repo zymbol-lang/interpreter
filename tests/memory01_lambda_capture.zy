@@ -1,0 +1,43 @@
+// TEST: Lambda variable capture (CURRENT BEHAVIOR)
+// Should this work? According to spec: NO
+// What happens now? Let's verify
+
+>> "=== Test 1: Lambda capturing external variable ===" ¶
+
+x = 100
+
+// Lambda that uses 'x' from outer scope WITHOUT passing it as parameter
+add_to_x = n -> x + n
+
+result = add_to_x(5)
+>> "Result: " result ¶
+>> "Expected if capture works: 105" ¶
+>> "Expected if NO capture: ERROR (undefined variable)" ¶
+
+¶
+
+>> "=== Test 2: Another closure example ===" ¶
+
+multiplier = 10
+
+// Lambda that captures 'multiplier' from outer scope
+make_multiplier = x -> x * multiplier
+
+result2 = make_multiplier(5)
+>> "Result: " result2 ¶
+>> "Expected if capture works: 50" ¶
+>> "Expected if NO capture: ERROR" ¶
+
+¶
+
+>> "=== Test 3: Using external variable in calculation ===" ¶
+
+base = 100
+offset = 20
+
+// Lambda using TWO external variables
+calculate = x -> base + x + offset
+
+result3 = calculate(5)
+>> "Result: " result3 ¶
+>> "Expected if capture works: 125" ¶

@@ -1,0 +1,23 @@
+// TEST: Variables in match blocks should be scoped
+
+>> "=== Test: Match block scoping ===" ¶
+
+value = 5
+
+result = ?? value {
+    1..3 : "low" {
+        match_var = "in range 1-3"
+        >> "Match arm 1: " match_var ¶
+    }
+    4..6 : "medium" {
+        match_var = "in range 4-6"
+        >> "Match arm 2: " match_var ¶
+    }
+    _ : "high"
+}
+
+>> "Result: " result ¶
+
+// This should FAIL - match_var should not exist outside match
+>> "After match, trying to access match_var..." ¶
+>> "Value: " match_var ¶

@@ -1,0 +1,10 @@
+// Test: String $? contains
+s = "hello world"
+>> (s$? 'o') ¶
+>> (s$? 'z') ¶
+>> (s$? "world") ¶
+>> (s$? "xyz") ¶
+>> (s$? "hello") ¶
+
+empty = ""
+>> (empty$? 'a') ¶

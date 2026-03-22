@@ -1,0 +1,70 @@
+# sistema
+
+// Módulo para operaciones del sistema
+// Construido sobre la funcionalidad <\ \> de Zymbol
+
+#> {
+    listar
+    listar_detalle
+    listar_ocultos
+    directorio_actual
+    usuario_actual
+    nombre_host
+    contar_archivos
+    espacio_disco
+    procesos
+}
+
+// Listar archivos del directorio actual
+listar() {
+    resultado = <\ ls \>
+    <~ resultado
+}
+
+// Listar archivos con detalles
+listar_detalle() {
+    resultado = <\ ls "-lh" \>
+    <~ resultado
+}
+
+// Listar incluyendo archivos ocultos
+listar_ocultos() {
+    resultado = <\ ls "-la" \>
+    <~ resultado
+}
+
+// Obtener directorio actual
+directorio_actual() {
+    resultado = <\ pwd \>
+    <~ resultado
+}
+
+// Obtener usuario actual
+usuario_actual() {
+    resultado = <\ whoami \>
+    <~ resultado
+}
+
+// Obtener nombre del host
+nombre_host() {
+    resultado = <\ hostname \>
+    <~ resultado
+}
+
+// Contar archivos en el directorio actual
+contar_archivos() {
+    resultado = <\ ls | wc "-l" \>
+    <~ resultado
+}
+
+// Mostrar espacio en disco
+espacio_disco() {
+    resultado = <\ df "-h" . \>
+    <~ resultado
+}
+
+// Número de procesos activos
+procesos() {
+    resultado = <\ ps aux | wc "-l" \>
+    <~ resultado
+}

@@ -1,0 +1,51 @@
+# test_integration_all
+
+// Test de integración: combina CLI args, ejecución interna y comandos bash
+
+>> "=== Test de Integración Completo ===" ¶
+¶
+
+// Feature 1: Capturar argumentos CLI
+><args
+
+>> "1. Argumentos CLI capturados:" ¶
+? args$# > 0 {
+    >> "   Total: " args$# ¶
+    @ arg:args {
+        >> "   - " arg ¶
+    }
+}
+_{
+    >> "   (No se pasaron argumentos)" ¶
+}
+¶
+
+// Feature 2: Ejecutar script interno
+>> "2. Ejecutando script interno (calculator.zy):" ¶
+calc_output = </ "./calculator.zy" />
+>> calc_output ¶
+
+// Feature 3: Ejecutar comandos bash
+>> "3. Comandos bash:" ¶
+
+>> "   a) Directorio actual:" ¶
+dir = <\ pwd \>
+>> "      " dir ¶
+
+>> "   b) Fecha y hora:" ¶
+fecha = <\ date \>
+>> "      " fecha ¶
+
+>> "   c) Contar archivos .zy:" ¶
+count = <\ ls *.zy | wc -l \>
+>> "      Total: " count ¶
+
+// Feature 4: Combinar todo - usar bash para crear info del sistema
+>> "4. Información del sistema:" ¶
+usuario = <\ whoami \>
+>> "   Usuario: " usuario ¶
+
+hostname = <\ hostname \>
+>> "   Host: " hostname ¶
+
+>> "=== Fin del Test de Integración ===" ¶

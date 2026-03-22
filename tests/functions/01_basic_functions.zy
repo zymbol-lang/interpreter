@@ -1,0 +1,13 @@
+// Test: basic function definitions and calls
+add(a, b) { <~ a + b }
+>> add(3, 4) ¶
+
+mul(a, b) { <~ a * b }
+>> mul(6, 7) ¶
+
+greet(name) { <~ "Hello, " + name }
+>> greet("World") ¶
+
+// No args
+answer() { <~ 42 }
+>> answer() ¶

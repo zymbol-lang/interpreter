@@ -1,0 +1,9 @@
+// Error Test 1: Field Not Found
+// Expected: Runtime error with helpful message
+
+person = (name: "Alice", age: 25)
+
+// This should error: field 'salary' doesn't exist
+salary = person.salary
+
+>> "This should not print" ¶

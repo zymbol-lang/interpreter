@@ -1,0 +1,19 @@
+// Test: match on char values
+ch = 'a'
+kind = ?? ch {
+    'a' : "vowel"
+    'e' : "vowel"
+    'i' : "vowel"
+    'o' : "vowel"
+    'u' : "vowel"
+    _   : "consonant"
+}
+>> kind ¶
+
+ch2 = 'b'
+kind2 = ?? ch2 {
+    'a' : "vowel"
+    'e' : "vowel"
+    _   : "consonant"
+}
+>> kind2 ¶

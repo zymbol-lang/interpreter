@@ -1,0 +1,38 @@
+# test_bash_simple
+
+// Test bash command execution - simple cases
+
+>> "=== Pruebas básicas de comandos bash ===" ¶
+¶
+
+// Test 1: Echo
+>> "Test 1: Echo" ¶
+mensaje = <\ echo "Hola Zymbol" \>
+>> "Resultado: " mensaje ¶
+
+// Test 2: pwd
+>> "Test 2: PWD" ¶
+directorio = <\ pwd \>
+>> "Directorio: " directorio ¶
+
+// Test 3: ls
+>> "Test 3: Listar archivos" ¶
+archivos = <\ ls \>
+>> archivos ¶
+
+// Test 4: ls con flags
+>> "Test 4: Listar con flags -lh" ¶
+detalle = <\ ls -lh \>
+>> detalle ¶
+
+// Test 5: Pipe simple
+>> "Test 5: Echo con pipe" ¶
+piped = <\ echo "uno dos tres" | wc -w \>
+>> "Palabras: " piped ¶
+
+// Test 6: Usar el resultado en una operación
+>> "Test 6: Convertir resultado a número" ¶
+num_archivos = <\ ls | wc -l \>
+>> "Total de archivos: " num_archivos ¶
+
+>> "=== Fin de las pruebas ===" ¶

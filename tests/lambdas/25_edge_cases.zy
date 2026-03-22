@@ -1,0 +1,100 @@
+// Test: Edge cases and boundary conditions
+>> "=== EDGE CASES TEST ===" ¶
+¶
+
+// Empty array operations
+empty = []
+>> "Empty array length: " >> empty$# >> " (expected: 0)" ¶
+
+map_empty = empty$> (x -> x * 2)
+>> "Map on empty: " >> map_empty$# >> " (expected: 0)" ¶
+
+filter_empty = empty$| (x -> x > 0)
+>> "Filter on empty: " >> filter_empty$# >> " (expected: 0)" ¶
+¶
+
+// Single element operations
+single = [42]
+>> "Single element array: " >> single$# >> " (expected: 1)" ¶
+
+mapped_single = single$> (x -> x * 2)
+>> "Mapped single: " >> mapped_single[0] >> " (expected: 84)" ¶
+
+sum_single = single$< (0, (acc, x) -> acc + x)
+>> "Reduce single: " >> sum_single >> " (expected: 42)" ¶
+¶
+
+// Lambda with unused parameter (constant function)
+get_constant = dummy -> 100
+constant = get_constant(#0)
+>> "Constant lambda: " >> constant >> " (expected: 100)" ¶
+¶
+
+// Nested lambdas with same parameter names (shadowing)
+outer = x -> {
+    inner = x -> x * 2
+    result = inner(5)
+    <~ x + result
+}
+
+shadow_result = outer(10)
+>> "Parameter shadowing: " >> shadow_result ¶
+>> "Expected: 10 + 5*2 = 20" ¶
+¶
+
+// Chain of identity functions
+identity = x -> x
+chain_identity = 99 |> identity(_) |> identity(_) |> identity(_)
+>> "Chain of identity: " >> chain_identity >> " (expected: 99)" ¶
+¶
+
+// Filter that keeps nothing
+numbers = [1, 2, 3, 4, 5]
+none = numbers$| (x -> #0)
+>> "Filter keeps none: " >> none$# >> " (expected: 0)" ¶
+
+// Filter that keeps everything
+all = numbers$| (x -> #1)
+>> "Filter keeps all: " >> all$# >> " (expected: 5)" ¶
+¶
+
+// Reduce with different initial values
+sum_zero = numbers$< (0, (acc, x) -> acc + x)
+sum_hundred = numbers$< (100, (acc, x) -> acc + x)
+>> "Reduce from 0: " >> sum_zero >> " (expected: 15)" ¶
+>> "Reduce from 100: " >> sum_hundred >> " (expected: 115)" ¶
+¶
+
+// Large chain of operations
+large_result = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    $> (x -> x + 1)
+    $> (x -> x * 2)
+    $| (x -> x > 10)
+    $> (x -> x - 5)
+    $< (0, (acc, x) -> acc + x)
+
+>> "Large chain result: " >> large_result ¶
+>> "Expected: sum of ((x+1)*2-5) for x where (x+1)*2 > 10" ¶
+¶
+
+// Closure capturing multiple variables
+a = 10
+b = 20
+c = 30
+
+multi_capture = x -> a + b + c + x
+mc_result = multi_capture(5)
+>> "Multi-variable closure: " >> mc_result ¶
+>> "Expected: 10+20+30+5 = 65" ¶
+¶
+
+// Boolean operations in filter
+bools = [#1, #0, #1, #1, #0]
+true_count = bools$| (x -> x)
+>> "Filter true values: " >> true_count$# >> " (expected: 3)" ¶
+
+false_count = bools$| (x -> !x)
+>> "Filter false values: " >> false_count$# >> " (expected: 2)" ¶
+¶
+
+>> "=== TEST PASSED ===" ¶

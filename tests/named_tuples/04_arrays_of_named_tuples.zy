@@ -1,0 +1,31 @@
+// Test 4: Arrays of Named Tuples
+// Expected: Arrays can contain named tuples and iterate over them
+
+users = [
+    (id: 1, name: "Alice", role: "Admin"),
+    (id: 2, name: "Bob", role: "User"),
+    (id: 3, name: "Charlie", role: "Moderator")
+]
+
+// Access array elements
+? users[0].name == "Alice" {
+    >> "✓ Array element field access works" ¶
+}
+
+? users[1].id == 2 {
+    >> "✓ Second element access works" ¶
+}
+
+// Iterate and access fields
+count = 0
+@ user:users {
+    ? user.id > 0 {
+        count = count + 1
+    }
+}
+
+? count == 3 {
+    >> "✓ Loop iteration over named tuples works" ¶
+}
+
+>> "Test 4 PASSED" ¶

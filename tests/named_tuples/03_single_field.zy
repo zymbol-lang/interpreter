@@ -1,0 +1,26 @@
+// Test 3: Single-Field Named Tuples
+// Expected: Named tuples can have just 1 field
+
+wrapper = (value: 42)
+
+? wrapper.value == 42 {
+    >> "✓ Single-field named tuple works" ¶
+}
+
+? wrapper[0] == 42 {
+    >> "✓ Single-field positional access works" ¶
+}
+
+// Test with different types
+str_wrapper = (text: "Hello")
+bool_wrapper = (flag: #1)
+
+? str_wrapper.text == "Hello" {
+    >> "✓ Single-field string works" ¶
+}
+
+? bool_wrapper.flag == #1 {
+    >> "✓ Single-field boolean works" ¶
+}
+
+>> "Test 3 PASSED" ¶

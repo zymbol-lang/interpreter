@@ -1,0 +1,15 @@
+[package]
+name = "zymbol-compiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AST-to-bytecode compiler for Zymbol-Lang"
+
+[dependencies]
+zymbol-bytecode.workspace = true
+zymbol-ast.workspace = true
+zymbol-common.workspace = true
+zymbol-lexer.workspace = true
+zymbol-parser.workspace = true
+zymbol-span.workspace = true
+thiserror.workspace = true

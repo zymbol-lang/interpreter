@@ -1,0 +1,100 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "crates/zymbol-span",
+    "crates/zymbol-error",
+    "crates/zymbol-common",
+    "crates/zymbol-ast",
+    "crates/zymbol-lexer",
+    "crates/zymbol-parser",
+    "crates/zymbol-interpreter",
+    "crates/zymbol-standalone",
+    "crates/zymbol-cli",
+    "crates/zymbol-semantic",
+    "crates/zymbol-analyzer",
+    "crates/zymbol-lsp",
+    "crates/zymbol-formatter",
+    "crates/zymbol-repl",
+    "crates/zymbol-bytecode",
+    "crates/zymbol-vm",
+    "crates/zymbol-compiler",
+    # Uncomment as you create each crate:
+    # "crates/zymbol-codegen",
+    # "crates/zymbol-runtime",
+    # "crates/zymbol-stdlib",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Zymbol-Lang Contributors"]
+repository = "https://github.com/your-username/zymbol-lang"
+
+[workspace.dependencies]
+# Internal crates
+zymbol-span = { path = "crates/zymbol-span" }
+zymbol-error = { path = "crates/zymbol-error" }
+zymbol-common = { path = "crates/zymbol-common" }
+zymbol-ast = { path = "crates/zymbol-ast" }
+zymbol-lexer = { path = "crates/zymbol-lexer" }
+zymbol-parser = { path = "crates/zymbol-parser" }
+zymbol-semantic = { path = "crates/zymbol-semantic" }
+zymbol-ir = { path = "crates/zymbol-ir" }
+zymbol-codegen = { path = "crates/zymbol-codegen" }
+zymbol-interpreter = { path = "crates/zymbol-interpreter" }
+zymbol-bytecode = { path = "crates/zymbol-bytecode" }
+zymbol-vm = { path = "crates/zymbol-vm" }
+zymbol-compiler = { path = "crates/zymbol-compiler" }
+zymbol-standalone = { path = "crates/zymbol-standalone" }
+zymbol-runtime = { path = "crates/zymbol-runtime" }
+zymbol-stdlib = { path = "crates/zymbol-stdlib" }
+zymbol-analyzer = { path = "crates/zymbol-analyzer" }
+zymbol-formatter = { path = "crates/zymbol-formatter" }
+zymbol-repl = { path = "crates/zymbol-repl" }
+
+# Unicode handling
+unicode-xid = "0.2"
+unicode-segmentation = "1.11"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# CLI tools
+clap = { version = "4.5", features = ["derive", "cargo"] }
+rustyline = "14.0"
+
+# Terminal/REPL
+crossterm = "0.28"
+arboard = "3.4"
+
+# Colors and formatting
+owo-colors = "4.0"
+termcolor = "1.4"
+
+# Data structures
+indexmap = "2.2"
+hashbrown = "0.14"
+
+# Utilities
+itertools = "0.12"
+derive_more = "0.99"
+
+# Serialization (for bytecode)
+bincode = "1.3"
+serde = { version = "1.0", features = ["derive"] }
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.bench]
+inherits = "release"

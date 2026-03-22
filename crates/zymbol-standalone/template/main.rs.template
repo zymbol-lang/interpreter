@@ -1,0 +1,53 @@
+// Auto-generated standalone Zymbol program
+// Built with Zymbol-Lang compiler
+
+mod source;
+
+use zymbol_error::DiagnosticBag;
+use zymbol_interpreter::Interpreter;
+use zymbol_lexer::Lexer;
+use zymbol_parser::Parser;
+use zymbol_span::SourceMap;
+
+fn main() {
+    // Embedded source code
+    let source = source::SOURCE;
+
+    // Setup source map
+    let mut source_map = SourceMap::new();
+    let file_id = source_map.add_file("<embedded>".to_string(), source.to_string());
+
+    // Lex
+    let lexer = Lexer::new(source, file_id);
+    let (tokens, lex_diagnostics) = lexer.tokenize();
+
+    if !lex_diagnostics.is_empty() {
+        let mut bag = DiagnosticBag::new();
+        for diag in lex_diagnostics {
+            bag.add(diag);
+        }
+        bag.emit_all(&source_map);
+        std::process::exit(1);
+    }
+
+    // Parse
+    let parser = Parser::new(tokens);
+    let program = match parser.parse() {
+        Ok(prog) => prog,
+        Err(diagnostics) => {
+            let mut bag = DiagnosticBag::new();
+            for diag in diagnostics {
+                bag.add(diag);
+            }
+            bag.emit_all(&source_map);
+            std::process::exit(1);
+        }
+    };
+
+    // Execute with interpreter
+    let mut interpreter = Interpreter::new();
+    if let Err(e) = interpreter.execute(&program) {
+        eprintln!("Runtime error: {}", e);
+        std::process::exit(1);
+    }
+}

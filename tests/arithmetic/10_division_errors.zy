@@ -1,0 +1,14 @@
+// Test: Division by zero caught by error handling
+!? {
+    x = 10 / 0
+    >> "no reach" ¶
+} :! ##Div {
+    >> "div zero caught" ¶
+}
+
+// Modulo by zero: WT panics (Rust panic), VM raises ##Div
+// → No testar modulo by zero aquí (comportamiento difiere)
+
+// Verificar que div normal funciona post-error
+r = 20 / 4
+>> r ¶

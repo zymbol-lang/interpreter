@@ -1,0 +1,69 @@
+# test_http_api
+
+// Test de consumo de APIs con curl
+// Demuestra interacción HTTP usando interpolación de variables
+
+<# ./matematicas/http <= http
+
+>> "=== Test de Consumo de APIs ===" ¶
+¶
+
+// ===== TEST 1: GET simple =====
+>> "1. GET a API pública (httpbin):" ¶
+url = "https://httpbin.org/get"
+respuesta = http::get(url)
+>> "Respuesta: " ¶
+>> respuesta ¶
+¶
+
+// ===== TEST 2: Código de estado =====
+>> "2. Verificar código de estado:" ¶
+url_test = "https://httpbin.org/status/200"
+codigo = http::get_status_code(url_test)
+>> "Código HTTP: " codigo ¶
+¶
+
+// ===== TEST 3: Headers =====
+>> "3. Obtener headers:" ¶
+headers = http::get_headers(url)
+>> headers ¶
+¶
+
+// ===== TEST 4: GET con parámetros en URL =====
+>> "4. GET con parámetros:" ¶
+api_url = "https://httpbin.org/get?nombre=Zymbol&version=1.0"
+datos = http::get(api_url)
+>> "Datos recibidos: " ¶
+>> datos ¶
+¶
+
+// ===== TEST 5: POST con datos =====
+>> "5. POST con datos:" ¶
+post_url = "https://httpbin.org/post"
+payload = "campo1=valor1&campo2=valor2"
+respuesta_post = http::post(post_url, payload)
+>> "Respuesta POST: " ¶
+>> respuesta_post ¶
+¶
+
+// ===== TEST 6: Múltiples APIs con variables =====
+>> "6. Consultar múltiples endpoints:" ¶
+
+base_url = "https://httpbin.org"
+endpoints = ["/uuid", "/ip", "/user-agent"]
+
+// Nota: Esto requeriría iteración, por ahora hacemos manual
+endpoint1 = "/uuid"
+url1 = base_url + endpoint1
+uuid_resp = http::get(url1)
+>> "UUID: " ¶
+>> uuid_resp ¶
+
+endpoint2 = "/ip"
+url2 = base_url + endpoint2
+ip_resp = http::get(url2)
+>> "IP: " ¶
+>> ip_resp ¶
+¶
+
+>> "=== Fin del Test HTTP ===" ¶

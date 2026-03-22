@@ -1,0 +1,13 @@
+// Test: Float arithmetic
+a = 3.14
+b = 2.0
+>> (a + b) ¶
+>> (a * b) ¶
+>> (10.0 / 3.0) ¶
+>> (2.5 ^ 2) ¶
+
+// Int to float promotion
+c = 5
+d = 2.0
+>> (c + d) ¶
+>> (c / d) ¶

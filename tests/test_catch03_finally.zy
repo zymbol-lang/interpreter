@@ -1,0 +1,11 @@
+// Test: Finally always executes
+// Expected output:
+// success: 42
+// finally runs
+
+!? {
+    result = 42
+    >> "success: " + result ¶
+} :> {
+    >> "finally runs" ¶
+}

@@ -1,0 +1,63 @@
+# test_modulos_sistema
+
+// Test de módulos construidos sobre <\ \>
+// Demuestra cómo construir bibliotecas estándar usando comandos bash
+
+<# ./matematicas/fecha_hora <= fecha
+<# ./matematicas/sistema <= sys
+
+>> "=== Test de Módulos del Sistema ===" ¶
+¶
+
+// ===== MÓDULO FECHA_HORA =====
+>> "1. Módulo fecha_hora:" ¶
+¶
+
+>> "   Fecha actual: " fecha::fecha_actual() ¶
+>> "   Hora actual: " fecha::hora_actual() ¶
+>> "   Timestamp Unix: " fecha::timestamp() ¶
+>> "   Día de la semana: " fecha::dia_semana() ¶
+>> "   Mes: " fecha::mes() ¶
+>> "   Año: " fecha::año() ¶
+>> "   Formato ISO: " fecha::formato_iso() ¶
+¶
+
+>> "   Fecha y hora completa:" ¶
+>> "   " fecha::fecha_hora_completa() ¶
+¶
+
+// ===== MÓDULO SISTEMA =====
+>> "2. Módulo sistema:" ¶
+¶
+
+>> "   Directorio actual: " sys::directorio_actual() ¶
+>> "   Usuario: " sys::usuario_actual() ¶
+>> "   Host: " sys::nombre_host() ¶
+¶
+
+>> "   Número de archivos: " sys::contar_archivos() ¶
+>> "   Número de procesos: " sys::procesos() ¶
+¶
+
+>> "   Archivos en el directorio:" ¶
+archivos = sys::listar()
+>> archivos ¶
+¶
+
+>> "   Espacio en disco:" ¶
+>> sys::espacio_disco() ¶
+¶
+
+// ===== USO COMBINADO =====
+>> "3. Reporte del sistema:" ¶
+>> "   ================================" ¶
+>> "   Fecha: " fecha::fecha_actual() ¶
+>> "   Hora: " fecha::hora_actual() ¶
+>> "   Usuario: " sys::usuario_actual() ¶
+>> "   Host: " sys::nombre_host() ¶
+>> "   Ubicación: " sys::directorio_actual() ¶
+>> "   Archivos: " sys::contar_archivos() ¶
+>> "   ================================" ¶
+¶
+
+>> "=== Fin del Test ===" ¶

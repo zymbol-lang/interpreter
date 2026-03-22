@@ -1,0 +1,11 @@
+[package]
+name = "zymbol-error"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Error reporting for Zymbol-Lang compiler"
+
+[dependencies]
+zymbol-span.workspace = true
+owo-colors.workspace = true
+thiserror.workspace = true

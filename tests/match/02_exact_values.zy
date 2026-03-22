@@ -1,0 +1,19 @@
+// Test: match with exact integer values
+day = 3
+name = ?? day {
+    1 : "Monday"
+    2 : "Tuesday"
+    3 : "Wednesday"
+    4 : "Thursday"
+    5 : "Friday"
+    _ : "Weekend"
+}
+>> name ¶
+
+day2 = 7
+name2 = ?? day2 {
+    1 : "Monday"
+    2 : "Tuesday"
+    _ : "Weekend"
+}
+>> name2 ¶

@@ -1,0 +1,50 @@
+// Comprehensive pipe operator test
+>> "=== PIPE OPERATOR TESTS ===" ¶
+¶
+
+// 1. Simple pipe with lambda
+>> "1. Simple Pipe with Lambda:" ¶
+result1 = 5 |> (x -> x * 2)(_)
+>> "  5 |> (x -> x * 2)(_) = " >> result1 ¶
+¶
+
+// 2. Pipe with multi-parameter lambda
+>> "2. Pipe with Multi-Parameter Lambda:" ¶
+add = (a, b) -> a + b
+result2 = 10 |> add(_, 5)
+>> "  10 |> add(_, 5) = " >> result2 ¶
+¶
+
+// 3. Chained pipes
+>> "3. Chained Pipes:" ¶
+double = x -> x * 2
+add_ten = x -> x + 10
+result3 = 5 |> double(_) |> add_ten(_)
+>> "  5 |> double(_) |> add_ten(_) = " >> result3 ¶
+¶
+
+// 4. Pipe with closure
+>> "4. Pipe with Closure:" ¶
+multiplier = 3
+triple = x -> x * multiplier
+result4 = 7 |> triple(_)
+>> "  7 |> triple(_) with multiplier=3: " >> result4 ¶
+¶
+
+// 5. Multiple placeholders
+>> "5. Multiple Arguments:" ¶
+compute = (a, b, c) -> a * b + c
+result5 = 2 |> compute(_, 5, 10)
+>> "  2 |> compute(_, 5, 10) = " >> result5 ¶
+¶
+
+// 6. Pipe result to another operation
+>> "6. Chained Operations:" ¶
+increment = x -> x + 1
+square = x -> x * x
+result6 = 3 |> increment(_) |> square(_)
+>> "  3 |> increment(_) |> square(_) = " >> result6 ¶
+>> "  (Expected: (3+1)² = 16)" ¶
+¶
+
+>> "=== ALL PIPE TESTS PASSED! ===" ¶

@@ -1,0 +1,26 @@
+# test_sqlite_simple
+
+// Simple SQLite test to verify installation and basic functionality
+
+>> "=== SQLite Simple Test ===" ¶
+¶
+
+// Create a temporary database and query it
+db_name = "simple_test.db"
+
+>> "1. Creating database, table, and inserting data..." ¶
+dummy = <\ sqlite3 {db_name} "CREATE TABLE greetings (id INTEGER PRIMARY KEY, message TEXT); INSERT INTO greetings (message) VALUES ('Hello from Zymbol!'); INSERT INTO greetings (message) VALUES ('SQLite works!');" \>
+>> "   Database ready" ¶
+¶
+
+>> "2. Querying data:" ¶
+result = <\ sqlite3 {db_name} "SELECT * FROM greetings;" \>
+>> result ¶
+¶
+
+>> "3. Cleanup - removing test database" ¶
+dummy = <\ rm "-f" {db_name} \>
+>> "   Database removed" ¶
+¶
+
+>> "=== Test Complete ===" ¶

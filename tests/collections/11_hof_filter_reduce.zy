@@ -1,0 +1,17 @@
+// Test: $| filter and $< reduce
+nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+evens = nums$| (x -> x % 2 == 0)
+>> evens ¶
+
+odds = nums$| (x -> x % 2 != 0)
+>> odds ¶
+
+big = nums$| (x -> x > 5)
+>> big ¶
+
+total = nums$< (0, (acc, x) -> acc + x)
+>> total ¶
+
+product = nums$< (1, (acc, x) -> acc * x)
+>> product ¶

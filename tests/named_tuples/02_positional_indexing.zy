@@ -1,0 +1,27 @@
+// Test 2: Positional Indexing on Named Tuples (Backward Compatibility)
+// Expected: Named tuples support both field and index access
+
+person = (name: "Alice", age: 25, city: "Madrid")
+
+// Test positional access
+? person[0] == "Alice" {
+    >> "✓ Positional index [0] works" ¶
+}
+
+? person[1] == 25 {
+    >> "✓ Positional index [1] works" ¶
+}
+
+? person[2] == "Madrid" {
+    >> "✓ Positional index [2] works" ¶
+}
+
+// Mix field and index access
+name_field = person.name
+name_index = person[0]
+
+? name_field == name_index {
+    >> "✓ Field and index return same value" ¶
+}
+
+>> "Test 2 PASSED" ¶

@@ -1,0 +1,6 @@
+// Simple pipe operator test
+>> "Testing pipe operator..." ¶
+
+// Test 1: Simple pipe with lambda
+result1 = 5 |> (x -> x * 2)(_)
+>> "Test 1: 5 |> (x -> x * 2)(_) = " >> result1 ¶

@@ -1,0 +1,22 @@
+// Test: closures capturing outer variables
+base = 10
+adder = x -> x + base
+>> adder(5) ¶
+>> adder(20) ¶
+
+// Closure factory
+make_multiplier(factor) {
+    <~ x -> x * factor
+}
+
+times3 = make_multiplier(3)
+times5 = make_multiplier(5)
+>> times3(4) ¶
+>> times5(4) ¶
+
+// Closure captures loop variable value at creation time
+multipliers = [1, 2, 3, 4, 5]$> (n -> x -> x * n)
+fn0 = multipliers[0]
+fn2 = multipliers[2]
+>> fn0(10) ¶
+>> fn2(10) ¶

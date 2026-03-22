@@ -1,0 +1,18 @@
+// Test: functions as arguments and return values
+apply(f, x) { <~ f(x) }
+
+double = x -> x * 2
+>> apply(double, 7) ¶
+
+// Function composition
+compose(f, g) { <~ x -> f(g(x)) }
+
+inc = x -> x + 1
+double2 = x -> x * 2
+inc_then_double = compose(double2, inc)
+>> inc_then_double(4) ¶
+
+// Passing function to another HOF
+nums = [1, 2, 3, 4, 5]
+tripled = nums$> (x -> x * 3)
+>> tripled ¶

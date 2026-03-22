@@ -1,0 +1,7 @@
+# calculator
+
+// Script simple que realiza cálculos
+>> "Suma: " 10 + 5 ¶
+>> "Resta: " 10 - 5 ¶
+>> "Multiplicación: " 10 * 5 ¶
+>> "División: " 10 / 5 ¶

@@ -1,0 +1,4 @@
+// Test multi-parameter lambda
+add = (a, b) -> a + b
+result = add(3, 7)
+>> result ¶

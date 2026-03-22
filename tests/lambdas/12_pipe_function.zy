@@ -1,0 +1,9 @@
+// Pipe to regular function test
+>> "Testing pipe to function..." ¶
+
+// Define lambda
+add = (a, b) -> a + b
+
+// Test piping to lambda
+result = 10 |> add(_, 5)
+>> "10 |> add(_, 5) = " >> result ¶

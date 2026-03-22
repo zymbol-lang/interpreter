@@ -1,0 +1,20 @@
+// Test: Type metadata expr#?
+ti = 42#?
+>> ti ¶
+>> ti[0] ¶
+
+tf = 3.14#?
+>> tf[0] ¶
+
+ts = "hello"#?
+>> ts[0] ¶
+
+tc = 'A'#?
+>> tc[0] ¶
+
+tb = #1#?
+>> tb[0] ¶
+
+arr = [1, 2, 3]
+ta = arr#?
+>> ta[0] ¶

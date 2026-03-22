@@ -1,0 +1,16 @@
+// Test: tail-recursive functions (VM optimized)
+sum_tail(n, acc) {
+    ? n <= 0 { <~ acc }
+    <~ sum_tail(n - 1, acc + n)
+}
+
+>> sum_tail(100, 0) ¶
+>> sum_tail(1000, 0) ¶
+
+// Tail-recursive factorial
+fact_tail(n, acc) {
+    ? n <= 1 { <~ acc }
+    <~ fact_tail(n - 1, acc * n)
+}
+
+>> fact_tail(10, 1) ¶

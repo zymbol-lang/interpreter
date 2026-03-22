@@ -1,0 +1,8 @@
+[package]
+name = "zymbol-bytecode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bytecode instructions and compiled program format for Zymbol-Lang VM"
+
+[dependencies]

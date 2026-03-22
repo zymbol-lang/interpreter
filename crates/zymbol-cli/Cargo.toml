@@ -1,0 +1,28 @@
+[package]
+name = "zymbol-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line interface for Zymbol-Lang interpreter"
+
+[[bin]]
+name = "zymbol"
+path = "src/main.rs"
+
+[dependencies]
+zymbol-span.workspace = true
+zymbol-common.workspace = true
+zymbol-error.workspace = true
+zymbol-ast.workspace = true
+zymbol-lexer.workspace = true
+zymbol-parser.workspace = true
+zymbol-semantic.workspace = true
+zymbol-interpreter.workspace = true
+zymbol-standalone.workspace = true
+zymbol-bytecode.workspace = true
+zymbol-vm.workspace = true
+zymbol-compiler.workspace = true
+zymbol-formatter.workspace = true
+zymbol-repl.workspace = true
+clap.workspace = true
+anyhow.workspace = true

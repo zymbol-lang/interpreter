@@ -1,0 +1,75 @@
+// ============================================================================
+// ZYMBOL-LANG BENCHMARK: Pattern Matching
+// Run: time ./target/release/zymbol run tests/scripts/bench_match.zy
+// ============================================================================
+
+<# ./lib_time <= T
+
+>> "=== Zymbol Benchmark: Pattern Matching ===" ¶
+
+classify(x) {
+    <~ ?? x {
+        1 : "one"
+        2 : "two"
+        3 : "three"
+        4 : "four"
+        5 : "five"
+        _ : "other"
+    }
+}
+
+grade(score) {
+    <~ ?? score {
+        90..100 : "A"
+        80..89  : "B"
+        70..79  : "C"
+        60..69  : "D"
+        0..59   : "F"
+        _       : "?"
+    }
+}
+
+quadrant(x, y) {
+    <~ ?? x {
+        0..100 : ?? y {
+            0..100 : "Q1"
+            _      : "Q4"
+        }
+        _ : ?? y {
+            0..100 : "Q2"
+            _      : "Q3"
+        }
+    }
+}
+
+t_total = T::now()
+
+t = T::now()
+hits = 0
+@ i:0..50000 {
+    val = (i % 6) + 1
+    label = classify(val)
+    ? label <> "other" { hits = hits + 1 }
+}
+>> "value_match: " + hits + " non-other hits  " + T::elapsed(t) ¶
+
+t = T::now()
+a_count = 0
+@ i:0..50000 {
+    score = i % 101
+    g = grade(score)
+    ? g == "A" { a_count = a_count + 1 }
+}
+>> "range_match: " + a_count + " A-grades  " + T::elapsed(t) ¶
+
+t = T::now()
+q1_count = 0
+@ i:0..20000 {
+    x = i % 200
+    y = i % 150
+    q = quadrant(x, y)
+    ? q == "Q1" { q1_count = q1_count + 1 }
+}
+>> "nested_match: " + q1_count + " Q1 hits  " + T::elapsed(t) ¶
+
+>> "=== Done (" + T::total(t_total) + ") ===" ¶

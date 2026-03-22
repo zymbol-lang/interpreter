@@ -1,0 +1,15 @@
+// Test: Base literals 0x 0b 0o 0d
+a = 0x41
+>> a ¶
+b = 0b01000001
+>> b ¶
+c = 0o101
+>> c ¶
+d = 0d65
+>> d ¶
+
+// Higher hex values (Int result)
+e = 0xFF
+>> e ¶
+f = 0b11111111
+>> f ¶

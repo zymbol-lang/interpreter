@@ -1,0 +1,174 @@
+// ============================================================================
+// ZYMBOL-LANG BENCHMARK: Recursion vs Loop equivalents
+//
+// Los contadores de calls/iters se calculan en runtime desde el propio programa.
+// Funciones _c retornan (resultado, conteo) — el conteo se propaga recursivamente.
+//
+// Run: zymbol run tests/scripts/bench_recursion_loop.zy
+// ============================================================================
+
+<# ./lib_time <= T
+
+>> "=== Zymbol Benchmark: Recursion vs Loop ===" ¶
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fibonacci — versión recursiva con contador de calls
+// Retorna (resultado, total_calls) — el conteo se acumula en cada nodo del árbol
+// ─────────────────────────────────────────────────────────────────────────────
+fib_rec(n) {
+    ? n <= 1 { <~ (n, 1) }
+    _ {
+        r1 = fib_rec(n - 1)
+        r2 = fib_rec(n - 2)
+        <~ (r1[0] + r2[0], r1[1] + r2[1] + 1)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fibonacci — versión iterativa con contador de calls e iters
+// Retorna (resultado, calls, iters)
+// ─────────────────────────────────────────────────────────────────────────────
+fib_loop(n) {
+    ? n <= 1 { <~ (n, 1, 0) }
+    a = 0
+    b = 1
+    iters = 0
+    @ _i:2..n {
+        c = a + b
+        a = b
+        b = c
+        iters = iters + 1
+    }
+    <~ (b, 1, iters)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ackermann — versión recursiva con contador de calls
+// Retorna (resultado, total_calls)
+// ─────────────────────────────────────────────────────────────────────────────
+ackermann_rec(m, n) {
+    ? m == 0 { <~ (n + 1, 1) }
+    _? n == 0 {
+        r = ackermann_rec(m - 1, 1)
+        <~ (r[0], r[1] + 1)
+    }
+    _ {
+        r1 = ackermann_rec(m, n - 1)
+        r2 = ackermann_rec(m - 1, r1[0])
+        <~ (r2[0], r1[1] + r2[1] + 1)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ackermann — versión iterativa v1 (stack dinámico: $+/$-)
+// Retorna (resultado, calls, iters)
+// ─────────────────────────────────────────────────────────────────────────────
+ackermann_loop(m_init, n_init) {
+    stack = [m_init]
+    n = n_init
+    sz = stack$#
+    iters = 0
+    @ sz > 0 {
+        iters = iters + 1
+        last = sz - 1
+        m = stack[last]
+        stack = stack$- last
+        ? m == 0 {
+            n = n + 1
+        }
+        _? n == 0 {
+            stack = stack$+ (m - 1)
+            n = 1
+        }
+        _ {
+            stack = stack$+ (m - 1)
+            stack = stack$+ m
+            n = n - 1
+        }
+        sz = stack$#
+    }
+    <~ (n, 1, iters)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ackermann — versión iterativa v2 (stack pre-alocado + $~ in-place)
+// - Pre-aloca 520 slots (A(3,6) max depth = 508)
+// - $~ self-assign: O(1) vs O(n) clone por escritura
+// - index read fast path: m = stack[top] clona solo el elemento, no el array
+// - elimina sz = stack$# por iteración (era un clon O(n) extra)
+// Retorna (resultado, calls, iters)
+// ─────────────────────────────────────────────────────────────────────────────
+ackermann_loop_v2(m_init, n_init) {
+    stack = []
+    @ _i:0..519 { stack = stack$+ 0 }
+    top = 0
+    stack = stack[0]$~ m_init
+    n = n_init
+    iters = 0
+    @ top >= 0 {
+        iters = iters + 1
+        m = stack[top]
+        top = top - 1
+        ? m == 0 {
+            n = n + 1
+        }
+        _? n == 0 {
+            top = top + 1
+            stack = stack[top]$~ (m - 1)
+            n = 1
+        }
+        _ {
+            top = top + 1
+            stack = stack[top]$~ (m - 1)
+            top = top + 1
+            stack = stack[top]$~ m
+            n = n - 1
+        }
+    }
+    <~ (n, 1, iters)
+}
+
+t_total = T::now()
+
+// ── fib(30) recursivo ────────────────────────────────────────────────────────
+t = T::now()
+r1 = fib_rec(30)
+>> "fib_rec(30)        = " + r1[0] + "  " + T::elapsed(t) + "  (" + c|r1[1]| + " calls)" ¶
+
+// ── fib(30) iterativo ─────────────────────────────────────────────────────────
+t = T::now()
+r2 = fib_loop(30)
+>> "fib_loop(30)       = " + r2[0] + "  " + T::elapsed(t) + "  (" + c|r2[1]| + " calls, " + r2[2] + " iters)" ¶
+
+// ── fib(30) puro loop ─────────────────────────────────────────────────────────
+t = T::now()
+a = 0
+b = 1
+pure_iters = 0
+@ _i:2..30 {
+    c = a + b
+    a = b
+    b = c
+    pure_iters = pure_iters + 1
+}
+>> "fib_pure(30)       = " + b + "  " + T::elapsed(t) + "  (0 calls, " + pure_iters + " iters)" ¶
+
+>> "" ¶
+
+// ── ackermann(3,6) recursivo ─────────────────────────────────────────────────
+t = T::now()
+r4 = ackermann_rec(3, 6)
+>> "ackermann_rec(3,6)  = " + r4[0] + "  " + T::elapsed(t) + "  (" + c|r4[1]| + " calls)" ¶
+
+// ── ackermann(3,6) iterativo v1 (stack dinámico $+/$-) ────────────────────────
+t = T::now()
+r5 = ackermann_loop(3, 6)
+>> "ackermann_loop(3,6)    = " + r5[0] + "  " + T::elapsed(t) + "  (" + c|r5[1]| + " call, " + r5[2] + " iters)" ¶
+
+// ── ackermann(3,6) iterativo v2 ($~ in-place + index read fast path) ──────────
+t = T::now()
+r6 = ackermann_loop_v2(3, 6)
+>> "ackermann_loop_v2(3,6) = " + r6[0] + "  " + T::elapsed(t) + "  (" + c|r6[1]| + " call, " + r6[2] + " iters)" ¶
+
+>> "" ¶
+>> "=== Done (" + T::total(t_total) + ") ===" ¶

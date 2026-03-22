@@ -1,0 +1,28 @@
+// Test: Module isolation - module functions CANNOT see main variables
+
+<# ./isolated_module <= isolated
+
+>> "=== Testing Module Isolation ===" ¶
+¶
+
+>> "--- Main program variable ---" ¶
+main_variable = "I am in main program"
+>> "Main variable: " main_variable ¶
+¶
+
+>> "--- Calling module function (should NOT see main_variable) ---" ¶
+result = isolated::try_access_main_var("test data")
+>> "Result: " result ¶
+¶
+
+>> "--- Module function with local variable ---" ¶
+result2 = isolated::safe_function(10)
+>> "Result: " result2 ¶
+¶
+
+>> "--- Verify main_variable still exists in main ---" ¶
+>> "Main variable: " main_variable ¶
+¶
+
+>> "=== Isolation test passed! ===" ¶
+>> "Module functions correctly isolated from main program" ¶

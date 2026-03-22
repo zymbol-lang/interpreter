@@ -1,0 +1,17 @@
+// TEST: Variable shadowing in nested scopes
+
+>> "=== Test: Variable shadowing ===" ¶
+
+x = "outer x"
+>> "Outer x: " x ¶
+
+? #1 {
+    x = "inner x"  // Shadows outer x
+    >> "Inner x: " x ¶
+}
+
+// After block, should restore outer x (if shadowing implemented)
+// OR keep modified value (if no shadowing)
+>> "After block, x: " x ¶
+>> "Expected (with shadowing): 'outer x'" ¶
+>> "Expected (without shadowing): 'inner x'" ¶

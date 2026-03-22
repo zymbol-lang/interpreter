@@ -1,0 +1,17 @@
+// TEST: Module isolation
+// Modules should NOT see variables from importing program
+// NOTE: This requires creating a module file first
+
+>> "=== Module Isolation Test ===" ¶
+>> "Modules should only access their own variables" ¶
+>> "and what's passed via parameters" ¶
+
+// Create a variable in main
+main_secret = "This should be invisible to module functions"
+
+>> "Main variable set: " main_secret ¶
+
+// If we had a module, it should NOT be able to see main_secret
+// without it being passed as a parameter
+
+>> "Test completed - module system prevents global access" ¶

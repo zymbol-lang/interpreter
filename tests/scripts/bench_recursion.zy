@@ -1,0 +1,58 @@
+// ============================================================================
+// ZYMBOL-LANG BENCHMARK: Recursion Depth & Call Overhead
+// Run: time ./target/release/zymbol run tests/scripts/bench_recursion.zy
+// ============================================================================
+
+<# ./lib_time <= T
+
+>> "=== Zymbol Benchmark: Recursion ===" ¶
+
+fib(n) {
+    ? n <= 1 { <~ n }
+    _ { <~ fib(n - 1) + fib(n - 2) }
+}
+
+fact(n) {
+    ? n <= 1 { <~ 1 }
+    _ { <~ n * fact(n - 1) }
+}
+
+pow(base, exp) {
+    ? exp == 0 { <~ 1 }
+    _ { <~ base * pow(base, exp - 1) }
+}
+
+ackermann(m, n) {
+    ? m == 0 { <~ n + 1 }
+    _? n == 0 { <~ ackermann(m - 1, 1) }
+    _ { <~ ackermann(m - 1, ackermann(m, n - 1)) }
+}
+
+sum_down(n, acc) {
+    ? n == 0 { <~ acc }
+    _ { <~ sum_down(n - 1, acc + n) }
+}
+
+t_total = T::now()
+
+t = T::now()
+r1 = fib(30)
+>> "fib(30) = " + r1 + "  " + T::elapsed(t) ¶
+
+t = T::now()
+r2 = fact(20)
+>> "fact(20) = " + r2 + "  " + T::elapsed(t) ¶
+
+t = T::now()
+r3 = pow(2, 20)
+>> "pow(2,20) = " + r3 + "  " + T::elapsed(t) ¶
+
+t = T::now()
+r4 = ackermann(3, 6)
+>> "ackermann(3,6) = " + r4 + "  " + T::elapsed(t) ¶
+
+t = T::now()
+r5 = sum_down(1000, 0)
+>> "sum_down(1000) = " + r5 + "  " + T::elapsed(t) ¶
+
+>> "=== Done (" + T::total(t_total) + ") ===" ¶

@@ -1,0 +1,19 @@
+// Test: Variable scope in try-catch-finally
+// Expected output:
+// before: initial
+// in try: modified
+// in finally: finalized
+// after: finalized
+
+status = "initial"
+>> "before: " + status ¶
+
+!? {
+    status = "modified"
+    >> "in try: " + status ¶
+} :> {
+    status = "finalized"
+    >> "in finally: " + status ¶
+}
+
+>> "after: " + status ¶

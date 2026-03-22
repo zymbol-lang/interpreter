@@ -1,0 +1,10 @@
+// Test: String split operator /
+parts = "a,b,c,d" / ','
+>> parts ¶
+>> (parts$#) ¶
+>> parts[0] ¶
+>> parts[3] ¶
+
+words = "hello world foo" / ' '
+>> words ¶
+>> (words$#) ¶

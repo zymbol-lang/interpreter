@@ -1,0 +1,9 @@
+// Pipe with parenthesized identifier
+>> "Testing pipe with parentheses..." ¶
+
+// Define lambda
+add = (a, b) -> a + b
+
+// Test piping to parenthesized identifier
+result = 10 |> (add)(_, 5)
+>> "10 |> (add)(_, 5) = " >> result ¶

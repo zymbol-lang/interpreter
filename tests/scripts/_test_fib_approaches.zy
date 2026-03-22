@@ -1,0 +1,24 @@
+<# ./lib_time <= T
+
+fib_rec(n) {
+    ? n <= 1 { <~ n }
+    _ { <~ fib_rec(n - 1) + fib_rec(n - 2) }
+}
+
+fib_tail(n, a, b) {
+    ? n == 0 { <~ a }
+    _? n == 1 { <~ b }
+    _ { <~ fib_tail(n - 1, b, a + b) }
+}
+
+t = T::now()
+r1 = fib_rec(30)
+>> "fib_rec(30)  = " + r1 + "  " + T::elapsed(t) + "  (2,692,537 calls)" ¶
+
+t = T::now()
+r2 = fib_tail(30, 0, 1)
+>> "fib_tail(30) = " + r2 + "  " + T::elapsed(t) + "  (30 calls)" ¶
+
+t = T::now()
+r3 = fib_tail(30, 0, 1)
+>> "fib_tail(30) = " + r3 + "  " + T::elapsed(t) + "  (40 calls)" ¶

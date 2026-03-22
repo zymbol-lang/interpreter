@@ -1,0 +1,19 @@
+// Edge Case Test 1: Collection Operations on Named Tuples
+// Expected: $# operator works on named tuples
+
+product = (id: 1, name: "Item", price: 100, stock: 50)
+
+len = product$#
+? len == 4 {
+    >> "✓ Collection length on named tuple works" ¶
+}
+
+// Named tuple in array
+items = [(id: 1, name: "A"), (id: 2, name: "B")]
+arr_len = items$#
+
+? arr_len == 2 {
+    >> "✓ Array of named tuples length works" ¶
+}
+
+>> "Edge Test 1 PASSED" ¶

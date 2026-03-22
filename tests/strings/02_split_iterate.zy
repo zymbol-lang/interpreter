@@ -1,0 +1,13 @@
+// Test: Iterate over split parts
+csv = "10,20,30,40,50" / ','
+total = 0
+@ part:csv {
+    n = #|part|
+    total = total + n
+}
+>> total ¶
+
+// Split and rejoin manually
+tokens = "one two three" / ' '
+@ t:tokens { >> t "-" }
+>> ¶

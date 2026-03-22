@@ -1,0 +1,22 @@
+// Test: function scope isolation (no closures for traditional fns)
+x = 100
+
+no_access() {
+    // x is not visible here — function scope is isolated
+    local = 42
+    <~ local
+}
+
+>> no_access() ¶
+>> x ¶
+
+// Inner vars don't leak
+side_effect() {
+    secret = 999
+    <~ secret
+}
+
+r = side_effect()
+>> r ¶
+// secret is not accessible here, verify x unchanged
+>> x ¶

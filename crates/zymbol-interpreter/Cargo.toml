@@ -1,0 +1,22 @@
+[package]
+name = "zymbol-interpreter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Interpreter for Zymbol-Lang"
+
+[dependencies]
+zymbol-span.workspace = true
+zymbol-common.workspace = true
+zymbol-error.workspace = true
+zymbol-ast.workspace = true
+zymbol-lexer.workspace = true
+zymbol-parser.workspace = true
+zymbol-semantic = { path = "../zymbol-semantic" }
+thiserror.workspace = true
+
+[dev-dependencies]
+zymbol-lexer.workspace = true
+zymbol-parser.workspace = true
+zymbol-compiler.workspace = true
+zymbol-vm.workspace = true

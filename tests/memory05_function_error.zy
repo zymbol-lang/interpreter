@@ -1,0 +1,16 @@
+// TEST: Function trying to access external variable
+// This SHOULD cause a runtime error
+
+>> "=== Testing function access to external variable ===" ¶
+
+external_var = "I am external"
+
+bad_function() {
+    // This should cause an error: undefined variable
+    >> "Trying to access: " external_var ¶
+    <~ #1
+}
+
+>> "Calling function that tries to access external_var..." ¶
+bad_function()
+>> "If you see this, there's a problem!" ¶

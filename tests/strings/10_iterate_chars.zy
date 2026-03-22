@@ -1,0 +1,16 @@
+// Test: for-each over string characters
+count = 0
+@ c:"hello" { count++ }
+>> count ¶
+
+// Collect chars
+result = ""
+@ c:"abc" { result = result, c }
+>> result ¶
+
+// Count specific char
+vowels = 0
+@ c:"hello world" {
+    ? c == 'e' || c == 'o' { vowels++ }
+}
+>> vowels ¶

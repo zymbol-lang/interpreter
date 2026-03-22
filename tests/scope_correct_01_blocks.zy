@@ -1,0 +1,62 @@
+// CORRECT: Using block scopes properly
+// Variables defined in blocks are auto-destroyed when block ends
+
+>> "=== Correct Block Scope Usage ===" ¶
+¶
+
+>> "--- Test 1: IF block with local variables ---" ¶
+
+score = 85
+
+? score >= 90 {
+    grade = 'A'
+    message = "Excellent!"
+    >> "Grade: " grade ", " message ¶
+}
+_? score >= 80 {
+    grade = 'B'
+    message = "Good job!"
+    >> "Grade: " grade ", " message ¶
+}
+
+// 'grade' and 'message' don't exist here - they were destroyed
+>> "Score was: " score ¶
+¶
+
+>> "--- Test 2: Loop with iteration variables ---" ¶
+
+total = 0
+@ i:1..5 {
+    squared = i * i
+    total = total + squared
+    >> "i=" i ", squared=" squared ", total=" total ¶
+}
+
+// 'i' and 'squared' don't exist here
+>> "Final total: " total ¶
+¶
+
+>> "--- Test 3: Nested blocks see outer variables ---" ¶
+
+outer = "OUTER"
+
+? #1 {
+    middle = "MIDDLE"
+    >> "Can see outer: " outer ¶
+
+    ? #1 {
+        inner = "INNER"
+        >> "Can see outer: " outer ¶
+        >> "Can see middle: " middle ¶
+        >> "Can see inner: " inner ¶
+    }
+
+    >> "After inner block, can still see middle: " middle ¶
+    // 'inner' is destroyed here
+}
+
+>> "After all blocks, can still see outer: " outer ¶
+// 'middle' is destroyed here
+¶
+
+>> "=== All tests passed! ===" ¶

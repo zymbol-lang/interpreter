@@ -1,0 +1,49 @@
+# time_utils
+// Timing utilities for Zymbol-Lang benchmarks.
+// Uses <\ date +%s%N \> (Unix epoch nanoseconds via system call) — no built-ins.
+//
+// Usage:
+//   <# ./lib_time <= T
+//   t0 = T::now()
+//   // ... work ...
+//   >> T::elapsed(t0) ¶          // "(0.235s)"
+//   >> T::total(t0) ¶            // "0.235s total"
+
+#> { now, elapsed, total }
+
+// Return current time in milliseconds (epoch nanoseconds / 1_000_000).
+now() {
+    <~ #|<\ date +%s%N \>| / 1000000
+}
+
+// Format elapsed time since start_ms as "(X.XXXs)".
+elapsed(start_ms) {
+    diff = #|<\ date +%s%N \>| / 1000000 - start_ms
+    s    = diff / 1000
+    ms   = diff - (s * 1000)
+    ? ms < 10 {
+        <~ "(" + s + ".00" + ms + "s)"
+    }
+    _? ms < 100 {
+        <~ "(" + s + ".0" + ms + "s)"
+    }
+    _ {
+        <~ "(" + s + "." + ms + "s)"
+    }
+}
+
+// Format elapsed time since start_ms as "X.XXXs total".
+total(start_ms) {
+    diff = #|<\ date +%s%N \>| / 1000000 - start_ms
+    s    = diff / 1000
+    ms   = diff - (s * 1000)
+    ? ms < 10 {
+        <~ s + ".00" + ms + "s total"
+    }
+    _? ms < 100 {
+        <~ s + ".0" + ms + "s total"
+    }
+    _ {
+        <~ s + "." + ms + "s total"
+    }
+}

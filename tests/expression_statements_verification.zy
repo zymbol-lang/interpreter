@@ -1,0 +1,417 @@
+// =============================================================================
+// EXPRESSION STATEMENTS VERIFICATION TEST SUITE
+// =============================================================================
+// Purpose: Comprehensive verification that expression statements work correctly
+// Feature: Function calls without assignment (side effects only)
+// Date: December 19, 2024
+// =============================================================================
+
+>> "=== EXPRESSION STATEMENTS VERIFICATION TEST SUITE ===" ¶
+¶
+
+// =============================================================================
+// TEST 1: Basic Function Call Statements with Output Parameters
+// =============================================================================
+>> "TEST 1: Basic Function Call with Output Parameters" ¶
+
+counter = 0
+increment_counter(c<~) {
+    c = c + 1
+}
+
+increment_counter(counter)
+>> "Counter after 1st call: " counter ¶  // Expected: 1
+
+increment_counter(counter)
+>> "Counter after 2nd call: " counter ¶  // Expected: 2
+
+increment_counter(counter)
+>> "Counter after 3rd call: " counter ¶  // Expected: 3
+
+? counter == 3 {
+    >> "✅ TEST 1 PASSED" ¶
+}
+_{
+    >> "❌ TEST 1 FAILED" ¶
+}
+¶
+
+// =============================================================================
+// TEST 2: Function Call Statement with Return Value (Discarded)
+// =============================================================================
+>> "TEST 2: Function Call with Return (Discarded)" ¶
+
+sum_func(a, b) {
+    <~ a + b
+}
+
+sum_func(10, 20)  // Returns 30, but we discard it
+sum_func(5, 15)   // Returns 20, but we discard it
+
+>> "✅ TEST 2 PASSED (no crash, values discarded)" ¶
+¶
+
+// =============================================================================
+// TEST 3: Multiple Expression Statements in Sequence
+// =============================================================================
+>> "TEST 3: Multiple Expression Statements in Sequence" ¶
+
+seq_count = 0
+increment_seq(c<~) {
+    c = c + 1
+}
+
+increment_seq(seq_count)
+increment_seq(seq_count)
+increment_seq(seq_count)
+increment_seq(seq_count)
+increment_seq(seq_count)
+
+>> "Sequence count: " seq_count ¶  // Expected: 5
+
+? seq_count == 5 {
+    >> "✅ TEST 3 PASSED" ¶
+}
+_{
+    >> "❌ TEST 3 FAILED" ¶
+}
+¶
+
+// =============================================================================
+// TEST 4: Expression Statements in IF Blocks
+// =============================================================================
+>> "TEST 4: Expression Statements in IF Blocks" ¶
+
+if_result = 0
+set_if_result(val, result<~) {
+    result = val
+}
+
+x = 10
+? x > 5 {
+    set_if_result(1, if_result)
+}
+_? x > 0 {
+    set_if_result(2, if_result)
+}
+_{
+    set_if_result(3, if_result)
+}
+
+>> "IF result: " if_result ¶  // Expected: 1
+
+? if_result == 1 {
+    >> "✅ TEST 4 PASSED" ¶
+}
+_{
+    >> "❌ TEST 4 FAILED" ¶
+}
+¶
+
+// =============================================================================
+// TEST 5: Expression Statements in WHILE Loops
+// =============================================================================
+>> "TEST 5: Expression Statements in While Loops" ¶
+
+loop_counter = 0
+while_result = 0
+add_to_while(val, result<~) {
+    result = result + val
+}
+
+@ loop_counter < 5 {
+    add_to_while(1, while_result)
+    loop_counter = loop_counter + 1
+}
+
+>> "While loop result: " while_result ¶  // Expected: 5
+
+? while_result == 5 {
+    >> "✅ TEST 5 PASSED" ¶
+}
+_{
+    >> "❌ TEST 5 FAILED" ¶
+}
+¶
+
+// =============================================================================
+// TEST 6: Expression Statements in FOR-EACH Loops
+// =============================================================================
+>> "TEST 6: Expression Statements in For-Each Loops" ¶
+
+foreach_sum = 0
+add_to_sum(n, sum<~) {
+    sum = sum + n
+}
+
+@ i:1..5 {
+    add_to_sum(i, foreach_sum)
+}
+
+>> "For-each sum: " foreach_sum ¶  // Expected: 15 (1+2+3+4+5)
+
+? foreach_sum == 15 {
+    >> "✅ TEST 6 PASSED" ¶
+}
+_{
+    >> "❌ TEST 6 FAILED" ¶
+}
+¶
+
+// =============================================================================
+// TEST 7: Expression Statements in TIMES Loops
+// =============================================================================
+>> "TEST 7: Expression Statements in Times Loops" ¶
+
+times_counter = 0
+inc_times(c<~) {
+    c = c + 1
+}
+
+@ 10 {
+    inc_times(times_counter)
+}
+
+>> "Times loop counter: " times_counter ¶  // Expected: 10
+
+? times_counter == 10 {
+    >> "✅ TEST 7 PASSED" ¶
+}
+_{
+    >> "❌ TEST 7 FAILED" ¶
+}
+¶
+
+// =============================================================================
+// TEST 8: Expression Statements with Multiple Output Parameters
+// =============================================================================
+>> "TEST 8: Expression Statements with Multiple Output Parameters" ¶
+
+modify_values(a, b, x<~, y<~) {
+    x = a * 2
+    y = b * 3
+}
+
+val1 = 0
+val2 = 0
+modify_values(5, 10, val1, val2)  // Expression statement
+
+>> "Modified values: " val1 " and " val2 ¶  // Expected: 10 and 30
+
+? val1 == 10 {
+    ? val2 == 30 {
+        >> "✅ TEST 8 PASSED" ¶
+    }
+    _{
+        >> "❌ TEST 8 FAILED (val2 incorrect)" ¶
+    }
+}
+_{
+    >> "❌ TEST 8 FAILED (val1 incorrect)" ¶
+}
+¶
+
+// =============================================================================
+// TEST 9: Nested Expression Statements
+// =============================================================================
+>> "TEST 9: Nested Expression Statements" ¶
+
+nested_result = 0
+increment_nested(r<~) {
+    r = r + 1
+}
+
+outer_nested(result<~) {
+    increment_nested(result)
+    increment_nested(result)
+    increment_nested(result)
+}
+
+outer_nested(nested_result)
+
+>> "Nested result: " nested_result ¶  // Expected: 3
+
+? nested_result == 3 {
+    >> "✅ TEST 9 PASSED" ¶
+}
+_{
+    >> "❌ TEST 9 FAILED" ¶
+}
+¶
+
+// =============================================================================
+// TEST 10: Expression Statements in Match Blocks
+// =============================================================================
+>> "TEST 10: Expression Statements in Match Blocks" ¶
+
+match_result = 0
+set_match_value(val, result<~) {
+    result = val
+}
+
+value = 85
+?? value {
+    90..100 : { set_match_value(1, match_result) }
+    80..89  : { set_match_value(2, match_result) }
+    70..79  : { set_match_value(3, match_result) }
+    _       : { set_match_value(0, match_result) }
+}
+
+>> "Match result: " match_result ¶  // Expected: 2
+
+? match_result == 2 {
+    >> "✅ TEST 10 PASSED" ¶
+}
+_{
+    >> "❌ TEST 10 FAILED" ¶
+}
+¶
+
+// =============================================================================
+// TEST 11: Expression Statements Mixed with Assignments
+// =============================================================================
+>> "TEST 11: Expression Statements Mixed with Assignments" ¶
+
+get_and_increment(counter<~) {
+    counter = counter + 1
+    <~ counter
+}
+
+mixed_counter = 0
+
+get_and_increment(mixed_counter)         // Expression statement (discard return)
+result1 = get_and_increment(mixed_counter)    // Assignment (capture return)
+get_and_increment(mixed_counter)         // Expression statement (discard return)
+result2 = get_and_increment(mixed_counter)    // Assignment (capture return)
+
+>> "Mixed: counter=" mixed_counter " result1=" result1 " result2=" result2 ¶
+// Expected: counter=4 result1=2 result2=4
+
+? mixed_counter == 4 {
+    ? result1 == 2 {
+        ? result2 == 4 {
+            >> "✅ TEST 11 PASSED" ¶
+        }
+        _{
+            >> "❌ TEST 11 FAILED (result2 incorrect)" ¶
+        }
+    }
+    _{
+        >> "❌ TEST 11 FAILED (result1 incorrect)" ¶
+    }
+}
+_{
+    >> "❌ TEST 11 FAILED (counter incorrect)" ¶
+}
+¶
+
+// =============================================================================
+// TEST 12: Expression Statements in Array Iteration
+// =============================================================================
+>> "TEST 12: Expression Statements in Array Iteration" ¶
+
+arr_sum = 0
+add_to_array_sum(n, sum<~) {
+    sum = sum + n
+}
+
+numbers = [10, 20, 30, 40, 50]
+@ num:numbers {
+    add_to_array_sum(num, arr_sum)
+}
+
+>> "Array sum: " arr_sum ¶  // Expected: 150
+
+? arr_sum == 150 {
+    >> "✅ TEST 12 PASSED" ¶
+}
+_{
+    >> "❌ TEST 12 FAILED" ¶
+}
+¶
+
+// =============================================================================
+// TEST 13: Function Call Statements with Void Functions (No Return)
+// =============================================================================
+>> "TEST 13: Void Functions (No Return)" ¶
+
+void_result = 0
+void_func(val, result<~) {
+    result = val * 2
+    // No return statement
+}
+
+void_func(5, void_result)
+
+>> "Void result: " void_result ¶  // Expected: 10
+
+? void_result == 10 {
+    >> "✅ TEST 13 PASSED" ¶
+}
+_{
+    >> "❌ TEST 13 FAILED" ¶
+}
+¶
+
+// =============================================================================
+// TEST 14: Multiple Parameters in Expression Statements
+// =============================================================================
+>> "TEST 14: Multiple Parameters" ¶
+
+multi_result = 0
+multi_param(a, b, c, d, result<~) {
+    result = a + b + c + d
+}
+
+multi_param(1, 2, 3, 4, multi_result)
+
+>> "Multi param result: " multi_result ¶  // Expected: 10
+
+? multi_result == 10 {
+    >> "✅ TEST 14 PASSED" ¶
+}
+_{
+    >> "❌ TEST 14 FAILED" ¶
+}
+¶
+
+// =============================================================================
+// TEST 15: Complex Nested Calls
+// =============================================================================
+>> "TEST 15: Complex Nested Calls" ¶
+
+complex_result = 0
+helper1(r<~) {
+    r = r + 10
+}
+
+helper2(r<~) {
+    r = r * 2
+}
+
+complex_func(result<~) {
+    helper1(result)
+    helper2(result)
+}
+
+complex_func(complex_result)
+
+>> "Complex result: " complex_result ¶  // Expected: 20
+
+? complex_result == 20 {
+    >> "✅ TEST 15 PASSED" ¶
+}
+_{
+    >> "❌ TEST 15 FAILED" ¶
+}
+¶
+
+// =============================================================================
+// FINAL SUMMARY
+// =============================================================================
+>> "================================================" ¶
+>> "VERIFICATION TEST SUITE COMPLETE" ¶
+>> "================================================" ¶
+>> "All 15 tests executed" ¶
+>> "Check output above for ✅ PASSED or ❌ FAILED" ¶
+>> "================================================" ¶

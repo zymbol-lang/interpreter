@@ -1,0 +1,203 @@
+// Complex problems to test robustness of functional features
+>> "=== COMPLEX FUNCTIONAL PROGRAMMING TESTS ===" ¶
+¶
+
+// ===== PROBLEM 1: Data Processing Pipeline =====
+>> "1. Data Processing Pipeline:" ¶
+>> "   Processing sales data with multiple transformations" ¶
+
+// Simulated sales data: (price, quantity, discount_percent)
+sales = [
+    (100, 5, 10),
+    (250, 3, 15),
+    (75, 10, 5),
+    (500, 2, 20),
+    (150, 8, 10)
+]
+
+// Calculate total revenue after discount - INLINE lambda required
+revenues = sales$> (sale -> {
+    price = sale[0]
+    quantity = sale[1]
+    discount = sale[2]
+    subtotal = price * quantity
+    discount_amount = subtotal * discount / 100
+    final = subtotal - discount_amount
+    <~ final
+})
+
+// Filter high-value sales (> 500)
+high_value = revenues$| (r -> r > 500)
+
+// Sum total revenue
+total_revenue = revenues$< (0, (acc, x) -> acc + x)
+
+>> "   Total revenue: " >> total_revenue ¶
+>> "   High-value sales count: " >> high_value$# ¶
+¶
+
+// ===== PROBLEM 2: Fibonacci Sequence =====
+>> "2. Fibonacci Sequence:" ¶
+
+fib_list = [0, 1]
+@ counter:2..15 {
+    a = fib_list[counter - 2]
+    b = fib_list[counter - 1]
+    next = a + b
+    fib_list = fib_list$+ next
+}
+
+>> "   First 15 Fibonacci: "
+@ n:fib_list {
+    >> n " "
+}
+¶
+¶
+
+// ===== PROBLEM 3: Prime Number Sieve =====
+>> "3. Prime Number Sieve (up to 50):" ¶
+
+numbers = [2, 3, 4, 5, 6, 7, 8, 9, 10,
+           11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+           21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+           31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+           41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+
+// Filter primes - INLINE lambda required
+primes = numbers$| (n -> {
+    ? n < 2 {
+        <~ #0
+    }
+    divisor = 2
+    @ divisor:2..n {
+        ? divisor * divisor > n {
+            @!
+        }
+        ? n % divisor == 0 {
+            <~ #0
+        }
+    }
+    <~ #1
+})
+
+>> "   Primes: "
+@ p:primes {
+    >> p " "
+}
+¶
+>> "   Count: " >> primes$# ¶
+¶
+
+// ===== PROBLEM 4: Statistical Analysis =====
+>> "4. Statistical Analysis:" ¶
+
+dataset = [23, 45, 12, 67, 34, 89, 56, 78, 90, 43, 21, 65, 54, 32, 76]
+
+sum = dataset$< (0, (acc, x) -> acc + x)
+count = dataset$#
+mean = sum / count
+
+>> "   Dataset size: " >> count ¶
+>> "   Sum: " >> sum ¶
+>> "   Mean: " >> mean ¶
+
+above_mean = dataset$| (x -> x > mean)
+>> "   Values above mean: " >> above_mean$# ¶
+¶
+
+// ===== PROBLEM 5: Nested Data Transformation =====
+>> "5. Nested Transformations:" ¶
+
+matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+doubled_matrix = matrix$> (row -> row$> (x -> x * 2))
+
+>> "   Original first row: "
+@ n:matrix[0] {
+    >> n " "
+}
+¶
+
+>> "   Doubled first row: "
+@ n:doubled_matrix[0] {
+    >> n " "
+}
+¶
+¶
+
+// ===== PROBLEM 6: Complex Chaining =====
+>> "6. Complex Chaining:" ¶
+
+input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+evens = input$| (x -> x % 2 == 0)
+squared = evens$> (x -> x * x)
+result = squared$< (0, (acc, x) -> acc + x)
+
+>> "   Result: " >> result ¶
+>> "   (Expected: 2² + 4² + 6² + 8² + 10² = 220)" ¶
+¶
+
+// ===== PROBLEM 7: Currying Patterns =====
+>> "7. Currying:" ¶
+
+create_multiplier = factor -> x -> x * factor
+times_two = create_multiplier(2)
+times_five = create_multiplier(5)
+
+test = 7
+>> "   " >> test " * 2 = " >> times_two(test) ¶
+>> "   " >> test " * 5 = " >> times_five(test) ¶
+¶
+
+// ===== PROBLEM 8: Function Composition =====
+>> "8. Function Composition:" ¶
+
+add_one = x -> x + 1
+multiply_two = x -> x * 2
+square = x -> x * x
+
+result8 = 5 |> add_one(_) |> multiply_two(_) |> square(_)
+>> "   ((5+1)*2)² = " >> result8 ¶
+>> "   (Expected: 144)" ¶
+¶
+
+// ===== PROBLEM 9: Custom Aggregation =====
+>> "9. Data Aggregation:" ¶
+
+nums = [45, 23, 67, 12, 89, 34, 56, 78]
+
+maximum = nums$< (nums[0], (max, x) -> {
+    ? x > max {
+        <~ x
+    }
+    _{
+        <~ max
+    }
+})
+
+>> "   Maximum: " >> maximum ¶
+¶
+
+// ===== PROBLEM 10: Multi-step Pipeline =====
+>> "10. Multi-step Pipeline:" ¶
+
+data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+step1 = data$| (x -> x % 3 == 0)
+step2 = step1$> (x -> x * x)
+step3 = step2$< (0, (acc, x) -> acc + x)
+
+>> "   Sum of squared multiples of 3: " >> step3 ¶
+>> "   (3² + 6² + 9² + 12² + 15² + 18² = 819)" ¶
+¶
+
+>> "=== ALL COMPLEX TESTS COMPLETED ===" ¶
+>> "Successfully tested:" ¶
+>> "  ✓ Complex data processing" ¶
+>> "  ✓ Iterative algorithms (Fibonacci)" ¶
+>> "  ✓ Filtering algorithms (Prime sieve)" ¶
+>> "  ✓ Statistical computations" ¶
+>> "  ✓ Nested transformations" ¶
+>> "  ✓ Complex chaining" ¶
+>> "  ✓ Currying patterns" ¶
+>> "  ✓ Function composition" ¶
+>> "  ✓ Custom aggregations" ¶
+>> "  ✓ Multi-step pipelines" ¶

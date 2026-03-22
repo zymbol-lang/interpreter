@@ -1,0 +1,12 @@
+// Test: for-each over array and nested operations
+nums = [1, 2, 3, 4, 5]
+total = 0
+@ n:nums { total = total + n }
+>> total ¶
+
+// Collect transformed
+result = []
+@ n:nums {
+    result = result$+ (n * n)
+}
+>> result ¶

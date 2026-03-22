@@ -1,0 +1,54 @@
+// ============================================================================
+// ZYMBOL-LANG STRESS TEST
+// Run: cargo build --release && time ./target/release/zymbol run tests/scripts/stress.zy
+// ============================================================================
+
+<# ./lib_time <= T
+
+>> "=== Zymbol Stress Test ===" ¶
+
+t_total = T::now()
+
+t = T::now()
+s = 0
+@ i:0..99999 { s = s + i }
+>> "arithmetic: sum(0..99999) = " + s + "  " + T::elapsed(t) ¶
+
+t = T::now()
+count = 0
+@ i:0..499 {
+    @ _j:0..499 { count = count + 1 }
+}
+>> "nested_loop: " + count + " iterations  " + T::elapsed(t) ¶
+
+t = T::now()
+str = ""
+@ i:0..2999 { str = str + "a" }
+str_len = str$#
+>> "string_concat: len = " + str_len + "  " + T::elapsed(t) ¶
+
+t = T::now()
+arr = []
+@ i:0..4999 { arr = arr$+ i }
+arr_len = arr$#
+>> "array_push: len = " + arr_len + "  " + T::elapsed(t) ¶
+
+fib(n) {
+    ? n <= 1 { <~ n }
+    _ { <~ fib(n - 1) + fib(n - 2) }
+}
+
+t = T::now()
+fib_result = fib(25)
+>> "fib(25) = " + fib_result + "  " + T::elapsed(t) ¶
+
+t = T::now()
+lookup_arr = []
+@ i:0..999 { lookup_arr = lookup_arr$+ i }
+hits = 0
+@ i:0..999 {
+    ? lookup_arr$? i { hits = hits + 1 }
+}
+>> "array_contains: " + hits + " hits  " + T::elapsed(t) ¶
+
+>> "=== Done (" + T::total(t_total) + ") ===" ¶

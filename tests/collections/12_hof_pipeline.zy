@@ -1,0 +1,19 @@
+// Test: HOF pipeline combining map/filter/reduce
+nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+// filter evens, then double, then sum
+step1 = nums$| (x -> x % 2 == 0)
+step2 = step1$> (x -> x * 2)
+step3 = step2$< (0, (acc, x) -> acc + x)
+>> step3 ¶
+
+// max via reduce
+max_val = nums$< (nums[0], (m, x) -> {
+    ? x > m { <~ x }
+    <~ m
+})
+>> max_val ¶
+
+// count matching condition
+count_gt5 = (nums$| (x -> x > 5))$#
+>> count_gt5 ¶

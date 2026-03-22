@@ -1,0 +1,18 @@
+[package]
+name = "zymbol-semantic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+zymbol-ast = { path = "../zymbol-ast" }
+zymbol-error = { path = "../zymbol-error" }
+zymbol-span = { path = "../zymbol-span" }
+zymbol-common = { path = "../zymbol-common" }
+thiserror = "2.0"
+
+[dev-dependencies]
+zymbol-parser = { path = "../zymbol-parser" }
+zymbol-lexer = { path = "../zymbol-lexer" }

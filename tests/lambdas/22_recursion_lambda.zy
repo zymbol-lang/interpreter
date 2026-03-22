@@ -1,0 +1,71 @@
+// Test: Recursive algorithms with traditional functions
+>> "=== RECURSIVE FUNCTION TEST ===" ¶
+¶
+
+// Factorial using traditional function (lambdas can't self-reference)
+factorial(n) {
+    ? n <= 1 {
+        <~ 1
+    }
+    _{
+        prev = factorial(n - 1)
+        <~ n * prev
+    }
+}
+
+>> "Factorial Tests:" ¶
+>> "  5! = " >> factorial(5) >> " (expected: 120)" ¶
+>> "  7! = " >> factorial(7) >> " (expected: 5040)" ¶
+>> "  10! = " >> factorial(10) >> " (expected: 3628800)" ¶
+¶
+
+// Power function using recursion
+power(base, exp) {
+    ? exp == 0 {
+        <~ 1
+    }
+    _? exp == 1 {
+        <~ base
+    }
+    _{
+        half = power(base, exp / 2)
+        ? exp % 2 == 0 {
+            <~ half * half
+        }
+        _{
+            <~ half * half * base
+        }
+    }
+}
+
+>> "Power Tests:" ¶
+>> "  2^10 = " >> power(2, 10) >> " (expected: 1024)" ¶
+>> "  3^5 = " >> power(3, 5) >> " (expected: 243)" ¶
+>> "  5^0 = " >> power(5, 0) >> " (expected: 1)" ¶
+¶
+
+// GCD using Euclidean algorithm
+gcd(a, b) {
+    ? b == 0 {
+        <~ a
+    }
+    _{
+        <~ gcd(b, a % b)
+    }
+}
+
+>> "GCD Tests:" ¶
+>> "  gcd(48, 18) = " >> gcd(48, 18) >> " (expected: 6)" ¶
+>> "  gcd(100, 35) = " >> gcd(100, 35) >> " (expected: 5)" ¶
+>> "  gcd(17, 19) = " >> gcd(17, 19) >> " (expected: 1)" ¶
+¶
+
+// Test lambdas with recursive functions
+apply_twice = f -> x -> f(f(x))
+increment = x -> x + 1
+
+result = apply_twice(increment)(10)
+>> "Apply twice increment to 10: " >> result >> " (expected: 12)" ¶
+¶
+
+>> "=== TEST PASSED ===" ¶

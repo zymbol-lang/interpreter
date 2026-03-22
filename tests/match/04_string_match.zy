@@ -1,0 +1,18 @@
+// Test: match on string values
+color = "red"
+code = ?? color {
+    "red"   : "#FF0000"
+    "green" : "#00FF00"
+    "blue"  : "#0000FF"
+    _       : "#000000"
+}
+>> code ¶
+
+lang = "es"
+greeting = ?? lang {
+    "en" : "Hello"
+    "es" : "Hola"
+    "fr" : "Bonjour"
+    _    : "Hi"
+}
+>> greeting ¶

@@ -1,0 +1,57 @@
+# http
+
+// Módulo para consumo de APIs y URLs usando curl
+// Construido sobre <\ \> con interpolación de variables
+
+#> {
+    get
+    post
+    get_json
+    post_json
+    download
+    get_status_code
+    get_headers
+}
+
+// GET simple a una URL
+get(url) {
+    resultado = <\ curl "-s" {url} \>
+    <~ resultado
+}
+
+// POST con datos
+post(url, data) {
+    resultado = <\ curl "-s" "-X" "POST" "-d" {data} {url} \>
+    <~ resultado
+}
+
+// GET esperando JSON
+get_json(url) {
+    // -s: silencioso, -L: seguir redirects
+    resultado = <\ curl "-s" "-L" "-H" "Accept: application/json" {url} \>
+    <~ resultado
+}
+
+// POST con JSON
+post_json(url, json_data) {
+    resultado = <\ curl "-s" "-X" "POST" "-H" "Content-Type: application/json" "-d" {json_data} {url} \>
+    <~ resultado
+}
+
+// Descargar archivo
+download(url, output_file) {
+    resultado = <\ curl "-s" "-o" {output_file} {url} \>
+    <~ resultado
+}
+
+// Obtener solo el código de estado HTTP
+get_status_code(url) {
+    resultado = <\ curl "-s" "-o" "/dev/null" "-w" "%{http_code}" {url} \>
+    <~ resultado
+}
+
+// Obtener headers de respuesta
+get_headers(url) {
+    resultado = <\ curl "-s" "-I" {url} \>
+    <~ resultado
+}

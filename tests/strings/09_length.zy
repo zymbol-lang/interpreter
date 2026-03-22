@@ -1,0 +1,12 @@
+// Test: String $# length
+>> ("hello"$#) ¶
+>> (""$#) ¶
+>> ("a"$#) ¶
+
+s = "hello world"
+n = s$#
+>> n ¶
+
+// Length after operations
+ins = s$++[5:"!!!"]
+>> (ins$#) ¶

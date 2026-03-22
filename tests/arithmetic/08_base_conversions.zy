@@ -1,0 +1,15 @@
+// Test: Base conversion expressions 0x|expr|
+hex_str = 0x|255|
+>> hex_str ¶
+
+hex_char = 0x|'A'|
+>> hex_char ¶
+
+bin_str = 0b|65|
+>> bin_str ¶
+
+oct_str = 0o|8|
+>> oct_str ¶
+
+dec_str = 0d|255|
+>> dec_str ¶

@@ -1,0 +1,11 @@
+[package]
+name = "zymbol-standalone"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Standalone executable builder for Zymbol-Lang"
+
+[dependencies]
+zymbol-ast.workspace = true
+anyhow.workspace = true
+tempfile = "3.13"

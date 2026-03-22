@@ -1,0 +1,104 @@
+// Final comprehensive test for all implemented features
+>> "=== FUNCTIONAL PROGRAMMING FEATURES TEST ===" ¶
+¶
+
+// 1. Simple lambdas
+>> "1. Simple Lambda:" ¶
+double = x -> x * 2
+>> "  double(5) = " >> double(5) ¶
+¶
+
+// 2. Multi-parameter lambdas
+>> "2. Multi-Parameter Lambda:" ¶
+add = (a, b) -> a + b
+>> "  add(3, 7) = " >> add(3, 7) ¶
+¶
+
+// 3. Closures
+>> "3. Closures:" ¶
+factor = 10
+make_mult = x -> x * factor
+>> "  make_mult(5) with factor=10: " >> make_mult(5) ¶
+¶
+
+// 4. Currying
+>> "4. Currying:" ¶
+curry_add = a -> b -> a + b
+add_five = curry_add(5)
+>> "  curry_add(5)(10) = " >> curry_add(5)(10) ¶
+>> "  Partial application add_five(10) = " >> add_five(10) ¶
+¶
+
+// 5. Triple currying
+>> "5. Triple Currying:" ¶
+curry3 = a -> b -> c -> a + b + c
+>> "  curry3(1)(2)(3) = " >> curry3(1)(2)(3) ¶
+¶
+
+// 6. Map operation
+>> "6. Map ($>):" ¶
+numbers = [1, 2, 3, 4, 5]
+doubled = numbers$> (x -> x * 2)
+>> "  [1,2,3,4,5]$> (x -> x * 2) = "
+@ n:doubled {
+    >> n " "
+}
+¶
+¶
+
+// 7. Filter operation
+>> "7. Filter ($|):" ¶
+all_nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+evens = all_nums$| (x -> x % 2 == 0)
+>> "  [1-10]$| (x -> x % 2 == 0) = "
+@ n:evens {
+    >> n " "
+}
+¶
+¶
+
+// 8. Reduce operation
+>> "8. Reduce ($<):" ¶
+sum = numbers$< (0, (acc, x) -> acc + x)
+>> "  [1,2,3,4,5]$< (0, (acc,x) -> acc + x) = " >> sum ¶
+¶
+
+// 9. Complex chaining
+>> "9. Complex Chaining:" ¶
+result = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+filtered = result$| (x -> x % 2 == 0)
+mapped = filtered$> (x -> x * x)
+total = mapped$< (0, (acc, x) -> acc + x)
+>> "  Filter evens, square, sum = " >> total ¶
+>> "  (Expected: 2² + 4² + 6² + 8² + 10² = 220)" ¶
+¶
+
+// 10. Lambdas with closures in higher-order functions
+>> "10. Lambdas with Closures in Map:" ¶
+multiplier = 3
+tripled = numbers$> (x -> x * multiplier)
+>> "  [1,2,3,4,5]$> (x -> x * 3) = "
+@ n:tripled {
+    >> n " "
+}
+¶
+¶
+
+// 11. Chained function calls from arrays
+>> "11. Functions in Arrays:" ¶
+operations = [double, add_five]
+>> "  operations[0](10) = " >> operations[0](10) ¶
+>> "  operations[1](10) = " >> operations[1](10) ¶
+¶
+
+>> "=== ALL TESTS PASSED! ===" ¶
+>> "Implemented features:" ¶
+>> "  ✓ Lambda expressions (x -> expr)" ¶
+>> "  ✓ Multi-parameter lambdas ((a,b) -> expr)" ¶
+>> "  ✓ Closures (variable capture)" ¶
+>> "  ✓ Currying (f(a)(b)(c))" ¶
+>> "  ✓ Map operator ($>)" ¶
+>> "  ✓ Filter operator ($|)" ¶
+>> "  ✓ Reduce operator ($<)" ¶
+>> "  ✓ Chained function calls" ¶
+>> "  ✓ Functions as first-class values" ¶

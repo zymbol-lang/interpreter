@@ -1,0 +1,17 @@
+# test_cli_args
+
+// Capturar argumentos CLI
+><args
+
+// Mostrar el número de argumentos
+>> "Número de argumentos: " args$# ¶
+
+// Iterar sobre los argumentos
+@ arg:args {
+    >> "Argumento: " arg ¶
+}
+
+// Verificar un argumento específico si existe
+? args$# > 0 {
+    >> "Primer argumento: " args[0] ¶
+}

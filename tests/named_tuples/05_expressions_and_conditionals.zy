@@ -1,0 +1,28 @@
+// Test 5: Named Tuples in Expressions and Conditionals
+// Expected: Fields can be used in expressions and conditions
+
+config = (debug: #1, max_size: 100, timeout: 30)
+
+// Use in conditionals
+? config.debug {
+    >> "✓ Boolean field in conditional works" ¶
+}
+
+// Use in arithmetic
+doubled = config.max_size * 2
+? doubled == 200 {
+    >> "✓ Numeric field in arithmetic works" ¶
+}
+
+// Use in comparisons
+? config.timeout < 60 {
+    >> "✓ Field in comparison works" ¶
+}
+
+// Complex expression
+result = config.max_size + config.timeout
+? result == 130 {
+    >> "✓ Multiple fields in expression works" ¶
+}
+
+>> "Test 5 PASSED" ¶

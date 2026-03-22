@@ -1,0 +1,86 @@
+// Test: Matrix operations using nested collection operators
+>> "=== MATRIX OPERATIONS TEST ===" ¶
+¶
+
+// Create a 3x3 matrix
+matrix = [
+    [1, 2, 3],
+    [4, 5, 6],
+    [7, 8, 9]
+]
+
+>> "Original matrix:" ¶
+@ row:matrix {
+    @ val:row {
+        >> val " "
+    }
+    ¶
+}
+¶
+
+// Double every element using nested map
+doubled = matrix$> (row -> row$> (x -> x * 2))
+
+>> "Doubled matrix:" ¶
+@ row:doubled {
+    @ val:row {
+        >> val " "
+    }
+    ¶
+}
+¶
+
+// Calculate row sums
+row_sums = matrix$> (row -> row$< (0, (acc, x) -> acc + x))
+
+>> "Row sums: "
+@ sum:row_sums {
+    >> sum " "
+}
+>> " (expected: 6 15 24)" ¶
+¶
+
+// Filter rows where sum > 10
+filtered_matrix = matrix$| (row -> {
+    sum = row$< (0, (acc, x) -> acc + x)
+    <~ sum > 10
+})
+
+>> "Rows with sum > 10:" ¶
+@ row:filtered_matrix {
+    @ val:row {
+        >> val " "
+    }
+    ¶
+}
+¶
+
+// Flatten matrix and get sum of all elements
+all_elements = matrix$< ([], (acc, row) -> {
+    combined = acc
+    @ elem:row {
+        combined = combined$+ elem
+    }
+    <~ combined
+})
+
+total_sum = all_elements$< (0, (acc, x) -> acc + x)
+>> "Total sum of all elements: " >> total_sum >> " (expected: 45)" ¶
+¶
+
+// Create identity-like pattern: multiply each element by row index
+indexed = matrix$> (row -> {
+    result = row$> (x -> x * 0)
+    <~ result
+})
+
+>> "Zero matrix (all * 0):" ¶
+@ row:indexed {
+    @ val:row {
+        >> val " "
+    }
+    ¶
+}
+¶
+
+>> "=== TEST PASSED ===" ¶

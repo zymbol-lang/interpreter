@@ -1,0 +1,19 @@
+// Test 1: Basic Named Tuple Creation and Access
+// Expected: All assertions pass
+space = ": "
+product = (id: 101, name: "Laptop", price: 999)
+
+// Test field access
+? product.id == 101 {
+    >> "✓ Field access: product.id works" space product.id ¶
+}
+
+? product.name == "Laptop" {
+    >> "✓ Field access: product.name works" space product.name ¶
+}
+
+? product.price == 999 {
+    >> "✓ Field access: product.price works" space product.price ¶
+}
+
+>> "Test 1 PASSED" ¶

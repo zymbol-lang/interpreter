@@ -1,0 +1,17 @@
+// Test: Nested named tuples
+origin = (x: 0, y: 0)
+rect = (pos: origin, w: 100, h: 50)
+>> rect.pos.x ¶
+>> rect.pos.y ¶
+>> rect.w ¶
+>> rect.h ¶
+
+// Array of named tuples
+people = [
+    (name: "Alice", age: 25),
+    (name: "Bob", age: 30),
+    (name: "Carol", age: 28)
+]
+@ p:people {
+    >> p.name " " p.age ¶
+}

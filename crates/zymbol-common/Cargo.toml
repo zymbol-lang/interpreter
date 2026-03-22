@@ -1,0 +1,9 @@
+[package]
+name = "zymbol-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Common types and utilities for Zymbol-Lang"
+
+[dependencies]
+indexmap.workspace = true

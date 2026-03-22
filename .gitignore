@@ -1,0 +1,37 @@
+# Development backups and reports (internal only)
+crates/reorganization_backups/
+crates/reorganization_reports/
+crates/verify_reorganization.sh
+
+# Rust build artifacts
+/target/
+**/target/
+
+# Compiled Zymbol bytecode cache
+*.zyc
+
+# Cargo lock for libraries (keep for binaries)
+# Cargo.lock is intentionally committed for the workspace binary
+
+# Editor and IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test output
+tests/output/
+*.tmp
+
+# Standalone executables built by `zymbol build`
+*.exe
+*.out
+
+# Environment / secrets
+.env
+.env.*

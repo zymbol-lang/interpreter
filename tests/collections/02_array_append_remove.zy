@@ -1,0 +1,10 @@
+// Test: Array $+ append and $- remove
+arr = [1, 2, 3]
+arr = arr$+ 4
+arr = arr$+ 5
+>> arr ¶
+
+arr = arr$- 0
+>> arr ¶
+arr = arr$- 3
+>> arr ¶

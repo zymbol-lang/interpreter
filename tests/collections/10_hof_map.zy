@@ -1,0 +1,15 @@
+// Test: $> map with various lambdas
+nums = [1, 2, 3, 4, 5]
+
+doubled = nums$> (x -> x * 2)
+>> doubled ¶
+
+squares = nums$> (x -> x * x)
+>> squares ¶
+
+strs = nums$> (x -> x + 10)
+>> strs ¶
+
+// Map with direct lambda negation
+neg = nums$> (x -> 0 - x)
+>> neg ¶

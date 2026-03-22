@@ -1,0 +1,13 @@
+// Test: String $~~[pat:rep] and $~~[pat:rep:n] replace
+s = "hello world hello"
+r1 = s$~~["hello":"HI"]
+>> r1 ¶
+
+r2 = s$~~["hello":"HI":1]
+>> r2 ¶
+
+r3 = s$~~["l":"L"]
+>> r3 ¶
+
+r4 = s$~~["l":"L":2]
+>> r4 ¶

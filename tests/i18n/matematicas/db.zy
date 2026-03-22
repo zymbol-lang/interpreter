@@ -1,0 +1,64 @@
+# db
+
+// Módulo para interacción con bases de datos SQLite
+// Construido sobre <\ \> con interpolación de variables
+
+#> {
+    crear_tabla_usuarios
+    insertar_usuario
+    consultar_usuarios
+    consultar_usuario_por_id
+    actualizar_usuario
+    eliminar_usuario
+    ejecutar_query
+    crear_db
+}
+
+// Crear base de datos (si no existe)
+crear_db(nombre_db) {
+    resultado = <\ sqlite3 {nombre_db} "SELECT 1;" \>
+    <~ resultado
+}
+
+// Crear tabla de usuarios de ejemplo
+crear_tabla_usuarios(db) {
+    resultado = <\ sqlite3 {db} "CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY, nombre TEXT, email TEXT, edad INTEGER);" \>
+    <~ resultado
+}
+
+// Insertar usuario (valores hardcoded por ahora)
+insertar_usuario(db) {
+    resultado = <\ sqlite3 {db} "INSERT INTO usuarios (nombre, email, edad) VALUES ('Juan Perez', 'juan@example.com', 30);" \>
+    <~ resultado
+}
+
+// Consultar todos los usuarios
+consultar_usuarios(db) {
+    resultado = <\ sqlite3 {db} "SELECT * FROM usuarios;" \>
+    <~ resultado
+}
+
+// Consultar usuario por ID (ejemplo con id=1)
+consultar_usuario_por_id(db) {
+    resultado = <\ sqlite3 {db} "SELECT * FROM usuarios WHERE id=1;" \>
+    <~ resultado
+}
+
+// Actualizar usuario
+actualizar_usuario(db) {
+    resultado = <\ sqlite3 {db} "UPDATE usuarios SET edad=31 WHERE id=1;" \>
+    <~ resultado
+}
+
+// Eliminar usuario
+eliminar_usuario(db) {
+    resultado = <\ sqlite3 {db} "DELETE FROM usuarios WHERE id=1;" \>
+    <~ resultado
+}
+
+// Ejecutar query personalizado
+// NOTA: El query debe estar entre comillas cuando se llame
+ejecutar_query(db, sql) {
+    resultado = <\ sqlite3 {db} {sql} \>
+    <~ resultado
+}

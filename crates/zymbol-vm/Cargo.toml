@@ -1,0 +1,10 @@
+[package]
+name = "zymbol-vm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Register-based virtual machine executor for Zymbol-Lang"
+
+[dependencies]
+zymbol-bytecode.workspace = true
+thiserror.workspace = true

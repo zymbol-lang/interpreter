@@ -1,0 +1,191 @@
+// Complex robustness test - corrected version
+>> "=== COMPLEX FUNCTIONAL PROGRAMMING TESTS ===" ¶
+¶
+
+// ===== PROBLEM 1: Data Processing Pipeline =====
+>> "1. Data Processing Pipeline:" ¶
+>> "   Processing sales data with multiple transformations" ¶
+
+// Simulated sales data: (price, quantity, discount_percent)
+sales = [
+    (100, 5, 10),
+    (250, 3, 15),
+    (75, 10, 5),
+    (500, 2, 20),
+    (150, 8, 10)
+]
+
+// Calculate total revenue after discount - inline lambda
+revenues = sales$> (sale -> {
+    price = sale[0]
+    quantity = sale[1]
+    discount = sale[2]
+    subtotal = price * quantity
+    discount_amount = subtotal * discount / 100
+    final = subtotal - discount_amount
+    <~ final
+})
+
+// Filter high-value sales (> 500)
+high_value = revenues$| (r -> r > 500)
+
+// Sum total revenue
+total_revenue = revenues$< (0, (acc, x) -> acc + x)
+
+>> "   Total revenue: " >> total_revenue ¶
+>> "   High-value sales count: " >> high_value$# ¶
+¶
+
+// ===== PROBLEM 2: Fibonacci Sequence Generator =====
+>> "2. Fibonacci Sequence:" ¶
+
+fib_list = [0, 1]
+@ counter:2..15 {
+    a = fib_list[counter - 2]
+    b = fib_list[counter - 1]
+    next = a + b
+    fib_list = fib_list$+ next
+}
+
+>> "   First 15 Fibonacci numbers: "
+@ n:fib_list {
+    >> n " "
+}
+¶
+¶
+
+// ===== PROBLEM 3: Statistical Analysis =====
+>> "3. Statistical Analysis:" ¶
+
+dataset = [23, 45, 12, 67, 34, 89, 56, 78, 90, 43, 21, 65, 54, 32, 76]
+
+sum = dataset$< (0, (acc, x) -> acc + x)
+count = dataset$#
+mean = sum / count
+
+>> "   Dataset size: " >> count ¶
+>> "   Sum: " >> sum ¶
+>> "   Mean: " >> mean ¶
+
+above_mean = dataset$| (x -> x > mean)
+>> "   Values above mean: " >> above_mean$# ¶
+¶
+
+// ===== PROBLEM 4: Nested Data Transformation =====
+>> "4. Nested Data Transformation:" ¶
+
+matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+
+doubled_matrix = matrix$> (row -> row$> (x -> x * 2))
+
+>> "   Original first row: "
+@ n:matrix[0] {
+    >> n " "
+}
+¶
+
+>> "   Doubled first row: "
+@ n:doubled_matrix[0] {
+    >> n " "
+}
+¶
+¶
+
+// ===== PROBLEM 5: Complex Chaining =====
+>> "5. Complex Chaining:" ¶
+
+// Filter evens, square them, sum result
+input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+evens = input$| (x -> x % 2 == 0)
+squared = evens$> (x -> x * x)
+result = squared$< (0, (acc, x) -> acc + x)
+
+>> "   Result: " >> result ¶
+>> "   (Expected: 2² + 4² + 6² + 8² + 10² = 220)" ¶
+¶
+
+// ===== PROBLEM 6: Currying Patterns =====
+>> "6. Currying:" ¶
+
+create_multiplier = factor -> x -> x * factor
+
+times_two = create_multiplier(2)
+times_five = create_multiplier(5)
+
+test = 7
+>> "   " >> test " * 2 = " >> times_two(test) ¶
+>> "   " >> test " * 5 = " >> times_five(test) ¶
+¶
+
+// ===== PROBLEM 7: Function Composition with Pipes =====
+>> "7. Function Composition:" ¶
+
+add_one = x -> x + 1
+multiply_two = x -> x * 2
+square = x -> x * x
+
+// (5 + 1) * 2, then square
+result7 = 5 |> add_one(_) |> multiply_two(_) |> square(_)
+>> "   ((5+1)*2)² = " >> result7 ¶
+>> "   (Expected: 144)" ¶
+¶
+
+// ===== PROBLEM 8: Data Aggregation =====
+>> "8. Custom Aggregation:" ¶
+
+numbers = [45, 23, 67, 12, 89, 34, 56, 78]
+
+// Find maximum using reduce
+maximum = numbers$< (numbers[0], (max, x) -> {
+    ? x > max {
+        <~ x
+    }
+    _{
+        <~ max
+    }
+})
+
+>> "   Maximum: " >> maximum ¶
+¶
+
+// ===== PROBLEM 9: Multi-step Pipeline =====
+>> "9. Multi-step Pipeline:" ¶
+
+// Start with range 1-20
+data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+
+// Keep only multiples of 3
+step1 = data$| (x -> x % 3 == 0)
+
+// Square each
+step2 = step1$> (x -> x * x)
+
+// Sum them
+step3 = step2$< (0, (acc, x) -> acc + x)
+
+>> "   Sum of squared multiples of 3 (1-20): " >> step3 ¶
+>> "   (3² + 6² + 9² + 12² + 15² + 18² = 819)" ¶
+¶
+
+// ===== PROBLEM 10: Closure State =====
+>> "10. Closures:" ¶
+
+multiplier = 100
+add_to_base = x -> x + multiplier
+
+result10 = 50 |> add_to_base(_)
+>> "   50 + 100 (from closure) = " >> result10 ¶
+¶
+
+>> "=== ALL COMPLEX TESTS COMPLETED ===" ¶
+>> "Successfully tested:" ¶
+>> "  ✓ Complex data processing" ¶
+>> "  ✓ Iterative algorithms" ¶
+>> "  ✓ Statistical computations" ¶
+>> "  ✓ Nested transformations" ¶
+>> "  ✓ Chained operations" ¶
+>> "  ✓ Currying patterns" ¶
+>> "  ✓ Function composition" ¶
+>> "  ✓ Custom aggregations" ¶
+>> "  ✓ Multi-step pipelines" ¶
+>> "  ✓ Closure state management" ¶

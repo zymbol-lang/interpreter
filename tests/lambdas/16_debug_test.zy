@@ -1,0 +1,9 @@
+// Debug test
+>> "Testing collection operations..." ¶
+
+revenues = [450, 637, 667, 800, 1080]
+
+// Test filter
+high_value = revenues$| (r -> r > 500)
+
+>> "High value count: " >> high_value$# ¶

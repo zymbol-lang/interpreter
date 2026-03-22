@@ -1,0 +1,17 @@
+// TEST: Variables defined inside IF block should auto-destroy
+// Expected: variable 'inside_var' should NOT exist after IF block ends
+
+>> "=== Test 1: Variable defined in IF block ===" ¶
+
+condition = #1
+
+? condition {
+    inside_var = "I exist only in IF block"
+    >> "Inside IF: " inside_var ¶
+}
+
+// This should FAIL if scoping is correct
+// inside_var should NOT exist here
+>> "After IF block, trying to access inside_var..." ¶
+>> "Value: " inside_var ¶
+>> "ERROR: Should not see this line!" ¶

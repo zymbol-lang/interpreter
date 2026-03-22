@@ -1,0 +1,15 @@
+// Test: Unused variable detection
+
+// Unused variable (should warn)
+unused_var = 42
+
+// Used variable (should NOT warn)
+used_var = 100
+>> "Value: " used_var ¶
+
+// Constant declared but never used (should warn)
+UNUSED_CONST := "never read"
+
+// Constant that is used (should NOT warn)
+USED_CONST := 3.14
+>> "Pi: " USED_CONST ¶

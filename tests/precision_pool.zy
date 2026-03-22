@@ -1,0 +1,438 @@
+// ============================================================================
+// PRECISION EXPRESSIONS TEST POOL
+// Tests for #.N|expr| (round) and #!N|expr| (truncate)
+// ============================================================================
+
+passed = 0
+failed = 0
+
+// Helper for test results
+test_pass(name) {
+    >> "[PASS] " name ¶
+    <~ #1
+}
+
+test_fail(name, expected, got) {
+    >> "[FAIL] " name ¶
+    >> "       Expected: " expected ¶
+    >> "       Got:      " got ¶
+    <~ #0
+}
+
+// ============================================================================
+// SECTION 1: BASIC ROUNDING (#.N)
+// ============================================================================
+>> "=== SECTION 1: Basic Rounding ===" ¶
+
+// Test 1.1: Round up (digit >= 5)
+result = #.2|19.876|
+? result == 19.88 {
+    test_pass("1.1 Round up 19.876 to 2 decimals")
+    passed = passed + 1
+} _ {
+    test_fail("1.1 Round up 19.876 to 2 decimals", 19.88, result)
+    failed = failed + 1
+}
+
+// Test 1.2: Round down (digit < 5)
+result = #.2|19.874|
+? result == 19.87 {
+    test_pass("1.2 Round down 19.874 to 2 decimals")
+    passed = passed + 1
+} _ {
+    test_fail("1.2 Round down 19.874 to 2 decimals", 19.87, result)
+    failed = failed + 1
+}
+
+// Test 1.3: Round exactly 5 (banker's rounding - rounds up)
+result = #.2|19.875|
+? result == 19.88 {
+    test_pass("1.3 Round 19.875 (exactly .5) to 2 decimals")
+    passed = passed + 1
+} _ {
+    test_fail("1.3 Round 19.875 (exactly .5) to 2 decimals", 19.88, result)
+    failed = failed + 1
+}
+
+// Test 1.4: Round to 0 decimals
+result = #.0|19.5|
+? result == 20.0 {
+    test_pass("1.4 Round 19.5 to 0 decimals")
+    passed = passed + 1
+} _ {
+    test_fail("1.4 Round 19.5 to 0 decimals", 20.0, result)
+    failed = failed + 1
+}
+
+// Test 1.5: Round to 3 decimals
+result = #.3|3.14159|
+? result == 3.142 {
+    test_pass("1.5 Round PI to 3 decimals")
+    passed = passed + 1
+} _ {
+    test_fail("1.5 Round PI to 3 decimals", 3.142, result)
+    failed = failed + 1
+}
+
+// ============================================================================
+// SECTION 2: BASIC TRUNCATION (#!N)
+// ============================================================================
+>> "" ¶
+>> "=== SECTION 2: Basic Truncation ===" ¶
+
+// Test 2.1: Truncate (no rounding)
+result = #!2|19.879|
+? result == 19.87 {
+    test_pass("2.1 Truncate 19.879 to 2 decimals")
+    passed = passed + 1
+} _ {
+    test_fail("2.1 Truncate 19.879 to 2 decimals", 19.87, result)
+    failed = failed + 1
+}
+
+// Test 2.2: Truncate to 0 decimals
+result = #!0|19.999|
+? result == 19.0 {
+    test_pass("2.2 Truncate 19.999 to 0 decimals")
+    passed = passed + 1
+} _ {
+    test_fail("2.2 Truncate 19.999 to 0 decimals", 19.0, result)
+    failed = failed + 1
+}
+
+// Test 2.3: Truncate to 3 decimals
+result = #!3|3.14159|
+? result == 3.141 {
+    test_pass("2.3 Truncate PI to 3 decimals")
+    passed = passed + 1
+} _ {
+    test_fail("2.3 Truncate PI to 3 decimals", 3.141, result)
+    failed = failed + 1
+}
+
+// ============================================================================
+// SECTION 3: ROUND VS TRUNCATE COMPARISON
+// ============================================================================
+>> "" ¶
+>> "=== SECTION 3: Round vs Truncate Comparison ===" ¶
+
+// Test 3.1: Compare on 19.999
+round_result = #.2|19.999|
+trunc_result = #!2|19.999|
+? round_result == 20.0 && trunc_result == 19.99 {
+    test_pass("3.1 Round vs Truncate on 19.999")
+    passed = passed + 1
+} _ {
+    test_fail("3.1 Round vs Truncate on 19.999", "round=20.0, trunc=19.99", "round=" + round_result + ", trunc=" + trunc_result)
+    failed = failed + 1
+}
+
+// Test 3.2: Compare on 19.001
+round_result = #.2|19.001|
+trunc_result = #!2|19.001|
+? round_result == 19.0 && trunc_result == 19.0 {
+    test_pass("3.2 Round vs Truncate on 19.001")
+    passed = passed + 1
+} _ {
+    test_fail("3.2 Round vs Truncate on 19.001", "round=19.0, trunc=19.0", "round=" + round_result + ", trunc=" + trunc_result)
+    failed = failed + 1
+}
+
+// ============================================================================
+// SECTION 4: INTEGER INPUT
+// ============================================================================
+>> "" ¶
+>> "=== SECTION 4: Integer Input ===" ¶
+
+// Test 4.1: Round integer
+result = #.2|42|
+? result == 42.0 {
+    test_pass("4.1 Round integer 42")
+    passed = passed + 1
+} _ {
+    test_fail("4.1 Round integer 42", 42.0, result)
+    failed = failed + 1
+}
+
+// Test 4.2: Truncate integer
+result = #!2|42|
+? result == 42.0 {
+    test_pass("4.2 Truncate integer 42")
+    passed = passed + 1
+} _ {
+    test_fail("4.2 Truncate integer 42", 42.0, result)
+    failed = failed + 1
+}
+
+// ============================================================================
+// SECTION 5: STRING AUTO-CONVERSION
+// ============================================================================
+>> "" ¶
+>> "=== SECTION 5: String Auto-Conversion ===" ¶
+
+// Test 5.1: Round from float string
+texto = "1234.5678"
+result = #.2|texto|
+? result == 1234.57 {
+    test_pass("5.1 Round from float string")
+    passed = passed + 1
+} _ {
+    test_fail("5.1 Round from float string", 1234.57, result)
+    failed = failed + 1
+}
+
+// Test 5.2: Truncate from float string
+result = #!2|texto|
+? result == 1234.56 {
+    test_pass("5.2 Truncate from float string")
+    passed = passed + 1
+} _ {
+    test_fail("5.2 Truncate from float string", 1234.56, result)
+    failed = failed + 1
+}
+
+// Test 5.3: Round from integer string
+texto_int = "42"
+result = #.2|texto_int|
+? result == 42.0 {
+    test_pass("5.3 Round from integer string")
+    passed = passed + 1
+} _ {
+    test_fail("5.3 Round from integer string", 42.0, result)
+    failed = failed + 1
+}
+
+// Test 5.4: Truncate from integer string
+result = #!2|texto_int|
+? result == 42.0 {
+    test_pass("5.4 Truncate from integer string")
+    passed = passed + 1
+} _ {
+    test_fail("5.4 Truncate from integer string", 42.0, result)
+    failed = failed + 1
+}
+
+// ============================================================================
+// SECTION 6: EXPRESSIONS
+// ============================================================================
+>> "" ¶
+>> "=== SECTION 6: Expressions ===" ¶
+
+// Test 6.1: Round multiplication
+precio = 19.876543
+cantidad = 4
+result = #.2|precio * cantidad|
+? result == 79.51 {
+    test_pass("6.1 Round multiplication result")
+    passed = passed + 1
+} _ {
+    test_fail("6.1 Round multiplication result", 79.51, result)
+    failed = failed + 1
+}
+
+// Test 6.2: Truncate multiplication
+result = #!2|precio * cantidad|
+? result == 79.5 {
+    test_pass("6.2 Truncate multiplication result")
+    passed = passed + 1
+} _ {
+    test_fail("6.2 Truncate multiplication result", 79.5, result)
+    failed = failed + 1
+}
+
+// Test 6.3: Round addition
+a = 10.5
+b = 3.7
+result = #.1|a + b|
+? result == 14.2 {
+    test_pass("6.3 Round addition result")
+    passed = passed + 1
+} _ {
+    test_fail("6.3 Round addition result", 14.2, result)
+    failed = failed + 1
+}
+
+// Test 6.4: Round division
+result = #.2|10.0 / 3.0|
+? result == 3.33 {
+    test_pass("6.4 Round division result")
+    passed = passed + 1
+} _ {
+    test_fail("6.4 Round division result", 3.33, result)
+    failed = failed + 1
+}
+
+// ============================================================================
+// SECTION 7: PRECISION LEVELS
+// ============================================================================
+>> "" ¶
+>> "=== SECTION 7: Precision Levels ===" ¶
+
+pi = 3.141592653589793
+
+// Test 7.1-7.5: Different precision levels
+result1 = #.1|pi|
+result2 = #.2|pi|
+result3 = #.3|pi|
+result4 = #.4|pi|
+result5 = #.5|pi|
+
+? result1 == 3.1 {
+    test_pass("7.1 PI to 1 decimal")
+    passed = passed + 1
+} _ {
+    test_fail("7.1 PI to 1 decimal", 3.1, result1)
+    failed = failed + 1
+}
+
+? result2 == 3.14 {
+    test_pass("7.2 PI to 2 decimals")
+    passed = passed + 1
+} _ {
+    test_fail("7.2 PI to 2 decimals", 3.14, result2)
+    failed = failed + 1
+}
+
+? result3 == 3.142 {
+    test_pass("7.3 PI to 3 decimals")
+    passed = passed + 1
+} _ {
+    test_fail("7.3 PI to 3 decimals", 3.142, result3)
+    failed = failed + 1
+}
+
+? result4 == 3.1416 {
+    test_pass("7.4 PI to 4 decimals")
+    passed = passed + 1
+} _ {
+    test_fail("7.4 PI to 4 decimals", 3.1416, result4)
+    failed = failed + 1
+}
+
+? result5 == 3.14159 {
+    test_pass("7.5 PI to 5 decimals")
+    passed = passed + 1
+} _ {
+    test_fail("7.5 PI to 5 decimals", 3.14159, result5)
+    failed = failed + 1
+}
+
+// ============================================================================
+// SECTION 8: NEGATIVE NUMBERS
+// ============================================================================
+>> "" ¶
+>> "=== SECTION 8: Negative Numbers ===" ¶
+
+// Test 8.1: Round negative number
+result = #.2|-19.876|
+? result == -19.88 {
+    test_pass("8.1 Round negative number")
+    passed = passed + 1
+} _ {
+    test_fail("8.1 Round negative number", -19.88, result)
+    failed = failed + 1
+}
+
+// Test 8.2: Truncate negative number
+result = #!2|-19.876|
+? result == -19.87 {
+    test_pass("8.2 Truncate negative number")
+    passed = passed + 1
+} _ {
+    test_fail("8.2 Truncate negative number", -19.87, result)
+    failed = failed + 1
+}
+
+// ============================================================================
+// SECTION 9: EDGE CASES
+// ============================================================================
+>> "" ¶
+>> "=== SECTION 9: Edge Cases ===" ¶
+
+// Test 9.1: Very small number
+result = #.2|0.001|
+? result == 0.0 {
+    test_pass("9.1 Round very small number")
+    passed = passed + 1
+} _ {
+    test_fail("9.1 Round very small number", 0.0, result)
+    failed = failed + 1
+}
+
+// Test 9.2: Zero
+result = #.2|0.0|
+? result == 0.0 {
+    test_pass("9.2 Round zero")
+    passed = passed + 1
+} _ {
+    test_fail("9.2 Round zero", 0.0, result)
+    failed = failed + 1
+}
+
+// Test 9.3: Large number
+result = #.2|123456.789|
+? result == 123456.79 {
+    test_pass("9.3 Round large number")
+    passed = passed + 1
+} _ {
+    test_fail("9.3 Round large number", 123456.79, result)
+    failed = failed + 1
+}
+
+// ============================================================================
+// SECTION 10: FINANCIAL CALCULATIONS
+// ============================================================================
+>> "" ¶
+>> "=== SECTION 10: Financial Calculations ===" ¶
+
+// Test 10.1: Tax calculation
+subtotal = 99.99
+tax_rate = 0.0825
+tax = #.2|subtotal * tax_rate|
+? tax == 8.25 {
+    test_pass("10.1 Tax calculation")
+    passed = passed + 1
+} _ {
+    test_fail("10.1 Tax calculation", 8.25, tax)
+    failed = failed + 1
+}
+
+// Test 10.2: Total with tax
+total = #.2|subtotal + tax|
+? total == 108.24 {
+    test_pass("10.2 Total with tax")
+    passed = passed + 1
+} _ {
+    test_fail("10.2 Total with tax", 108.24, total)
+    failed = failed + 1
+}
+
+// Test 10.3: Discount calculation
+precio_original = 149.99
+descuento = 0.15
+precio_final = #.2|precio_original * (1 - descuento)|
+? precio_final == 127.49 {
+    test_pass("10.3 Discount calculation")
+    passed = passed + 1
+} _ {
+    test_fail("10.3 Discount calculation", 127.49, precio_final)
+    failed = failed + 1
+}
+
+// ============================================================================
+// SUMMARY
+// ============================================================================
+>> "" ¶
+>> "============================================" ¶
+>> "TEST SUMMARY" ¶
+>> "============================================" ¶
+>> "Passed: " passed ¶
+>> "Failed: " failed ¶
+>> "Total:  " passed + failed ¶
+>> "" ¶
+
+? failed == 0 {
+    >> "ALL TESTS PASSED!" ¶
+} _ {
+    >> "SOME TESTS FAILED - Please review" ¶
+}

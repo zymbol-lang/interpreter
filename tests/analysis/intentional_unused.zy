@@ -1,0 +1,13 @@
+// Test: Intentionally unused variables (should NOT warn)
+
+// Variables starting with underscore are intentionally unused
+_intentional = 100
+_temp = "not used"
+_debug_value := 42
+
+// Normal variable for comparison (should warn)
+actually_unused = 999
+
+// Used variable (should NOT warn)
+used = 123
+>> "Used: " used ¶

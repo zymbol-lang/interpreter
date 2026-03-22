@@ -1,0 +1,15 @@
+// TEST: Variables in loop blocks should be destroyed each iteration
+
+>> "=== Test: Loop block scoping ===" ¶
+
+counter = 0
+
+@ counter < 3 {
+    loop_var = "iteration " + counter
+    >> "Inside loop: " loop_var ¶
+    counter = counter + 1
+}
+
+// This should FAIL - loop_var should not exist outside loop
+>> "After loop, trying to access loop_var..." ¶
+>> "Value: " loop_var ¶

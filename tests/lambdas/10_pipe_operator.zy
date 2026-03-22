@@ -1,0 +1,74 @@
+// Pipe operator test - basic functionality
+>> "=== PIPE OPERATOR TESTS ===" ¶
+¶
+
+
+// 1. Simple pipe with lambda
+>> "1. Simple Pipe with Lambda:" ¶
+result1 = 5 |> (x -> x * 2)(_)
+>> "  5 |> (x -> x * 2)(_) = " >> result1 ¶
+¶
+
+
+// 2. Pipe with multi-parameter lambda
+>> "2. Pipe with Multi-Parameter Lambda:" ¶
+add = (a, b) -> a + b
+result2 = 10 |> add(_, 5)
+>> "  10 |> add(_, 5) = " >> result2 ¶
+¶
+
+
+// 3. Chained pipes
+>> "3. Chained Pipes:" ¶
+double = x -> x * 2
+add_ten = x -> x + 10
+result3 = 5 |> double(_) |> add_ten(_)
+>> "  5 |> double(_) |> add_ten(_) = " >> result3 ¶
+¶
+
+
+// 4. Pipe with helper function
+>> "4. Pipe with Helper Function:" ¶
+square = x -> x * x
+result4 = 7 |> square(_)
+>> "  7 |> square(_) = " >> result4 ¶
+¶
+
+
+// 5. Pipe with multiple placeholders
+>> "5. Pipe with Multiple Arguments:" ¶
+multiply = (a, b, c) -> a * b * c
+result5 = 5 |> multiply(2, _, 3)
+>> "  5 |> multiply(2, _, 3) = " >> result5 ¶
+¶
+
+
+// 6. Pipe with transformation chain
+>> "6. Pipe Transformation Chain:" ¶
+increment = x -> x + 1
+result6 = 15 |> increment(_) |> increment(_) |> increment(_)
+>> "  15 |> increment |> increment |> increment = " >> result6 ¶
+¶
+
+// 7. Collection operators (direct usage - NOT with pipes)
+>> "7. Collection Operators (direct):" ¶
+numbers = [1, 2, 3, 4, 5]
+doubled = numbers$> (x -> x * 2)
+>> "  [1,2,3,4,5]$> (x -> x * 2) = "
+@ n:doubled {
+    >> n " "
+}
+¶
+¶
+
+
+// 8. Pipe with lambda using closure
+>> "8. Pipe with Closure:" ¶
+multiplier = 3
+triple = x -> x * multiplier
+result8 = 7 |> triple(_)
+>> "  7 |> triple(_) with multiplier=3: " >> result8 ¶
+¶
+
+
+>> "=== ALL PIPE TESTS PASSED! ===" ¶

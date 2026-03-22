@@ -1,0 +1,83 @@
+// CORRECT: Traditional functions with proper parameter usage
+// Demonstrates isolated scope and explicit parameter passing
+
+>> "=== Correct Function Usage ===" ¶
+>> "Functions execute in isolated scopes" ¶
+¶
+
+>> "--- Test 1: Simple function with parameters ---" ¶
+
+add(a, b) {
+    <~ a + b
+}
+
+result = add(5, 3)
+>> "add(5, 3) = " result ¶
+>> "Expected: 8" ¶
+¶
+
+>> "--- Test 2: Function with local variables ---" ¶
+
+calculate_area(width, height) {
+    area = width * height
+    >> "Calculating area: " width " x " height ¶
+    <~ area
+}
+
+area = calculate_area(5, 10)
+>> "Area: " area ¶
+>> "Expected: 50" ¶
+
+// 'area' variable inside function is NOT visible here
+// This would error: >> area
+¶
+
+>> "--- Test 3: Function calling another function ---" ¶
+
+square(x) {
+    <~ x * x
+}
+
+sum_of_squares(a, b) {
+    sq_a = square(a)
+    sq_b = square(b)
+    <~ sq_a + sq_b
+}
+
+result = sum_of_squares(3, 4)
+>> "sum_of_squares(3, 4) = " result ¶
+>> "Expected: 25" ¶
+¶
+
+>> "--- Test 4: Function with output parameter ---" ¶
+
+divide_with_remainder(dividend, divisor, remainder<~) {
+    quotient = dividend / divisor
+    remainder = dividend % divisor
+    <~ quotient
+}
+
+remainder = 0
+quotient = divide_with_remainder(17, 5, remainder)
+>> "17 / 5 = " quotient " remainder " remainder ¶
+>> "Expected: 3 remainder 2" ¶
+¶
+
+>> "--- Test 5: Recursive function ---" ¶
+
+factorial(n) {
+    ? n <= 1 {
+        <~ 1
+    }
+    _{
+        prev = factorial(n - 1)
+        <~ n * prev
+    }
+}
+
+result = factorial(5)
+>> "factorial(5) = " result ¶
+>> "Expected: 120" ¶
+¶
+
+>> "=== All tests passed! ===" ¶

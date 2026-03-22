@@ -1,0 +1,22 @@
+# test_sqlite_direct
+
+// Direct SQLite test with inline queries
+
+db = "direct_test.db"
+
+>> "=== SQLite Direct Test ===" ¶
+¶
+
+>> "1. Create and insert..." ¶
+dummy = <\ sqlite3 {db} "CREATE TABLE test (id INTEGER, msg TEXT); INSERT INTO test VALUES (1, 'Hello'); INSERT INTO test VALUES (2, 'World');" \>
+>> "   Done" ¶
+¶
+
+>> "2. Query all data:" ¶
+result = <\ sqlite3 {db} "SELECT * FROM test;" \>
+>> result ¶
+¶
+
+>> "3. Cleanup" ¶
+dummy = <\ rm "-f" {db} \>
+>> "   Done" ¶

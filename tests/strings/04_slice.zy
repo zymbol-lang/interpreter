@@ -1,0 +1,10 @@
+// Test: String slice $[start..end]
+s = "hello world"
+>> s$[0..5] ¶
+>> s$[6..11] ¶
+>> s$[0..1] ¶
+>> s$[4..5] ¶
+
+// Slice all
+full = s$[0..11]
+>> full ¶

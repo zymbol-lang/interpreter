@@ -1,0 +1,13 @@
+// Test: Array $? contains and $[..] slice
+arr = [10, 20, 30, 40, 50]
+>> (arr$? 30) ¶
+>> (arr$? 99) ¶
+
+s1 = arr$[1..3]
+>> s1 ¶
+
+s2 = arr$[0..5]
+>> s2 ¶
+
+s3 = arr$[2..4]
+>> s3 ¶

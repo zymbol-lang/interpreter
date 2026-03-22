@@ -1,0 +1,11 @@
+[package]
+name = "zymbol-span"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Source position tracking for Zymbol-Lang compiler"
+
+[dependencies]
+unicode-segmentation.workspace = true
+
+[dev-dependencies]

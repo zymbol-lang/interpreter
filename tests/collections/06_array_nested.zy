@@ -1,0 +1,11 @@
+// Test: Nested arrays (matrices)
+matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+>> matrix[0] ¶
+>> matrix[1][1] ¶
+>> matrix[2][2] ¶
+
+// Row sums
+@ row:matrix {
+    s = row$< (0, (acc, x) -> acc + x)
+    >> s ¶
+}

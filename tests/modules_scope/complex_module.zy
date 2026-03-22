@@ -1,0 +1,54 @@
+// Module: complex_module
+// Tests blocks within module functions
+
+# complex_module
+
+#> {
+    process_with_blocks
+    filter_values
+}
+
+MODULE_NAME := "ComplexModule"
+
+// Function with IF blocks
+process_with_blocks(value) {
+    >> "Processing in " MODULE_NAME ¶
+
+    ? value > 10 {
+        temp_msg = "High value"
+        result = value * 2
+        >> temp_msg ": " result ¶
+        <~ result
+    }
+    _? value > 5 {
+        temp_msg = "Medium value"
+        result = value + 10
+        >> temp_msg ": " result ¶
+        <~ result
+    }
+    _{
+        temp_msg = "Low value"
+        result = value + 5
+        >> temp_msg ": " result ¶
+        <~ result
+    }
+}
+
+// Function with loop and blocks
+filter_values(numbers) {
+    filtered = []
+    count = 0
+
+    @ num:numbers {
+        // Block scope variables in loop
+        ? num > 0 {
+            check_msg = "Positive"
+            filtered = filtered$+ num
+            count = count + 1
+        }
+        // check_msg is destroyed here
+    }
+
+    >> "Filtered " count " positive numbers" ¶
+    <~ filtered
+}

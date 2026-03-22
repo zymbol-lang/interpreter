@@ -1,0 +1,82 @@
+// Test: Advanced pipe operator combinations
+>> "=== ADVANCED PIPE OPERATIONS TEST ===" ¶
+¶
+
+// Create transformation pipeline with closures
+scale_factor = 10
+offset = 5
+
+scale = x -> x * scale_factor
+translate = x -> x + offset
+square = x -> x * x
+
+// Chain multiple transformations
+result1 = 3 |> scale(_) |> translate(_) |> square(_)
+>> "Pipeline: 3 -> scale(*10) -> translate(+5) -> square" ¶
+>> "Result: " >> result1 >> " (expected: (3*10+5)^2 = 1225)" ¶
+¶
+
+// Pipe with multi-argument lambdas
+combine = (a, b, c) -> a * b + c
+
+result2 = 5 |> combine(2, _, 10)
+>> "Combine(2, 5, 10): " >> result2 >> " (expected: 2*5+10 = 20)" ¶
+¶
+
+result3 = 7 |> combine(_, 3, 5)
+>> "Combine(7, 3, 5): " >> result3 >> " (expected: 7*3+5 = 26)" ¶
+¶
+
+// Complex pipe chain with inline lambdas
+result4 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    $| (x -> x % 2 == 0)
+    $> (x -> x * x)
+    $< (0, (acc, x) -> acc + x)
+
+>> "Filter evens -> square -> sum: " >> result4 ¶
+>> "Expected: 2^2 + 4^2 + 6^2 + 8^2 + 10^2 = 220" ¶
+¶
+
+// Pipe with curried functions
+make_multiplier = factor -> value -> value * factor
+times_three = make_multiplier(3)
+times_five = make_multiplier(5)
+
+result5 = 10 |> times_three(_) |> times_five(_)
+>> "10 -> *3 -> *5: " >> result5 >> " (expected: 150)" ¶
+¶
+
+// Closure that captures and returns function
+make_accumulator = start -> {
+    current = start
+    <~ x -> {
+        total = current + x
+        <~ total
+    }
+}
+
+acc_100 = make_accumulator(100)
+result6 = 25 |> acc_100(_)
+>> "Accumulator starting at 100, add 25: " >> result6 ¶
+>> "Expected: 125" ¶
+¶
+
+// Multiple placeholders in different positions
+weighted_sum = (w1, v1, w2, v2) -> w1 * v1 + w2 * v2
+
+result7 = 5 |> weighted_sum(2, _, 3, 10)
+>> "Weighted sum with placeholder in middle: " >> result7 ¶
+>> "Expected: 2*5 + 3*10 = 40" ¶
+¶
+
+// Nested pipe expressions (pipe result into another pipe)
+step1 = x -> x + 10
+step2 = x -> x * 2
+step3 = x -> x - 5
+
+nested_result = 5 |> step1(_) |> step2(_) |> step3(_)
+>> "Nested pipes: (5+10)*2-5 = " >> nested_result ¶
+>> "Expected: 25" ¶
+¶
+
+>> "=== TEST PASSED ===" ¶
