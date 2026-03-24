@@ -12,6 +12,7 @@ use zymbol_ast::{
     Output, IfStmt, Loop, Break, Continue,
     FunctionDecl, LambdaBody,
     TryStmt, FormatPrefix,
+    DestructureAssign, DestructureItem, DestructurePattern,
 };
 use zymbol_ast::Pattern;
 use zymbol_ast::BasePrefix;
@@ -523,6 +524,7 @@ impl Compiler {
             Statement::Match(m) => {
                 self.compile_match_stmt(m, ctx)
             }
+            Statement::DestructureAssign(d) => self.compile_destructure_assign(d, ctx),
             // Unsupported — produce meaningful error
             Statement::Input(_) => Err(CompileError::Unsupported("input (<<)".into())),
             Statement::Try(ts) => self.compile_try(ts, ctx),
@@ -577,6 +579,63 @@ impl Compiler {
         }
         if src != dst {
             ctx.emit(Instruction::CopyReg(dst, src));
+        }
+        Ok(())
+    }
+
+    fn compile_destructure_assign(
+        &mut self,
+        d: &DestructureAssign,
+        ctx: &mut FunctionCtx,
+    ) -> Result<(), CompileError> {
+        let r_rhs = self.compile_expr(&d.value, ctx)?;
+        match &d.pattern {
+            DestructurePattern::Array(items) | DestructurePattern::Positional(items) => {
+                let mut idx: i64 = 0;
+                for item in items {
+                    match item {
+                        DestructureItem::Bind(name) => {
+                            let r_idx = ctx.alloc_temp()?;
+                            ctx.emit(Instruction::LoadInt(r_idx, idx));
+                            let dst = if let Ok(existing) = ctx.get_reg(name) {
+                                existing
+                            } else {
+                                ctx.alloc_reg(name)?
+                            };
+                            ctx.emit(Instruction::ArrayGet(dst, r_rhs, r_idx));
+                            idx += 1;
+                        }
+                        DestructureItem::Rest(name) => {
+                            let r_lo = ctx.alloc_temp()?;
+                            ctx.emit(Instruction::LoadInt(r_lo, idx));
+                            let r_hi = ctx.alloc_temp()?;
+                            // Use array length as hi (slice to end)
+                            ctx.emit(Instruction::ArrayLen(r_hi, r_rhs));
+                            let dst = if let Ok(existing) = ctx.get_reg(name) {
+                                existing
+                            } else {
+                                ctx.alloc_reg(name)?
+                            };
+                            ctx.emit(Instruction::ArraySlice(dst, r_rhs, r_lo));
+                            idx += 1;
+                        }
+                        DestructureItem::Ignore => {
+                            idx += 1;
+                        }
+                    }
+                }
+            }
+            DestructurePattern::NamedTuple(fields) => {
+                for (field, var_name) in fields {
+                    let field_idx = self.intern_string(field);
+                    let dst = if let Ok(existing) = ctx.get_reg(var_name) {
+                        existing
+                    } else {
+                        ctx.alloc_reg(var_name)?
+                    };
+                    ctx.emit(Instruction::NamedTupleGet(dst, r_rhs, field_idx));
+                }
+            }
         }
         Ok(())
     }
@@ -981,13 +1040,28 @@ impl Compiler {
             Expr::Match(m) => self.compile_match_expr(m, ctx),
             Expr::CollectionLength(cl) => self.compile_collection_length(cl, ctx),
             Expr::CollectionAppend(ca) => self.compile_collection_append(ca, ctx),
-            Expr::CollectionRemove(cr) => self.compile_collection_remove(cr, ctx),
+            Expr::CollectionInsert(ci) => self.compile_collection_insert(ci, ctx),
+            Expr::CollectionRemoveValue(cv) => self.compile_collection_remove_value(cv, ctx),
+            Expr::CollectionRemoveAll(ca) => self.compile_collection_remove_all(ca, ctx),
+            Expr::CollectionRemoveAt(cr) => self.compile_collection_remove(cr, ctx),
+            Expr::CollectionRemoveRange(cr) => self.compile_collection_remove_range(cr, ctx),
+            Expr::CollectionFindAll(op) => {
+                let r_coll = self.compile_expr(&op.collection, ctx)?;
+                let r_val  = self.compile_expr(&op.value, ctx)?;
+                let dst    = ctx.alloc_temp()?;
+                ctx.emit(Instruction::StrFindPos(dst, r_coll, r_val));
+                ctx.set_reg_type(dst, StaticType::Unknown);
+                Ok(dst)
+            }
             Expr::CollectionContains(cc) => self.compile_collection_contains(cc, ctx),
             Expr::CollectionUpdate(cu) => self.compile_collection_update(cu, ctx),
             Expr::CollectionSlice(cs) => self.compile_collection_slice(cs, ctx),
             Expr::CollectionMap(cm) => self.compile_collection_map(cm, ctx),
             Expr::CollectionFilter(cf) => self.compile_collection_filter(cf, ctx),
             Expr::CollectionReduce(cr2) => self.compile_collection_reduce(cr2, ctx),
+            Expr::CollectionSortAsc(cs) => self.compile_collection_sort(cs, ctx),
+            Expr::CollectionSortDesc(cs) => self.compile_collection_sort(cs, ctx),
+            Expr::CollectionSortCustom(cs) => self.compile_collection_sort(cs, ctx),
             Expr::Lambda(lam) => self.compile_lambda(lam, ctx),
             Expr::NumericEval(ne) => {
                 let r = self.compile_expr(&ne.expr, ctx)?;
@@ -1089,32 +1163,6 @@ impl Compiler {
                 Ok(dst)
             }
             // ── String modification operators ──────────────────────────────
-            Expr::StringFindPositions(op) => {
-                let r_str = self.compile_expr(&op.string, ctx)?;
-                let r_pat = self.compile_expr(&op.pattern, ctx)?;
-                let dst   = ctx.alloc_temp()?;
-                ctx.emit(Instruction::StrFindPos(dst, r_str, r_pat));
-                ctx.set_reg_type(dst, StaticType::Unknown);
-                Ok(dst)
-            }
-            Expr::StringInsert(op) => {
-                let r_str  = self.compile_expr(&op.string, ctx)?;
-                let r_pos  = self.compile_expr(&op.position, ctx)?;
-                let r_text = self.compile_expr(&op.text, ctx)?;
-                let dst    = ctx.alloc_temp()?;
-                ctx.emit(Instruction::StrInsert(dst, r_str, r_pos, r_text));
-                ctx.set_reg_type(dst, StaticType::String);
-                Ok(dst)
-            }
-            Expr::StringRemove(op) => {
-                let r_str   = self.compile_expr(&op.string, ctx)?;
-                let r_pos   = self.compile_expr(&op.position, ctx)?;
-                let r_count = self.compile_expr(&op.count, ctx)?;
-                let dst     = ctx.alloc_temp()?;
-                ctx.emit(Instruction::StrRemove(dst, r_str, r_pos, r_count));
-                ctx.set_reg_type(dst, StaticType::String);
-                Ok(dst)
-            }
             Expr::StringReplace(op) => {
                 let r_str = self.compile_expr(&op.string, ctx)?;
                 let r_pat = self.compile_expr(&op.pattern, ctx)?;
@@ -1761,7 +1809,7 @@ impl Compiler {
 
     fn compile_collection_remove(
         &mut self,
-        cr: &zymbol_ast::CollectionRemoveExpr,
+        cr: &zymbol_ast::CollectionRemoveAtExpr,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
         let r_coll = self.compile_expr(&cr.collection, ctx)?;
@@ -1816,19 +1864,28 @@ impl Compiler {
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
         let r_coll = self.compile_expr(&cs.collection, ctx)?;
-        // lo register
-        let r_lo = if let Some(start) = &cs.start {
-            self.compile_expr(start, ctx)?
+        // Pre-allocate both bounds consecutively BEFORE any compile_expr calls, so
+        // r_hi == r_lo + 1 is always guaranteed (VM reads lo_reg and lo_reg+1).
+        let r_lo = ctx.alloc_temp()?;
+        let r_hi = ctx.alloc_temp()?; // = r_lo + 1 guaranteed
+
+        // Fill r_lo with start value
+        if let Some(start) = &cs.start {
+            let r_start = self.compile_expr(start, ctx)?;
+            ctx.emit(Instruction::CopyReg(r_lo, r_start));
         } else {
-            let t = ctx.alloc_temp()?;
-            ctx.emit(Instruction::LoadInt(t, 0));
-            t
-        };
-        // hi register must be r_lo + 1 by VM convention
-        let r_hi = ctx.alloc_temp()?;
+            ctx.emit(Instruction::LoadInt(r_lo, 0));
+        }
+
+        // Fill r_hi with end value
         if let Some(end) = &cs.end {
             let r_end = self.compile_expr(end, ctx)?;
-            ctx.emit(Instruction::CopyReg(r_hi, r_end));
+            if cs.count_based {
+                // [start:count] → actual_end = start + count
+                ctx.emit(Instruction::AddInt(r_hi, r_lo, r_end));
+            } else {
+                ctx.emit(Instruction::CopyReg(r_hi, r_end));
+            }
         } else {
             // slice to end: use length
             if ctx.get_reg_type(r_coll) == StaticType::String {
@@ -1845,6 +1902,83 @@ impl Compiler {
         } else {
             ctx.emit(Instruction::ArraySlice(dst, r_coll, r_lo));
         }
+        Ok(dst)
+    }
+
+    fn compile_collection_insert(
+        &mut self,
+        ci: &zymbol_ast::CollectionInsertExpr,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let r_coll = self.compile_expr(&ci.collection, ctx)?;
+        let r_idx  = self.compile_expr(&ci.index, ctx)?;
+        let r_elem = self.compile_expr(&ci.element, ctx)?;
+        let dst = ctx.alloc_temp()?;
+        ctx.emit(Instruction::CopyReg(dst, r_coll));
+        ctx.emit(Instruction::ArrayInsert(dst, r_idx, r_elem));
+        Ok(dst)
+    }
+
+    fn compile_collection_remove_value(
+        &mut self,
+        cv: &zymbol_ast::CollectionRemoveValueExpr,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let r_coll = self.compile_expr(&cv.collection, ctx)?;
+        let r_val  = self.compile_expr(&cv.value, ctx)?;
+        let dst = ctx.alloc_temp()?;
+        ctx.emit(Instruction::CopyReg(dst, r_coll));
+        ctx.emit(Instruction::ArrayRemoveValue(dst, r_val));
+        Ok(dst)
+    }
+
+    fn compile_collection_remove_all(
+        &mut self,
+        ca: &zymbol_ast::CollectionRemoveAllExpr,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let r_coll = self.compile_expr(&ca.collection, ctx)?;
+        let r_val  = self.compile_expr(&ca.value, ctx)?;
+        let dst = ctx.alloc_temp()?;
+        ctx.emit(Instruction::CopyReg(dst, r_coll));
+        ctx.emit(Instruction::ArrayRemoveAll(dst, r_val));
+        Ok(dst)
+    }
+
+    fn compile_collection_remove_range(
+        &mut self,
+        cr: &zymbol_ast::CollectionRemoveRangeExpr,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let r_coll = self.compile_expr(&cr.collection, ctx)?;
+        // Pre-allocate both bounds consecutively BEFORE any compile_expr calls, so
+        // r_hi == r_lo + 1 is always guaranteed (VM reads lo_reg and lo_reg+1).
+        let r_lo = ctx.alloc_temp()?;
+        let r_hi = ctx.alloc_temp()?; // = r_lo + 1 guaranteed
+
+        // Fill r_lo with start value
+        if let Some(start) = &cr.start {
+            let r_start = self.compile_expr(start, ctx)?;
+            ctx.emit(Instruction::CopyReg(r_lo, r_start));
+        } else {
+            ctx.emit(Instruction::LoadInt(r_lo, 0));
+        }
+
+        // Fill r_hi with end value
+        if let Some(end) = &cr.end {
+            let r_end = self.compile_expr(end, ctx)?;
+            if cr.count_based {
+                // [start:count] → actual_end = start + count
+                ctx.emit(Instruction::AddInt(r_hi, r_lo, r_end));
+            } else {
+                ctx.emit(Instruction::CopyReg(r_hi, r_end));
+            }
+        } else {
+            ctx.emit(Instruction::ArrayLen(r_hi, r_coll));
+        }
+        let dst = ctx.alloc_temp()?;
+        ctx.emit(Instruction::CopyReg(dst, r_coll));
+        ctx.emit(Instruction::ArrayRemoveRange(dst, r_lo));
         Ok(dst)
     }
 
@@ -1882,6 +2016,22 @@ impl Compiler {
         let r_fn = self.compile_expr(&cr.lambda, ctx)?;
         let dst = ctx.alloc_temp()?;
         ctx.emit(Instruction::ArrayReduce(dst, r_arr, r_init, r_fn));
+        Ok(dst)
+    }
+
+    fn compile_collection_sort(
+        &mut self,
+        cs: &zymbol_ast::CollectionSortExpr,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let r_arr = self.compile_expr(&cs.collection, ctx)?;
+        let dst = ctx.alloc_temp()?;
+        let r_fn = if let Some(ref cmp) = cs.comparator {
+            self.compile_expr(cmp, ctx)?
+        } else {
+            u16::MAX  // sentinel: no comparator → natural order
+        };
+        ctx.emit(Instruction::ArraySort(dst, r_arr, cs.ascending, r_fn));
         Ok(dst)
     }
 
@@ -2342,9 +2492,35 @@ fn collect_free_in_expr(
             collect_free_in_expr(&op.collection, locals, outer_ctx, seen, free);
             collect_free_in_expr(&op.element, locals, outer_ctx, seen, free);
         }
-        Expr::CollectionRemove(op) => {
+        Expr::CollectionInsert(op) => {
             collect_free_in_expr(&op.collection, locals, outer_ctx, seen, free);
             collect_free_in_expr(&op.index, locals, outer_ctx, seen, free);
+            collect_free_in_expr(&op.element, locals, outer_ctx, seen, free);
+        }
+        Expr::CollectionRemoveValue(op) => {
+            collect_free_in_expr(&op.collection, locals, outer_ctx, seen, free);
+            collect_free_in_expr(&op.value, locals, outer_ctx, seen, free);
+        }
+        Expr::CollectionRemoveAll(op) => {
+            collect_free_in_expr(&op.collection, locals, outer_ctx, seen, free);
+            collect_free_in_expr(&op.value, locals, outer_ctx, seen, free);
+        }
+        Expr::CollectionRemoveAt(op) => {
+            collect_free_in_expr(&op.collection, locals, outer_ctx, seen, free);
+            collect_free_in_expr(&op.index, locals, outer_ctx, seen, free);
+        }
+        Expr::CollectionRemoveRange(op) => {
+            collect_free_in_expr(&op.collection, locals, outer_ctx, seen, free);
+            if let Some(s) = &op.start {
+                collect_free_in_expr(s, locals, outer_ctx, seen, free);
+            }
+            if let Some(e) = &op.end {
+                collect_free_in_expr(e, locals, outer_ctx, seen, free);
+            }
+        }
+        Expr::CollectionFindAll(op) => {
+            collect_free_in_expr(&op.collection, locals, outer_ctx, seen, free);
+            collect_free_in_expr(&op.value, locals, outer_ctx, seen, free);
         }
         Expr::CollectionContains(op) => {
             collect_free_in_expr(&op.collection, locals, outer_ctx, seen, free);
@@ -2393,26 +2569,18 @@ fn collect_free_in_expr(
                 }
             }
         }
-        Expr::StringFindPositions(op) => {
-            collect_free_in_expr(&op.string, locals, outer_ctx, seen, free);
-            collect_free_in_expr(&op.pattern, locals, outer_ctx, seen, free);
-        }
-        Expr::StringInsert(op) => {
-            collect_free_in_expr(&op.string, locals, outer_ctx, seen, free);
-            collect_free_in_expr(&op.position, locals, outer_ctx, seen, free);
-            collect_free_in_expr(&op.text, locals, outer_ctx, seen, free);
-        }
-        Expr::StringRemove(op) => {
-            collect_free_in_expr(&op.string, locals, outer_ctx, seen, free);
-            collect_free_in_expr(&op.position, locals, outer_ctx, seen, free);
-            collect_free_in_expr(&op.count, locals, outer_ctx, seen, free);
-        }
         Expr::StringReplace(op) => {
             collect_free_in_expr(&op.string, locals, outer_ctx, seen, free);
             collect_free_in_expr(&op.pattern, locals, outer_ctx, seen, free);
             collect_free_in_expr(&op.replacement, locals, outer_ctx, seen, free);
             if let Some(count) = &op.count {
                 collect_free_in_expr(count, locals, outer_ctx, seen, free);
+            }
+        }
+        Expr::CollectionSortAsc(op) | Expr::CollectionSortDesc(op) | Expr::CollectionSortCustom(op) => {
+            collect_free_in_expr(&op.collection, locals, outer_ctx, seen, free);
+            if let Some(ref cmp) = op.comparator {
+                collect_free_in_expr(cmp, locals, outer_ctx, seen, free);
             }
         }
         // Literals and shell expressions have no capturable sub-expressions
@@ -2527,6 +2695,9 @@ fn collect_free_in_stmts(
             }
             Statement::Expr(expr_stmt) => {
                 collect_free_in_expr(&expr_stmt.expr, locals, outer_ctx, seen, free);
+            }
+            Statement::DestructureAssign(d) => {
+                collect_free_in_expr(&d.value, locals, outer_ctx, seen, free);
             }
             // No sub-expressions to scan
             Statement::Newline(_) | Statement::Break(_) | Statement::Continue(_)
@@ -2663,11 +2834,14 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::NewArray(d) => upd(*d),
             Instruction::ArrayPush(a, e) => { upd(*a); upd(*e); }
             Instruction::ArrayGet(d, a, i) | Instruction::ArraySet(d, a, i) => { upd(*d); upd(*a); upd(*i); }
-            Instruction::ArrayRemove(d, a) => { upd(*d); upd(*a); }
+            Instruction::ArrayRemove(d, a) | Instruction::ArrayRemoveValue(d, a)
+            | Instruction::ArrayRemoveAll(d, a) | Instruction::ArrayRemoveRange(d, a) => { upd(*d); upd(*a); }
+            Instruction::ArrayInsert(d, i, v) => { upd(*d); upd(*i); upd(*v); }
             Instruction::ArrayLen(d, a) | Instruction::ArrayContains(d, a, _)
             | Instruction::ArraySlice(d, a, _) => { upd(*d); upd(*a); }
             Instruction::ArrayMap(d, a, f) | Instruction::ArrayFilter(d, a, f) => { upd(*d); upd(*a); upd(*f); }
             Instruction::ArrayReduce(d, a, i, f) => { upd(*d); upd(*a); upd(*i); upd(*f); }
+            Instruction::ArraySort(d, a, _, f) => { upd(*d); upd(*a); if *f != u16::MAX { upd(*f); } }
             Instruction::StrLen(d, s) | Instruction::StrChars(d, s) => { upd(*d); upd(*s); }
             Instruction::StrSplit(d, s, p) | Instruction::StrContains(d, s, p)
             | Instruction::StrSlice(d, s, p) | Instruction::StrFindPos(d, s, p)

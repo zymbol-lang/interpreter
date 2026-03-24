@@ -114,6 +114,14 @@ pub enum Instruction {
     ArraySet(Reg, Reg, Reg),
     ArrayLen(Reg, Reg),
     ArrayRemove(Reg, Reg),
+    /// Remove first occurrence of val from arr in-place ($-)
+    ArrayRemoveValue(Reg, Reg),
+    /// Remove all occurrences of val from arr in-place ($--)
+    ArrayRemoveAll(Reg, Reg),
+    /// Insert val at position idx in arr in-place ($+[i])
+    ArrayInsert(Reg, Reg, Reg),
+    /// Remove elements [lo..hi) from arr in-place ($-[lo..hi]); hi_reg = lo_reg + 1
+    ArrayRemoveRange(Reg, Reg),
     /// dst = arr.contains(elem)
     ArrayContains(Reg, Reg, Reg),
     /// dst = arr[lo..hi] (exclusive hi, like Python slicing)
@@ -124,6 +132,9 @@ pub enum Instruction {
     ArrayFilter(Reg, Reg, Reg),
     /// HOF: dst = arr.reduce(init_reg, lambda_reg)
     ArrayReduce(Reg, Reg, Reg, Reg),
+    /// HOF: dst = arr.sort(ascending, opt_func_reg)
+    /// ascending: true=$^+, false=$^-; func_reg=u8::MAX means natural order
+    ArraySort(Reg, Reg, bool, Reg),
 
     // ── Tuples ───────────────────────────────────────────────────────────
     /// Build a positional tuple: dst = (regs[0], regs[1], ...)

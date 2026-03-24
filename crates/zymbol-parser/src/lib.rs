@@ -165,6 +165,29 @@ impl Parser {
                     self.parse_assignment()
                 }
             }
+            TokenKind::LBracket => {
+                // Could be array destructure: [a, b] = expr
+                // is_array_destructure() saves/restores state, so peek() still returns '[' after
+                if self.is_array_destructure() {
+                    self.parse_destructure_assign()
+                } else {
+                    let span = self.peek().span;
+                    Err(Diagnostic::error("unexpected '[' at statement level")
+                        .with_span(span)
+                        .with_help("use '[a, b] = expr' for array destructuring"))
+                }
+            }
+            TokenKind::LParen => {
+                // Could be tuple destructure: (a, b) = expr or (name: n) = expr
+                if self.is_tuple_destructure() {
+                    self.parse_destructure_assign()
+                } else {
+                    let span = self.peek().span;
+                    Err(Diagnostic::error("unexpected '(' at statement level")
+                        .with_span(span)
+                        .with_help("use '(a, b) = expr' for tuple destructuring"))
+                }
+            }
             TokenKind::Eof => Err(Diagnostic::error("unexpected end of file")
                 .with_span(token.span)),
             TokenKind::Error(msg) => Err(Diagnostic::error(msg.clone())
@@ -271,6 +294,11 @@ impl Parser {
         loop {
             match self.peek().kind {
                 TokenKind::LBracket => {
+                    // Only treat '[' as a postfix index if it's on the same line.
+                    // A '[' on a new line is either a new statement or an array destructure.
+                    if self.peek().span.start.line != expr.span().end.line {
+                        break;
+                    }
                     self.advance(); // consume [
 
                     let index = self.parse_expr()?;
@@ -308,7 +336,12 @@ impl Parser {
                     ));
                 }
                 TokenKind::LParen => {
-                    // Chained function call: expr(args)
+                    // Chained function call: expr(args) — only if on the same line.
+                    // A '(' on a new line starts a new statement (e.g. destructure pattern),
+                    // not a chained call.
+                    if self.peek().span.start.line != expr.span().end.line {
+                        break;
+                    }
                     self.advance(); // consume (
 
                     // Parse arguments
@@ -357,8 +390,14 @@ impl Parser {
                 TokenKind::DollarPlus => {
                     expr = self.parse_collection_append(expr)?;
                 }
+                TokenKind::DollarPlusLBracket => {
+                    expr = self.parse_collection_insert(expr)?;
+                }
                 TokenKind::DollarMinus => {
                     expr = self.parse_collection_remove(expr)?;
+                }
+                TokenKind::DollarMinusLBracket => {
+                    expr = self.parse_collection_remove_positional(expr)?;
                 }
                 TokenKind::DollarQuestion => {
                     expr = self.parse_collection_contains(expr)?;
@@ -370,7 +409,7 @@ impl Parser {
                     expr = self.parse_string_insert(expr)?;
                 }
                 TokenKind::DollarMinusMinus => {
-                    expr = self.parse_string_remove(expr)?;
+                    expr = self.parse_collection_remove_all(expr)?;
                 }
                 TokenKind::DollarTildeTilde => {
                     expr = self.parse_string_replace(expr)?;
@@ -389,6 +428,15 @@ impl Parser {
                 }
                 TokenKind::DollarLt => {
                     expr = self.parse_collection_reduce(expr)?;
+                }
+                TokenKind::DollarCaretPlus => {
+                    expr = self.parse_collection_sort(expr, true)?;
+                }
+                TokenKind::DollarCaretMinus => {
+                    expr = self.parse_collection_sort(expr, false)?;
+                }
+                TokenKind::DollarCaret => {
+                    expr = self.parse_collection_sort_custom(expr)?;
                 }
                 TokenKind::HashQuestion => {
                     // Type metadata operator: expr#?
@@ -463,11 +511,15 @@ impl Parser {
             }
         };
 
-        // Handle indexing and member access, but NOT function calls
+        // Handle indexing and member access (same line only), but NOT function calls
         loop {
             let token = self.peek().clone();
             match token.kind {
                 TokenKind::LBracket => {
+                    // Only treat '[' as a postfix index if it's on the same line.
+                    if self.peek().span.start.line != expr.span().end.line {
+                        break;
+                    }
                     self.advance(); // consume [
 
                     let index = self.parse_expr()?;
@@ -531,7 +583,7 @@ impl Parser {
                     expr = self.parse_string_insert(expr)?;
                 }
                 TokenKind::DollarMinusMinus => {
-                    expr = self.parse_string_remove(expr)?;
+                    expr = self.parse_collection_remove_all(expr)?;
                 }
                 TokenKind::DollarTildeTilde => {
                     expr = self.parse_string_replace(expr)?;

@@ -3,7 +3,7 @@
 //! Walks the AST to extract symbol definitions for indexing,
 //! supporting go-to-definition and find-references functionality.
 
-use zymbol_ast::{Block, Expr, Program, Statement};
+use zymbol_ast::{Block, Expr, Program, Statement, DestructureItem, DestructurePattern};
 use zymbol_span::Span;
 
 /// Kind of symbol extracted from the AST
@@ -299,6 +299,32 @@ impl SymbolExtractor {
                     SymbolKind::Variable,
                     capture.span,
                 ));
+            }
+
+            Statement::DestructureAssign(d) => {
+                // Register bound variable names as symbols
+                match &d.pattern {
+                    DestructurePattern::Array(items) | DestructurePattern::Positional(items) => {
+                        for item in items {
+                            if let DestructureItem::Bind(name) | DestructureItem::Rest(name) = item {
+                                self.symbols.push(Symbol::new(
+                                    name.clone(),
+                                    SymbolKind::Variable,
+                                    d.span,
+                                ));
+                            }
+                        }
+                    }
+                    DestructurePattern::NamedTuple(fields) => {
+                        for (_field, var) in fields {
+                            self.symbols.push(Symbol::new(
+                                var.clone(),
+                                SymbolKind::Variable,
+                                d.span,
+                            ));
+                        }
+                    }
+                }
             }
 
             // Statements without symbol definitions

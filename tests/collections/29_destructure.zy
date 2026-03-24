@@ -1,0 +1,39 @@
+// Test: destructuring assignment
+// [a, b] = arr / (a, b) = tuple / (name: n, age: a) = named_tuple
+
+// ── Array destructuring ─────────────────────────────────────────────────────
+[a, b, c] = [10, 20, 30]
+>> a ¶                           // → 10
+>> b ¶                           // → 20
+>> c ¶                           // → 30
+
+// ── Array destructuring with rest ──────────────────────────────────────────
+[first, *rest] = [1, 2, 3, 4, 5]
+>> first ¶                       // → 1
+>> (rest$#) ¶                    // → 4
+>> rest[0] ¶                     // → 2
+>> rest[-1] ¶                    // → 5
+
+// ── Array destructuring with ignore ────────────────────────────────────────
+[x, _, z] = [100, 999, 300]
+>> x ¶                           // → 100
+>> z ¶                           // → 300
+
+// ── Named tuple destructuring ───────────────────────────────────────────────
+(name: n, age: a) = (name: "Ana", age: 25)
+>> n ¶                           // → Ana
+>> a ¶                           // → 25
+
+// ── Positional tuple destructuring ─────────────────────────────────────────
+(p, q) = (42, 99)
+>> p ¶                           // → 42
+>> q ¶                           // → 99
+
+// ── Function returning tuple — clean unpack ─────────────────────────────────
+stats(nums) {
+    total = nums$< (0, (acc, x) -> acc + x)
+    <~ (total, nums$#)
+}
+(total, count) = stats([1, 2, 3, 4, 5])
+>> total ¶                       // → 15
+>> count ¶                       // → 5

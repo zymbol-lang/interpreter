@@ -3,7 +3,7 @@
 //! Tracks where variables are defined and used to determine lifetimes
 
 use std::collections::{HashMap, HashSet};
-use zymbol_ast::{Expr, Statement};
+use zymbol_ast::{DestructureItem, DestructurePattern, Expr, Statement};
 use zymbol_span::Span;
 use crate::cfg::{ControlFlowGraph, NodeId};
 
@@ -443,6 +443,35 @@ impl DefUseAnalyzer {
                 self.analyze_expr(&expr_stmt.expr, node_index);
             }
 
+            Statement::DestructureAssign(d) => {
+                // RHS is a use
+                self.analyze_expr(&d.value, node_index);
+                // Each bound variable on LHS is a definition
+                let bound_names: Vec<String> = match &d.pattern {
+                    DestructurePattern::Array(items) | DestructurePattern::Positional(items) => {
+                        items.iter().filter_map(|item| match item {
+                            DestructureItem::Bind(name) | DestructureItem::Rest(name) => Some(name.clone()),
+                            DestructureItem::Ignore => None,
+                        }).collect()
+                    }
+                    DestructurePattern::NamedTuple(pairs) => {
+                        pairs.iter().map(|(_, var)| var.clone()).collect()
+                    }
+                };
+                for name in bound_names {
+                    let chain = self.chains.entry(name.clone()).or_insert_with(|| {
+                        DefUseChain::new(name.clone())
+                    });
+                    chain.add_definition(Definition {
+                        var_name: name.clone(),
+                        node: node_index,
+                        span: d.span,
+                        is_underscore: name.starts_with('_'),
+                        scope_depth: self.scope_depth,
+                    });
+                }
+            }
+
             Statement::LifetimeEnd(lifetime_end) => {
                 // Explicit destruction is a use
                 let chain = self.chains.entry(lifetime_end.variable_name.clone()).or_insert_with(|| {
@@ -698,9 +727,35 @@ impl DefUseAnalyzer {
                 self.analyze_expr(&col_append.element, node_index);
             }
 
-            Expr::CollectionRemove(col_remove) => {
-                self.analyze_expr(&col_remove.collection, node_index);
-                self.analyze_expr(&col_remove.index, node_index);
+            Expr::CollectionInsert(op) => {
+                self.analyze_expr(&op.collection, node_index);
+                self.analyze_expr(&op.index, node_index);
+                self.analyze_expr(&op.element, node_index);
+            }
+
+            Expr::CollectionRemoveValue(op) => {
+                self.analyze_expr(&op.collection, node_index);
+                self.analyze_expr(&op.value, node_index);
+            }
+
+            Expr::CollectionRemoveAll(op) => {
+                self.analyze_expr(&op.collection, node_index);
+                self.analyze_expr(&op.value, node_index);
+            }
+
+            Expr::CollectionRemoveAt(op) => {
+                self.analyze_expr(&op.collection, node_index);
+                self.analyze_expr(&op.index, node_index);
+            }
+
+            Expr::CollectionRemoveRange(op) => {
+                self.analyze_expr(&op.collection, node_index);
+                if let Some(start) = &op.start {
+                    self.analyze_expr(start, node_index);
+                }
+                if let Some(end) = &op.end {
+                    self.analyze_expr(end, node_index);
+                }
             }
 
             Expr::CollectionContains(col_contains) => {
@@ -740,24 +795,19 @@ impl DefUseAnalyzer {
                 self.analyze_expr(&col_reduce.lambda, node_index);
             }
 
+            Expr::CollectionSortAsc(op) | Expr::CollectionSortDesc(op) | Expr::CollectionSortCustom(op) => {
+                self.analyze_expr(&op.collection, node_index);
+                if let Some(ref cmp) = op.comparator {
+                    self.analyze_expr(cmp, node_index);
+                }
+            }
+
+            Expr::CollectionFindAll(op) => {
+                self.analyze_expr(&op.collection, node_index);
+                self.analyze_expr(&op.value, node_index);
+            }
+
             // String operations
-            Expr::StringFindPositions(str_find) => {
-                self.analyze_expr(&str_find.string, node_index);
-                self.analyze_expr(&str_find.pattern, node_index);
-            }
-
-            Expr::StringInsert(str_insert) => {
-                self.analyze_expr(&str_insert.string, node_index);
-                self.analyze_expr(&str_insert.position, node_index);
-                self.analyze_expr(&str_insert.text, node_index);
-            }
-
-            Expr::StringRemove(str_remove) => {
-                self.analyze_expr(&str_remove.string, node_index);
-                self.analyze_expr(&str_remove.position, node_index);
-                self.analyze_expr(&str_remove.count, node_index);
-            }
-
             Expr::StringReplace(str_replace) => {
                 self.analyze_expr(&str_replace.string, node_index);
                 self.analyze_expr(&str_replace.pattern, node_index);

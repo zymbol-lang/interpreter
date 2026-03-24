@@ -54,7 +54,7 @@ total = data5k$< (0, (acc, x) -> acc + x)
 t = T::now()
 rem_arr = []
 @ i:0..499 { rem_arr = rem_arr$+ i }
-@ _i:0..199 { rem_arr = rem_arr$- 0 }
+@ _i:0..199 { rem_arr = rem_arr$-[0] }
 rem_len = rem_arr$#
 >> "remove_ops: remaining len = " + rem_len + "  " + T::elapsed(t) ¶
 

@@ -1,0 +1,47 @@
+// Test: negative indices on strings, tuples, and named tuples
+// Complements 26_negative_indices.zy which focused on plain arrays.
+
+// ── String — various negative positions ─────────────────────────────────────
+s = "abcdefg"
+>> s[-1] ¶        // → g  (last char)
+>> s[-2] ¶        // → f
+>> s[-7] ¶        // → a  (first, via -length)
+
+// Single-char string
+one = "Z"
+>> one[-1] ¶      // → Z
+
+// ── String — remove at negative index ───────────────────────────────────────
+s2 = s$-[-1]      // removes 'g' → "abcdef"
+>> s2$# ¶         // → 6
+>> s2[-1] ¶       // → f
+
+s3 = s$-[-3]      // removes 'e' → "abcdfg"
+>> s3$# ¶         // → 6
+>> s3[4] ¶        // → f  (was at index 5, 'g' still at end)
+
+// ── Positional tuple — negative access ──────────────────────────────────────
+t = (10, 20, 30, 40, 50)
+>> t[-1] ¶        // → 50
+>> t[-2] ¶        // → 40
+>> t[-5] ¶        // → 10
+
+// ── Positional tuple — remove at negative index ──────────────────────────────
+t2 = t$-[-1]      // removes last → (10, 20, 30, 40)
+>> t2$# ¶         // → 4
+>> t2[-1] ¶       // → 40
+
+t3 = t$-[-2]      // removes second-to-last (40) → (10, 20, 30, 50)
+>> t3[-1] ¶       // → 50
+>> t3[-2] ¶       // → 30
+
+// ── Named tuple — positional negative access ────────────────────────────────
+person = (id: 1, name: "Ana", age: 25, city: "Lima")
+>> person[-1] ¶   // → Lima  (last field value)
+>> person[-2] ¶   // → 25   (second-to-last)
+>> person[-4] ¶   // → 1    (first)
+
+// ── Named tuple — remove last field ─────────────────────────────────────────
+p2 = person$-[-1]  // removes 'city' field → (id, name, age)
+>> p2$# ¶          // → 3
+>> p2[-1] ¶        // → 25  (now 'age' is last)

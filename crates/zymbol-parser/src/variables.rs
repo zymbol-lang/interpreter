@@ -7,7 +7,7 @@
 //! - Increment/decrement: ++, --
 //! - Lifetime end: \variable (explicit destruction)
 
-use zymbol_ast::{Assignment, BinaryExpr, CollectionUpdateExpr, ConstDecl, Expr, IdentifierExpr, IndexExpr, LifetimeEnd, LiteralExpr, Statement};
+use zymbol_ast::{Assignment, BinaryExpr, CollectionUpdateExpr, ConstDecl, DestructureAssign, DestructureItem, DestructurePattern, Expr, IdentifierExpr, IndexExpr, LifetimeEnd, LiteralExpr, Statement};
 use zymbol_common::{BinaryOp, Literal};
 use zymbol_error::Diagnostic;
 use zymbol_lexer::TokenKind;
@@ -187,6 +187,161 @@ impl Parser {
         let span = ident_token.span.to(&value.span());
 
         Ok(Statement::ConstDecl(ConstDecl::new(name, value, span)))
+    }
+
+    /// Returns true if current `[` starts a destructure assignment (not an array literal).
+    /// Uses save/restore to look past the bracket group and check for `=`.
+    pub(crate) fn is_array_destructure(&mut self) -> bool {
+        let saved = self.current;
+        self.advance(); // consume [
+        let mut depth = 1i32;
+        while depth > 0 && !self.is_at_end() {
+            match self.peek().kind {
+                TokenKind::LBracket => { depth += 1; self.advance(); }
+                TokenKind::RBracket => { depth -= 1; self.advance(); }
+                _ => { self.advance(); }
+            }
+        }
+        let result = matches!(self.peek().kind, TokenKind::Assign);
+        self.current = saved;
+        result
+    }
+
+    /// Returns true if current `(` starts a destructure assignment (not a tuple expression).
+    /// Uses save/restore to look past the paren group and check for `=`.
+    pub(crate) fn is_tuple_destructure(&mut self) -> bool {
+        let saved = self.current;
+        self.advance(); // consume (
+        let mut depth = 1i32;
+        while depth > 0 && !self.is_at_end() {
+            match self.peek().kind {
+                TokenKind::LParen => { depth += 1; self.advance(); }
+                TokenKind::RParen => { depth -= 1; self.advance(); }
+                _ => { self.advance(); }
+            }
+        }
+        let result = matches!(self.peek().kind, TokenKind::Assign);
+        self.current = saved;
+        result
+    }
+
+    /// Parse a destructure assignment: `[a, b] = expr` or `(name: n, age: a) = expr`
+    pub(crate) fn parse_destructure_assign(&mut self) -> Result<Statement, Diagnostic> {
+        let start_span = self.peek().span;
+
+        let pattern = if matches!(self.peek().kind, TokenKind::LBracket) {
+            self.parse_array_destructure_pattern()?
+        } else {
+            self.parse_tuple_destructure_pattern()?
+        };
+
+        let assign_tok = self.peek().clone();
+        if !matches!(assign_tok.kind, TokenKind::Assign) {
+            return Err(Diagnostic::error("expected '=' in destructure assignment")
+                .with_span(assign_tok.span));
+        }
+        self.advance(); // consume =
+
+        let value = self.parse_expr()?;
+        let span = start_span.to(&value.span());
+        Ok(Statement::DestructureAssign(DestructureAssign::new(pattern, value, span)))
+    }
+
+    fn parse_array_destructure_pattern(&mut self) -> Result<DestructurePattern, Diagnostic> {
+        self.advance(); // consume [
+        let mut items = Vec::new();
+        loop {
+            match self.peek().kind.clone() {
+                TokenKind::RBracket => { self.advance(); break; }
+                TokenKind::Comma => { self.advance(); }
+                TokenKind::Star => {
+                    self.advance(); // consume *
+                    let ident = self.peek().clone();
+                    let name = match &ident.kind {
+                        TokenKind::Ident(n) => n.clone(),
+                        _ => return Err(Diagnostic::error("expected identifier after '*' in destructure")
+                            .with_span(ident.span)),
+                    };
+                    self.advance();
+                    items.push(DestructureItem::Rest(name));
+                }
+                TokenKind::Underscore => {
+                    self.advance();
+                    items.push(DestructureItem::Ignore);
+                }
+                TokenKind::Ident(n) => {
+                    let name = n.clone();
+                    self.advance();
+                    items.push(DestructureItem::Bind(name));
+                }
+                _ => return Err(Diagnostic::error("expected identifier, '*rest', or '_' in array destructure")
+                    .with_span(self.peek().span)),
+            }
+        }
+        Ok(DestructurePattern::Array(items))
+    }
+
+    fn parse_tuple_destructure_pattern(&mut self) -> Result<DestructurePattern, Diagnostic> {
+        self.advance(); // consume (
+
+        // Determine named vs positional: if first content is `ident :` → named
+        let is_named = matches!(
+            (self.peek().kind.clone(), self.peek_ahead(1).map(|t| t.kind.clone())),
+            (TokenKind::Ident(_), Some(TokenKind::Colon))
+        );
+
+        let mut named_pairs: Vec<(String, String)> = Vec::new();
+        let mut positional_items: Vec<DestructureItem> = Vec::new();
+
+        loop {
+            match self.peek().kind.clone() {
+                TokenKind::RParen => { self.advance(); break; }
+                TokenKind::Comma => { self.advance(); }
+                TokenKind::Star if !is_named => {
+                    self.advance();
+                    let ident = self.peek().clone();
+                    let name = match &ident.kind {
+                        TokenKind::Ident(n) => n.clone(),
+                        _ => return Err(Diagnostic::error("expected identifier after '*' in destructure")
+                            .with_span(ident.span)),
+                    };
+                    self.advance();
+                    positional_items.push(DestructureItem::Rest(name));
+                }
+                TokenKind::Ident(n) if is_named => {
+                    let field = n.clone();
+                    self.advance(); // consume field name
+                    // Expect ':'
+                    let colon = self.peek().clone();
+                    if !matches!(colon.kind, TokenKind::Colon) {
+                        return Err(Diagnostic::error("expected ':' after field name in named tuple destructure")
+                            .with_span(colon.span));
+                    }
+                    self.advance(); // consume :
+                    let var_tok = self.peek().clone();
+                    let var_name = match &var_tok.kind {
+                        TokenKind::Ident(n) => n.clone(),
+                        _ => return Err(Diagnostic::error("expected variable name after ':' in named tuple destructure")
+                            .with_span(var_tok.span)),
+                    };
+                    self.advance();
+                    named_pairs.push((field, var_name));
+                }
+                TokenKind::Ident(n) if !is_named => {
+                    let name = n.clone();
+                    self.advance();
+                    positional_items.push(DestructureItem::Bind(name));
+                }
+                _ => return Err(Diagnostic::error("unexpected token in tuple destructure pattern")
+                    .with_span(self.peek().span)),
+            }
+        }
+
+        if is_named {
+            Ok(DestructurePattern::NamedTuple(named_pairs))
+        } else {
+            Ok(DestructurePattern::Positional(positional_items))
+        }
     }
 
     /// Parse lifetime end: \variable

@@ -118,3 +118,24 @@ For `fib(30)` + `ackermann(3,6)`, the pool's benefit is partial:
 - `HashMap::clear()` has O(n) cost per frame even for small maps
 - Net: allocation count reduced but Rust's allocator is already optimized for small, short-lived maps
 - Full benefit requires B6 (Bytecode VM) which eliminates per-call HashMap overhead entirely
+
+---
+
+## v0.0.2 Collection API Redesign — Impact Check (2026-03-23)
+
+| Benchmark       | S3 avg (baseline) | v0.0.2 avg | Δ       | Result       |
+|-----------------|-------------------|------------|---------|--------------|
+| stress          | 207ms             | 202ms      | -2%     | ✅ no regression |
+| bench_match     | 163ms             | 166ms      | +2%     | ✅ noise       |
+| bench_recursion | 1491ms            | 1494ms     | +0.2%   | ✅ identical   |
+| bench_collections | 69ms            | 63ms       | **-9%** | ✅ improved    |
+| bench_strings   | 50ms              | 44ms       | **-12%**| ✅ improved    |
+| bench_strings_stress | 116ms        | 118ms      | +2%     | ✅ noise       |
+| bench_strings_modify | 69ms         | 63ms       | **-9%** | ✅ improved    |
+
+**Test coverage:** 159/159 vm_compare PASS (3 new test files added)
+
+**Notes:**
+- `bench_collections` fix: `$- 0` (old remove-by-index) → `$-[0]` (new remove-at-index) — semantically correct
+- `bench_strings_modify` fix: `$++[p:t]` → `$+[p] t`, `$--[p:n]` → `$-[start..end]` — new v0.0.2 syntax
+- No performance regression from the API unification — new code paths are equally fast

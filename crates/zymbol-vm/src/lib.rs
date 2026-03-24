@@ -758,16 +758,188 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::ArrayRemove(arr_reg, idx_reg) => {
                     let idx = self.as_int(idx_reg)?;
-                    match &mut self.value_stack[base + arr_reg as usize] {
+                    let result = match self.value_stack[base + arr_reg as usize].clone() {
                         Value::Array(rc_arr) => {
-                            let arr = Rc::make_mut(rc_arr);
+                            let mut arr = rc_arr.as_ref().clone();
                             let i = if idx < 0 { arr.len() as i64 + idx } else { idx };
                             if i < 0 || i as usize >= arr.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
                             }
                             arr.remove(i as usize);
+                            Value::Array(Rc::new(arr))
                         }
-                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                        Value::Tuple(rc_tup) => {
+                            let mut tup = rc_tup.as_ref().clone();
+                            let i = if idx < 0 { tup.len() as i64 + idx } else { idx };
+                            if i < 0 || i as usize >= tup.len() {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() });
+                            }
+                            tup.remove(i as usize);
+                            Value::Tuple(Rc::new(tup))
+                        }
+                        Value::NamedTuple(rc_fields) => {
+                            let mut fields = rc_fields.as_ref().clone();
+                            let i = if idx < 0 { fields.len() as i64 + idx } else { idx };
+                            if i < 0 || i as usize >= fields.len() {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
+                            }
+                            fields.remove(i as usize);
+                            Value::NamedTuple(Rc::new(fields))
+                        }
+                        Value::String(rc_s) => {
+                            let mut chars: Vec<char> = rc_s.chars().collect();
+                            let i = if idx < 0 { chars.len() as i64 + idx } else { idx };
+                            if i < 0 || i as usize >= chars.len() {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() });
+                            }
+                            chars.remove(i as usize);
+                            Value::String(Rc::new(chars.iter().collect()))
+                        }
+                        other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
+                    };
+                    self.value_stack[base + arr_reg as usize] = result;
+                }
+
+                &Instruction::ArrayRemoveValue(arr_reg, val_reg) => {
+                    let val = self.reg_get(val_reg).clone();
+                    match self.value_stack[base + arr_reg as usize].clone() {
+                        Value::Array(rc_arr) => {
+                            let mut arr = rc_arr.as_ref().clone();
+                            if let Some(pos) = arr.iter().position(|v| v.equals(&val)) {
+                                arr.remove(pos);
+                            }
+                            self.value_stack[base + arr_reg as usize] = Value::Array(Rc::new(arr));
+                        }
+                        Value::String(rc_s) => {
+                            let result = match &val {
+                                Value::Char(c) => {
+                                    let chars: Vec<char> = rc_s.chars().collect();
+                                    if let Some(pos) = chars.iter().position(|ch| ch == c) {
+                                        let mut out = chars; out.remove(pos); out.iter().collect()
+                                    } else { rc_s.as_ref().clone() }
+                                }
+                                Value::String(p) => {
+                                    let s = rc_s.as_ref();
+                                    let pc: Vec<char> = p.chars().collect();
+                                    let sc: Vec<char> = s.chars().collect();
+                                    if pc.is_empty() { s.to_string() } else {
+                                        let mut found = false;
+                                        let mut out = sc.clone();
+                                        for i in 0..=sc.len().saturating_sub(pc.len()) {
+                                            if sc[i..i+pc.len()] == pc[..] {
+                                                out.drain(i..i+pc.len()); found = true; break;
+                                            }
+                                        }
+                                        let _ = found; out.iter().collect()
+                                    }
+                                }
+                                _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
+                            };
+                            self.value_stack[base + arr_reg as usize] = Value::String(Rc::new(result));
+                        }
+                        other => raise!(VmError::TypeError { expected: "Array or String", got: other.type_name().to_string() }),
+                    }
+                }
+
+                &Instruction::ArrayRemoveAll(arr_reg, val_reg) => {
+                    let val = self.reg_get(val_reg).clone();
+                    match self.value_stack[base + arr_reg as usize].clone() {
+                        Value::Array(rc_arr) => {
+                            let arr: Vec<Value> = rc_arr.as_ref().iter().filter(|v| !v.equals(&val)).cloned().collect();
+                            self.value_stack[base + arr_reg as usize] = Value::Array(Rc::new(arr));
+                        }
+                        Value::Tuple(rc_tup) => {
+                            let tup: Vec<Value> = rc_tup.as_ref().iter().filter(|v| !v.equals(&val)).cloned().collect();
+                            self.value_stack[base + arr_reg as usize] = Value::Tuple(Rc::new(tup));
+                        }
+                        Value::String(rc_s) => {
+                            let result = match &val {
+                                Value::Char(c) => rc_s.chars().filter(|ch| ch != c).collect(),
+                                Value::String(p) => {
+                                    if p.is_empty() { rc_s.as_ref().clone() }
+                                    else { rc_s.replace(p.as_str(), "") }
+                                }
+                                _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
+                            };
+                            self.value_stack[base + arr_reg as usize] = Value::String(Rc::new(result));
+                        }
+                        other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
+                    }
+                }
+
+                &Instruction::ArrayInsert(arr_reg, idx_reg, val_reg) => {
+                    let idx = self.as_int(idx_reg)?;
+                    let val = self.reg_get(val_reg).clone();
+                    match self.value_stack[base + arr_reg as usize].clone() {
+                        Value::Array(rc_arr) => {
+                            let mut arr = rc_arr.as_ref().clone();
+                            if idx < 0 || idx as usize > arr.len() {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                            }
+                            arr.insert(idx as usize, val);
+                            self.value_stack[base + arr_reg as usize] = Value::Array(Rc::new(arr));
+                        }
+                        Value::Tuple(rc_tup) => {
+                            let mut tup = rc_tup.as_ref().clone();
+                            if idx < 0 || idx as usize > tup.len() {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() });
+                            }
+                            tup.insert(idx as usize, val);
+                            self.value_stack[base + arr_reg as usize] = Value::Tuple(Rc::new(tup));
+                        }
+                        Value::String(rc_s) => {
+                            let mut chars: Vec<char> = rc_s.chars().collect();
+                            let i = idx as usize;
+                            if idx < 0 || i > chars.len() {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() });
+                            }
+                            match val {
+                                Value::Char(c) => { chars.insert(i, c); }
+                                Value::String(ref ins) => {
+                                    for (j, c) in ins.chars().enumerate() { chars.insert(i + j, c); }
+                                }
+                                _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
+                            }
+                            self.value_stack[base + arr_reg as usize] = Value::String(Rc::new(chars.iter().collect()));
+                        }
+                        other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
+                    }
+                }
+
+                &Instruction::ArrayRemoveRange(arr_reg, lo_reg) => {
+                    // hi_reg = lo_reg + 1 by compiler convention
+                    let lo = self.as_int(lo_reg)? as usize;
+                    let hi = self.as_int(lo_reg + 1)? as usize;
+                    match self.value_stack[base + arr_reg as usize].clone() {
+                        Value::Array(rc_arr) => {
+                            let mut arr = rc_arr.as_ref().clone();
+                            if lo <= hi && hi <= arr.len() {
+                                arr.drain(lo..hi);
+                            }
+                            self.value_stack[base + arr_reg as usize] = Value::Array(Rc::new(arr));
+                        }
+                        Value::Tuple(rc_tup) => {
+                            let mut tup = rc_tup.as_ref().clone();
+                            if lo <= hi && hi <= tup.len() {
+                                tup.drain(lo..hi);
+                            }
+                            self.value_stack[base + arr_reg as usize] = Value::Tuple(Rc::new(tup));
+                        }
+                        Value::NamedTuple(rc_nt) => {
+                            let mut fields = rc_nt.as_ref().clone();
+                            if lo <= hi && hi <= fields.len() {
+                                fields.drain(lo..hi);
+                            }
+                            self.value_stack[base + arr_reg as usize] = Value::NamedTuple(Rc::new(fields));
+                        }
+                        Value::String(rc_s) => {
+                            let mut chars: Vec<char> = rc_s.chars().collect();
+                            if lo <= hi && hi <= chars.len() {
+                                chars.drain(lo..hi);
+                            }
+                            self.value_stack[base + arr_reg as usize] = Value::String(Rc::new(chars.iter().collect()));
+                        }
+                        other => raise!(VmError::TypeError { expected: "Array, Tuple, NamedTuple, or String", got: other.type_name().to_string() }),
                     }
                 }
 
@@ -923,8 +1095,22 @@ impl<W: Write> VM<W> {
                                         .collect()
                                 }
                             }
+                            (Value::Array(arr), needle) => {
+                                let needle = needle.clone();
+                                arr.iter().enumerate()
+                                    .filter(|(_, v)| v.equals(&needle))
+                                    .map(|(i, _)| Value::Int(i as i64))
+                                    .collect()
+                            }
+                            (Value::Tuple(tup), needle) => {
+                                let needle = needle.clone();
+                                tup.iter().enumerate()
+                                    .filter(|(_, v)| v.equals(&needle))
+                                    .map(|(i, _)| Value::Int(i as i64))
+                                    .collect()
+                            }
                             (Value::String(_), other) => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
-                            (other, _) => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            (other, _) => raise!(VmError::TypeError { expected: "String, Array, or Tuple", got: other.type_name().to_string() }),
                         }
                     };
                     wreg!(dst, Value::Array(Rc::new(positions)));
@@ -1154,7 +1340,25 @@ impl<W: Write> VM<W> {
                             let hi = hi.min(arr.len());
                             Value::Array(Rc::new(arr[lo..hi].to_vec()))
                         }
-                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                        Value::Tuple(tup) => {
+                            let tup = tup.as_ref();
+                            let len = tup.len() as i64;
+                            let lo = (if lo < 0 { len + lo } else { lo }).max(0) as usize;
+                            let hi = (if hi < 0 { len + hi } else { hi }).min(len) as usize;
+                            let lo = lo.min(tup.len());
+                            let hi = hi.min(tup.len());
+                            Value::Tuple(Rc::new(tup[lo..hi].to_vec()))
+                        }
+                        Value::NamedTuple(fields) => {
+                            let fields = fields.as_ref();
+                            let len = fields.len() as i64;
+                            let lo = (if lo < 0 { len + lo } else { lo }).max(0) as usize;
+                            let hi = (if hi < 0 { len + hi } else { hi }).min(len) as usize;
+                            let lo = lo.min(fields.len());
+                            let hi = hi.min(fields.len());
+                            Value::NamedTuple(Rc::new(fields[lo..hi].to_vec()))
+                        }
+                        other => raise!(VmError::TypeError { expected: "Array, Tuple, or NamedTuple", got: other.type_name().to_string() }),
                     };
                     self.reg_set(dst, result);
                 }
@@ -1197,6 +1401,37 @@ impl<W: Write> VM<W> {
                         acc = self.call_callable(callable.clone(), vec![acc, elem], program, ip, chunk_idx)?;
                     }
                     self.reg_set(dst, acc);
+                }
+                &Instruction::ArraySort(dst, arr_reg, ascending, func_reg) => {
+                    let arr = match self.reg_get(arr_reg).clone() {
+                        Value::Array(a) => a.as_ref().clone(),
+                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    let mut items = arr;
+                    if func_reg == u16::MAX {
+                        // Natural order
+                        items.sort_by(|a, b| vm_natural_cmp(a, b));
+                        if !ascending {
+                            items.reverse();
+                        }
+                    } else {
+                        // Custom comparator: bubble sort to avoid unsafe borrow
+                        let callable = self.reg_get(func_reg).clone();
+                        let n = items.len();
+                        for i in 0..n {
+                            for j in 0..n.saturating_sub(i + 1) {
+                                let keep = self.call_callable(
+                                    callable.clone(),
+                                    vec![items[j].clone(), items[j + 1].clone()],
+                                    program, ip, chunk_idx,
+                                )?;
+                                if !keep.is_truthy() {
+                                    items.swap(j, j + 1);
+                                }
+                            }
+                        }
+                    }
+                    self.reg_set(dst, Value::Array(Rc::new(items)));
                 }
 
                 // ── Tuples ───────────────────────────────────────────────────
@@ -1738,6 +1973,53 @@ impl<W: Write> VM<W> {
                     let result = self.call_callable(callable, args, program, 0, chunk_idx)?;
                     self.value_stack[base + dst as usize] = result;
                 }
+                &Instruction::CmpLt(dst, a, b) => {
+                    let res = match (r!(a), r!(b)) {
+                        (Value::Int(x), Value::Int(y))       => x < y,
+                        (Value::Float(x), Value::Float(y))   => x < y,
+                        (Value::Int(x), Value::Float(y))     => (*x as f64) < *y,
+                        (Value::Float(x), Value::Int(y))     => *x < (*y as f64),
+                        (Value::String(x), Value::String(y)) => x.as_ref() < y.as_ref(),
+                        _ => false,
+                    };
+                    w!(dst, Value::Bool(res));
+                }
+                &Instruction::CmpLe(dst, a, b) => {
+                    let res = match (r!(a), r!(b)) {
+                        (Value::Int(x), Value::Int(y))       => x <= y,
+                        (Value::Float(x), Value::Float(y))   => x <= y,
+                        (Value::Int(x), Value::Float(y))     => (*x as f64) <= *y,
+                        (Value::Float(x), Value::Int(y))     => *x <= (*y as f64),
+                        (Value::String(x), Value::String(y)) => x.as_ref() <= y.as_ref(),
+                        _ => false,
+                    };
+                    w!(dst, Value::Bool(res));
+                }
+                &Instruction::CmpGe(dst, a, b) => {
+                    let res = match (r!(a), r!(b)) {
+                        (Value::Int(x), Value::Int(y))       => x >= y,
+                        (Value::Float(x), Value::Float(y))   => x >= y,
+                        (Value::Int(x), Value::Float(y))     => (*x as f64) >= *y,
+                        (Value::Float(x), Value::Int(y))     => *x >= (*y as f64),
+                        (Value::String(x), Value::String(y)) => x.as_ref() >= y.as_ref(),
+                        _ => false,
+                    };
+                    w!(dst, Value::Bool(res));
+                }
+                &Instruction::NamedTupleGet(dst, tuple_reg, field_idx) => {
+                    let field_name = &program.string_pool[field_idx as usize];
+                    let result = match &self.value_stack[base + tuple_reg as usize] {
+                        Value::NamedTuple(fields) => {
+                            let field_name = field_name.clone();
+                            fields.iter()
+                                .find(|(n, _)| *n == field_name)
+                                .map(|(_, v)| v.clone())
+                                .unwrap_or(Value::Unit)
+                        }
+                        _ => Value::Unit,
+                    };
+                    self.value_stack[base + dst as usize] = result;
+                }
                 _ => {
                     // For unsupported instructions in HOF mini-VM, skip
                 }
@@ -1745,5 +2027,17 @@ impl<W: Write> VM<W> {
         }
         self.value_stack.truncate(base);
         Ok(Value::Unit)
+    }
+}
+
+fn vm_natural_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y))       => x.cmp(y),
+        (Value::Float(x), Value::Float(y))   => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Int(x), Value::Float(y))     => (*x as f64).partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Float(x), Value::Int(y))     => x.partial_cmp(&(*y as f64)).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::String(x), Value::String(y)) => x.cmp(y),
+        (Value::Bool(x), Value::Bool(y))     => x.cmp(y),
+        _                                    => std::cmp::Ordering::Equal,
     }
 }

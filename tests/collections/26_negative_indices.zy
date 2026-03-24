@@ -1,0 +1,26 @@
+// Test: negative array/string/tuple indices (arr[-1] = last element)
+// Both tree-walker and VM must return identical results.
+
+// ── Array — basic negative access ──────────────────────────────────────────
+arr = [10, 20, 30, 40, 50]
+>> arr[-1] ¶          // → 50  (last)
+>> arr[-2] ¶          // → 40  (second to last)
+>> arr[-5] ¶          // → 10  (first, via -length)
+
+// ── String — negative index returns char ───────────────────────────────────
+s = "hello"
+>> s[-1] ¶            // → o
+>> s[-5] ¶            // → h
+
+// ── Tuple — positional negative index ──────────────────────────────────────
+t = (100, 200, 300)
+>> t[-1] ¶            // → 300
+>> t[-3] ¶            // → 100
+
+// ── Remove at negative index ────────────────────────────────────────────────
+arr2 = arr$-[-1]      // removes last → [10, 20, 30, 40]
+>> arr2$# ¶           // → 4
+>> arr2[-1] ¶         // → 40
+
+// ── Original unchanged ──────────────────────────────────────────────────────
+>> arr$# ¶            // → 5

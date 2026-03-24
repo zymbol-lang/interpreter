@@ -37,27 +37,43 @@ impl Lexer {
                     return Some(Token::new(TokenKind::DollarHash, self.span(start)));
                 }
                 '+' => {
-                    // Check for $++ (string insert operator)
+                    // Check for $++ (retired string insert — kept for migration error in parser)
                     if self.peek_ahead(2) == Some('+') {
                         self.advance(); // consume $
                         self.advance(); // consume first +
                         self.advance(); // consume second +
                         return Some(Token::new(TokenKind::DollarPlusPlus, self.span(start)));
                     }
-                    // Otherwise, it's $+ (array append)
+                    // Check for $+[ (insert at position — arrays, tuples, strings)
+                    // Note: space between $+ and [ produces DollarPlus + LBracket (append array literal)
+                    if self.peek_ahead(2) == Some('[') {
+                        self.advance(); // consume $
+                        self.advance(); // consume +
+                        self.advance(); // consume [
+                        return Some(Token::new(TokenKind::DollarPlusLBracket, self.span(start)));
+                    }
+                    // Otherwise, it's $+ (append value)
                     self.advance(); // consume $
                     self.advance(); // consume +
                     return Some(Token::new(TokenKind::DollarPlus, self.span(start)));
                 }
                 '-' => {
-                    // Check for $-- (string remove operator)
+                    // Check for $-- (remove all occurrences of value — arrays, tuples, strings)
                     if self.peek_ahead(2) == Some('-') {
                         self.advance(); // consume $
                         self.advance(); // consume first -
                         self.advance(); // consume second -
                         return Some(Token::new(TokenKind::DollarMinusMinus, self.span(start)));
                     }
-                    // Otherwise, it's $- (array remove by index)
+                    // Check for $-[ (remove at position or range — arrays, tuples, strings)
+                    // Note: space between $- and [ produces DollarMinus + LBracket (remove value [..])
+                    if self.peek_ahead(2) == Some('[') {
+                        self.advance(); // consume $
+                        self.advance(); // consume -
+                        self.advance(); // consume [
+                        return Some(Token::new(TokenKind::DollarMinusLBracket, self.span(start)));
+                    }
+                    // Otherwise, it's $- (remove first occurrence of value)
                     self.advance(); // consume $
                     self.advance(); // consume -
                     return Some(Token::new(TokenKind::DollarMinus, self.span(start)));
@@ -87,6 +103,25 @@ impl Lexer {
                     self.advance(); // consume $
                     self.advance(); // consume ~
                     return Some(Token::new(TokenKind::DollarTilde, self.span(start)));
+                }
+                '^' => {
+                    // $^+ (natural ascending), $^- (natural descending), $^ (custom comparator)
+                    if self.peek_ahead(2) == Some('+') {
+                        self.advance(); // consume $
+                        self.advance(); // consume ^
+                        self.advance(); // consume +
+                        return Some(Token::new(TokenKind::DollarCaretPlus, self.span(start)));
+                    }
+                    if self.peek_ahead(2) == Some('-') {
+                        self.advance(); // consume $
+                        self.advance(); // consume ^
+                        self.advance(); // consume -
+                        return Some(Token::new(TokenKind::DollarCaretMinus, self.span(start)));
+                    }
+                    // $^ — custom comparator sort (direction encoded in lambda)
+                    self.advance(); // consume $
+                    self.advance(); // consume ^
+                    return Some(Token::new(TokenKind::DollarCaret, self.span(start)));
                 }
                 '[' => {
                     self.advance(); // consume $

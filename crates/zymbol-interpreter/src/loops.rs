@@ -18,6 +18,7 @@ fn body_needs_own_scope<W: std::io::Write>(block: &zymbol_ast::Block, interp: &I
     block.statements.iter().any(|s| match s {
         Statement::Assignment(a) => interp.get_variable(&a.name).is_none(),
         Statement::ConstDecl(_) => true,
+        Statement::DestructureAssign(_) => true,
         _ => false,
     })
 }

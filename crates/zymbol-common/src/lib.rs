@@ -205,23 +205,33 @@ impl fmt::Display for UnaryOp {
 /// Collection operators in Zymbol (all use $ prefix)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CollectionOp {
-    Append, // $+ (append element)
-    Delete, // $- (delete by index)
-    Search, // $? (search/find element)
-    Length, // $# (length/size)
-    Update, // $~ (update by index)
-    Slice,  // $[..] (slice)
+    Length,      // $#       length
+    Append,      // $+       append value
+    Insert,      // $+[i]    insert at position
+    RemoveValue, // $-       remove first occurrence of value
+    RemoveAll,   // $--      remove all occurrences of value
+    RemoveAt,    // $-[i]    remove at index
+    RemoveRange, // $-[i..j] remove range
+    Search,      // $?       contains
+    FindAll,     // $??      find all indices of value
+    Update,      // $~       update at index
+    Slice,       // $[..]    slice
 }
 
 impl fmt::Display for CollectionOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            CollectionOp::Append => "$+",
-            CollectionOp::Delete => "$-",
-            CollectionOp::Search => "$?",
-            CollectionOp::Length => "$#",
-            CollectionOp::Update => "$~",
-            CollectionOp::Slice => "$[..]",
+            CollectionOp::Length      => "$#",
+            CollectionOp::Append      => "$+",
+            CollectionOp::Insert      => "$+[i]",
+            CollectionOp::RemoveValue => "$-",
+            CollectionOp::RemoveAll   => "$--",
+            CollectionOp::RemoveAt    => "$-[i]",
+            CollectionOp::RemoveRange => "$-[i..j]",
+            CollectionOp::Search      => "$?",
+            CollectionOp::FindAll     => "$??",
+            CollectionOp::Update      => "$~",
+            CollectionOp::Slice       => "$[..]",
         };
         write!(f, "{}", s)
     }
@@ -335,7 +345,7 @@ mod tests {
     #[test]
     fn test_collection_op_display() {
         assert_eq!(CollectionOp::Append.to_string(), "$+");
-        assert_eq!(CollectionOp::Delete.to_string(), "$-");
+        assert_eq!(CollectionOp::RemoveValue.to_string(), "$-");
         assert_eq!(CollectionOp::Search.to_string(), "$?");
         assert_eq!(CollectionOp::Length.to_string(), "$#");
         assert_eq!(CollectionOp::Update.to_string(), "$~");

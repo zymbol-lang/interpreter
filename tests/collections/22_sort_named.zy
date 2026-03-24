@@ -1,0 +1,34 @@
+// Named tuple sort — extended
+people = [
+    (name: "Zara",  age: 22, score: 88),
+    (name: "Inti",  age: 35, score: 72),
+    (name: "Luna",  age: 22, score: 95),
+    (name: "Omar",  age: 29, score: 72),
+    (name: "Mia",   age: 35, score: 60)
+]
+
+// Sort by age ascending
+by_age = people$^+ (a, b -> a.age < b.age)
+>> "Sort by Age ascending" ¶ 
+>> "Age|Name|Score" ¶
+@ age:by_age {
+    >> age.age "|" age.name  "|" age.score ¶ 
+}
+
+// Sort by score descending (custom: a.score > b.score keeps a first)
+by_score_desc = people$^- (a, b -> a.score > b.score)
+>> ¶ 
+>> "Sort by Score descending" ¶ 
+>> "Score|Name|Age" ¶
+@ score:by_score_desc {
+    >> score.score "|" score.name  "|" score.age ¶ 
+}
+
+// Sort by name lexicographic ascending
+by_name = people$^+ (a, b -> a.name < b.name)
+>> ¶ 
+>> "Sort by Name ascending" ¶ 
+>> "Name|Age|Score" ¶
+@ name:by_name {
+    >> name.name "|" name.age  "|" name.score ¶ 
+}

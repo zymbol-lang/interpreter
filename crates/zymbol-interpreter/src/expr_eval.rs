@@ -220,67 +220,72 @@ impl<W: Write> Interpreter<W> {
         // Handle both arrays and tuples
         match collection_value {
             Value::Array(ref arr) => {
-                // Check bounds
-                if index < 0 || index as usize >= arr.len() {
+                let len = arr.len();
+                let i = if index < 0 { len as i64 + index } else { index };
+                if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!(
                             "array index out of bounds: index {} for array of length {}",
                             index,
-                            arr.len()
+                            len
                         ),
                         span: idx.span,
                     });
                 }
 
-                Ok(arr[index as usize].clone())
+                Ok(arr[i as usize].clone())
             }
             Value::Tuple(ref elements) => {
-                // Check bounds
-                if index < 0 || index as usize >= elements.len() {
+                let len = elements.len();
+                let i = if index < 0 { len as i64 + index } else { index };
+                if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!(
                             "tuple index out of bounds: index {} for tuple of length {}",
                             index,
-                            elements.len()
+                            len
                         ),
                         span: idx.span,
                     });
                 }
 
-                Ok(elements[index as usize].clone())
+                Ok(elements[i as usize].clone())
             }
             Value::NamedTuple(ref fields) => {
                 // Named tuples support positional indexing (backward compatibility)
-                if index < 0 || index as usize >= fields.len() {
+                let len = fields.len();
+                let i = if index < 0 { len as i64 + index } else { index };
+                if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!(
                             "named tuple index out of bounds: index {} for tuple of length {}",
                             index,
-                            fields.len()
+                            len
                         ),
                         span: idx.span,
                     });
                 }
 
-                Ok(fields[index as usize].1.clone())
+                Ok(fields[i as usize].1.clone())
             }
             Value::String(ref s) => {
                 // String indexing returns a char
                 let chars: Vec<char> = s.chars().collect();
+                let len = chars.len();
+                let i = if index < 0 { len as i64 + index } else { index };
 
-                // Check bounds
-                if index < 0 || index as usize >= chars.len() {
+                if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!(
                             "string index out of bounds: index {} for string of length {}",
                             index,
-                            chars.len()
+                            len
                         ),
                         span: idx.span,
                     });
                 }
 
-                Ok(Value::Char(chars[index as usize]))
+                Ok(Value::Char(chars[i as usize]))
             }
             _ => {
                 Err(RuntimeError::Generic {

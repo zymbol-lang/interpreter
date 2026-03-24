@@ -4,8 +4,8 @@
 > `zymbol run` (tree-walker) and `zymbol run --vm` (register VM).
 > If a construct is not documented here, it may not be implemented.
 
-**Interpreter version**: Sprint 5I
-**Test coverage**: 99/99 vm_compare PASS | 88 E2E (44 tree-walker + 44 VM)
+**Interpreter version**: v0.0.2
+**Test coverage**: 159/159 vm_compare PASS
 
 ---
 
@@ -22,6 +22,7 @@
 9. [Functions](#9-functions)
 10. [Lambdas and Closures](#10-lambdas-and-closures)
 11. [Arrays](#11-arrays)
+11b. [Destructuring Assignment](#11b-destructuring-assignment)
 12. [Tuples](#12-tuples)
 13. [Strings](#13-strings)
 14. [Higher-Order Functions](#14-higher-order-functions)
@@ -51,7 +52,7 @@ zymbol run --help
 - **Tree-walker**: canonical behavior, descriptive error messages, debugging
 - **VM**: production, ~1.1–1.5× faster than Python for most workloads
 
-Both modes produce **identical output** on 99/99 parity tests.
+Both modes produce **identical output** on 159/159 parity tests.
 
 ---
 
@@ -199,7 +200,7 @@ b = 3
 
 ```zymbol
 a == b    // equal
-a != b    // not equal
+a <> b    // not equal
 a < b     // less than
 a <= b    // less than or equal
 a > b     // greater than
@@ -665,8 +666,8 @@ arr = [10, 20, 30, 40, 50]
 >> arr[2] ¶        // → 30
 ```
 
-> **⚠ Negative indices**: VM accepts `arr[-1]` (Python-style, last element).
-> Tree-walker throws "index out of bounds". Do not use negative indices in portable code.
+> **Negative indices**: `arr[-1]` returns the last element, `arr[-2]` the second-to-last, etc.
+> Supported in both tree-walker and VM (v0.0.2).
 
 ### Length
 
@@ -676,35 +677,111 @@ len = arr$#
 >> (arr$#) ¶    // ✅ parentheses required in >>
 ```
 
-### Append, Remove, Contains, Slice
+### Append, Insert, Remove, Contains, Slice
 
 ```zymbol
-arr = [1, 2, 3]
+arr = [1, 2, 3, 4, 5]
 
-// Append — returns new array (does not modify in place)
-arr = arr$+ 4
->> arr ¶    // → [1, 2, 3, 4]
+// $+ — append, returns new collection
+arr = arr$+ 6
+>> arr ¶    // → [1, 2, 3, 4, 5, 6]
 
-// Remove by index — returns new array
-arr = arr$- 0
->> arr ¶    // → [2, 3, 4]
+// $+[i] — insert at position
+arr2 = arr$+[2] 99
+>> arr2 ¶    // → [1, 2, 99, 3, 4, 5, 6]
 
-// Contains
+// $- val — remove first occurrence by value
+arr3 = arr$- 3
+>> arr3 ¶    // → [1, 2, 4, 5, 6]
+
+// $-- val — remove all occurrences by value
+arr4 = [1, 2, 3, 2, 4]$-- 2
+>> arr4 ¶    // → [1, 3, 4]
+
+// $-[i] — remove at index
+arr5 = arr$-[0]
+>> arr5 ¶    // → [2, 3, 4, 5, 6]
+
+// $-[start..end] — remove range (end EXCLUSIVE)
+arr6 = arr$-[1..3]
+>> arr6 ¶    // → [1, 4, 5, 6]
+
+// $-[start:count] — remove range, count-based (alternative syntax)
+arr6b = arr$-[1:2]
+>> arr6b ¶    // → [1, 4, 5, 6]  (identical result to $-[1..3])
+
+// $? — contains
 has = arr$? 3
 >> has ¶    // → #1
 
-// Slice [start..end) — end is EXCLUSIVE
-sl = arr$[0..2]
->> sl ¶    // → [2, 3]
+// $?? — find all indices
+pos = [1, 2, 1, 3, 1]$?? 1
+>> pos ¶    // → [0, 2, 4]
+
+// $[..] — slice [start..end) — end is EXCLUSIVE
+sl = arr$[0..3]
+>> sl ¶    // → [1, 2, 3]
+
+// $[start:count] — slice count-based (alternative syntax)
+sl2 = arr$[0:3]
+>> sl2 ¶    // → [1, 2, 3]  (identical result)
 ```
 
-> **Note**: `$+`, `$-`, `$[..]` always return a new array. Assign back to the
-> same variable: `arr = arr$+ 4`. Collection operators **cannot be chained**:
+> **Note**: All collection operators return a new collection. Assign back to the
+> same variable: `arr = arr$+ 4`. Operators **cannot be chained directly**:
 > ```zymbol
 > arr = arr$+ 5$+ 6    // ❌ not supported
 > arr = arr$+ 5        // ✅ intermediate assignment
 > arr = arr$+ 6
 > ```
+
+### Sort
+
+`$^+` sorts ascending and `$^-` sorts descending. Both return a **new array**; the
+original is unchanged. The `^` prefix means "order"; `+` and `-` indicate direction.
+
+```zymbol
+arr = [3, 1, 4, 1, 5, 9, 2, 6]
+
+// Natural ascending order
+asc = arr$^+
+>> asc ¶    // → [1, 1, 2, 3, 4, 5, 6, 9]
+
+// Natural descending order
+desc = arr$^-
+>> desc ¶   // → [9, 6, 5, 4, 3, 2, 1, 1]
+```
+
+Works on strings too — lexicographic order:
+
+```zymbol
+words = ["banana", "apple", "cherry", "date"]
+>> words$^+ ¶    // → ["apple", "banana", "cherry", "date"]
+>> words$^- ¶    // → ["date", "cherry", "banana", "apple"]
+```
+
+**Custom comparator** — a two-argument lambda that returns a bool (`#1` if first
+element should come before second). Required when sorting named tuples by field:
+
+```zymbol
+db = [
+    (name: "Carla", age: 28),
+    (name: "Ana",   age: 25),
+    (name: "Bob",   age: 30)
+]
+
+// Sort by age ascending
+by_age = db$^+ (a, b -> a.age < b.age)
+>> by_age[0].name ¶    // → Ana
+
+// Sort by name descending
+by_name_desc = db$^- (a, b -> a.name < b.name)
+>> by_name_desc[0].name ¶    // → Carla
+```
+
+> **Note**: When a custom comparator is provided, the `+`/`-` sign still documents
+> intent but the lambda defines the actual ordering. `$^+` and `$^-` with the same
+> lambda produce opposite orderings.
 
 ### Direct Element Update
 
@@ -737,6 +814,52 @@ matrix = [[1,2,3], [4,5,6], [7,8,9]]
 
 > **⚠ Arrays must be homogeneous** — all elements must be the same type.
 > See [Known Limitations](#20-known-limitations-and-workarounds) for workarounds.
+
+---
+
+## 11b. Destructuring Assignment
+
+Unpack arrays or tuples into individual variables in a single statement.
+
+### Array Destructuring
+
+```zymbol
+arr = [10, 20, 30, 40, 50]
+
+// Basic — bind by position
+[a, b, c] = arr          // a=10  b=20  c=30
+
+// Rest collector — *name captures remaining elements
+[first, *rest] = arr     // first=10  rest=[20, 30, 40, 50]
+
+// Discard with _
+[x, _, z] = [1, 2, 3]   // x=1  z=3
+```
+
+### Positional Tuple Destructuring
+
+```zymbol
+point = (100, 200)
+(px, py) = point         // px=100  py=200
+
+triple = (1, 2, 3)
+(h, *tail) = triple      // h=1  tail=[2, 3]
+```
+
+### Named Tuple Destructuring
+
+```zymbol
+person = (name: "Ana", age: 25, city: "Madrid")
+
+// Bind each field to a local variable
+(name: n, age: a) = person    // n="Ana"  a=25
+
+// Rename fields freely
+(name: who, city: where) = person   // who="Ana"  where="Madrid"
+```
+
+> **Note**: Destructuring always creates new variables — it does not update existing ones.
+> All patterns are matched positionally (arrays, positional tuples) or by field name (named tuples).
 
 ---
 
@@ -791,6 +914,10 @@ n = s$#
 sub = s$[0..5]
 >> sub ¶    // → Hello
 
+// Slice count-based (alternative syntax)
+sub2 = s$[0:5]
+>> sub2 ¶    // → Hello  (identical result)
+
 // Split by char
 parts = "a,b,c,d" / ','
 >> parts ¶    // → [a, b, c, d]
@@ -800,27 +927,47 @@ parts = "a,b,c,d" / ','
 ### Advanced String Operators
 
 ```zymbol
-s = "hello world foo"
+s = "hello world"
+
+// $+ — append char or string
+s2 = s$+ "!"
+>> s2 ¶    // → hello world!
+
+// $+[i] — insert at char position
+ins = s$+[5] "!!!"
+>> ins ¶    // → hello!!! world
+
+// $- val — remove first occurrence of char or substring
+rem1 = s$- 'l'
+>> rem1 ¶    // → helo world
+
+// $-- val — remove all occurrences
+rem2 = s$-- 'l'
+>> rem2 ¶    // → heo word
+
+// $-[i] — remove char at index
+rem3 = s$-[0]
+>> rem3 ¶    // → ello world
+
+// $-[start..end] — remove char range (end EXCLUSIVE)
+rem4 = s$-[0..6]
+>> rem4 ¶    // → world
+
+// $-[start:count] — remove char range, count-based (alternative syntax)
+rem4b = s$-[0:6]
+>> rem4b ¶    // → world  (identical result)
 
 // $?? — find all positions of a pattern
 pos = s$?? "o"
->> pos ¶    // → [4, 7, 13]  (0-based indices)
-
-// $++[pos:text] — insert at position
-ins = s$++[5:"!!!"]
->> ins ¶    // → hello!!! world foo
-
-// $--[pos:n] — remove N chars from position
-rem = s$--[0:6]
->> rem ¶    // → world foo
+>> pos ¶    // → [4, 7]  (0-based char indices)
 
 // $~~[pattern:replacement] — replace all occurrences
-rep = s$~~["o":"0"]
->> rep ¶    // → hell0 w0rld f00
+rep = s$~~["l":"L"]
+>> rep ¶    // → heLLo worLd
 
 // $~~[pattern:replacement:N] — replace only first N occurrences
-rep1 = s$~~["o":"0":1]
->> rep1 ¶   // → hell0 world foo
+rep1 = s$~~["l":"L":1]
+>> rep1 ¶   // → heLlo world
 ```
 
 ### Concatenation — Three Correct Forms
@@ -1291,13 +1438,15 @@ nums$> (x -> fn(x))    // ✅ always works
 }  // ✅
 ```
 
-### L8 — Negative array indices: WT vs VM behavior differs
+### L8 — ~~Negative array indices: WT vs VM behavior differs~~ Fixed in v0.0.2
+
+Negative indices are now normalized in both tree-walker and VM:
 
 ```zymbol
-arr[-1]   // tree-walker: "index out of bounds" error
-          // VM: last element (Python-style)
+arr = [10, 20, 30, 40, 50]
+>> arr[-1] ¶    // → 50 (last element)
+>> arr[-2] ¶    // → 40
 ```
-Official behavior is undefined — avoid negative indices in portable code.
 
 ### L9 — False positive warnings
 
@@ -1347,6 +1496,8 @@ active = [#1, #1, #0]
 | Symbol | Operation | Example |
 |--------|-----------|---------|
 | `=` | Assignment | `x = 5` |
+| `[..] =` | Array destructure | `[a, b, *rest] = arr` |
+| `(..) =` | Tuple destructure | `(name: n, age: a) = t` |
 | `:=` | Constant | `PI := 3.14` |
 | `>>` | Output | `>> "hello" ¶` |
 | `<<` | Input | `<< "prompt: " var` |
@@ -1362,17 +1513,23 @@ active = [#1, #1, #0]
 | `<~` | Return / output param | `<~ value` |
 | `\|>` | Pipe | `val \|> fn(_)` |
 | `$#` | Length | `arr$#` |
-| `$+` | Append | `arr$+ elem` |
-| `$-` | Remove by index | `arr$- 0` |
+| `$+` | Append by value | `arr$+ elem` |
+| `$+[i]` | Insert at position | `arr$+[2] elem` |
+| `$-` | Remove first by value | `arr$- val` |
+| `$--` | Remove all by value | `arr$-- val` |
+| `$-[i]` | Remove at index | `arr$-[0]` |
+| `$-[i..j]` | Remove range (exclusive end) | `arr$-[1..3]` |
+| `$-[i:n]` | Remove range (count-based) | `arr$-[1:2]` |
 | `$?` | Contains | `arr$? val` |
+| `$??` | Find all indices of value | `arr$?? val` |
 | `$~` | Functional update | `arr[i]$~ val` |
-| `$[..]` | Slice | `arr$[1..3]` |
+| `$[i..j]` | Slice (exclusive end) | `arr$[1..3]` |
+| `$[i:n]` | Slice (count-based) | `arr$[1:2]` |
+| `$^+` | Sort ascending | `arr$^+` · `arr$^+ (a,b -> a.f < b.f)` |
+| `$^-` | Sort descending | `arr$^-` · `arr$^- (a,b -> a.f < b.f)` |
 | `$>` | Map | `arr$> (x -> f(x))` |
 | `$\|` | Filter | `arr$\| (x -> cond)` |
 | `$<` | Reduce | `arr$< (0, (a,x) -> a+x)` |
-| `$??` | String find positions | `s$?? "pat"` |
-| `$++[p:t]` | String insert | `s$++[2:"txt"]` |
-| `$--[p:n]` | String remove | `s$--[0:3]` |
 | `$~~[p:r]` | String replace | `s$~~["o":"0"]` |
 | `/` | String split | `"a,b" / ','` |
 | `!?` | Try | `!? { } :! { }` |
@@ -1565,4 +1722,5 @@ parse_number(s) {
 | Precision / format / base conversion | ✅ | ✅ | |
 | BashExec / Execute script | ✅ | ✅ | |
 | CLI args capture `><` | ✅ | — | VM not supported |
-| Negative array indices | ❌ | ✅ | Python-style in VM only — not official |
+| Negative array indices | ✅ | ✅ | `arr[-1]` normalized in both modes (v0.0.2) |
+| Destructuring assignment | ✅ | ✅ | `[a, b] = arr`, `(name: n) = t` (v0.0.2) |

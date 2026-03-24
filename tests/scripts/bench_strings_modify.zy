@@ -1,7 +1,7 @@
 // ============================================================================
 // ZYMBOL-LANG — String Modification Stress Test
 // Operators: $~~ (replace)  $?? (find positions)
-//            $++ (insert)   $-- (remove)
+//            $+[i] (insert) $-[i..j] (remove range)  (v0.0.2)
 //
 // Run (WT):  time zymbol run tests/scripts/bench_strings_modify.zy
 // Run (VM):  time zymbol run --vm tests/scripts/bench_strings_modify.zy
@@ -74,7 +74,7 @@ t = T::now()
 base = "content goes here for this item"
 total_len = 0
 @ i:0..1999 {
-    tagged = base$++[0:"[ITEM] "]
+    tagged = base$+[0] "[ITEM] "
     total_len = total_len + tagged$#
 }
 >> "M6_insert_front:    len=" + total_len + "  " + T::elapsed(t) ¶
@@ -85,7 +85,7 @@ t = T::now()
 word = "helloworld"
 total_len = 0
 @ i:0..1999 {
-    spaced = word$++[5:" "]
+    spaced = word$+[5] " "
     total_len = total_len + spaced$#
 }
 >> "M7_insert_mid:      len=" + total_len + "  " + T::elapsed(t) ¶
@@ -96,18 +96,18 @@ t = T::now()
 log_line = ">>> ERROR: connection timeout at host 192.168.1.1"
 total_len = 0
 @ i:0..2999 {
-    stripped = log_line$--[0:4]
+    stripped = log_line$-[0..4]
     total_len = total_len + stripped$#
 }
 >> "M8_remove_prefix:   len=" + total_len + "  " + T::elapsed(t) ¶
 
 // ── M9: Remove — strip from middle ───────────────────────────────────────────
-// Remove 6 chars starting at position 10, 2 000 times
+// Remove 6 chars starting at position 11, 2 000 times
 t = T::now()
 data = "field_name:HIDDEN:field_value"
 total_len = 0
 @ i:0..1999 {
-    cleaned = data$--[11:6]
+    cleaned = data$-[11..17]
     total_len = total_len + cleaned$#
 }
 >> "M9_remove_mid:      len=" + total_len + "  " + T::elapsed(t) ¶

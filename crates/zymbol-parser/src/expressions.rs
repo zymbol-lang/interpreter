@@ -313,10 +313,8 @@ impl Parser {
         // Parse primary expression
         let mut expr = self.parse_primary_expr()?;
 
-        // Handle postfix operations for identifiers
-        if matches!(expr, Expr::Identifier(_)) {
-            expr = self.parse_output_item_postfix(expr)?;
-        }
+        // Handle postfix operations (collection ops, indexing, member access, calls)
+        expr = self.parse_output_item_postfix(expr)?;
 
         // Allow * / % with proper precedence
         while matches!(self.peek().kind, TokenKind::Star | TokenKind::Slash | TokenKind::Percent) {
@@ -347,20 +345,22 @@ impl Parser {
         // Parse primary
         let mut expr = self.parse_primary_expr()?;
 
-        // Allow postfix for identifiers
-        if matches!(expr, Expr::Identifier(_)) {
-            expr = self.parse_output_item_postfix(expr)?;
-        }
+        // Handle postfix operations (collection ops, indexing, member access, calls)
+        expr = self.parse_output_item_postfix(expr)?;
 
         Ok(expr)
     }
 
-    /// Parse postfix operations for output items (identifiers only)
+    /// Parse postfix operations for output items.
+    /// Handles structural ops ([], ., ()) and all collection operators ($#, $+, $-, etc.)
+    /// so they can be used directly in >> without extra parentheses.
     fn parse_output_item_postfix(&mut self, mut expr: Expr) -> Result<Expr, Diagnostic> {
-        use zymbol_ast::{IndexExpr, MemberAccessExpr, FunctionCallExpr};
+        use zymbol_ast::{IndexExpr, MemberAccessExpr, FunctionCallExpr, TypeMetadataExpr};
 
         loop {
-            match self.peek().kind {
+            let token = self.peek().clone();
+            match token.kind {
+                // ── Structural postfix ────────────────────────────────────────
                 TokenKind::LBracket => {
                     self.advance(); // consume [
                     let index = self.parse_expr()?;
@@ -423,6 +423,79 @@ impl Parser {
                         arguments,
                         span,
                     ));
+                }
+                // ── Collection operators ──────────────────────────────────────
+                TokenKind::DollarHash => {
+                    expr = self.parse_collection_length(expr)?;
+                }
+                TokenKind::DollarPlus => {
+                    expr = self.parse_collection_append(expr)?;
+                }
+                TokenKind::DollarPlusLBracket => {
+                    expr = self.parse_collection_insert(expr)?;
+                }
+                TokenKind::DollarMinus => {
+                    expr = self.parse_collection_remove(expr)?;
+                }
+                TokenKind::DollarMinusLBracket => {
+                    expr = self.parse_collection_remove_positional(expr)?;
+                }
+                TokenKind::DollarQuestion => {
+                    expr = self.parse_collection_contains(expr)?;
+                }
+                TokenKind::DollarQuestionQuestion => {
+                    expr = self.parse_string_find_positions(expr)?;
+                }
+                TokenKind::DollarPlusPlus => {
+                    expr = self.parse_string_insert(expr)?;
+                }
+                TokenKind::DollarMinusMinus => {
+                    expr = self.parse_collection_remove_all(expr)?;
+                }
+                TokenKind::DollarTildeTilde => {
+                    expr = self.parse_string_replace(expr)?;
+                }
+                TokenKind::DollarTilde => {
+                    expr = self.parse_collection_update(expr)?;
+                }
+                TokenKind::DollarLBracket => {
+                    expr = self.parse_collection_slice(expr)?;
+                }
+                TokenKind::DollarGt => {
+                    expr = self.parse_collection_map(expr)?;
+                }
+                TokenKind::DollarPipe => {
+                    expr = self.parse_collection_filter(expr)?;
+                }
+                TokenKind::DollarLt => {
+                    expr = self.parse_collection_reduce(expr)?;
+                }
+                TokenKind::DollarCaretPlus => {
+                    expr = self.parse_collection_sort(expr, true)?;
+                }
+                TokenKind::DollarCaretMinus => {
+                    expr = self.parse_collection_sort(expr, false)?;
+                }
+                TokenKind::DollarCaret => {
+                    expr = self.parse_collection_sort_custom(expr)?;
+                }
+                TokenKind::HashQuestion => {
+                    let start_span = expr.span();
+                    self.advance(); // consume #?
+                    let span = start_span.to(&token.span);
+                    expr = Expr::TypeMetadata(TypeMetadataExpr::new(Box::new(expr), span));
+                }
+                TokenKind::DollarExclaim => {
+                    let start_span = expr.span();
+                    self.advance(); // consume $!
+                    let span = start_span.to(&token.span);
+                    expr = Expr::ErrorCheck(zymbol_ast::ErrorCheckExpr::new(Box::new(expr), span));
+                }
+                TokenKind::DollarExclaimExclaim => {
+                    let start_span = expr.span();
+                    self.advance(); // consume $!!
+                    let span = start_span.to(&token.span);
+                    expr = Expr::ErrorPropagate(zymbol_ast::ErrorPropagateExpr::new(Box::new(expr), span));
                 }
                 _ => break,
             }

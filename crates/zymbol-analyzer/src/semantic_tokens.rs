@@ -138,12 +138,17 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         | TokenKind::DollarGt        // $>
         | TokenKind::DollarPipe      // $|
         | TokenKind::DollarLt        // $<
+        | TokenKind::DollarPlusLBracket  // $+[
+        | TokenKind::DollarMinusLBracket // $-[
         | TokenKind::DollarQuestionQuestion // $??
         | TokenKind::DollarPlusPlus  // $++
         | TokenKind::DollarMinusMinus // $--
         | TokenKind::DollarTildeTilde // $~~
         | TokenKind::DollarExclaim   // $!
         | TokenKind::DollarExclaimExclaim // $!!
+        | TokenKind::DollarCaretPlus  // $^+
+        | TokenKind::DollarCaretMinus // $^-
+        | TokenKind::DollarCaret      // $^
         => Some(token_type_index::OPERATOR),
 
         // Format and base operators
@@ -309,7 +314,13 @@ fn token_length(kind: &TokenKind) -> u32 {
         | TokenKind::DollarMinusMinus     // $--
         | TokenKind::DollarTildeTilde     // $~~
         | TokenKind::DollarExclaimExclaim // $!!
+        | TokenKind::DollarPlusLBracket   // $+[
+        | TokenKind::DollarMinusLBracket  // $-[
+        | TokenKind::DollarCaretPlus      // $^+
+        | TokenKind::DollarCaretMinus     // $^-
         => 3,
+        TokenKind::DollarCaret            // $^ (2 chars)
+        => 2,
 
         // Variable-length tokens - use span information
         TokenKind::String(s) => (s.len() + 2) as u32, // +2 for quotes

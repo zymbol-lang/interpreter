@@ -1,0 +1,44 @@
+// Test: $^ (sort with custom comparator lambda)
+// The lambda fully encodes the ordering — no direction sign needed.
+// Covers: integers, named tuples by field, strings, floats.
+
+// ── Integers — descending via comparator ──────────────────────────────────
+nums = [3, 1, 4, 1, 5, 9, 2, 6]
+cd = nums$^ (a, b -> a > b)
+>> cd[0] ¶
+>> cd[7] ¶
+
+// ── Named tuples — sort by age ascending ──────────────────────────────────
+people = [
+    (name: "Carla", age: 28),
+    (name: "Ana",   age: 25),
+    (name: "Bob",   age: 30)
+]
+by_age = people$^ (a, b -> a.age < b.age)
+>> by_age[0].name ¶
+>> by_age[2].name ¶
+
+// ── Named tuples — sort by name lexicographic ─────────────────────────────
+by_name = people$^ (a, b -> a.name < b.name)
+>> by_name[0].name ¶
+>> by_name[2].name ¶
+
+// ── Named tuples — multiple fields, extended ──────────────────────────────
+staff = [
+    (name: "Zara",  score: 88),
+    (name: "Inti",  score: 72),
+    (name: "Luna",  score: 95),
+    (name: "Mia",   score: 60)
+]
+top = staff$^ (a, b -> a.score > b.score)
+>> top[0].name ¶
+>> top[3].name ¶
+
+// ── Floats — ascending via comparator ─────────────────────────────────────
+flt = [3.14, 1.41, 2.71, 0.57]
+fa = flt$^ (a, b -> a < b)
+>> fa[0] ¶
+>> fa[3] ¶
+
+// ── Original array is unchanged ───────────────────────────────────────────
+>> nums[0] ¶

@@ -622,6 +622,7 @@ impl Spannable for Statement {
             Statement::Output(s) => &s.span,
             Statement::Assignment(s) => &s.span,
             Statement::ConstDecl(s) => &s.span,
+            Statement::DestructureAssign(s) => &s.span,
             Statement::LifetimeEnd(s) => &s.span,
             Statement::Input(s) => &s.span,
             Statement::If(s) => &s.span,

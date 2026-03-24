@@ -5,14 +5,17 @@
 use zymbol_ast::{
     ArrayLiteralExpr, Assignment, BasePrefix, BinaryExpr, Block, Break, CatchClause,
     CollectionAppendExpr, CollectionContainsExpr, CollectionFilterExpr, CollectionLengthExpr,
-    CollectionMapExpr, CollectionReduceExpr, CollectionRemoveExpr, CollectionSliceExpr,
-    CollectionUpdateExpr, ConstDecl, Continue, ErrorCheckExpr, ErrorPropagateExpr, ErrorType,
+    CollectionFindAllExpr, CollectionInsertExpr, CollectionMapExpr, CollectionReduceExpr, CollectionSortExpr,
+    CollectionRemoveAllExpr, CollectionRemoveAtExpr, CollectionRemoveRangeExpr,
+    CollectionRemoveValueExpr, CollectionSliceExpr,
+    CollectionUpdateExpr, ConstDecl, Continue, DestructureAssign, DestructureItem, DestructurePattern,
+    ErrorCheckExpr, ErrorPropagateExpr, ErrorType,
     ExportBlock, ExportItem, Expr, ExprStatement, FinallyClause, FormatExpr, FormatPrefix,
     FunctionCallExpr, FunctionDecl, IdentifierExpr, IfStmt, ImportStmt, IndexExpr, Input,
     InputPrompt, ItemType, LambdaBody, LambdaExpr, LifetimeEnd, LiteralExpr, Loop, MatchCase,
     MatchExpr, MemberAccessExpr, ModuleDecl, NamedTupleExpr, NumericEvalExpr, Output,
     Parameter, ParameterKind, Pattern, Program, RangeExpr, ReturnStmt, RoundExpr, Statement,
-    StringFindPositionsExpr, StringInsertExpr, StringRemoveExpr, StringReplaceExpr, TruncExpr,
+    StringReplaceExpr, TruncExpr,
     TryStmt, TupleExpr, TypeMetadataExpr, UnaryExpr,
     ExecuteExpr, BashExecExpr, CliArgsCaptureStmt,
 };
@@ -175,6 +178,7 @@ impl<'a> FormatVisitor<'a> {
                 self.format_match(match_expr);
             }
             Statement::Expr(expr_stmt) => self.format_expr_statement(expr_stmt),
+            Statement::DestructureAssign(d) => self.format_destructure_assign(d),
             Statement::CliArgsCapture(capture) => self.format_cli_args_capture(capture),
         }
     }
@@ -193,6 +197,60 @@ impl<'a> FormatVisitor<'a> {
         self.output.write(&assign.name);
         self.output.write(" = ");
         self.format_expr(&assign.value);
+    }
+
+    /// Format a destructure assignment statement
+    fn format_destructure_assign(&mut self, d: &DestructureAssign) {
+        match &d.pattern {
+            DestructurePattern::Array(items) => {
+                self.output.write("[");
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        self.output.write(", ");
+                    }
+                    match item {
+                        DestructureItem::Bind(name) => self.output.write(name),
+                        DestructureItem::Rest(name) => {
+                            self.output.write("*");
+                            self.output.write(name);
+                        }
+                        DestructureItem::Ignore => self.output.write("_"),
+                    }
+                }
+                self.output.write("]");
+            }
+            DestructurePattern::Positional(items) => {
+                self.output.write("(");
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        self.output.write(", ");
+                    }
+                    match item {
+                        DestructureItem::Bind(name) => self.output.write(name),
+                        DestructureItem::Rest(name) => {
+                            self.output.write("*");
+                            self.output.write(name);
+                        }
+                        DestructureItem::Ignore => self.output.write("_"),
+                    }
+                }
+                self.output.write(")");
+            }
+            DestructurePattern::NamedTuple(fields) => {
+                self.output.write("(");
+                for (i, (field, var)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        self.output.write(", ");
+                    }
+                    self.output.write(field);
+                    self.output.write(": ");
+                    self.output.write(var);
+                }
+                self.output.write(")");
+            }
+        }
+        self.output.write(" = ");
+        self.format_expr(&d.value);
     }
 
     /// Format a constant declaration
@@ -434,6 +492,7 @@ impl<'a> FormatVisitor<'a> {
             Statement::Output(_)
             | Statement::Assignment(_)
             | Statement::ConstDecl(_)
+            | Statement::DestructureAssign(_)
             | Statement::Break(_)
             | Statement::Continue(_)
             | Statement::Return(_)
@@ -459,13 +518,15 @@ impl<'a> FormatVisitor<'a> {
             Expr::Match(match_expr) => self.format_match(match_expr),
             Expr::CollectionLength(op) => self.format_collection_length(op),
             Expr::CollectionAppend(op) => self.format_collection_append(op),
-            Expr::CollectionRemove(op) => self.format_collection_remove(op),
+            Expr::CollectionInsert(op) => self.format_collection_insert(op),
+            Expr::CollectionRemoveValue(op) => self.format_collection_remove_value(op),
+            Expr::CollectionRemoveAll(op) => self.format_collection_remove_all(op),
+            Expr::CollectionRemoveAt(op) => self.format_collection_remove_at(op),
+            Expr::CollectionRemoveRange(op) => self.format_collection_remove_range(op),
             Expr::CollectionContains(op) => self.format_collection_contains(op),
+            Expr::CollectionFindAll(op) => self.format_collection_find_all(op),
             Expr::CollectionUpdate(op) => self.format_collection_update(op),
             Expr::CollectionSlice(op) => self.format_collection_slice(op),
-            Expr::StringFindPositions(op) => self.format_string_find_positions(op),
-            Expr::StringInsert(op) => self.format_string_insert(op),
-            Expr::StringRemove(op) => self.format_string_remove(op),
             Expr::StringReplace(op) => self.format_string_replace(op),
             Expr::NumericEval(op) => self.format_numeric_eval(op),
             Expr::TypeMetadata(op) => self.format_type_metadata(op),
@@ -475,6 +536,9 @@ impl<'a> FormatVisitor<'a> {
             Expr::CollectionMap(op) => self.format_collection_map(op),
             Expr::CollectionFilter(op) => self.format_collection_filter(op),
             Expr::CollectionReduce(op) => self.format_collection_reduce(op),
+            Expr::CollectionSortAsc(op) => self.format_collection_sort(op),
+            Expr::CollectionSortDesc(op) => self.format_collection_sort(op),
+            Expr::CollectionSortCustom(op) => self.format_collection_sort(op),
             Expr::Pipe(pipe) => self.format_pipe(pipe),
             Expr::Execute(exec) => self.format_execute(exec),
             Expr::BashExec(bash) => self.format_bash_exec(bash),
@@ -960,11 +1024,64 @@ impl<'a> FormatVisitor<'a> {
         self.format_expr(&op.element);
     }
 
-    /// Format collection remove operation
-    fn format_collection_remove(&mut self, op: &CollectionRemoveExpr) {
+    /// Format collection insert operation: collection$+[index] element
+    fn format_collection_insert(&mut self, op: &CollectionInsertExpr) {
+        self.format_expr(&op.collection);
+        self.output.write("$+[");
+        self.format_expr(&op.index);
+        self.output.write("] ");
+        self.format_expr(&op.element);
+    }
+
+    /// Format collection remove value operation: collection$- value
+    fn format_collection_remove_value(&mut self, op: &CollectionRemoveValueExpr) {
         self.format_expr(&op.collection);
         self.output.write("$- ");
+        self.format_expr(&op.value);
+    }
+
+    /// Format collection remove all operation: collection$-- value
+    fn format_collection_remove_all(&mut self, op: &CollectionRemoveAllExpr) {
+        self.format_expr(&op.collection);
+        self.output.write("$-- ");
+        self.format_expr(&op.value);
+    }
+
+    /// Format collection remove at operation: collection$-[index]
+    fn format_collection_remove_at(&mut self, op: &CollectionRemoveAtExpr) {
+        self.format_expr(&op.collection);
+        self.output.write("$-[");
         self.format_expr(&op.index);
+        self.output.write("]");
+    }
+
+    /// Format collection remove range operation: collection$-[start..end]
+    fn format_collection_remove_range(&mut self, op: &CollectionRemoveRangeExpr) {
+        self.format_expr(&op.collection);
+        self.output.write("$-[");
+        if let Some(ref start) = op.start {
+            self.format_expr(start);
+        }
+        if op.count_based {
+            // [start:count] form — preserve as written
+            self.output.write(":");
+            if let Some(ref count) = op.end {
+                self.format_expr(count);
+            }
+        } else {
+            self.output.write("..");
+            if let Some(ref end) = op.end {
+                self.format_expr(end);
+            }
+        }
+        self.output.write("]");
+    }
+
+    /// Format collection find all operation: collection$?? value
+    fn format_collection_find_all(&mut self, op: &CollectionFindAllExpr) {
+        self.format_expr(&op.collection);
+        self.output.write("$?? ");
+        self.format_expr(&op.value);
     }
 
     /// Format collection contains operation
@@ -988,37 +1105,18 @@ impl<'a> FormatVisitor<'a> {
         if let Some(ref start) = op.start {
             self.format_expr(start);
         }
-        self.output.write("..");
-        if let Some(ref end) = op.end {
-            self.format_expr(end);
+        if op.count_based {
+            // [start:count] form — preserve as written
+            self.output.write(":");
+            if let Some(ref count) = op.end {
+                self.format_expr(count);
+            }
+        } else {
+            self.output.write("..");
+            if let Some(ref end) = op.end {
+                self.format_expr(end);
+            }
         }
-        self.output.write("]");
-    }
-
-    /// Format string find positions operation
-    fn format_string_find_positions(&mut self, op: &StringFindPositionsExpr) {
-        self.format_expr(&op.string);
-        self.output.write("$?? ");
-        self.format_expr(&op.pattern);
-    }
-
-    /// Format string insert operation
-    fn format_string_insert(&mut self, op: &StringInsertExpr) {
-        self.format_expr(&op.string);
-        self.output.write("$++[");
-        self.format_expr(&op.position);
-        self.output.write(":");
-        self.format_expr(&op.text);
-        self.output.write("]");
-    }
-
-    /// Format string remove operation
-    fn format_string_remove(&mut self, op: &StringRemoveExpr) {
-        self.format_expr(&op.string);
-        self.output.write("$--[");
-        self.format_expr(&op.position);
-        self.output.write(":");
-        self.format_expr(&op.count);
         self.output.write("]");
     }
 
@@ -1108,6 +1206,18 @@ impl<'a> FormatVisitor<'a> {
         self.output.write("$| (");
         self.format_expr(&op.lambda);
         self.output.write(")");
+    }
+
+    /// Format collection sort operation
+    fn format_collection_sort(&mut self, op: &CollectionSortExpr) {
+        self.format_expr(&op.collection);
+        let sym = if op.ascending { "$^+" } else { "$^-" };
+        self.output.write(sym);
+        if let Some(ref cmp) = op.comparator {
+            self.output.write(" (");
+            self.format_expr(cmp);
+            self.output.write(")");
+        }
     }
 
     /// Format collection reduce operation

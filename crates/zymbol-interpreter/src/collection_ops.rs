@@ -2,18 +2,25 @@
 //!
 //! Handles runtime execution of all collection operators:
 //! - $# (length/size)
-//! - $+ (append element)
-//! - $- (remove by index)
-//! - $? (contains/search)
-//! - $~ (update element)
+//! - $+ (append element by value)
+//! - $+[i] (insert element at position)
+//! - $- (remove first occurrence by value)
+//! - $-- (remove all occurrences by value)
+//! - $-[i] (remove element at index)
+//! - $-[i..j] (remove range of elements)
+//! - $? (contains/search by value)
+//! - $?? (find all indices of value)
+//! - $~ (update element at index)
 //! - $[ (slice with range)
 //! - $> (map - transform collection)
 //! - $| (filter - select elements)
 //! - $< (reduce - accumulate)
 
 use zymbol_ast::{
-    CollectionAppendExpr, CollectionContainsExpr, CollectionLengthExpr,
-    CollectionRemoveExpr, CollectionSliceExpr, CollectionUpdateExpr, Expr,
+    CollectionAppendExpr, CollectionContainsExpr, CollectionFindAllExpr,
+    CollectionInsertExpr, CollectionLengthExpr,
+    CollectionRemoveAllExpr, CollectionRemoveAtExpr, CollectionRemoveRangeExpr,
+    CollectionRemoveValueExpr, CollectionSliceExpr, CollectionUpdateExpr, Expr,
 };
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
@@ -45,18 +52,31 @@ impl<W: Write> Interpreter<W> {
 
         match collection {
             Value::Array(mut arr) => {
-                // Create a new array with the element appended (immutability)
                 arr.push(element);
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
-                // Create a new tuple with the element appended (immutability)
                 tup.push(element);
                 Ok(Value::Tuple(tup))
             }
+            Value::NamedTuple(_) => Err(RuntimeError::Generic {
+                message: "$+ is not supported on named tuples — no field name available".to_string(),
+                span: op.span,
+            }),
+            Value::String(s) => {
+                let result = match element {
+                    Value::Char(c) => { let mut out = s; out.push(c); out }
+                    Value::String(ref suffix) => { let mut out = s; out.push_str(suffix); out }
+                    _ => return Err(RuntimeError::Generic {
+                        message: format!("$+ on string requires char or string element, got {:?}", element),
+                        span: op.span,
+                    }),
+                };
+                Ok(Value::String(result))
+            }
             _ => Err(RuntimeError::Generic {
                 message: format!(
-                    "cannot append to {:?} - only arrays and tuples support append",
+                    "cannot append to {:?} - only arrays, tuples, and strings support $+",
                     collection
                 ),
                 span: op.span,
@@ -64,8 +84,8 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
-    /// Evaluate collection remove operator: collection$- index
-    pub(crate) fn eval_collection_remove(&mut self, op: &CollectionRemoveExpr) -> Result<Value> {
+    /// Evaluate collection remove at operator: collection$-[index]
+    pub(crate) fn eval_collection_remove(&mut self, op: &CollectionRemoveAtExpr) -> Result<Value> {
         let collection = self.eval_expr(&op.collection)?;
         let index_value = self.eval_expr(&op.index)?;
 
@@ -82,40 +102,57 @@ impl<W: Write> Interpreter<W> {
 
         match collection {
             Value::Array(mut arr) => {
-                // Check bounds
-                if index < 0 || index as usize >= arr.len() {
+                let len = arr.len();
+                let i = if index < 0 { len as i64 + index } else { index };
+                if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
-                        message: format!(
-                            "index out of bounds: index {} for array of length {}",
-                            index,
-                            arr.len()
-                        ),
+                        message: format!("index out of bounds: index {} for array of length {}", index, len),
                         span: op.span,
                     });
                 }
-                // Create a new array with the element removed (immutability)
-                arr.remove(index as usize);
+                arr.remove(i as usize);
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
-                // Check bounds
-                if index < 0 || index as usize >= tup.len() {
+                let len = tup.len();
+                let i = if index < 0 { len as i64 + index } else { index };
+                if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
-                        message: format!(
-                            "index out of bounds: index {} for tuple of length {}",
-                            index,
-                            tup.len()
-                        ),
+                        message: format!("index out of bounds: index {} for tuple of length {}", index, len),
                         span: op.span,
                     });
                 }
-                // Create a new tuple with the element removed (immutability)
-                tup.remove(index as usize);
+                tup.remove(i as usize);
                 Ok(Value::Tuple(tup))
+            }
+            Value::NamedTuple(mut fields) => {
+                let len = fields.len();
+                let i = if index < 0 { len as i64 + index } else { index };
+                if i < 0 || i as usize >= len {
+                    return Err(RuntimeError::Generic {
+                        message: format!("index out of bounds: index {} for named tuple of length {}", index, len),
+                        span: op.span,
+                    });
+                }
+                fields.remove(i as usize);
+                Ok(Value::NamedTuple(fields))
+            }
+            Value::String(s) => {
+                let mut chars: Vec<char> = s.chars().collect();
+                let len = chars.len();
+                let i = if index < 0 { len as i64 + index } else { index };
+                if i < 0 || i as usize >= len {
+                    return Err(RuntimeError::Generic {
+                        message: format!("index out of bounds: index {} for string of length {}", index, len),
+                        span: op.span,
+                    });
+                }
+                chars.remove(i as usize);
+                Ok(Value::String(chars.iter().collect()))
             }
             _ => Err(RuntimeError::Generic {
                 message: format!(
-                    "cannot remove from {:?} - only arrays and tuples support remove",
+                    "cannot remove from {:?} - only arrays, tuples, and strings support $-[i]",
                     collection
                 ),
                 span: op.span,
@@ -252,11 +289,12 @@ impl<W: Write> Interpreter<W> {
         let length = match &collection {
             Value::Array(arr) => arr.len(),
             Value::Tuple(tup) => tup.len(),
+            Value::NamedTuple(fields) => fields.len(),
             Value::String(s) => s.chars().count(),
             _ => {
                 return Err(RuntimeError::Generic {
                     message: format!(
-                        "cannot slice {:?} - only arrays, tuples, and strings support slice",
+                        "cannot slice {:?} - only arrays, tuples, named tuples, and strings support slice",
                         collection
                     ),
                     span: op.span,
@@ -281,7 +319,7 @@ impl<W: Write> Interpreter<W> {
         };
 
         // Evaluate end index (default to length if None)
-        let end = if let Some(ref end_expr) = op.end {
+        let raw_end = if let Some(ref end_expr) = op.end {
             let end_value = self.eval_expr(end_expr)?;
             match end_value {
                 Value::Int(n) => n,
@@ -295,6 +333,13 @@ impl<W: Write> Interpreter<W> {
         } else {
             length as i64
         };
+
+        // Normalize negative indices (Python-style: -1 = last element)
+        let start = if start < 0 { length as i64 + start } else { start };
+        let raw_end = if !op.count_based && raw_end < 0 { length as i64 + raw_end } else { raw_end };
+
+        // count_based: end field holds count → actual_end = start + count
+        let end = if op.count_based { start + raw_end } else { raw_end };
 
         // Validate indices
         if start < 0 || end < 0 || start > length as i64 || end > length as i64 {
@@ -326,6 +371,10 @@ impl<W: Write> Interpreter<W> {
             Value::Tuple(tup) => {
                 let slice = tup[(start as usize)..(end as usize)].to_vec();
                 Ok(Value::Tuple(slice))
+            }
+            Value::NamedTuple(fields) => {
+                let slice = fields[(start as usize)..(end as usize)].to_vec();
+                Ok(Value::NamedTuple(slice))
             }
             Value::String(s) => {
                 // Convert string to chars, slice, then back to string
@@ -472,5 +521,405 @@ impl<W: Write> Interpreter<W> {
                 span: op.span,
             }),
         }
+    }
+
+    /// Evaluate collection sort: collection$^+ or collection$^-
+    /// Natural order for numbers/strings; custom comparator (a, b) -> Bool for named tuples.
+    pub(crate) fn eval_collection_sort(&mut self, op: &zymbol_ast::CollectionSortExpr) -> Result<Value> {
+        let collection = self.eval_expr(&op.collection)?;
+
+        match collection {
+            Value::Array(arr) => {
+                let mut items = arr.clone();
+
+                if let Some(ref cmp_expr) = op.comparator {
+                    // Custom comparator: (a, b) -> Bool
+                    let lambda = self.eval_expr(cmp_expr)?;
+                    let func = match lambda {
+                        Value::Function(f) => f,
+                        _ => return Err(RuntimeError::Generic {
+                            message: "sort comparator must be a lambda (a, b) -> Bool".to_string(),
+                            span: op.span,
+                        }),
+                    };
+                    // Bubble sort — stable, correct for small arrays; avoids unsafe sort_by
+                    let n = items.len();
+                    for i in 0..n {
+                        for j in 0..n.saturating_sub(i + 1) {
+                            let keep = self.eval_lambda_call(
+                                func.clone(),
+                                vec![items[j].clone(), items[j + 1].clone()],
+                                &op.span,
+                            )?;
+                            let a_before_b = matches!(keep, Value::Bool(true));
+                            if !a_before_b {
+                                items.swap(j, j + 1);
+                            }
+                        }
+                    }
+                } else {
+                    // Natural order
+                    items.sort_by(|a, b| {
+                        natural_cmp(a, b).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    if !op.ascending {
+                        items.reverse();
+                    }
+                }
+
+                Ok(Value::Array(items))
+            }
+            _ => Err(RuntimeError::Generic {
+                message: format!("sort requires an array, got {:?}", collection),
+                span: op.span,
+            }),
+        }
+    }
+
+    /// Evaluate collection insert operator: collection$+[index] element
+    pub(crate) fn eval_collection_insert(&mut self, op: &CollectionInsertExpr) -> Result<Value> {
+        let collection = self.eval_expr(&op.collection)?;
+        let index_val = self.eval_expr(&op.index)?;
+        let element = self.eval_expr(&op.element)?;
+
+        let index = match index_val {
+            Value::Int(n) => n,
+            _ => return Err(RuntimeError::Generic {
+                message: format!("$+[i] index must be an integer, got {:?}", index_val),
+                span: op.span,
+            }),
+        };
+        if index < 0 {
+            return Err(RuntimeError::Generic {
+                message: format!("$+[i] index must be non-negative, got {}", index),
+                span: op.span,
+            });
+        }
+        let i = index as usize;
+
+        match collection {
+            Value::Array(mut arr) => {
+                if i > arr.len() {
+                    return Err(RuntimeError::Generic {
+                        message: format!("$+[{}] index out of bounds for array of length {}", i, arr.len()),
+                        span: op.span,
+                    });
+                }
+                arr.insert(i, element);
+                Ok(Value::Array(arr))
+            }
+            Value::Tuple(mut tup) => {
+                if i > tup.len() {
+                    return Err(RuntimeError::Generic {
+                        message: format!("$+[{}] index out of bounds for tuple of length {}", i, tup.len()),
+                        span: op.span,
+                    });
+                }
+                tup.insert(i, element);
+                Ok(Value::Tuple(tup))
+            }
+            Value::NamedTuple(_) => Err(RuntimeError::Generic {
+                message: "$+[i] is not supported on named tuples — no field name available".to_string(),
+                span: op.span,
+            }),
+            Value::String(s) => {
+                let mut chars: Vec<char> = s.chars().collect();
+                if i > chars.len() {
+                    return Err(RuntimeError::Generic {
+                        message: format!("$+[{}] index out of bounds for string of length {}", i, chars.len()),
+                        span: op.span,
+                    });
+                }
+                match element {
+                    Value::Char(c) => { chars.insert(i, c); Ok(Value::String(chars.iter().collect())) }
+                    Value::String(ref ins) => {
+                        let insert_chars: Vec<char> = ins.chars().collect();
+                        for (j, c) in insert_chars.iter().enumerate() {
+                            chars.insert(i + j, *c);
+                        }
+                        Ok(Value::String(chars.iter().collect()))
+                    }
+                    _ => Err(RuntimeError::Generic {
+                        message: format!("$+[i] on string requires char or string element, got {:?}", element),
+                        span: op.span,
+                    }),
+                }
+            }
+            _ => Err(RuntimeError::Generic {
+                message: format!("$+[i] requires an array, tuple, or string, got {:?}", collection),
+                span: op.span,
+            }),
+        }
+    }
+
+    /// Evaluate collection remove value operator: collection$- value
+    /// Removes the first occurrence of value. Silent no-op if not found.
+    pub(crate) fn eval_collection_remove_value(&mut self, op: &CollectionRemoveValueExpr) -> Result<Value> {
+        let collection = self.eval_expr(&op.collection)?;
+        let value = self.eval_expr(&op.value)?;
+
+        match collection {
+            Value::Array(mut arr) => {
+                if let Some(pos) = arr.iter().position(|item| self.values_equal(item, &value)) {
+                    arr.remove(pos);
+                }
+                Ok(Value::Array(arr))
+            }
+            Value::Tuple(mut tup) => {
+                if let Some(pos) = tup.iter().position(|item| self.values_equal(item, &value)) {
+                    tup.remove(pos);
+                }
+                Ok(Value::Tuple(tup))
+            }
+            Value::NamedTuple(mut fields) => {
+                if let Some(pos) = fields.iter().position(|(_, v)| self.values_equal(v, &value)) {
+                    fields.remove(pos);
+                }
+                Ok(Value::NamedTuple(fields))
+            }
+            Value::String(s) => {
+                let chars: Vec<char> = s.chars().collect();
+                let result = match value {
+                    Value::Char(c) => {
+                        if let Some(pos) = chars.iter().position(|ch| *ch == c) {
+                            let mut out = chars.clone();
+                            out.remove(pos);
+                            out.iter().collect()
+                        } else {
+                            s.clone()
+                        }
+                    }
+                    Value::String(ref pattern) => {
+                        let pattern_chars: Vec<char> = pattern.chars().collect();
+                        if pattern_chars.is_empty() { return Ok(Value::String(s)); }
+                        for i in 0..=(chars.len().saturating_sub(pattern_chars.len())) {
+                            if chars[i..i + pattern_chars.len()] == pattern_chars[..] {
+                                let mut out = chars.clone();
+                                out.drain(i..i + pattern_chars.len());
+                                return Ok(Value::String(out.iter().collect()));
+                            }
+                        }
+                        s.clone()
+                    }
+                    _ => return Err(RuntimeError::Generic {
+                        message: format!("$- on string requires char or string value, got {:?}", value),
+                        span: op.span,
+                    }),
+                };
+                Ok(Value::String(result))
+            }
+            _ => Err(RuntimeError::Generic {
+                message: format!("$- requires an array, tuple, or string, got {:?}", collection),
+                span: op.span,
+            }),
+        }
+    }
+
+    /// Evaluate collection remove all operator: collection$-- value
+    /// Removes all occurrences of value. Silent no-op if not found.
+    pub(crate) fn eval_collection_remove_all(&mut self, op: &CollectionRemoveAllExpr) -> Result<Value> {
+        let collection = self.eval_expr(&op.collection)?;
+        let value = self.eval_expr(&op.value)?;
+
+        match collection {
+            Value::Array(arr) => {
+                let result: Vec<Value> = arr.into_iter()
+                    .filter(|item| !self.values_equal(item, &value))
+                    .collect();
+                Ok(Value::Array(result))
+            }
+            Value::Tuple(tup) => {
+                let result: Vec<Value> = tup.into_iter()
+                    .filter(|item| !self.values_equal(item, &value))
+                    .collect();
+                Ok(Value::Tuple(result))
+            }
+            Value::NamedTuple(fields) => {
+                let result: Vec<(String, Value)> = fields.into_iter()
+                    .filter(|(_, v)| !self.values_equal(v, &value))
+                    .collect();
+                Ok(Value::NamedTuple(result))
+            }
+            Value::String(s) => {
+                let result = match value {
+                    Value::Char(c) => s.chars().filter(|ch| *ch != c).collect(),
+                    Value::String(ref pattern) => {
+                        if pattern.is_empty() { return Ok(Value::String(s)); }
+                        s.replace(pattern.as_str(), "")
+                    }
+                    _ => return Err(RuntimeError::Generic {
+                        message: format!("$-- on string requires char or string value, got {:?}", value),
+                        span: op.span,
+                    }),
+                };
+                Ok(Value::String(result))
+            }
+            _ => Err(RuntimeError::Generic {
+                message: format!("$-- requires an array, tuple, or string, got {:?}", collection),
+                span: op.span,
+            }),
+        }
+    }
+
+    /// Evaluate collection remove range operator: collection$-[start..end]
+    pub(crate) fn eval_collection_remove_range(&mut self, op: &CollectionRemoveRangeExpr) -> Result<Value> {
+        let collection = self.eval_expr(&op.collection)?;
+
+        let length = match &collection {
+            Value::Array(a) => a.len(),
+            Value::Tuple(t) => t.len(),
+            Value::NamedTuple(f) => f.len(),
+            Value::String(s) => s.chars().count(),
+            _ => return Err(RuntimeError::Generic {
+                message: format!("$-[..] requires an array, tuple, or string, got {:?}", collection),
+                span: op.span,
+            }),
+        };
+
+        let start = if let Some(ref s_expr) = op.start {
+            match self.eval_expr(s_expr)? {
+                Value::Int(n) => {
+                    if n < 0 { return Err(RuntimeError::Generic {
+                        message: format!("$-[start..] start must be non-negative, got {}", n),
+                        span: op.span,
+                    }); }
+                    n as usize
+                }
+                other => return Err(RuntimeError::Generic {
+                    message: format!("$-[..] start must be an integer, got {:?}", other),
+                    span: op.span,
+                }),
+            }
+        } else { 0 };
+
+        let raw_end = if let Some(ref e_expr) = op.end {
+            match self.eval_expr(e_expr)? {
+                Value::Int(n) => {
+                    if n < 0 { return Err(RuntimeError::Generic {
+                        message: format!("$-[..end] end must be non-negative, got {}", n),
+                        span: op.span,
+                    }); }
+                    n as usize
+                }
+                other => return Err(RuntimeError::Generic {
+                    message: format!("$-[..] end must be an integer, got {:?}", other),
+                    span: op.span,
+                }),
+            }
+        } else { length };
+
+        // count_based: end field holds count → actual_end = start + count
+        let end = if op.count_based { start + raw_end } else { raw_end };
+
+        if start > end {
+            return Err(RuntimeError::Generic {
+                message: format!("$-[start..end]: start ({}) cannot be greater than end ({})", start, end),
+                span: op.span,
+            });
+        }
+        if start > length || end > length {
+            return Err(RuntimeError::Generic {
+                message: format!("$-[{}..{}] out of bounds for collection of length {}", start, end, length),
+                span: op.span,
+            });
+        }
+        // i == j → no-op
+        if start == end {
+            return Ok(collection);
+        }
+
+        match collection {
+            Value::Array(mut arr) => { arr.drain(start..end); Ok(Value::Array(arr)) }
+            Value::Tuple(mut tup) => { tup.drain(start..end); Ok(Value::Tuple(tup)) }
+            Value::NamedTuple(mut fields) => { fields.drain(start..end); Ok(Value::NamedTuple(fields)) }
+            Value::String(s) => {
+                let mut chars: Vec<char> = s.chars().collect();
+                chars.drain(start..end);
+                Ok(Value::String(chars.iter().collect()))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Evaluate collection find all operator: collection$?? value
+    /// Returns an array of indices where value is found
+    /// Supports: arrays (element equality), tuples, strings (char/substring search)
+    pub(crate) fn eval_collection_find_all(&mut self, op: &CollectionFindAllExpr) -> Result<Value> {
+        let collection = self.eval_expr(&op.collection)?;
+        let value = self.eval_expr(&op.value)?;
+
+        match collection {
+            Value::Array(ref arr) => {
+                let indices: Vec<Value> = arr.iter()
+                    .enumerate()
+                    .filter(|(_, item)| self.values_equal(item, &value))
+                    .map(|(i, _)| Value::Int(i as i64))
+                    .collect();
+                Ok(Value::Array(indices))
+            }
+            Value::Tuple(ref tup) => {
+                let indices: Vec<Value> = tup.iter()
+                    .enumerate()
+                    .filter(|(_, item)| self.values_equal(item, &value))
+                    .map(|(i, _)| Value::Int(i as i64))
+                    .collect();
+                Ok(Value::Array(indices))
+            }
+            Value::String(ref s) => {
+                let string_chars: Vec<char> = s.chars().collect();
+                let positions = match value {
+                    Value::String(ref pattern) => {
+                        let pattern_chars: Vec<char> = pattern.chars().collect();
+                        if pattern_chars.is_empty() {
+                            return Ok(Value::Array(vec![]));
+                        }
+                        let mut positions = Vec::new();
+                        for i in 0..=(string_chars.len().saturating_sub(pattern_chars.len())) {
+                            if string_chars[i..i + pattern_chars.len()] == pattern_chars[..] {
+                                positions.push(Value::Int(i as i64));
+                            }
+                        }
+                        positions
+                    }
+                    Value::Char(ch) => {
+                        string_chars.iter()
+                            .enumerate()
+                            .filter(|(_, c)| **c == ch)
+                            .map(|(i, _)| Value::Int(i as i64))
+                            .collect()
+                    }
+                    _ => {
+                        return Err(RuntimeError::Generic {
+                            message: format!(
+                                "$?? on string requires char or string value, got {:?}",
+                                value
+                            ),
+                            span: op.span,
+                        })
+                    }
+                };
+                Ok(Value::Array(positions))
+            }
+            _ => Err(RuntimeError::Generic {
+                message: format!(
+                    "$?? requires an array, tuple, or string, got {:?}",
+                    collection
+                ),
+                span: op.span,
+            }),
+        }
+    }
+}
+
+/// Natural comparison for sort: numbers, strings, booleans.
+fn natural_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y))       => Some(x.cmp(y)),
+        (Value::Float(x), Value::Float(y))   => x.partial_cmp(y),
+        (Value::Int(x), Value::Float(y))     => (*x as f64).partial_cmp(y),
+        (Value::Float(x), Value::Int(y))     => x.partial_cmp(&(*y as f64)),
+        (Value::String(x), Value::String(y)) => Some(x.cmp(y)),
+        (Value::Bool(x), Value::Bool(y))     => Some(x.cmp(y)),
+        _ => None,
     }
 }

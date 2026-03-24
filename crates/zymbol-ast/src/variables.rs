@@ -48,3 +48,41 @@ impl LifetimeEnd {
         Self { variable_name, span }
     }
 }
+
+// ── Destructuring assignment ─────────────────────────────────────────────────
+
+/// A single item in an array or positional-tuple destructure pattern
+#[derive(Debug, Clone)]
+pub enum DestructureItem {
+    /// `name` — bind element to variable
+    Bind(String),
+    /// `*name` — collect remaining elements into a new array
+    Rest(String),
+    /// `_` — discard element
+    Ignore,
+}
+
+/// The overall pattern on the left-hand side of a destructure assignment
+#[derive(Debug, Clone)]
+pub enum DestructurePattern {
+    /// `[a, b, *rest]` — array destructuring
+    Array(Vec<DestructureItem>),
+    /// `(a, b, c)` — positional tuple destructuring
+    Positional(Vec<DestructureItem>),
+    /// `(field: var, ...)` — named tuple destructuring
+    NamedTuple(Vec<(String, String)>),
+}
+
+/// Destructure assignment: `[a, b] = expr` / `(name: n, age: a) = expr`
+#[derive(Debug, Clone)]
+pub struct DestructureAssign {
+    pub pattern: DestructurePattern,
+    pub value: Box<Expr>,
+    pub span: Span,
+}
+
+impl DestructureAssign {
+    pub fn new(pattern: DestructurePattern, value: Expr, span: Span) -> Self {
+        Self { pattern, value: Box::new(value), span }
+    }
+}

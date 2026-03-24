@@ -7,19 +7,23 @@
   No keywords — pure symbolic syntax with full Unicode support.
 
   Implementation: Rust workspace (17 crates)
-  Test coverage:  99/99 vm_compare PASS | 88/88 E2E PASS
+  Test coverage:  159/159 vm_compare PASS
   Execution:      Tree-walker (default) | Register VM (--vm)
 
   IMPLEMENTATION STATUS: Feature-complete as of Sprint 5I.
   All rules in this grammar are implemented unless marked [NOT IMPLEMENTED].
 
   Version History:
+    2.1.0 (v0.0.2)     — Destructuring assignment (array, positional tuple, named tuple).
+                          Negative indices normalized (both tree-walker and VM).
     2.0.0 (Sprint 5I)  — Authoritative clean grammar. Indexed assign, comma concat,
                           guard patterns, range step, base conversion, labeled loops,
                           string interpolation in all contexts.
+    1.9.0              — v0.0.2 Collection API: $-[i:n] and $[s:n] count-based forms added
+    1.8.0              — v0.0.2 Collection API: $+[i] $- $-- $-[i] $-[i..j] $?? unified
     1.7.0              — Error handling: !? / :! / :> / $! / $!!
     1.6.0              — Precision operators: #.N|x| and #!N|x|
-    1.5.0              — String operators: $?? $++[..] $--[..] $~~[..]
+    1.5.0              — String operators: $?? $++[..] $--[..] $~~[..] (pre-v0.0.2)
     1.4.0              — Shell integration: <\ \> and </ />
     1.3.0              — Functional: lambdas, HOF ($> $| $<), closures, pipe |>
     1.2.0              — Collections: arrays, tuples, named tuples
@@ -61,6 +65,7 @@ import_path    = [ "./" | "../" | { "../" } ] ,
 
 statement      = ( assignment
                | indexed_assign
+               | destructure_assign
                | const_decl
                | update_op
                | output_stmt
@@ -90,14 +95,43 @@ indexed_assign = identifier , { "[" , expr , "]" } , "=" , expr ;
   matrix[1][2] = 0
 *)
 
+(* Destructure assignment — unpacks array or tuple into variables *)
+destructure_assign = array_destructure_pattern  , "=" , expr
+                   | tuple_destructure_pattern , "=" , expr ;
+
+array_destructure_pattern  = "[" , destructure_item , { "," , destructure_item } , "]" ;
+tuple_destructure_pattern  = positional_destr_pattern | named_destr_pattern ;
+
+positional_destr_pattern   = "(" , destructure_item , { "," , destructure_item } , ")" ;
+named_destr_pattern        = "(" , named_destr_field , { "," , named_destr_field } , ")" ;
+named_destr_field          = identifier , ":" , identifier ;  (* field: variable *)
+
+destructure_item = identifier             (* bind element to variable *)
+                 | "*" , identifier       (* *rest — collect remaining into new array *)
+                 | "_" ;                  (* discard element *)
+
+(*
+  // Array destructuring
+  [a, b, c] = [1, 2, 3]          // a=1  b=2  c=3
+  [x, *rest] = [1, 2, 3, 4]      // x=1  rest=[2, 3, 4]
+  [first, _, last] = [1, 2, 3]   // first=1  last=3
+
+  // Positional tuple destructuring
+  (x, y) = point                 // x=point[0]  y=point[1]
+  (h, *tail) = tup               // h=tup[0]  tail=remaining
+
+  // Named tuple destructuring
+  (name: n, age: a) = person     // n=person.name  a=person.age
+*)
+
 (* Constant declaration — immutable, cannot be reassigned *)
 const_decl     = identifier , ":=" , expr ;
 
 (* Compound assignment — desugared to assignment by parser *)
 (* x += n  →  x = x + n  |  x -= n  →  x = x - n  |  x *= n  →  x = x * n
-   x /= n  →  x = x / n  |  x %= n  →  x = x % n  |  x ^= n  →  x = x ^ n
+   x /= n  →  x = x / n  |  x %= n  →  x = x % n
    x++     →  x = x + 1  |  x--     →  x = x - 1                           *)
-update_op      = identifier , ( "+=" | "-=" | "*=" | "/=" | "%=" | "^=" ) , expr
+update_op      = identifier , ( "+=" | "-=" | "*=" | "/=" | "%=" ) , expr
                | identifier , ( "++" | "--" ) ;
 
 (* --- Output --- *)
@@ -240,7 +274,7 @@ lambda_params  = identifier
    2.  |> (pipe)          — function composition
    3.  || (logical or)
    4.  && (logical and)
-   5.  == != (equality)
+   5.  == <> (equality)
    6.  < > <= >= (comparison)
    7.  + - (addition)
    8.  * / % (multiplication)
@@ -275,7 +309,7 @@ pipe_arg       = "_"                            (* placeholder for piped value *
 (* Binary operators *)
 logic_or       = logic_and , { "||" , logic_and } ;
 logic_and      = equality  , { "&&" , equality } ;
-equality       = comparison , { ( "==" | "!=" | "<>" ) , comparison } ;
+equality       = comparison , { ( "==" | "<>" ) , comparison } ;
 comparison     = addition  , { ( "<" | ">" | "<=" | ">=" ) , addition } ;
 addition       = multiplication , { ( "+" | "-" ) , multiplication } ;
 multiplication = exponentiation , { ( "*" | "/" | "%" ) , exponentiation } ;
@@ -299,7 +333,7 @@ postfix_expr   = primary_expr ,
                  | error_op_suffix
                  | type_metadata_suffix } ;
 
-index_suffix   = "[" , expr , "]" ;             (* arr[0], matrix[1][2] *)
+index_suffix   = "[" , expr , "]" ;             (* arr[0], matrix[1][2], arr[-1] last element *)
 call_suffix    = "(" , [ arg_list ] , ")" ;     (* func()(args) — chained calls *)
 
 arg_list       = arg , { "," , arg } ;
@@ -373,25 +407,29 @@ module_call    = identifier , "::" , identifier ;
    COLLECTION OPERATORS
    ========================================================================= *)
 
-(* All collection operators use $ prefix and are postfix *)
+(* All collection operators use $ prefix and are postfix.
+   Rule: $op bare = by value  ·  $op[..] = by position/range  (v0.0.2) *)
 collection_op_suffix
-               = "$#"                                                  (* length *)
-               | "$+" , expr                                           (* append → new collection *)
-               | "$-" , expr                                           (* remove by index → new collection *)
-               | "$?" , expr                                           (* contains → Bool *)
-               | "$[" , [ expr ] , ".." , [ expr ] , "]"              (* slice → new collection *)
-               | "$>" , lambda                                         (* map → new array *)
-               | "$|" , lambda                                         (* filter → new array *)
-               | "$<" , "(" , expr , "," , lambda , ")"               (* reduce → scalar *)
-               | "$~" , expr                                           (* functional update → new collection *)
-               | string_op_suffix ;
-
-(* String-specific operators *)
-string_op_suffix
-               = "$??" , expr                                          (* find all positions → [Int] *)
-               | "$++" , "[" , expr , ":" , expr , "]"                (* insert at pos → new string *)
-               | "$--" , "[" , expr , ":" , expr , "]"                (* remove N chars from pos → new string *)
-               | "$~~" , "[" , expr , ":" , expr , [ ":" , expr ] , "]" ; (* replace [pattern:repl:count?] *)
+               = "$#"                                                           (* length *)
+               | "$+" , expr                                                    (* append by value → new collection *)
+               | "$+[" , expr , "]" , expr                                     (* insert at index → new collection *)
+               | "$-" , expr                                                    (* remove first occurrence by value → new collection *)
+               | "$--" , expr                                                   (* remove all occurrences by value → new collection *)
+               | "$-[" , [ expr ] , ".." , [ expr ] , "]"                      (* remove at index or range (end exclusive) → new collection *)
+               | "$-[" , expr , ":" , expr , "]"                               (* remove count-based range → new collection *)
+               | "$?" , expr                                                    (* contains → Bool *)
+               | "$??" , expr                                                   (* find all indices of value → [Int] *)
+               | "$[" , [ expr ] , ".." , [ expr ] , "]"                       (* slice (end exclusive) → new collection *)
+               | "$[" , expr , ":" , expr , "]"                                (* slice count-based → new collection *)
+               | "$^+"                                                           (* sort ascending, natural order → new array *)
+               | "$^+" , lambda                                                 (* sort ascending, custom comparator (a,b)->Bool → new array *)
+               | "$^-"                                                           (* sort descending, natural order → new array *)
+               | "$^-" , lambda                                                 (* sort descending, custom comparator (a,b)->Bool → new array *)
+               | "$>" , lambda                                                  (* map → new array *)
+               | "$|" , lambda                                                  (* filter → new array *)
+               | "$<" , "(" , expr , "," , lambda , ")"                        (* reduce → scalar *)
+               | "$[" , expr , "]" , "$~" , expr                               (* functional update → new collection *)
+               | "$~~" , "[" , expr , ":" , expr , [ ":" , expr ] , "]" ;     (* string replace [pattern:repl:count?] *)
 
 (* Error check operators — postfix *)
 error_op_suffix
@@ -524,7 +562,7 @@ exponent       = ( "e" | "E" ) , [ "+" | "-" ] , digit , { digit } ;
 string_literal = '"' , { string_part } , '"' ;
 
 string_part    = string_char
-               | "{" , identifier , "}" ;        (* variable interpolation *)
+               | "{" , identifier , "}" ;        (* variable interpolation — valid in any expr context *)
 
 string_char    = ? any Unicode character except " { \ ?
                | escape_sequence ;

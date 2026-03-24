@@ -210,23 +210,19 @@ impl<W: Write> Interpreter<W> {
             // Type promotion for comparison
             (Value::Int(a), Value::Float(b)) => Ok(Value::Bool(float_compare(*a as f64, *b))),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(float_compare(*a, *b as f64))),
-            // String comparison (try to parse as numbers)
+            // String comparison: numeric if both parse as integers, else lexicographic
             (Value::String(a), Value::String(b)) => {
-                // Try to parse strings as integers
                 if let (Ok(a_int), Ok(b_int)) = (a.parse::<i64>(), b.parse::<i64>()) {
                     Ok(Value::Bool(int_compare(a_int, b_int)))
                 } else {
-                    Err(RuntimeError::Generic {
-                        message: format!(
-                            "cannot compare values with operator '{:?}': {:?} and {:?}",
-                            op, left, right
-                        ),
-                        span: Span::new(
-                            zymbol_span::Position::start(),
-                            zymbol_span::Position::start(),
-                            zymbol_span::FileId(0),
-                        ),
-                    })
+                    Ok(Value::Bool(int_compare(
+                        0,
+                        match a.as_str().cmp(b.as_str()) {
+                            std::cmp::Ordering::Less    => 1,
+                            std::cmp::Ordering::Equal   => 0,
+                            std::cmp::Ordering::Greater => -1,
+                        },
+                    )))
                 }
             }
             // Handle String-Int comparisons (parse string to int)

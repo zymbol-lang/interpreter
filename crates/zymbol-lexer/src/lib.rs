@@ -90,12 +90,26 @@ pub enum TokenKind {
     /// $< (reduce - accumulate)
     DollarLt,
 
+    // Positional collection operators (v0.0.2)
+    /// $+[ (insert element at position — arrays, tuples, strings)
+    DollarPlusLBracket,
+    /// $-[ (remove element at position or range — arrays, tuples, strings)
+    DollarMinusLBracket,
+
+    // Sort operators (v0.0.2)
+    /// $^+ (sort ascending — natural order, no comparator)
+    DollarCaretPlus,
+    /// $^- (sort descending — natural order, no comparator)
+    DollarCaretMinus,
+    /// $^ (sort with custom comparator lambda)
+    DollarCaret,
+
     // String operators
-    /// $?? (find positions - returns array of indices where pattern is found)
+    /// $?? (find all indices where pattern occurs — arrays, tuples, strings)
     DollarQuestionQuestion,
-    /// $++ (insert text at position)
+    /// $++ (insert text at position) — RETIRED in v0.0.2, use $+[ instead
     DollarPlusPlus,
-    /// $-- (remove text by count)
+    /// $-- (remove all occurrences of value — arrays, tuples, strings)
     DollarMinusMinus,
     /// $~~ (replace pattern with text, with optional count)
     DollarTildeTilde,
@@ -2105,5 +2119,85 @@ add(a, b) {
         assert!(matches!(tokens[4], TokenKind::DollarTilde));
         assert!(matches!(tokens[5], TokenKind::DollarExclaim));
         assert!(matches!(tokens[6], TokenKind::DollarExclaimExclaim));
+    }
+
+    // ── v0.0.2 positional token tests ────────────────────────────────────────
+
+    #[test]
+    fn test_dollar_plus_lbracket() {
+        // $+[ (no space) must lex as a single DollarPlusLBracket token
+        let tokens = lex("arr$+[2] 99");
+        assert!(matches!(tokens[1], TokenKind::DollarPlusLBracket),
+            "expected DollarPlusLBracket, got {:?}", tokens[1]);
+    }
+
+    #[test]
+    fn test_dollar_minus_lbracket() {
+        // $-[ (no space) must lex as a single DollarMinusLBracket token
+        let tokens = lex("arr$-[0]");
+        assert!(matches!(tokens[1], TokenKind::DollarMinusLBracket),
+            "expected DollarMinusLBracket, got {:?}", tokens[1]);
+    }
+
+    #[test]
+    fn test_dollar_minus_lbracket_range() {
+        // $-[ used with a range: arr$-[1..3]
+        let tokens = lex("arr$-[1..3]");
+        assert!(matches!(tokens[1], TokenKind::DollarMinusLBracket),
+            "expected DollarMinusLBracket, got {:?}", tokens[1]);
+    }
+
+    #[test]
+    fn test_dollar_plus_space_lbracket_stays_separate() {
+        // $+ followed by space then [ → DollarPlus + LBracket (append array literal)
+        let tokens = lex("arr$+ [1]");
+        assert!(matches!(tokens[1], TokenKind::DollarPlus),
+            "expected DollarPlus, got {:?}", tokens[1]);
+        assert!(matches!(tokens[2], TokenKind::LBracket),
+            "expected LBracket, got {:?}", tokens[2]);
+    }
+
+    #[test]
+    fn test_dollar_minus_space_lbracket_stays_separate() {
+        // $- followed by space then [ → DollarMinus + LBracket (remove array-literal value)
+        let tokens = lex("arr$- [1]");
+        assert!(matches!(tokens[1], TokenKind::DollarMinus),
+            "expected DollarMinus, got {:?}", tokens[1]);
+        assert!(matches!(tokens[2], TokenKind::LBracket),
+            "expected LBracket, got {:?}", tokens[2]);
+    }
+
+    #[test]
+    fn test_dollar_plus_plus_unaffected() {
+        // $++ still lexes correctly (kept as retired token for parser migration error)
+        let tokens = lex("s$++");
+        assert!(matches!(tokens[1], TokenKind::DollarPlusPlus),
+            "expected DollarPlusPlus, got {:?}", tokens[1]);
+    }
+
+    #[test]
+    fn test_dollar_minus_minus_unaffected() {
+        // $-- still lexes correctly (repurposed as remove-all by value)
+        let tokens = lex("arr$-- 30");
+        assert!(matches!(tokens[1], TokenKind::DollarMinusMinus),
+            "expected DollarMinusMinus, got {:?}", tokens[1]);
+    }
+
+    #[test]
+    fn test_dollar_plus_lbracket_not_confused_with_dollar_plus_plus() {
+        // $++ must NOT be confused with $+[
+        let tokens = lex("s$++");
+        assert!(matches!(tokens[1], TokenKind::DollarPlusPlus));
+        let tokens2 = lex("arr$+[0]");
+        assert!(matches!(tokens2[1], TokenKind::DollarPlusLBracket));
+    }
+
+    #[test]
+    fn test_dollar_minus_lbracket_not_confused_with_dollar_minus_minus() {
+        // $-- must NOT be confused with $-[
+        let tokens = lex("arr$--");
+        assert!(matches!(tokens[1], TokenKind::DollarMinusMinus));
+        let tokens2 = lex("arr$-[0]");
+        assert!(matches!(tokens2[1], TokenKind::DollarMinusLBracket));
     }
 }

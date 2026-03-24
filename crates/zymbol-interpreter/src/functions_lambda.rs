@@ -68,6 +68,23 @@ impl<W: Write> Interpreter<W> {
             });
         }
 
+        // HOF fast path: expression lambda with no captures.
+        // Expression bodies cannot contain assignment statements, so they cannot
+        // write to any outer scope. A simple push_scope/pop_scope is sufficient —
+        // no need to hide the caller's scope with the expensive take_call_state cycle.
+        if func.captures.is_empty() {
+            if let zymbol_ast::LambdaBody::Expr(ref expr) = func.body {
+                self.push_scope();
+                for (i, param) in func.params.iter().enumerate() {
+                    let value = std::mem::replace(&mut arg_values[i], Value::Unit);
+                    self.set_variable_new(param, value);
+                }
+                let result = self.eval_expr(expr)?;
+                self.pop_scope();
+                return Ok(result);
+            }
+        }
+
         // B2: zero-copy save + fresh isolated scope (see take_call_state)
         let saved = self.take_call_state();
 
@@ -417,9 +434,27 @@ fn collect_refs_in_expr(
             collect_refs_in_expr(&op.collection, locals, refs);
             collect_refs_in_expr(&op.element, locals, refs);
         }
-        Expr::CollectionRemove(op) => {
+        Expr::CollectionInsert(op) => {
             collect_refs_in_expr(&op.collection, locals, refs);
             collect_refs_in_expr(&op.index, locals, refs);
+            collect_refs_in_expr(&op.element, locals, refs);
+        }
+        Expr::CollectionRemoveValue(op) => {
+            collect_refs_in_expr(&op.collection, locals, refs);
+            collect_refs_in_expr(&op.value, locals, refs);
+        }
+        Expr::CollectionRemoveAll(op) => {
+            collect_refs_in_expr(&op.collection, locals, refs);
+            collect_refs_in_expr(&op.value, locals, refs);
+        }
+        Expr::CollectionRemoveAt(op) => {
+            collect_refs_in_expr(&op.collection, locals, refs);
+            collect_refs_in_expr(&op.index, locals, refs);
+        }
+        Expr::CollectionRemoveRange(op) => {
+            collect_refs_in_expr(&op.collection, locals, refs);
+            if let Some(s) = &op.start { collect_refs_in_expr(s, locals, refs); }
+            if let Some(e) = &op.end { collect_refs_in_expr(e, locals, refs); }
         }
         Expr::CollectionContains(op) => {
             collect_refs_in_expr(&op.collection, locals, refs);
@@ -447,6 +482,10 @@ fn collect_refs_in_expr(
             collect_refs_in_expr(&op.initial, locals, refs);
             collect_refs_in_expr(&op.lambda, locals, refs);
         }
+        Expr::CollectionSortAsc(op) | Expr::CollectionSortDesc(op) | Expr::CollectionSortCustom(op) => {
+            collect_refs_in_expr(&op.collection, locals, refs);
+            if let Some(ref cmp) = op.comparator { collect_refs_in_expr(cmp, locals, refs); }
+        }
         Expr::NumericEval(op)    => collect_refs_in_expr(&op.expr, locals, refs),
         Expr::TypeMetadata(op)   => collect_refs_in_expr(&op.expr, locals, refs),
         Expr::Format(op)         => collect_refs_in_expr(&op.expr, locals, refs),
@@ -462,19 +501,9 @@ fn collect_refs_in_expr(
                 if let zymbol_ast::PipeArg::Expr(e) = arg { collect_refs_in_expr(e, locals, refs); }
             }
         }
-        Expr::StringFindPositions(op) => {
-            collect_refs_in_expr(&op.string, locals, refs);
-            collect_refs_in_expr(&op.pattern, locals, refs);
-        }
-        Expr::StringInsert(op) => {
-            collect_refs_in_expr(&op.string, locals, refs);
-            collect_refs_in_expr(&op.position, locals, refs);
-            collect_refs_in_expr(&op.text, locals, refs);
-        }
-        Expr::StringRemove(op) => {
-            collect_refs_in_expr(&op.string, locals, refs);
-            collect_refs_in_expr(&op.position, locals, refs);
-            collect_refs_in_expr(&op.count, locals, refs);
+        Expr::CollectionFindAll(op) => {
+            collect_refs_in_expr(&op.collection, locals, refs);
+            collect_refs_in_expr(&op.value, locals, refs);
         }
         Expr::StringReplace(op) => {
             collect_refs_in_expr(&op.string, locals, refs);
@@ -523,6 +552,9 @@ fn collect_refs_in_stmts(
             zymbol_ast::Statement::Loop(l) => {
                 let mut bl = locals.clone();
                 collect_refs_in_stmts(&l.body.statements, &mut bl, refs);
+            }
+            zymbol_ast::Statement::DestructureAssign(d) => {
+                collect_refs_in_expr(&d.value, &locals.iter().map(|s| s.as_str()).collect(), refs);
             }
             _ => {}  // Break, Continue, Newline, etc. have no expressions
         }

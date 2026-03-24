@@ -1,0 +1,69 @@
+// Test: $+ append of tuples and named tuples into arrays
+// Covers: direct literals, variables, mixed, and field access after append.
+
+// ── Positional tuples — literal ───────────────────────────────────────────────
+arr = []
+arr = arr$+ (1, 2, 3)
+arr = arr$+ (4, 5, 6)
+>> arr$# ¶
+>> arr[0][0] ¶
+>> arr[1][2] ¶
+
+// ── Positional tuples — from variable ─────────────────────────────────────────
+t1 = (10, 20)
+t2 = (30, 40)
+pts = []
+pts = pts$+ t1
+pts = pts$+ t2
+>> pts$# ¶
+>> pts[0][0] ¶
+>> pts[0][1] ¶
+>> pts[1][0] ¶
+
+// ── Named tuples — literal ────────────────────────────────────────────────────
+db = []
+db = db$+ (id: 1, name: "Ana",   age: 25, mail: "ana@corp.com")
+db = db$+ (id: 2, name: "Bob",   age: 30, mail: "bob@corp.com")
+db = db$+ (id: 3, name: "Carla", age: 28, mail: "carla@corp.com")
+>> db$# ¶
+>> db[0].name ¶
+>> db[1].age ¶
+>> db[2].mail ¶
+
+// ── Named tuples — from variable ──────────────────────────────────────────────
+r1 = (id: 4, name: "Dan",  age: 35, mail: "dan@corp.com")
+r2 = (id: 5, name: "Eva",  age: 22, mail: "eva@corp.com")
+db = db$+ r1
+db = db$+ r2
+>> db$# ¶
+>> db[3].name ¶
+>> db[4].name ¶
+>> db[4].id ¶
+
+// ── Mixed: positional and named in same array ─────────────────────────────────
+mixed = []
+mixed = mixed$+ (0, 0)
+mixed = mixed$+ (name: "origin", x: 0, y: 0)
+>> mixed$# ¶
+>> mixed[0][0] ¶
+>> mixed[1].name ¶
+
+// ── Build table in loop then query ────────────────────────────────────────────
+table = []
+@ i:0..4 {
+    table = table$+ (id: i, val: i * 10)
+}
+>> table$# ¶
+>> table[0].id ¶
+>> table[0].val ¶
+>> table[3].id ¶
+>> table[3].val ¶
+
+// ── Append and immediately slice ──────────────────────────────────────────────
+base = [(id: 1, name: "A"), (id: 2, name: "B")]
+extra = (id: 3, name: "C")
+full = base$+ extra
+page = full$[1:2]
+>> page$# ¶
+>> page[0].name ¶
+>> page[1].name ¶

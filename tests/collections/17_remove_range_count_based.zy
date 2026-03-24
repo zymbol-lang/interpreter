@@ -1,0 +1,160 @@
+// Test: $-[start:count] count-based remove range — arrays, tuples, strings
+// Every :count scenario is paired with its ..end equivalent; outputs must match.
+
+// ── Arrays ────────────────────────────────────────────────────────────────────
+arr = [10, 20, 30, 40, 50]
+
+// Remove interior range
+a1 = arr$-[1:2]
+b1 = arr$-[1..3]
+>> a1 ¶
+>> b1 ¶
+
+// Remove from start
+a2 = arr$-[0:2]
+b2 = arr$-[0..2]
+>> a2 ¶
+>> b2 ¶
+
+// Remove at end
+a3 = arr$-[3:2]
+b3 = arr$-[3..5]
+>> a3 ¶
+>> b3 ¶
+
+// Remove all (full range)
+a4 = arr$-[0:5]
+b4 = arr$-[0..5]
+>> a4 ¶
+>> b4 ¶
+
+// Remove single element
+a5 = arr$-[2:1]
+b5 = arr$-[2..3]
+>> a5 ¶
+>> b5 ¶
+
+// Count = 0 → no-op
+a6 = arr$-[1:0]
+b6 = arr$-[1..1]
+>> a6 ¶
+>> b6 ¶
+
+// Remove last element
+a7 = arr$-[4:1]
+b7 = arr$-[4..5]
+>> a7 ¶
+>> b7 ¶
+
+// Variable start and count
+i = 2
+n = 2
+a8 = arr$-[i:n]
+b8 = arr$-[2..4]
+>> a8 ¶
+>> b8 ¶
+
+// ── Tuples ────────────────────────────────────────────────────────────────────
+tup = (100, 200, 300, 400, 500)
+
+t1 = tup$-[0:2]
+t1b = tup$-[0..2]
+>> t1 ¶
+>> t1b ¶
+
+t2 = tup$-[2:2]
+t2b = tup$-[2..4]
+>> t2 ¶
+>> t2b ¶
+
+// Count = 0 → no-op
+t3 = tup$-[1:0]
+t3b = tup$-[1..1]
+>> t3 ¶
+>> t3b ¶
+
+// Remove all
+t4 = tup$-[0:5]
+t4b = tup$-[0..5]
+>> t4 ¶
+>> t4b ¶
+
+// Single element
+t5 = tup$-[3:1]
+t5b = tup$-[3..4]
+>> t5 ¶
+>> t5b ¶
+
+// ── Strings ───────────────────────────────────────────────────────────────────
+s = "hello world"
+
+// Remove prefix
+s1 = s$-[0:6]
+s1b = s$-[0..6]
+>> s1 ¶
+>> s1b ¶
+
+// Remove suffix
+s2 = s$-[5:6]
+s2b = s$-[5..11]
+>> s2 ¶
+>> s2b ¶
+
+// Remove space (single char at interior)
+s3 = s$-[5:1]
+s3b = s$-[5..6]
+>> s3 ¶
+>> s3b ¶
+
+// Remove single char at start
+s4 = s$-[0:1]
+s4b = s$-[0..1]
+>> s4 ¶
+>> s4b ¶
+
+// Count = 0 → no-op
+s5 = s$-[3:0]
+s5b = s$-[3..3]
+>> s5 ¶
+>> s5b ¶
+
+// Remove all chars
+s6 = s$-[0:11]
+s6b = s$-[0..11]
+>> s6 ¶
+>> s6b ¶
+
+// Unicode string
+u = "café au lait"
+u1 = u$-[0:5]
+u1b = u$-[0..5]
+>> u1 ¶
+>> u1b ¶
+
+u2 = u$-[4:3]
+u2b = u$-[4..7]
+>> u2 ¶
+>> u2b ¶
+
+// ── Length of result after remove ─────────────────────────────────────────────
+data = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+la = (data$-[3:4])$#
+lb = (data$-[3..7])$#
+>> la ¶
+>> lb ¶
+
+la2 = (data$-[0:1])$#
+lb2 = (data$-[0..1])$#
+>> la2 ¶
+>> lb2 ¶
+
+// ── More array edge cases ──────────────────────────────────────────────────────
+// Remove one from middle and check length
+arr2 = [1, 2, 3, 4, 5, 6, 7]
+r1 = arr2$-[2:3]
+r1b = arr2$-[2..5]
+r1_len = r1$#
+r1b_len = r1b$#
+>> r1_len ¶
+>> r1b_len ¶

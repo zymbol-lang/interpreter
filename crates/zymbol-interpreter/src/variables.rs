@@ -65,7 +65,7 @@ impl<W: Write> Interpreter<W> {
                     }
                 }
             }
-            Expr::CollectionRemove(op) => {
+            Expr::CollectionRemoveAt(op) => {
                 if let Expr::Identifier(ident) = op.collection.as_ref() {
                     if ident.name == assign.name {
                         let index_val = self.eval_expr(&op.index)?;

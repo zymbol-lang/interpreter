@@ -1,0 +1,13 @@
+// Test: $-- remove all by value (v0.0.2)
+arr = [1, 2, 3, 2, 4, 2]
+rem1 = arr$-- 2
+>> rem1 ¶
+
+// Remove value not present — no-op
+rem2 = arr$-- 99
+>> rem2 ¶
+
+// Remove all from single-element array
+arr2 = [5]
+rem3 = arr2$-- 5
+>> rem3 ¶

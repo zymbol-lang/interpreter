@@ -23,7 +23,7 @@ mod match_stmt;
 pub use match_stmt::{MatchCase, MatchExpr, Pattern};
 
 mod variables;
-pub use variables::{Assignment, ConstDecl, LifetimeEnd};
+pub use variables::{Assignment, ConstDecl, LifetimeEnd, DestructureAssign, DestructurePattern, DestructureItem};
 
 mod functions;
 pub use functions::{FunctionDecl, LambdaBody, LambdaExpr, Parameter, ParameterKind, ReturnStmt};
@@ -33,15 +33,18 @@ pub use collections::{ArrayLiteralExpr, NamedTupleExpr, TupleExpr};
 
 mod collection_ops;
 pub use collection_ops::{
-    CollectionLengthExpr, CollectionAppendExpr, CollectionRemoveExpr,
-    CollectionContainsExpr, CollectionUpdateExpr, CollectionSliceExpr,
+    CollectionLengthExpr, CollectionAppendExpr,
+    CollectionInsertExpr,
+    CollectionRemoveValueExpr, CollectionRemoveAllExpr,
+    CollectionRemoveAtExpr, CollectionRemoveRangeExpr,
+    CollectionContainsExpr, CollectionFindAllExpr,
+    CollectionUpdateExpr, CollectionSliceExpr,
     CollectionMapExpr, CollectionFilterExpr, CollectionReduceExpr,
+    CollectionSortExpr,
 };
 
 mod string_ops;
-pub use string_ops::{
-    StringFindPositionsExpr, StringInsertExpr, StringRemoveExpr, StringReplaceExpr,
-};
+pub use string_ops::StringReplaceExpr;
 
 mod data_ops;
 pub use data_ops::{
@@ -81,6 +84,8 @@ pub enum Statement {
     Assignment(Assignment),
     /// Constant declaration: name := expr (immutable)
     ConstDecl(ConstDecl),
+    /// Destructure assignment: [a, b] = expr / (name: n) = expr
+    DestructureAssign(DestructureAssign),
     /// Lifetime end: \variable (explicit destruction)
     LifetimeEnd(LifetimeEnd),
     /// Input statement: << variable
@@ -157,20 +162,24 @@ pub enum Expr {
     CollectionLength(CollectionLengthExpr),
     /// Collection append: collection$+ element
     CollectionAppend(CollectionAppendExpr),
-    /// Collection remove: collection$- index
-    CollectionRemove(CollectionRemoveExpr),
+    /// Collection insert: collection$+[index] element
+    CollectionInsert(CollectionInsertExpr),
+    /// Collection remove value: collection$- value (removes first occurrence)
+    CollectionRemoveValue(CollectionRemoveValueExpr),
+    /// Collection remove all: collection$-- value (removes all occurrences)
+    CollectionRemoveAll(CollectionRemoveAllExpr),
+    /// Collection remove at: collection$-[index]
+    CollectionRemoveAt(CollectionRemoveAtExpr),
+    /// Collection remove range: collection$-[start..end]
+    CollectionRemoveRange(CollectionRemoveRangeExpr),
     /// Collection contains: collection$? element
     CollectionContains(CollectionContainsExpr),
+    /// Collection find all: collection$?? value - returns array of indices
+    CollectionFindAll(CollectionFindAllExpr),
     /// Collection update: collection[index]$~ value
     CollectionUpdate(CollectionUpdateExpr),
     /// Collection slice: collection$[start..end]
     CollectionSlice(CollectionSliceExpr),
-    /// String find positions: string$?? pattern - returns array of positions
-    StringFindPositions(StringFindPositionsExpr),
-    /// String insert: string$++[position:text] - insert text at position
-    StringInsert(StringInsertExpr),
-    /// String remove: string$--[position:count] - remove count characters
-    StringRemove(StringRemoveExpr),
     /// String replace: string$~~[pattern:replacement:count?] - replace pattern with replacement
     StringReplace(StringReplaceExpr),
     /// Numeric evaluation: #|expr| - safe string to number conversion
@@ -189,6 +198,12 @@ pub enum Expr {
     CollectionFilter(CollectionFilterExpr),
     /// Collection reduce: collection$< (0, (acc, x) -> acc + x)
     CollectionReduce(CollectionReduceExpr),
+    /// Collection sort ascending: collection$^+ (natural order, no comparator)
+    CollectionSortAsc(CollectionSortExpr),
+    /// Collection sort descending: collection$^- (natural order, no comparator)
+    CollectionSortDesc(CollectionSortExpr),
+    /// Collection sort with custom comparator: collection$^ (a, b -> a.field < b.field)
+    CollectionSortCustom(CollectionSortExpr),
     /// Pipe expression: value |> func(_) or value |> (x -> x * 2)(_)
     Pipe(PipeExpr),
     /// Execute expression: </ file.zy /> - execute .zy file and capture output
@@ -325,13 +340,15 @@ impl Expr {
             Expr::Match(match_expr) => match_expr.span,
             Expr::CollectionLength(op) => op.span,
             Expr::CollectionAppend(op) => op.span,
-            Expr::CollectionRemove(op) => op.span,
+            Expr::CollectionInsert(op) => op.span,
+            Expr::CollectionRemoveValue(op) => op.span,
+            Expr::CollectionRemoveAll(op) => op.span,
+            Expr::CollectionRemoveAt(op) => op.span,
+            Expr::CollectionRemoveRange(op) => op.span,
             Expr::CollectionContains(op) => op.span,
+            Expr::CollectionFindAll(op) => op.span,
             Expr::CollectionUpdate(op) => op.span,
             Expr::CollectionSlice(op) => op.span,
-            Expr::StringFindPositions(op) => op.span,
-            Expr::StringInsert(op) => op.span,
-            Expr::StringRemove(op) => op.span,
             Expr::StringReplace(op) => op.span,
             Expr::NumericEval(op) => op.span,
             Expr::TypeMetadata(op) => op.span,
@@ -341,6 +358,9 @@ impl Expr {
             Expr::CollectionMap(op) => op.span,
             Expr::CollectionFilter(op) => op.span,
             Expr::CollectionReduce(op) => op.span,
+            Expr::CollectionSortAsc(op) => op.span,
+            Expr::CollectionSortDesc(op) => op.span,
+            Expr::CollectionSortCustom(op) => op.span,
             Expr::Pipe(pipe) => pipe.span,
             Expr::Execute(execute) => execute.span,
             Expr::BashExec(bash) => bash.span,

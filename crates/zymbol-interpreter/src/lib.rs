@@ -11,6 +11,7 @@ use std::rc::Rc;
 use thiserror::Error;
 use zymbol_ast::{
     Block, Expr, Program, Statement, TryStmt, CatchClause,
+    DestructureAssign, DestructureItem, DestructurePattern,
 };
 use zymbol_span::Span;
 
@@ -873,6 +874,7 @@ impl<W: Write> Interpreter<W> {
                 // For now, this is a no-op
                 Ok(())
             }
+            Statement::DestructureAssign(d) => self.eval_destructure_assign(d),
             Statement::Try(try_stmt) => self.execute_try(try_stmt),
         }
     }
@@ -900,6 +902,71 @@ impl<W: Write> Interpreter<W> {
         Ok(())
     }
 
+    /// Execute a destructure assignment statement: [a, *rest, _] = expr / (a, b) = expr / (field: var) = expr
+    pub(crate) fn eval_destructure_assign(&mut self, d: &DestructureAssign) -> Result<()> {
+        let rhs = self.eval_expr(&d.value)?;
+        match &d.pattern {
+            DestructurePattern::Array(items) | DestructurePattern::Positional(items) => {
+                let elements: Vec<Value> = match &rhs {
+                    Value::Array(arr) => arr.clone(),
+                    Value::Tuple(tup) => tup.clone(),
+                    _ => return Err(RuntimeError::Generic {
+                        message: format!(
+                            "destructure assignment requires an array or tuple, got {}",
+                            self.value_type_name(&rhs)
+                        ),
+                        span: d.span,
+                    }),
+                };
+                let mut idx = 0usize;
+                for item in items {
+                    match item {
+                        DestructureItem::Bind(name) => {
+                            let val = elements.get(idx).cloned().unwrap_or(Value::Unit);
+                            self.set_variable(name, val);
+                            idx += 1;
+                        }
+                        DestructureItem::Rest(name) => {
+                            // Collect remaining elements (excluding any trailing Bind/Ignore items)
+                            let trailing = items.iter().rev().take_while(|i| !matches!(i, DestructureItem::Rest(_))).count();
+                            let end = if trailing > 0 && elements.len() > idx + trailing {
+                                elements.len() - trailing
+                            } else {
+                                elements.len()
+                            };
+                            let rest: Vec<Value> = elements.get(idx..end).unwrap_or(&[]).to_vec();
+                            self.set_variable(name, Value::Array(rest));
+                            idx = end;
+                        }
+                        DestructureItem::Ignore => {
+                            idx += 1;
+                        }
+                    }
+                }
+            }
+            DestructurePattern::NamedTuple(fields) => {
+                let pairs: &Vec<(String, Value)> = match &rhs {
+                    Value::NamedTuple(p) => p,
+                    _ => return Err(RuntimeError::Generic {
+                        message: format!(
+                            "named tuple destructure requires a named tuple, got {}",
+                            self.value_type_name(&rhs)
+                        ),
+                        span: d.span,
+                    }),
+                };
+                for (field, var_name) in fields {
+                    let val = pairs.iter()
+                        .find(|(k, _)| k == field)
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or(Value::Unit);
+                    self.set_variable(var_name, val);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Evaluate an expression
     fn eval_expr(&mut self, expr: &Expr) -> Result<Value> {
         match expr {
@@ -920,13 +987,15 @@ impl<W: Write> Interpreter<W> {
             Expr::Match(match_expr) => self.eval_match(match_expr),
             Expr::CollectionLength(op) => self.eval_collection_length(op),
             Expr::CollectionAppend(op) => self.eval_collection_append(op),
-            Expr::CollectionRemove(op) => self.eval_collection_remove(op),
+            Expr::CollectionInsert(op) => self.eval_collection_insert(op),
+            Expr::CollectionRemoveValue(op) => self.eval_collection_remove_value(op),
+            Expr::CollectionRemoveAll(op) => self.eval_collection_remove_all(op),
+            Expr::CollectionRemoveAt(op) => self.eval_collection_remove(op),
+            Expr::CollectionRemoveRange(op) => self.eval_collection_remove_range(op),
             Expr::CollectionContains(op) => self.eval_collection_contains(op),
+            Expr::CollectionFindAll(op) => self.eval_collection_find_all(op),
             Expr::CollectionUpdate(op) => self.eval_collection_update(op),
             Expr::CollectionSlice(op) => self.eval_collection_slice(op),
-            Expr::StringFindPositions(op) => self.eval_string_find_positions(op),
-            Expr::StringInsert(op) => self.eval_string_insert(op),
-            Expr::StringRemove(op) => self.eval_string_remove(op),
             Expr::StringReplace(op) => self.eval_string_replace(op),
             Expr::NumericEval(op) => self.eval_numeric_eval(op),
             Expr::TypeMetadata(op) => self.eval_type_metadata(op),
@@ -936,6 +1005,9 @@ impl<W: Write> Interpreter<W> {
             Expr::CollectionMap(op) => self.eval_collection_map(op),
             Expr::CollectionFilter(op) => self.eval_collection_filter(op),
             Expr::CollectionReduce(op) => self.eval_collection_reduce(op),
+            Expr::CollectionSortAsc(op) => self.eval_collection_sort(op),
+            Expr::CollectionSortDesc(op) => self.eval_collection_sort(op),
+            Expr::CollectionSortCustom(op) => self.eval_collection_sort(op),
             Expr::Pipe(pipe) => self.eval_pipe(pipe),
             Expr::Execute(execute) => self.eval_execute(execute),
             Expr::BashExec(bash) => self.eval_bash_exec(bash),

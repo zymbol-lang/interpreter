@@ -1,0 +1,85 @@
+// Test: destructuring — extended scenarios with named tuples, strings, and edge cases
+
+// ── Named tuple — many fields ────────────────────────────────────────────────
+product = (id: 42, name: "Widget", price: 9.99, stock: 100)
+(id: pid, name: pname, price: pprice, stock: pstock) = product
+>> pid ¶                         // → 42
+>> pname ¶                       // → Widget
+>> pprice ¶                      // → 9.99
+>> pstock ¶                      // → 100
+
+// ── Named tuple — partial extraction (only needed fields) ────────────────────
+(name: item, price: cost) = product
+>> item ¶                        // → Widget
+>> cost ¶                        // → 9.99
+
+// ── Named tuple — rename fields freely ──────────────────────────────────────
+(id: code, name: label) = product
+>> code ¶                        // → 42
+>> label ¶                       // → Widget
+
+// ── Positional tuple — from expression ──────────────────────────────────────
+(min_v, max_v) = (3, 97)
+>> min_v ¶                       // → 3
+>> max_v ¶                       // → 97
+
+// ── Array — reassignment via destructure (vars already declared) ─────────────
+a = 0
+b = 0
+[a, b] = [55, 66]
+>> a ¶                           // → 55
+>> b ¶                           // → 66
+
+// ── Array — more elements, rest captures tail ────────────────────────────────
+[head, *tail] = [10, 20, 30, 40, 50]
+>> head ¶                        // → 10
+>> tail$# ¶                      // → 4
+>> tail[0] ¶                     // → 20
+>> tail[-1] ¶                    // → 50
+
+// ── Array — ignore multiple positions ────────────────────────────────────────
+[_, second, _, fourth] = [1, 2, 3, 4]
+>> second ¶                      // → 2
+>> fourth ¶                      // → 4
+
+// ── Destructure inside function — unpack return value ───────────────────────
+minmax(nums) {
+    mn = nums[0]
+    mx = nums[0]
+    @ i:1..(nums$#-1) {
+        ? nums[i] < mn { mn = nums[i] }
+        ? nums[i] > mx { mx = nums[i] }
+    }
+    <~ (mn, mx)
+}
+
+(lo, hi) = minmax([5, 2, 8, 1, 9, 3])
+>> lo ¶                          // → 1
+>> hi ¶                          // → 9
+
+// ── Named tuple from function ────────────────────────────────────────────────
+make_point(x, y) {
+    <~ (x: x, y: y)
+}
+
+(x: px, y: py) = make_point(3, 7)
+>> px ¶                          // → 3
+>> py ¶                          // → 7
+
+// ── Chained destructure — unpack array of named tuples ───────────────────────
+people = [
+    (name: "Ana",  score: 95),
+    (name: "Bob",  score: 80),
+    (name: "Cara", score: 88)
+]
+
+(name: best_name, score: best_score) = (people$^ (a, b -> a.score > b.score))[0]
+>> best_name ¶                   // → Ana
+>> best_score ¶                  // → 95
+
+// ── Positional tuple — swap values via destructure ───────────────────────────
+x2 = 10
+y2 = 20
+(x2, y2) = (y2, x2)
+>> x2 ¶                          // → 20
+>> y2 ¶                          // → 10

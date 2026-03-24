@@ -15,7 +15,7 @@ use std::io::Write;
 #[inline(always)]
 fn needs_own_scope(block: &Block) -> bool {
     block.statements.iter().any(|s| {
-        matches!(s, Statement::Assignment(_) | Statement::ConstDecl(_))
+        matches!(s, Statement::Assignment(_) | Statement::ConstDecl(_) | Statement::DestructureAssign(_))
     })
 }
 

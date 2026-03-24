@@ -1,7 +1,7 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **Sprint 5I** — interpreter feature-complete, dual execution modes,
-> 99/99 VM parity, 88/88 E2E tests passing.
+> Current status: **v0.0.2** — interpreter feature-complete, dual execution modes,
+> 159/159 VM parity tests passing. Collection API v0.0.2 + destructuring.
 
 ---
 
@@ -31,6 +31,12 @@
 | Higher-order functions: `$>` map, `$|` filter, `$<` reduce | ✅ |
 | Pipe operator `\|>` with placeholder `_` | ✅ |
 | Arrays: full CRUD + direct index update | ✅ |
+| Array positional insert `$+[i]` | ✅ |
+| Array positional remove `$-[i]`, range `$-[i..j]` | ✅ |
+| Array remove-all `$--`, find-all positions `$??` | ✅ |
+| Negative indices `arr[-1]` (tree-walker + VM parity) | ✅ |
+| Sort `$^+` (ascending) / `$^-` (descending), natural + custom comparator | ✅ |
+| Destructuring assignment: `[a, b, *rest] = arr`, `(name: n) = t` | ✅ |
 | Named tuples with `.field` access | ✅ |
 | String operators: split, slice, find, insert, remove, replace | ✅ |
 | Error handling: `!?` / `:!` / `:>` with typed catch | ✅ |
@@ -70,8 +76,8 @@
 
 | Suite | Status |
 |-------|--------|
-| 88 E2E tests (44 tree-walker + 44 VM) | ✅ PASS |
-| VM parity check (vm_compare.sh) | ✅ 99/99 PASS |
+| 94 E2E tests (47 tree-walker + 47 VM) | ✅ PASS |
+| VM parity check (vm_compare.sh) | ✅ 159/159 PASS |
 | RosettaStone i18n suite (105 languages) | ✅ PASS |
 
 ---
@@ -88,7 +94,6 @@ They are documented in the manual as known limitations.
 | **Match multi-value arms** | `1, 2 : "low"` syntax not parsed | Use guard: `_? n == 1 \|\| n == 2 : "low"` |
 | **Match identifier binding** | `n : n * 2` pattern not supported | Use guard or extract value before match |
 | **Module constant access** | `alias.CONST` fails at runtime | Use getter function: `alias::get_CONST()` |
-| **Negative array indices** | WT errors, VM accepts (Python-style) | Use `arr[arr$# - 1]` for last element |
 | **HOF with lambda variable** | `arr$> fn` where `fn` is a variable | Wrap: `arr$> (x -> fn(x))` |
 | **Named functions as values** | `f = myFunc` fails | Wrap: `f = x -> myFunc(x)` |
 | **CLI args in VM mode** | `><` capture not implemented in VM | Use tree-walker for CLI arg programs |
@@ -113,7 +118,6 @@ They are documented in the manual as known limitations.
 - **Match multi-value arms**: extend parser to accept `val1, val2 : expr` arm syntax
 - **Match identifier binding**: extend AST to support `ident : body` pattern
 - **Module constant access**: fix `alias.CONST` lookup in module scope resolver
-- **Negative array indices**: standardize behavior between WT and VM (choose one)
 
 #### Fix static analyzer false positives
 
@@ -233,3 +237,4 @@ Both are targeted by the Cranelift JIT milestone.
 | Sprint 5B–5C | VM performance | Flat register stack, scope pool recycling |
 | Sprint 5D–5D+ | VM memory | `sizeof(Value)` 40→16 bytes, string pool, slim frames |
 | Sprint 5I | Language complete | Indexed assign, comma concat, guard patterns, range step, BaseConvert, labeled loops |
+| v0.0.2 | Collection API + destructuring | `$+[i]` `$-` `$--` `$-[i]` `$-[i..j]` `$??` `$^+` `$^-`, negative indices normalized, destructuring assignment |

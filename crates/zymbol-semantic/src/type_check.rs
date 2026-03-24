@@ -7,7 +7,7 @@
 //! 3. Third pass: type check statements and expressions
 
 use std::collections::HashMap;
-use zymbol_ast::{Expr, Statement, Program, FunctionDecl, Block};
+use zymbol_ast::{DestructureItem, DestructurePattern, Expr, Statement, Program, FunctionDecl, Block};
 use zymbol_common::{BinaryOp, Literal, UnaryOp};
 use zymbol_error::Diagnostic;
 
@@ -571,6 +571,25 @@ impl TypeChecker {
                 }
             }
 
+            Statement::DestructureAssign(d) => {
+                self.infer_expr(&d.value);
+                // Define each bound variable as Any (pattern may bind any type)
+                let names: Vec<String> = match &d.pattern {
+                    DestructurePattern::Array(items) | DestructurePattern::Positional(items) => {
+                        items.iter().filter_map(|item| match item {
+                            DestructureItem::Bind(name) | DestructureItem::Rest(name) => Some(name.clone()),
+                            DestructureItem::Ignore => None,
+                        }).collect()
+                    }
+                    DestructurePattern::NamedTuple(pairs) => {
+                        pairs.iter().map(|(_, var)| var.clone()).collect()
+                    }
+                };
+                for name in names {
+                    self.env.define_var(&name, ZymbolType::Any);
+                }
+            }
+
             // Other statements don't need type checking
             _ => {}
         }
@@ -631,6 +650,24 @@ impl TypeChecker {
                 Statement::Assignment(assign) => {
                     if self.env.lookup_var(&assign.name).is_none() {
                         self.env.define_var(&assign.name, ZymbolType::Any);
+                    }
+                }
+                Statement::DestructureAssign(d) => {
+                    let names: Vec<String> = match &d.pattern {
+                        DestructurePattern::Array(items) | DestructurePattern::Positional(items) => {
+                            items.iter().filter_map(|item| match item {
+                                DestructureItem::Bind(name) | DestructureItem::Rest(name) => Some(name.clone()),
+                                DestructureItem::Ignore => None,
+                            }).collect()
+                        }
+                        DestructurePattern::NamedTuple(pairs) => {
+                            pairs.iter().map(|(_, var)| var.clone()).collect()
+                        }
+                    };
+                    for name in names {
+                        if self.env.lookup_var(&name).is_none() {
+                            self.env.define_var(&name, ZymbolType::Any);
+                        }
                     }
                 }
                 Statement::If(if_stmt) => {
@@ -1419,8 +1456,13 @@ impl TypeChecker {
 
                 collection_type
             }
-            Expr::CollectionRemove(op) => self.infer_expr(&op.collection),
+            Expr::CollectionInsert(op) => self.infer_expr(&op.collection),
+            Expr::CollectionRemoveValue(op) => self.infer_expr(&op.collection),
+            Expr::CollectionRemoveAll(op) => self.infer_expr(&op.collection),
+            Expr::CollectionRemoveAt(op) => self.infer_expr(&op.collection),
+            Expr::CollectionRemoveRange(op) => self.infer_expr(&op.collection),
             Expr::CollectionContains(_) => ZymbolType::Bool,
+            Expr::CollectionFindAll(_) => ZymbolType::Array(Box::new(ZymbolType::Int)),
             Expr::CollectionUpdate(op) => self.infer_expr(&op.target),
             Expr::CollectionSlice(op) => self.infer_expr(&op.collection),
             Expr::CollectionMap(op) => {
@@ -1538,10 +1580,15 @@ impl TypeChecker {
                 }
             }
 
+            Expr::CollectionSortAsc(op) | Expr::CollectionSortDesc(op) | Expr::CollectionSortCustom(op) => {
+                let _collection_type = self.infer_expr(&op.collection);
+                if let Some(ref cmp) = op.comparator {
+                    let _cmp_type = self.infer_expr(cmp);
+                }
+                ZymbolType::Array(Box::new(ZymbolType::Unknown))
+            }
+
             // String operations
-            Expr::StringFindPositions(_) => ZymbolType::Array(Box::new(ZymbolType::Int)),
-            Expr::StringInsert(_) => ZymbolType::String,
-            Expr::StringRemove(_) => ZymbolType::String,
             Expr::StringReplace(_) => ZymbolType::String,
 
             // Data operations

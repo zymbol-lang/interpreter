@@ -7,7 +7,7 @@
 //! - Invalid access to underscore variables (_variable)
 
 use std::collections::{HashMap, HashSet};
-use zymbol_ast::{Block, Expr, Program, Statement};
+use zymbol_ast::{Block, DestructureItem, DestructurePattern, Expr, Program, Statement};
 use zymbol_span::Span;
 use zymbol_error::Diagnostic;
 
@@ -526,6 +526,30 @@ impl VariableAnalyzer {
                 }
             }
 
+            Statement::DestructureAssign(d) => {
+                // Analyze RHS first (all variables on RHS are used before LHS bindings)
+                self.analyze_expr(&d.value);
+                // Declare each bound variable
+                let names: Vec<(String, zymbol_span::Span)> = match &d.pattern {
+                    DestructurePattern::Array(items) | DestructurePattern::Positional(items) => {
+                        items.iter().filter_map(|item| match item {
+                            DestructureItem::Bind(name) | DestructureItem::Rest(name) => Some((name.clone(), d.span)),
+                            DestructureItem::Ignore => None,
+                        }).collect()
+                    }
+                    DestructurePattern::NamedTuple(pairs) => {
+                        pairs.iter().map(|(_, var)| (var.clone(), d.span)).collect()
+                    }
+                };
+                for (name, span) in names {
+                    if !self.variables.contains_key(&name) {
+                        self.declare_variable(name, span, false);
+                    } else {
+                        self.assign_variable(&name, span);
+                    }
+                }
+            }
+
             Statement::LifetimeEnd(lifetime_end) => {
                 // Lifetime end marks explicit destruction of a variable
                 // For now, just mark it as used (Phase 6 will add full semantics)
@@ -689,10 +713,38 @@ impl VariableAnalyzer {
 
             Expr::CollectionAppend(op) => {
                 self.analyze_expr(&op.collection);
+                self.analyze_expr(&op.element);
             }
 
-            Expr::CollectionRemove(op) => {
+            Expr::CollectionInsert(op) => {
                 self.analyze_expr(&op.collection);
+                self.analyze_expr(&op.index);
+                self.analyze_expr(&op.element);
+            }
+
+            Expr::CollectionRemoveValue(op) => {
+                self.analyze_expr(&op.collection);
+                self.analyze_expr(&op.value);
+            }
+
+            Expr::CollectionRemoveAll(op) => {
+                self.analyze_expr(&op.collection);
+                self.analyze_expr(&op.value);
+            }
+
+            Expr::CollectionRemoveAt(op) => {
+                self.analyze_expr(&op.collection);
+                self.analyze_expr(&op.index);
+            }
+
+            Expr::CollectionRemoveRange(op) => {
+                self.analyze_expr(&op.collection);
+                if let Some(start) = &op.start {
+                    self.analyze_expr(start);
+                }
+                if let Some(end) = &op.end {
+                    self.analyze_expr(end);
+                }
             }
 
             Expr::CollectionContains(op) => {
@@ -721,24 +773,19 @@ impl VariableAnalyzer {
                 self.analyze_expr(&op.lambda);
             }
 
-            // String operations - analyze component expressions
-            Expr::StringFindPositions(op) => {
-                self.analyze_expr(&op.string);
-                self.analyze_expr(&op.pattern);
+            Expr::CollectionSortAsc(op) | Expr::CollectionSortDesc(op) | Expr::CollectionSortCustom(op) => {
+                self.analyze_expr(&op.collection);
+                if let Some(ref cmp) = op.comparator {
+                    self.analyze_expr(cmp);
+                }
             }
 
-            Expr::StringInsert(op) => {
-                self.analyze_expr(&op.string);
-                self.analyze_expr(&op.position);
-                self.analyze_expr(&op.text);
+            Expr::CollectionFindAll(op) => {
+                self.analyze_expr(&op.collection);
+                self.analyze_expr(&op.value);
             }
 
-            Expr::StringRemove(op) => {
-                self.analyze_expr(&op.string);
-                self.analyze_expr(&op.position);
-                self.analyze_expr(&op.count);
-            }
-
+            // String operations
             Expr::StringReplace(op) => {
                 self.analyze_expr(&op.string);
                 self.analyze_expr(&op.pattern);
