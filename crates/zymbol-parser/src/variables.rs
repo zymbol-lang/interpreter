@@ -3,7 +3,7 @@
 //! Handles parsing of:
 //! - Assignment: name = expr
 //! - Constants: name := expr (immutable)
-//! - Compound assignment: +=, -=, *=, /=, %=
+//! - Compound assignment: +=, -=, *=, /=, %=, ^=
 //! - Increment/decrement: ++, --
 //! - Lifetime end: \variable (explicit destruction)
 
@@ -89,16 +89,17 @@ impl Parser {
             return Ok(Statement::Assignment(Assignment::new(name, binary_expr, span)));
         }
 
-        // Check for compound assignment (+=, -=, *=, /=, %=)
+        // Check for compound assignment (+=, -=, *=, /=, %=, ^=)
         let op = match assign_token.kind {
             TokenKind::PlusAssign => Some(BinaryOp::Add),
             TokenKind::MinusAssign => Some(BinaryOp::Sub),
             TokenKind::StarAssign => Some(BinaryOp::Mul),
             TokenKind::SlashAssign => Some(BinaryOp::Div),
             TokenKind::PercentAssign => Some(BinaryOp::Mod),
+            TokenKind::CaretAssign => Some(BinaryOp::Pow),
             TokenKind::Assign => None, // Regular assignment
             _ => {
-                return Err(Diagnostic::error("expected assignment operator (=, +=, -=, *=, /=, %=, ++, --)")
+                return Err(Diagnostic::error("expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)")
                     .with_span(assign_token.span)
                     .with_help("use '=' to assign a value to a variable"));
             }

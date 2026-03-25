@@ -280,48 +280,47 @@ impl Parser {
     /// And also:    >> "i=" + i ¶           (concatenation)
     /// And also:    >> arr[0] ¶             (indexed access)
     pub(crate) fn parse_output_item(&mut self) -> Result<Expr, Diagnostic> {
-        // Addition level: handles + (and serves as entry for * / % level below)
-        // This supports: >> "i=" + i + ": done" ¶
-        //                >> "Suma: " 10 + 5 ¶  (10 + 5 parsed as single item)
+        // Addition/subtraction level — lowest binary precedence in output context.
+        // Supports numeric arithmetic: >> "Suma: " 10 + 5 ¶  (single item = 15)
+        //                              >> a - b ¶             (single item = a-b)
+        // Note: + with strings is a type error; use juxtaposition for multi-value output.
         let mut expr = self.parse_output_item_mul()?;
 
-        while matches!(self.peek().kind, TokenKind::Plus) {
-            self.advance(); // consume +
+        while matches!(self.peek().kind, TokenKind::Plus | TokenKind::Minus) {
+            let op_token = self.advance(); // consume + or -
+            let op = match op_token.kind {
+                TokenKind::Plus  => BinaryOp::Add,
+                TokenKind::Minus => BinaryOp::Sub,
+                _ => unreachable!(),
+            };
             let right = self.parse_output_item_mul()?;
             let span = expr.span().to(&right.span());
-            expr = Expr::Binary(BinaryExpr::new(
-                BinaryOp::Add,
-                Box::new(expr),
-                Box::new(right),
-                span,
-            ));
+            expr = Expr::Binary(BinaryExpr::new(op, Box::new(expr), Box::new(right), span));
         }
 
         Ok(expr)
     }
 
-    /// Multiplication/division level for output items (higher precedence than +)
+    /// Multiplication/division level for output items (higher precedence than +/-)
     /// Supports: >> "Result: " 10 * 5 ¶  → outputs "Result: 50"
     fn parse_output_item_mul(&mut self) -> Result<Expr, Diagnostic> {
         let token = self.peek().clone();
 
-        // Handle unary operators (only - and ! at start of item)
+        // Handle unary operators (- and !) at the start of an item: >> -5 ¶  >> !flag ¶
         if matches!(token.kind, TokenKind::Not | TokenKind::Minus) {
             return self.parse_unary();
         }
 
-        // Parse primary expression
-        let mut expr = self.parse_primary_expr()?;
-
-        // Handle postfix operations (collection ops, indexing, member access, calls)
-        expr = self.parse_output_item_postfix(expr)?;
+        // Use parse_output_item_term as base so ^ (power) is handled with correct
+        // precedence on both sides of * / %
+        let mut expr = self.parse_output_item_term()?;
 
         // Allow * / % with proper precedence
         while matches!(self.peek().kind, TokenKind::Star | TokenKind::Slash | TokenKind::Percent) {
             let op_token = self.advance();
             let op = match op_token.kind {
-                TokenKind::Star => BinaryOp::Mul,
-                TokenKind::Slash => BinaryOp::Div,
+                TokenKind::Star    => BinaryOp::Mul,
+                TokenKind::Slash   => BinaryOp::Div,
                 TokenKind::Percent => BinaryOp::Mod,
                 _ => unreachable!(),
             };
@@ -333,11 +332,12 @@ impl Parser {
         Ok(expr)
     }
 
-    /// Parse a term for output item (right side of * / % or + concatenation)
+    /// Parse a power-level term for output items (highest binary precedence).
+    /// Handles primary expressions, postfix ops, and ^ (right-associative).
     fn parse_output_item_term(&mut self) -> Result<Expr, Diagnostic> {
         let token = self.peek().clone();
 
-        // Handle unary - for negative numbers: "Score: " + -5
+        // Handle unary - for negative numbers at this level: a * -b
         if matches!(token.kind, TokenKind::Minus) {
             return self.parse_unary();
         }
@@ -347,6 +347,20 @@ impl Parser {
 
         // Handle postfix operations (collection ops, indexing, member access, calls)
         expr = self.parse_output_item_postfix(expr)?;
+
+        // Handle ^ (power) — right-associative, highest binary precedence.
+        // Right-recursive call so 2^3^4 = 2^(3^4).
+        if matches!(self.peek().kind, TokenKind::Caret) {
+            self.advance(); // consume ^
+            let right = self.parse_output_item_term()?;
+            let span = expr.span().to(&right.span());
+            expr = Expr::Binary(BinaryExpr::new(
+                BinaryOp::Pow,
+                Box::new(expr),
+                Box::new(right),
+                span,
+            ));
+        }
 
         Ok(expr)
     }

@@ -100,11 +100,12 @@ t = meta[0]
 >> (arr$#) ¶                        // postfix operators require parentheses in >>
 ```
 
-String concatenation with `+` in output works but generates a type warning. Prefer juxtaposition:
+Output uses **juxtaposition** (Haskell-style) — values separated by spaces are printed in sequence. `+` is for numeric addition only; using it with strings is a type error:
 
 ```zymbol
->> "Score: " score ¶               // ✅ canonical
->> "Score: " + score ¶             // ⚠ works but triggers warning
+>> "Score: " score ¶               // ✅ juxtaposition — canonical form
+>> 10 + 5 ¶                        // ✅ numeric addition in output → 15
+>> "Score: " + score ¶             // ✗ type error — + is not string concat
 ```
 
 ### Newline
@@ -157,8 +158,9 @@ x -= 3    // x = 12
 x *= 2    // x = 24
 x /= 3    // x = 8
 x %= 3    // x = 2
-x++       // x = 3  (equivalent to x += 1)
-x--       // x = 2  (equivalent to x -= 1)
+x ^= 2    // x = 4  (x = x ^ 2)
+x++       // x = 5  (equivalent to x += 1)
+x--       // x = 4  (equivalent to x -= 1)
 ```
 
 ### String Interpolation
@@ -330,10 +332,10 @@ n = 42
 i = 0
 @ {
     i++
-    ? i >= 5 { @! }
+    ? i >= 5 { @! }    // break fires before printing → 5 never prints
     >> i " "
 }
->> ¶    // → 1 2 3 4 5
+>> ¶    // → 1 2 3 4
 ```
 
 ### While Loop
@@ -760,8 +762,9 @@ words = ["banana", "apple", "cherry", "date"]
 >> words$^- ¶    // → ["date", "cherry", "banana", "apple"]
 ```
 
-**Custom comparator** — a two-argument lambda that returns a bool (`#1` if first
-element should come before second). Required when sorting named tuples by field:
+**Custom comparator** — use `$^` (no `+`/`-`) with a two-argument lambda that returns
+`#1` if the first element should come before the second. Required for sorting named or
+positional tuples by field. Direction is encoded entirely in the lambda:
 
 ```zymbol
 db = [
@@ -770,18 +773,17 @@ db = [
     (name: "Bob",   age: 30)
 ]
 
-// Sort by age ascending
-by_age = db$^+ (a, b -> a.age < b.age)
+// Sort by age ascending (< means ascending)
+by_age = db$^ (a, b -> a.age < b.age)
 >> by_age[0].name ¶    // → Ana
 
-// Sort by name descending
-by_name_desc = db$^- (a, b -> a.name < b.name)
+// Sort by name descending (> means descending)
+by_name_desc = db$^ (a, b -> a.name > b.name)
 >> by_name_desc[0].name ¶    // → Carla
 ```
 
-> **Note**: When a custom comparator is provided, the `+`/`-` sign still documents
-> intent but the lambda defines the actual ordering. `$^+` and `$^-` with the same
-> lambda produce opposite orderings.
+> **Note**: `$^+` and `$^-` are for **primitive arrays** (numbers, strings) only.
+> For named or positional tuple arrays, use `$^` with a comparator lambda.
 
 ### Direct Element Update
 
@@ -1525,8 +1527,9 @@ active = [#1, #1, #0]
 | `$~` | Functional update | `arr[i]$~ val` |
 | `$[i..j]` | Slice (exclusive end) | `arr$[1..3]` |
 | `$[i:n]` | Slice (count-based) | `arr$[1:2]` |
-| `$^+` | Sort ascending | `arr$^+` · `arr$^+ (a,b -> a.f < b.f)` |
-| `$^-` | Sort descending | `arr$^-` · `arr$^- (a,b -> a.f < b.f)` |
+| `$^+` | Sort ascending (primitives) | `arr$^+` |
+| `$^-` | Sort descending (primitives) | `arr$^-` |
+| `$^` | Sort with comparator (tuples) | `arr$^ (a,b -> a.f < b.f)` |
 | `$>` | Map | `arr$> (x -> f(x))` |
 | `$\|` | Filter | `arr$\| (x -> cond)` |
 | `$<` | Reduce | `arr$< (0, (a,x) -> a+x)` |
@@ -1557,7 +1560,7 @@ active = [#1, #1, #0]
 | `#1` / `#0` | Bool true / false | `? #1 { }` |
 | `,` | String concat in assignments | `msg = "a", "b"` |
 | `++` / `--` | Increment / decrement | `x++` |
-| `+=` `-=` `*=` `/=` `%=` | Compound assignment | `x += 5` |
+| `+=` `-=` `*=` `/=` `%=` `^=` | Compound assignment | `x += 5` |
 
 ---
 

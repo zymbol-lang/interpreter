@@ -100,6 +100,7 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         | TokenKind::StarAssign      // *=
         | TokenKind::SlashAssign     // /=
         | TokenKind::PercentAssign   // %=
+        | TokenKind::CaretAssign     // ^=
         => Some(token_type_index::OPERATOR),
 
         // Arithmetic operators
@@ -271,6 +272,7 @@ fn token_length(kind: &TokenKind) -> u32 {
         | TokenKind::StarAssign     // *=
         | TokenKind::SlashAssign    // /=
         | TokenKind::PercentAssign  // %=
+        | TokenKind::CaretAssign    // ^=
         | TokenKind::PlusPlus       // ++
         | TokenKind::MinusMinus     // --
         | TokenKind::Ge             // >=

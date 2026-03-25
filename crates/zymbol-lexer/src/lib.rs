@@ -131,6 +131,8 @@ pub enum TokenKind {
     SlashAssign,
     /// %= (modulo and assign)
     PercentAssign,
+    /// ^= (power and assign)
+    CaretAssign,
 
     // Increment/Decrement operators
     /// ++ (increment)
@@ -542,8 +544,13 @@ impl Lexer {
             return Token::new(TokenKind::Percent, self.span(start));
         }
 
-        // Check for ^ (caret/power)
+        // Check for ^ operators (^=, ^)
         if ch == '^' {
+            if self.peek() == Some('=') {
+                self.advance(); // consume ^
+                self.advance(); // consume =
+                return Token::new(TokenKind::CaretAssign, self.span(start));
+            }
             self.advance();
             return Token::new(TokenKind::Caret, self.span(start));
         }

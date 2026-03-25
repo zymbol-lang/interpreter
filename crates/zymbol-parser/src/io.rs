@@ -151,6 +151,7 @@ impl Parser {
                             | TokenKind::StarAssign
                             | TokenKind::SlashAssign
                             | TokenKind::PercentAssign
+                            | TokenKind::CaretAssign
                             | TokenKind::PlusPlus
                             | TokenKind::MinusMinus
                             => {
@@ -210,7 +211,7 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use zymbol_ast::{Expr, InputPrompt, Program, Statement};
-    use zymbol_common::Literal;
+    use zymbol_common::{BinaryOp, Literal};
     use zymbol_error::Diagnostic;
     use zymbol_lexer::{Lexer, StringPart};
     use zymbol_span::FileId;
@@ -369,6 +370,82 @@ mod tests {
                 }
             }
             _ => panic!("Expected input"),
+        }
+    }
+
+    #[test]
+    fn test_parse_output_subtraction() {
+        // >> a - b ¶ must parse as a single Binary(Sub) expression, not two items
+        let program = parse(">> a - b").expect("should parse");
+        match &program.statements[0] {
+            Statement::Output(output) => {
+                assert_eq!(output.exprs.len(), 1, "a - b must be one item");
+                assert!(
+                    matches!(&output.exprs[0], Expr::Binary(b) if b.op == BinaryOp::Sub),
+                    "expected Binary(Sub)"
+                );
+            }
+            _ => panic!("Expected output"),
+        }
+    }
+
+    #[test]
+    fn test_parse_output_power() {
+        // >> a ^ b ¶ must parse as a single Binary(Pow) expression
+        let program = parse(">> a ^ b").expect("should parse");
+        match &program.statements[0] {
+            Statement::Output(output) => {
+                assert_eq!(output.exprs.len(), 1, "a ^ b must be one item");
+                assert!(
+                    matches!(&output.exprs[0], Expr::Binary(b) if b.op == BinaryOp::Pow),
+                    "expected Binary(Pow)"
+                );
+            }
+            _ => panic!("Expected output"),
+        }
+    }
+
+    #[test]
+    fn test_parse_output_precedence() {
+        // >> a - b * c  must parse as a - (b*c), i.e. Sub(a, Mul(b,c))
+        let program = parse(">> a - b * c").expect("should parse");
+        match &program.statements[0] {
+            Statement::Output(output) => {
+                assert_eq!(output.exprs.len(), 1);
+                match &output.exprs[0] {
+                    Expr::Binary(sub) => {
+                        assert_eq!(sub.op, BinaryOp::Sub);
+                        assert!(matches!(*sub.right, Expr::Binary(ref m) if m.op == BinaryOp::Mul));
+                    }
+                    _ => panic!("expected Sub at top level"),
+                }
+            }
+            _ => panic!("Expected output"),
+        }
+    }
+
+    #[test]
+    fn test_parse_output_unary_still_works() {
+        // >> -5  must still parse as a single unary-minus item (not broken by sub fix)
+        let program = parse(">> -5").expect("should parse");
+        match &program.statements[0] {
+            Statement::Output(output) => {
+                assert_eq!(output.exprs.len(), 1, "-5 must be one item");
+                assert!(matches!(&output.exprs[0], Expr::Unary(_)), "expected Unary");
+            }
+            _ => panic!("Expected output"),
+        }
+    }
+
+    #[test]
+    fn test_parse_output_juxtaposition_unaffected() {
+        // >> "label" value  must still produce two separate items (Haskell-style)
+        let program = parse(">> \"label\" value").expect("should parse");
+        match &program.statements[0] {
+            Statement::Output(output) => {
+                assert_eq!(output.exprs.len(), 2, "juxtaposition must still produce two items");
+            }
+            _ => panic!("Expected output"),
         }
     }
 }
