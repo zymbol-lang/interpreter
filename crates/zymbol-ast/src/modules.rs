@@ -26,9 +26,10 @@ pub struct ExportBlock {
 /// Items that can be exported
 #[derive(Debug, Clone)]
 pub enum ExportItem {
-    /// Own item: identifier
+    /// Own item: identifier [<= public_name]
     Own {
         name: String,
+        rename: Option<String>,
         span: Span,
     },
     /// Re-export: alias::function or alias.CONSTANT
@@ -84,8 +85,8 @@ impl ExportBlock {
 }
 
 impl ExportItem {
-    pub fn own(name: String, span: Span) -> Self {
-        ExportItem::Own { name, span }
+    pub fn own(name: String, rename: Option<String>, span: Span) -> Self {
+        ExportItem::Own { name, rename, span }
     }
 
     pub fn re_export(

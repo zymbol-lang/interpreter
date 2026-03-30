@@ -234,9 +234,27 @@ impl Parser {
                 ))
             }
             _ => {
-                // Own item: just identifier
+                // Own item: identifier [<= public_name]
+                let rename = if matches!(self.peek().kind, TokenKind::Le) {
+                    self.advance(); // consume <=
+                    let rename_token = self.peek().clone();
+                    match &rename_token.kind {
+                        TokenKind::Ident(name) => {
+                            let name = name.clone();
+                            self.advance();
+                            end_span = rename_token.span;
+                            Some(name)
+                        }
+                        _ => {
+                            return Err(Diagnostic::error("expected public name after '<='")
+                                .with_span(rename_token.span))
+                        }
+                    }
+                } else {
+                    None
+                };
                 let span = start.to(&end_span);
-                Ok(ExportItem::own(first_name, span))
+                Ok(ExportItem::own(first_name, rename, span))
             }
         }
     }
@@ -599,5 +617,21 @@ name = text::uppercase("alice")
 
         // Check statements
         assert_eq!(program.statements.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_export_own_renamed() {
+        let program = parse("# calc\n#> { internal_add <= sum }").expect("should parse");
+        let module = program.module_decl.unwrap();
+        let export_block = module.export_block.unwrap();
+
+        assert_eq!(export_block.items.len(), 1);
+        match &export_block.items[0] {
+            ExportItem::Own { name, rename, .. } => {
+                assert_eq!(name, "internal_add");
+                assert_eq!(rename.as_deref(), Some("sum"));
+            }
+            _ => panic!("Expected own export item with rename"),
+        }
     }
 }

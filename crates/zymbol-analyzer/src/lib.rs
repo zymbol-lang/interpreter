@@ -130,16 +130,17 @@ impl Analyzer {
                 if let Some(export_block) = &module_decl.export_block {
                     for item in &export_block.items {
                         match item {
-                            zymbol_ast::ExportItem::Own { name, span } => {
-                                // Check if it's a function or constant by looking at statements
+                            zymbol_ast::ExportItem::Own { name, rename, span } => {
+                                let public_name = rename.as_ref().unwrap_or(name).clone();
+                                // Check if it's a function or constant by internal name
                                 let kind = self.infer_export_kind(&program, name);
                                 let params = self.get_function_params(&program, name);
 
                                 let export = match kind {
                                     ExportedKind::Function => {
-                                        ExportedSymbol::function(name.clone(), *span, params)
+                                        ExportedSymbol::function(public_name, *span, params)
                                     }
-                                    _ => ExportedSymbol::constant(name.clone(), *span),
+                                    _ => ExportedSymbol::constant(public_name, *span),
                                 };
                                 exports.add_export(export);
                             }

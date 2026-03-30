@@ -14,7 +14,7 @@
 | Variables (`=`) and constants (`:=`) | ✅ |
 | All primitive types: Int, Float, String, Char, Bool, Array, Tuple | ✅ |
 | Arithmetic, comparison, logical operators | ✅ |
-| Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `++`, `--`) | ✅ |
+| Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `++`, `--`) | ✅ |
 | String interpolation in any context | ✅ |
 | Output `>>` (multi-item juxtaposition) | ✅ |
 | Input `<<` with prompt | ✅ |
@@ -97,6 +97,8 @@ They are documented in the manual as known limitations.
 | **HOF with lambda variable** | `arr$> fn` where `fn` is a variable | Wrap: `arr$> (x -> fn(x))` |
 | **Named functions as values** | `f = myFunc` fails | Wrap: `f = x -> myFunc(x)` |
 | **CLI args in VM mode** | `><` capture not implemented in VM | Use tree-walker for CLI arg programs |
+| **`$!!` from lambdas** | Error propagation only works in named functions | Wrap lambda body in a named function |
+| **`do-while ~>`** | Post-condition loop syntax defined in EBNF, not parsed | Infinite loop with `@!` break at end |
 
 ### Static Analyzer False Positives
 
@@ -130,7 +132,7 @@ They are documented in the manual as known limitations.
 
 - **CLI args capture `><`** in VM mode (parity with tree-walker)
 - **Module system in VM**: full parity with tree-walker for `<#` imports
-- **Format expressions in VM**: `e|x|`, `c|x|`, `#.N|x|` full parity
+- **Format expressions in VM**: `e|x|`, `c|x|` full parity (`#.N|x|` already working)
 
 ### Medium Term
 
@@ -154,7 +156,10 @@ They are documented in the manual as known limitations.
 - **Array type inference relaxation**: allow mixed-type arrays with dynamic dispatch
   (currently requires homogeneous element types)
 - **Module constants via `.`**: complete the `alias.CONST` access path
-- **`$!!` error propagation from lambdas**: currently limited to named functions
+- **`$!!` error propagation from lambdas**: currently limited to named functions; extend
+  to propagate through the lambda's call frame to its immediate caller
+- **`do-while ~>` post-condition loop**: implement EBNF rule `block ~> expr`; parser
+  and both interpreters (tree-walker + VM) need to handle the new AST node
 
 ### Long Term
 

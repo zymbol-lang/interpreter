@@ -445,23 +445,25 @@ impl ModuleAnalyzer {
 
             for export_item in &export_block.items {
                 match export_item {
-                    ExportItem::Own { name, span } => {
-                        // Check for duplicates
-                        if exported_names.contains(name) {
+                    ExportItem::Own { name, rename, span } => {
+                        let public_name = rename.as_ref().unwrap_or(name);
+
+                        // Check for duplicates by public name
+                        if exported_names.contains(public_name) {
                             errors.push(SemanticError::DuplicateExport {
-                                item: name.clone(),
+                                item: public_name.clone(),
                                 span: *span,
                             });
                             continue;
                         }
 
-                        exported_names.insert(name.clone());
+                        exported_names.insert(public_name.clone());
 
                         // Note: The actual type (function vs constant) is determined later
                         // when we have access to the program's AST. For now we store it
                         // as a function, which will be validated during type checking.
                         export_table.add_item(ExportedItem::Function {
-                            name: name.clone(),
+                            name: public_name.clone(),
                         });
                     }
 
@@ -562,7 +564,8 @@ impl ModuleAnalyzer {
         if let Some(ref module_decl) = program.module_decl {
             if let Some(ref export_block) = module_decl.export_block {
                 for item in &export_block.items {
-                    if let ExportItem::Own { name, span } = item {
+                    if let ExportItem::Own { name, span, .. } = item {
+                        // Validate by internal name (the symbol that must exist in this file)
                         if !defined_functions.contains(name) && !defined_constants.contains(name) {
                             self.diagnostics.push(
                                 SemanticError::ItemNotFound {
@@ -717,8 +720,8 @@ mod tests {
 
         let export_block = ExportBlock::new(
             vec![
-                ExportItem::own("add".to_string(), create_test_span()),
-                ExportItem::own("add".to_string(), create_test_span()), // Duplicate
+                ExportItem::own("add".to_string(), None, create_test_span()),
+                ExportItem::own("add".to_string(), None, create_test_span()), // Duplicate
             ],
             create_test_span(),
         );

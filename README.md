@@ -343,7 +343,7 @@ interpreter/
 ├── crates/             # Rust source crates
 ├── tests/              # End-to-end test suite
 ├── docs/               # Extended documentation
-├── LICENSE             # MIT
+├── LICENSE             
 ├── LICENSE-AGPL-3.0    # AGPL-3.0
 └── LICENSE-CC-BY-SA-4.0
 ```
@@ -362,7 +362,7 @@ interpreter/
 
 This project is available under multiple licenses:
 
-- **MIT** — [`LICENSE`](./LICENSE)
+- **READ LICENSE** — [`LICENSE`](./LICENSE)
 - **AGPL-3.0** — [`LICENSE-AGPL-3.0`](./LICENSE-AGPL-3.0) (interpreter source)
 - **CC-BY-SA-4.0** — [`LICENSE-CC-BY-SA-4.0`](./LICENSE-CC-BY-SA-4.0) (documentation)
 

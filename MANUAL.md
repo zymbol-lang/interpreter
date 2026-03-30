@@ -763,8 +763,9 @@ words = ["banana", "apple", "cherry", "date"]
 ```
 
 **Custom comparator** — use `$^` (no `+`/`-`) with a two-argument lambda that returns
-`#1` if the first element should come before the second. Required for sorting named or
-positional tuples by field. Direction is encoded entirely in the lambda:
+`#1` if the first element should come before the second. The direction is encoded
+entirely in the comparator (`<` for ascending, `>` for descending). Required for
+sorting named or positional tuple arrays by field:
 
 ```zymbol
 db = [
@@ -782,8 +783,9 @@ by_name_desc = db$^ (a, b -> a.name > b.name)
 >> by_name_desc[0].name ¶    // → Carla
 ```
 
-> **Note**: `$^+` and `$^-` are for **primitive arrays** (numbers, strings) only.
-> For named or positional tuple arrays, use `$^` with a comparator lambda.
+> **Note**: `$^+` and `$^-` are for **primitive arrays** (numbers, strings) without a
+> custom comparator. For named or positional tuple arrays, use `$^` with a lambda.
+> `$^` with a lambda on a primitive array is also valid when you need custom ordering.
 
 ### Direct Element Update
 
@@ -792,8 +794,8 @@ arr = [10, 20, 30, 40, 50]
 arr[2] = 99
 >> arr ¶    // → [10, 20, 99, 40, 50]
 
-// Functional form (generates new array)
-arr = arr[2]$~ 99
+// Functional form (generates new array — EBNF form uses $[i])
+arr = arr$[2]$~ 99
 ```
 
 ### Iterating
@@ -1141,6 +1143,9 @@ is_err = x$!
 
 ### `$!!` — Propagate Error to Caller
 
+> **⚠ Known limitation**: `$!!` is only supported inside **named functions**. Using it
+> inside a lambda does not propagate to the lambda's caller. See [L13](#l13----from-lambdas-not-supported).
+
 ```zymbol
 process(value) {
     ? value < 0 {
@@ -1232,6 +1237,24 @@ result = u::add(5, 3)
     INTERNAL_CONST <= PUBLIC_CONST
 }
 ```
+
+### Re-export from Another Module
+
+Use `::` to re-export a function imported from another module, and `.` to re-export a constant. The alias always follows `<=`:
+
+```zymbol
+// In module math.zy:
+<# ./core <= c
+
+#> {
+    c::add           // re-export function as-is (callers use m::add)
+    c::add <= sum    // re-export function with different public name
+    c.PI             // re-export constant (⚠ requires alias.CONST fix — see L3)
+    c.PI <= TAU      // re-export constant with different name
+}
+```
+
+> **Note**: Re-export of constants via `.` is subject to [L3](#l3----module-aliasconst-does-not-work).
 
 ### Subdirectory Module Convention
 
@@ -1329,8 +1352,9 @@ d = 0d65        // explicit decimal → 'A'
 
 // Convert expression to base string
 hex = 0x|255|    // Int → hex string → "0x00FF"
-bin = 0b|65|     // Int → binary string
-oct = 0o|8|      // Int → octal string
+bin = 0b|65|     // Int → binary string → "0b1000001"
+oct = 0o|8|      // Int → octal string → "0o10"
+dec = 0d|255|    // Int → decimal string → "0d0255"
 ```
 
 ---
@@ -1469,6 +1493,38 @@ arr = arr$+ 4             // ✅
 arr = arr$+ 5
 ```
 
+### L12 — `do-while` (`~>`) not implemented
+
+A post-condition loop (execute body at least once, then repeat) is defined in the EBNF
+but not yet implemented.
+
+```zymbol
+// ❌ Not implemented:
+// { body } ~> condition
+
+// ✅ Workaround — infinite loop with break at the end:
+@ {
+    // body runs at least once
+    body_here()
+    ? !condition { @! }
+}
+```
+
+### L13 — `$!!` from lambdas not supported
+
+`$!!` error propagation only works inside **named functions**. Placing it inside a
+lambda does not propagate to the lambda's caller.
+
+```zymbol
+// ❌ Inside lambda — propagation does not reach outer caller:
+handler = x -> { x$!! }
+
+// ✅ Wrap the logic in a named function:
+handle(x) {
+    x$!!
+}
+```
+
 ### L11 — Arrays must be homogeneous (same type for all elements)
 
 ```zymbol
@@ -1510,7 +1566,7 @@ active = [#1, #1, #0]
 | `??` | Match | `?? x { pat : val }` |
 | `@` | Loop | `@ cond { }` |
 | `@!` | Break | `@!` or `@! label` |
-| `@>` | Continue | `@>` |
+| `@>` | Continue | `@>` or `@> label` |
 | `->` | Lambda | `x -> x * 2` |
 | `<~` | Return / output param | `<~ value` |
 | `\|>` | Pipe | `val \|> fn(_)` |
@@ -1524,7 +1580,7 @@ active = [#1, #1, #0]
 | `$-[i:n]` | Remove range (count-based) | `arr$-[1:2]` |
 | `$?` | Contains | `arr$? val` |
 | `$??` | Find all indices of value | `arr$?? val` |
-| `$~` | Functional update | `arr[i]$~ val` |
+| `$[i]$~` | Functional update | `arr$[2]$~ 99` |
 | `$[i..j]` | Slice (exclusive end) | `arr$[1..3]` |
 | `$[i:n]` | Slice (count-based) | `arr$[1:2]` |
 | `$^+` | Sort ascending (primitives) | `arr$^+` |
@@ -1722,8 +1778,12 @@ parse_number(s) {
 | Modules (constants via `.`) | ❌ | ❌ | Known gap |
 | Advanced string operators | ✅ | ✅ | |
 | Numeric eval / type metadata | ✅ | ✅ | |
-| Precision / format / base conversion | ✅ | ✅ | |
+| Precision `#.N` / `#!N` | ✅ | ✅ | |
+| Format `c\|x\|` / `e\|x\|` | ✅ | ⚠ | Full parity pending in VM |
+| Base literals / conversions | ✅ | ✅ | |
 | BashExec / Execute script | ✅ | ✅ | |
 | CLI args capture `><` | ✅ | — | VM not supported |
 | Negative array indices | ✅ | ✅ | `arr[-1]` normalized in both modes (v0.0.2) |
 | Destructuring assignment | ✅ | ✅ | `[a, b] = arr`, `(name: n) = t` (v0.0.2) |
+| `$!!` error propagation | ✅ | ✅ | Named functions only — lambdas not supported (L13) |
+| `do-while ~>` (post-cond loop) | ❌ | ❌ | Not implemented — EBNF spec, planned |

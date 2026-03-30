@@ -1,0 +1,9 @@
+<# ./export_alias <= m
+
+// Access function via its public name "sum" (internal name is _add)
+result = m::sum(3, 4)
+>> result ¶
+
+// Chained calls via public name
+chained = m::sum(m::sum(1, 2), 3)
+>> chained ¶

@@ -161,12 +161,13 @@ impl<W: Write> Interpreter<W> {
             if let Some(ref export_block) = module_decl.export_block {
                 for export_item in &export_block.items {
                     match export_item {
-                        zymbol_ast::ExportItem::Own { name, .. } => {
-                            // Export own function or constant
+                        zymbol_ast::ExportItem::Own { name, rename, .. } => {
+                            let public_name = rename.as_ref().unwrap_or(name).clone();
+                            // Export own function or constant under public name
                             if let Some(func) = module_interp.functions.get(name) {
-                                loaded_module.functions.insert(name.clone(), func.clone());
+                                loaded_module.functions.insert(public_name, func.clone());
                             } else if let Some(val) = module_interp.get_variable(name) {
-                                loaded_module.constants.insert(name.clone(), val.clone());
+                                loaded_module.constants.insert(public_name, val.clone());
                             }
                         }
                         zymbol_ast::ExportItem::ReExport {
