@@ -468,10 +468,25 @@ type_metadata_suffix = "#?" ;
     ##?  = Bool     ##]  = Array    ##)  = Tuple     ##_  = Unit
 *)
 
-(* Format expressions *)
-format_expr    = format_prefix , "|" , expr , "|" ;
-format_prefix  = "e"                                    (* scientific: e|12345.0| → "1.2345e4" *)
-               | "c" ;                                  (* comma-sep: c|1234567| → "1,234,567" *)
+(* Format expressions — v0.0.2_01: #, and #^ replace c| and e| *)
+format_expr    = format_kind , [ precision_mod ] , "|" , expr , "|" ;
+
+format_kind    = "#,"          (* thousands separator: #,|1234567| → "1,234,567" *)
+               | "#^" ;        (* scientific notation: #^|12345.678| → "1.2345678e4" *)
+
+precision_mod  = "." , precision    (* round to N places — same as #.N|..| *)
+               | "!" , precision ;  (* truncate to N places — same as #!N|..| *)
+
+(*
+  #,|1234567|        → "1,234,567"
+  #,.2|123456.789|   → "123,456.79"   (thousands + round 2)
+  #,!2|123456.789|   → "123,456.78"   (thousands + truncate 2)
+  #,.0|123456.789|   → "123,457"      (thousands + round to integer)
+  #^|12345.678|      → "1.2345678e4"
+  #^.2|12345.678|    → "1.23e4"       (scientific + round 2)
+  #^!2|12345.678|    → "1.23e4"       (scientific + truncate 2)
+  #^.4|0.000123456|  → "1.2346e-4"    (scientific + round 4)
+*)
 
 (* Precision expressions *)
 round_expr     = "#." , precision , "|" , expr , "|" ;  (* round to N decimal places *)
