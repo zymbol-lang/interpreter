@@ -10,7 +10,7 @@ use zymbol_ast::{
     CollectionRemoveValueExpr, CollectionSliceExpr,
     CollectionUpdateExpr, ConstDecl, Continue, DestructureAssign, DestructureItem, DestructurePattern,
     ErrorCheckExpr, ErrorPropagateExpr, ErrorType,
-    ExportBlock, ExportItem, Expr, ExprStatement, FinallyClause, FormatExpr, FormatPrefix,
+    ExportBlock, ExportItem, Expr, ExprStatement, FinallyClause, FormatExpr, FormatKind, PrecisionOp,
     FunctionCallExpr, FunctionDecl, IdentifierExpr, IfStmt, ImportStmt, IndexExpr, Input,
     InputPrompt, ItemType, LambdaBody, LambdaExpr, LifetimeEnd, LiteralExpr, Loop, MatchCase,
     MatchExpr, MemberAccessExpr, ModuleDecl, NamedTupleExpr, NumericEvalExpr, Output,
@@ -114,8 +114,12 @@ impl<'a> FormatVisitor<'a> {
     /// Format an export item
     fn format_export_item(&mut self, item: &ExportItem) {
         match item {
-            ExportItem::Own { name, .. } => {
+            ExportItem::Own { name, rename, .. } => {
                 self.output.write(name);
+                if let Some(alias) = rename {
+                    self.output.write(" <= ");
+                    self.output.write(alias);
+                }
             }
             ExportItem::ReExport {
                 module_alias,
@@ -1147,12 +1151,18 @@ impl<'a> FormatVisitor<'a> {
         self.output.write("#?");
     }
 
-    /// Format format expression
+    /// Format format expression: #,|expr|, #^|expr|, #,.2|expr|, etc.
     fn format_format_expr(&mut self, op: &FormatExpr) {
-        match op.prefix {
-            FormatPrefix::Scientific => self.output.write("e|"),
-            FormatPrefix::Comma => self.output.write("c|"),
+        match op.kind {
+            FormatKind::Thousands => self.output.write("#,"),
+            FormatKind::Scientific => self.output.write("#^"),
         }
+        match op.precision {
+            Some(PrecisionOp::Round(n)) => self.output.write(&format!(".{}", n)),
+            Some(PrecisionOp::Truncate(n)) => self.output.write(&format!("!{}", n)),
+            None => {}
+        }
+        self.output.write("|");
         self.format_expr(&op.expr);
         self.output.write("|");
     }

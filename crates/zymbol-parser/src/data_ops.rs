@@ -3,12 +3,12 @@
 //! Handles parsing of data transformation and introspection expressions:
 //! - Numeric evaluation: #|expr| (safe string-to-number conversion)
 //! - Type metadata: expr#? (returns type info tuple)
-//! - Format expressions: e|expr| (scientific), c|expr| (comma-separated)
+//! - Format expressions: #,|expr| (thousands), #^|expr| (scientific)
 //! - Base conversion: 0x|expr|, 0b|expr|, 0o|expr|, 0d|expr| (char/int/text conversion)
 //! - Precision expressions: #.N|expr| (round), #!N|expr| (truncate)
 
 use zymbol_ast::{
-    BaseConversionExpr, BasePrefix, Expr, FormatExpr, FormatPrefix,
+    BaseConversionExpr, BasePrefix, Expr, FormatExpr, FormatKind, PrecisionOp,
     NumericEvalExpr, RoundExpr, TruncExpr,
 };
 use zymbol_error::Diagnostic;
@@ -37,20 +37,39 @@ impl Parser {
         Ok(Expr::NumericEval(NumericEvalExpr::new(expr, span)))
     }
 
-    /// Parse format expression: e|expr| or c|expr|
-    pub(crate) fn parse_format_expr(&mut self, prefix: FormatPrefix) -> Result<Expr, Diagnostic> {
-        let start_token = self.advance(); // consume format prefix (e or c)
+    /// Parse format expression: #,|expr| or #^|expr|, with optional precision modifier.
+    ///
+    /// Grammar: format_kind [ precision_mod ] "|" expr "|"
+    /// - precision_mod: "." integer (round) | "!" integer (truncate)
+    pub(crate) fn parse_format_expr(&mut self, kind: FormatKind) -> Result<Expr, Diagnostic> {
+        let start_token = self.advance(); // consume #, or #^
+
+        let prefix_str = match kind {
+            FormatKind::Thousands => "#,",
+            FormatKind::Scientific => "#^",
+        };
+
+        // Optional precision: .N (round) or !N (truncate)
+        let precision = match self.peek().kind.clone() {
+            TokenKind::Dot => {
+                self.advance(); // consume .
+                let n = self.parse_format_precision(prefix_str)?;
+                Some(PrecisionOp::Round(n))
+            }
+            TokenKind::Not => {
+                self.advance(); // consume !
+                let n = self.parse_format_precision(prefix_str)?;
+                Some(PrecisionOp::Truncate(n))
+            }
+            _ => None,
+        };
 
         // Expect opening |
         let pipe_token = self.peek().clone();
         if !matches!(pipe_token.kind, TokenKind::Pipe) {
-            let prefix_str = match prefix {
-                FormatPrefix::Scientific => "e",
-                FormatPrefix::Comma => "c",
-            };
-            return Err(Diagnostic::error(format!("expected '|' after format prefix '{}'", prefix_str))
+            return Err(Diagnostic::error(format!("expected '|' after format operator '{}'", prefix_str))
                 .with_span(pipe_token.span)
-                .with_help(format!("format expression syntax: {}|expr|", prefix_str)));
+                .with_help(format!("format expression syntax: {}|expr| or {}.N|expr|", prefix_str, prefix_str)));
         }
         self.advance(); // consume |
 
@@ -60,10 +79,6 @@ impl Parser {
         // Expect closing |
         let close_pipe_token = self.peek().clone();
         if !matches!(close_pipe_token.kind, TokenKind::Pipe) {
-            let prefix_str = match prefix {
-                FormatPrefix::Scientific => "e",
-                FormatPrefix::Comma => "c",
-            };
             return Err(Diagnostic::error("expected '|' to close format expression")
                 .with_span(close_pipe_token.span)
                 .with_help(format!("format expression syntax: {}|expr|", prefix_str)));
@@ -71,7 +86,27 @@ impl Parser {
         let end_token = self.advance(); // consume |
 
         let span = start_token.span.to(&end_token.span);
-        Ok(Expr::Format(FormatExpr::new(prefix, expr, span)))
+        Ok(Expr::Format(FormatExpr::new(kind, precision, expr, span)))
+    }
+
+    /// Parse precision integer after '.' or '!' in a format expression.
+    fn parse_format_precision(&mut self, prefix_str: &str) -> Result<u32, Diagnostic> {
+        let precision_token = self.peek().clone();
+        match &precision_token.kind {
+            TokenKind::Integer(n) => {
+                if *n < 0 {
+                    return Err(Diagnostic::error("precision must be a non-negative integer")
+                        .with_span(precision_token.span)
+                        .with_help(format!("format expression syntax: {}.N|expr| where N >= 0", prefix_str)));
+                }
+                let n = *n as u32;
+                self.advance(); // consume integer
+                Ok(n)
+            }
+            _ => Err(Diagnostic::error(format!("expected integer precision after '{}'", prefix_str))
+                .with_span(precision_token.span)
+                .with_help(format!("format expression syntax: {}.N|expr| (e.g., {}.2|value|)", prefix_str, prefix_str))),
+        }
     }
 
     /// Parse base conversion expression: 0b|expr| or 0o|expr| or 0d|expr| or 0x|expr|

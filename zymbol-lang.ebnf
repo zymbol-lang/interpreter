@@ -131,7 +131,7 @@ const_decl     = identifier , ":=" , expr ;
 (* x += n  →  x = x + n  |  x -= n  →  x = x - n  |  x *= n  →  x = x * n
    x /= n  →  x = x / n  |  x %= n  →  x = x % n
    x++     →  x = x + 1  |  x--     →  x = x - 1                           *)
-update_op      = identifier , ( "+=" | "-=" | "*=" | "/=" | "%=" ) , expr
+update_op      = identifier , ( "+=" | "-=" | "*=" | "/=" | "%=" | "^=" ) , expr
                | identifier , ( "++" | "--" ) ;
 
 (* --- Output --- *)
@@ -422,9 +422,8 @@ collection_op_suffix
                | "$[" , [ expr ] , ".." , [ expr ] , "]"                       (* slice (end exclusive) → new collection *)
                | "$[" , expr , ":" , expr , "]"                                (* slice count-based → new collection *)
                | "$^+"                                                           (* sort ascending, natural order → new array *)
-               | "$^+" , lambda                                                 (* sort ascending, custom comparator (a,b)->Bool → new array *)
                | "$^-"                                                           (* sort descending, natural order → new array *)
-               | "$^-" , lambda                                                 (* sort descending, custom comparator (a,b)->Bool → new array *)
+               | "$^"  , lambda                                                 (* sort with custom comparator — direction encoded in lambda (a,b)->Bool → new array *)
                | "$>" , lambda                                                  (* map → new array *)
                | "$|" , lambda                                                  (* filter → new array *)
                | "$<" , "(" , expr , "," , lambda , ")"                        (* reduce → scalar *)
@@ -627,6 +626,13 @@ whitespace     = " " | "\t" | "\r" | "\n" ;
 
 (* [NOT IMPLEMENTED] Post-condition loop (do-while):
    block_post_cond = "{" , { statement } , "}" , "~>" , expr ;
+   Planned: execute block at least once, then repeat while condition holds.
+   Workaround: use an infinite loop with @! break at the end.
+*)
+
+(* [NOT IMPLEMENTED] $!! error propagation from lambdas:
+   $!! is currently only supported inside named functions.
+   Inside lambdas the operator is parsed but does not propagate to the lambda's caller.
 *)
 
 (* [NOT IMPLEMENTED] Match multi-value arm:

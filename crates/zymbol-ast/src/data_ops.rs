@@ -3,7 +3,7 @@
 //! Contains AST structures for data transformation and introspection:
 //! - Numeric evaluation: #|expr| (safe string-to-number conversion)
 //! - Type metadata: expr#? (type introspection)
-//! - Format expressions: e|expr| (scientific), c|expr| (comma-separated)
+//! - Format expressions: #,|expr| (thousands), #^|expr| (scientific)
 //! - Base conversions: 0x|expr|, 0b|expr|, 0o|expr|, 0d|expr| (char/int/text)
 //! - Precision expressions: #.N|expr| (round), #!N|expr| (truncate)
 
@@ -34,21 +34,32 @@ pub struct TypeMetadataExpr {
     pub span: Span,
 }
 
-/// Format expression: e|expr| or c|expr|
+/// Format expression: #,|expr| / #^|expr| / #,.N|expr| / #,!N|expr| / etc.
 #[derive(Debug, Clone)]
 pub struct FormatExpr {
-    pub prefix: FormatPrefix,
+    pub kind: FormatKind,
+    /// None → no precision modifier (full precision)
+    pub precision: Option<PrecisionOp>,
     pub expr: Box<Expr>,
     pub span: Span,
 }
 
-/// Format prefix for format expressions
+/// Format kind for #, and #^ operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FormatPrefix {
-    /// e or E - scientific/exponential notation
+pub enum FormatKind {
+    /// #, — thousands separator (e.g. 1234567 → "1,234,567")
+    Thousands,
+    /// #^ — scientific notation (e.g. 12345.678 → "1.2345678e4")
     Scientific,
-    /// c or C - comma-separated thousands
-    Comma,
+}
+
+/// Optional precision modifier appended to #, or #^
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrecisionOp {
+    /// .N — round to N decimal places (same semantics as #.N|..|)
+    Round(u32),
+    /// !N — truncate to N decimal places (same semantics as #!N|..|)
+    Truncate(u32),
 }
 
 /// Base conversion expression: 0x|expr| or 0b|expr| or 0o|expr| or 0d|expr|
@@ -119,8 +130,13 @@ impl TypeMetadataExpr {
 }
 
 impl FormatExpr {
-    pub fn new(prefix: FormatPrefix, expr: Box<Expr>, span: Span) -> Self {
-        Self { prefix, expr, span }
+    pub fn new(
+        kind: FormatKind,
+        precision: Option<PrecisionOp>,
+        expr: Box<Expr>,
+        span: Span,
+    ) -> Self {
+        Self { kind, precision, expr, span }
     }
 }
 

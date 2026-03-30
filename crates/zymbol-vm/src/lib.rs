@@ -205,6 +205,63 @@ fn fmt_comma_int(n: i64) -> String {
     s
 }
 
+/// Format with thousands separators: prec_kind 0=none, 1=round, 2=truncate
+fn vm_fmt_thousands(num: f64, prec_kind: u8, prec_n: u32) -> String {
+    let num = match prec_kind {
+        1 => { let m = 10f64.powi(prec_n as i32); (num * m).round() / m }
+        2 => { let m = 10f64.powi(prec_n as i32); (num * m).trunc() / m }
+        _ => num,
+    };
+    let neg = num < 0.0;
+    let abs_f = num.abs();
+    let int_part = abs_f.floor() as i64;
+    let mut s = fmt_comma_int(int_part);
+    match prec_kind {
+        0 => {
+            let full_s = format!("{}", abs_f);
+            if let Some(dot_pos) = full_s.find('.') {
+                s.push_str(&full_s[dot_pos..]);
+            }
+        }
+        _ => {
+            if prec_n > 0 {
+                let frac = abs_f - int_part as f64;
+                let frac_s = format!("{:.prec$}", frac, prec = prec_n as usize);
+                if let Some(dot_pos) = frac_s.find('.') {
+                    s.push_str(&frac_s[dot_pos..]);
+                }
+            }
+        }
+    }
+    if neg { s.insert(0, '-'); }
+    s
+}
+
+/// Format in scientific notation: prec_kind 0=none, 1=round, 2=truncate
+fn vm_fmt_scientific(num: f64, prec_kind: u8, prec_n: u32) -> String {
+    match prec_kind {
+        0 => format!("{:e}", num),
+        1 => format!("{:.prec$e}", num, prec = prec_n as usize),
+        _ => vm_fmt_scientific_truncate(num, prec_n),
+    }
+}
+
+fn vm_fmt_scientific_truncate(num: f64, n: u32) -> String {
+    if num == 0.0 {
+        if n == 0 { return "0e0".to_string(); }
+        return format!("{:.prec$e}", 0.0f64, prec = n as usize);
+    }
+    let exp = num.abs().log10().floor() as i32;
+    let mantissa = num / 10f64.powi(exp);
+    let m = 10f64.powi(n as i32);
+    let truncated = (mantissa * m).trunc() / m;
+    if n == 0 {
+        format!("{}e{}", truncated as i64, exp)
+    } else {
+        format!("{:.prec$}e{}", truncated, exp, prec = n as usize)
+    }
+}
+
 #[inline(always)]
 fn cmp_direct(va: &Value, vb: &Value) -> i32 {
     use std::cmp::Ordering;
@@ -1541,19 +1598,15 @@ impl<W: Write> VM<W> {
                             };
                             Value::String(Rc::new(s))
                         }
-                        // Int → Char (create char from code point)
-                        Value::Int(code) => {
-                            if !(0..=0x10FFFF).contains(&code) {
-                                raise!(VmError::Generic(format!(
-                                    "character code must be in range 0..0x10FFFF, got {}", code
-                                )));
-                            }
-                            match char::from_u32(code as u32) {
-                                Some(ch) => Value::Char(ch),
-                                None => raise!(VmError::Generic(format!(
-                                    "invalid Unicode character code: {}", code
-                                ))),
-                            }
+                        // Int → String (format integer in specified base)
+                        Value::Int(n) => {
+                            let s = match radix {
+                                2  => format!("0b{:b}", n),
+                                8  => format!("0o{:o}", n),
+                                10 => format!("0d{:04}", n),
+                                _  => format!("0x{:04X}", n),
+                            };
+                            Value::String(Rc::new(s))
                         }
                         // String → Char (parse in given base, then create char)
                         Value::String(s) => {
@@ -1668,35 +1721,22 @@ impl<W: Write> VM<W> {
                 }
 
                 // ── Format ops ────────────────────────────────────────────────
-                &Instruction::FormatComma(dst, src) => {
-                    let s = match self.reg_get(src) {
-                        Value::Int(n) => fmt_comma_int(*n),
-                        Value::Float(f) => {
-                            let f = *f;
-                            let neg = f < 0.0;
-                            let abs_f = f.abs();
-                            let int_part = abs_f.floor() as i64;
-                            let frac = abs_f - int_part as f64;
-                            let mut s = fmt_comma_int(int_part);
-                            if frac > 0.0 {
-                                let frac_s = format!("{}", frac);
-                                if let Some(dot_pos) = frac_s.find('.') {
-                                    s.push_str(&frac_s[dot_pos..]);
-                                }
-                            }
-                            if neg { s.insert(0, '-'); }
-                            s
-                        }
-                        other => other.to_string(),
+                &Instruction::FmtThousands(dst, src, prec_kind, prec_n) => {
+                    let f = match self.reg_get(src) {
+                        Value::Int(n) => *n as f64,
+                        Value::Float(f) => *f,
+                        other => other.to_string().parse::<f64>().unwrap_or(0.0),
                     };
+                    let s = vm_fmt_thousands(f, prec_kind, prec_n);
                     self.reg_set(dst, Value::String(Rc::new(s)));
                 }
-                &Instruction::FormatScientific(dst, src) => {
-                    let s = match self.reg_get(src) {
-                        Value::Int(n) => format!("{:e}", *n as f64),
-                        Value::Float(f) => format!("{:e}", f),
-                        other => other.to_string(),
+                &Instruction::FmtScientific(dst, src, prec_kind, prec_n) => {
+                    let f = match self.reg_get(src) {
+                        Value::Int(n) => *n as f64,
+                        Value::Float(f) => *f,
+                        other => other.to_string().parse::<f64>().unwrap_or(0.0),
                     };
+                    let s = vm_fmt_scientific(f, prec_kind, prec_n);
                     self.reg_set(dst, Value::String(Rc::new(s)));
                 }
 

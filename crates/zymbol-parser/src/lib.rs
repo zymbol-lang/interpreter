@@ -4,7 +4,7 @@
 //! Phase 1: Parses assignments and identifiers
 
 use zymbol_ast::{
-    BasePrefix, Block, CollectionLengthExpr, Expr, FormatPrefix,
+    BasePrefix, Block, CollectionLengthExpr, Expr, FormatKind,
     FunctionCallExpr, IdentifierExpr, IndexExpr, LiteralExpr,
     Program, RangeExpr, Statement, TypeMetadataExpr,
 };
@@ -837,13 +837,13 @@ impl Parser {
                 // Parse truncate expression: #!N|expr|
                 self.parse_trunc_expr()
             }
-            TokenKind::FormatScientific => {
-                // Parse scientific notation format: e|expr| or E|expr|
-                self.parse_format_expr(FormatPrefix::Scientific)
+            TokenKind::HashComma => {
+                // Parse thousands format: #,|expr| or #,.N|expr| or #,!N|expr|
+                self.parse_format_expr(FormatKind::Thousands)
             }
-            TokenKind::FormatComma => {
-                // Parse comma format: c|expr| or C|expr|
-                self.parse_format_expr(FormatPrefix::Comma)
+            TokenKind::HashCaret => {
+                // Parse scientific notation format: #^|expr| or #^.N|expr| or #^!N|expr|
+                self.parse_format_expr(FormatKind::Scientific)
             }
             TokenKind::BaseBinary => {
                 // Parse binary base conversion: 0b|expr|

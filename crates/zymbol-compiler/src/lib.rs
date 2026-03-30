@@ -11,7 +11,7 @@ use zymbol_ast::{
     Block, Expr, LiteralExpr, Statement,
     Output, IfStmt, Loop, Break, Continue,
     FunctionDecl, LambdaBody,
-    TryStmt, FormatPrefix,
+    TryStmt, FormatKind, PrecisionOp,
     DestructureAssign, DestructureItem, DestructurePattern,
 };
 use zymbol_ast::Pattern;
@@ -355,12 +355,13 @@ impl Compiler {
         let module_prog = parser.parse()
             .map_err(|_| CompileError::Unsupported(format!("failed to parse module '{}'", path.display())))?;
 
-        // Collect exported function names
-        let exported: Vec<String> = if let Some(decl) = &module_prog.module_decl {
+        // Collect exported items as (internal_name, public_name) pairs
+        let exported: Vec<(String, String)> = if let Some(decl) = &module_prog.module_decl {
             if let Some(export_block) = &decl.export_block {
                 export_block.items.iter().filter_map(|item| {
-                    if let zymbol_ast::ExportItem::Own { name, .. } = item {
-                        Some(name.clone())
+                    if let zymbol_ast::ExportItem::Own { name, rename, .. } = item {
+                        let public = rename.as_ref().unwrap_or(name).clone();
+                        Some((name.clone(), public))
                     } else {
                         None
                     }
@@ -375,23 +376,23 @@ impl Compiler {
         let alias = import.alias.clone();
 
         // Separate exported names into functions and constants
-        let mut func_names: Vec<String> = Vec::new();
-        let mut const_names: Vec<String> = Vec::new();
-        for name in &exported {
+        let mut func_names: Vec<(String, String)> = Vec::new();
+        let mut const_names: Vec<(String, String)> = Vec::new();
+        for (internal, public) in &exported {
             let is_func = module_prog.statements.iter().any(|s| {
-                matches!(s, Statement::FunctionDecl(d) if &d.name == name)
+                matches!(s, Statement::FunctionDecl(d) if &d.name == internal)
             });
             if is_func {
-                func_names.push(name.clone());
+                func_names.push((internal.clone(), public.clone()));
             } else {
-                const_names.push(name.clone());
+                const_names.push((internal.clone(), public.clone()));
             }
         }
 
         // First pass: reserve slots in function_index for functions only
         let start_idx = self.functions.len();
-        for (i, func_name) in func_names.iter().enumerate() {
-            let qualified = format!("{}::{}", alias, func_name);
+        for (i, (_, public_name)) in func_names.iter().enumerate() {
+            let qualified = format!("{}::{}", alias, public_name);
             self.function_index.insert(qualified, (start_idx + i) as FuncIdx);
             self.functions.push(Chunk::new("placeholder"));
         }
@@ -406,11 +407,11 @@ impl Compiler {
             }
         }
 
-        // Second pass: compile function bodies
-        for (i, func_name) in func_names.iter().enumerate() {
+        // Second pass: compile function bodies (look up by internal name)
+        for (i, (internal_name, _)) in func_names.iter().enumerate() {
             let func_decl = module_prog.statements.iter().find_map(|s| {
                 if let Statement::FunctionDecl(d) = s {
-                    if &d.name == func_name { Some(d) } else { None }
+                    if &d.name == internal_name { Some(d) } else { None }
                 } else {
                     None
                 }
@@ -425,17 +426,17 @@ impl Compiler {
         self.global_consts = saved_global_consts;
 
         // Collect constant/variable exports: evaluate literal values
-        for const_name in &const_names {
+        for (internal_name, public_name) in &const_names {
             let val_expr = module_prog.statements.iter().find_map(|s| {
                 match s {
-                    Statement::ConstDecl(c) if &c.name == const_name => Some(&c.value),
-                    Statement::Assignment(a) if &a.name == const_name => Some(&a.value),
+                    Statement::ConstDecl(c) if &c.name == internal_name => Some(&c.value),
+                    Statement::Assignment(a) if &a.name == internal_name => Some(&a.value),
                     _ => None,
                 }
             });
             if let Some(expr) = val_expr {
                 if let Some(mc) = Self::eval_const_expr(expr) {
-                    let key = format!("{}.{}", alias, const_name);
+                    let key = format!("{}.{}", alias, public_name);
                     self.module_constants.insert(key, mc);
                 }
             }
@@ -2367,9 +2368,16 @@ impl Compiler {
     ) -> Result<Reg, CompileError> {
         let r = self.compile_expr(&fe.expr, ctx)?;
         let dst = ctx.alloc_temp()?;
-        match fe.prefix {
-            FormatPrefix::Comma => ctx.emit(Instruction::FormatComma(dst, r)),
-            FormatPrefix::Scientific => ctx.emit(Instruction::FormatScientific(dst, r)),
+
+        let (prec_kind, prec_n) = match fe.precision {
+            None => (0u8, 0u32),
+            Some(PrecisionOp::Round(n)) => (1u8, n),
+            Some(PrecisionOp::Truncate(n)) => (2u8, n),
+        };
+
+        match fe.kind {
+            FormatKind::Thousands => ctx.emit(Instruction::FmtThousands(dst, r, prec_kind, prec_n)),
+            FormatKind::Scientific => ctx.emit(Instruction::FmtScientific(dst, r, prec_kind, prec_n)),
         };
         ctx.set_reg_type(dst, StaticType::String);
         Ok(dst)
@@ -2854,7 +2862,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::NamedTupleGet(d, t, _) => { upd(*d); upd(*t); }
             Instruction::BashExec(d, _) | Instruction::BuildStr(d, _)
             | Instruction::Execute(d, _) => upd(*d),
-            Instruction::FormatComma(d, s) | Instruction::FormatScientific(d, s)
+            Instruction::FmtThousands(d, s, _, _) | Instruction::FmtScientific(d, s, _, _)
             | Instruction::NumericEval(d, s) | Instruction::TypeOf(d, s)
             | Instruction::IsError(d, s) | Instruction::BaseConvert(d, s, _) => { upd(*d); upd(*s); }
             Instruction::RoundFloat(d, s, _) | Instruction::TruncFloat(d, s, _) => { upd(*d); upd(*s); }

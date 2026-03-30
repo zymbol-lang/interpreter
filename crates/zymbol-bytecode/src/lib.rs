@@ -177,10 +177,12 @@ pub enum Instruction {
     Execute(Reg, Vec<BuildPart>),
 
     // ── Format ops ───────────────────────────────────────────────────────
-    /// Format number with comma separators: c|expr|
-    FormatComma(Reg, Reg),
-    /// Format number in scientific notation: e|expr|
-    FormatScientific(Reg, Reg),
+    /// Format number with thousands separators: #,|expr| / #,.N|expr| / #,!N|expr|
+    /// precision_kind: 0 = none, 1 = round, 2 = truncate; precision_n: N (0 if kind=none)
+    FmtThousands(Reg, Reg, u8, u32),
+    /// Format number in scientific notation: #^|expr| / #^.N|expr| / #^!N|expr|
+    /// precision_kind: 0 = none, 1 = round, 2 = truncate; precision_n: N (0 if kind=none)
+    FmtScientific(Reg, Reg, u8, u32),
 
     // ── Precision ops ────────────────────────────────────────────────────
     /// Round dst = #.precision|src|  (standard rounding)

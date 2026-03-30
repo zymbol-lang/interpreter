@@ -48,7 +48,7 @@ pub use string_ops::StringReplaceExpr;
 
 mod data_ops;
 pub use data_ops::{
-    NumericEvalExpr, TypeMetadataExpr, FormatExpr, FormatPrefix,
+    NumericEvalExpr, TypeMetadataExpr, FormatExpr, FormatKind, PrecisionOp,
     BaseConversionExpr, BasePrefix, RoundExpr, TruncExpr,
 };
 

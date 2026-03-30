@@ -1,6 +1,8 @@
-// Test: Format operators e|, c|, and precision #.N|, #!N|
+// Test: Format operators #,  #^  and precision #.N|  #!N|
+
 pi = 3.14159265358979
 
+// Standalone precision (unchanged)
 r2 = #.2|pi|
 >> r2 ¶
 
@@ -10,14 +12,36 @@ r4 = #.4|pi|
 t2 = #!2|pi|
 >> t2 ¶
 
+// Thousands — simple
 big = 1234567890
-fc = c|big|
+fc = #,|big|
 >> fc ¶
 
+// Thousands + precision
+fc2 = #,.2|123456.789|
+>> fc2 ¶
+
+fc3 = #,!2|123456.789|
+>> fc3 ¶
+
+fc4 = #,.0|123456.789|
+>> fc4 ¶
+
+// Scientific — simple
 medium = 9876.54321
-fe = e|medium|
+fe = #^|medium|
 >> fe ¶
 
-// From string
-rs = #.2|"19.876"|
->> rs ¶
+// Scientific + precision
+fe2 = #^.2|12345.678|
+>> fe2 ¶
+
+fe3 = #^!2|12345.678|
+>> fe3 ¶
+
+fe4 = #^.4|0.000123456|
+>> fe4 ¶
+
+// From string (via #| parse first)
+val = #|"19876.543"|
+>> #,.2|val| ¶

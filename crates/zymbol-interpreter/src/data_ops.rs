@@ -109,17 +109,16 @@ impl<W: Write> Interpreter<W> {
         ]))
     }
 
-    /// Evaluate format expression: e|expr| or c|expr|
-    /// Formats the result of expression evaluation for display
+    /// Evaluate format expression: #,|expr| or #^|expr| with optional precision.
+    /// Always returns a String value.
     pub(crate) fn eval_format(&mut self, op: &FormatExpr) -> Result<Value> {
-        use zymbol_ast::FormatPrefix;
+        use zymbol_ast::FormatKind;
 
         let value = self.eval_expr(&op.expr)?;
 
-        // Extract numeric value
-        let (int_val, float_val) = match value {
-            Value::Int(n) => (Some(n), Some(n as f64)),
-            Value::Float(f) => (None, Some(f)),
+        let f: f64 = match value {
+            Value::Int(n) => n as f64,
+            Value::Float(f) => f,
             _ => {
                 return Err(RuntimeError::Generic {
                     message: format!(
@@ -131,69 +130,11 @@ impl<W: Write> Interpreter<W> {
             }
         };
 
-        // Format based on prefix
-        let formatted = match op.prefix {
-            FormatPrefix::Scientific => {
-                // Scientific notation: e|1500000| → "1.5e6"
-                let f = float_val.unwrap();
-                format!("{:e}", f)
-            }
-            FormatPrefix::Comma => {
-                // Comma-separated thousands: c|1500000| → "1,500,000"
-                if let Some(i) = int_val {
-                    // Integer formatting
-                    let s = i.to_string();
-                    let is_negative = s.starts_with('-');
-                    let digits = if is_negative { &s[1..] } else { &s };
-
-                    let mut result = String::new();
-                    for (idx, ch) in digits.chars().rev().enumerate() {
-                        if idx > 0 && idx % 3 == 0 {
-                            result.push(',');
-                        }
-                        result.push(ch);
-                    }
-
-                    let formatted: String = result.chars().rev().collect();
-                    if is_negative {
-                        format!("-{}", formatted)
-                    } else {
-                        formatted
-                    }
-                } else {
-                    // Float formatting with commas
-                    let f = float_val.unwrap();
-                    let s = f.to_string();
-                    let parts: Vec<&str> = s.split('.').collect();
-                    let int_part = parts[0];
-                    let is_negative = int_part.starts_with('-');
-                    let digits = if is_negative { &int_part[1..] } else { int_part };
-
-                    let mut result = String::new();
-                    for (idx, ch) in digits.chars().rev().enumerate() {
-                        if idx > 0 && idx % 3 == 0 {
-                            result.push(',');
-                        }
-                        result.push(ch);
-                    }
-
-                    let formatted_int: String = result.chars().rev().collect();
-                    let formatted_int = if is_negative {
-                        format!("-{}", formatted_int)
-                    } else {
-                        formatted_int
-                    };
-
-                    if parts.len() > 1 {
-                        format!("{}.{}", formatted_int, parts[1])
-                    } else {
-                        formatted_int
-                    }
-                }
-            }
+        let formatted = match op.kind {
+            FormatKind::Thousands => interp_fmt_thousands(f, op.precision),
+            FormatKind::Scientific => interp_fmt_scientific(f, op.precision),
         };
 
-        // Return as string
         Ok(Value::String(formatted))
     }
 
@@ -220,24 +161,15 @@ impl<W: Write> Interpreter<W> {
                 Ok(Value::String(formatted))
             }
 
-            // Case 2: int → char (create char from code)
-            Value::Int(code) => {
-                if !(0..=0x10FFFF).contains(&code) {
-                    return Err(RuntimeError::Generic {
-                        message: format!(
-                            "character code must be in range 0..0x10FFFF, got {}",
-                            code
-                        ),
-                        span: op.span,
-                    });
-                }
-
-                let ch = char::from_u32(code as u32).ok_or_else(|| RuntimeError::Generic {
-                    message: format!("invalid Unicode character code: {}", code),
-                    span: op.span,
-                })?;
-
-                Ok(Value::Char(ch))
+            // Case 2: int → string (format integer in specified base)
+            Value::Int(n) => {
+                let formatted = match op.prefix {
+                    BasePrefix::Binary => format!("0b{:b}", n),
+                    BasePrefix::Octal => format!("0o{:o}", n),
+                    BasePrefix::Decimal => format!("0d{:04}", n),
+                    BasePrefix::Hex => format!("0x{:04X}", n),
+                };
+                Ok(Value::String(formatted))
             }
 
             // Case 3: text → char (parse string as number in base, create char)
@@ -399,6 +331,93 @@ impl<W: Write> Interpreter<W> {
     }
 }
 
+// ── Format helpers (free functions) ──────────────────────────────────────────
+
+/// Format number with thousands separators and optional precision.
+fn interp_fmt_thousands(num: f64, precision: Option<zymbol_ast::PrecisionOp>) -> String {
+    use zymbol_ast::PrecisionOp;
+
+    // Apply precision first
+    let num = match precision {
+        Some(PrecisionOp::Round(n)) => {
+            let m = 10f64.powi(n as i32);
+            (num * m).round() / m
+        }
+        Some(PrecisionOp::Truncate(n)) => {
+            let m = 10f64.powi(n as i32);
+            (num * m).trunc() / m
+        }
+        None => num,
+    };
+
+    let neg = num < 0.0;
+    let abs_f = num.abs();
+    let int_part = abs_f.floor() as i64;
+
+    // Format integer part with commas (sign handled separately)
+    let int_s = {
+        let digits = format!("{}", int_part);
+        let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+        for (i, c) in digits.chars().rev().enumerate() {
+            if i > 0 && i % 3 == 0 { out.push(','); }
+            out.push(c);
+        }
+        out.chars().rev().collect::<String>()
+    };
+    let mut s = int_s;
+
+    // Append fractional part
+    match precision {
+        None => {
+            // No precision: derive fractional part from float's natural representation
+            let full_s = format!("{}", abs_f);
+            if let Some(dot_pos) = full_s.find('.') {
+                s.push_str(&full_s[dot_pos..]);
+            }
+        }
+        Some(PrecisionOp::Round(n)) | Some(PrecisionOp::Truncate(n)) => {
+            if n > 0 {
+                let frac = abs_f - int_part as f64;
+                let frac_s = format!("{:.prec$}", frac, prec = n as usize);
+                if let Some(dot_pos) = frac_s.find('.') {
+                    s.push_str(&frac_s[dot_pos..]);
+                }
+            }
+            // n == 0: no decimal part
+        }
+    }
+
+    if neg { s.insert(0, '-'); }
+    s
+}
+
+/// Format number in scientific notation with optional precision.
+fn interp_fmt_scientific(num: f64, precision: Option<zymbol_ast::PrecisionOp>) -> String {
+    use zymbol_ast::PrecisionOp;
+    match precision {
+        None => format!("{:e}", num),
+        Some(PrecisionOp::Round(n)) => format!("{:.prec$e}", num, prec = n as usize),
+        Some(PrecisionOp::Truncate(n)) => interp_fmt_scientific_truncate(num, n),
+    }
+}
+
+/// Scientific notation with truncation (no rounding) of mantissa decimal places.
+fn interp_fmt_scientific_truncate(num: f64, n: u32) -> String {
+    if num == 0.0 {
+        if n == 0 { return "0e0".to_string(); }
+        return format!("{:.prec$e}", 0.0f64, prec = n as usize);
+    }
+    let exp = num.abs().log10().floor() as i32;
+    let mantissa = num / 10f64.powi(exp);
+    let m = 10f64.powi(n as i32);
+    let truncated = (mantissa * m).trunc() / m;
+    if n == 0 {
+        format!("{}e{}", truncated as i64, exp)
+    } else {
+        format!("{:.prec$}e{}", truncated, exp, prec = n as usize)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Interpreter;
@@ -521,7 +540,7 @@ info = x#?
     fn test_format_scientific_integer() {
         let code = r#"
 x = 1500000
->> e|x| ¶
+>> #^|x| ¶
 "#;
         let output = run(code);
         assert_eq!(output, "1.5e6\n");
@@ -531,17 +550,16 @@ x = 1500000
     fn test_format_scientific_float() {
         let code = r#"
 x = 3.14159
->> e|x| ¶
+>> #^|x| ¶
 "#;
         let output = run(code);
-        // Float in scientific notation
         assert!(output.starts_with("3.14159e"));
     }
 
     #[test]
     fn test_format_scientific_literal() {
         let code = r#"
->> e|300000000| ¶
+>> #^|300000000| ¶
 "#;
         let output = run(code);
         assert_eq!(output, "3e8\n");
@@ -551,7 +569,7 @@ x = 3.14159
     fn test_format_comma_integer() {
         let code = r#"
 x = 1500000
->> c|x| ¶
+>> #,|x| ¶
 "#;
         let output = run(code);
         assert_eq!(output, "1,500,000\n");
@@ -561,7 +579,7 @@ x = 1500000
     fn test_format_comma_float() {
         let code = r#"
 x = 12345.67
->> c|x| ¶
+>> #,|x| ¶
 "#;
         let output = run(code);
         assert_eq!(output, "12,345.67\n");
@@ -570,28 +588,46 @@ x = 12345.67
     #[test]
     fn test_format_comma_literal() {
         let code = r#"
->> c|1000000| ¶
+>> #,|1000000| ¶
 "#;
         let output = run(code);
         assert_eq!(output, "1,000,000\n");
     }
 
     #[test]
-    fn test_format_scientific_uppercase() {
+    fn test_format_thousands_with_precision_round() {
         let code = r#"
->> E|1500000| ¶
+>> #,.2|123456.789| ¶
 "#;
         let output = run(code);
-        assert_eq!(output, "1.5e6\n");
+        assert_eq!(output, "123,456.79\n");
     }
 
     #[test]
-    fn test_format_comma_uppercase() {
+    fn test_format_thousands_with_precision_truncate() {
         let code = r#"
->> C|1500000| ¶
+>> #,!2|123456.789| ¶
 "#;
         let output = run(code);
-        assert_eq!(output, "1,500,000\n");
+        assert_eq!(output, "123,456.78\n");
+    }
+
+    #[test]
+    fn test_format_scientific_with_precision_round() {
+        let code = r#"
+>> #^.2|12345.678| ¶
+"#;
+        let output = run(code);
+        assert_eq!(output, "1.23e4\n");
+    }
+
+    #[test]
+    fn test_format_scientific_with_precision_truncate() {
+        let code = r#"
+>> #^!2|12345.678| ¶
+"#;
+        let output = run(code);
+        assert_eq!(output, "1.23e4\n");
     }
 
     #[test]
@@ -599,7 +635,7 @@ x = 12345.67
         let code = r#"
 a = 1000000
 b = 500000
->> e|a + b| ¶
+>> #^|a + b| ¶
 "#;
         let output = run(code);
         assert_eq!(output, "1.5e6\n");

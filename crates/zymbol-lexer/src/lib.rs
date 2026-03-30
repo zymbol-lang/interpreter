@@ -202,11 +202,11 @@ pub enum TokenKind {
     /// \ (single backslash - for lifetime end)
     Backslash,
 
-    // Format and Base prefixes (Zenith-Lang style)
-    /// e (scientific notation format prefix)
-    FormatScientific,
-    /// c (comma format prefix)
-    FormatComma,
+    // Format and Base prefixes
+    /// #, (thousands separator format prefix)
+    HashComma,
+    /// #^ (scientific notation format prefix)
+    HashCaret,
     /// 0b (binary base prefix for char literals)
     BaseBinary,
     /// 0o (octal base prefix for char literals)
@@ -657,6 +657,18 @@ impl Lexer {
                     self.advance(); // consume !
                     return Token::new(TokenKind::HashExclaim, self.span(start));
                 }
+                // Check for #, (thousands format)
+                else if next == ',' {
+                    self.advance(); // consume #
+                    self.advance(); // consume ,
+                    return Token::new(TokenKind::HashComma, self.span(start));
+                }
+                // Check for #^ (scientific notation format)
+                else if next == '^' {
+                    self.advance(); // consume #
+                    self.advance(); // consume ^
+                    return Token::new(TokenKind::HashCaret, self.span(start));
+                }
                 // Check for booleans #1 or #0
                 else if next == '1' {
                     self.advance(); // consume #
@@ -699,18 +711,6 @@ impl Lexer {
         // Check for number
         if ch.is_ascii_digit() {
             return self.lex_number(start);
-        }
-
-        // Check for format prefixes: e|, E|, c|, C|
-        // Must check before identifier to avoid treating 'e' or 'c' as variable names
-        if (ch == 'e' || ch == 'E') && self.peek() == Some('|') {
-            self.advance(); // consume 'e' or 'E'
-            return Token::new(TokenKind::FormatScientific, self.span(start));
-        }
-
-        if (ch == 'c' || ch == 'C') && self.peek() == Some('|') {
-            self.advance(); // consume 'c' or 'C'
-            return Token::new(TokenKind::FormatComma, self.span(start));
         }
 
         // Check for identifier (letters, Unicode, or emojis)
@@ -1405,60 +1405,72 @@ mod tests {
     }
 
     #[test]
-    fn test_format_scientific_token() {
-        let tokens = lex("e|");
-        assert_eq!(tokens.len(), 3); // FormatScientific, Pipe, Eof
-        assert!(matches!(tokens[0], TokenKind::FormatScientific));
+    fn test_hash_comma_token() {
+        // #, followed by | (open pipe) — two separate tokens
+        let tokens = lex("#,|");
+        assert_eq!(tokens.len(), 3); // HashComma, Pipe, Eof
+        assert!(matches!(tokens[0], TokenKind::HashComma));
         assert!(matches!(tokens[1], TokenKind::Pipe));
     }
 
     #[test]
-    fn test_format_scientific_uppercase_token() {
-        let tokens = lex("E|");
-        assert_eq!(tokens.len(), 3); // FormatScientific, Pipe, Eof
-        assert!(matches!(tokens[0], TokenKind::FormatScientific));
+    fn test_hash_caret_token() {
+        let tokens = lex("#^|");
+        assert_eq!(tokens.len(), 3); // HashCaret, Pipe, Eof
+        assert!(matches!(tokens[0], TokenKind::HashCaret));
         assert!(matches!(tokens[1], TokenKind::Pipe));
     }
 
     #[test]
-    fn test_format_comma_token() {
-        let tokens = lex("c|");
-        assert_eq!(tokens.len(), 3); // FormatComma, Pipe, Eof
-        assert!(matches!(tokens[0], TokenKind::FormatComma));
-        assert!(matches!(tokens[1], TokenKind::Pipe));
+    fn test_hash_comma_with_dot_precision() {
+        // #,.2|val|  →  HashComma, Dot, Integer(2), Pipe, Ident, Pipe, Eof
+        let tokens = lex("#,.2|val|");
+        assert_eq!(tokens.len(), 7);
+        assert!(matches!(tokens[0], TokenKind::HashComma));
+        assert!(matches!(tokens[1], TokenKind::Dot));
+        assert!(matches!(tokens[2], TokenKind::Integer(2)));
+        assert!(matches!(tokens[3], TokenKind::Pipe));
+        assert!(matches!(tokens[4], TokenKind::Ident(_)));
+        assert!(matches!(tokens[5], TokenKind::Pipe));
     }
 
     #[test]
-    fn test_format_comma_uppercase_token() {
-        let tokens = lex("C|");
-        assert_eq!(tokens.len(), 3); // FormatComma, Pipe, Eof
-        assert!(matches!(tokens[0], TokenKind::FormatComma));
-        assert!(matches!(tokens[1], TokenKind::Pipe));
+    fn test_hash_caret_with_exclaim_precision() {
+        // #^!2|val|  →  HashCaret, Not, Integer(2), Pipe, Ident, Pipe, Eof
+        // bare '!' (not preceded by '#') produces Not token
+        let tokens = lex("#^!2|val|");
+        assert_eq!(tokens.len(), 7);
+        assert!(matches!(tokens[0], TokenKind::HashCaret));
+        assert!(matches!(tokens[1], TokenKind::Not));
+        assert!(matches!(tokens[2], TokenKind::Integer(2)));
+        assert!(matches!(tokens[3], TokenKind::Pipe));
+        assert!(matches!(tokens[4], TokenKind::Ident(_)));
+        assert!(matches!(tokens[5], TokenKind::Pipe));
     }
 
     #[test]
-    fn test_format_scientific_expression() {
-        let tokens = lex("e|1500000|");
-        assert_eq!(tokens.len(), 5); // FormatScientific, Pipe, Integer, Pipe, Eof
-        assert!(matches!(tokens[0], TokenKind::FormatScientific));
+    fn test_hash_comma_expression() {
+        let tokens = lex("#,|1500000|");
+        assert_eq!(tokens.len(), 5); // HashComma, Pipe, Integer, Pipe, Eof
+        assert!(matches!(tokens[0], TokenKind::HashComma));
         assert!(matches!(tokens[1], TokenKind::Pipe));
         assert!(matches!(tokens[2], TokenKind::Integer(1500000)));
         assert!(matches!(tokens[3], TokenKind::Pipe));
     }
 
     #[test]
-    fn test_format_comma_expression() {
-        let tokens = lex("c|total|");
-        assert_eq!(tokens.len(), 5); // FormatComma, Pipe, Ident, Pipe, Eof
-        assert!(matches!(tokens[0], TokenKind::FormatComma));
+    fn test_hash_caret_expression() {
+        let tokens = lex("#^|total|");
+        assert_eq!(tokens.len(), 5); // HashCaret, Pipe, Ident, Pipe, Eof
+        assert!(matches!(tokens[0], TokenKind::HashCaret));
         assert!(matches!(tokens[1], TokenKind::Pipe));
         assert!(matches!(tokens[2], TokenKind::Ident(_)));
         assert!(matches!(tokens[3], TokenKind::Pipe));
     }
 
     #[test]
-    fn test_e_is_identifier_without_pipe() {
-        // When 'e' is not followed by '|', it should be treated as an identifier
+    fn test_e_is_identifier() {
+        // 'e' is now always an identifier (no longer overloaded as format prefix)
         let tokens = lex("e");
         assert_eq!(tokens.len(), 2); // Ident + Eof
         match &tokens[0] {
@@ -1468,8 +1480,8 @@ mod tests {
     }
 
     #[test]
-    fn test_c_is_identifier_without_pipe() {
-        // When 'c' is not followed by '|', it should be treated as an identifier
+    fn test_c_is_identifier() {
+        // 'c' is now always an identifier (no longer overloaded as format prefix)
         let tokens = lex("c");
         assert_eq!(tokens.len(), 2); // Ident + Eof
         match &tokens[0] {

@@ -157,8 +157,8 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         | TokenKind::HashQuestion    // #?
         | TokenKind::HashDot         // #.
         | TokenKind::HashExclaim     // #!
-        | TokenKind::FormatScientific // e|
-        | TokenKind::FormatComma     // c|
+        | TokenKind::HashComma       // #,
+        | TokenKind::HashCaret       // #^
         | TokenKind::BaseBinary      // 0b
         | TokenKind::BaseOctal       // 0o
         | TokenKind::BaseDecimal     // 0d
@@ -338,7 +338,7 @@ fn token_length(kind: &TokenKind) -> u32 {
         TokenKind::Integer(n) => format!("{}", n).len() as u32,
         TokenKind::Float(f) => format!("{}", f).len() as u32,
         TokenKind::Ident(name) => name.len() as u32,
-        TokenKind::FormatScientific | TokenKind::FormatComma => 1, // e or c (pipe is separate)
+        TokenKind::HashComma | TokenKind::HashCaret => 2, // #, or #^ (two-char tokens)
         TokenKind::LineComment(content) => (content.len() + 2) as u32, // +2 for //
         TokenKind::BlockComment(content) => (content.len() + 4) as u32, // +4 for /* */
         TokenKind::Error(msg) => msg.len() as u32,
