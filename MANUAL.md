@@ -1329,13 +1329,22 @@ rstr = #.2|"19.876"|
 ```zymbol
 // Comma-separated format for large numbers
 nfmt = 1234567
-fmt = c|nfmt|
+fmt = #,|nfmt|
 >> fmt ¶    // → 1,234,567
+
+// With inline precision: round (.N) or truncate (!N)
+pi = 3141592.653
+>> #,.2|pi| ¶    // → 3,141,592.65  (round to 2 decimal places)
+>> #,!2|pi| ¶    // → 3,141,592.65  (truncate to 2 decimal places)
 
 // Scientific notation
 xsci = 12345.678
-sci = e|xsci|
+sci = #^|xsci|
 >> sci ¶    // → 1.2345678e4
+
+// With inline precision: round (.N) or truncate (!N)
+>> #^.3|xsci| ¶    // → 1.235e4  (round to 3 significant digits)
+>> #^!3|xsci| ¶    // → 1.234e4  (truncate to 3 significant digits)
 ```
 
 ### Base Literals and Conversions
