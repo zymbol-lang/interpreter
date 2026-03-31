@@ -4,72 +4,81 @@ This repository contains multiple components licensed under different terms:
 
 ---
 
-## Source Code - GNU Affero General Public License v3.0 (AGPL-3.0)
+## Source Code - GNU Affero General Public License v3.0 (AGPL-3.0-only)
 
 All source code, including but not limited to:
+
 - `crates/` - Compiler and interpreter implementation (Rust)
   - `zymbol-cli/` - Command-line interface
-  - `zymbol-parser/` - Parser implementation
   - `zymbol-lexer/` - Lexical analyzer
-  - `zymbol-interpreter/` - Interpreter runtime
-  - `zymbol-ast/` - Abstract syntax tree
-  - `zymbol-common/` - Shared utilities
-  - `zymbol-error/` - Error handling
-- `vscode-extension-zymbol-lang/` - VSCode extension
+  - `zymbol-parser/` - Recursive descent parser
+  - `zymbol-ast/` - Abstract syntax tree definitions
+  - `zymbol-semantic/` - Semantic analysis and type checking
+  - `zymbol-interpreter/` - Tree-walker interpreter runtime
+  - `zymbol-compiler/` - AST-to-bytecode compiler
+  - `zymbol-bytecode/` - Bytecode instructions and compiled program format
+  - `zymbol-vm/` - Register-based virtual machine executor
+  - `zymbol-analyzer/` - LSP analysis engine
+  - `zymbol-lsp/` - Language Server Protocol implementation
+  - `zymbol-formatter/` - Code formatter
+  - `zymbol-repl/` - Interactive REPL
+  - `zymbol-standalone/` - Standalone executable builder
+  - `zymbol-span/` - Source position tracking
+  - `zymbol-error/` - Error reporting and diagnostics
+  - `zymbol-common/` - Shared types and utilities
 
-**is licensed under the GNU Affero General Public License version 3.0 (AGPL-3.0).**
+**is licensed under the GNU Affero General Public License version 3.0 (AGPL-3.0-only).**
 
-### Key Terms (Summary):
-- You are free to use, modify, and distribute this software
+### Key Terms (Source Code)
+
+- You are free to use, modify, and distribute this software.
 - If you distribute modified versions, you must:
-  - Provide the complete source code
-  - License your modifications under AGPL-3.0
-  - Make source available to users interacting with the software over a network
-- This is a copyleft license ensuring all derivatives remain free software
+  - Provide the complete source code.
+  - License your modifications under AGPL-3.0-only.
+  - Make source available to users interacting with the software over a network.
+- This is a copyleft license ensuring all derivatives remain free software.
 
-**Full License Text:** See `LICENSE-AGPL-3.0` or visit:
-https://www.gnu.org/licenses/agpl-3.0.html
+**Full License Text:** See [`LICENSE-AGPL-3.0`](LICENSE-AGPL-3.0) or visit <https://www.gnu.org/licenses/agpl-3.0.html>
 
 ---
 
 ## Documentation & Design - Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)
 
 All documentation, design specifications, and educational materials, including but not limited to:
-- `*.md` files - Documentation (README, CLAUDE, ANALYSIS, etc.)
+
+- `*.md` files - Documentation (README, ANALYSIS, etc.)
 - `zymbol.ebnf` - Grammar specification
 - `tests/` - Test files and examples (`.zy` files)
 - `examples/` - Example code and tutorials
 
 **are licensed under Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0).**
 
-### Key Terms (Summary):
-- You are free to:
-  - Share, copy, and redistribute the material in any medium or format
-  - Adapt, remix, transform, and build upon the material
-- Under the following terms:
-  - **Attribution:** You must give appropriate credit and indicate if changes were made
-  - **ShareAlike:** If you remix or build upon the material, you must distribute your contributions under the same CC BY-SA 4.0 license
-- No additional restrictions may be applied
+### Key Terms (Documentation)
 
-**Full License Text:** See `LICENSE-CC-BY-SA-4.0` or visit:
-https://creativecommons.org/licenses/by-sa/4.0/
+- You are free to:
+  - Share, copy, and redistribute the material in any medium or format.
+  - Adapt, remix, transform, and build upon the material.
+- Under the following terms:
+  - **Attribution:** You must give appropriate credit and indicate if changes were made.
+  - **ShareAlike:** If you remix or build upon the material, you must distribute your contributions under the same CC BY-SA 4.0 license.
+- No additional restrictions may be applied.
+
+**Full License Text:** See [`LICENSE-CC-BY-SA-4.0`](LICENSE-CC-BY-SA-4.0) or visit <https://creativecommons.org/licenses/by-sa/4.0/>
 
 ---
 
 ## Quick Reference
 
-| Component | License | File Location |
-|-----------|---------|---------------|
-| Source Code (Rust, JavaScript, TypeScript) | AGPL-3.0 | `LICENSE-AGPL-3.0` |
-| Documentation, Grammar, Examples | CC BY-SA 4.0 | `LICENSE-CC-BY-SA-4.0` |
+| Component                                  | License       | File                   |
+|--------------------------------------------|---------------|------------------------|
+| Source Code (Rust, JavaScript, TypeScript) | AGPL-3.0-only | `LICENSE-AGPL-3.0`     |
+| Documentation, Grammar, Examples           | CC BY-SA 4.0  | `LICENSE-CC-BY-SA-4.0` |
 
 ---
 
 ## Copyright
 
-Copyright (C) 2024-2025 Zymbol-Lang Team
-
-Repository: https://github.com/your-org/zymbol-lang
+Copyright (C) 2024-2026 Zymbol-Lang Team
 
 ---
 
@@ -77,46 +86,51 @@ Repository: https://github.com/your-org/zymbol-lang
 
 ### Why Two Licenses?
 
-**AGPL-3.0 for Code:**
-The Zymbol-Lang compiler and related software tools are licensed under AGPL-3.0 to ensure that:
-- The software remains free and open source
-- Any modifications shared publicly (including via network services) must provide source code
-- The community benefits from improvements and derivatives
-- Network deployment of modified versions requires source disclosure
+**AGPL-3.0-only for Code:**
+The Zymbol-Lang compiler and related software tools are licensed under AGPL-3.0-only to ensure that:
+
+- The software remains free and open source.
+- Any modifications shared publicly (including via network services) must provide source code.
+- The community benefits from improvements and derivatives.
+- Network deployment of modified versions requires source disclosure.
 
 **CC BY-SA 4.0 for Documentation:**
 Documentation and design materials use CC BY-SA 4.0 because:
-- It's specifically designed for creative works and documentation
-- It allows broader use in educational contexts
-- It's more permissive for documentation while still requiring attribution and share-alike
-- It's compatible with documentation aggregation and educational platforms
+
+- It is specifically designed for creative works and documentation.
+- It allows broader use in educational contexts.
+- It is more permissive for documentation while still requiring attribution and share-alike.
+- It is compatible with documentation aggregation and educational platforms.
 
 ### License Compatibility
 
-- **Code derivatives:** Must be AGPL-3.0 or compatible
-- **Documentation derivatives:** Must be CC BY-SA 4.0 or compatible
-- **Combined works:** When combining code + documentation, both licenses apply to their respective parts
+- **Code derivatives:** Must be AGPL-3.0-only or compatible.
+- **Documentation derivatives:** Must be CC BY-SA 4.0 or compatible.
+- **Combined works:** When combining code and documentation, both licenses apply to their respective parts.
 
 ### For Contributors
 
 By contributing to this project, you agree that:
-- Your code contributions will be licensed under AGPL-3.0
-- Your documentation contributions will be licensed under CC BY-SA 4.0
-- You have the legal right to contribute the material
+
+- Your code contributions will be licensed under AGPL-3.0-only.
+- Your documentation contributions will be licensed under CC BY-SA 4.0.
+- You have the legal right to contribute the material.
 
 ---
 
 ## Language Philosophy
 
 Zymbol-Lang is designed as a **minimalist symbolic programming language** with:
-- No keywords (pure symbolic syntax)
-- Language-agnostic design (works across cultures)
-- Full Unicode support
-- Functional programming paradigms
+
+- No keywords (pure symbolic syntax).
+- Language-agnostic design (works across cultures).
+- Full Unicode support.
+- Functional programming paradigms.
 
 The dual-licensing approach ensures both:
-1. The code remains free and open (AGPL-3.0)
-2. Documentation can be widely shared and adapted (CC BY-SA 4.0)
+
+1. The code remains free and open (AGPL-3.0-only).
+2. Documentation can be widely shared and adapted (CC BY-SA 4.0).
 
 ---
 
@@ -128,4 +142,4 @@ See the individual license files for complete warranty disclaimers and limitatio
 
 ---
 
-**Last Updated:** December 2024
+**Last Updated:** March 2026

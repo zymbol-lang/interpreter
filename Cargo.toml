@@ -28,7 +28,7 @@ members = [
 [workspace.package]
 version = "0.0.2"
 edition = "2021"
-license = "AGPL-3.0"
+license = "AGPL-3.0-only"
 authors = ["Zymbol-Lang Contributors"]
 repository = "https://github.com/your-username/zymbol-lang"
 
