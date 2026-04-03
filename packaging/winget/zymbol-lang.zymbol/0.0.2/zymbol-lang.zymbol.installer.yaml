@@ -10,7 +10,7 @@ Commands:
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/zymbol-lang/interpreter/releases/download/v0.0.2/zymbol_lang_v0.0.2_x86_64_windows.exe
-    InstallerSha256: PLACEHOLDER_UPDATE_AFTER_BUILD
+    InstallerSha256: dcabe0d5cf7e3f58c49c90d36209207f1c2f3b89d06592b5f380e44a4ba5870f
     PortableCommandAlias: zymbol
 ManifestType: installer
 ManifestVersion: 1.6.0
