@@ -1,0 +1,52 @@
+name: Build macOS binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to upload to (e.g. v0.0.2)'
+        required: true
+
+jobs:
+  build-macos:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-13        # Intel
+            target: x86_64-apple-darwin
+          - arch: aarch64
+            runner: macos-latest   # Apple Silicon (M1/M2)
+            target: aarch64-apple-darwin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare asset
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
+          ASSET="zymbol_lang_v${VERSION}_${{ matrix.arch }}_macos"
+          cp target/${{ matrix.target }}/release/zymbol "$ASSET"
+          chmod +x "$ASSET"
+          sha256sum "$ASSET" | tee "SHA256_${{ matrix.arch }}_macos.txt"
+          echo "ASSET=$ASSET" >> "$GITHUB_ENV"
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          gh release upload "$TAG" "$ASSET" "SHA256_${{ matrix.arch }}_macos.txt" --clobber
