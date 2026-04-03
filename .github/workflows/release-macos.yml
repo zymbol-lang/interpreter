@@ -17,10 +17,10 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: macos-13        # Intel
+            runner: macos-12        # Intel
             target: x86_64-apple-darwin
           - arch: aarch64
-            runner: macos-latest   # Apple Silicon (M1/M2)
+            runner: macos-latest    # Apple Silicon (M1/M2)
             target: aarch64-apple-darwin
 
     steps:
@@ -41,7 +41,7 @@ jobs:
           ASSET="zymbol_lang_v${VERSION}_${{ matrix.arch }}_macos"
           cp target/${{ matrix.target }}/release/zymbol "$ASSET"
           chmod +x "$ASSET"
-          sha256sum "$ASSET" | tee "SHA256_${{ matrix.arch }}_macos.txt"
+          shasum -a 256 "$ASSET" | tee "SHA256_${{ matrix.arch }}_macos.txt"
           echo "ASSET=$ASSET" >> "$GITHUB_ENV"
 
       - name: Upload to release
