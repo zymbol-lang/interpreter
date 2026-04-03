@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # build-packages.sh — Zymbol packaging script
-# Produces .deb, .rpm, .pkg.tar.zst, and .AppImage from the compiled binary.
+# Produces .deb, .rpm, .pkg.tar.zst, and a static musl binary from the compiled source.
 #
 # Usage: bash packaging/build-packages.sh [OPTIONS]
 # Run from interpreter/ (the git repository root).
@@ -39,7 +39,7 @@ Usage: bash packaging/build-packages.sh [OPTIONS]
 Options:
   --version  X.Y.Z       Override version (default: read from interpreter/Cargo.toml)
   --arch     ARCH        x86_64 | aarch64  (default: host arch via uname -m)
-  --formats  LIST        Comma-separated subset: deb,rpm,arch,appimage,win,winmsi  (default: all)
+  --formats  LIST        Comma-separated subset: deb,rpm,arch,static,win,winmsi  (default: all)
   --cross                Cross-compile with 'cross' (required for aarch64 on x86_64 host)
   --no-build             Skip cargo/cross build; use existing binary
   --no-hashes            Skip SHA256SUMS / SHA512SUMS generation
@@ -48,7 +48,7 @@ Options:
 
 Examples:
   bash packaging/build-packages.sh
-  bash packaging/build-packages.sh --formats deb,appimage
+  bash packaging/build-packages.sh --formats deb,static
   bash packaging/build-packages.sh --arch aarch64 --cross
 EOF
 }
@@ -112,7 +112,7 @@ esac
 # ---------------------------------------------------------------------------
 # Formats to build
 # ---------------------------------------------------------------------------
-build_deb=false; build_rpm=false; build_arch=false; build_appimage=false
+build_deb=false; build_rpm=false; build_arch=false; build_static=false
 build_win=false; build_winmsi=false
 IFS=',' read -ra fmt_list <<< "${FORMATS}"
 for f in "${fmt_list[@]}"; do
@@ -120,12 +120,12 @@ for f in "${fmt_list[@]}"; do
         deb)      build_deb=true ;;
         rpm)      build_rpm=true ;;
         arch)     build_arch=true ;;
-        appimage) build_appimage=true ;;
+        static)   build_static=true ;;
         win)      build_win=true ;;
         winmsi)   build_winmsi=true ;;
         all)      build_deb=true; build_rpm=true; build_arch=true
-                  build_appimage=true; build_win=true; build_winmsi=true ;;
-        *) error "Unknown format '${f}'. Valid: deb,rpm,arch,appimage,win,winmsi,all" ;;
+                  build_static=true; build_win=true; build_winmsi=true ;;
+        *) error "Unknown format '${f}'. Valid: deb,rpm,arch,static,win,winmsi,all" ;;
     esac
 done
 
@@ -374,89 +374,48 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# .AppImage
+# Static musl binary (no dependencies — works on any Linux)
 # ---------------------------------------------------------------------------
-APPIMAGETOOL_URL_X86_64="https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
-APPIMAGETOOL_URL_AARCH64="https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage"
+build_static_package() {
+    info "Building static musl binary..."
 
-resolve_appimagetool() {
-    if command -v appimagetool &>/dev/null; then
-        echo "appimagetool"
-        return
-    fi
+    # musl cross-compilation matrix
+    local musl_target
+    case "${ARCH}" in
+        x86_64)  musl_target="x86_64-unknown-linux-musl" ;;
+        aarch64) musl_target="aarch64-unknown-linux-musl" ;;
+        *) error "No musl target mapping for arch: ${ARCH}" ;;
+    esac
 
-    local cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/zymbol-packaging"
+    # Ensure the Rust target is installed
+    rustup target add "${musl_target}" &>/dev/null || true
 
-    # Always use the host-native appimagetool (x86_64 can cross-build aarch64
-    # AppImages because it carries the aarch64 runtime embedded; ARCH env var
-    # controls the target architecture of the output, not the tool itself).
-    local host_arch; host_arch="$(uname -m)"
-    local tool="${cache_dir}/appimagetool-${host_arch}"
+    local out="${OUT_DIR}/${BASE_NAME}_linux"
 
-    if [[ ! -x "${tool}" ]]; then
-        warn "appimagetool not found — downloading automatically..." >&2
-        mkdir -p "${cache_dir}"
+    if [[ "${DO_BUILD}" == true ]]; then
+        cd "${INTERP_DIR}"
 
-        local url
-        case "${host_arch}" in
-            x86_64)  url="${APPIMAGETOOL_URL_X86_64}" ;;
-            aarch64) url="${APPIMAGETOOL_URL_AARCH64}" ;;
-            *) error "No appimagetool binary available for host arch: ${host_arch}" ;;
-        esac
-
-        if command -v curl &>/dev/null; then
-            curl -fsSL -o "${tool}" "${url}" >&2
-        elif command -v wget &>/dev/null; then
-            wget -qO "${tool}" "${url}" >&2
-        else
-            error "Neither 'curl' nor 'wget' found. Install one to auto-download appimagetool."
+        local linker_env=""
+        if [[ "${ARCH}" == "aarch64" ]]; then
+            command -v aarch64-linux-musl-gcc &>/dev/null \
+                || error "aarch64 musl cross-compiler not found.
+Install with: sudo apt install musl-tools gcc-aarch64-linux-gnu
+And set up musl cross toolchain (e.g. musl-cross-make)."
+            linker_env="CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc"
         fi
-        chmod +x "${tool}"
-        echo -e "${GREEN}[OK]${NC}    appimagetool ready at ${tool}" >&2
-    fi
 
-    echo "${tool}"
-}
+        env ${linker_env} RUSTFLAGS="-C target-feature=+crt-static" \
+            cargo build --release --target "${musl_target}"
 
-build_appimage_package() {
-    info "Building .AppImage..."
-
-    local appimagetool; appimagetool="$(resolve_appimagetool)"
-
-    local tmp; tmp="$(mktemp -d)"
-    trap 'rm -rf "${tmp}"' RETURN
-
-    local appdir="${tmp}/AppDir"
-    mkdir -p "${appdir}/usr/bin"
-
-    # AppRun
-    cat > "${appdir}/AppRun" <<'APPRUN'
-#!/usr/bin/env bash
-exec "$(dirname "$(readlink -f "$0")")/usr/bin/zymbol" "$@"
-APPRUN
-    chmod +x "${appdir}/AppRun"
-
-    # Binary
-    install -m 755 "${BINARY}" "${appdir}/usr/bin/zymbol"
-
-    # Desktop entry (required by AppImage spec)
-    install -m 644 "${DESKTOP_SRC}" "${appdir}/zymbol.desktop"
-
-    # Icon (required by AppImage spec; must be at root without extension)
-    if [[ -n "${ICON}" ]]; then
-        install -m 644 "${ICON}" "${appdir}/zymbol.png"
+        cd "${REPO_ROOT}"
+        local built="${INTERP_DIR}/target/${musl_target}/release/zymbol"
+        [[ -f "${built}" ]] || error "Static binary not found at: ${built}"
+        install -m 755 "${built}" "${out}"
     else
-        warn "No icon found — AppImage may not display correctly in launchers"
+        [[ -f "${out}" ]] || error "Static binary not found at ${out} (and --no-build was set)"
     fi
 
-    local out="${OUT_DIR}/${BASE_NAME}.AppImage"
-
-    ARCH="${APPIMAGE_ARCH}" APPIMAGE_EXTRACT_AND_RUN=1 "${appimagetool}" "${appdir}" "${out}" 2>&1 \
-        | grep -v "^$" || true
-
-    [[ -f "${out}" ]] || error "appimagetool did not produce an AppImage"
-    chmod +x "${out}"
-    success ".AppImage → ${out}"
+    success "static binary → ${out}"
 }
 
 # ---------------------------------------------------------------------------
@@ -600,12 +559,14 @@ generate_hashes() {
 
     # Collect all Linux packages produced in this session (current BASE_NAME only)
     local linux_pkgs=()
-    for ext in deb rpm pkg.tar.zst AppImage; do
+    for ext in deb rpm pkg.tar.zst; do
         for f in "${OUT_DIR}/${BASE_NAME}".*.${ext} "${OUT_DIR}/${BASE_NAME}".${ext}; do
             [[ -f "$f" ]] && linux_pkgs+=("$(basename "${f}")")
         done
-        # also match exact BASE_NAME.ext (no extra dot segment)
     done
+    # Static binary (no extension)
+    local static_bin="${OUT_DIR}/${BASE_NAME}_linux"
+    [[ -f "${static_bin}" ]] && linux_pkgs+=("$(basename "${static_bin}")")
 
     # Fallback: match any file built with current BASE_NAME prefix
     if [[ ${#linux_pkgs[@]} -eq 0 ]]; then
@@ -613,7 +574,7 @@ generate_hashes() {
             linux_pkgs+=("$(basename "${f}")")
         done < <(find "${OUT_DIR}" -maxdepth 1 -name "${BASE_NAME}*" \
                    \( -name "*.deb" -o -name "*.rpm" \
-                   -o -name "*.pkg.tar.zst" -o -name "*.AppImage" \) \
+                   -o -name "*.pkg.tar.zst" -o -name "*_linux" \) \
                    -print0 2>/dev/null)
     fi
 
@@ -641,7 +602,7 @@ echo ""
 [[ "${build_deb}" == true ]]      && build_deb_package
 [[ "${build_rpm}" == true ]]      && build_rpm_package
 [[ "${build_arch}" == true ]]     && build_arch_package
-[[ "${build_appimage}" == true ]] && build_appimage_package
+[[ "${build_static}" == true ]]   && build_static_package
 [[ "${build_win}" == true ]]      && build_windows_package
 [[ "${build_winmsi}" == true ]]   && build_windows_msi_package
 

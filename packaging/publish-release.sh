@@ -95,7 +95,7 @@ mkdir -p "${OUT_DIR}"
 rm -f "${OUT_DIR}"/*.deb \
       "${OUT_DIR}"/*.rpm \
       "${OUT_DIR}"/*.pkg.tar.zst \
-      "${OUT_DIR}"/*.AppImage \
+      "${OUT_DIR}"/*_linux \
       "${OUT_DIR}"/SHA256SUMS \
       "${OUT_DIR}"/SHA512SUMS
 success "dist/ cleaned (Windows .msi / .exe untouched)"
@@ -144,14 +144,13 @@ renamed=()
 for f in "${OUT_DIR}"/zymbol_lang_v*.deb \
          "${OUT_DIR}"/zymbol_lang_v*.rpm \
          "${OUT_DIR}"/zymbol_lang_v*.pkg.tar.zst \
-         "${OUT_DIR}"/zymbol_lang_v*.AppImage; do
+         "${OUT_DIR}"/zymbol_lang_v*_linux; do
     [[ -f "$f" ]] || continue
     base="$(basename "${f}")"
 
-    # Match: zymbol_lang_v{VER}_{ARCH}_{TIMESTAMP}.ext
-    # Target: zymbol_lang_v{VER}_{ARCH}.ext
-    # The timestamp segment is 15 chars: \d{8}T\d{4}
-    canonical="$(echo "${base}" | sed -E 's/_[0-9]{8}T[0-9]{4}(\.[^.]+(\.[^.]+)?)$/\1/')"
+    # Match: zymbol_lang_v{VER}_{ARCH}_{TIMESTAMP}.ext  or  …_{TIMESTAMP}_linux
+    # Target: zymbol_lang_v{VER}_{ARCH}.ext  or  …_{ARCH}_linux
+    canonical="$(echo "${base}" | sed -E 's/_[0-9]{8}T[0-9]{4}(\.[^.]+(\.[^.]+)?|_linux)$/\1/')"
 
     if [[ "${base}" != "${canonical}" ]]; then
         mv -f "${f}" "${OUT_DIR}/${canonical}"
@@ -173,7 +172,7 @@ linux_canonical=()
 for f in "${OUT_DIR}"/zymbol_lang_v*.deb \
          "${OUT_DIR}"/zymbol_lang_v*.rpm \
          "${OUT_DIR}"/zymbol_lang_v*.pkg.tar.zst \
-         "${OUT_DIR}"/zymbol_lang_v*.AppImage; do
+         "${OUT_DIR}"/zymbol_lang_v*_linux; do
     [[ -f "$f" ]] && linux_canonical+=("$(basename "${f}")")
 done
 
@@ -234,7 +233,7 @@ if [[ ! -f "${INTERP_NOTES}" ]]; then
 - \`.deb\` — Debian / Ubuntu
 - \`.rpm\` — Fedora / RHEL / openSUSE
 - \`.pkg.tar.zst\` — Arch Linux
-- \`.AppImage\` — Universal (any Linux)
+- \`_linux\` — Static binary (musl, no dependencies, any Linux)
 
 ### Verification
 Download \`SHA256SUMS\` alongside your package and run:
