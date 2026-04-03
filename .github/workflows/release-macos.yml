@@ -20,7 +20,7 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: macos-12        # Intel
+            runner: macos-13        # Intel
             target: x86_64-apple-darwin
           - arch: aarch64
             runner: macos-latest    # Apple Silicon (M1/M2)
