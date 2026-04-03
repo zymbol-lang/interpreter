@@ -1,0 +1,55 @@
+name: Build aarch64 static binary
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to upload to (e.g. v0.0.2)'
+        required: true
+
+jobs:
+  build-aarch64-musl:
+    name: aarch64 static musl binary
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Download musl.cc aarch64 toolchain
+        run: |
+          curl -fsSL https://musl.cc/aarch64-linux-musl-cross.tgz \
+            | tar -xz -C /opt
+          echo "/opt/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Build static binary
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-gcc
+        run: cargo build --release --target aarch64-unknown-linux-musl
+
+      - name: Prepare asset
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
+          cp target/aarch64-unknown-linux-musl/release/zymbol \
+             "zymbol_lang_v${VERSION}_aarch64_linux"
+          chmod +x "zymbol_lang_v${VERSION}_aarch64_linux"
+          echo "ASSET=zymbol_lang_v${VERSION}_aarch64_linux" >> "$GITHUB_ENV"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Compute SHA256
+        run: sha256sum "$ASSET" | tee SHA256_aarch64_linux.txt
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          gh release upload "$TAG" "$ASSET" SHA256_aarch64_linux.txt --clobber
