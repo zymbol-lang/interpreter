@@ -1,0 +1,15 @@
+Package: zymbol-lang
+Version: {{VERSION}}
+Architecture: {{DEB_ARCH}}
+Maintainer: Zymbol-Lang Contributors
+Depends: libc6 (>= 2.17)
+Section: devel
+Priority: optional
+Homepage: https://github.com/your-username/zymbol-lang
+Description: Zymbol symbolic programming language
+ Zymbol is a keyword-free symbolic programming language where every
+ construct (conditionals, loops, functions, I/O, error handling) is
+ expressed using pure symbols such as ?, @, ->, >> and others.
+ .
+ This package provides the zymbol CLI: interpreter, REPL, formatter,
+ checker, and standalone compiler.

@@ -1,0 +1,23 @@
+# Maintainer: Zymbol-Lang Contributors
+pkgname=zymbol-lang
+pkgver={{VERSION}}
+pkgrel=1
+pkgdesc="Zymbol symbolic programming language — keyword-free, symbol-driven"
+arch=('x86_64' 'aarch64')
+url="https://github.com/your-username/zymbol-lang"
+license=('AGPL-3.0-only')
+depends=('glibc')
+options=('!strip')
+
+# Source is a tarball with the pre-built binary for the current arch.
+source_x86_64=("zymbol-${pkgver}-x86_64.tar.gz")
+source_aarch64=("zymbol-${pkgver}-aarch64.tar.gz")
+sha256sums_x86_64=('{{SHA256_X86_64}}')
+sha256sums_aarch64=('{{SHA256_AARCH64}}')
+
+package() {
+    install -Dm755 "zymbol" "${pkgdir}/usr/bin/zymbol"
+    install -Dm644 "zymbol.desktop" "${pkgdir}/usr/share/applications/zymbol.desktop"
+    install -Dm644 "zymbol.png" "${pkgdir}/usr/share/pixmaps/zymbol.png"
+    install -Dm644 "copyright" "${pkgdir}/usr/share/doc/${pkgname}/copyright"
+}

@@ -1,0 +1,44 @@
+# Disable automatic debuginfo subpackage (binary is pre-built/stripped)
+%define debug_package %{nil}
+# Force output architecture for cross-builds (pre-built binary package)
+%define _arch {{RPM_ARCH}}
+
+Name:           zymbol-lang
+Version:        {{VERSION}}
+Release:        1%{?dist}
+Summary:        Zymbol symbolic programming language
+License:        AGPL-3.0-only
+URL:            https://github.com/your-username/zymbol-lang
+
+# Pre-built binary package — no compilation at install time.
+# Source0 is a tarball containing only the compiled binary.
+Source0:        zymbol-{{VERSION}}-{{RPM_ARCH}}.tar.gz
+
+Requires:       glibc >= 2.17
+
+%description
+Zymbol is a keyword-free symbolic programming language where every
+construct (conditionals, loops, functions, I/O, error handling) is
+expressed using pure symbols such as ?, @, ->, >> and others.
+
+This package provides the zymbol CLI: interpreter, REPL, formatter,
+checker, and standalone compiler.
+
+%prep
+%setup -q -n zymbol-{{VERSION}}-{{RPM_ARCH}}
+
+%install
+install -Dm755 zymbol %{buildroot}%{_bindir}/zymbol
+install -Dm644 zymbol.desktop %{buildroot}%{_datadir}/applications/zymbol.desktop
+install -Dm644 zymbol.png %{buildroot}%{_datadir}/pixmaps/zymbol.png
+install -Dm644 copyright %{buildroot}%{_datadir}/doc/%{name}/copyright
+
+%files
+%{_bindir}/zymbol
+%{_datadir}/applications/zymbol.desktop
+%{_datadir}/pixmaps/zymbol.png
+%doc %{_datadir}/doc/%{name}/copyright
+
+%changelog
+* {{RPM_DATE}} Zymbol-Lang Contributors <noreply@zymbol-lang.dev> - {{VERSION}}-1
+- Release {{VERSION}}

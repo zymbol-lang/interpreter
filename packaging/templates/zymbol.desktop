@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Zymbol
+GenericName=Programming Language
+Comment=Zymbol symbolic programming language interpreter
+Exec=zymbol
+Icon=zymbol
+Terminal=true
+Type=Application
+Categories=Development;Languages;
+Keywords=zymbol;programming;language;interpreter;

@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- zymbol.wxs.in — Zymbol-Lang MSI installer (WiX / wixl) -->
+<!-- Variables substituted at build time: {{VERSION}}, {{GUID_UPGRADE}} -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <Product
+    Id="*"
+    Name="Zymbol-Lang"
+    Language="1033"
+    Version="{{VERSION}}"
+    Manufacturer="Zymbol-Lang Contributors"
+    UpgradeCode="{{GUID_UPGRADE}}">
+
+    <Package
+      InstallerVersion="400"
+      Compressed="yes"
+      InstallScope="perMachine"
+      Description="Zymbol symbolic programming language"
+      Comments="Keyword-free symbolic programming language" />
+
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of Zymbol-Lang is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- ── Program Files directory ── -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Zymbol-Lang" />
+      </Directory>
+    </Directory>
+
+    <!-- ── Files to install ── -->
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="MainBinary" Guid="A1B2C3D4-0001-0001-0001-EF1234567890">
+        <File Id="ZymbolExe"
+              Source="zymbol.exe"
+              Name="zymbol.exe"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="LicenseComp" Guid="A1B2C3D4-0002-0002-0002-EF1234567890">
+        <File Id="LicenseFile"
+              Source="LICENSE"
+              Name="LICENSE"
+              KeyPath="yes" />
+      </Component>
+      <!-- Add zymbol to system PATH -->
+      <Component Id="PathEnv" Guid="A1B2C3D4-0003-0003-0003-EF1234567890">
+        <Environment Id="ZymbolPATH"
+                     Action="set"
+                     Name="PATH"
+                     Part="last"
+                     Permanent="no"
+                     System="yes"
+                     Value="[INSTALLFOLDER]" />
+        <RegistryValue Root="HKLM"
+                       Key="Software\Zymbol-Lang"
+                       Name="installed"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- ── Feature definition ── -->
+    <Feature Id="ProductFeature" Title="Zymbol-Lang" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+    </Feature>
+
+    <!-- ── Add/Remove Programs metadata ── -->
+    <Property Id="ARPHELPLINK" Value="https://zymbol-lang.org" />
+    <Property Id="ARPURLINFOABOUT" Value="https://zymbol-lang.org" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+  </Product>
+</Wix>

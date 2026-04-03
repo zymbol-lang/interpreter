@@ -35,3 +35,7 @@ tests/output/
 # Environment / secrets
 .env
 .env.*
+
+# Packaging — built artifacts and release notes (uploaded to GitHub Releases, not committed)
+packaging/dist/
+packaging/RELEASE_NOTES_*.md
