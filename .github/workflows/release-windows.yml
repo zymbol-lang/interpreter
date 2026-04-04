@@ -43,10 +43,35 @@ jobs:
         run: |
           sha256sum "$ASSET" | tee SHA256_x86_64_windows.txt
 
+      - name: Build MSI installer
+        shell: bash
+        run: |
+          choco install wixtoolset --no-progress -y
+          export PATH="/c/Program Files (x86)/WiX Toolset v3.14/bin:$PATH"
+
+          MSI_ASSET="zymbol_lang_v${VERSION}_x86_64_windows.msi"
+          GUID_UPGRADE="A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+
+          mkdir -p msi_staging
+          cp target/x86_64-pc-windows-msvc/release/zymbol.exe msi_staging/zymbol.exe
+          cp LICENSE msi_staging/LICENSE 2>/dev/null || cp LICENSE-AGPL-3.0 msi_staging/LICENSE
+
+          sed \
+            -e "s/{{VERSION}}/${VERSION}/g" \
+            -e "s/{{GUID_UPGRADE}}/${GUID_UPGRADE}/g" \
+            packaging/templates/zymbol.wxs.in > msi_staging/zymbol.wxs
+
+          cd msi_staging
+          candle.exe zymbol.wxs -arch x64 -o zymbol.wixobj
+          light.exe zymbol.wixobj -o "../${MSI_ASSET}"
+          cd ..
+
+          echo "MSI_ASSET=$MSI_ASSET" >> "$GITHUB_ENV"
+
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           TAG="${{ github.event.release.tag_name || inputs.tag }}"
-          gh release upload "$TAG" "$ASSET" SHA256_x86_64_windows.txt --clobber
+          gh release upload "$TAG" "$ASSET" SHA256_x86_64_windows.txt "$MSI_ASSET" --clobber
