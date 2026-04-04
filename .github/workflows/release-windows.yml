@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write   # required by SignPath
 
 jobs:
   build-windows:
@@ -68,10 +69,32 @@ jobs:
 
           echo "MSI_ASSET=$MSI_ASSET" >> "$GITHUB_ENV"
 
+      - name: Upload unsigned MSI as artifact
+        id: upload-unsigned-msi
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi-unsigned
+          path: "*.msi"
+          if-no-files-found: error
+
+      - name: Sign MSI via SignPath
+        id: sign-msi
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token:                    ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id:              ${{ secrets.SIGNPATH_ORG_ID }}
+          project-slug:                 zymbol-lang
+          signing-policy-slug:          release-signing
+          artifact-configuration-slug:  windows-installer
+          github-artifact-id:           ${{ steps.upload-unsigned-msi.outputs.artifact-id }}
+          wait-for-completion:          true
+          output-artifact-directory:    signed
+
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           TAG="${{ github.event.release.tag_name || inputs.tag }}"
-          gh release upload "$TAG" "$ASSET" SHA256_x86_64_windows.txt "$MSI_ASSET" --clobber
+          SIGNED_MSI="signed/${MSI_ASSET}"
+          gh release upload "$TAG" "$ASSET" SHA256_x86_64_windows.txt "$SIGNED_MSI" --clobber
