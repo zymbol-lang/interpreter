@@ -1,0 +1,135 @@
+// Numeral system: Takri (U+116C0–U+116C9)
+// Script: Takri
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Takri) ---
+// 𑛁𑛂
+// 𑛄
+// 𑛃𑛂
+// 𑛂
+// 𑛂
+// 𑛆𑛄
+// -𑛈
+// -𑛄
+// -𑛃𑛂
+// 𑛄.𑛇𑛅
+// 𑛂.𑛂𑛅
+// 𑛄.𑛃𑛇𑛅
+// 𑛂.𑛈
+// 𑛁𑛂.𑛂𑛅
+// -𑛁.𑛂𑛅
+// 𑛁𑛀𑛈
+// 𑛄𑛀𑛀
+// 𑛂𑛅𑛅
+// --- Booleans (in script mode) ---
+// #𑛁
+// #𑛀
+// #𑛁
+// #𑛀
+// #𑛁
+// #𑛀
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𑛈
+b = 𑛄
+c = 𑛃
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑛂) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𑛃.𑛅
+g = 𑛁.𑛂𑛅
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑛂) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𑛁𑛀𑛀
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Takri) ---" ¶
+
+#𑛀𑛉#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑛂) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑛂) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𑛁𑛂 > 𑛄)
+cmp_lt = (𑛄 > 𑛁𑛂)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𑛁 ¶
+>> #𑛀 ¶
+
+// Restore ASCII mode
+#09#

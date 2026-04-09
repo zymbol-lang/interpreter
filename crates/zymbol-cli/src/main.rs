@@ -83,6 +83,13 @@ enum Commands {
 
     /// Start interactive REPL
     Repl,
+
+    /// Start the Language Server Protocol server (reads from stdin, writes to stdout)
+    Lsp {
+        /// Use stdio transport — accepted for LSP client compatibility (this is always the mode)
+        #[arg(long, hide = true)]
+        stdio: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -94,12 +101,20 @@ fn main() -> Result<()> {
         Commands::Check { file } => check_file(file),
         Commands::Fmt { file, write, check, indent } => format_file(file, write, check, indent),
         Commands::Repl => start_repl(),
+        Commands::Lsp { .. } => start_lsp(),
     }
 }
 
 fn start_repl() -> Result<()> {
     let mut repl = Repl::new();
     repl.start().map_err(|e| anyhow::anyhow!("REPL error: {}", e))
+}
+
+fn start_lsp() -> Result<()> {
+    tokio::runtime::Runtime::new()
+        .map_err(|e| anyhow::anyhow!("failed to create tokio runtime: {}", e))?
+        .block_on(zymbol_lsp::run());
+    Ok(())
 }
 
 fn run_file(path: PathBuf, args: Vec<String>, use_vm: bool) -> Result<()> {

@@ -1,0 +1,135 @@
+// Numeral system: Mathematical Double-struck (U+1D7D8–U+1D7E1)
+// Script: Mathematical Double-struck
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Mathematical Double-struck) ---
+// 𝟙𝟚
+// 𝟜
+// 𝟛𝟚
+// 𝟚
+// 𝟚
+// 𝟞𝟜
+// -𝟠
+// -𝟜
+// -𝟛𝟚
+// 𝟜.𝟟𝟝
+// 𝟚.𝟚𝟝
+// 𝟜.𝟛𝟟𝟝
+// 𝟚.𝟠
+// 𝟙𝟚.𝟚𝟝
+// -𝟙.𝟚𝟝
+// 𝟙𝟘𝟠
+// 𝟜𝟘𝟘
+// 𝟚𝟝𝟝
+// --- Booleans (in script mode) ---
+// #𝟙
+// #𝟘
+// #𝟙
+// #𝟘
+// #𝟙
+// #𝟘
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𝟠
+b = 𝟜
+c = 𝟛
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𝟚) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𝟛.𝟝
+g = 𝟙.𝟚𝟝
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𝟚) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𝟙𝟘𝟘
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Mathematical Double-struck) ---" ¶
+
+#𝟘𝟡#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𝟚) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𝟚) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𝟙𝟚 > 𝟜)
+cmp_lt = (𝟜 > 𝟙𝟚)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𝟙 ¶
+>> #𝟘 ¶
+
+// Restore ASCII mode
+#09#

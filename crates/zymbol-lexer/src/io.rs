@@ -42,15 +42,6 @@ impl Lexer {
             return Some(Token::new(TokenKind::Backslash2, self.span(start)));
         }
 
-        // Check for \> (bash execute end) — MUST come before single-backslash check
-        // Bug fix: try_parse_io_token runs before the BashEnd check in next_token(),
-        // so \> was being consumed as Backslash + Gt instead of BashEnd.
-        if ch == '\\' && self.peek() == Some('>') {
-            self.advance();
-            self.advance();
-            return Some(Token::new(TokenKind::BashEnd, self.span(start)));
-        }
-
         // Check for \ (single backslash - lifetime end)
         if ch == '\\' {
             self.advance();

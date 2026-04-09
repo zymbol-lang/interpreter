@@ -85,11 +85,9 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         | TokenKind::Arrow           // ->
         | TokenKind::ScopeResolution // ::
         | TokenKind::PipeOp          // |>
-        | TokenKind::ExecuteStart    // </
-        | TokenKind::ExecuteEnd      // />
-        | TokenKind::BashStart       // <\
-        | TokenKind::BashEnd         // \>
-        | TokenKind::CliArgsCapture  // ><
+        | TokenKind::CliArgsCapture   // ><
+        | TokenKind::BashCommand(_)   // <\ command \>
+        | TokenKind::ExecuteCommand(_) // </ path />
         => Some(token_type_index::OPERATOR),
 
         // Assignment operators
@@ -209,9 +207,10 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         | TokenKind::BlockComment(_)
         => Some(token_type_index::COMMENT),
 
-        // Error and EOF tokens
+        // Error, EOF, and runtime-mode tokens
         TokenKind::Eof
         | TokenKind::Error(_)
+        | TokenKind::SetNumeralMode(_)
         => None,
     }
 }
@@ -297,10 +296,6 @@ fn token_length(kind: &TokenKind) -> u32 {
         | TokenKind::HashQuestion   // #?
         | TokenKind::HashDot        // #.
         | TokenKind::HashExclaim    // #!
-        | TokenKind::ExecuteStart   // </
-        | TokenKind::ExecuteEnd     // />
-        | TokenKind::BashStart      // <\
-        | TokenKind::BashEnd        // \>
         | TokenKind::CliArgsCapture // ><
         | TokenKind::BaseBinary     // 0b
         | TokenKind::BaseOctal      // 0o
@@ -339,10 +334,14 @@ fn token_length(kind: &TokenKind) -> u32 {
         TokenKind::Float(f) => format!("{}", f).len() as u32,
         TokenKind::Ident(name) => name.len() as u32,
         TokenKind::HashComma | TokenKind::HashCaret => 2, // #, or #^ (two-char tokens)
+        TokenKind::BashCommand(cmd) => (cmd.len() + 4) as u32,    // +4 for <\ and \>
+        TokenKind::ExecuteCommand(path) => (path.len() + 4) as u32, // +4 for </ and />
         TokenKind::LineComment(content) => (content.len() + 2) as u32, // +2 for //
         TokenKind::BlockComment(content) => (content.len() + 4) as u32, // +4 for /* */
         TokenKind::Error(msg) => msg.len() as u32,
         TokenKind::Eof => 0,
+        // #<digit0><digit9># — always 4 codepoints regardless of script
+        TokenKind::SetNumeralMode(_) => 4,
     }
 }
 

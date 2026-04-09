@@ -1,0 +1,135 @@
+// Numeral system: Tangsa (U+16AC0–U+16AC9)
+// Script: Tangsa
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Tangsa) ---
+// 𖫁𖫂
+// 𖫄
+// 𖫃𖫂
+// 𖫂
+// 𖫂
+// 𖫆𖫄
+// -𖫈
+// -𖫄
+// -𖫃𖫂
+// 𖫄.𖫇𖫅
+// 𖫂.𖫂𖫅
+// 𖫄.𖫃𖫇𖫅
+// 𖫂.𖫈
+// 𖫁𖫂.𖫂𖫅
+// -𖫁.𖫂𖫅
+// 𖫁𖫀𖫈
+// 𖫄𖫀𖫀
+// 𖫂𖫅𖫅
+// --- Booleans (in script mode) ---
+// #𖫁
+// #𖫀
+// #𖫁
+// #𖫀
+// #𖫁
+// #𖫀
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𖫈
+b = 𖫄
+c = 𖫃
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𖫂) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𖫃.𖫅
+g = 𖫁.𖫂𖫅
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𖫂) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𖫁𖫀𖫀
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Tangsa) ---" ¶
+
+#𖫀𖫉#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𖫂) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𖫂) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𖫁𖫂 > 𖫄)
+cmp_lt = (𖫄 > 𖫁𖫂)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𖫁 ¶
+>> #𖫀 ¶
+
+// Restore ASCII mode
+#09#

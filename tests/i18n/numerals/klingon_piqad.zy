@@ -1,0 +1,135 @@
+// Numeral system: Klingon pIqaD (U+F8F0–U+F8F9)
+// Script: Klingon pIqaD
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Klingon pIqaD) ---
+// 
+// 
+// 
+// 
+// 
+// 
+// -
+// -
+// -
+// .
+// .
+// .
+// .
+// .
+// -.
+// 
+// 
+// 
+// --- Booleans (in script mode) ---
+// #
+// #
+// #
+// #
+// #
+// #
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 
+b = 
+c = 
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = .
+g = .
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Klingon pIqaD) ---" ¶
+
+##
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = ( > )
+cmp_lt = ( > )
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> # ¶
+>> # ¶
+
+// Restore ASCII mode
+#09#

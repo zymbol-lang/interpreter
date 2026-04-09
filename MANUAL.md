@@ -30,6 +30,7 @@
 16. [Error Handling](#16-error-handling)
 17. [Modules](#17-modules)
 18. [Data Operators](#18-data-operators)
+18b. [Numeral Modes](#18b-numeral-modes)
 19. [Shell Integration](#19-shell-integration)
 20. [Known Limitations and Workarounds](#20-known-limitations-and-workarounds)
 21. [Complete Symbol Reference](#21-complete-symbol-reference)
@@ -64,7 +65,7 @@ Both modes produce **identical output** on 159/159 parity tests.
 | Float | `3.14`, `1.5e10` | `##.` | Scientific notation supported |
 | String | `"text"` | `##"` | Interpolation: `"Hello {name}"` |
 | Char | `'A'` | `##'` | Single Unicode character |
-| Bool | `#1`, `#0` | `##?` | NOT numeric — `#1` ≠ `1` |
+| Bool | `#1`, `#0` | `##?` | NOT numeric — `#1` ≠ `1`; digit adapts to active numeral mode |
 | Array | `[1, 2, 3]` | `##]` | Must be homogeneous (same type) |
 | Tuple | `(a, b)` | `##)` | Positional |
 | NamedTuple | `(x: 1, y: 2)` | `##)` | Named fields |
@@ -215,6 +216,16 @@ a >= b    // greater than or equal
 #1 && #0   // #0 (false)
 #1 || #0   // #1 (true)
 !#1        // #0 (not)
+```
+
+Logical operators always return a Bool. Under an active numeral mode the result
+is displayed with the active script digit:
+
+```zymbol
+#०९#
+>> (#1 && #0) ¶   // → #०  (false in Devanagari)
+>> (#1 || #0) ¶   // → #१  (true  in Devanagari)
+>> !(#0) ¶        // → #१
 ```
 
 ### String Concatenation
@@ -789,14 +800,37 @@ by_name_desc = db$^ (a, b -> a.name > b.name)
 
 ### Direct Element Update
 
+Arrays are mutable. Elements can be replaced or updated in-place using index syntax:
+
 ```zymbol
 arr = [10, 20, 30, 40, 50]
+
+// Direct assignment
 arr[2] = 99
 >> arr ¶    // → [10, 20, 99, 40, 50]
 
-// Functional form (generates new array — EBNF form uses $[i])
-arr = arr$[2]$~ 99
+// Compound indexed assignment (+=, -=, *=, /=, %=, ^=)
+arr[0] += 5
+>> arr ¶    // → [15, 20, 99, 40, 50]
+
+arr[2] *= 2
+>> arr ¶    // → [15, 20, 198, 40, 50]
+
+// Functional form — returns a new array; original is unchanged
+arr2 = arr[2]$~ 0
+>> arr ¶    // → [15, 20, 198, 40, 50]  (unchanged)
+>> arr2 ¶   // → [15, 20, 0, 40, 50]
 ```
+
+> **Value semantics**: assigning an array to a new variable creates an independent
+> copy. Modifying one does not affect the other:
+> ```zymbol
+> a = [1, 2, 3]
+> b = a
+> a[0] = 99
+> >> a ¶    // → [99, 2, 3]
+> >> b ¶    // → [1, 2, 3]   ← b is unaffected
+> ```
 
 ### Iterating
 
@@ -869,12 +903,20 @@ person = (name: "Ana", age: 25, city: "Madrid")
 
 ## 12. Tuples
 
+Tuples are **immutable** ordered containers. Once created, their elements cannot be
+modified. They can hold values of different types (unlike arrays, which are homogeneous).
+Use tuples to represent fixed records; use arrays for dynamic, same-type collections.
+
 ### Positional Tuple
 
 ```zymbol
 point = (10, 20)
 >> point[0] ¶    // → 10
 >> point[1] ¶    // → 20
+
+// Tuples allow mixed types
+data = (42, "hello", #1, 3.14)
+>> data[2] ¶    // → #1
 ```
 
 ### Named Tuple
@@ -896,6 +938,40 @@ p = (pos: pos, label: "origin")
 >> p.label ¶        // → origin
 >> p.pos.x ¶        // → 10
 ```
+
+### Immutability
+
+Tuples cannot be modified after creation. Any attempt to assign to an element
+produces a runtime error:
+
+```zymbol
+t = (10, 20, 30)
+t[0] = 99    // ❌ runtime error: cannot modify tuple 't': tuples are immutable
+t[0] += 5    // ❌ same error
+```
+
+To derive a new tuple with one element changed, use the functional update operator `$~`.
+The original tuple is never touched:
+
+```zymbol
+t = (10, 20, 30)
+t2 = t[1]$~ 999
+>> t ¶     // → (10, 20, 30)   ← original unchanged
+>> t2 ¶    // → (10, 999, 30)  ← new tuple
+```
+
+For named tuples, rebuild them explicitly:
+
+```zymbol
+person = (name: "Alice", age: 25)
+older  = (name: person.name, age: 26)
+>> person.age ¶    // → 25
+>> older.age ¶     // → 26
+```
+
+> **Constants vs immutability**: `:=` makes the *variable binding* constant (the name
+> cannot be rebound at all). Tuples make the *value* immutable (elements cannot change).
+> Both mechanisms are independent and complementary.
 
 ---
 
@@ -1368,6 +1444,258 @@ dec = 0d|255|    // Int → decimal string → "0d0255"
 
 ---
 
+## 18b. Numeral Modes
+
+Zymbol can display numbers in any of **69 Unicode digit scripts** — Devanagari,
+Arabic-Indic, Thai, Klingon pIqaD, Mathematical Bold, LCD segments, and more.
+Numeral mode only affects **output** (`>>`); internal arithmetic always uses
+binary integers and IEEE-754 floats regardless of the active script.
+
+### Mode-Switch Token `#d0d9#`
+
+Write the digit `0` and digit `9` of the target script, enclosed in `#…#`:
+
+```zymbol
+#०९#    // activate Devanagari  (U+0966–U+096F)
+#٠٩#    // activate Arabic-Indic (U+0660–U+0669)
+#๐๙#    // activate Thai         (U+0E50–U+0E59)
+#09#    // restore ASCII (always safe — never display-affected)
+```
+
+The token is **purely a runtime directive** — it emits no output and leaves no
+variable. One mode-switch persists until the next one in the same file.
+
+### Output Under an Active Mode
+
+Once a mode is active, `>>` formats all numeric values through it:
+
+```zymbol
+n = 42
+>> n ¶          // → 42  (ASCII, default)
+
+#०९#
+>> n ¶          // → ४२  (Devanagari)
+>> 3.14 ¶       // → ३.१४
+>> 1 + 2 ¶      // → ३
+
+#09#
+>> n ¶          // → 42  (back to ASCII)
+```
+
+### Boolean Output
+
+Booleans always print with an ASCII `#` prefix followed by the **active digit**
+for `0` (false) or `1` (true). This guarantees `#0` (false) is always visually
+distinct from `0` (integer zero) in every script:
+
+```zymbol
+>> #1 ¶         // → #1   (ASCII default)
+>> #0 ¶         // → #0
+
+#०९#
+>> #1 ¶         // → #१   (Devanagari — # stays ASCII)
+>> #0 ¶         // → #०
+
+x = 28 > 4
+>> x ¶          // → #१   (comparison result follows active mode)
+```
+
+See [§18b — Booleans Across Numeral Scripts](#booleans-across-numeral-scripts)
+for the complete reference including native literals, conditions, match, and all
+supported scripts.
+
+### Native Digit Literals in Source Code
+
+Digit characters from any supported block are valid **numeric literals** in
+source code — in loop ranges, modulo operands, comparisons, and assignments:
+
+```zymbol
+#०९#
+
+// All of these are valid integer literals:
+n = ४२         // same as n = 42
+@ i:१..१५ {   // range 1..15 in Devanagari digits
+    ? i % १५ == ० { >> "FizzBuzz" ¶ }
+    _? i % ३  == ० { >> "Fizz" ¶ }
+    _? i % ५  == ० { >> "Buzz" ¶ }
+    _ { >> i ¶ }
+}
+```
+
+Native digit literals and ASCII digit literals are interchangeable — the
+lexer normalises both to the same internal integer value.
+
+### Booleans Across Numeral Scripts
+
+#### Writing boolean literals
+
+`#` followed by the digit `0` or `1` of **any** supported script lexes as a
+boolean literal identical to ASCII `#0` / `#1`. The `#` prefix is always an
+ASCII `#` — only the digit after it varies:
+
+| Script | False | True | Mode token |
+| ------ | ----- | ---- | ---------- |
+| ASCII (default) | `#0` | `#1` | `#09#` |
+| Devanagari | `#०` | `#१` | `#०९#` |
+| Arabic-Indic | `#٠` | `#١` | `#٠٩#` |
+| Ext. Arabic-Indic | `#۰` | `#۱` | `#۰۹#` |
+| Bengali | `#০` | `#১` | `#০৯#` |
+| Gurmukhi | `#੦` | `#੧` | `#੦੯#` |
+| Gujarati | `#૦` | `#૧` | `#૦૯#` |
+| Tamil | `#௦` | `#௧` | `#௦௯#` |
+| Telugu | `#౦` | `#౧` | `#౦౯#` |
+| Kannada | `#೦` | `#೧` | `#೦೯#` |
+| Thai | `#๐` | `#๑` | `#๐๙#` |
+| Myanmar | `#၀` | `#၁` | `#၀၉#` |
+| Math Bold | `#𝟎` | `#𝟏` | `#𝟎𝟗#` |
+| Klingon pIqaD | `#`+U+F8F0 | `#`+U+F8F1 | `#`+U+F8F0+U+F8F9+`#` |
+
+#### Boolean literals in conditions and expressions
+
+Native-script boolean literals can be used anywhere `#0`/`#1` is valid —
+conditions, logical operators, assignments, comparisons:
+
+```zymbol
+#०९#
+
+// Condition
+? #१ {
+    >> "सत्य" ¶     // → सत्य  (true branch taken)
+}
+
+// Assignment
+सक्रिय = #१
+>> सक्रिय ¶        // → #१
+
+// Logical operators (input and output both in active script)
+>> (#१ && #०) ¶    // → #०
+>> (#१ || #०) ¶    // → #१
+>> !#० ¶           // → #१
+```
+
+```zymbol
+#٠٩#
+
+// Arabic-Indic example
+? #١ {
+    >> "صحيح" ¶    // → صحيح
+}
+نشط = #١
+>> نشط ¶           // → #١
+>> (#١ && #٠) ¶   // → #٠
+```
+
+#### Comparison results follow the active mode
+
+All comparison operators (`==`, `<>`, `<`, `>`, `<=`, `>=`) return a Bool.
+Under an active numeral mode, the result is displayed in the active script:
+
+```zymbol
+a = 28
+b = 4
+
+// ASCII (default)
+>> (a > b) ¶     // → #1
+>> (a < b) ¶     // → #0
+>> (a == b) ¶    // → #0
+
+#๐๙#
+>> (a > b) ¶     // → #๑   (true  in Thai)
+>> (a < b) ¶     // → #๐   (false in Thai)
+
+#০৯#   // activate Bengali digits
+// the comparison value itself is still Bool — only display changes
+বড় = a > b
+>> বড় ¶       // → #১   (Bengali true)
+```
+
+#### Match on booleans in any script
+
+Boolean values can be matched with `??` using any script's `#0`/`#1`:
+
+```zymbol
+#०९#
+
+x = ५ > ३     // Bool — evaluates to true (#१)
+
+?? x {
+    #१ : { >> "हाँ" ¶ }     // → हाँ
+    #०  : { >> "नहीं" ¶ }
+}
+```
+
+#### Key invariant: `#` prefix always ASCII
+
+No matter which numeral mode is active, the `#` separator is always the
+ASCII `#` (U+0023). This means:
+
+- `#0` and `#०` are the same boolean (false) — both lex identically
+- The printed representation `#` + native-digit is never ambiguous with an
+  integer: `0` (integer zero) vs `#0` (boolean false) remain visually distinct
+  in every script
+
+### Supported Digit Scripts — 69 Blocks
+
+| Script | Range | Digits |
+| ------ | ----- | ------ |
+| ASCII | U+0030–U+0039 | `0123456789` |
+| Arabic-Indic | U+0660–U+0669 | `٠١٢٣٤٥٦٧٨٩` |
+| Ext. Arabic-Indic | U+06F0–U+06F9 | `۰۱۲۳۴۵۶۷۸۹` |
+| NKo | U+07C0–U+07C9 | `߀߁߂߃߄߅߆߇߈߉` |
+| Devanagari | U+0966–U+096F | `०१२३४५६७८९` |
+| Bengali | U+09E6–U+09EF | `০১২৩৪৫৬৭৮৯` |
+| Gurmukhi | U+0A66–U+0A6F | `੦੧੨੩੪੫੬੭੮੯` |
+| Gujarati | U+0AE6–U+0AEF | `૦૧૨૩૪૫૬૭૮૯` |
+| Oriya | U+0B66–U+0B6F | `୦୧୨୩୪୫୬୭୮୯` |
+| Tamil | U+0BE6–U+0BEF | `௦௧௨௩௪௫௬௭௮௯` |
+| Telugu | U+0C66–U+0C6F | `౦౧౨౩౪౫౬౭౮౯` |
+| Kannada | U+0CE6–U+0CEF | `೦೧೨೩೪೫೬೭೮೯` |
+| Malayalam | U+0D66–U+0D6F | `൦൧൨൩൪൫൬൭൮൯` |
+| Sinhala Archaic | U+0DE6–U+0DEF | `𑇐𑇑𑇒𑇓𑇔𑇕𑇖𑇗𑇘𑇙` |
+| Thai | U+0E50–U+0E59 | `๐๑๒๓๔๕๖๗๘๙` |
+| Lao | U+0ED0–U+0ED9 | `໐໑໒໓໔໕໖໗໘໙` |
+| Tibetan | U+0F20–U+0F29 | `༠༡༢༣༤༥༦༧༨༩` |
+| Myanmar | U+1040–U+1049 | `၀၁၂၃၄၅၆၇၈၉` |
+| Myanmar Shan | U+1090–U+1099 | `႐႑႒႓႔႕႖႗႘႙` |
+| Khmer | U+17E0–U+17E9 | `០១២៣៤៥៦៧៨៩` |
+| Mongolian | U+1810–U+1819 | `᠐᠑᠒᠓᠔᠕᠖᠗᠘᠙` |
+| Mathematical Bold | U+1D7CE–U+1D7D7 | `𝟎𝟏𝟐𝟑𝟒𝟓𝟔𝟕𝟖𝟗` |
+| Mathematical Double-struck | U+1D7D8–U+1D7E1 | `𝟘𝟙𝟚𝟛𝟜𝟝𝟞𝟟𝟠𝟡` |
+| Mathematical Sans-serif | U+1D7E2–U+1D7EB | `𝟢𝟣𝟤𝟥𝟦𝟧𝟨𝟩𝟪𝟫` |
+| Math Sans-serif Bold | U+1D7EC–U+1D7F5 | `𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵` |
+| Mathematical Monospace | U+1D7F6–U+1D7FF | `𝟶𝟷𝟸𝟹𝟺𝟻𝟼𝟽𝟾𝟿` |
+| Segmented/LCD | U+1FBF0–U+1FBF9 | `🯰🯱🯲🯳🯴🯵🯶🯷🯸🯹` |
+| Klingon pIqaD ¹ | U+F8F0–U+F8F9 | _(CSUR PUA — requires pIqaD font)_ |
+| _(+43 additional BMP and SMP scripts)_ | | _(see `interpreter/crates/zymbol-lexer/src/digit_blocks.rs`)_ |
+
+> ¹ Klingon pIqaD digits live in the ConScript Unicode Registry (CSUR) Private
+> Use Area. They render correctly only with a pIqaD-capable font such as
+> _pIqaD-qolqoS_.
+
+### Scope and Persistence
+
+- Mode is **file-local** — each file starts in ASCII mode.
+- Mode changes take effect **immediately** at the statement that contains
+  `#d0d9#` and persist until the next mode-switch in the same file.
+- Importing a module does not inherit or alter the caller's mode.
+- The REPL respects the active mode: expression results are displayed in the
+  currently active script.
+
+### Rules Summary
+
+| Rule | Detail |
+| ---- | ------ |
+| Default mode | ASCII (`0`–`9`) |
+| Activation token | `#d0d9#` — zero and nine of any supported block |
+| Affected output | `>>` for Int, Float, Bool |
+| Unaffected | String content, Char, Array brackets, Tuple parentheses |
+| Bool prefix | `#` always ASCII; digit adapts to active script |
+| Literals | Any script's digits valid as integer literals in source |
+| Float decimal point | Always ASCII `.` regardless of active mode |
+| Reset to ASCII | `#09#` |
+
+---
+
 ## 19. Shell Integration
 
 ### BashExec `<\ cmd \>`
@@ -1490,7 +1818,6 @@ arr = [10, 20, 30, 40, 50]
 | `unused variable 'x'` when `x` is used in `"{x}"` interpolation | Static analyzer does not track interpolation usage | Ignore |
 | `unused variable 'x'` when `x` is used in `<\ bash {x} \>` | Analyzer does not track BashExec variable usage | Ignore, or prefix with `_`: `_x` and `{_x}` |
 | `arithmetic on non-numeric type` when using `/` for string split | Analyzer cannot distinguish string `/` from arithmetic `/` | Ignore |
-| `type mismatch: 'arr' was [Int] but assigned Int` on `arr[i] = val` | Analyzer does not understand indexed update | Ignore |
 
 ### L10 — Collection operators cannot be chained
 
@@ -1589,7 +1916,9 @@ active = [#1, #1, #0]
 | `$-[i:n]` | Remove range (count-based) | `arr$-[1:2]` |
 | `$?` | Contains | `arr$? val` |
 | `$??` | Find all indices of value | `arr$?? val` |
-| `$[i]$~` | Functional update | `arr$[2]$~ 99` |
+| `arr[i] = val` | Direct element update (arrays only) | `arr[2] = 99` |
+| `arr[i] += val` | Compound element update (arrays only) | `arr[0] += 5` |
+| `arr[i]$~` | Functional update — returns new collection | `arr[2]$~ 99` |
 | `$[i..j]` | Slice (exclusive end) | `arr$[1..3]` |
 | `$[i:n]` | Slice (count-based) | `arr$[1:2]` |
 | `$^+` | Sort ascending (primitives) | `arr$^+` |
@@ -1623,6 +1952,7 @@ active = [#1, #1, #0]
 | `>< args` | CLI args capture | `>< args` |
 | `\ var` | Explicit lifetime end | `\ x` |
 | `#1` / `#0` | Bool true / false | `? #1 { }` |
+| `#d0d9#` | Numeral mode switch | `#०९#` (Devanagari), `#09#` (reset) |
 | `,` | String concat in assignments | `msg = "a", "b"` |
 | `++` / `--` | Increment / decrement | `x++` |
 | `+=` `-=` `*=` `/=` `%=` `^=` | Compound assignment | `x += 5` |
@@ -1691,8 +2021,9 @@ passing = scores$| (x -> x >= 60)
 total = passing$< (0, (acc, x) -> acc + x)
 count = passing$#
 average = total / count
+n_scores = scores$#
 
->> "Total scores: " (scores$#) ¶
+>> "Total scores: " n_scores ¶
 >> "Passing: " count ¶
 >> "Average (passing): " average ¶
 ```
@@ -1778,6 +2109,8 @@ parse_number(s) {
 | Lambdas / closures | ✅ | ✅ | |
 | Arrays (full CRUD) | ✅ | ✅ | |
 | `arr[i] = val` (direct update) | ✅ | ✅ | Sprint 5I |
+| `arr[i] += val` (compound indexed update) | ✅ | ✅ | |
+| Tuple immutability (`t[i]=val` → runtime error) | ✅ | ✅ | |
 | Named tuples | ✅ | ✅ | |
 | HOF: map / filter / reduce | ✅ | ✅ | |
 | Pipe `\|>` | ✅ | ✅ | |

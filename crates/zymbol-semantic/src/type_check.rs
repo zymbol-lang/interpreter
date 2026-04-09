@@ -1463,7 +1463,16 @@ impl TypeChecker {
             Expr::CollectionRemoveRange(op) => self.infer_expr(&op.collection),
             Expr::CollectionContains(_) => ZymbolType::Bool,
             Expr::CollectionFindAll(_) => ZymbolType::Array(Box::new(ZymbolType::Int)),
-            Expr::CollectionUpdate(op) => self.infer_expr(&op.target),
+            Expr::CollectionUpdate(op) => {
+                // target is IndexExpr(collection[index]) — return the collection type,
+                // not the element type (which would cause false type-mismatch warnings
+                // on `arr[i] = val` desugared as `arr = arr[i]$~ val`).
+                if let Expr::Index(idx_expr) = op.target.as_ref() {
+                    self.infer_expr(&idx_expr.array)
+                } else {
+                    self.infer_expr(&op.target)
+                }
+            }
             Expr::CollectionSlice(op) => self.infer_expr(&op.collection),
             Expr::CollectionMap(op) => {
                 let collection_type = self.infer_expr(&op.collection);

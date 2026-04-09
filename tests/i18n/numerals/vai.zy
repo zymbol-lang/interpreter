@@ -1,0 +1,135 @@
+// Numeral system: Vai (U+A620–U+A629)
+// Script: Vai
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Vai) ---
+// ꘡꘢
+// ꘤
+// ꘣꘢
+// ꘢
+// ꘢
+// ꘦꘤
+// -꘨
+// -꘤
+// -꘣꘢
+// ꘤.꘧꘥
+// ꘢.꘢꘥
+// ꘤.꘣꘧꘥
+// ꘢.꘨
+// ꘡꘢.꘢꘥
+// -꘡.꘢꘥
+// ꘡꘠꘨
+// ꘤꘠꘠
+// ꘢꘥꘥
+// --- Booleans (in script mode) ---
+// #꘡
+// #꘠
+// #꘡
+// #꘠
+// #꘡
+// #꘠
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ꘨
+b = ꘤
+c = ꘣
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ꘢) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ꘣.꘥
+g = ꘡.꘢꘥
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ꘢) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ꘡꘠꘠
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Vai) ---" ¶
+
+#꘠꘩#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ꘢) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ꘢) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (꘡꘢ > ꘤)
+cmp_lt = (꘤ > ꘡꘢)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #꘡ ¶
+>> #꘠ ¶
+
+// Restore ASCII mode
+#09#

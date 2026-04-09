@@ -1,0 +1,135 @@
+// Numeral system: Mathematical Monospace (U+1D7F6–U+1D7FF)
+// Script: Mathematical Monospace
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Mathematical Monospace) ---
+// 𝟷𝟸
+// 𝟺
+// 𝟹𝟸
+// 𝟸
+// 𝟸
+// 𝟼𝟺
+// -𝟾
+// -𝟺
+// -𝟹𝟸
+// 𝟺.𝟽𝟻
+// 𝟸.𝟸𝟻
+// 𝟺.𝟹𝟽𝟻
+// 𝟸.𝟾
+// 𝟷𝟸.𝟸𝟻
+// -𝟷.𝟸𝟻
+// 𝟷𝟶𝟾
+// 𝟺𝟶𝟶
+// 𝟸𝟻𝟻
+// --- Booleans (in script mode) ---
+// #𝟷
+// #𝟶
+// #𝟷
+// #𝟶
+// #𝟷
+// #𝟶
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𝟾
+b = 𝟺
+c = 𝟹
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𝟸) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𝟹.𝟻
+g = 𝟷.𝟸𝟻
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𝟸) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𝟷𝟶𝟶
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Mathematical Monospace) ---" ¶
+
+#𝟶𝟿#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𝟸) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𝟸) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𝟷𝟸 > 𝟺)
+cmp_lt = (𝟺 > 𝟷𝟸)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𝟷 ¶
+>> #𝟶 ¶
+
+// Restore ASCII mode
+#09#

@@ -1,0 +1,135 @@
+// Numeral system: Gujarati (U+0AE6–U+0AEF)
+// Script: Gujarati
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Gujarati) ---
+// ૧૨
+// ૪
+// ૩૨
+// ૨
+// ૨
+// ૬૪
+// -૮
+// -૪
+// -૩૨
+// ૪.૭૫
+// ૨.૨૫
+// ૪.૩૭૫
+// ૨.૮
+// ૧૨.૨૫
+// -૧.૨૫
+// ૧૦૮
+// ૪૦૦
+// ૨૫૫
+// --- Booleans (in script mode) ---
+// #૧
+// #૦
+// #૧
+// #૦
+// #૧
+// #૦
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ૮
+b = ૪
+c = ૩
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ૨) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ૩.૫
+g = ૧.૨૫
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ૨) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ૧૦૦
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Gujarati) ---" ¶
+
+#૦૯#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ૨) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ૨) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (૧૨ > ૪)
+cmp_lt = (૪ > ૧૨)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #૧ ¶
+>> #૦ ¶
+
+// Restore ASCII mode
+#09#

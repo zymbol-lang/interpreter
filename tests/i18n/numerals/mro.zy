@@ -1,0 +1,135 @@
+// Numeral system: Mro (U+16A60–U+16A69)
+// Script: Mro
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Mro) ---
+// 𖩡𖩢
+// 𖩤
+// 𖩣𖩢
+// 𖩢
+// 𖩢
+// 𖩦𖩤
+// -𖩨
+// -𖩤
+// -𖩣𖩢
+// 𖩤.𖩧𖩥
+// 𖩢.𖩢𖩥
+// 𖩤.𖩣𖩧𖩥
+// 𖩢.𖩨
+// 𖩡𖩢.𖩢𖩥
+// -𖩡.𖩢𖩥
+// 𖩡𖩠𖩨
+// 𖩤𖩠𖩠
+// 𖩢𖩥𖩥
+// --- Booleans (in script mode) ---
+// #𖩡
+// #𖩠
+// #𖩡
+// #𖩠
+// #𖩡
+// #𖩠
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𖩨
+b = 𖩤
+c = 𖩣
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𖩢) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𖩣.𖩥
+g = 𖩡.𖩢𖩥
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𖩢) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𖩡𖩠𖩠
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Mro) ---" ¶
+
+#𖩠𖩩#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𖩢) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𖩢) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𖩡𖩢 > 𖩤)
+cmp_lt = (𖩤 > 𖩡𖩢)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𖩡 ¶
+>> #𖩠 ¶
+
+// Restore ASCII mode
+#09#

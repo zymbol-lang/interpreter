@@ -1,0 +1,135 @@
+// Numeral system: Tamil (U+0BE6–U+0BEF)
+// Script: Tamil
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Tamil) ---
+// ௧௨
+// ௪
+// ௩௨
+// ௨
+// ௨
+// ௬௪
+// -௮
+// -௪
+// -௩௨
+// ௪.௭௫
+// ௨.௨௫
+// ௪.௩௭௫
+// ௨.௮
+// ௧௨.௨௫
+// -௧.௨௫
+// ௧௦௮
+// ௪௦௦
+// ௨௫௫
+// --- Booleans (in script mode) ---
+// #௧
+// #௦
+// #௧
+// #௦
+// #௧
+// #௦
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ௮
+b = ௪
+c = ௩
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ௨) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ௩.௫
+g = ௧.௨௫
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ௨) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ௧௦௦
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Tamil) ---" ¶
+
+#௦௯#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ௨) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ௨) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (௧௨ > ௪)
+cmp_lt = (௪ > ௧௨)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #௧ ¶
+>> #௦ ¶
+
+// Restore ASCII mode
+#09#

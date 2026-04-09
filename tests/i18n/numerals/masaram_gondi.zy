@@ -1,0 +1,135 @@
+// Numeral system: Masaram Gondi (U+11D50–U+11D59)
+// Script: Masaram Gondi
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Masaram Gondi) ---
+// 𑵑𑵒
+// 𑵔
+// 𑵓𑵒
+// 𑵒
+// 𑵒
+// 𑵖𑵔
+// -𑵘
+// -𑵔
+// -𑵓𑵒
+// 𑵔.𑵗𑵕
+// 𑵒.𑵒𑵕
+// 𑵔.𑵓𑵗𑵕
+// 𑵒.𑵘
+// 𑵑𑵒.𑵒𑵕
+// -𑵑.𑵒𑵕
+// 𑵑𑵐𑵘
+// 𑵔𑵐𑵐
+// 𑵒𑵕𑵕
+// --- Booleans (in script mode) ---
+// #𑵑
+// #𑵐
+// #𑵑
+// #𑵐
+// #𑵑
+// #𑵐
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𑵘
+b = 𑵔
+c = 𑵓
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑵒) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𑵓.𑵕
+g = 𑵑.𑵒𑵕
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑵒) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𑵑𑵐𑵐
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Masaram Gondi) ---" ¶
+
+#𑵐𑵙#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑵒) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑵒) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𑵑𑵒 > 𑵔)
+cmp_lt = (𑵔 > 𑵑𑵒)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𑵑 ¶
+>> #𑵐 ¶
+
+// Restore ASCII mode
+#09#

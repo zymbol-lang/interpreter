@@ -18,18 +18,17 @@ impl<W: Write> Interpreter<W> {
     /// Evaluate execute expression: </ file.zy />
     /// Executes a .zy file and captures its output
     pub(crate) fn eval_execute(&mut self, execute: &ExecuteExpr) -> Result<Value> {
-        // Resolve the file path (relative to current file or base dir)
-        let file_path = if execute.path.starts_with("./") || execute.path.starts_with("../") {
-            // Relative path
+        // Resolve the file path relative to the calling script's directory.
+        // Absolute paths are used as-is; everything else is resolved from the
+        // parent of the current file (or base_dir if there is no current file).
+        let file_path = if execute.path.starts_with('/') {
+            PathBuf::from(&execute.path)
+        } else {
             let current_dir = self.current_file
                 .as_ref()
                 .and_then(|p| p.parent())
                 .unwrap_or(&self.base_dir);
-
             current_dir.join(&execute.path)
-        } else {
-            // Absolute or current directory
-            PathBuf::from(&execute.path)
         };
 
         // Check if file exists

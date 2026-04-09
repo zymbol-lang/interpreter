@@ -1,0 +1,135 @@
+// Numeral system: Chakma (U+11136–U+1113F)
+// Script: Chakma
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Chakma) ---
+// 𑄷𑄸
+// 𑄺
+// 𑄹𑄸
+// 𑄸
+// 𑄸
+// 𑄼𑄺
+// -𑄾
+// -𑄺
+// -𑄹𑄸
+// 𑄺.𑄽𑄻
+// 𑄸.𑄸𑄻
+// 𑄺.𑄹𑄽𑄻
+// 𑄸.𑄾
+// 𑄷𑄸.𑄸𑄻
+// -𑄷.𑄸𑄻
+// 𑄷𑄶𑄾
+// 𑄺𑄶𑄶
+// 𑄸𑄻𑄻
+// --- Booleans (in script mode) ---
+// #𑄷
+// #𑄶
+// #𑄷
+// #𑄶
+// #𑄷
+// #𑄶
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𑄾
+b = 𑄺
+c = 𑄹
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑄸) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𑄹.𑄻
+g = 𑄷.𑄸𑄻
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑄸) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𑄷𑄶𑄶
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Chakma) ---" ¶
+
+#𑄶𑄿#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑄸) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑄸) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𑄷𑄸 > 𑄺)
+cmp_lt = (𑄺 > 𑄷𑄸)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𑄷 ¶
+>> #𑄶 ¶
+
+// Restore ASCII mode
+#09#

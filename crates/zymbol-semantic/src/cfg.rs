@@ -636,6 +636,7 @@ impl Spannable for Statement {
             Statement::Match(s) => &s.span,
             Statement::Expr(s) => &s.span,
             Statement::CliArgsCapture(s) => &s.span,
+            Statement::SetNumeralMode { span, .. } => span,
         }
     }
 }

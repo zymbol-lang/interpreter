@@ -71,6 +71,7 @@ statement      = ( assignment
                | output_stmt
                | input_stmt
                | cli_args_capture
+               | numeral_mode_stmt
                | newline_stmt
                | if_stmt
                | match_stmt
@@ -162,6 +163,20 @@ input_stmt     = "<<" , [ string_literal ] , identifier ;
 (* Captures command-line arguments as array of strings. Tree-walker only. *)
 cli_args_capture = "><" , identifier ;
 
+(* --- Numeral mode --- *)
+(* Switches the active Unicode digit block for subsequent integer literals.
+   The two characters must be the 0-digit and 9-digit of the same numeral block.
+   Resets to ASCII when the same block is repeated or #09# is used explicitly. *)
+numeral_mode_stmt = "#" , numeral_zero , numeral_nine , "#" ;
+numeral_zero      = ? the "0" digit of any Unicode decimal-digit block (\\p{Nd} at position n*10) ? ;
+numeral_nine      = ? the "9" digit of the same block as numeral_zero ? ;
+(*
+  #09#   — ASCII (default, reset)
+  #०९#   — Devanagari
+  #๐๙#   — Thai
+  #𞥐𞥙#   — Adlam
+*)
+
 (* --- Explicit lifetime end --- *)
 lifetime_end   = "\\" , identifier ;
 
@@ -186,14 +201,24 @@ match_case     = pattern , ":" , ( expr | block ) ;
 
 pattern        = range_pattern                (* 90..100 *)
                | guard_pattern                (* _? condition *)
+               | list_pattern                 (* [a, b, c] *)
                | literal_pattern             (* 42, "red", 'A', #1 *)
                | wildcard_pattern ;           (* _ *)
 
-literal_pattern = literal ;
-range_pattern   = range_bound , ".." , range_bound ;
-range_bound     = literal | identifier ;
-guard_pattern   = "_?" , expr ;              (* arbitrary condition *)
+literal_pattern  = literal ;
+range_pattern    = range_bound , ".." , range_bound ;
+range_bound      = literal | identifier ;
+guard_pattern    = "_?" , expr                (* wildcard guard — _? condition *)
+               | pattern , "?" , expr ;      (* pattern guard — literal/range ? condition *)
 wildcard_pattern = "_" ;
+list_pattern     = "[" , [ pattern , { "," , pattern } ] , "]" ;  (* [] empty list allowed *)
+(*
+  ?? val {
+      [1, 2]:    { >> "starts with 1,2" ¶ }
+      [_, _, _]: { >> "exactly 3 elems" ¶ }
+      _:         { >> "other" ¶ }
+  }
+*)
 
 (* [NOT IMPLEMENTED] multi-value arm:  1, 2 : "low"     *)
 (* [NOT IMPLEMENTED] binding pattern:  n : n * 2        *)
@@ -203,15 +228,16 @@ wildcard_pattern = "_" ;
    ========================================================================= *)
 
 (* Universal loop — form inferred from specifier *)
-loop_stmt      = "@" , [ loop_spec ] , [ loop_label ] , block ;
+loop_stmt      = "@" , [ loop_label ] , [ loop_spec ] , block ;
+(* Label comes BEFORE the specifier — parser reads @label then condition/for-each *)
+
+loop_label     = "@" , identifier ;
 
 loop_spec      = identifier , ":" , iterable   (* for-each / range *)
                | expr ;                         (* while condition *)
-(* "@" alone (no spec) = infinite loop *)
+(* "@" alone (no label, no spec) = infinite loop *)
 
 iterable       = range_expr | expr ;            (* array, string, or range *)
-
-loop_label     = "@" , identifier ;
 
 break_stmt     = "@!" , [ identifier ] ;        (* @! or @! label *)
 continue_stmt  = "@>" , [ identifier ] ;        (* @> or @> label *)
@@ -250,6 +276,7 @@ function_def   = identifier , "(" , [ param_list ] , ")" , func_block ;
 
 param_list     = param , { "," , param } ;
 param          = identifier                   (* normal parameter *)
+               | identifier , "~"             (* mutable parameter — caller's copy is modified *)
                | identifier , "<~" ;          (* output parameter — passed by reference *)
 
 func_block     = "{" , { statement } , "}" ;
@@ -284,15 +311,12 @@ lambda_params  = identifier
    12. [] () $op #? (postfix)
    ========================================================================= *)
 
-expr           = comma_expr ;
-
-(* Comma — string/value concatenation in assignment context *)
-comma_expr     = base_expr , { "," , base_expr } ;
-(*
-  msg = "Hello ", name, "!"          ✅ valid
-  TITLE := "Mr. ", name              ✅ valid
-  >> "a" , "b" ¶                     ❌ not valid in output context
-*)
+expr           = pipe_expr ;
+(* NOTE: comma concatenation is NOT part of expr. It is handled explicitly
+   only in assignment_stmt and const_decl:
+     msg = "Hello ", name, "!"     ✅ valid (assignment context)
+     TITLE := "Mr. ", name         ✅ valid (const decl context)
+     >> "a" , "b" ¶                ❌ not valid in output / expression context *)
 
 base_expr      = pipe_expr ;
 
@@ -301,6 +325,10 @@ pipe_expr      = logic_or , { "|>" , pipe_call } ;
 
 pipe_call      = identifier , "(" , pipe_args , ")"
                | lambda , "(" , pipe_args , ")" ;
+(* NOTE: identifier here must be a lambda-variable (stored in self.variables).
+   Named functions (stored in self.functions) are NOT first-class and will fail
+   with "undefined variable" when used as pipe callables.
+   Workaround: wrap named function in lambda — add_fn = (a, b) -> add(a, b) *)
 
 pipe_args      = pipe_arg , { "," , pipe_arg } ;
 pipe_arg       = "_"                            (* placeholder for piped value *)
@@ -322,7 +350,9 @@ unary          = [ "!" | "-" | "+" ] , member_access_expr ;
 member_access_expr = postfix_expr , { "." , identifier } ;
 (*
   person.name     — named tuple field
-  m.CONST         — module constant  [NOTE: currently broken — use getter function]
+  m.CONST         — module constant  [KNOWN ISSUE: parser accepts this syntax but the
+                    interpreter does not resolve module-scoped constants via dot notation.
+                    Workaround: export a zero-argument getter function — m::getConst()]
 *)
 
 (* Postfix *)
@@ -349,7 +379,6 @@ primary_expr   = literal
                | array_literal
                | positional_tuple
                | named_tuple
-               | range_expr
                | match_stmt
                | lambda
                | grouped_expr
@@ -362,6 +391,10 @@ primary_expr   = literal
                | bash_exec_expr
                | script_exec_expr
                | function_call ;
+(* NOTE: range_expr is intentionally excluded from primary_expr.
+   Ranges are only valid inside loop specifiers (loop_spec / iterable).
+   Using a range in any other context (assignment, output, expression) is
+   a runtime error: "ranges can only be used in for-each loops". *)
 
 grouped_expr   = "(" , expr , ")" ;
 
@@ -656,6 +689,22 @@ whitespace     = " " | "\t" | "\r" | "\n" ;
 
 (* [NOT IMPLEMENTED] Match identifier binding:
    binding_pattern = identifier , ":" , expr ;
+*)
+
+(* =========================================================================
+   RETIRED OPERATORS  (recognized by lexer, rejected by parser with migration message)
+   ========================================================================= *)
+
+(* [RETIRED v0.0.2] $++ — insert string/value at position:
+   Old syntax:  s$++[i] val
+   Replacement: s$+[i] val
+   Parser emits: "v0.0.2: use $+[ instead of $++"
+*)
+
+(* [RETIRED v0.0.2] $--[pos:count] — remove by position + count:
+   Old syntax:  s$--[0:6]
+   Replacement: s$-[0..6]
+   Parser emits: "v0.0.2: s$--[0:6] → s$-[0..6]"
 *)
 
 (* END OF GRAMMAR *)

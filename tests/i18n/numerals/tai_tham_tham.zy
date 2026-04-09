@@ -1,0 +1,135 @@
+// Numeral system: Tai Tham Tham (U+1A90–U+1A99)
+// Script: Tai Tham Tham
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Tai Tham Tham) ---
+// ᪑᪒
+// ᪔
+// ᪓᪒
+// ᪒
+// ᪒
+// ᪖᪔
+// -᪘
+// -᪔
+// -᪓᪒
+// ᪔.᪗᪕
+// ᪒.᪒᪕
+// ᪔.᪓᪗᪕
+// ᪒.᪘
+// ᪑᪒.᪒᪕
+// -᪑.᪒᪕
+// ᪑᪐᪘
+// ᪔᪐᪐
+// ᪒᪕᪕
+// --- Booleans (in script mode) ---
+// #᪑
+// #᪐
+// #᪑
+// #᪐
+// #᪑
+// #᪐
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ᪘
+b = ᪔
+c = ᪓
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ᪒) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ᪓.᪕
+g = ᪑.᪒᪕
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ᪒) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ᪑᪐᪐
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Tai Tham Tham) ---" ¶
+
+#᪐᪙#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ᪒) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ᪒) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (᪑᪒ > ᪔)
+cmp_lt = (᪔ > ᪑᪒)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #᪑ ¶
+>> #᪐ ¶
+
+// Restore ASCII mode
+#09#

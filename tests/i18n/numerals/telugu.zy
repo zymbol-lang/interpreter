@@ -1,0 +1,135 @@
+// Numeral system: Telugu (U+0C66–U+0C6F)
+// Script: Telugu
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Telugu) ---
+// ౧౨
+// ౪
+// ౩౨
+// ౨
+// ౨
+// ౬౪
+// -౮
+// -౪
+// -౩౨
+// ౪.౭౫
+// ౨.౨౫
+// ౪.౩౭౫
+// ౨.౮
+// ౧౨.౨౫
+// -౧.౨౫
+// ౧౦౮
+// ౪౦౦
+// ౨౫౫
+// --- Booleans (in script mode) ---
+// #౧
+// #౦
+// #౧
+// #౦
+// #౧
+// #౦
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ౮
+b = ౪
+c = ౩
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ౨) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ౩.౫
+g = ౧.౨౫
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ౨) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ౧౦౦
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Telugu) ---" ¶
+
+#౦౯#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ౨) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ౨) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (౧౨ > ౪)
+cmp_lt = (౪ > ౧౨)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #౧ ¶
+>> #౦ ¶
+
+// Restore ASCII mode
+#09#

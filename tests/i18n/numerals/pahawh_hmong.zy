@@ -1,0 +1,135 @@
+// Numeral system: Pahawh Hmong (U+16B50–U+16B59)
+// Script: Pahawh Hmong
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Pahawh Hmong) ---
+// 𖭑𖭒
+// 𖭔
+// 𖭓𖭒
+// 𖭒
+// 𖭒
+// 𖭖𖭔
+// -𖭘
+// -𖭔
+// -𖭓𖭒
+// 𖭔.𖭗𖭕
+// 𖭒.𖭒𖭕
+// 𖭔.𖭓𖭗𖭕
+// 𖭒.𖭘
+// 𖭑𖭒.𖭒𖭕
+// -𖭑.𖭒𖭕
+// 𖭑𖭐𖭘
+// 𖭔𖭐𖭐
+// 𖭒𖭕𖭕
+// --- Booleans (in script mode) ---
+// #𖭑
+// #𖭐
+// #𖭑
+// #𖭐
+// #𖭑
+// #𖭐
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𖭘
+b = 𖭔
+c = 𖭓
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𖭒) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𖭓.𖭕
+g = 𖭑.𖭒𖭕
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𖭒) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𖭑𖭐𖭐
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Pahawh Hmong) ---" ¶
+
+#𖭐𖭙#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𖭒) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𖭒) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𖭑𖭒 > 𖭔)
+cmp_lt = (𖭔 > 𖭑𖭒)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𖭑 ¶
+>> #𖭐 ¶
+
+// Restore ASCII mode
+#09#

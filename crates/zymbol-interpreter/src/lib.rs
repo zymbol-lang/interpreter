@@ -18,6 +18,7 @@ use zymbol_span::Span;
 mod literals;
 mod io;
 mod variables;
+pub(crate) mod numeral_mode;
 mod if_stmt;
 mod loops;
 mod match_stmt;
@@ -284,6 +285,10 @@ pub struct Interpreter<W: Write> {
     /// QW13 fix: output param names of the current function.
     /// MoveOrClone (take_variable) must NOT be used for output params — writeback needs the value.
     pub(crate) current_output_params: std::collections::HashSet<String>,
+    /// Active output numeral system (block base codepoint).
+    /// Default: 0x0030 (ASCII). Changed by #<d0><d9># statements.
+    /// Applies only to >> numeric outputs; does not affect to_display_string().
+    pub(crate) numeral_mode: u32,
 }
 
 impl<W: Write> Interpreter<W> {
@@ -547,6 +552,7 @@ impl Interpreter<std::io::Stdout> {
             tco_pending: false,
             tco_args: Vec::new(),
             current_output_params: std::collections::HashSet::new(),
+            numeral_mode: numeral_mode::ASCII_BASE,
         }
     }
 }
@@ -589,6 +595,7 @@ impl<W: Write> Interpreter<W> {
             tco_pending: false,
             tco_args: Vec::new(),
             current_output_params: std::collections::HashSet::new(),
+            numeral_mode: numeral_mode::ASCII_BASE,
         }
     }
 
@@ -755,6 +762,20 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
+    /// Format a value for display using the current active numeral mode.
+    ///
+    /// Numeric types (`Int`, `Float`, `Bool`) are rendered in the active script.
+    /// All other types use their standard `to_display_string()` form.
+    pub fn format_value(&self, value: &Value) -> String {
+        let mode = self.numeral_mode;
+        match value {
+            Value::Int(n)   => numeral_mode::to_numeral_int(*n, mode),
+            Value::Float(f) => numeral_mode::to_numeral_float(*f, mode),
+            Value::Bool(b)  => numeral_mode::to_numeral_bool(*b, mode),
+            _               => value.to_display_string(),
+        }
+    }
+
     /// Execute a program
     pub fn execute(&mut self, program: &Program) -> Result<()> {
         // Process imports first
@@ -876,6 +897,10 @@ impl<W: Write> Interpreter<W> {
             }
             Statement::DestructureAssign(d) => self.eval_destructure_assign(d),
             Statement::Try(try_stmt) => self.execute_try(try_stmt),
+            Statement::SetNumeralMode { base, .. } => {
+                self.numeral_mode = *base;
+                Ok(())
+            }
         }
     }
 

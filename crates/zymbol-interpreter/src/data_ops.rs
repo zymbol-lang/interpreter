@@ -533,6 +533,7 @@ info = x#?
 >> info[2] ¶
 "#;
         let output = run(code);
+        // info[2] is the bool value; >> renders it with # prefix to distinguish from integer
         assert_eq!(output, "##?\n1\n#1\n");
     }
 

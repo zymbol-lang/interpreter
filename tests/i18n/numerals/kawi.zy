@@ -1,0 +1,135 @@
+// Numeral system: Kawi (U+11F50–U+11F59)
+// Script: Kawi
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Kawi) ---
+// 𑽑𑽒
+// 𑽔
+// 𑽓𑽒
+// 𑽒
+// 𑽒
+// 𑽖𑽔
+// -𑽘
+// -𑽔
+// -𑽓𑽒
+// 𑽔.𑽗𑽕
+// 𑽒.𑽒𑽕
+// 𑽔.𑽓𑽗𑽕
+// 𑽒.𑽘
+// 𑽑𑽒.𑽒𑽕
+// -𑽑.𑽒𑽕
+// 𑽑𑽐𑽘
+// 𑽔𑽐𑽐
+// 𑽒𑽕𑽕
+// --- Booleans (in script mode) ---
+// #𑽑
+// #𑽐
+// #𑽑
+// #𑽐
+// #𑽑
+// #𑽐
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𑽘
+b = 𑽔
+c = 𑽓
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑽒) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𑽓.𑽕
+g = 𑽑.𑽒𑽕
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑽒) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𑽑𑽐𑽐
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Kawi) ---" ¶
+
+#𑽐𑽙#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑽒) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑽒) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𑽑𑽒 > 𑽔)
+cmp_lt = (𑽔 > 𑽑𑽒)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𑽑 ¶
+>> #𑽐 ¶
+
+// Restore ASCII mode
+#09#

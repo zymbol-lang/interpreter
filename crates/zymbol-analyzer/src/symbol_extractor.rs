@@ -333,7 +333,8 @@ impl SymbolExtractor {
             | Statement::Break(_)
             | Statement::Continue(_)
             | Statement::Newline(_)
-            | Statement::LifetimeEnd(_) => {}
+            | Statement::LifetimeEnd(_)
+            | Statement::SetNumeralMode { .. } => {}
         }
     }
 

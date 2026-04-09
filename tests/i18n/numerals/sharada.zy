@@ -1,0 +1,135 @@
+// Numeral system: Sharada (U+111D0–U+111D9)
+// Script: Sharada
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Sharada) ---
+// 𑇑𑇒
+// 𑇔
+// 𑇓𑇒
+// 𑇒
+// 𑇒
+// 𑇖𑇔
+// -𑇘
+// -𑇔
+// -𑇓𑇒
+// 𑇔.𑇗𑇕
+// 𑇒.𑇒𑇕
+// 𑇔.𑇓𑇗𑇕
+// 𑇒.𑇘
+// 𑇑𑇒.𑇒𑇕
+// -𑇑.𑇒𑇕
+// 𑇑𑇐𑇘
+// 𑇔𑇐𑇐
+// 𑇒𑇕𑇕
+// --- Booleans (in script mode) ---
+// #𑇑
+// #𑇐
+// #𑇑
+// #𑇐
+// #𑇑
+// #𑇐
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𑇘
+b = 𑇔
+c = 𑇓
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑇒) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𑇓.𑇕
+g = 𑇑.𑇒𑇕
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑇒) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𑇑𑇐𑇐
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Sharada) ---" ¶
+
+#𑇐𑇙#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑇒) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑇒) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𑇑𑇒 > 𑇔)
+cmp_lt = (𑇔 > 𑇑𑇒)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𑇑 ¶
+>> #𑇐 ¶
+
+// Restore ASCII mode
+#09#

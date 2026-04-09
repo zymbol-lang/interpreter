@@ -10,6 +10,7 @@
 use zymbol_error::Diagnostic;
 use zymbol_span::Position;
 
+use crate::digit_blocks::{digit_block_base, digit_value};
 use crate::{Lexer, Token, TokenKind};
 
 /// Parts of an interpolated string
@@ -201,22 +202,29 @@ impl Lexer {
         Token::new(TokenKind::Char(char_value), self.span(start))
     }
 
-    /// Lex a number (integer or float)
+    /// Lex a number (integer or float).
+    ///
+    /// Accepts digits from any supported Unicode numeral system (see
+    /// [`digit_blocks`]).  All digits within a single literal must belong to
+    /// the same script; mixing scripts (e.g. `४2`) is a lex error.
+    ///
+    /// Digits are normalised to their ASCII equivalents before parsing so the
+    /// rest of the pipeline sees plain `i64` / `f64` values regardless of
+    /// script.  The decimal separator (`.`) and scientific-notation marker
+    /// (`e`/`E`) are always ASCII.
     pub(crate) fn lex_number(&mut self, start: Position) -> Token {
-        // Check for base prefixes (0b, 0o, 0d, 0x)
+        // Base prefixes (0b, 0o, 0d, 0x) are always ASCII — check before the
+        // Unicode digit path so `0b101` etc. still work.
         if self.current_char() == '0' && !self.is_at_end() {
             if let Some(next_ch) = self.peek() {
                 match next_ch {
                     'b' | 'o' | 'd' | 'x' => {
-                        // Peek two characters ahead to check for '|' (base conversion expression)
                         let peek_ahead = self.peek_ahead(2);
-
                         if peek_ahead == Some('|') {
-                            // This is a base conversion expression (0x|expr|), emit prefix token
+                            // Base conversion expression: 0x|expr|
                             self.advance(); // consume '0'
                             self.advance(); // consume base char
                             let span = self.span(start);
-
                             let kind = match next_ch {
                                 'b' => TokenKind::BaseBinary,
                                 'o' => TokenKind::BaseOctal,
@@ -224,10 +232,9 @@ impl Lexer {
                                 'x' => TokenKind::BaseHex,
                                 _ => unreachable!(),
                             };
-
                             return Token::new(kind, span);
                         } else {
-                            // This is a base character literal (0x41), parse it
+                            // Base character literal: 0x41
                             let (radix, base_name) = match next_ch {
                                 'b' => (2, "binary"),
                                 'o' => (8, "octal"),
@@ -238,39 +245,58 @@ impl Lexer {
                             return self.lex_base_char_literal(start, radix, base_name);
                         }
                     }
-                    _ => {} // Continue with normal number parsing
+                    _ => {}
                 }
             }
         }
 
+        // Builds an ASCII-normalised string for parsing; tracks the active
+        // block base to enforce single-script consistency.
         let mut number_str = String::new();
         let mut is_float = false;
+        let mut active_block: Option<u32> = None;
 
-        // Parse integer part
+        // ── integer part ──────────────────────────────────────────────────────
         while !self.is_at_end() {
             let ch = self.current_char();
-            if ch.is_ascii_digit() {
-                number_str.push(ch);
+            if let Some(d) = digit_value(ch) {
+                let block = digit_block_base(ch).unwrap();
+                if let Some(b) = active_block {
+                    if b != block {
+                        return self.mixed_script_error(start);
+                    }
+                } else {
+                    active_block = Some(block);
+                }
+                number_str.push(char::from_u32('0' as u32 + d as u32).unwrap());
                 self.advance();
             } else {
                 break;
             }
         }
 
-        // Check for decimal point
+        // ── decimal point ─────────────────────────────────────────────────────
+        // Require the char after '.' to be a recognised digit (any script) to
+        // avoid mistaking the range operator `..` for a float separator.
         if !self.is_at_end() && self.current_char() == '.' {
-            // Look ahead to ensure next char is a digit (to avoid confusion with range operator ..)
             if let Some(next_ch) = self.peek() {
-                if next_ch.is_ascii_digit() {
+                if digit_value(next_ch).is_some() {
                     is_float = true;
                     number_str.push('.');
                     self.advance(); // consume '.'
 
-                    // Parse fractional part
                     while !self.is_at_end() {
                         let ch = self.current_char();
-                        if ch.is_ascii_digit() {
-                            number_str.push(ch);
+                        if let Some(d) = digit_value(ch) {
+                            let block = digit_block_base(ch).unwrap();
+                            if let Some(b) = active_block {
+                                if b != block {
+                                    return self.mixed_script_error(start);
+                                }
+                            } else {
+                                active_block = Some(block);
+                            }
+                            number_str.push(char::from_u32('0' as u32 + d as u32).unwrap());
                             self.advance();
                         } else {
                             break;
@@ -280,7 +306,7 @@ impl Lexer {
             }
         }
 
-        // Check for scientific notation (e or E)
+        // ── scientific notation (always ASCII) ────────────────────────────────
         if !self.is_at_end() {
             let ch = self.current_char();
             if ch == 'e' || ch == 'E' {
@@ -288,7 +314,6 @@ impl Lexer {
                 number_str.push(ch);
                 self.advance();
 
-                // Optional sign
                 if !self.is_at_end() {
                     let sign_ch = self.current_char();
                     if sign_ch == '+' || sign_ch == '-' {
@@ -297,7 +322,6 @@ impl Lexer {
                     }
                 }
 
-                // Parse exponent
                 while !self.is_at_end() {
                     let ch = self.current_char();
                     if ch.is_ascii_digit() {
@@ -310,7 +334,7 @@ impl Lexer {
             }
         }
 
-        // Parse as float or int
+        // ── parse normalised ASCII string ─────────────────────────────────────
         if is_float {
             match number_str.parse::<f64>() {
                 Ok(f) => Token::new(TokenKind::Float(f), self.span(start)),
@@ -336,6 +360,20 @@ impl Lexer {
                 }
             }
         }
+    }
+
+    /// Emits a `MixedDigitScripts` diagnostic and returns an error token.
+    fn mixed_script_error(&mut self, start: Position) -> Token {
+        let span = self.span(start);
+        self.diagnostics.push(
+            Diagnostic::error("mixed digit scripts in numeric literal")
+                .with_span(span)
+                .with_help(
+                    "all digits in a literal must belong to the same numeral system \
+                     (e.g. all ASCII or all Devanagari)",
+                ),
+        );
+        Token::new(TokenKind::Error("mixed digit scripts".to_string()), span)
     }
 
     /// Lex a base character literal (0x41, 0b01000001, 0o0101, 0d65)
@@ -411,5 +449,98 @@ impl Lexer {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use zymbol_span::FileId;
+    use crate::{Lexer, TokenKind};
+
+    fn lex_first(src: &str) -> TokenKind {
+        let (tokens, diags) = Lexer::new(src, FileId(0)).tokenize();
+        assert!(diags.is_empty(), "unexpected lex errors: {:?}", diags);
+        tokens[0].kind.clone()
+    }
+
+    fn lex_error(src: &str) -> bool {
+        let (_, diags) = Lexer::new(src, FileId(0)).tokenize();
+        !diags.is_empty()
+    }
+
+    // ── Integer normalization ─────────────────────────────────────────────────
+
+    #[test]
+    fn ascii_integer() {
+        assert_eq!(lex_first("42"), TokenKind::Integer(42));
+    }
+
+    #[test]
+    fn devanagari_integer() {
+        assert_eq!(lex_first("४२"), TokenKind::Integer(42));
+    }
+
+    #[test]
+    fn arabic_indic_integer() {
+        // U+0660 = ٠, U+0664 = ٤, U+0662 = ٢ → 42
+        assert_eq!(lex_first("٤٢"), TokenKind::Integer(42));
+    }
+
+    #[test]
+    fn thai_integer() {
+        // U+0E54 = ๔, U+0E52 = ๒ → 42
+        assert_eq!(lex_first("๔๒"), TokenKind::Integer(42));
+    }
+
+    #[test]
+    fn adlam_integer() {
+        // U+1E954 = 𞥔, U+1E952 = 𞥒 → 42
+        let four = char::from_u32(0x1E950 + 4).unwrap();
+        let two  = char::from_u32(0x1E950 + 2).unwrap();
+        let src: String = [four, two].iter().collect();
+        assert_eq!(lex_first(&src), TokenKind::Integer(42));
+    }
+
+    #[test]
+    fn zero_in_any_script() {
+        // Devanagari zero
+        assert_eq!(lex_first("०"), TokenKind::Integer(0));
+    }
+
+    // ── Float normalization ───────────────────────────────────────────────────
+
+    #[test]
+    fn devanagari_float() {
+        // ३.१४ → 3.14
+        assert_eq!(lex_first("३.१४"), TokenKind::Float(3.14));
+    }
+
+    #[test]
+    fn ascii_float_unchanged() {
+        assert_eq!(lex_first("3.14"), TokenKind::Float(3.14));
+    }
+
+    #[test]
+    fn scientific_notation_unchanged() {
+        assert_eq!(lex_first("1e10"), TokenKind::Float(1e10));
+    }
+
+    // ── Mixed-script error ────────────────────────────────────────────────────
+
+    #[test]
+    fn mixed_scripts_integer_is_error() {
+        // ASCII '4' (U+0034) followed by Devanagari '२' (U+0968)
+        assert!(lex_error("4२"));
+    }
+
+    #[test]
+    fn mixed_scripts_float_fractional_is_error() {
+        // Integer part ASCII, fractional part Devanagari
+        assert!(lex_error("3.१४"));
+    }
+
+    #[test]
+    fn homogeneous_devanagari_float_is_ok() {
+        assert!(!lex_error("३.१४"));
     }
 }

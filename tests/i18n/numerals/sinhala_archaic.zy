@@ -1,0 +1,135 @@
+// Numeral system: Sinhala Archaic (U+0DE6–U+0DEF)
+// Script: Sinhala Archaic
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Sinhala Archaic) ---
+// ෧෨
+// ෪
+// ෩෨
+// ෨
+// ෨
+// ෬෪
+// -෮
+// -෪
+// -෩෨
+// ෪.෭෫
+// ෨.෨෫
+// ෪.෩෭෫
+// ෨.෮
+// ෧෨.෨෫
+// -෧.෨෫
+// ෧෦෮
+// ෪෦෦
+// ෨෫෫
+// --- Booleans (in script mode) ---
+// #෧
+// #෦
+// #෧
+// #෦
+// #෧
+// #෦
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ෮
+b = ෪
+c = ෩
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ෨) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ෩.෫
+g = ෧.෨෫
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ෨) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ෧෦෦
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Sinhala Archaic) ---" ¶
+
+#෦෯#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ෨) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ෨) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (෧෨ > ෪)
+cmp_lt = (෪ > ෧෨)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #෧ ¶
+>> #෦ ¶
+
+// Restore ASCII mode
+#09#

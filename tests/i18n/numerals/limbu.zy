@@ -1,0 +1,135 @@
+// Numeral system: Limbu (U+1946–U+194F)
+// Script: Limbu
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Limbu) ---
+// ᥇᥈
+// ᥊
+// ᥉᥈
+// ᥈
+// ᥈
+// ᥌᥊
+// -᥎
+// -᥊
+// -᥉᥈
+// ᥊.᥍᥋
+// ᥈.᥈᥋
+// ᥊.᥉᥍᥋
+// ᥈.᥎
+// ᥇᥈.᥈᥋
+// -᥇.᥈᥋
+// ᥇᥆᥎
+// ᥊᥆᥆
+// ᥈᥋᥋
+// --- Booleans (in script mode) ---
+// #᥇
+// #᥆
+// #᥇
+// #᥆
+// #᥇
+// #᥆
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ᥎
+b = ᥊
+c = ᥉
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ᥈) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ᥉.᥋
+g = ᥇.᥈᥋
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ᥈) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ᥇᥆᥆
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Limbu) ---" ¶
+
+#᥆᥏#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ᥈) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ᥈) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (᥇᥈ > ᥊)
+cmp_lt = (᥊ > ᥇᥈)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #᥇ ¶
+>> #᥆ ¶
+
+// Restore ASCII mode
+#09#

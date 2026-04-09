@@ -1,0 +1,135 @@
+// Numeral system: Lepcha (U+1C40–U+1C49)
+// Script: Lepcha
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Lepcha) ---
+// ᱁᱂
+// ᱄
+// ᱃᱂
+// ᱂
+// ᱂
+// ᱆᱄
+// -᱈
+// -᱄
+// -᱃᱂
+// ᱄.᱇᱅
+// ᱂.᱂᱅
+// ᱄.᱃᱇᱅
+// ᱂.᱈
+// ᱁᱂.᱂᱅
+// -᱁.᱂᱅
+// ᱁᱀᱈
+// ᱄᱀᱀
+// ᱂᱅᱅
+// --- Booleans (in script mode) ---
+// #᱁
+// #᱀
+// #᱁
+// #᱀
+// #᱁
+// #᱀
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ᱈
+b = ᱄
+c = ᱃
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ᱂) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ᱃.᱅
+g = ᱁.᱂᱅
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ᱂) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ᱁᱀᱀
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Lepcha) ---" ¶
+
+#᱀᱉#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ᱂) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ᱂) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (᱁᱂ > ᱄)
+cmp_lt = (᱄ > ᱁᱂)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #᱁ ¶
+>> #᱀ ¶
+
+// Restore ASCII mode
+#09#

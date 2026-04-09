@@ -112,6 +112,10 @@ pub enum Statement {
     Expr(ExprStatement),
     /// CLI args capture: ><variable
     CliArgsCapture(CliArgsCaptureStmt),
+    /// Numeral mode switch: #<digit_0><digit_9>#
+    /// Sets the active output numeral system for all subsequent >> outputs.
+    /// `base` is the block base codepoint of the chosen script.
+    SetNumeralMode { base: u32, span: Span },
 }
 
 /// Expression statement: expr (evaluated for side effects, result discarded)

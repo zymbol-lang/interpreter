@@ -1,0 +1,135 @@
+// Numeral system: Ol Chiki (U+1C50–U+1C59)
+// Script: Ol Chiki
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Ol Chiki) ---
+// ᱑᱒
+// ᱔
+// ᱓᱒
+// ᱒
+// ᱒
+// ᱖᱔
+// -᱘
+// -᱔
+// -᱓᱒
+// ᱔.᱗᱕
+// ᱒.᱒᱕
+// ᱔.᱓᱗᱕
+// ᱒.᱘
+// ᱑᱒.᱒᱕
+// -᱑.᱒᱕
+// ᱑᱐᱘
+// ᱔᱐᱐
+// ᱒᱕᱕
+// --- Booleans (in script mode) ---
+// #᱑
+// #᱐
+// #᱑
+// #᱐
+// #᱑
+// #᱐
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ᱘
+b = ᱔
+c = ᱓
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ᱒) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ᱓.᱕
+g = ᱑.᱒᱕
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ᱒) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ᱑᱐᱐
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Ol Chiki) ---" ¶
+
+#᱐᱙#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ᱒) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ᱒) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (᱑᱒ > ᱔)
+cmp_lt = (᱔ > ᱑᱒)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #᱑ ¶
+>> #᱐ ¶
+
+// Restore ASCII mode
+#09#

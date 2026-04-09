@@ -1,0 +1,135 @@
+// Numeral system: Fullwidth (U+FF10–U+FF19)
+// Script: Fullwidth
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Fullwidth) ---
+// １２
+// ４
+// ３２
+// ２
+// ２
+// ６４
+// -８
+// -４
+// -３２
+// ４.７５
+// ２.２５
+// ４.３７５
+// ２.８
+// １２.２５
+// -１.２５
+// １０８
+// ４００
+// ２５５
+// --- Booleans (in script mode) ---
+// #１
+// #０
+// #１
+// #０
+// #１
+// #０
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ８
+b = ４
+c = ３
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ２) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ３.５
+g = １.２５
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ２) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = １００
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Fullwidth) ---" ¶
+
+#０９#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ２) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ２) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (１２ > ４)
+cmp_lt = (４ > １２)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #１ ¶
+>> #０ ¶
+
+// Restore ASCII mode
+#09#

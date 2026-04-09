@@ -1,0 +1,135 @@
+// Numeral system: Dives Akuru (U+11950–U+11959)
+// Script: Dives Akuru
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Dives Akuru) ---
+// 𑥑𑥒
+// 𑥔
+// 𑥓𑥒
+// 𑥒
+// 𑥒
+// 𑥖𑥔
+// -𑥘
+// -𑥔
+// -𑥓𑥒
+// 𑥔.𑥗𑥕
+// 𑥒.𑥒𑥕
+// 𑥔.𑥓𑥗𑥕
+// 𑥒.𑥘
+// 𑥑𑥒.𑥒𑥕
+// -𑥑.𑥒𑥕
+// 𑥑𑥐𑥘
+// 𑥔𑥐𑥐
+// 𑥒𑥕𑥕
+// --- Booleans (in script mode) ---
+// #𑥑
+// #𑥐
+// #𑥑
+// #𑥐
+// #𑥑
+// #𑥐
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𑥘
+b = 𑥔
+c = 𑥓
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑥒) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𑥓.𑥕
+g = 𑥑.𑥒𑥕
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑥒) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𑥑𑥐𑥐
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Dives Akuru) ---" ¶
+
+#𑥐𑥙#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑥒) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑥒) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𑥑𑥒 > 𑥔)
+cmp_lt = (𑥔 > 𑥑𑥒)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𑥑 ¶
+>> #𑥐 ¶
+
+// Restore ASCII mode
+#09#

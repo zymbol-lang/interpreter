@@ -1,0 +1,135 @@
+// Numeral system: Sora Sompeng (U+110F0–U+110F9)
+// Script: Sora Sompeng
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Sora Sompeng) ---
+// 𑃱𑃲
+// 𑃴
+// 𑃳𑃲
+// 𑃲
+// 𑃲
+// 𑃶𑃴
+// -𑃸
+// -𑃴
+// -𑃳𑃲
+// 𑃴.𑃷𑃵
+// 𑃲.𑃲𑃵
+// 𑃴.𑃳𑃷𑃵
+// 𑃲.𑃸
+// 𑃱𑃲.𑃲𑃵
+// -𑃱.𑃲𑃵
+// 𑃱𑃰𑃸
+// 𑃴𑃰𑃰
+// 𑃲𑃵𑃵
+// --- Booleans (in script mode) ---
+// #𑃱
+// #𑃰
+// #𑃱
+// #𑃰
+// #𑃱
+// #𑃰
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𑃸
+b = 𑃴
+c = 𑃳
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑃲) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𑃳.𑃵
+g = 𑃱.𑃲𑃵
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑃲) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𑃱𑃰𑃰
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Sora Sompeng) ---" ¶
+
+#𑃰𑃹#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑃲) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑃲) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𑃱𑃲 > 𑃴)
+cmp_lt = (𑃴 > 𑃱𑃲)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𑃱 ¶
+>> #𑃰 ¶
+
+// Restore ASCII mode
+#09#

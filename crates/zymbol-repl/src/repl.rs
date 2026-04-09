@@ -356,7 +356,7 @@ impl Repl {
                     "  {}: {} = {}\r",
                     name,
                     colors::type_name(&type_name),
-                    value.to_display_string()
+                    self.interpreter.format_value(&value)
                 )?;
             }
             writeln!(stdout, "\r")?;
@@ -389,7 +389,7 @@ impl Repl {
                     "{}: {} = {}\r",
                     name,
                     colors::type_name(&type_name),
-                    colors::value(&value.to_display_string())
+                    colors::value(&self.interpreter.format_value(&value))
                 )?;
             }
             None => {
@@ -406,7 +406,7 @@ impl Repl {
             Ok(Some(value)) => {
                 // Print the result value if not Unit
                 if !matches!(value, Value::Unit) {
-                    writeln!(stdout, "{}\r", value.to_display_string())?;
+                    writeln!(stdout, "{}\r", self.interpreter.format_value(&value))?;
                 }
             }
             Ok(None) => {

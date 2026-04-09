@@ -106,6 +106,8 @@ pub enum Instruction {
     // ── I/O ──────────────────────────────────────────────────────────────
     Print(Reg),
     PrintNewline,
+    /// Set active numeral mode; `base` is the block base codepoint of the script.
+    SetNumeralMode(u32),
 
     // ── Arrays ───────────────────────────────────────────────────────────
     NewArray(Reg),

@@ -1,0 +1,135 @@
+// Numeral system: Wancho (U+1E2F0–U+1E2F9)
+// Script: Wancho
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Wancho) ---
+// 𞋱𞋲
+// 𞋴
+// 𞋳𞋲
+// 𞋲
+// 𞋲
+// 𞋶𞋴
+// -𞋸
+// -𞋴
+// -𞋳𞋲
+// 𞋴.𞋷𞋵
+// 𞋲.𞋲𞋵
+// 𞋴.𞋳𞋷𞋵
+// 𞋲.𞋸
+// 𞋱𞋲.𞋲𞋵
+// -𞋱.𞋲𞋵
+// 𞋱𞋰𞋸
+// 𞋴𞋰𞋰
+// 𞋲𞋵𞋵
+// --- Booleans (in script mode) ---
+// #𞋱
+// #𞋰
+// #𞋱
+// #𞋰
+// #𞋱
+// #𞋰
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𞋸
+b = 𞋴
+c = 𞋳
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𞋲) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𞋳.𞋵
+g = 𞋱.𞋲𞋵
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𞋲) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𞋱𞋰𞋰
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Wancho) ---" ¶
+
+#𞋰𞋹#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𞋲) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𞋲) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𞋱𞋲 > 𞋴)
+cmp_lt = (𞋴 > 𞋱𞋲)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𞋱 ¶
+>> #𞋰 ¶
+
+// Restore ASCII mode
+#09#

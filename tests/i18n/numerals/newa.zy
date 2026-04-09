@@ -1,0 +1,135 @@
+// Numeral system: Newa (U+11450–U+11459)
+// Script: Newa
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Newa) ---
+// 𑑑𑑒
+// 𑑔
+// 𑑓𑑒
+// 𑑒
+// 𑑒
+// 𑑖𑑔
+// -𑑘
+// -𑑔
+// -𑑓𑑒
+// 𑑔.𑑗𑑕
+// 𑑒.𑑒𑑕
+// 𑑔.𑑓𑑗𑑕
+// 𑑒.𑑘
+// 𑑑𑑒.𑑒𑑕
+// -𑑑.𑑒𑑕
+// 𑑑𑑐𑑘
+// 𑑔𑑐𑑐
+// 𑑒𑑕𑑕
+// --- Booleans (in script mode) ---
+// #𑑑
+// #𑑐
+// #𑑑
+// #𑑐
+// #𑑑
+// #𑑐
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𑑘
+b = 𑑔
+c = 𑑓
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑑒) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𑑓.𑑕
+g = 𑑑.𑑒𑑕
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑑒) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𑑑𑑐𑑐
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Newa) ---" ¶
+
+#𑑐𑑙#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑑒) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑑒) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𑑑𑑒 > 𑑔)
+cmp_lt = (𑑔 > 𑑑𑑒)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𑑑 ¶
+>> #𑑐 ¶
+
+// Restore ASCII mode
+#09#

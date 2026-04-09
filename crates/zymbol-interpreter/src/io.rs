@@ -8,15 +8,25 @@
 use std::io::Write;
 use zymbol_ast::{Input, InputPrompt, Newline, Output};
 use zymbol_lexer::StringPart;
+use crate::numeral_mode::{to_numeral_int, to_numeral_float, to_numeral_bool};
 use crate::{Interpreter, Result, RuntimeError, Value};
 
 impl<W: Write> Interpreter<W> {
     /// Execute output statement: >> expr1 expr2 ...
+    ///
+    /// Numeric values (`Int`, `Float`, `Bool`) are rendered using the active
+    /// numeral mode; all other values use their standard display form.
     pub(crate) fn execute_output(&mut self, output: &Output) -> Result<()> {
-        // Evaluate and concatenate all expressions (Haskell-style)
+        let mode = self.numeral_mode;
         for expr in &output.exprs {
             let value = self.eval_expr(expr)?;
-            write!(self.output, "{}", value.to_display_string())?;
+            let s = match &value {
+                Value::Int(n)   => to_numeral_int(*n, mode),
+                Value::Float(f) => to_numeral_float(*f, mode),
+                Value::Bool(b)  => to_numeral_bool(*b, mode),
+                _               => value.to_display_string(),
+            };
+            write!(self.output, "{}", s)?;
         }
         Ok(())
     }

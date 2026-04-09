@@ -6,6 +6,7 @@
 ¶
 
 // Feature 1: Capturar argumentos CLI
+args = []  // Inicializar array para argumentos
 ><args
 
 >> "1. Argumentos CLI capturados:" ¶

@@ -1,0 +1,135 @@
+// Numeral system: Devanagari (U+0966–U+096F)
+// Script: Devanagari
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Devanagari) ---
+// १२
+// ४
+// ३२
+// २
+// २
+// ६४
+// -८
+// -४
+// -३२
+// ४.७५
+// २.२५
+// ४.३७५
+// २.८
+// १२.२५
+// -१.२५
+// १०८
+// ४००
+// २५५
+// --- Booleans (in script mode) ---
+// #१
+// #०
+// #१
+// #०
+// #१
+// #०
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ८
+b = ४
+c = ३
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ २) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ३.५
+g = १.२५
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ २) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = १००
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Devanagari) ---" ¶
+
+#०९#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ २) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ २) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (१२ > ४)
+cmp_lt = (४ > १२)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #१ ¶
+>> #० ¶
+
+// Restore ASCII mode
+#09#

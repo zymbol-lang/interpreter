@@ -18,6 +18,31 @@ use thiserror::Error;
 use zymbol_bytecode::{BuildPart, Chunk, CompiledProgram, FuncIdx, Instruction, Reg};
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Numeral-mode helpers (mirrors zymbol-interpreter::numeral_mode)
+// ──────────────────────────────────────────────────────────────────────────────
+
+const ASCII_BASE: u32 = 0x0030;
+
+fn map_ascii_digits(s: &str, block_base: u32) -> String {
+    if block_base == ASCII_BASE {
+        return s.to_string();
+    }
+    s.chars()
+        .map(|ch| {
+            if ch.is_ascii_digit() {
+                char::from_u32(block_base + (ch as u32 - ASCII_BASE)).unwrap_or(ch)
+            } else {
+                ch
+            }
+        })
+        .collect()
+}
+
+fn numeral_int(value: i64, base: u32) -> String { map_ascii_digits(&value.to_string(), base) }
+fn numeral_float(value: f64, base: u32) -> String { map_ascii_digits(&value.to_string(), base) }
+fn numeral_bool(value: bool, base: u32) -> String { format!("#{}", numeral_int(if value { 1 } else { 0 }, base)) }
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Runtime Value
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -304,6 +329,8 @@ pub struct VM<W: Write> {
     pending_output_writeback: Vec<(usize, Reg)>,
     /// Interned string pool — Rc<String> for each entry, shared across LoadStr calls
     string_rcs: Vec<Rc<String>>,
+    /// Active numeral mode: block base codepoint (0x0030 = ASCII default).
+    numeral_mode: u32,
     output: W,
 }
 
@@ -315,6 +342,7 @@ impl<W: Write> VM<W> {
             tco_buf: Vec::with_capacity(16),
             pending_output_writeback: Vec::new(),
             string_rcs: Vec::new(),
+            numeral_mode: 0x0030, // ASCII_BASE default
             output,
         }
     }
@@ -725,11 +753,12 @@ impl<W: Write> VM<W> {
 
                 // ── I/O ─────────────────────────────────────────────────────
                 &Instruction::Print(reg) => {
+                    let mode = self.numeral_mode;
                     match &self.value_stack[base + reg as usize] {
                         Value::String(s)  => write!(self.output, "{}", s)?,
-                        Value::Int(n)     => write!(self.output, "{}", n)?,
-                        Value::Float(f)   => write!(self.output, "{}", f)?,
-                        Value::Bool(b)    => write!(self.output, "{}", if *b { "#1" } else { "#0" })?,
+                        Value::Int(n)     => write!(self.output, "{}", numeral_int(*n, mode))?,
+                        Value::Float(f)   => write!(self.output, "{}", numeral_float(*f, mode))?,
+                        Value::Bool(b)    => write!(self.output, "{}", numeral_bool(*b, mode))?,
                         Value::Char(c)    => write!(self.output, "{}", c)?,
                         Value::Unit       => {},
                         other             => write!(self.output, "{}", other)?,
@@ -737,6 +766,9 @@ impl<W: Write> VM<W> {
                 }
                 Instruction::PrintNewline => {
                     writeln!(self.output)?;
+                }
+                &Instruction::SetNumeralMode(base_cp) => {
+                    self.numeral_mode = base_cp;
                 }
 
                 // ── Arrays ───────────────────────────────────────────────────

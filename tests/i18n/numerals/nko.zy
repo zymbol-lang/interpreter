@@ -1,0 +1,135 @@
+// Numeral system: NKo (U+07C0–U+07C9)
+// Script: NKo
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (NKo) ---
+// ߁߂
+// ߄
+// ߃߂
+// ߂
+// ߂
+// ߆߄
+// -߈
+// -߄
+// -߃߂
+// ߄.߇߅
+// ߂.߂߅
+// ߄.߃߇߅
+// ߂.߈
+// ߁߂.߂߅
+// -߁.߂߅
+// ߁߀߈
+// ߄߀߀
+// ߂߅߅
+// --- Booleans (in script mode) ---
+// #߁
+// #߀
+// #߁
+// #߀
+// #߁
+// #߀
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ߈
+b = ߄
+c = ߃
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ߂) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ߃.߅
+g = ߁.߂߅
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ߂) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ߁߀߀
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (NKo) ---" ¶
+
+#߀߉#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ߂) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ߂) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (߁߂ > ߄)
+cmp_lt = (߄ > ߁߂)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #߁ ¶
+>> #߀ ¶
+
+// Restore ASCII mode
+#09#

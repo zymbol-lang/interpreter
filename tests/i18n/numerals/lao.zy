@@ -1,0 +1,135 @@
+// Numeral system: Lao (U+0ED0–U+0ED9)
+// Script: Lao
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Lao) ---
+// ໑໒
+// ໔
+// ໓໒
+// ໒
+// ໒
+// ໖໔
+// -໘
+// -໔
+// -໓໒
+// ໔.໗໕
+// ໒.໒໕
+// ໔.໓໗໕
+// ໒.໘
+// ໑໒.໒໕
+// -໑.໒໕
+// ໑໐໘
+// ໔໐໐
+// ໒໕໕
+// --- Booleans (in script mode) ---
+// #໑
+// #໐
+// #໑
+// #໐
+// #໑
+// #໐
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ໘
+b = ໔
+c = ໓
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ໒) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ໓.໕
+g = ໑.໒໕
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ໒) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ໑໐໐
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Lao) ---" ¶
+
+#໐໙#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ໒) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ໒) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (໑໒ > ໔)
+cmp_lt = (໔ > ໑໒)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #໑ ¶
+>> #໐ ¶
+
+// Restore ASCII mode
+#09#

@@ -45,6 +45,17 @@ fn run_vm(source: &str) -> Result<String, String> {
     String::from_utf8(output).map_err(|e| e.to_string())
 }
 
+/// Run a program and return the first lexer diagnostic message (expects at least one).
+fn run_lex_err(source: &str) -> String {
+    let lexer = Lexer::new(source, FileId(0));
+    let (_tokens, lex_diagnostics) = lexer.tokenize();
+    assert!(
+        !lex_diagnostics.is_empty(),
+        "Expected lexer error but got none"
+    );
+    lex_diagnostics[0].message.clone()
+}
+
 /// Run a program and expect a runtime error
 #[allow(dead_code)]
 fn run_err(source: &str) -> String {
@@ -155,6 +166,7 @@ fn test_boolean_literals() {
 >> #1 ¶
 >> #0 ¶
 "#);
+    // >> outputs booleans with # prefix so they are distinct from integers
     assert_eq!(out, "#1\n#0\n");
 }
 
@@ -1150,5 +1162,162 @@ action = "greet"
     }
 }
 "#;
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// i18n — Multi-numeral system support (Phase 8)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Lexer input: Unicode digit literals ──────────────────────────────────────
+
+#[test]
+fn test_i18n_devanagari_integer_input() {
+    // ४२ (Devanagari) should be identical to 42 after normalization
+    let src = "x = ४२\n>> x ¶\n";
+    assert_eq!(run(src), "42\n");
+}
+
+#[test]
+fn test_i18n_arabic_indic_integer_input() {
+    // ٤٢ (Arabic-Indic) should normalize to 42
+    let src = "x = ٤٢\n>> x ¶\n";
+    assert_eq!(run(src), "42\n");
+}
+
+#[test]
+fn test_i18n_thai_integer_input() {
+    // ๑๒๓ (Thai) should normalize to 123
+    let src = "x = ๑๒๓\n>> x ¶\n";
+    assert_eq!(run(src), "123\n");
+}
+
+#[test]
+fn test_i18n_devanagari_float_input() {
+    // ३.१४ (Devanagari) should normalize to 3.14
+    let src = "x = ३.१४\n>> x ¶\n";
+    assert_eq!(run(src), "3.14\n");
+}
+
+#[test]
+fn test_i18n_unicode_arithmetic() {
+    // Arithmetic with Unicode digit literals
+    let src = "a = ४२\nb = ८\n>> a + b ¶\n>> a - b ¶\n";
+    assert_eq!(run(src), "50\n34\n");
+}
+
+#[test]
+fn test_i18n_mixed_script_lexer_error() {
+    // Mixing Devanagari and ASCII digits in one literal must be a lexer error
+    let msg = run_lex_err("x = ४2");
+    assert!(
+        msg.contains("mixed") || msg.contains("script") || msg.contains("block"),
+        "unexpected error message: {msg}"
+    );
+}
+
+// ── Mode-switch token ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_i18n_mode_switch_ascii_default() {
+    // #09# is a no-op (already ASCII default); output must be ASCII
+    let src = "#09#\n>> 42 ¶\n";
+    assert_eq!(run(src), "42\n");
+}
+
+#[test]
+fn test_i18n_mode_switch_devanagari_output_int() {
+    // After #०९#, integer output uses Devanagari digits
+    let src = "#०९#\n>> 42 ¶\n";
+    assert_eq!(run(src), "४२\n");
+}
+
+#[test]
+fn test_i18n_mode_switch_devanagari_output_zero() {
+    let src = "#०९#\n>> 0 ¶\n";
+    assert_eq!(run(src), "०\n");
+}
+
+#[test]
+fn test_i18n_mode_switch_devanagari_output_negative() {
+    // Negative sign stays ASCII, digits change
+    let src = "#०९#\n>> -7 ¶\n";
+    assert_eq!(run(src), "-७\n");
+}
+
+#[test]
+fn test_i18n_mode_switch_devanagari_output_float() {
+    // Float separator stays ASCII, digits change
+    let src = "#०९#\n>> 3.14 ¶\n";
+    assert_eq!(run(src), "३.१४\n");
+}
+
+#[test]
+fn test_i18n_mode_switch_devanagari_output_bool() {
+    // Booleans output with # prefix in active numeral mode
+    let src = "#०९#\n>> #1 ¶\n>> #0 ¶\n";
+    assert_eq!(run(src), "#१\n#०\n");
+}
+
+#[test]
+fn test_i18n_mode_switch_thai_output_int() {
+    // After #๐๙#, output uses Thai digits
+    let src = "#๐๙#\n>> 123 ¶\n";
+    assert_eq!(run(src), "๑๒๓\n");
+}
+
+#[test]
+fn test_i18n_mode_switch_arabic_indic_output_int() {
+    // After #٠٩#, output uses Arabic-Indic digits
+    let src = "#٠٩#\n>> 42 ¶\n";
+    assert_eq!(run(src), "٤٢\n");
+}
+
+// ── Mid-program mode change ───────────────────────────────────────────────────
+
+#[test]
+fn test_i18n_mode_change_mid_program() {
+    // Switch to Devanagari, then back to ASCII
+    let src = "#०९#\n>> 1 ¶\n#09#\n>> 2 ¶\n";
+    assert_eq!(run(src), "१\n2\n");
+}
+
+#[test]
+fn test_i18n_mode_does_not_affect_string_output() {
+    // Strings pass through unchanged regardless of numeral mode
+    let src = "#०९#\n>> \"hello\" ¶\n";
+    assert_eq!(run(src), "hello\n");
+}
+
+#[test]
+fn test_i18n_unicode_input_devanagari_mode_output() {
+    // Input Devanagari digit, activate Devanagari output mode: round-trip
+    let src = "#०९#\nx = ४२\n>> x ¶\n";
+    assert_eq!(run(src), "४२\n");
+}
+
+// ── VM parity ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_i18n_devanagari_integer_input_vm() {
+    let src = "x = ४२\n>> x ¶\n";
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
+#[test]
+fn test_i18n_mode_switch_devanagari_vm() {
+    let src = "#०९#\n>> 42 ¶\n";
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
+#[test]
+fn test_i18n_mode_change_mid_program_vm() {
+    let src = "#०९#\n>> 1 ¶\n#09#\n>> 2 ¶\n";
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
+#[test]
+fn test_i18n_devanagari_bool_output_vm() {
+    let src = "#०९#\n>> #1 ¶\n>> #0 ¶\n";
     assert_eq!(run_vm(src).expect("VM"), run(src));
 }

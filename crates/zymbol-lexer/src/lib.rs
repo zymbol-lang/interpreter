@@ -11,8 +11,10 @@ mod loops;
 mod functions;
 mod collections;
 mod collection_ops;
+pub mod digit_blocks;
 
 pub use literals::StringPart;
+pub use digit_blocks::{digit_value, digit_block_base, DIGIT_BLOCKS};
 
 use zymbol_error::Diagnostic;
 use zymbol_span::{FileId, Position, Span};
@@ -37,8 +39,12 @@ pub enum TokenKind {
     Float(f64),
     /// Char literal
     Char(char),
-    /// Boolean literal (#1 or #0)
+    /// Boolean literal (#1 or #0, or Unicode equivalent)
     Boolean(bool),
+    /// Numeral mode switch: #<digit_0><digit_9># — sets the active output
+    /// numeral system. Carries the block base codepoint of the chosen script
+    /// (e.g. 0x0030 for ASCII, 0x0966 for Devanagari).
+    SetNumeralMode(u32),
 
     // Identifiers
     /// Identifier (variable name)
@@ -261,16 +267,12 @@ pub enum TokenKind {
     ScopeResolution,
 
     // Script execution operators
-    /// </ (execute start - for .zy files)
-    ExecuteStart,
-    /// /> (execute end - for .zy files)
-    ExecuteEnd,
+    /// </ path /> (execute — raw path string)
+    ExecuteCommand(String),
     /// >< (CLI args capture)
     CliArgsCapture,
-    /// <\ (bash execute start)
-    BashStart,
-    /// \> (bash execute end)
-    BashEnd,
+    /// <\ command \> (bash execute — raw command string)
+    BashCommand(String),
 
     // Comments (for formatter preservation)
     /// Single-line comment // ...
@@ -351,9 +353,10 @@ impl Lexer {
             return true;
         }
 
-        // For emojis and other Unicode symbols: allow if not whitespace, digit, or operator
+        // For emojis and other Unicode symbols: allow if not whitespace, digit, or operator.
+        // digit_value covers all supported numeral systems, not just ASCII.
         !ch.is_whitespace()
-            && !ch.is_ascii_digit()
+            && digit_blocks::digit_value(ch).is_none()
             && !Self::is_operator_char(ch)
     }
 
@@ -442,13 +445,6 @@ impl Lexer {
             return Token::new(TokenKind::Ge, self.span(start));
         }
 
-        // Check for /> (execute end - for .zy files)
-        if ch == '/' && self.peek() == Some('>') {
-            self.advance();
-            self.advance();
-            return Token::new(TokenKind::ExecuteEnd, self.span(start));
-        }
-
         // Check for > (greater than)
         if ch == '>' {
             self.advance();
@@ -476,18 +472,56 @@ impl Lexer {
             return Token::new(TokenKind::Neq, self.span(start));
         }
 
-        // Check for </ (execute start - for .zy files)
+        // Check for </ (execute) — raw-string mode: read path literally until />
         if ch == '<' && self.peek() == Some('/') {
-            self.advance();
-            self.advance();
-            return Token::new(TokenKind::ExecuteStart, self.span(start));
+            self.advance(); // consume <
+            self.advance(); // consume /
+            let mut raw = String::new();
+            loop {
+                if self.is_at_end() {
+                    self.diagnostics.push(
+                        Diagnostic::error("unterminated execute expression")
+                            .with_span(self.span(start))
+                            .with_help("execute syntax: </ path.zy />"),
+                    );
+                    break;
+                }
+                let c = self.current_char();
+                if c == '/' && self.peek() == Some('>') {
+                    self.advance(); // consume /
+                    self.advance(); // consume >
+                    break;
+                }
+                raw.push(c);
+                self.advance();
+            }
+            return Token::new(TokenKind::ExecuteCommand(raw.trim().to_string()), self.span(start));
         }
 
-        // Check for <\ (bash execute start)
+        // Check for <\ (bash execute) — raw-string mode: read everything literally until \>
         if ch == '<' && self.peek() == Some('\\') {
-            self.advance();
-            self.advance();
-            return Token::new(TokenKind::BashStart, self.span(start));
+            self.advance(); // consume <
+            self.advance(); // consume \
+            let mut raw = String::new();
+            loop {
+                if self.is_at_end() {
+                    self.diagnostics.push(
+                        Diagnostic::error("unterminated bash execute expression")
+                            .with_span(self.span(start))
+                            .with_help("bash execute syntax: <\\ command \\>"),
+                    );
+                    break;
+                }
+                let c = self.current_char();
+                if c == '\\' && self.peek() == Some('>') {
+                    self.advance(); // consume \
+                    self.advance(); // consume >
+                    break;
+                }
+                raw.push(c);
+                self.advance();
+            }
+            return Token::new(TokenKind::BashCommand(raw.trim().to_string()), self.span(start));
         }
 
         // Check for < (less than)
@@ -567,13 +601,6 @@ impl Lexer {
             self.advance();
             self.advance();
             return Token::new(TokenKind::Or, self.span(start));
-        }
-
-        // Check for \> (bash execute end)
-        if ch == '\\' && self.peek() == Some('>') {
-            self.advance();
-            self.advance();
-            return Token::new(TokenKind::BashEnd, self.span(start));
         }
 
         // Check for !? (try block) or ! (logical NOT)
@@ -669,15 +696,65 @@ impl Lexer {
                     self.advance(); // consume ^
                     return Token::new(TokenKind::HashCaret, self.span(start));
                 }
-                // Check for booleans #1 or #0
-                else if next == '1' {
+                // Check for digits after #.
+                //
+                // Two cases share the same first character (a digit with value 0):
+                //
+                //   1. Numeral mode switch  #<d0><d9>#
+                //      d0 has digit_value 0, d9 has digit_value 9, same block, then '#'.
+                //      Example: #09# (ASCII reset), #०९# (Devanagari).
+                //
+                //   2. Boolean false  #<d0>
+                //      Any other context where digit_value of next == 0.
+                //
+                // We resolve the ambiguity with a 3-char lookahead before consuming
+                // any characters.
+                else if let Some(dv) = digit_blocks::digit_value(next) {
+                    // ── mode-switch check (only when first digit has value 0) ──
+                    if dv == 0 {
+                        let maybe_d9   = self.peek_ahead(2); // char after next
+                        let maybe_hash = self.peek_ahead(3); // char after that
+                        if let (Some(d9_char), Some('#')) = (maybe_d9, maybe_hash) {
+                            if digit_blocks::digit_value(d9_char) == Some(9)
+                                && digit_blocks::digit_block_base(next)
+                                    == digit_blocks::digit_block_base(d9_char)
+                            {
+                                let block_base =
+                                    digit_blocks::digit_block_base(next).unwrap();
+                                self.advance(); // consume #
+                                self.advance(); // consume digit0
+                                self.advance(); // consume digit9
+                                self.advance(); // consume closing #
+                                return Token::new(
+                                    TokenKind::SetNumeralMode(block_base),
+                                    self.span(start),
+                                );
+                            }
+                        }
+                    }
+
+                    // ── boolean ───────────────────────────────────────────────
                     self.advance(); // consume #
-                    self.advance(); // consume 1
-                    return Token::new(TokenKind::Boolean(true), self.span(start));
-                } else if next == '0' {
-                    self.advance(); // consume #
-                    self.advance(); // consume 0
-                    return Token::new(TokenKind::Boolean(false), self.span(start));
+                    self.advance(); // consume digit
+                    match dv {
+                        0 => return Token::new(TokenKind::Boolean(false), self.span(start)),
+                        1 => return Token::new(TokenKind::Boolean(true), self.span(start)),
+                        _ => {
+                            let span = self.span(start);
+                            self.diagnostics.push(
+                                Diagnostic::error(format!(
+                                    "invalid boolean literal: digit {} is not valid after '#'",
+                                    dv
+                                ))
+                                .with_span(span)
+                                .with_help("use '#0' (or its Unicode equivalent) for false, '#1' for true"),
+                            );
+                            return Token::new(
+                                TokenKind::Error("invalid boolean literal".to_string()),
+                                span,
+                            );
+                        }
+                    }
                 }
             }
             // Standalone # (module declaration)
@@ -708,8 +785,8 @@ impl Lexer {
             return self.lex_char(start);
         }
 
-        // Check for number
-        if ch.is_ascii_digit() {
+        // Check for number — any digit from any supported numeral system
+        if digit_blocks::digit_value(ch).is_some() {
             return self.lex_number(start);
         }
 
@@ -1011,6 +1088,198 @@ mod tests {
             TokenKind::Boolean(b) => assert!(!(*b)),
             _ => panic!("Expected boolean false"),
         }
+    }
+
+    // ── Boolean Unicode literals ──────────────────────────────────────────────
+
+    fn lex_bool_token(src: &str) -> Option<bool> {
+        use zymbol_span::FileId;
+        let (tokens, _) = Lexer::new(src, FileId(0)).tokenize();
+        match tokens.first() {
+            Some(t) => match &t.kind {
+                TokenKind::Boolean(b) => Some(*b),
+                _ => None,
+            },
+            None => None,
+        }
+    }
+
+    fn lex_has_error(src: &str) -> bool {
+        use zymbol_span::FileId;
+        let (_, diags) = Lexer::new(src, FileId(0)).tokenize();
+        !diags.is_empty()
+    }
+
+    #[test]
+    fn boolean_devanagari_false() {
+        assert_eq!(lex_bool_token("#०"), Some(false)); // U+0966
+    }
+
+    #[test]
+    fn boolean_devanagari_true() {
+        assert_eq!(lex_bool_token("#१"), Some(true)); // U+0967
+    }
+
+    #[test]
+    fn boolean_arabic_indic_false() {
+        assert_eq!(lex_bool_token("#٠"), Some(false)); // U+0660
+    }
+
+    #[test]
+    fn boolean_arabic_indic_true() {
+        assert_eq!(lex_bool_token("#١"), Some(true)); // U+0661
+    }
+
+    #[test]
+    fn boolean_thai_false() {
+        assert_eq!(lex_bool_token("#๐"), Some(false)); // U+0E50
+    }
+
+    #[test]
+    fn boolean_thai_true() {
+        assert_eq!(lex_bool_token("#๑"), Some(true)); // U+0E51
+    }
+
+    #[test]
+    fn boolean_adlam_false() {
+        let zero = char::from_u32(0x1E950).unwrap();
+        let src = format!("#{}", zero);
+        assert_eq!(lex_bool_token(&src), Some(false));
+    }
+
+    #[test]
+    fn boolean_adlam_true() {
+        let one = char::from_u32(0x1E951).unwrap();
+        let src = format!("#{}", one);
+        assert_eq!(lex_bool_token(&src), Some(true));
+    }
+
+    #[test]
+    fn boolean_klingon_piqad_false() {
+        // U+F8F0 — CSUR PUA klingon zero digit
+        let zero = char::from_u32(0xF8F0).unwrap();
+        let src = format!("#{}", zero);
+        assert_eq!(lex_bool_token(&src), Some(false));
+    }
+
+    #[test]
+    fn boolean_klingon_piqad_true() {
+        // U+F8F1 — CSUR PUA klingon one digit
+        let one = char::from_u32(0xF8F1).unwrap();
+        let src = format!("#{}", one);
+        assert_eq!(lex_bool_token(&src), Some(true));
+    }
+
+    #[test]
+    fn boolean_digit_2_to_9_is_error() {
+        // ASCII digits 2-9 after # must be a lex error
+        for d in '2'..='9' {
+            let src = format!("#{}", d);
+            assert!(lex_has_error(&src), "expected error for '{}'", src);
+        }
+    }
+
+    #[test]
+    fn boolean_devanagari_digit_2_to_9_is_error() {
+        // Devanagari digits 2-9 (U+0968-U+096F) after # must also be an error
+        for offset in 2u32..=9 {
+            let d = char::from_u32(0x0966 + offset).unwrap();
+            let src = format!("#{}", d);
+            assert!(lex_has_error(&src), "expected error for '#{}'", d);
+        }
+    }
+
+    // ── SetNumeralMode token ──────────────────────────────────────────────────
+
+    fn lex_mode(src: &str) -> Option<u32> {
+        use zymbol_span::FileId;
+        let (tokens, diags) = Lexer::new(src, FileId(0)).tokenize();
+        assert!(diags.is_empty(), "unexpected lex errors: {:?}", diags);
+        match tokens.first() {
+            Some(t) => match t.kind {
+                TokenKind::SetNumeralMode(base) => Some(base),
+                _ => None,
+            },
+            None => None,
+        }
+    }
+
+    #[test]
+    fn mode_switch_ascii_reset() {
+        assert_eq!(lex_mode("#09#"), Some(0x0030));
+    }
+
+    #[test]
+    fn mode_switch_devanagari() {
+        assert_eq!(lex_mode("#०९#"), Some(0x0966));
+    }
+
+    #[test]
+    fn mode_switch_thai() {
+        assert_eq!(lex_mode("#๐๙#"), Some(0x0E50));
+    }
+
+    #[test]
+    fn mode_switch_tibetan() {
+        assert_eq!(lex_mode("#༠༩#"), Some(0x0F20));
+    }
+
+    #[test]
+    fn mode_switch_adlam() {
+        let zero  = char::from_u32(0x1E950).unwrap();
+        let nine  = char::from_u32(0x1E959).unwrap();
+        let src   = format!("#{}{}#", zero, nine);
+        assert_eq!(lex_mode(&src), Some(0x1E950));
+    }
+
+    #[test]
+    fn mode_switch_segmented_lcd() {
+        assert_eq!(lex_mode("#🯰🯹#"), Some(0x1FBF0));
+    }
+
+    // ── Disambiguation: #0 alone must remain Boolean(false) ──────────────────
+
+    #[test]
+    fn hash_zero_alone_is_boolean_false() {
+        // #0 with nothing after → Boolean(false), NOT a mode switch
+        assert_eq!(lex_bool_token("#0"), Some(false));
+    }
+
+    #[test]
+    fn hash_zero_followed_by_space_is_boolean_false() {
+        // #0 followed by space — the 4-char pattern #09# is not complete
+        assert_eq!(lex_bool_token("#0 "), Some(false));
+    }
+
+    #[test]
+    fn hash_zero_nine_without_closing_hash_is_boolean_false() {
+        // #09 without trailing # → Boolean(false) then Integer(9)
+        use zymbol_span::FileId;
+        let (tokens, _) = Lexer::new("#09", FileId(0)).tokenize();
+        assert!(matches!(tokens[0].kind, TokenKind::Boolean(false)));
+        assert!(matches!(tokens[1].kind, TokenKind::Integer(9)));
+    }
+
+    #[test]
+    fn mixed_script_mode_switch_is_not_recognised() {
+        // #0९# — ASCII '0' and Devanagari '९' → different blocks → NOT a mode switch
+        // Resolves as Boolean(false) then the remaining chars as tokens
+        let devanagari_nine = char::from_u32(0x0969).unwrap(); // ९
+        let src = format!("#0{}#", devanagari_nine);
+        use zymbol_span::FileId;
+        let (tokens, _) = Lexer::new(&src, FileId(0)).tokenize();
+        // First token must be Boolean(false), not SetNumeralMode
+        assert!(matches!(tokens[0].kind, TokenKind::Boolean(false)));
+    }
+
+    #[test]
+    fn mode_switch_produces_single_token() {
+        // #09# should be exactly one SetNumeralMode token + Eof
+        use zymbol_span::FileId;
+        let (tokens, diags) = Lexer::new("#09#", FileId(0)).tokenize();
+        assert!(diags.is_empty());
+        assert_eq!(tokens.len(), 2); // SetNumeralMode + Eof
+        assert!(matches!(tokens[0].kind, TokenKind::SetNumeralMode(0x0030)));
     }
 
     #[test]

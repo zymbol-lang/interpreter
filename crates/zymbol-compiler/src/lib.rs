@@ -533,6 +533,10 @@ impl Compiler {
             Statement::CliArgsCapture(_) => {
                 Err(CompileError::Unsupported("CLI args capture — VM Fase 4C".into()))
             }
+            Statement::SetNumeralMode { base, .. } => {
+                ctx.emit(Instruction::SetNumeralMode(*base));
+                Ok(())
+            }
         }
     }
 
@@ -1144,14 +1148,12 @@ impl Compiler {
             }
             // ── 4H: Execute expression </ file.zy /> → Execute instruction ──
             Expr::Execute(exec) => {
-                // Resolve path relative to base_dir (same as WT's eval_execute)
-                let abs_path = if exec.path.starts_with("./") || exec.path.starts_with("../") {
-                    if let Some(ref base) = self.base_dir {
-                        let resolved = base.join(&exec.path);
-                        resolved.to_string_lossy().to_string()
-                    } else {
-                        exec.path.clone()
-                    }
+                // Resolve path relative to base_dir (same as WT's eval_execute).
+                // Absolute paths are used as-is; everything else is joined to base_dir.
+                let abs_path = if exec.path.starts_with('/') {
+                    exec.path.clone()
+                } else if let Some(ref base) = self.base_dir {
+                    base.join(&exec.path).to_string_lossy().to_string()
                 } else {
                     exec.path.clone()
                 };
@@ -2710,7 +2712,8 @@ fn collect_free_in_stmts(
             // No sub-expressions to scan
             Statement::Newline(_) | Statement::Break(_) | Statement::Continue(_)
             | Statement::FunctionDecl(_) | Statement::LifetimeEnd(_)
-            | Statement::Input(_) | Statement::CliArgsCapture(_) => {}
+            | Statement::Input(_) | Statement::CliArgsCapture(_)
+            | Statement::SetNumeralMode { .. } => {}
         }
     }
 }
@@ -2871,7 +2874,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             // No-register instructions
             Instruction::SetupOutputWriteback(_) | Instruction::TryBegin(_)
             | Instruction::TryEnd(_) | Instruction::RaiseError(_)
-            | Instruction::Jump(_) | Instruction::Halt | Instruction::PrintNewline => {}
+            | Instruction::Jump(_) | Instruction::Halt | Instruction::PrintNewline
+            | Instruction::SetNumeralMode(_) => {}
         }
     }
     max

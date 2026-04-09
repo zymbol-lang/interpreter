@@ -1,0 +1,135 @@
+// Numeral system: Balinese (U+1B50–U+1B59)
+// Script: Balinese
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Balinese) ---
+// ᭑᭒
+// ᭔
+// ᭓᭒
+// ᭒
+// ᭒
+// ᭖᭔
+// -᭘
+// -᭔
+// -᭓᭒
+// ᭔.᭗᭕
+// ᭒.᭒᭕
+// ᭔.᭓᭗᭕
+// ᭒.᭘
+// ᭑᭒.᭒᭕
+// -᭑.᭒᭕
+// ᭑᭐᭘
+// ᭔᭐᭐
+// ᭒᭕᭕
+// --- Booleans (in script mode) ---
+// #᭑
+// #᭐
+// #᭑
+// #᭐
+// #᭑
+// #᭐
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ᭘
+b = ᭔
+c = ᭓
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ᭒) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ᭓.᭕
+g = ᭑.᭒᭕
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ᭒) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ᭑᭐᭐
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Balinese) ---" ¶
+
+#᭐᭙#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ᭒) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ᭒) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (᭑᭒ > ᭔)
+cmp_lt = (᭔ > ᭑᭒)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #᭑ ¶
+>> #᭐ ¶
+
+// Restore ASCII mode
+#09#

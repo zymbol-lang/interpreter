@@ -1,0 +1,138 @@
+// Numeral system: Ahom (U+11730–U+11739)
+// Script: Ahom
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Ahom) ---
+// 𑜱𑜲
+// 𑜴
+// 𑜳𑜲
+// 𑜲
+// 𑜲
+// 𑜶𑜴
+// -𑜸
+// -𑜴
+// -𑜳𑜲
+// 𑜴.𑜷𑜵
+// 𑜲.𑜲𑜵
+// 𑜴.𑜳𑜷𑜵
+// 𑜲.𑜸
+// 𑜱𑜲.𑜲𑜵
+// -𑜱.𑜲𑜵
+// 𑜱𑜰𑜸
+// 𑜴𑜰𑜰
+// 𑜲𑜵𑜵
+// --- Booleans (in script mode) ---
+// #𑜱
+// #𑜰
+// #𑜱
+// #𑜰
+// #𑜱
+// #𑜰
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𑜸
+b = 𑜴
+c = 𑜳
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑜲) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𑜳.𑜵
+g = 𑜱.𑜲𑜵
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑜲) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𑜱𑜰𑜰
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Ahom) ---" ¶
+
+#𑜰𑜹#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑜲) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑜲) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𑜱𑜲 > 𑜴)
+cmp_lt = (𑜴 > 𑜱𑜲)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𑜱 ¶
+>> #𑜰 ¶
+
+// Restore ASCII mode
+#09#
+
+>> #1 ¶
+>> #0 ¶

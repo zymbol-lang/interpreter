@@ -1,0 +1,135 @@
+// Numeral system: Javanese (U+A9D0–U+A9D9)
+// Script: Javanese
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Javanese) ---
+// ꧑꧒
+// ꧔
+// ꧓꧒
+// ꧒
+// ꧒
+// ꧖꧔
+// -꧘
+// -꧔
+// -꧓꧒
+// ꧔.꧗꧕
+// ꧒.꧒꧕
+// ꧔.꧓꧗꧕
+// ꧒.꧘
+// ꧑꧒.꧒꧕
+// -꧑.꧒꧕
+// ꧑꧐꧘
+// ꧔꧐꧐
+// ꧒꧕꧕
+// --- Booleans (in script mode) ---
+// #꧑
+// #꧐
+// #꧑
+// #꧐
+// #꧑
+// #꧐
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ꧘
+b = ꧔
+c = ꧓
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ꧒) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ꧓.꧕
+g = ꧑.꧒꧕
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ꧒) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ꧑꧐꧐
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Javanese) ---" ¶
+
+#꧐꧙#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ꧒) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ꧒) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (꧑꧒ > ꧔)
+cmp_lt = (꧔ > ꧑꧒)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #꧑ ¶
+>> #꧐ ¶
+
+// Restore ASCII mode
+#09#

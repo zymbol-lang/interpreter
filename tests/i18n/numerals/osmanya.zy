@@ -1,0 +1,135 @@
+// Numeral system: Osmanya (U+104A0–U+104A9)
+// Script: Osmanya
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Osmanya) ---
+// 𐒡𐒢
+// 𐒤
+// 𐒣𐒢
+// 𐒢
+// 𐒢
+// 𐒦𐒤
+// -𐒨
+// -𐒤
+// -𐒣𐒢
+// 𐒤.𐒧𐒥
+// 𐒢.𐒢𐒥
+// 𐒤.𐒣𐒧𐒥
+// 𐒢.𐒨
+// 𐒡𐒢.𐒢𐒥
+// -𐒡.𐒢𐒥
+// 𐒡𐒠𐒨
+// 𐒤𐒠𐒠
+// 𐒢𐒥𐒥
+// --- Booleans (in script mode) ---
+// #𐒡
+// #𐒠
+// #𐒡
+// #𐒠
+// #𐒡
+// #𐒠
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𐒨
+b = 𐒤
+c = 𐒣
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𐒢) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𐒣.𐒥
+g = 𐒡.𐒢𐒥
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𐒢) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𐒡𐒠𐒠
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Osmanya) ---" ¶
+
+#𐒠𐒩#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𐒢) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𐒢) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𐒡𐒢 > 𐒤)
+cmp_lt = (𐒤 > 𐒡𐒢)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𐒡 ¶
+>> #𐒠 ¶
+
+// Restore ASCII mode
+#09#

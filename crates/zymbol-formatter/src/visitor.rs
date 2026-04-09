@@ -184,6 +184,12 @@ impl<'a> FormatVisitor<'a> {
             Statement::Expr(expr_stmt) => self.format_expr_statement(expr_stmt),
             Statement::DestructureAssign(d) => self.format_destructure_assign(d),
             Statement::CliArgsCapture(capture) => self.format_cli_args_capture(capture),
+            Statement::SetNumeralMode { base, .. } => {
+                // Reconstruct #<digit0><digit9># from the block base codepoint
+                let d0 = char::from_u32(*base).unwrap_or('0');
+                let d9 = char::from_u32(base + 9).unwrap_or('9');
+                self.output.write(&format!("#{}{}\u{23}", d0, d9));
+            }
         }
     }
 

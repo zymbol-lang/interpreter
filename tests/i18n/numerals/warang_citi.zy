@@ -1,0 +1,135 @@
+// Numeral system: Warang Citi (U+118E0–U+118E9)
+// Script: Warang Citi
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Warang Citi) ---
+// 𑣡𑣢
+// 𑣤
+// 𑣣𑣢
+// 𑣢
+// 𑣢
+// 𑣦𑣤
+// -𑣨
+// -𑣤
+// -𑣣𑣢
+// 𑣤.𑣧𑣥
+// 𑣢.𑣢𑣥
+// 𑣤.𑣣𑣧𑣥
+// 𑣢.𑣨
+// 𑣡𑣢.𑣢𑣥
+// -𑣡.𑣢𑣥
+// 𑣡𑣠𑣨
+// 𑣤𑣠𑣠
+// 𑣢𑣥𑣥
+// --- Booleans (in script mode) ---
+// #𑣡
+// #𑣠
+// #𑣡
+// #𑣠
+// #𑣡
+// #𑣠
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𑣨
+b = 𑣤
+c = 𑣣
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑣢) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𑣣.𑣥
+g = 𑣡.𑣢𑣥
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑣢) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𑣡𑣠𑣠
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Warang Citi) ---" ¶
+
+#𑣠𑣩#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑣢) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑣢) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𑣡𑣢 > 𑣤)
+cmp_lt = (𑣤 > 𑣡𑣢)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𑣡 ¶
+>> #𑣠 ¶
+
+// Restore ASCII mode
+#09#

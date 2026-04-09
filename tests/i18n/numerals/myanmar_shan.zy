@@ -1,0 +1,135 @@
+// Numeral system: Myanmar Shan (U+1090–U+1099)
+// Script: Myanmar Shan
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Myanmar Shan) ---
+// ႑႒
+// ႔
+// ႓႒
+// ႒
+// ႒
+// ႖႔
+// -႘
+// -႔
+// -႓႒
+// ႔.႗႕
+// ႒.႒႕
+// ႔.႓႗႕
+// ႒.႘
+// ႑႒.႒႕
+// -႑.႒႕
+// ႑႐႘
+// ႔႐႐
+// ႒႕႕
+// --- Booleans (in script mode) ---
+// #႑
+// #႐
+// #႑
+// #႐
+// #႑
+// #႐
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ႘
+b = ႔
+c = ႓
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ႒) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ႓.႕
+g = ႑.႒႕
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ႒) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ႑႐႐
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Myanmar Shan) ---" ¶
+
+#႐႙#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ႒) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ႒) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (႑႒ > ႔)
+cmp_lt = (႔ > ႑႒)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #႑ ¶
+>> #႐ ¶
+
+// Restore ASCII mode
+#09#

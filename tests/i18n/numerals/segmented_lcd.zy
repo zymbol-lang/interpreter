@@ -1,0 +1,135 @@
+// Numeral system: Segmented/LCD (U+1FBF0–U+1FBF9)
+// Script: Segmented/LCD
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Segmented/LCD) ---
+// 🯱🯲
+// 🯴
+// 🯳🯲
+// 🯲
+// 🯲
+// 🯶🯴
+// -🯸
+// -🯴
+// -🯳🯲
+// 🯴.🯷🯵
+// 🯲.🯲🯵
+// 🯴.🯳🯷🯵
+// 🯲.🯸
+// 🯱🯲.🯲🯵
+// -🯱.🯲🯵
+// 🯱🯰🯸
+// 🯴🯰🯰
+// 🯲🯵🯵
+// --- Booleans (in script mode) ---
+// #🯱
+// #🯰
+// #🯱
+// #🯰
+// #🯱
+// #🯰
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 🯸
+b = 🯴
+c = 🯳
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 🯲) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 🯳.🯵
+g = 🯱.🯲🯵
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 🯲) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 🯱🯰🯰
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Segmented/LCD) ---" ¶
+
+#🯰🯹#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 🯲) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 🯲) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (🯱🯲 > 🯴)
+cmp_lt = (🯴 > 🯱🯲)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #🯱 ¶
+>> #🯰 ¶
+
+// Restore ASCII mode
+#09#

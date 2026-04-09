@@ -601,7 +601,8 @@ impl DefUseAnalyzer {
             }
 
             Statement::Break(_) | Statement::Continue(_) | Statement::Newline(_) |
-            Statement::FunctionDecl(_) | Statement::CliArgsCapture(_) => {
+            Statement::FunctionDecl(_) | Statement::CliArgsCapture(_) |
+            Statement::SetNumeralMode { .. } => {
                 // No variable uses in these statements
             }
         }

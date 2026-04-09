@@ -1,0 +1,135 @@
+// Numeral system: Tibetan (U+0F20–U+0F29)
+// Script: Tibetan
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Tibetan) ---
+// ༡༢
+// ༤
+// ༣༢
+// ༢
+// ༢
+// ༦༤
+// -༨
+// -༤
+// -༣༢
+// ༤.༧༥
+// ༢.༢༥
+// ༤.༣༧༥
+// ༢.༨
+// ༡༢.༢༥
+// -༡.༢༥
+// ༡༠༨
+// ༤༠༠
+// ༢༥༥
+// --- Booleans (in script mode) ---
+// #༡
+// #༠
+// #༡
+// #༠
+// #༡
+// #༠
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ༨
+b = ༤
+c = ༣
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ༢) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ༣.༥
+g = ༡.༢༥
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ༢) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ༡༠༠
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Tibetan) ---" ¶
+
+#༠༩#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ༢) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ༢) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (༡༢ > ༤)
+cmp_lt = (༤ > ༡༢)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #༡ ¶
+>> #༠ ¶
+
+// Restore ASCII mode
+#09#

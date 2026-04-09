@@ -88,6 +88,19 @@ impl<W: Write> Interpreter<W> {
                 if let Expr::Index(idx) = op.target.as_ref() {
                     if let Expr::Identifier(ident) = idx.array.as_ref() {
                         if ident.name == assign.name {
+                            // Tuples are immutable — indexed assignment is forbidden
+                            match self.get_variable(&assign.name) {
+                                Some(Value::Tuple(_)) | Some(Value::NamedTuple(_)) => {
+                                    return Err(RuntimeError::Generic {
+                                        message: format!(
+                                            "cannot modify tuple '{}': tuples are immutable\nhelp: use 'new = {}[i]$~ value' for a functional update",
+                                            assign.name, assign.name
+                                        ),
+                                        span: assign.span,
+                                    });
+                                }
+                                _ => {}
+                            }
                             let index_val = self.eval_expr(&idx.index)?;
                             let new_value = self.eval_expr(&op.value)?;
                             if let (Some(Value::Array(arr)), Value::Int(i)) =

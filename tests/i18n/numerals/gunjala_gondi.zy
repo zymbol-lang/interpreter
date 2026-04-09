@@ -1,0 +1,135 @@
+// Numeral system: Gunjala Gondi (U+11DA0–U+11DA9)
+// Script: Gunjala Gondi
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Gunjala Gondi) ---
+// 𑶡𑶢
+// 𑶤
+// 𑶣𑶢
+// 𑶢
+// 𑶢
+// 𑶦𑶤
+// -𑶨
+// -𑶤
+// -𑶣𑶢
+// 𑶤.𑶧𑶥
+// 𑶢.𑶢𑶥
+// 𑶤.𑶣𑶧𑶥
+// 𑶢.𑶨
+// 𑶡𑶢.𑶢𑶥
+// -𑶡.𑶢𑶥
+// 𑶡𑶠𑶨
+// 𑶤𑶠𑶠
+// 𑶢𑶥𑶥
+// --- Booleans (in script mode) ---
+// #𑶡
+// #𑶠
+// #𑶡
+// #𑶠
+// #𑶡
+// #𑶠
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𑶨
+b = 𑶤
+c = 𑶣
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑶢) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𑶣.𑶥
+g = 𑶡.𑶢𑶥
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑶢) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𑶡𑶠𑶠
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Gunjala Gondi) ---" ¶
+
+#𑶠𑶩#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑶢) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑶢) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𑶡𑶢 > 𑶤)
+cmp_lt = (𑶤 > 𑶡𑶢)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𑶡 ¶
+>> #𑶠 ¶
+
+// Restore ASCII mode
+#09#

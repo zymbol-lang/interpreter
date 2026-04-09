@@ -7,7 +7,7 @@
 //! - Increment/decrement: ++, --
 //! - Lifetime end: \variable (explicit destruction)
 
-use zymbol_ast::{Assignment, BinaryExpr, CollectionUpdateExpr, ConstDecl, DestructureAssign, DestructureItem, DestructurePattern, Expr, IdentifierExpr, IndexExpr, LifetimeEnd, LiteralExpr, Statement};
+use zymbol_ast::{Assignment, BinaryExpr, CollectionUpdateExpr, ConstDecl, DestructureAssign, DestructureItem, DestructurePattern, ErrorPropagateExpr, Expr, ExprStatement, IdentifierExpr, IndexExpr, LifetimeEnd, LiteralExpr, Statement};
 use zymbol_common::{BinaryOp, Literal};
 use zymbol_error::Diagnostic;
 use zymbol_lexer::TokenKind;
@@ -35,14 +35,43 @@ impl Parser {
             self.advance(); // consume ']'
 
             let assign_tok = self.peek().clone();
-            if !matches!(assign_tok.kind, TokenKind::Assign) {
-                return Err(Diagnostic::error("expected '=' after index expression for indexed assignment")
-                    .with_span(assign_tok.span)
-                    .with_help("syntax: arr[i] = val"));
-            }
-            self.advance(); // consume '='
+            let compound_op = match assign_tok.kind {
+                TokenKind::Assign => None,
+                TokenKind::PlusAssign => Some(BinaryOp::Add),
+                TokenKind::MinusAssign => Some(BinaryOp::Sub),
+                TokenKind::StarAssign => Some(BinaryOp::Mul),
+                TokenKind::SlashAssign => Some(BinaryOp::Div),
+                TokenKind::PercentAssign => Some(BinaryOp::Mod),
+                TokenKind::CaretAssign => Some(BinaryOp::Pow),
+                _ => {
+                    return Err(Diagnostic::error("expected '=' after index expression for indexed assignment")
+                        .with_span(assign_tok.span)
+                        .with_help("syntax: arr[i] = val  or  arr[i] += val"));
+                }
+            };
+            self.advance(); // consume operator
 
-            let value_expr = self.parse_expr()?;
+            let rhs = self.parse_expr()?;
+
+            // For compound ops: arr[i] += rhs  →  arr[i]$~ (arr[i] + rhs)
+            let value_expr = if let Some(op) = compound_op {
+                let arr_ident = Expr::Identifier(IdentifierExpr::new(name.clone(), ident_token.span));
+                let current_elem = Expr::Index(IndexExpr::new(
+                    Box::new(arr_ident),
+                    Box::new(index_expr.clone()),
+                    ident_token.span.to(&rbracket.span),
+                ));
+                let rhs_span = rhs.span();
+                Expr::Binary(BinaryExpr::new(
+                    op,
+                    Box::new(current_elem),
+                    Box::new(rhs),
+                    ident_token.span.to(&rhs_span),
+                ))
+            } else {
+                rhs
+            };
+
             let span = ident_token.span.to(&value_expr.span());
 
             // Build arr[i] target expression
@@ -53,7 +82,7 @@ impl Parser {
                 ident_token.span.to(&rbracket.span),
             ));
 
-            // Wrap in CollectionUpdate: arr[i]$~ val
+            // Wrap in CollectionUpdate: arr[i]$~ value_expr
             let update_expr = Expr::CollectionUpdate(CollectionUpdateExpr::new(
                 Box::new(index_node),
                 Box::new(value_expr),
@@ -64,6 +93,15 @@ impl Parser {
         }
 
         let assign_token = self.peek();
+
+        // Check for error propagation as statement: value$!!
+        if matches!(assign_token.kind, TokenKind::DollarExclaimExclaim) {
+            let op_token = self.advance(); // consume $!!
+            let ident_expr = Expr::Identifier(IdentifierExpr::new(name.clone(), ident_token.span));
+            let span = ident_token.span.to(&op_token.span);
+            let propagate_expr = Expr::ErrorPropagate(ErrorPropagateExpr::new(Box::new(ident_expr), span));
+            return Ok(Statement::Expr(ExprStatement::new(propagate_expr, span)));
+        }
 
         // Check for increment/decrement (++, --)
         if matches!(assign_token.kind, TokenKind::PlusPlus | TokenKind::MinusMinus) {

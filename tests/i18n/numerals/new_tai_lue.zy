@@ -1,0 +1,135 @@
+// Numeral system: New Tai Lue (U+19D0–U+19D9)
+// Script: New Tai Lue
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (New Tai Lue) ---
+// ᧑᧒
+// ᧔
+// ᧓᧒
+// ᧒
+// ᧒
+// ᧖᧔
+// -᧘
+// -᧔
+// -᧓᧒
+// ᧔.᧗᧕
+// ᧒.᧒᧕
+// ᧔.᧓᧗᧕
+// ᧒.᧘
+// ᧑᧒.᧒᧕
+// -᧑.᧒᧕
+// ᧑᧐᧘
+// ᧔᧐᧐
+// ᧒᧕᧕
+// --- Booleans (in script mode) ---
+// #᧑
+// #᧐
+// #᧑
+// #᧐
+// #᧑
+// #᧐
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = ᧘
+b = ᧔
+c = ᧓
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ᧒) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = ᧓.᧕
+g = ᧑.᧒᧕
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ᧒) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = ᧑᧐᧐
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (New Tai Lue) ---" ¶
+
+#᧐᧙#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ ᧒) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ ᧒) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (᧑᧒ > ᧔)
+cmp_lt = (᧔ > ᧑᧒)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #᧑ ¶
+>> #᧐ ¶
+
+// Restore ASCII mode
+#09#

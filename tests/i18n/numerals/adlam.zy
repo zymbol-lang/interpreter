@@ -1,0 +1,135 @@
+// Numeral system: Adlam (U+1E950–U+1E959)
+// Script: Adlam
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Adlam) ---
+// 𞥑𞥒
+// 𞥔
+// 𞥓𞥒
+// 𞥒
+// 𞥒
+// 𞥖𞥔
+// -𞥘
+// -𞥔
+// -𞥓𞥒
+// 𞥔.𞥗𞥕
+// 𞥒.𞥒𞥕
+// 𞥔.𞥓𞥗𞥕
+// 𞥒.𞥘
+// 𞥑𞥒.𞥒𞥕
+// -𞥑.𞥒𞥕
+// 𞥑𞥐𞥘
+// 𞥔𞥐𞥐
+// 𞥒𞥕𞥕
+// --- Booleans (in script mode) ---
+// #𞥑
+// #𞥐
+// #𞥑
+// #𞥐
+// #𞥑
+// #𞥐
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𞥘
+b = 𞥔
+c = 𞥓
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𞥒) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𞥓.𞥕
+g = 𞥑.𞥒𞥕
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𞥒) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𞥑𞥐𞥐
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Adlam) ---" ¶
+
+#𞥐𞥙#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𞥒) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𞥒) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𞥑𞥒 > 𞥔)
+cmp_lt = (𞥔 > 𞥑𞥒)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𞥑 ¶
+>> #𞥐 ¶
+
+// Restore ASCII mode
+#09#

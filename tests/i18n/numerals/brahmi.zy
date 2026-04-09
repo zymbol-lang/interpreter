@@ -1,0 +1,135 @@
+// Numeral system: Brahmi (U+11066–U+1106F)
+// Script: Brahmi
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Brahmi) ---
+// 𑁧𑁨
+// 𑁪
+// 𑁩𑁨
+// 𑁨
+// 𑁨
+// 𑁬𑁪
+// -𑁮
+// -𑁪
+// -𑁩𑁨
+// 𑁪.𑁭𑁫
+// 𑁨.𑁨𑁫
+// 𑁪.𑁩𑁭𑁫
+// 𑁨.𑁮
+// 𑁧𑁨.𑁨𑁫
+// -𑁧.𑁨𑁫
+// 𑁧𑁦𑁮
+// 𑁪𑁦𑁦
+// 𑁨𑁫𑁫
+// --- Booleans (in script mode) ---
+// #𑁧
+// #𑁦
+// #𑁧
+// #𑁦
+// #𑁧
+// #𑁦
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𑁮
+b = 𑁪
+c = 𑁩
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑁨) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𑁩.𑁫
+g = 𑁧.𑁨𑁫
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑁨) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𑁧𑁦𑁦
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Brahmi) ---" ¶
+
+#𑁦𑁯#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𑁨) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𑁨) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𑁧𑁨 > 𑁪)
+cmp_lt = (𑁪 > 𑁧𑁨)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𑁧 ¶
+>> #𑁦 ¶
+
+// Restore ASCII mode
+#09#

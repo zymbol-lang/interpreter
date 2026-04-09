@@ -102,6 +102,12 @@ impl Parser {
         let token = self.peek();
 
         match &token.kind {
+            TokenKind::SetNumeralMode(base) => {
+                let base = *base;
+                let span = token.span;
+                self.advance(); // consume the token
+                Ok(Statement::SetNumeralMode { base, span })
+            }
             TokenKind::Output => self.parse_output(),
             TokenKind::Input => self.parse_input(),
             TokenKind::CliArgsCapture => self.parse_cli_args_capture(),
@@ -761,8 +767,12 @@ impl Parser {
                         span,
                     )))
                 }
-                // Check for regular function call: name(...)
-                else if matches!(self.peek().kind, TokenKind::LParen) {
+                // Check for regular function call: name(...) — only if ( is on the same line.
+                // A '(' on a new line starts a new statement (e.g. tuple destructure),
+                // not a function call. Same guard as in parse_postfix.
+                else if matches!(self.peek().kind, TokenKind::LParen)
+                    && self.peek().span.start.line == span_start.start.line
+                {
                     self.advance(); // consume (
 
                     // Parse arguments
@@ -861,11 +871,11 @@ impl Parser {
                 // Parse hexadecimal base conversion: 0x|expr|
                 self.parse_base_conversion(BasePrefix::Hex)
             }
-            TokenKind::ExecuteStart => {
+            TokenKind::ExecuteCommand(_) => {
                 // Parse execute expression: </ file.zy />
                 self.parse_execute_expr()
             }
-            TokenKind::BashStart => {
+            TokenKind::BashCommand(_) => {
                 // Parse bash execute expression: <\ command \>
                 self.parse_bash_exec_expr()
             }
@@ -991,4 +1001,59 @@ impl Parser {
         is_lambda
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use zymbol_lexer::Lexer;
+    use zymbol_span::FileId;
+    use zymbol_ast::Statement;
+    use crate::Parser;
+
+    fn parse(src: &str) -> Vec<Statement> {
+        let (tokens, lex_diags) = Lexer::new(src, FileId(0)).tokenize();
+        assert!(lex_diags.is_empty(), "lex errors: {:?}", lex_diags);
+        let parser = Parser::new(tokens);
+        let program = parser.parse().expect("parse error");
+        program.statements
+    }
+
+    #[test]
+    fn parse_set_numeral_mode_ascii() {
+        let stmts = parse("#09#");
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Statement::SetNumeralMode { base, .. } => assert_eq!(*base, 0x0030),
+            other => panic!("expected SetNumeralMode, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_set_numeral_mode_devanagari() {
+        let stmts = parse("#०९#");
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Statement::SetNumeralMode { base, .. } => assert_eq!(*base, 0x0966),
+            other => panic!("expected SetNumeralMode, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_set_numeral_mode_thai() {
+        let stmts = parse("#๐๙#");
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Statement::SetNumeralMode { base, .. } => assert_eq!(*base, 0x0E50),
+            other => panic!("expected SetNumeralMode, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_mode_switch_followed_by_output() {
+        // Mode switch + output statement both parse cleanly in sequence
+        let stmts = parse("#09#\n>> 42 ¶");
+        assert_eq!(stmts.len(), 3); // SetNumeralMode + Output + Newline
+        assert!(matches!(stmts[0], Statement::SetNumeralMode { base: 0x0030, .. }));
+        assert!(matches!(stmts[1], Statement::Output(_)));
+    }
 }

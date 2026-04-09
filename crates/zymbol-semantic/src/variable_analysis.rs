@@ -562,10 +562,15 @@ impl VariableAnalyzer {
 
                 // Analyze catch clauses
                 for catch in &try_stmt.catch_clauses {
+                    // Open ONE scope for the catch body and declare _err inside it,
+                    // so _err is at the same scope level as the statements that use it.
+                    // (Declaring _err before analyze_block() would put it one level above,
+                    // triggering the "cannot access underscore variable from inner scope" error.)
                     self.enter_scope();
-                    // _err is implicitly defined in catch blocks
                     self.declare_variable("_err".to_string(), catch.span, false);
-                    self.analyze_block(&catch.block);
+                    for statement in &catch.block.statements {
+                        self.analyze_statement(statement);
+                    }
                     self.exit_scope();
                 }
 
@@ -574,6 +579,8 @@ impl VariableAnalyzer {
                     self.analyze_block(&finally.block);
                 }
             }
+            // No variables introduced or consumed — pure runtime side effect
+            Statement::SetNumeralMode { .. } => {}
         }
     }
 
@@ -839,8 +846,10 @@ impl VariableAnalyzer {
                 // Skip for now - these might have variable interpolation
             }
 
-            Expr::BashExec(_) => {
-                // Skip for now - these might have variable interpolation
+            Expr::BashExec(bash) => {
+                for var_name in &bash.variables {
+                    self.use_variable(var_name, bash.span);
+                }
             }
 
             // Error handling expressions

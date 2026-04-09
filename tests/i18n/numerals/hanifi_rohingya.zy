@@ -1,0 +1,135 @@
+// Numeral system: Hanifi Rohingya (U+10D30–U+10D39)
+// Script: Hanifi Rohingya
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Hanifi Rohingya) ---
+// 𐴱𐴲
+// 𐴴
+// 𐴳𐴲
+// 𐴲
+// 𐴲
+// 𐴶𐴴
+// -𐴸
+// -𐴴
+// -𐴳𐴲
+// 𐴴.𐴷𐴵
+// 𐴲.𐴲𐴵
+// 𐴴.𐴳𐴷𐴵
+// 𐴲.𐴸
+// 𐴱𐴲.𐴲𐴵
+// -𐴱.𐴲𐴵
+// 𐴱𐴰𐴸
+// 𐴴𐴰𐴰
+// 𐴲𐴵𐴵
+// --- Booleans (in script mode) ---
+// #𐴱
+// #𐴰
+// #𐴱
+// #𐴰
+// #𐴱
+// #𐴰
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𐴸
+b = 𐴴
+c = 𐴳
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𐴲) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𐴳.𐴵
+g = 𐴱.𐴲𐴵
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𐴲) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𐴱𐴰𐴰
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Hanifi Rohingya) ---" ¶
+
+#𐴰𐴹#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𐴲) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𐴲) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𐴱𐴲 > 𐴴)
+cmp_lt = (𐴴 > 𐴱𐴲)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𐴱 ¶
+>> #𐴰 ¶
+
+// Restore ASCII mode
+#09#

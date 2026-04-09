@@ -1,0 +1,135 @@
+// Numeral system: Mathematical Bold (U+1D7CE–U+1D7D7)
+// Script: Mathematical Bold
+//
+// Tests: integer arithmetic (+ - * / % ^), negative numbers,
+//        floats/decimals, exponentiation, large numbers,
+//        output-mode switch, hex literals, and booleans.
+//
+// Values used:  a=8  b=4  c=3  f=3.5  g=1.25  h=100  exponent=2
+//
+// Expected output:
+// --- Integer arithmetic (ASCII mode) ---
+// 12
+// 4
+// 32
+// 2
+// 2
+// 64
+// --- Negative numbers ---
+// -8
+// -4
+// -32
+// --- Float / decimal ---
+// 4.75
+// 2.25
+// 4.375
+// 2.8
+// 12.25
+// -1.25
+// --- Large numbers ---
+// 108
+// 400
+// --- Hex literal 0xFF (decoded to decimal) ---
+// 255
+// --- Output mode (Mathematical Bold) ---
+// 𝟏𝟐
+// 𝟒
+// 𝟑𝟐
+// 𝟐
+// 𝟐
+// 𝟔𝟒
+// -𝟖
+// -𝟒
+// -𝟑𝟐
+// 𝟒.𝟕𝟓
+// 𝟐.𝟐𝟓
+// 𝟒.𝟑𝟕𝟓
+// 𝟐.𝟖
+// 𝟏𝟐.𝟐𝟓
+// -𝟏.𝟐𝟓
+// 𝟏𝟎𝟖
+// 𝟒𝟎𝟎
+// 𝟐𝟓𝟓
+// --- Booleans (in script mode) ---
+// #𝟏
+// #𝟎
+// #𝟏
+// #𝟎
+// #𝟏
+// #𝟎
+
+>> "--- Integer arithmetic (ASCII mode) ---" ¶
+
+a = 𝟖
+b = 𝟒
+c = 𝟑
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𝟐) ¶
+
+>> "--- Negative numbers ---" ¶
+
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+
+>> "--- Float / decimal ---" ¶
+
+f = 𝟑.𝟓
+g = 𝟏.𝟐𝟓
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𝟐) ¶
+>> (-g) ¶
+
+>> "--- Large numbers ---" ¶
+
+h = 𝟏𝟎𝟎
+>> (h + a) ¶
+>> (h * b) ¶
+
+>> "--- Hex literal 0xFF (decoded to decimal) ---" ¶
+
+>> 0xFF ¶
+
+>> "--- Output mode (Mathematical Bold) ---" ¶
+
+#𝟎𝟗#
+
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % c) ¶
+>> (a ^ 𝟐) ¶
+>> (-a) ¶
+>> (-a + b) ¶
+>> (-(a * b)) ¶
+>> (f + g) ¶
+>> (f - g) ¶
+>> (f * g) ¶
+>> (f / g) ¶
+>> (f ^ 𝟐) ¶
+>> (-g) ¶
+>> (h + a) ¶
+>> (h * b) ¶
+>> 0xFF ¶
+
+>> "--- Booleans ---" ¶
+
+>> #1 ¶
+>> #0 ¶
+cmp_gt = (𝟏𝟐 > 𝟒)
+cmp_lt = (𝟒 > 𝟏𝟐)
+>> cmp_gt ¶
+>> cmp_lt ¶
+>> #𝟏 ¶
+>> #𝟎 ¶
+
+// Restore ASCII mode
+#09#
