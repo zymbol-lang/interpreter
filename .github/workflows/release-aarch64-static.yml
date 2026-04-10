@@ -26,17 +26,11 @@ jobs:
         with:
           targets: aarch64-unknown-linux-musl
 
-      - name: Download musl.cc aarch64 toolchain
-        run: |
-          curl -fsSL https://musl.cc/aarch64-linux-musl-cross.tgz \
-            | tar -xz -C /opt
-          echo "/opt/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
+      - name: Install cross
+        run: cargo install cross --locked
 
       - name: Build static binary
-        env:
-          RUSTFLAGS: "-C target-feature=+crt-static"
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-gcc
-        run: cargo build --release --target aarch64-unknown-linux-musl
+        run: cross build --release --target aarch64-unknown-linux-musl
 
       - name: Prepare asset
         run: |
