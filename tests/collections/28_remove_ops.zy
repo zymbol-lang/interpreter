@@ -1,12 +1,12 @@
-// Test: $-[i], $-[i..j], $-- value, $?? value
+// Test: $-[i], $-[i..j], $-- value, $?? value (1-based indexing)
 // All return new collections; originals unchanged.
 
 base = [10, 20, 30, 40, 50]
 
 // ── $-[i] — remove element at index ────────────────────────────────────────
-r1 = base$-[1]        // removes 20 → [10, 30, 40, 50]
->> r1[0] ¶            // → 10
->> r1[1] ¶            // → 30
+r1 = base$-[2]        // removes 20 → [10, 30, 40, 50]
+>> r1[1] ¶            // → 10
+>> r1[2] ¶            // → 30
 >> r1$# ¶             // → 4
 
 // ── $-[i] — remove last via negative index ──────────────────────────────────
@@ -14,25 +14,25 @@ r2 = base$-[-1]       // removes 50 → [10, 20, 30, 40]
 >> r2[-1] ¶           // → 40
 >> r2$# ¶             // → 4
 
-// ── $-[i..j] — remove range inclusive ──────────────────────────────────────
-r3 = base$-[1..3]     // removes indices 1,2,3 → [10, 50]
->> r3[0] ¶            // → 10
->> r3[1] ¶            // → 50
+// ── $-[i..j] — remove range inclusive (1-based positions 2,3,4) ────────────
+r3 = base$-[2..4]     // removes positions 2,3,4 → [10, 50]
+>> r3[1] ¶            // → 10
+>> r3[2] ¶            // → 50
 >> r3$# ¶             // → 2
 
 // ── $-- value — remove ALL occurrences ─────────────────────────────────────
 counts = [1, 2, 1, 3, 1, 4]
 clean = counts$-- 1   // → [2, 3, 4]
->> clean[0] ¶         // → 2
->> clean[1] ¶         // → 3
->> clean[2] ¶         // → 4
+>> clean[1] ¶         // → 2
+>> clean[2] ¶         // → 3
+>> clean[3] ¶         // → 4
 >> clean$# ¶          // → 3
 
-// ── $?? value — indices of ALL occurrences ─────────────────────────────────
-positions = counts$?? 1   // → [0, 2, 4]
->> positions[0] ¶     // → 0
->> positions[1] ¶     // → 2
->> positions[2] ¶     // → 4
+// ── $?? value — indices of ALL occurrences (1-based results) ───────────────
+positions = counts$?? 1   // → [1, 3, 5]
+>> positions[1] ¶     // → 1
+>> positions[2] ¶     // → 3
+>> positions[3] ¶     // → 5
 >> positions$# ¶      // → 3
 
 // ── $?? value not found — empty array ──────────────────────────────────────

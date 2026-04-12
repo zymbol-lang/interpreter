@@ -18,7 +18,7 @@ s2 = s$-[-1]      // removes 'g' → "abcdef"
 
 s3 = s$-[-3]      // removes 'e' → "abcdfg"
 >> s3$# ¶         // → 6
->> s3[4] ¶        // → f  (was at index 5, 'g' still at end)
+>> s3[5] ¶        // → f  (1-based position 5, 'g' still at end)
 
 // ── Positional tuple — negative access ──────────────────────────────────────
 t = (10, 20, 30, 40, 50)

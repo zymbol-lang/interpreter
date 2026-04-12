@@ -5,7 +5,7 @@
 > If a construct is not documented here, it may not be implemented.
 
 **Interpreter version**: v0.0.2
-**Test coverage**: 159/159 vm_compare PASS
+**Test coverage**: 243/246 vm_compare PASS (3 skipped: HTTP + CLI args not in VM)
 
 ---
 
@@ -53,7 +53,7 @@ zymbol run --help
 - **Tree-walker**: canonical behavior, descriptive error messages, debugging
 - **VM**: production, ~1.1–1.5× faster than Python for most workloads
 
-Both modes produce **identical output** on 159/159 parity tests.
+Both modes produce **identical output** on 243/246 parity tests.
 
 ---
 
@@ -80,7 +80,7 @@ meta = x#?
 //    ^type ^digits ^value
 
 // Extract just the type symbol (intermediate variable required)
-t = meta[0]
+t = meta[1]
 >> t ¶    // → ###
 ```
 
@@ -657,9 +657,9 @@ fn_ref = x -> x * x
 
 // Store in array
 ops = [x -> x+1, x -> x*2, x -> x*x]
->> ops[0](5) ¶    // → 6
->> ops[1](5) ¶    // → 10
->> ops[2](5) ¶    // → 25
+>> ops[1](5) ¶    // → 6
+>> ops[2](5) ¶    // → 10
+>> ops[3](5) ¶    // → 25
 
 // Pass as argument
 apply(f, x) { <~ f(x) }
@@ -675,12 +675,16 @@ apply(f, x) { <~ f(x) }
 ```zymbol
 arr = [10, 20, 30, 40, 50]
 >> arr ¶           // → [10, 20, 30, 40, 50]
->> arr[0] ¶        // → 10 (0-indexed)
->> arr[2] ¶        // → 30
+>> arr[1] ¶        // → 10 (1-indexed: first element)
+>> arr[3] ¶        // → 30
 ```
 
+> **Index rules**: Zymbol uses **1-based indexing**. `arr[1]` is the first element,
+> `arr[2]` the second, etc. **Index 0 is a runtime error** (`runtime error: index 0 is invalid`).
+>
 > **Negative indices**: `arr[-1]` returns the last element, `arr[-2]` the second-to-last, etc.
-> Supported in both tree-walker and VM (v0.0.2).
+> Negative indices are symmetric mirrors of positive ones: `arr[1]` and `arr[-1]` are the
+> first and last elements respectively.
 
 ### Length
 
@@ -699,9 +703,9 @@ arr = [1, 2, 3, 4, 5]
 arr = arr$+ 6
 >> arr ¶    // → [1, 2, 3, 4, 5, 6]
 
-// $+[i] — insert at position
+// $+[i] — insert at position (1-based)
 arr2 = arr$+[2] 99
->> arr2 ¶    // → [1, 2, 99, 3, 4, 5, 6]
+>> arr2 ¶    // → [1, 99, 2, 3, 4, 5, 6]
 
 // $- val — remove first occurrence by value
 arr3 = arr$- 3
@@ -711,34 +715,62 @@ arr3 = arr$- 3
 arr4 = [1, 2, 3, 2, 4]$-- 2
 >> arr4 ¶    // → [1, 3, 4]
 
-// $-[i] — remove at index
-arr5 = arr$-[0]
+// $-[i] — remove at index (1-based)
+arr5 = arr$-[1]
 >> arr5 ¶    // → [2, 3, 4, 5, 6]
 
-// $-[start..end] — remove range (end EXCLUSIVE)
-arr6 = arr$-[1..3]
+// $-[start..end] — remove range, 1-based inclusive start, inclusive end
+arr6 = arr$-[2..3]
 >> arr6 ¶    // → [1, 4, 5, 6]
 
 // $-[start:count] — remove range, count-based (alternative syntax)
-arr6b = arr$-[1:2]
->> arr6b ¶    // → [1, 4, 5, 6]  (identical result to $-[1..3])
+arr6b = arr$-[2:2]
+>> arr6b ¶    // → [1, 4, 5, 6]  (identical result to $-[2..3])
 
 // $? — contains
 has = arr$? 3
 >> has ¶    // → #1
 
-// $?? — find all indices
+// $?? — find all indices (returns 1-based positions)
 pos = [1, 2, 1, 3, 1]$?? 1
->> pos ¶    // → [0, 2, 4]
+>> pos ¶    // → [1, 3, 5]
 
-// $[..] — slice [start..end) — end is EXCLUSIVE
-sl = arr$[0..3]
+// $[..] — slice, 1-based inclusive start, inclusive end
+sl = arr$[1..3]
 >> sl ¶    // → [1, 2, 3]
 
 // $[start:count] — slice count-based (alternative syntax)
-sl2 = arr$[0:3]
+sl2 = arr$[1:3]
 >> sl2 ¶    // → [1, 2, 3]  (identical result)
 ```
+
+### Negative Indices and Symmetric Slices
+
+Negative indices count from the end. `arr[-1]` is the last element, symmetric to `arr[1]`
+(the first). This makes end-relative access natural without knowing the length in advance.
+
+```zymbol
+arr = [10, 20, 30, 40, 50]
+
+>> arr[1] ¶        // → 10 — first element
+>> arr[-1] ¶       // → 50 — last element  (mirror of arr[1])
+>> arr[-2] ¶       // → 40 — second-to-last
+```
+
+> Accessing `arr[0]` is a **runtime error**: `index 0 is invalid — Zymbol uses 1-based indexing`.
+
+Combining a positive start with a negative end gives **symmetric slices** `arr$[k..-k]`:
+
+```zymbol
+arr = [10, 20, 30, 40, 50]
+
+>> arr$[1..-1] ¶   // → [10, 20, 30, 40, 50] — full array
+>> arr$[2..-2] ¶   // → [20, 30, 40]          — strip first and last
+>> arr$[3..-3] ¶   // → [30]                  — center element only
+```
+
+The pattern `$[k..-k]` naturally expresses "drop k elements from each end". When the window
+collapses to nothing (e.g. `$[4..-4]` on a 5-element array), the result is an empty array.
 
 > **Note**: All collection operators return a new collection. Assign back to the
 > same variable: `arr = arr$+ 4`. Operators **cannot be chained directly**:
@@ -787,11 +819,11 @@ db = [
 
 // Sort by age ascending (< means ascending)
 by_age = db$^ (a, b -> a.age < b.age)
->> by_age[0].name ¶    // → Ana
+>> by_age[1].name ¶    // → Ana
 
 // Sort by name descending (> means descending)
 by_name_desc = db$^ (a, b -> a.name > b.name)
->> by_name_desc[0].name ¶    // → Carla
+>> by_name_desc[1].name ¶    // → Carla
 ```
 
 > **Note**: `$^+` and `$^-` are for **primitive arrays** (numbers, strings) without a
@@ -805,21 +837,21 @@ Arrays are mutable. Elements can be replaced or updated in-place using index syn
 ```zymbol
 arr = [10, 20, 30, 40, 50]
 
-// Direct assignment
+// Direct assignment (1-based index)
 arr[2] = 99
->> arr ¶    // → [10, 20, 99, 40, 50]
+>> arr ¶    // → [10, 99, 30, 40, 50]
 
 // Compound indexed assignment (+=, -=, *=, /=, %=, ^=)
-arr[0] += 5
->> arr ¶    // → [15, 20, 99, 40, 50]
+arr[1] += 5
+>> arr ¶    // → [15, 99, 30, 40, 50]
 
-arr[2] *= 2
->> arr ¶    // → [15, 20, 198, 40, 50]
+arr[3] *= 2
+>> arr ¶    // → [15, 99, 60, 40, 50]
 
 // Functional form — returns a new array; original is unchanged
 arr2 = arr[2]$~ 0
->> arr ¶    // → [15, 20, 198, 40, 50]  (unchanged)
->> arr2 ¶   // → [15, 20, 0, 40, 50]
+>> arr ¶    // → [15, 99, 60, 40, 50]  (unchanged)
+>> arr2 ¶   // → [15, 0, 60, 40, 50]
 ```
 
 > **Value semantics**: assigning an array to a new variable creates an independent
@@ -827,7 +859,7 @@ arr2 = arr[2]$~ 0
 > ```zymbol
 > a = [1, 2, 3]
 > b = a
-> a[0] = 99
+> a[1] = 99
 > >> a ¶    // → [99, 2, 3]
 > >> b ¶    // → [1, 2, 3]   ← b is unaffected
 > ```
@@ -846,8 +878,8 @@ nums = [10, 20, 30]
 
 ```zymbol
 matrix = [[1,2,3], [4,5,6], [7,8,9]]
->> matrix[1] ¶       // → [4, 5, 6]
->> matrix[1][2] ¶    // → 6
+>> matrix[2] ¶       // → [4, 5, 6]
+>> matrix[2][3] ¶    // → 6
 ```
 
 > **⚠ Arrays must be homogeneous** — all elements must be the same type.
@@ -911,12 +943,12 @@ Use tuples to represent fixed records; use arrays for dynamic, same-type collect
 
 ```zymbol
 point = (10, 20)
->> point[0] ¶    // → 10
->> point[1] ¶    // → 20
+>> point[1] ¶    // → 10
+>> point[2] ¶    // → 20
 
 // Tuples allow mixed types
 data = (42, "hello", #1, 3.14)
->> data[2] ¶    // → #1
+>> data[3] ¶    // → #1
 ```
 
 ### Named Tuple
@@ -928,9 +960,9 @@ person = (name: "Alice", age: 25, active: #1)
 >> person.name ¶    // → Alice
 >> person.age ¶     // → 25
 
-// Access by positional index
->> person[0] ¶      // → Alice
->> person[1] ¶      // → 25
+// Access by positional index (1-based)
+>> person[1] ¶      // → Alice
+>> person[2] ¶      // → 25
 
 // Nested named tuples
 pos = (x: 10, y: 20)
@@ -946,8 +978,8 @@ produces a runtime error:
 
 ```zymbol
 t = (10, 20, 30)
-t[0] = 99    // ❌ runtime error: cannot modify tuple 't': tuples are immutable
-t[0] += 5    // ❌ same error
+t[1] = 99    // ❌ runtime error: cannot modify tuple 't': tuples are immutable
+t[1] += 5    // ❌ same error
 ```
 
 To derive a new tuple with one element changed, use the functional update operator `$~`.
@@ -955,7 +987,7 @@ The original tuple is never touched:
 
 ```zymbol
 t = (10, 20, 30)
-t2 = t[1]$~ 999
+t2 = t[2]$~ 999
 >> t ¶     // → (10, 20, 30)   ← original unchanged
 >> t2 ¶    // → (10, 999, 30)  ← new tuple
 ```
@@ -990,12 +1022,12 @@ n = s$#
 >> (s$? 'W') ¶         // → #1
 >> (s$? "World") ¶     // → #1
 
-// Slice [start..end) — end is EXCLUSIVE
-sub = s$[0..5]
+// Slice — 1-based inclusive on both ends
+sub = s$[1..5]
 >> sub ¶    // → Hello
 
 // Slice count-based (alternative syntax)
-sub2 = s$[0:5]
+sub2 = s$[1:5]
 >> sub2 ¶    // → Hello  (identical result)
 
 // Split by char
@@ -1025,21 +1057,21 @@ rem1 = s$- 'l'
 rem2 = s$-- 'l'
 >> rem2 ¶    // → heo word
 
-// $-[i] — remove char at index
-rem3 = s$-[0]
+// $-[i] — remove char at index (1-based)
+rem3 = s$-[1]
 >> rem3 ¶    // → ello world
 
-// $-[start..end] — remove char range (end EXCLUSIVE)
-rem4 = s$-[0..6]
+// $-[start..end] — remove char range, 1-based inclusive start, inclusive end
+rem4 = s$-[1..5]
 >> rem4 ¶    // → world
 
 // $-[start:count] — remove char range, count-based (alternative syntax)
-rem4b = s$-[0:6]
+rem4b = s$-[1:5]
 >> rem4b ¶    // → world  (identical result)
 
-// $?? — find all positions of a pattern
+// $?? — find all positions of a pattern (returns 1-based positions)
 pos = s$?? "o"
->> pos ¶    // → [4, 7]  (0-based char indices)
+>> pos ¶    // → [5, 8]  (1-based char positions)
 
 // $~~[pattern:replacement] — replace all occurrences
 rep = s$~~["l":"L"]
@@ -1122,7 +1154,7 @@ filtered = nums$| (x -> is_big(x))
 
 ```zymbol
 data = [3, 1, 4, 1, 5, 9, 2, 6]
-maximum = data$< (data[0], (max, x) -> {
+maximum = data$< (data[1], (max, x) -> {
     ? x > max { <~ x }
     <~ max
 })
@@ -1377,7 +1409,7 @@ tc = 'A'#?
 
 // Extract just the type (intermediate variable required)
 meta = 42#?
-t = meta[0]
+t = meta[1]
 >> t ¶    // → ###
 ```
 
@@ -1878,7 +1910,8 @@ flags = [1, 0, 1, 1, 0]
 labels = ["English", "Spanish", "Chinese"]
 files  = ["en.zy", "es.zy", "zh.zy"]
 active = [#1, #1, #0]
-@ i:0..(labels$# - 1) {
+n_labels = labels$#
+@ i:1..n_labels {
     >> labels[i] " → " files[i] ¶
 }
 ```
@@ -1911,15 +1944,15 @@ active = [#1, #1, #0]
 | `$+[i]` | Insert at position | `arr$+[2] elem` |
 | `$-` | Remove first by value | `arr$- val` |
 | `$--` | Remove all by value | `arr$-- val` |
-| `$-[i]` | Remove at index | `arr$-[0]` |
-| `$-[i..j]` | Remove range (exclusive end) | `arr$-[1..3]` |
-| `$-[i:n]` | Remove range (count-based) | `arr$-[1:2]` |
+| `$-[i]` | Remove at index | `arr$-[1]` |
+| `$-[i..j]` | Remove range (1-based inclusive) | `arr$-[2..3]` |
+| `$-[i:n]` | Remove range (count-based) | `arr$-[2:2]` |
 | `$?` | Contains | `arr$? val` |
 | `$??` | Find all indices of value | `arr$?? val` |
 | `arr[i] = val` | Direct element update (arrays only) | `arr[2] = 99` |
-| `arr[i] += val` | Compound element update (arrays only) | `arr[0] += 5` |
+| `arr[i] += val` | Compound element update (arrays only) | `arr[1] += 5` |
 | `arr[i]$~` | Functional update — returns new collection | `arr[2]$~ 99` |
-| `$[i..j]` | Slice (exclusive end) | `arr$[1..3]` |
+| `$[i..j]` | Slice (1-based inclusive) | `arr$[1..3]` |
 | `$[i:n]` | Slice (count-based) | `arr$[1:2]` |
 | `$^+` | Sort ascending (primitives) | `arr$^+` |
 | `$^-` | Sort descending (primitives) | `arr$^-` |
@@ -1995,8 +2028,8 @@ fib(n) {
 ```zymbol
 bsort(arr<~) {
     n = arr$#
-    @ i:0..(n-2) {           // outer: n-2 (not n-1) to avoid negative range
-        @ j:0..(n-i-2) {
+    @ i:1..(n-1) {
+        @ j:1..(n-i) {
             ? arr[j] > arr[j+1] {
                 tmp = arr[j]
                 arr[j] = arr[j+1]
@@ -2066,7 +2099,7 @@ ver = c::get_version()
 parse_number(s) {
     n = #|s|
     meta = n#?
-    type = meta[0]
+    type = meta[1]
     ? type == "##\"" {
         <~ "not a number: " + s
     }

@@ -490,9 +490,9 @@ y = #|x|
         let code = r#"
 x = 456
 info = x#?
->> info[0] ¶
 >> info[1] ¶
 >> info[2] ¶
+>> info[3] ¶
 "#;
         let output = run(code);
         assert_eq!(output, "###\n3\n456\n");
@@ -503,9 +503,9 @@ info = x#?
         let code = r#"
 x = "Hello"
 info = x#?
->> info[0] ¶
 >> info[1] ¶
 >> info[2] ¶
+>> info[3] ¶
 "#;
         let output = run(code);
         assert_eq!(output, "##\"\n5\nHello\n");
@@ -516,8 +516,8 @@ info = x#?
         let code = r#"
 x = [1, 2, 3, 4, 5]
 info = x#?
->> info[0] ¶
 >> info[1] ¶
+>> info[2] ¶
 "#;
         let output = run(code);
         assert_eq!(output, "##]\n5\n");
@@ -528,12 +528,12 @@ info = x#?
         let code = r#"
 x = #1
 info = x#?
->> info[0] ¶
 >> info[1] ¶
 >> info[2] ¶
+>> info[3] ¶
 "#;
         let output = run(code);
-        // info[2] is the bool value; >> renders it with # prefix to distinguish from integer
+        // info[3] is the bool value; >> renders it with # prefix to distinguish from integer
         assert_eq!(output, "##?\n1\n#1\n");
     }
 
@@ -647,9 +647,9 @@ b = 500000
         let code = r#"
 x = "789"
 info = #|x|#?
->> info[0] ¶
 >> info[1] ¶
 >> info[2] ¶
+>> info[3] ¶
 "#;
         let output = run(code);
         assert_eq!(output, "###\n3\n789\n");
@@ -661,8 +661,8 @@ info = #|x|#?
 x = "notanumber"
 result = #|x|
 info = result#?
->> info[0] ¶
->> info[2] ¶
+>> info[1] ¶
+>> info[3] ¶
 "#;
         let output = run(code);
         assert_eq!(output, "##\"\nnotanumber\n");

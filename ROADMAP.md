@@ -1,7 +1,8 @@
 # Zymbol-Lang — Roadmap
 
 > Current status: **v0.0.2** — interpreter feature-complete, dual execution modes,
-> 159/159 VM parity tests passing. Collection API v0.0.2 + destructuring.
+> 243/246 VM parity tests passing (3 failures: HTTP client + CLI args not yet in VM).
+> Collection API v0.0.2 + destructuring. **1-based indexing** across all collections.
 
 ---
 
@@ -35,6 +36,7 @@
 | Array positional remove `$-[i]`, range `$-[i..j]` | ✅ |
 | Array remove-all `$--`, find-all positions `$??` | ✅ |
 | Negative indices `arr[-1]` (tree-walker + VM parity) | ✅ |
+| **1-based indexing** — `arr[1]` is first element; index 0 = runtime error | ✅ |
 | Sort `$^+` (ascending) / `$^-` (descending), natural + custom comparator | ✅ |
 | Destructuring assignment: `[a, b, *rest] = arr`, `(name: n) = t` | ✅ |
 | Named tuples with `.field` access | ✅ |

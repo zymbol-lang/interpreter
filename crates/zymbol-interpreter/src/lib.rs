@@ -1707,8 +1707,8 @@ mod error_handling_tests {
         "#;
         let (output, result) = parse_and_run(code);
         assert!(result.is_ok());
-        // i=0 succeeds, i=1,2 fail (range 0..2 is inclusive: 0,1,2)
-        assert_eq!(String::from_utf8_lossy(&output), "1\nerror at 1\nerror at 2\n");
+        // 1-based: i=0 invalid index, i=1 succeeds (arr has 1 element), i=2 out of bounds
+        assert_eq!(String::from_utf8_lossy(&output), "error at 0\n1\nerror at 2\n");
     }
 
     #[test]
@@ -1729,7 +1729,8 @@ mod error_handling_tests {
         "#;
         let (output, result) = parse_and_run(code);
         assert!(result.is_ok());
-        assert_eq!(String::from_utf8_lossy(&output), "20\n-1\n");
+        // 1-based: arr[1] = first element = 10; arr[99] = out of bounds → -1
+        assert_eq!(String::from_utf8_lossy(&output), "10\n-1\n");
     }
 
     #[test]
@@ -1739,7 +1740,7 @@ mod error_handling_tests {
             arr = [1]
 
             !? {
-                >> arr[0] ¶
+                >> arr[1] ¶
             } :! {
                 >> "error 1" ¶
             }

@@ -1,6 +1,7 @@
 // Test: $[start:count] and $-[start:count] on arrays of tuples and named tuples
-// Simulates a small in-memory table: rows are named tuples, container is array.
-// Each :count case is paired with its ..end equivalent — outputs must match.
+// 1-based indexing. Simulates a small in-memory table: rows are named tuples,
+// container is array. Each :count case is paired with its ..end equivalent —
+// outputs must match.
 
 // ── Table setup ───────────────────────────────────────────────────────────────
 db = [
@@ -13,108 +14,108 @@ db = [
 >> db$# ¶
 
 // ── Slice: page 1 (first 2 rows) ─────────────────────────────────────────────
-pg1  = db$[0:2]
-pg1b = db$[0..2]
+pg1  = db$[1:2]
+pg1b = db$[1..2]
 >> pg1$# ¶
 >> pg1b$# ¶
->> pg1[0].name ¶
->> pg1b[0].name ¶
 >> pg1[1].name ¶
 >> pg1b[1].name ¶
+>> pg1[2].name ¶
+>> pg1b[2].name ¶
 
-// ── Slice: page 2 (rows 2–3) ─────────────────────────────────────────────────
-pg2  = db$[2:2]
-pg2b = db$[2..4]
+// ── Slice: page 2 (rows 3–4) ─────────────────────────────────────────────────
+pg2  = db$[3:2]
+pg2b = db$[3..4]
 >> pg2$# ¶
 >> pg2b$# ¶
->> pg2[0].name ¶
->> pg2b[0].name ¶
 >> pg2[1].name ¶
 >> pg2b[1].name ¶
+>> pg2[2].name ¶
+>> pg2b[2].name ¶
 
 // ── Slice: last row only ──────────────────────────────────────────────────────
-last  = db$[4:1]
-lastb = db$[4..5]
->> last[0].name ¶
->> lastb[0].name ¶
+last  = db$[5:1]
+lastb = db$[5..5]
+>> last[1].name ¶
+>> lastb[1].name ¶
 
 // ── Slice: variable range ─────────────────────────────────────────────────────
-from = 1
+from = 2
 cnt  = 3
 mid  = db$[from:cnt]
-midb = db$[1..4]
+midb = db$[2..4]
 >> mid$# ¶
 >> midb$# ¶
->> mid[0].name ¶
->> midb[0].name ¶
->> mid[2].name ¶
->> midb[2].name ¶
+>> mid[1].name ¶
+>> midb[1].name ¶
+>> mid[3].name ¶
+>> midb[3].name ¶
 
 // ── Slice: single row by position ────────────────────────────────────────────
-one  = db$[2:1]
-oneb = db$[2..3]
->> one[0].name ¶
->> oneb[0].name ¶
+one  = db$[3:1]
+oneb = db$[3..3]
+>> one[1].name ¶
+>> oneb[1].name ¶
 
 // ── Remove: delete first row (Ana) ───────────────────────────────────────────
-db2  = db$-[0:1]
-db2b = db$-[0..1]
+db2  = db$-[1:1]
+db2b = db$-[1..1]
 >> db2$# ¶
 >> db2b$# ¶
->> db2[0].name ¶
->> db2b[0].name ¶
+>> db2[1].name ¶
+>> db2b[1].name ¶
 
-// ── Remove: delete rows 1 and 2 (Bob, Carla) ─────────────────────────────────
-db3  = db$-[1:2]
-db3b = db$-[1..3]
+// ── Remove: delete rows 2 and 3 (Bob, Carla) ─────────────────────────────────
+db3  = db$-[2:2]
+db3b = db$-[2..3]
 >> db3$# ¶
 >> db3b$# ¶
->> db3[0].name ¶
->> db3b[0].name ¶
 >> db3[1].name ¶
 >> db3b[1].name ¶
+>> db3[2].name ¶
+>> db3b[2].name ¶
 
 // ── Remove: delete last row (Eva) ────────────────────────────────────────────
-db4  = db$-[4:1]
-db4b = db$-[4..5]
+db4  = db$-[5:1]
+db4b = db$-[5..5]
 >> db4$# ¶
 >> db4b$# ¶
->> db4[3].name ¶
->> db4b[3].name ¶
+>> db4[4].name ¶
+>> db4b[4].name ¶
 
 // ── Remove: delete all rows ───────────────────────────────────────────────────
-db5  = db$-[0:5]
-db5b = db$-[0..5]
+db5  = db$-[1:5]
+db5b = db$-[1..5]
 >> db5$# ¶
 >> db5b$# ¶
 
 // ── Array of positional tuples (coordinates) ─────────────────────────────────
 coords = [(0, 0), (1, 2), (3, 4), (5, 6), (7, 8)]
 
-// Slice 3 points from index 1
-pts  = coords$[1:3]
-ptsb = coords$[1..4]
+// Slice 3 points from 1-based position 2
+pts  = coords$[2:3]
+ptsb = coords$[2..4]
 >> pts$# ¶
 >> ptsb$# ¶
->> pts[0][0] ¶
->> ptsb[0][0] ¶
->> pts[2][1] ¶
->> ptsb[2][1] ¶
+>> pts[1][1] ¶
+>> ptsb[1][1] ¶
+>> pts[3][2] ¶
+>> ptsb[3][2] ¶
 
 // Remove first 2 points
-c2  = coords$-[0:2]
-c2b = coords$-[0..2]
+c2  = coords$-[1:2]
+c2b = coords$-[1..2]
 >> c2$# ¶
 >> c2b$# ¶
->> c2[0][0] ¶
->> c2b[0][0] ¶
+>> c2[1][1] ¶
+>> c2b[1][1] ¶
 
 // ── Cross: slice rows then access nested field ────────────────────────────────
-win  = db$[1:3]
-winb = db$[1..4]
->> win[0].mail ¶
->> winb[0].mail ¶
->> win[1].age ¶
->> winb[1].age ¶
->> win[2].name ¶
->> winb[2].name ¶
+win  = db$[2:3]
+winb = db$[2..4]
+>> win[1].mail ¶
+>> winb[1].mail ¶
+>> win[2].age ¶
+>> winb[2].age ¶
+>> win[3].name ¶
+>> winb[3].name ¶

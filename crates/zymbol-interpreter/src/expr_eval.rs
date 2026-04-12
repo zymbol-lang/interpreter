@@ -182,7 +182,7 @@ impl<W: Write> Interpreter<W> {
             Value::Tuple(_) => {
                 Err(RuntimeError::Generic {
                     message: format!(
-                        "Cannot access field '{}' on positional tuple. Use positional indexing like tuple[0]",
+                        "Cannot access field '{}' on positional tuple. Use positional indexing like tuple[1]",
                         member.field
                     ),
                     span: member.span,
@@ -221,7 +221,16 @@ impl<W: Write> Interpreter<W> {
         match collection_value {
             Value::Array(ref arr) => {
                 let len = arr.len();
-                let i = if index < 0 { len as i64 + index } else { index };
+                let i = if index == 0 {
+                    return Err(RuntimeError::Generic {
+                        message: "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)".to_string(),
+                        span: idx.span,
+                    });
+                } else if index < 0 {
+                    len as i64 + index
+                } else {
+                    index - 1
+                };
                 if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!(
@@ -237,7 +246,16 @@ impl<W: Write> Interpreter<W> {
             }
             Value::Tuple(ref elements) => {
                 let len = elements.len();
-                let i = if index < 0 { len as i64 + index } else { index };
+                let i = if index == 0 {
+                    return Err(RuntimeError::Generic {
+                        message: "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)".to_string(),
+                        span: idx.span,
+                    });
+                } else if index < 0 {
+                    len as i64 + index
+                } else {
+                    index - 1
+                };
                 if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!(
@@ -254,7 +272,16 @@ impl<W: Write> Interpreter<W> {
             Value::NamedTuple(ref fields) => {
                 // Named tuples support positional indexing (backward compatibility)
                 let len = fields.len();
-                let i = if index < 0 { len as i64 + index } else { index };
+                let i = if index == 0 {
+                    return Err(RuntimeError::Generic {
+                        message: "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)".to_string(),
+                        span: idx.span,
+                    });
+                } else if index < 0 {
+                    len as i64 + index
+                } else {
+                    index - 1
+                };
                 if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!(
@@ -272,7 +299,16 @@ impl<W: Write> Interpreter<W> {
                 // String indexing returns a char
                 let chars: Vec<char> = s.chars().collect();
                 let len = chars.len();
-                let i = if index < 0 { len as i64 + index } else { index };
+                let i = if index == 0 {
+                    return Err(RuntimeError::Generic {
+                        message: "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)".to_string(),
+                        span: idx.span,
+                    });
+                } else if index < 0 {
+                    len as i64 + index
+                } else {
+                    index - 1
+                };
 
                 if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {

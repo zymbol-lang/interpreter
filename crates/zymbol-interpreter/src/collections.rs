@@ -121,8 +121,8 @@ nested = ((1, 2), (3, 4))
     fn test_tuple_in_array() {
         let code = r#"
 points = [(0, 0), (10, 20), (30, 40)]
->> points[0] ¶
 >> points[1] ¶
+>> points[2] ¶
 "#;
         let output = run(code);
         assert_eq!(output, "(0, 0)\n(10, 20)\n");

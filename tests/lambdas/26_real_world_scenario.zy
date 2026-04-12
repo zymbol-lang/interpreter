@@ -21,8 +21,8 @@ orders = [
 
 // Business Rule 1: Calculate shipping cost
 calculate_shipping = order -> {
-    items = order[2]
-    is_priority = order[5]
+    items = order[3]
+    is_priority = order[6]
 
     base_cost = items * 5
 
@@ -36,8 +36,8 @@ calculate_shipping = order -> {
 
 // Business Rule 2: Apply discount
 apply_discount = order -> {
-    total = order[3]
-    has_discount = order[4]
+    total = order[4]
+    has_discount = order[5]
 
     ? has_discount {
         discount = total / 10
@@ -50,8 +50,8 @@ apply_discount = order -> {
 
 // Process all orders: extract relevant data
 processed_orders = orders$> (order -> {
-    order_id = order[0]
-    original_price = order[3]
+    order_id = order[1]
+    original_price = order[4]
     discounted_price = apply_discount(order)
     shipping = calculate_shipping(order)
     final_price = discounted_price + shipping
@@ -61,18 +61,18 @@ processed_orders = orders$> (order -> {
 
 >> "Processed orders (id, original, discounted, shipping, final):" ¶
 @ po:processed_orders {
-    >> "  Order " >> po[0] >> ": $" >> po[1]
-    >> " -> $" >> po[2] >> " + $" >> po[3]
-    >> " = $" >> po[4] ¶
+    >> "  Order " >> po[1] >> ": $" >> po[2]
+    >> " -> $" >> po[3] >> " + $" >> po[4]
+    >> " = $" >> po[5] ¶
 }
 ¶
 
 // Analytics: Priority orders only
-priority_orders = orders$| (o -> o[5])
+priority_orders = orders$| (o -> o[6])
 >> "Priority orders count: " >> priority_orders$# ¶
 
 // Analytics: Total revenue (with discounts and shipping)
-total_revenue = processed_orders$< (0, (acc, po) -> acc + po[4])
+total_revenue = processed_orders$< (0, (acc, po) -> acc + po[5])
 >> "Total revenue: $" >> total_revenue ¶
 ¶
 
@@ -82,20 +82,20 @@ average_order = total_revenue / processed_orders$#
 ¶
 
 // Customer segmentation: Group by customer
-customer_501_orders = orders$| (o -> o[1] == 501)
-customer_501_total = customer_501_orders$< (0, (acc, o) -> acc + o[3])
+customer_501_orders = orders$| (o -> o[2] == 501)
+customer_501_total = customer_501_orders$< (0, (acc, o) -> acc + o[4])
 >> "Customer 501 total spending: $" >> customer_501_total ¶
 ¶
 
 // High-value orders (>= $200 after processing)
-high_value = processed_orders$| (po -> po[4] >= 200)
+high_value = processed_orders$| (po -> po[5] >= 200)
 >> "High-value orders (>=$200 final): " >> high_value$# ¶
 ¶
 
 // Complex aggregation: Orders with discount AND priority
 special_orders = orders$| (o -> {
-    has_discount = o[4]
-    is_priority = o[5]
+    has_discount = o[5]
+    is_priority = o[6]
     <~ has_discount && is_priority
 })
 
@@ -110,8 +110,8 @@ special_revenue = special_orders
 ¶
 
 // Top 3 orders by final price (manual selection - no sort yet)
-top1 = processed_orders$< (processed_orders[0], (max, po) -> {
-    ? po[4] > max[4] {
+top1 = processed_orders$< (processed_orders[1], (max, po) -> {
+    ? po[5] > max[5] {
         <~ po
     }
     _{
@@ -119,7 +119,7 @@ top1 = processed_orders$< (processed_orders[0], (max, po) -> {
     }
 })
 
->> "Highest value order: #" >> top1[0] >> " at $" >> top1[4] ¶
+>> "Highest value order: #" >> top1[1] >> " at $" >> top1[5] ¶
 ¶
 
 // Closure-based discount calculator factory

@@ -8,7 +8,7 @@ step3 = step2$< (0, (acc, x) -> acc + x)
 >> step3 ¶
 
 // max via reduce
-max_val = nums$< (nums[0], (m, x) -> {
+max_val = nums$< (nums[1], (m, x) -> {
     ? x > m { <~ x }
     <~ m
 })

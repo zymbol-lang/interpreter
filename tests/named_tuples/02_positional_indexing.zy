@@ -4,21 +4,21 @@
 person = (name: "Alice", age: 25, city: "Madrid")
 
 // Test positional access
-? person[0] == "Alice" {
-    >> "✓ Positional index [0] works" ¶
-}
-
-? person[1] == 25 {
+? person[1] == "Alice" {
     >> "✓ Positional index [1] works" ¶
 }
 
-? person[2] == "Madrid" {
+? person[2] == 25 {
     >> "✓ Positional index [2] works" ¶
+}
+
+? person[3] == "Madrid" {
+    >> "✓ Positional index [3] works" ¶
 }
 
 // Mix field and index access
 name_field = person.name
-name_index = person[0]
+name_index = person[1]
 
 ? name_field == name_index {
     >> "✓ Field and index return same value" ¶

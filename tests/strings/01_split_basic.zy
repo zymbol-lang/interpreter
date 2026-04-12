@@ -2,8 +2,8 @@
 parts = "a,b,c,d" / ','
 >> parts ¶
 >> (parts$#) ¶
->> parts[0] ¶
->> parts[3] ¶
+>> parts[1] ¶
+>> parts[4] ¶
 
 words = "hello world foo" / ' '
 >> words ¶

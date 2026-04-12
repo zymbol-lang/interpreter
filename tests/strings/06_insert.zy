@@ -3,7 +3,7 @@ s = "hello world"
 ins1 = s$+[5] "!!!"
 >> ins1 ¶
 
-ins2 = s$+[0] "START-"
+ins2 = s$+[1] "START-"
 >> ins2 ¶
 
 ins3 = s$+[11] "-END"

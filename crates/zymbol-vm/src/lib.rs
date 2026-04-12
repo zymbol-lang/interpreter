@@ -786,21 +786,27 @@ impl<W: Write> VM<W> {
                     let idx = self.as_int(idx_reg)?;
                     let val = match &self.value_stack[base + arr_reg as usize] {
                         Value::Array(arr) => {
-                            let i = if idx < 0 { arr.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                            } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
                             }
                             arr[i as usize].clone()
                         }
                         Value::Tuple(items) => {
-                            let i = if idx < 0 { items.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: items.len() });
+                            } else if idx < 0 { items.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= items.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: items.len() });
                             }
                             items[i as usize].clone()
                         }
                         Value::NamedTuple(fields) => {
-                            let i = if idx < 0 { fields.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
+                            } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= fields.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
                             }
@@ -809,7 +815,9 @@ impl<W: Write> VM<W> {
                         Value::String(s) => {
                             // Single-pass: find the i-th char without collecting Vec<char>
                             let char_count = s.chars().count();
-                            let i = if idx < 0 { char_count as i64 + idx } else { idx };
+                            let i = if idx == 0 {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: char_count });
+                            } else if idx < 0 { char_count as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= char_count {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: char_count });
                             }
@@ -826,7 +834,9 @@ impl<W: Write> VM<W> {
                     match &mut self.value_stack[base + arr_reg as usize] {
                         Value::Array(rc_arr) => {
                             let arr = Rc::make_mut(rc_arr);
-                            let i = if idx < 0 { arr.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                            } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
                             }
@@ -850,7 +860,9 @@ impl<W: Write> VM<W> {
                     let result = match self.value_stack[base + arr_reg as usize].clone() {
                         Value::Array(rc_arr) => {
                             let mut arr = rc_arr.as_ref().clone();
-                            let i = if idx < 0 { arr.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                            } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
                             }
@@ -859,7 +871,9 @@ impl<W: Write> VM<W> {
                         }
                         Value::Tuple(rc_tup) => {
                             let mut tup = rc_tup.as_ref().clone();
-                            let i = if idx < 0 { tup.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() });
+                            } else if idx < 0 { tup.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= tup.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() });
                             }
@@ -868,7 +882,9 @@ impl<W: Write> VM<W> {
                         }
                         Value::NamedTuple(rc_fields) => {
                             let mut fields = rc_fields.as_ref().clone();
-                            let i = if idx < 0 { fields.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
+                            } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= fields.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
                             }
@@ -877,7 +893,9 @@ impl<W: Write> VM<W> {
                         }
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
-                            let i = if idx < 0 { chars.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 {
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() });
+                            } else if idx < 0 { chars.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= chars.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() });
                             }
@@ -962,26 +980,26 @@ impl<W: Write> VM<W> {
                     match self.value_stack[base + arr_reg as usize].clone() {
                         Value::Array(rc_arr) => {
                             let mut arr = rc_arr.as_ref().clone();
-                            if idx < 0 || idx as usize > arr.len() {
+                            if idx <= 0 || (idx - 1) as usize > arr.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
                             }
-                            arr.insert(idx as usize, val);
+                            arr.insert((idx - 1) as usize, val);
                             self.value_stack[base + arr_reg as usize] = Value::Array(Rc::new(arr));
                         }
                         Value::Tuple(rc_tup) => {
                             let mut tup = rc_tup.as_ref().clone();
-                            if idx < 0 || idx as usize > tup.len() {
+                            if idx <= 0 || (idx - 1) as usize > tup.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() });
                             }
-                            tup.insert(idx as usize, val);
+                            tup.insert((idx - 1) as usize, val);
                             self.value_stack[base + arr_reg as usize] = Value::Tuple(Rc::new(tup));
                         }
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
-                            let i = idx as usize;
-                            if idx < 0 || i > chars.len() {
+                            if idx <= 0 || (idx - 1) as usize > chars.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() });
                             }
+                            let i = (idx - 1) as usize;
                             match val {
                                 Value::Char(c) => { chars.insert(i, c); }
                                 Value::String(ref ins) => {
@@ -997,8 +1015,12 @@ impl<W: Write> VM<W> {
 
                 &Instruction::ArrayRemoveRange(arr_reg, lo_reg) => {
                     // hi_reg = lo_reg + 1 by compiler convention
-                    let lo = self.as_int(lo_reg)? as usize;
-                    let hi = self.as_int(lo_reg + 1)? as usize;
+                    let lo_raw = self.as_int(lo_reg)?;
+                    let hi_raw = self.as_int(lo_reg + 1)?;
+                    // lo: 0=default start (1-based 1 = internal 0), positive=1-based (subtract 1), negative=not supported
+                    let lo = (if lo_raw == 0 { 0i64 } else { lo_raw - 1 }).max(0) as usize;
+                    // hi: positive=1-based inclusive (stays same as 0-based exclusive)
+                    let hi = hi_raw.max(0) as usize;
                     match self.value_stack[base + arr_reg as usize].clone() {
                         Value::Array(rc_arr) => {
                             let mut arr = rc_arr.as_ref().clone();
@@ -1107,14 +1129,16 @@ impl<W: Write> VM<W> {
                             if s.is_ascii() {
                                 // Fast path: byte indices == char indices
                                 let len = s.len() as i64;
-                                let lo = (if lo_val < 0 { len + lo_val } else { lo_val }).max(0).min(len) as usize;
-                                let hi = (if hi_val < 0 { len + hi_val } else { hi_val }).max(0).min(len) as usize;
+                                let lo = (if lo_val == 0 { 0i64 } else if lo_val < 0 { len + lo_val } else { lo_val - 1 }).max(0).min(len) as usize;
+                                let hi = (if hi_val < 0 { len + hi_val + 1 } else { hi_val }).max(0).min(len) as usize;
+                                let hi = hi.max(lo);
                                 s[lo..hi].to_string()
                             } else {
                                 // Unicode: single-pass via char_indices to find byte offsets
                                 let char_len = s.chars().count() as i64;
-                                let lo = (if lo_val < 0 { char_len + lo_val } else { lo_val }).max(0).min(char_len) as usize;
-                                let hi = (if hi_val < 0 { char_len + hi_val } else { hi_val }).max(0).min(char_len) as usize;
+                                let lo = (if lo_val == 0 { 0i64 } else if lo_val < 0 { char_len + lo_val } else { lo_val - 1 }).max(0).min(char_len) as usize;
+                                let hi = (if hi_val < 0 { char_len + hi_val + 1 } else { hi_val }).max(0).min(char_len) as usize;
+                                let hi = hi.max(lo);
                                 let mut byte_lo = s.len();
                                 let mut byte_hi = s.len();
                                 for (ci, (bi, _)) in s.char_indices().enumerate() {
@@ -1158,13 +1182,13 @@ impl<W: Write> VM<W> {
                                     // ASCII fast path: byte_offset == char_offset
                                     s.bytes().enumerate()
                                         .filter(|(_, b)| *b == c as u8)
-                                        .map(|(i, _)| Value::Int(i as i64))
+                                        .map(|(i, _)| Value::Int((i + 1) as i64))
                                         .collect()
                                 } else {
                                     s.char_indices()
                                         .filter(|(_, ch)| *ch == c)
                                         .enumerate()
-                                        .map(|(ci, _)| Value::Int(ci as i64))
+                                        .map(|(ci, _)| Value::Int((ci + 1) as i64))
                                         .collect()
                                 }
                             }
@@ -1173,14 +1197,14 @@ impl<W: Write> VM<W> {
                                 if s.is_ascii() {
                                     // ASCII fast path: byte_offset == char_offset
                                     s.match_indices(pat.as_str())
-                                        .map(|(bi, _)| Value::Int(bi as i64))
+                                        .map(|(bi, _)| Value::Int((bi + 1) as i64))
                                         .collect()
                                 } else {
                                     // Unicode: build char-index map: byte_offset → char_index
                                     let char_idx: std::collections::HashMap<usize, usize> =
                                         s.char_indices().enumerate().map(|(ci, (bi, _))| (bi, ci)).collect();
                                     s.match_indices(pat.as_str())
-                                        .filter_map(|(bi, _)| char_idx.get(&bi).map(|&ci| Value::Int(ci as i64)))
+                                        .filter_map(|(bi, _)| char_idx.get(&bi).map(|&ci| Value::Int((ci + 1) as i64)))
                                         .collect()
                                 }
                             }
@@ -1188,14 +1212,14 @@ impl<W: Write> VM<W> {
                                 let needle = needle.clone();
                                 arr.iter().enumerate()
                                     .filter(|(_, v)| v.equals(&needle))
-                                    .map(|(i, _)| Value::Int(i as i64))
+                                    .map(|(i, _)| Value::Int((i + 1) as i64))
                                     .collect()
                             }
                             (Value::Tuple(tup), needle) => {
                                 let needle = needle.clone();
                                 tup.iter().enumerate()
                                     .filter(|(_, v)| v.equals(&needle))
-                                    .map(|(i, _)| Value::Int(i as i64))
+                                    .map(|(i, _)| Value::Int((i + 1) as i64))
                                     .collect()
                             }
                             (Value::String(_), other) => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
@@ -1215,8 +1239,10 @@ impl<W: Write> VM<W> {
                             Value::String(t) => t.clone(),
                             other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
                         };
+                        // 1-based: pos=1 inserts at beginning; pos=N+1 appends at end
+                        let pos_0based = if pos <= 0 { 0i64 } else { pos - 1 };
                         if s.is_ascii() {
-                            let p = (pos.max(0) as usize).min(s.len());
+                            let p = (pos_0based.max(0) as usize).min(s.len());
                             let mut r = String::with_capacity(s.len() + text.len());
                             r.push_str(&s[..p]);
                             r.push_str(&text);
@@ -1224,7 +1250,7 @@ impl<W: Write> VM<W> {
                             r
                         } else {
                             let char_len = s.chars().count() as i64;
-                            let p = (pos.max(0).min(char_len)) as usize;
+                            let p = (pos_0based.max(0).min(char_len)) as usize;
                             let byte_pos = s.char_indices().nth(p).map(|(bi, _)| bi).unwrap_or(s.len());
                             let mut r = String::with_capacity(s.len() + text.len());
                             r.push_str(&s[..byte_pos]);
@@ -1241,7 +1267,8 @@ impl<W: Write> VM<W> {
                             Value::String(s) => s.clone(),
                             other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
                         };
-                        let pos   = ri!(pos_reg).max(0) as usize;
+                        let pos_raw = ri!(pos_reg);
+                        let pos = if pos_raw <= 0 { 0usize } else { (pos_raw - 1) as usize };
                         let count = ri!(count_reg).max(0) as usize;
                         if s.is_ascii() {
                             let lo = pos.min(s.len());
@@ -1423,29 +1450,31 @@ impl<W: Write> VM<W> {
                         Value::Array(arr) => {
                             let arr = arr.as_ref();
                             let len = arr.len() as i64;
-                            let lo = (if lo < 0 { len + lo } else { lo }).max(0) as usize;
-                            let hi = (if hi < 0 { len + hi } else { hi }).min(len) as usize;
-                            let lo = lo.min(arr.len());
-                            let hi = hi.min(arr.len());
-                            Value::Array(Rc::new(arr[lo..hi].to_vec()))
+                            // lo: 0=default start (internal 0), positive=1-based (subtract 1), negative=from end
+                            let lo_norm = (if lo == 0 { 0i64 } else if lo < 0 { len + lo } else { lo - 1 }).max(0).min(len) as usize;
+                            // hi: positive=1-based inclusive = 0-based exclusive (no change); negative=len+hi+1
+                            let hi_norm = (if hi < 0 { len + hi + 1 } else { hi }).max(0).min(len) as usize;
+                            let lo_norm = lo_norm.min(arr.len());
+                            let hi_norm = hi_norm.min(arr.len()).max(lo_norm);
+                            Value::Array(Rc::new(arr[lo_norm..hi_norm].to_vec()))
                         }
                         Value::Tuple(tup) => {
                             let tup = tup.as_ref();
                             let len = tup.len() as i64;
-                            let lo = (if lo < 0 { len + lo } else { lo }).max(0) as usize;
-                            let hi = (if hi < 0 { len + hi } else { hi }).min(len) as usize;
-                            let lo = lo.min(tup.len());
-                            let hi = hi.min(tup.len());
-                            Value::Tuple(Rc::new(tup[lo..hi].to_vec()))
+                            let lo_norm = (if lo == 0 { 0i64 } else if lo < 0 { len + lo } else { lo - 1 }).max(0).min(len) as usize;
+                            let hi_norm = (if hi < 0 { len + hi + 1 } else { hi }).max(0).min(len) as usize;
+                            let lo_norm = lo_norm.min(tup.len());
+                            let hi_norm = hi_norm.min(tup.len()).max(lo_norm);
+                            Value::Tuple(Rc::new(tup[lo_norm..hi_norm].to_vec()))
                         }
                         Value::NamedTuple(fields) => {
                             let fields = fields.as_ref();
                             let len = fields.len() as i64;
-                            let lo = (if lo < 0 { len + lo } else { lo }).max(0) as usize;
-                            let hi = (if hi < 0 { len + hi } else { hi }).min(len) as usize;
-                            let lo = lo.min(fields.len());
-                            let hi = hi.min(fields.len());
-                            Value::NamedTuple(Rc::new(fields[lo..hi].to_vec()))
+                            let lo_norm = (if lo == 0 { 0i64 } else if lo < 0 { len + lo } else { lo - 1 }).max(0).min(len) as usize;
+                            let hi_norm = (if hi < 0 { len + hi + 1 } else { hi }).max(0).min(len) as usize;
+                            let lo_norm = lo_norm.min(fields.len());
+                            let hi_norm = hi_norm.min(fields.len()).max(lo_norm);
+                            Value::NamedTuple(Rc::new(fields[lo_norm..hi_norm].to_vec()))
                         }
                         other => raise!(VmError::TypeError { expected: "Array, Tuple, or NamedTuple", got: other.type_name().to_string() }),
                     };
@@ -1565,7 +1594,7 @@ impl<W: Write> VM<W> {
                         Value::Tuple(_) => {
                             let field_name = field_name.clone();
                             raise!(VmError::Generic(format!(
-                                "runtime error: Cannot access field '{}' on positional tuple. Use positional indexing like tuple[0]",
+                                "runtime error: Cannot access field '{}' on positional tuple. Use positional indexing like tuple[1]",
                                 field_name
                             )));
                         }

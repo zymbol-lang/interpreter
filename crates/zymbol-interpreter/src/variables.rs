@@ -33,23 +33,25 @@ impl<W: Write> Interpreter<W> {
                 if let Expr::Identifier(arr_ident) = idx.array.as_ref() {
                     let index_val = self.eval_expr(&idx.index)?;
                     if let Value::Int(i) = &index_val {
-                        let idx_pos = *i as usize;
-                        let elem = {
-                            match self.get_variable(&arr_ident.name) {
-                                Some(Value::Array(arr)) if idx_pos < arr.len() => {
-                                    Some(arr[idx_pos].clone())
+                        if *i > 0 {
+                            let idx_pos = (*i - 1) as usize;
+                            let elem = {
+                                match self.get_variable(&arr_ident.name) {
+                                    Some(Value::Array(arr)) if idx_pos < arr.len() => {
+                                        Some(arr[idx_pos].clone())
+                                    }
+                                    Some(Value::Tuple(tup)) if idx_pos < tup.len() => {
+                                        Some(tup[idx_pos].clone())
+                                    }
+                                    _ => None,
                                 }
-                                Some(Value::Tuple(tup)) if idx_pos < tup.len() => {
-                                    Some(tup[idx_pos].clone())
-                                }
-                                _ => None,
+                            };
+                            if let Some(v) = elem {
+                                self.set_variable(&assign.name, v);
+                                return Ok(());
                             }
-                        };
-                        if let Some(v) = elem {
-                            self.set_variable(&assign.name, v);
-                            return Ok(());
                         }
-                        // fallthrough: out-of-bounds or non-array → normal eval error
+                        // i <= 0 or out-of-bounds: fallthrough to eval_index for proper 1-based error handling
                     }
                 }
             }
@@ -69,16 +71,18 @@ impl<W: Write> Interpreter<W> {
                 if let Expr::Identifier(ident) = op.collection.as_ref() {
                     if ident.name == assign.name {
                         let index_val = self.eval_expr(&op.index)?;
-                        if let (Some(Value::Array(arr)), Value::Int(i)) =
-                            (self.get_variable_mut(&assign.name), &index_val)
-                        {
-                            let idx = *i as usize;
-                            if idx < arr.len() {
-                                arr.remove(idx);
-                                return Ok(());
+                        if let Value::Int(i) = &index_val {
+                            if *i > 0 {
+                                if let Some(Value::Array(arr)) = self.get_variable_mut(&assign.name) {
+                                    let idx = (*i - 1) as usize;
+                                    if idx < arr.len() {
+                                        arr.remove(idx);
+                                        return Ok(());
+                                    }
+                                }
                             }
-                            // out-of-bounds: fallthrough so eval normal generates the error
                         }
+                        // i <= 0 or out-of-bounds: fallthrough so eval normal generates the error
                     }
                 }
             }
@@ -103,16 +107,18 @@ impl<W: Write> Interpreter<W> {
                             }
                             let index_val = self.eval_expr(&idx.index)?;
                             let new_value = self.eval_expr(&op.value)?;
-                            if let (Some(Value::Array(arr)), Value::Int(i)) =
-                                (self.get_variable_mut(&assign.name), &index_val)
-                            {
-                                let idx_pos = *i as usize;
-                                if idx_pos < arr.len() {
-                                    arr[idx_pos] = new_value;
-                                    return Ok(());
+                            if let Value::Int(i) = &index_val {
+                                if *i > 0 {
+                                    if let Some(Value::Array(arr)) = self.get_variable_mut(&assign.name) {
+                                        let idx_pos = (*i - 1) as usize;
+                                        if idx_pos < arr.len() {
+                                            arr[idx_pos] = new_value;
+                                            return Ok(());
+                                        }
+                                    }
                                 }
-                                // out-of-bounds: fallthrough to normal eval for proper error
                             }
+                            // i <= 0 or out-of-bounds: fallthrough to normal eval for proper error
                         }
                     }
                 }

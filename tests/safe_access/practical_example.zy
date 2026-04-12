@@ -10,10 +10,10 @@ create_optional = #1  // Change to #0 to skip creation
 
 // Safe check before using
 check = optional_var#?
-is_defined = !(check[0] == "##_")
+is_defined = !(check[1] == "##_")
 
 ? is_defined {
-    >> "Using optional variable: " check[2] ¶
+    >> "Using optional variable: " check[3] ¶
 }
 _{
     >> "Optional variable not created, using default" ¶
@@ -33,10 +33,10 @@ condition = #0
 // Get value or use default
 choice_check = user_choice#?
 final_value = #0
-is_choice_defined = !(choice_check[0] == "##_")
+is_choice_defined = !(choice_check[1] == "##_")
 
 ? is_choice_defined {
-    final_value = choice_check[2]
+    final_value = choice_check[3]
     >> "Using user choice: " final_value ¶
 }
 _{
@@ -56,7 +56,7 @@ _{
 
 // Verify it was cleaned up
 cleanup_check = temp_data#?
-is_cleaned = cleanup_check[0] == "##_"
+is_cleaned = cleanup_check[1] == "##_"
 
 ? is_cleaned {
     >> "✅ Temporary data was properly cleaned up" ¶

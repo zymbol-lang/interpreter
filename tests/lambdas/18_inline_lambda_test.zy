@@ -5,8 +5,8 @@ sales = [(100, 5), (250, 3), (75, 10)]
 
 // Use inline lambda
 revenues = sales$> (sale -> {
-    price = sale[0]
-    quantity = sale[1]
+    price = sale[1]
+    quantity = sale[2]
     result = price * quantity
     <~ result
 })

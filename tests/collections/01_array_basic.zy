@@ -1,7 +1,26 @@
 // Test: Array creation, access, length
 arr = [10, 20, 30, 40, 50]
+
 >> arr ¶
->> arr[0] ¶
->> arr[4] ¶
-n = arr$#
->> n ¶
+>> arr$# ¶
+
+// 1-based indexing
+>> arr[1] ¶  // == 10
+>> arr[2] ¶  // == 20
+>> arr[3] ¶ // == 30
+>> arr[4] ¶ // == 40
+>> arr[5] ¶ // == 50
+
+// OR en reverse order
+
+>> arr[-5] ¶ // == 10
+>> arr[-4] ¶ // == 20
+>> arr[-3] ¶ // == 30
+>> arr[-2] ¶ // == 40
+>> arr[-1] ¶ /// == 50
+
+// and 
+>> arr[0] ¶ // == arr[] == Error: Index out of bounds
+//>> arr[] ¶ // == arr[0] == Error: Index its requires an index
+>> arr[6] ¶ // == Error: Index out of bounds
+>> arr[-6] ¶ // == Error: Index out of bounds

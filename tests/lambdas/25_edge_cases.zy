@@ -18,7 +18,7 @@ single = [42]
 >> "Single element array: " >> single$# >> " (expected: 1)" ¶
 
 mapped_single = single$> (x -> x * 2)
->> "Mapped single: " >> mapped_single[0] >> " (expected: 84)" ¶
+>> "Mapped single: " >> mapped_single[1] >> " (expected: 84)" ¶
 
 sum_single = single$< (0, (acc, x) -> acc + x)
 >> "Reduce single: " >> sum_single >> " (expected: 42)" ¶

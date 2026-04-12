@@ -8,11 +8,11 @@ users = [
 ]
 
 // Access array elements
-? users[0].name == "Alice" {
+? users[1].name == "Alice" {
     >> "✓ Array element field access works" ¶
 }
 
-? users[1].id == 2 {
+? users[2].id == 2 {
     >> "✓ Second element access works" ¶
 }
 

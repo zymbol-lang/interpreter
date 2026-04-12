@@ -365,8 +365,8 @@ has99 = arr$? 99
 fn test_array_indexing() {
     let out = run(r#"
 arr = [10, 20, 30]
->> arr[0] ¶
->> arr[2] ¶
+>> arr[1] ¶
+>> arr[3] ¶
 "#);
     assert_eq!(out, "10\n30\n");
 }
@@ -375,10 +375,10 @@ arr = [10, 20, 30]
 fn test_array_slice() {
     let out = run(r#"
 arr = [1, 2, 3, 4, 5]
-slice = arr$[1..3]
+slice = arr$[2..4]
 >> slice ¶
 "#);
-    assert_eq!(out, "[2, 3]\n");
+    assert_eq!(out, "[2, 3, 4]\n");
 }
 
 #[test]
@@ -395,8 +395,8 @@ person = (name: "Alice", age: 25)
 fn test_tuple_basic() {
     let out = run(r#"
 pair = (1, "hello")
->> pair[0] ¶
 >> pair[1] ¶
+>> pair[2] ¶
 "#);
     assert_eq!(out, "1\nhello\n");
 }
@@ -912,8 +912,8 @@ has99 = arr$? 99
 fn test_array_indexing_vm() {
     let src = r#"
 arr = [10, 20, 30]
->> arr[0] ¶
->> arr[2] ¶
+>> arr[1] ¶
+>> arr[3] ¶
 "#;
     assert_eq!(run_vm(src).expect("VM"), run(src));
 }
@@ -922,7 +922,7 @@ arr = [10, 20, 30]
 fn test_array_slice_vm() {
     let src = r#"
 arr = [1, 2, 3, 4, 5]
-slice = arr$[1..3]
+slice = arr$[2..4]
 >> slice ¶
 "#;
     assert_eq!(run_vm(src).expect("VM"), run(src));
@@ -942,8 +942,8 @@ person = (name: "Alice", age: 25)
 fn test_tuple_basic_vm() {
     let src = r#"
 pair = (1, "hello")
->> pair[0] ¶
 >> pair[1] ¶
+>> pair[2] ¶
 "#;
     assert_eq!(run_vm(src).expect("VM"), run(src));
 }

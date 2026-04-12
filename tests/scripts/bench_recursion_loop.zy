@@ -20,7 +20,7 @@ fib_rec(n) {
     _ {
         r1 = fib_rec(n - 1)
         r2 = fib_rec(n - 2)
-        <~ (r1[0] + r2[0], r1[1] + r2[1] + 1)
+        <~ (r1[1] + r2[1], r1[2] + r2[2] + 1)
     }
 }
 
@@ -50,12 +50,12 @@ ackermann_rec(m, n) {
     ? m == 0 { <~ (n + 1, 1) }
     _? n == 0 {
         r = ackermann_rec(m - 1, 1)
-        <~ (r[0], r[1] + 1)
+        <~ (r[1], r[2] + 1)
     }
     _ {
         r1 = ackermann_rec(m, n - 1)
-        r2 = ackermann_rec(m - 1, r1[0])
-        <~ (r2[0], r1[1] + r2[1] + 1)
+        r2 = ackermann_rec(m - 1, r1[1])
+        <~ (r2[1], r1[2] + r2[2] + 1)
     }
 }
 
@@ -70,9 +70,8 @@ ackermann_loop(m_init, n_init) {
     iters = 0
     @ sz > 0 {
         iters = iters + 1
-        last = sz - 1
-        m = stack[last]
-        stack = stack$- last
+        m = stack[sz]
+        stack = stack$- sz
         ? m == 0 {
             n = n + 1
         }
@@ -101,11 +100,11 @@ ackermann_loop(m_init, n_init) {
 ackermann_loop_v2(m_init, n_init) {
     stack = []
     @ _i:0..519 { stack = stack$+ 0 }
-    top = 0
-    stack = stack[0]$~ m_init
+    top = 1
+    stack = stack[1]$~ m_init
     n = n_init
     iters = 0
-    @ top >= 0 {
+    @ top >= 1 {
         iters = iters + 1
         m = stack[top]
         top = top - 1
@@ -133,12 +132,12 @@ t_total = T::now()
 // ── fib(30) recursivo ────────────────────────────────────────────────────────
 t = T::now()
 r1 = fib_rec(30)
->> "fib_rec(30)        = " + r1[0] + "  " + T::elapsed(t) + "  (" + #,|r1[1]| + " calls)" ¶
+>> "fib_rec(30)        = " + r1[1] + "  " + T::elapsed(t) + "  (" + #,|r1[2]| + " calls)" ¶
 
 // ── fib(30) iterativo ─────────────────────────────────────────────────────────
 t = T::now()
 r2 = fib_loop(30)
->> "fib_loop(30)       = " + r2[0] + "  " + T::elapsed(t) + "  (" + #,|r2[1]| + " calls, " + r2[2] + " iters)" ¶
+>> "fib_loop(30)       = " + r2[1] + "  " + T::elapsed(t) + "  (" + #,|r2[2]| + " calls, " + r2[3] + " iters)" ¶
 
 // ── fib(30) puro loop ─────────────────────────────────────────────────────────
 t = T::now()
@@ -158,17 +157,17 @@ pure_iters = 0
 // ── ackermann(3,6) recursivo ─────────────────────────────────────────────────
 t = T::now()
 r4 = ackermann_rec(3, 6)
->> "ackermann_rec(3,6)  = " + r4[0] + "  " + T::elapsed(t) + "  (" + #,|r4[1]| + " calls)" ¶
+>> "ackermann_rec(3,6)  = " + r4[1] + "  " + T::elapsed(t) + "  (" + #,|r4[2]| + " calls)" ¶
 
 // ── ackermann(3,6) iterativo v1 (stack dinámico $+/$-) ────────────────────────
 t = T::now()
 r5 = ackermann_loop(3, 6)
->> "ackermann_loop(3,6)    = " + r5[0] + "  " + T::elapsed(t) + "  (" + #,|r5[1]| + " call, " + r5[2] + " iters)" ¶
+>> "ackermann_loop(3,6)    = " + r5[1] + "  " + T::elapsed(t) + "  (" + #,|r5[2]| + " call, " + r5[3] + " iters)" ¶
 
 // ── ackermann(3,6) iterativo v2 ($~ in-place + index read fast path) ──────────
 t = T::now()
 r6 = ackermann_loop_v2(3, 6)
->> "ackermann_loop_v2(3,6) = " + r6[0] + "  " + T::elapsed(t) + "  (" + #,|r6[1]| + " call, " + r6[2] + " iters)" ¶
+>> "ackermann_loop_v2(3,6) = " + r6[1] + "  " + T::elapsed(t) + "  (" + #,|r6[2]| + " call, " + r6[3] + " iters)" ¶
 
 >> "" ¶
 >> "=== Done (" + T::total(t_total) + ") ===" ¶

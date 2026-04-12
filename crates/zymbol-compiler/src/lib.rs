@@ -601,7 +601,7 @@ impl Compiler {
                     match item {
                         DestructureItem::Bind(name) => {
                             let r_idx = ctx.alloc_temp()?;
-                            ctx.emit(Instruction::LoadInt(r_idx, idx));
+                            ctx.emit(Instruction::LoadInt(r_idx, idx + 1));
                             let dst = if let Ok(existing) = ctx.get_reg(name) {
                                 existing
                             } else {
@@ -612,7 +612,7 @@ impl Compiler {
                         }
                         DestructureItem::Rest(name) => {
                             let r_lo = ctx.alloc_temp()?;
-                            ctx.emit(Instruction::LoadInt(r_lo, idx));
+                            ctx.emit(Instruction::LoadInt(r_lo, idx + 1));
                             let r_hi = ctx.alloc_temp()?;
                             // Use array length as hi (slice to end)
                             ctx.emit(Instruction::ArrayLen(r_hi, r_rhs));
@@ -1877,15 +1877,17 @@ impl Compiler {
             let r_start = self.compile_expr(start, ctx)?;
             ctx.emit(Instruction::CopyReg(r_lo, r_start));
         } else {
-            ctx.emit(Instruction::LoadInt(r_lo, 0));
+            ctx.emit(Instruction::LoadInt(r_lo, 1));
         }
 
         // Fill r_hi with end value
         if let Some(end) = &cs.end {
             let r_end = self.compile_expr(end, ctx)?;
             if cs.count_based {
-                // [start:count] → actual_end = start + count
+                // [start:count] → actual_end (0-based exclusive) = (start-1) + count = start + count - 1
+                // VM normalizes lo as lo-1, so hi must account for 1-based offset too.
                 ctx.emit(Instruction::AddInt(r_hi, r_lo, r_end));
+                ctx.emit(Instruction::SubIntImm(r_hi, r_hi, 1));
             } else {
                 ctx.emit(Instruction::CopyReg(r_hi, r_end));
             }
@@ -1964,15 +1966,17 @@ impl Compiler {
             let r_start = self.compile_expr(start, ctx)?;
             ctx.emit(Instruction::CopyReg(r_lo, r_start));
         } else {
-            ctx.emit(Instruction::LoadInt(r_lo, 0));
+            ctx.emit(Instruction::LoadInt(r_lo, 1));
         }
 
         // Fill r_hi with end value
         if let Some(end) = &cr.end {
             let r_end = self.compile_expr(end, ctx)?;
             if cr.count_based {
-                // [start:count] → actual_end = start + count
+                // [start:count] → actual_end (0-based exclusive) = (start-1) + count = start + count - 1
+                // VM normalizes lo as lo-1, so hi must account for 1-based offset too.
                 ctx.emit(Instruction::AddInt(r_hi, r_lo, r_end));
+                ctx.emit(Instruction::SubIntImm(r_hi, r_hi, 1));
             } else {
                 ctx.emit(Instruction::CopyReg(r_hi, r_end));
             }
@@ -2181,7 +2185,7 @@ impl Compiler {
         let r_one = ctx.alloc_temp()?;
 
         ctx.emit(Instruction::ArrayLen(r_len, r_coll));
-        ctx.emit(Instruction::LoadInt(r_idx, 0));
+        ctx.emit(Instruction::LoadInt(r_idx, 1));  // 1-based: start at 1
         ctx.emit(Instruction::LoadInt(r_one, 1));
 
         let loop_start = ctx.current_label();
@@ -2191,11 +2195,11 @@ impl Compiler {
             label: lp.label.clone(),
         });
 
-        // Exit if r_idx >= r_len
-        ctx.emit(Instruction::CmpGe(r_cmp, r_idx, r_len));
+        // Exit if r_idx > r_len (1-based: indices 1..=len)
+        ctx.emit(Instruction::CmpGt(r_cmp, r_idx, r_len));
         let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
 
-        // Load item
+        // Load item (ArrayGet normalizes 1-based → 0-based)
         ctx.emit(Instruction::ArrayGet(r_item, r_coll, r_idx));
 
         self.compile_block(&lp.body, ctx)?;
