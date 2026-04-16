@@ -1,0 +1,10 @@
+// Test: infinite loop @ { } with @> continue — regression for BUG-05
+// @> must skip the rest of the body and restart the loop, not hang or error
+i = 0
+@ {
+    i++
+    ? i >= 6 { @! }
+    ? i % 2 == 0 { @> }
+    >> i " "
+}
+>> ¶

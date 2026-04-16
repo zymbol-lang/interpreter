@@ -1,0 +1,6 @@
+=== Test: Variable shadowing ===
+Outer x: outer x
+Inner x: inner x
+After block, x: inner x
+Expected (with shadowing): 'outer x'
+Expected (without shadowing): 'inner x'

@@ -3,7 +3,7 @@
 //! Scope: literals, variables, arithmetic, if/else, loops (range/while/infinite), output.
 //! Functions and arrays are compiled as stubs (Fase 4B / 4C).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -13,9 +13,11 @@ use zymbol_ast::{
     FunctionDecl, LambdaBody,
     TryStmt, FormatKind, PrecisionOp,
     DestructureAssign, DestructureItem, DestructurePattern,
+    DeepIndexExpr, FlatExtractExpr, StructuredExtractExpr,
 };
 use zymbol_ast::Pattern;
 use zymbol_ast::BasePrefix;
+use zymbol_ast::CastKind;
 use zymbol_bytecode::{BuildPart, Chunk, CompiledProgram, FuncIdx, Instruction, Label, Reg, StrIdx};
 use zymbol_common::{BinaryOp, Literal, UnaryOp};
 
@@ -50,6 +52,11 @@ pub enum CompileError {
     BreakOutsideLoop,
     #[error("continue outside loop")]
     ContinueOutsideLoop,
+    #[error("E004: Circular import detected: module '{0}' is already being loaded")]
+    CircularImport(String),
+    /// Module had parse errors; the message includes count + per-diagnostic lines.
+    #[error("failed to parse module: {0}")]
+    ModuleParse(String),
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -242,6 +249,16 @@ pub struct Compiler {
     in_function_body: bool,
     /// Base directory of the source file (for resolving relative paths in Execute)
     base_dir: Option<PathBuf>,
+    /// Files currently being compiled (for circular import detection)
+    loading_stack: HashSet<PathBuf>,
+    /// Local function scope active during module compilation (plain name → FuncIdx).
+    /// Allows module functions to call private sibling functions.
+    module_scope: HashMap<String, FuncIdx>,
+    /// Module-level mutable variables: name → global var index.
+    /// Active during module function compilation so references emit LoadGlobal/StoreGlobal.
+    global_var_map: HashMap<String, u16>,
+    /// Initial values for global module variables (indexed by u16)
+    global_var_inits: Vec<zymbol_bytecode::GlobalInit>,
 }
 
 impl Compiler {
@@ -259,6 +276,10 @@ impl Compiler {
             output_param_map: HashMap::new(),
             in_function_body: false,
             base_dir: base_dir.map(|p| p.to_path_buf()),
+            loading_stack: HashSet::new(),
+            module_scope: HashMap::new(),
+            global_var_map: HashMap::new(),
+            global_var_inits: Vec::new(),
         };
 
         // Process imports first — register module functions as "alias::func"
@@ -327,11 +348,13 @@ impl Compiler {
         let mut compiled = CompiledProgram::new(main_chunk);
         compiled.functions = compiler.functions;
         compiled.string_pool = compiler.string_pool;
+        compiled.global_var_inits = compiler.global_var_inits;
         Ok(compiled)
     }
 
-    /// Process a module import: load, parse, and compile exported functions
-    /// registering them as `alias::func_name` in function_index.
+    /// Process a module import: load, parse, and compile exported + private functions,
+    /// registering exported ones as `alias::func_name` in function_index.
+    /// Also handles: circular import detection, nested sub-imports, and re-exports.
     fn compile_import(&mut self, import: &zymbol_ast::ImportStmt, base_dir: &Path) -> Result<(), CompileError> {
         // Build file path from import path components
         let mut path = base_dir.to_path_buf();
@@ -343,6 +366,19 @@ impl Compiler {
         }
         path.set_extension("zy");
 
+        // Canonicalize for reliable circular import detection
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+
+        // Circular import detection — use module stem name to match WT message format
+        if self.loading_stack.contains(&canonical) {
+            let module_name = path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            return Err(CompileError::CircularImport(module_name));
+        }
+        self.loading_stack.insert(canonical.clone());
+
         // Read module source
         let source = std::fs::read_to_string(&path)
             .map_err(|e| CompileError::Unsupported(format!("cannot read module '{}': {}", path.display(), e)))?;
@@ -352,49 +388,90 @@ impl Compiler {
         let lexer = zymbol_lexer::Lexer::new(&source, file_id);
         let (tokens, _lex_errs) = lexer.tokenize();
         let parser = zymbol_parser::Parser::new(tokens);
-        let module_prog = parser.parse()
-            .map_err(|_| CompileError::Unsupported(format!("failed to parse module '{}'", path.display())))?;
+        let module_prog = parser.parse().map_err(|errors| {
+            let canon_path = canonical.display().to_string();
+            let detail: Vec<String> = errors.iter().map(|d| {
+                let loc = d.span
+                    .map(|s| format!("{}:{}:{}", canon_path, s.start.line, s.start.column))
+                    .unwrap_or_else(|| canon_path.clone());
+                let mut msg = format!("  {}: {}", loc, d.message);
+                if let Some(help) = &d.help {
+                    msg.push_str(&format!("\n    help: {}", help));
+                }
+                msg
+            }).collect();
+            CompileError::ModuleParse(format!(
+                "{} parse error(s) in '{}'\n{}",
+                errors.len(),
+                canon_path,
+                detail.join("\n")
+            ))
+        })?;
 
-        // Collect exported items as (internal_name, public_name) pairs
-        let exported: Vec<(String, String)> = if let Some(decl) = &module_prog.module_decl {
-            if let Some(export_block) = &decl.export_block {
-                export_block.items.iter().filter_map(|item| {
-                    if let zymbol_ast::ExportItem::Own { name, rename, .. } = item {
-                        let public = rename.as_ref().unwrap_or(name).clone();
-                        Some((name.clone(), public))
-                    } else {
-                        None
-                    }
-                }).collect()
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
+        let module_base_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+
+        // Recursively process sub-imports of the module (for nested imports like i18n modules)
+        for sub_import in &module_prog.imports {
+            self.compile_import(sub_import, &module_base_dir)?;
+        }
 
         let alias = import.alias.clone();
 
-        // Separate exported names into functions and constants
-        let mut func_names: Vec<(String, String)> = Vec::new();
-        let mut const_names: Vec<(String, String)> = Vec::new();
-        for (internal, public) in &exported {
-            let is_func = module_prog.statements.iter().any(|s| {
-                matches!(s, Statement::FunctionDecl(d) if &d.name == internal)
-            });
-            if is_func {
-                func_names.push((internal.clone(), public.clone()));
-            } else {
-                const_names.push((internal.clone(), public.clone()));
+        // Collect ALL function names (exported + private) for module_scope
+        let all_func_names: Vec<String> = module_prog.statements.iter().filter_map(|s| {
+            if let Statement::FunctionDecl(d) = s { Some(d.name.clone()) } else { None }
+        }).collect();
+
+        // Collect exported items (Own = local, ReExport = from sub-module)
+        let mut own_func_exports: Vec<(String, String)> = Vec::new(); // (internal, public)
+        let mut own_const_exports: Vec<(String, String)> = Vec::new();
+        let mut reexport_funcs: Vec<(String, String, String)> = Vec::new(); // (src_alias, item_name, public_name)
+        let mut reexport_consts: Vec<(String, String, String)> = Vec::new();
+
+        if let Some(decl) = &module_prog.module_decl {
+            if let Some(export_block) = &decl.export_block {
+                for item in &export_block.items {
+                    match item {
+                        zymbol_ast::ExportItem::Own { name, rename, .. } => {
+                            let public = rename.as_ref().unwrap_or(name).clone();
+                            let is_func = module_prog.statements.iter().any(|s| {
+                                matches!(s, Statement::FunctionDecl(d) if &d.name == name)
+                            });
+                            if is_func {
+                                own_func_exports.push((name.clone(), public));
+                            } else {
+                                own_const_exports.push((name.clone(), public));
+                            }
+                        }
+                        zymbol_ast::ExportItem::ReExport { module_alias, item_name, item_type, rename, .. } => {
+                            let public = rename.as_ref().unwrap_or(item_name).clone();
+                            match item_type {
+                                zymbol_ast::ItemType::Function =>
+                                    reexport_funcs.push((module_alias.clone(), item_name.clone(), public)),
+                                zymbol_ast::ItemType::Constant =>
+                                    reexport_consts.push((module_alias.clone(), item_name.clone(), public)),
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        // First pass: reserve slots in function_index for functions only
+        // Reserve slots for ALL module functions (exported + private)
         let start_idx = self.functions.len();
-        for (i, (_, public_name)) in func_names.iter().enumerate() {
-            let qualified = format!("{}::{}", alias, public_name);
-            self.function_index.insert(qualified, (start_idx + i) as FuncIdx);
-            self.functions.push(Chunk::new("placeholder"));
+        let mut local_scope: HashMap<String, FuncIdx> = HashMap::new();
+        for (i, name) in all_func_names.iter().enumerate() {
+            let idx = (start_idx + i) as FuncIdx;
+            local_scope.insert(name.clone(), idx);
+            self.functions.push(Chunk::new(name.as_str()));
+        }
+
+        // Register exported functions in function_index as "alias::public_name"
+        for (internal, public) in &own_func_exports {
+            if let Some(&idx) = local_scope.get(internal) {
+                let qualified = format!("{}::{}", alias, public);
+                self.function_index.insert(qualified, idx);
+            }
         }
 
         // Collect module-level immutable constants (:=) for function body inlining
@@ -407,11 +484,39 @@ impl Compiler {
             }
         }
 
-        // Second pass: compile function bodies (look up by internal name)
-        for (i, (internal_name, _)) in func_names.iter().enumerate() {
+        // Register module-level mutable variables (= not :=) as global vars
+        // so function bodies can read/write them across calls via LoadGlobal/StoreGlobal.
+        let mut module_gvar_names: Vec<String> = Vec::new();
+        for stmt in &module_prog.statements {
+            if let Statement::Assignment(a) = stmt {
+                if !self.global_var_map.contains_key(&a.name) {
+                    let gvar_idx = self.global_var_inits.len() as u16;
+                    let init = if let Some(mc) = Self::eval_const_expr(&a.value) {
+                        match mc {
+                            ModuleConst::Int(n) => zymbol_bytecode::GlobalInit::Int(n),
+                            ModuleConst::Float(f) => zymbol_bytecode::GlobalInit::Float(f),
+                            ModuleConst::Bool(b) => zymbol_bytecode::GlobalInit::Bool(b),
+                            ModuleConst::Char(c) => zymbol_bytecode::GlobalInit::Char(c),
+                            ModuleConst::String(s) => zymbol_bytecode::GlobalInit::Str(s),
+                        }
+                    } else {
+                        zymbol_bytecode::GlobalInit::Unit
+                    };
+                    self.global_var_inits.push(init);
+                    self.global_var_map.insert(a.name.clone(), gvar_idx);
+                    module_gvar_names.push(a.name.clone());
+                }
+            }
+        }
+
+        // Activate module_scope so compile_call finds private sibling functions
+        let saved_module_scope = std::mem::replace(&mut self.module_scope, local_scope);
+
+        // Compile ALL function bodies (exported + private)
+        for (i, name) in all_func_names.iter().enumerate() {
             let func_decl = module_prog.statements.iter().find_map(|s| {
                 if let Statement::FunctionDecl(d) = s {
-                    if &d.name == internal_name { Some(d) } else { None }
+                    if &d.name == name { Some(d) } else { None }
                 } else {
                     None
                 }
@@ -422,11 +527,15 @@ impl Compiler {
             }
         }
 
-        // Restore global consts (don't leak module's consts into caller scope)
+        // Restore module_scope, global_consts, and remove this module's global var entries
+        self.module_scope = saved_module_scope;
         self.global_consts = saved_global_consts;
+        for name in &module_gvar_names {
+            self.global_var_map.remove(name);
+        }
 
-        // Collect constant/variable exports: evaluate literal values
-        for (internal_name, public_name) in &const_names {
+        // Collect own constant/variable exports
+        for (internal_name, public_name) in &own_const_exports {
             let val_expr = module_prog.statements.iter().find_map(|s| {
                 match s {
                     Statement::ConstDecl(c) if &c.name == internal_name => Some(&c.value),
@@ -441,6 +550,25 @@ impl Compiler {
                 }
             }
         }
+
+        // Handle re-exports from sub-modules (e.g., mat::sumar <= προσθέτω)
+        for (src_alias, item_name, public_name) in &reexport_funcs {
+            let src_qualified = format!("{}::{}", src_alias, item_name);
+            if let Some(&idx) = self.function_index.get(&src_qualified) {
+                let dst_qualified = format!("{}::{}", alias, public_name);
+                self.function_index.insert(dst_qualified, idx);
+            }
+        }
+        for (src_alias, item_name, public_name) in &reexport_consts {
+            let src_key = format!("{}.{}", src_alias, item_name);
+            if let Some(mc) = self.module_constants.get(&src_key).cloned() {
+                let dst_key = format!("{}.{}", alias, public_name);
+                self.module_constants.insert(dst_key, mc);
+            }
+        }
+
+        // Done with this module — remove from loading stack
+        self.loading_stack.remove(&canonical);
 
         Ok(())
     }
@@ -572,6 +700,13 @@ impl Compiler {
 
         let src = self.compile_expr(value, ctx)?;
         let src_ty = ctx.get_reg_type(src);
+
+        // If this name is a module global var, emit StoreGlobal instead of local register assign
+        if let Some(&gvar_idx) = self.global_var_map.get(name) {
+            ctx.emit(Instruction::StoreGlobal(gvar_idx, src));
+            return Ok(());
+        }
+
         // If re-assignment, get existing dst register; otherwise allocate new.
         let dst = if let Ok(existing) = ctx.get_reg(name) {
             existing
@@ -726,12 +861,14 @@ impl Compiler {
             }
         } else if lp.condition.is_some() {
             // Detect TIMES loop: condition is a literal Int → repeat N times
-            let is_times = matches!(
-                lp.condition.as_ref().unwrap().as_ref(),
-                Expr::Literal(lit) if matches!(lit.value, Literal::Int(_))
-            );
-            if is_times {
+            let cond = lp.condition.as_ref().unwrap().as_ref();
+            let is_literal_times = matches!(cond, Expr::Literal(lit) if matches!(lit.value, Literal::Int(_)));
+            // Dynamic times: condition is an identifier (variable holding an Int count)
+            let is_dynamic_times = matches!(cond, Expr::Identifier(_));
+            if is_literal_times {
                 self.compile_times_loop(lp, ctx)
+            } else if is_dynamic_times {
+                self.compile_dynamic_times_loop(lp, ctx)
             } else {
                 self.compile_while_loop(lp, ctx)
             }
@@ -775,6 +912,38 @@ impl Compiler {
 
         let inc_label = ctx.current_label();
         ctx.emit(Instruction::AddInt(r_i, r_i, r_one));
+        ctx.emit(Instruction::Jump(loop_start));
+
+        let loop_end = ctx.current_label();
+        ctx.patch_jump(exit_jump, loop_end);
+
+        let lctx = ctx.loop_stack.pop().unwrap();
+        for pos in lctx.break_patches { ctx.patch_jump(pos, loop_end); }
+        for pos in lctx.continue_patches { ctx.patch_jump(pos, inc_label); }
+        Ok(())
+    }
+
+    fn compile_dynamic_times_loop(
+        &mut self,
+        lp: &Loop,
+        ctx: &mut FunctionCtx,
+    ) -> Result<(), CompileError> {
+        // Evaluate the count expression once
+        let r_n = self.compile_expr(lp.condition.as_ref().unwrap(), ctx)?;
+        let r_i = ctx.alloc_temp()?;
+        let r_cmp = ctx.alloc_temp()?;
+        ctx.emit(Instruction::LoadInt(r_i, 0));
+
+        let loop_start = ctx.current_label();
+        ctx.loop_stack.push(LoopCtx { break_patches: Vec::new(), continue_patches: Vec::new(), label: lp.label.clone() });
+
+        ctx.emit(Instruction::CmpGe(r_cmp, r_i, r_n));
+        let exit_jump = ctx.emit(Instruction::JumpIf(r_cmp, 0));
+
+        self.compile_block(&lp.body, ctx)?;
+
+        let inc_label = ctx.current_label();
+        ctx.emit(Instruction::AddIntImm(r_i, r_i, 1));
         ctx.emit(Instruction::Jump(loop_start));
 
         let loop_end = ctx.current_label();
@@ -1023,6 +1192,12 @@ impl Compiler {
                     ctx.emit(instr);
                     return Ok(dst);
                 }
+                // Fall back to module global variable (mutable state shared across calls)
+                if let Some(&gvar_idx) = self.global_var_map.get(&id.name) {
+                    let dst = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::LoadGlobal(dst, gvar_idx));
+                    return Ok(dst);
+                }
                 // In function bodies, defer to runtime (matches tree-walker behavior)
                 if self.in_function_body {
                     let msg = format!("runtime error: undefined variable: '{}'", id.name);
@@ -1181,10 +1356,188 @@ impl Compiler {
                 Ok(dst)
             }
 
+            Expr::StringSplit(op) => {
+                let r_str = self.compile_expr(&op.string, ctx)?;
+                let r_del = self.compile_expr(&op.delimiter, ctx)?;
+                let dst   = ctx.alloc_temp()?;
+                ctx.emit(Instruction::StrSplit(dst, r_str, r_del));
+                Ok(dst)
+            }
+
+            Expr::ConcatBuild(op) => {
+                let r_base = self.compile_expr(&op.base, ctx)?;
+                let mut item_regs = Vec::with_capacity(op.items.len());
+                for item in &op.items {
+                    item_regs.push(self.compile_expr(item, ctx)?);
+                }
+                let dst = ctx.alloc_temp()?;
+                ctx.emit(Instruction::ConcatBuild(dst, r_base, item_regs));
+                Ok(dst)
+            }
+
+            Expr::NumericCast(cast) => {
+                let r_src = self.compile_expr(&cast.expr, ctx)?;
+                let dst = ctx.alloc_temp()?;
+                match cast.kind {
+                    CastKind::ToFloat => {
+                        ctx.emit(Instruction::IntToFloat(dst, r_src));
+                        ctx.set_reg_type(dst, StaticType::Float);
+                    }
+                    CastKind::ToIntRound => {
+                        ctx.emit(Instruction::FloatToIntRound(dst, r_src));
+                        ctx.set_reg_type(dst, StaticType::Int);
+                    }
+                    CastKind::ToIntTrunc => {
+                        ctx.emit(Instruction::FloatToIntTrunc(dst, r_src));
+                        ctx.set_reg_type(dst, StaticType::Int);
+                    }
+                }
+                Ok(dst)
+            }
+
+            Expr::DeepIndex(di) => self.compile_deep_index(di, ctx),
+            Expr::FlatExtract(fe) => self.compile_flat_extract(fe, ctx),
+            Expr::StructuredExtract(se) => self.compile_structured_extract(se, ctx),
+
             _ => Err(CompileError::Unsupported(format!(
                 "expression {:?}", std::mem::discriminant(expr)
             ))),
         }
+    }
+
+    // ── Nav-index helpers ────────────────────────────────────────────────────
+
+    /// Compile a single nav-path starting from `r_base` register.
+    /// Returns the register holding the final value.
+    /// Returns Err if any step uses a range (range steps require dynamic loops).
+    /// Scalar-only nav path: chain of plain ArrayGet, returns final register.
+    /// Used by DeepIndexExpr (which guarantees no range steps by AST design).
+    fn compile_nav_path(
+        &mut self,
+        r_base: Reg,
+        path: &zymbol_ast::NavPath,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let mut current = r_base;
+        for step in &path.steps {
+            let r_idx = self.compile_expr(&step.index, ctx)?;
+            let dst = ctx.alloc_temp()?;
+            ctx.emit(Instruction::ArrayGet(dst, current, r_idx));
+            current = dst;
+        }
+        Ok(current)
+    }
+
+    /// Compile a nav path segment, pushing all result value(s) into `r_collect`.
+    /// Handles range steps by emitting an inline counted loop; recurses for
+    /// additional steps after the range (fan-out semantics).
+    fn compile_nav_path_collect(
+        &mut self,
+        r_base: Reg,
+        steps: &[zymbol_ast::NavStep],
+        r_collect: Reg,
+        ctx: &mut FunctionCtx,
+    ) -> Result<(), CompileError> {
+        // Find first step that carries a range (..)
+        let range_pos = steps.iter().position(|s| s.range_end.is_some());
+
+        match range_pos {
+            None => {
+                // All plain steps: descend and push single value
+                let mut current = r_base;
+                for step in steps {
+                    let r_idx = self.compile_expr(&step.index, ctx)?;
+                    let dst = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::ArrayGet(dst, current, r_idx));
+                    current = dst;
+                }
+                ctx.emit(Instruction::ArrayPush(r_collect, current));
+                Ok(())
+            }
+            Some(k) => {
+                // Apply plain prefix steps 0..k
+                let mut r_mid = r_base;
+                for step in &steps[..k] {
+                    let r_idx = self.compile_expr(&step.index, ctx)?;
+                    let dst = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::ArrayGet(dst, r_mid, r_idx));
+                    r_mid = dst;
+                }
+
+                // Range step at k: loop i from start..=end (1-based, inclusive)
+                let range_step = &steps[k];
+                let r_start_tmp = self.compile_expr(&range_step.index, ctx)?;
+                let r_end_tmp   = self.compile_expr(range_step.range_end.as_ref().unwrap(), ctx)?;
+
+                let r_i   = ctx.alloc_temp()?;
+                let r_end = ctx.alloc_temp()?;
+                let r_cmp = ctx.alloc_temp()?;
+                let r_one = ctx.alloc_temp()?;
+                ctx.emit(Instruction::CopyReg(r_i, r_start_tmp));
+                ctx.emit(Instruction::CopyReg(r_end, r_end_tmp));
+                ctx.emit(Instruction::LoadInt(r_one, 1));
+
+                let loop_start = ctx.current_label();
+                ctx.emit(Instruction::CmpGt(r_cmp, r_i, r_end));
+                let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
+
+                // Get element at loop counter r_i
+                let r_elem = ctx.alloc_temp()?;
+                ctx.emit(Instruction::ArrayGet(r_elem, r_mid, r_i));
+
+                // Recurse: apply remaining steps steps[k+1..] to r_elem
+                self.compile_nav_path_collect(r_elem, &steps[k + 1..], r_collect, ctx)?;
+
+                ctx.emit(Instruction::AddInt(r_i, r_i, r_one));
+                ctx.emit(Instruction::Jump(loop_start));
+
+                let loop_end = ctx.current_label();
+                ctx.patch_jump(exit_patch, loop_end);
+                Ok(())
+            }
+        }
+    }
+
+    fn compile_deep_index(
+        &mut self,
+        di: &DeepIndexExpr,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let r_arr = self.compile_expr(&di.array, ctx)?;
+        self.compile_nav_path(r_arr, &di.path, ctx)
+    }
+
+    fn compile_flat_extract(
+        &mut self,
+        fe: &FlatExtractExpr,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let r_arr    = self.compile_expr(&fe.array, ctx)?;
+        let r_result = ctx.alloc_temp()?;
+        ctx.emit(Instruction::NewArray(r_result));
+        for path in &fe.paths {
+            self.compile_nav_path_collect(r_arr, &path.steps, r_result, ctx)?;
+        }
+        Ok(r_result)
+    }
+
+    fn compile_structured_extract(
+        &mut self,
+        se: &StructuredExtractExpr,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let r_arr   = self.compile_expr(&se.array, ctx)?;
+        let r_outer = ctx.alloc_temp()?;
+        ctx.emit(Instruction::NewArray(r_outer));
+        for group in &se.groups {
+            let r_inner = ctx.alloc_temp()?;
+            ctx.emit(Instruction::NewArray(r_inner));
+            for path in &group.paths {
+                self.compile_nav_path_collect(r_arr, &path.steps, r_inner, ctx)?;
+            }
+            ctx.emit(Instruction::ArrayPush(r_outer, r_inner));
+        }
+        Ok(r_outer)
     }
 
     fn compile_literal(
@@ -1207,13 +1560,20 @@ impl Compiler {
                 ctx.set_reg_type(dst, StaticType::Bool);
             }
             Literal::String(s) => {
-                // If string contains `{var}` interpolation, use BuildStr
+                // resolve \x01 sentinel (from \{ escape) to literal {
+                let resolved = s.replace('\x01', "{");
+                let idx = self.intern_string(&resolved);
+                ctx.emit(Instruction::LoadStr(dst, idx));
+                ctx.set_reg_type(dst, StaticType::String);
+            }
+            Literal::InterpolatedString(s) => {
+                // {var} interpolation — use BuildStr; sentinel resolved after interpolation
                 if s.contains('{') {
-                    // Drop the pre-allocated dst (it won't be used)
-                    // compile_interpolated_string allocates its own dst
                     return self.compile_interpolated_string(s, ctx);
                 }
-                let idx = self.intern_string(s);
+                // No real {var} — just sentinel resolution
+                let resolved = s.replace('\x01', "{");
+                let idx = self.intern_string(&resolved);
                 ctx.emit(Instruction::LoadStr(dst, idx));
                 ctx.set_reg_type(dst, StaticType::String);
             }
@@ -1292,11 +1652,13 @@ impl Compiler {
             || ty_l == StaticType::Char || ty_r == StaticType::Char;
 
         let instr = match bin.op {
+            BinaryOp::Concat => {
+                // Juxtaposition concatenation — always string concat
+                ctx.set_reg_type(dst, StaticType::String);
+                Instruction::ConcatStr(dst, r_l, r_r)
+            }
             BinaryOp::Add => {
-                if is_string {
-                    ctx.set_reg_type(dst, StaticType::String);
-                    Instruction::ConcatStr(dst, r_l, r_r)
-                } else if is_float {
+                if is_float {
                     ctx.set_reg_type(dst, StaticType::Float);
                     Instruction::AddFloat(dst, r_l, r_r)
                 } else {
@@ -1304,21 +1666,22 @@ impl Compiler {
                     Instruction::AddInt(dst, r_l, r_r)
                 }
             }
-            BinaryOp::Sub => if is_float { Instruction::SubFloat(dst, r_l, r_r) } else { Instruction::SubInt(dst, r_l, r_r) },
-            BinaryOp::Mul => if is_float { Instruction::MulFloat(dst, r_l, r_r) } else { Instruction::MulInt(dst, r_l, r_r) },
+            BinaryOp::Sub => if is_float { ctx.set_reg_type(dst, StaticType::Float); Instruction::SubFloat(dst, r_l, r_r) } else { Instruction::SubInt(dst, r_l, r_r) },
+            BinaryOp::Mul => if is_float { ctx.set_reg_type(dst, StaticType::Float); Instruction::MulFloat(dst, r_l, r_r) } else { Instruction::MulInt(dst, r_l, r_r) },
             BinaryOp::Div => {
                 if is_string {
                     // String split: "a,b" / ',' → Array
                     ctx.set_reg_type(dst, StaticType::Unknown); // Array type
                     Instruction::StrSplit(dst, r_l, r_r)
                 } else if is_float {
+                    ctx.set_reg_type(dst, StaticType::Float);
                     Instruction::DivFloat(dst, r_l, r_r)
                 } else {
                     Instruction::DivInt(dst, r_l, r_r)
                 }
             }
             BinaryOp::Mod => Instruction::ModInt(dst, r_l, r_r),
-            BinaryOp::Pow => if is_float { Instruction::PowFloat(dst, r_l, r_r) } else { Instruction::PowInt(dst, r_l, r_r) },
+            BinaryOp::Pow => if is_float { ctx.set_reg_type(dst, StaticType::Float); Instruction::PowFloat(dst, r_l, r_r) } else { Instruction::PowInt(dst, r_l, r_r) },
             BinaryOp::Eq => Instruction::CmpEq(dst, r_l, r_r),
             BinaryOp::Neq => Instruction::CmpNe(dst, r_l, r_r),
             BinaryOp::Lt => Instruction::CmpLt(dst, r_l, r_r),
@@ -1330,7 +1693,6 @@ impl Compiler {
                 return Err(CompileError::Unsupported("pipe (|>) — VM Fase 4C".into()))
             }
             BinaryOp::Comma => {
-                // Haskell-style space-separated output items — treated as concat
                 Instruction::ConcatStr(dst, r_l, r_r)
             }
             BinaryOp::Range => {
@@ -1415,7 +1777,9 @@ impl Compiler {
     ) -> Result<Reg, CompileError> {
         // Check if the callable is a known static function name or a module call (alias::func)
         let maybe_func_idx = match call.callable.as_ref() {
-            Expr::Identifier(id) => self.function_index.get(&id.name).copied(),
+            Expr::Identifier(id) => self.function_index.get(&id.name)
+                .or_else(|| self.module_scope.get(&id.name))
+                .copied(),
             Expr::MemberAccess(ma) => {
                 if let Expr::Identifier(obj) = ma.object.as_ref() {
                     // Module call: obj::func → look up "obj::func" in function_index
@@ -1483,7 +1847,7 @@ impl Compiler {
             Expr::Literal(lit) => match &lit.value {
                 Literal::Int(n) => Some(ModuleConst::Int(*n as i64)),
                 Literal::Float(f) => Some(ModuleConst::Float(*f)),
-                Literal::String(s) => Some(ModuleConst::String(s.clone())),
+                Literal::String(s) | Literal::InterpolatedString(s) => Some(ModuleConst::String(s.replace('\x01', "{"))),
                 Literal::Bool(b) => Some(ModuleConst::Bool(*b)),
                 Literal::Char(c) => Some(ModuleConst::Char(*c)),
             },
@@ -1637,8 +2001,9 @@ impl Compiler {
                             ctx.emit(Instruction::CmpEqImm(r_cmp, r_sub, *n as i32));
                             ctx.emit_jump_if_not_placeholder(r_cmp)
                         }
-                        zymbol_common::Literal::String(s) => {
-                            let idx = self.intern_string(s);
+                        zymbol_common::Literal::String(s) | zymbol_common::Literal::InterpolatedString(s) => {
+                            let resolved = s.replace('\x01', "{");
+                            let idx = self.intern_string(&resolved);
                             let body_label = ctx.current_label() + 2; // skip to MatchStr body
                             let _ms_pos = ctx.emit(Instruction::MatchStr(r_sub, idx, body_label as Label));
                             ctx.emit_jump_placeholder() // will patch to skip
@@ -1754,7 +2119,77 @@ impl Compiler {
                     }
                     ctx.patch_jump(guard_skip_patch, next_case);
                 }
-                Pattern::List(_, _) => {}
+                Pattern::List(patterns, _) => {
+                    let mut skip_patches: Vec<usize> = Vec::new();
+
+                    // Check array length matches pattern count
+                    let r_len = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::ArrayLen(r_len, r_sub));
+                    let r_ok = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::CmpEqImm(r_ok, r_len, patterns.len() as i32));
+                    skip_patches.push(ctx.emit_jump_if_not_placeholder(r_ok));
+
+                    // Check each element against its sub-pattern
+                    for (i, sub_pat) in patterns.iter().enumerate() {
+                        match sub_pat {
+                            Pattern::Wildcard(_) => {
+                                // Always matches — no check needed
+                            }
+                            Pattern::Literal(lit, _) => {
+                                let r_idx = ctx.alloc_temp()?;
+                                ctx.emit(Instruction::LoadInt(r_idx, (i + 1) as i64));
+                                let r_elem = ctx.alloc_temp()?;
+                                ctx.emit(Instruction::ArrayGet(r_elem, r_sub, r_idx));
+                                match lit {
+                                    zymbol_common::Literal::Int(n) => {
+                                        let r_cmp = ctx.alloc_temp()?;
+                                        ctx.emit(Instruction::CmpEqImm(r_cmp, r_elem, *n as i32));
+                                        skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
+                                    }
+                                    zymbol_common::Literal::String(s) | zymbol_common::Literal::InterpolatedString(s) => {
+                                        let resolved = s.replace('\x01', "{");
+                                        let idx = self.intern_string(&resolved);
+                                        let body_label = (ctx.current_label() + 2) as Label;
+                                        ctx.emit(Instruction::MatchStr(r_elem, idx, body_label));
+                                        skip_patches.push(ctx.emit_jump_placeholder());
+                                    }
+                                    zymbol_common::Literal::Bool(b) => {
+                                        let r_b = ctx.alloc_temp()?;
+                                        ctx.emit(Instruction::LoadBool(r_b, *b));
+                                        let r_cmp = ctx.alloc_temp()?;
+                                        ctx.emit(Instruction::CmpEq(r_cmp, r_elem, r_b));
+                                        skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
+                                    }
+                                    zymbol_common::Literal::Char(c) => {
+                                        let r_c = ctx.alloc_temp()?;
+                                        ctx.emit(Instruction::LoadChar(r_c, *c));
+                                        let r_cmp = ctx.alloc_temp()?;
+                                        ctx.emit(Instruction::CmpEq(r_cmp, r_elem, r_c));
+                                        skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
+                                    }
+                                    _ => {} // unsupported literal type — skip check (always matches)
+                                }
+                            }
+                            _ => {} // nested list/range/guard patterns not supported in list elements
+                        }
+                    }
+
+                    // Body
+                    if let Some(val) = &case.value {
+                        let r = self.compile_expr(val, ctx)?;
+                        ctx.emit(Instruction::CopyReg(dst, r));
+                    } else if let Some(block) = &case.block {
+                        self.compile_block(block, ctx)?;
+                    }
+                    let j = ctx.emit_jump_placeholder();
+                    end_patches.push(j);
+
+                    // Patch all skip jumps to the next case
+                    let next_case = ctx.current_label();
+                    for sp in skip_patches {
+                        ctx.patch_jump(sp, next_case);
+                    }
+                }
             }
         }
 
@@ -2122,7 +2557,9 @@ impl Compiler {
                         var_name.push(vc);
                     }
                     if !current_lit.is_empty() {
-                        let idx = self.intern_string(&current_lit);
+                        // Resolve \x01 sentinel (from \{ escape) to literal {
+                        let resolved = current_lit.replace('\x01', "{");
+                        let idx = self.intern_string(&resolved);
                         parts.push(BuildPart::Lit(idx));
                         current_lit.clear();
                     }
@@ -2144,7 +2581,9 @@ impl Compiler {
             }
         }
         if !current_lit.is_empty() {
-            let idx = self.intern_string(&current_lit);
+            // Resolve \x01 sentinel (from \{ escape) to literal {
+            let resolved = current_lit.replace('\x01', "{");
+            let idx = self.intern_string(&resolved);
             parts.push(BuildPart::Lit(idx));
         }
 
@@ -2347,17 +2786,11 @@ impl Compiler {
         be: &zymbol_ast::BashExecExpr,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
-        // parts[i] (literal) then variables[i] (register), interleaved
+        // Compile each arg to a register; VM concatenates them to build the command string
         let mut parts: Vec<BuildPart> = Vec::new();
-        for (i, lit) in be.parts.iter().enumerate() {
-            if !lit.is_empty() {
-                let idx = self.intern_string(lit);
-                parts.push(BuildPart::Lit(idx));
-            }
-            if i < be.variables.len() {
-                let r = ctx.get_reg(&be.variables[i])?;
-                parts.push(BuildPart::Reg(r));
-            }
+        for arg in &be.args {
+            let r = self.compile_expr(arg, ctx)?;
+            parts.push(BuildPart::Reg(r));
         }
         let dst = ctx.alloc_temp()?;
         ctx.emit(Instruction::BashExec(dst, parts));
@@ -2591,10 +3024,46 @@ fn collect_free_in_expr(
                 collect_free_in_expr(count, locals, outer_ctx, seen, free);
             }
         }
+        Expr::StringSplit(op) => {
+            collect_free_in_expr(&op.string, locals, outer_ctx, seen, free);
+            collect_free_in_expr(&op.delimiter, locals, outer_ctx, seen, free);
+        }
+        Expr::ConcatBuild(op) => {
+            collect_free_in_expr(&op.base, locals, outer_ctx, seen, free);
+            for item in &op.items { collect_free_in_expr(item, locals, outer_ctx, seen, free); }
+        }
+        Expr::NumericCast(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
         Expr::CollectionSortAsc(op) | Expr::CollectionSortDesc(op) | Expr::CollectionSortCustom(op) => {
             collect_free_in_expr(&op.collection, locals, outer_ctx, seen, free);
             if let Some(ref cmp) = op.comparator {
                 collect_free_in_expr(cmp, locals, outer_ctx, seen, free);
+            }
+        }
+        Expr::DeepIndex(di) => {
+            collect_free_in_expr(&di.array, locals, outer_ctx, seen, free);
+            for step in &di.path.steps {
+                collect_free_in_expr(&step.index, locals, outer_ctx, seen, free);
+                if let Some(end) = &step.range_end { collect_free_in_expr(end, locals, outer_ctx, seen, free); }
+            }
+        }
+        Expr::FlatExtract(fe) => {
+            collect_free_in_expr(&fe.array, locals, outer_ctx, seen, free);
+            for path in &fe.paths {
+                for step in &path.steps {
+                    collect_free_in_expr(&step.index, locals, outer_ctx, seen, free);
+                    if let Some(end) = &step.range_end { collect_free_in_expr(end, locals, outer_ctx, seen, free); }
+                }
+            }
+        }
+        Expr::StructuredExtract(se) => {
+            collect_free_in_expr(&se.array, locals, outer_ctx, seen, free);
+            for group in &se.groups {
+                for path in &group.paths {
+                    for step in &path.steps {
+                        collect_free_in_expr(&step.index, locals, outer_ctx, seen, free);
+                        if let Some(end) = &step.range_end { collect_free_in_expr(end, locals, outer_ctx, seen, free); }
+                    }
+                }
             }
         }
         // Literals and shell expressions have no capturable sub-expressions
@@ -2827,7 +3296,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::AddFloat(d, a, b) | Instruction::SubFloat(d, a, b)
             | Instruction::MulFloat(d, a, b) | Instruction::DivFloat(d, a, b)
             | Instruction::PowFloat(d, a, b) => { upd(*d); upd(*a); upd(*b); }
-            Instruction::NegFloat(d, s) | Instruction::IntToFloat(d, s) => { upd(*d); upd(*s); }
+            Instruction::NegFloat(d, s) | Instruction::IntToFloat(d, s)
+            | Instruction::FloatToIntRound(d, s) | Instruction::FloatToIntTrunc(d, s) => { upd(*d); upd(*s); }
             Instruction::CmpEq(d, a, b) | Instruction::CmpNe(d, a, b)
             | Instruction::CmpLt(d, a, b) | Instruction::CmpLe(d, a, b)
             | Instruction::CmpGt(d, a, b) | Instruction::CmpGe(d, a, b) => { upd(*d); upd(*a); upd(*b); }
@@ -2861,6 +3331,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::StrSplit(d, s, p) | Instruction::StrContains(d, s, p)
             | Instruction::StrSlice(d, s, p) | Instruction::StrFindPos(d, s, p)
             | Instruction::ConcatStr(d, s, p) => { upd(*d); upd(*s); upd(*p); }
+            Instruction::ConcatBuild(d, b, items) => { upd(*d); upd(*b); for &i in items { upd(i); } }
             Instruction::StrInsert(d, s, p, t) | Instruction::StrRemove(d, s, p, t)
             | Instruction::StrReplace(d, s, p, t) => { upd(*d); upd(*s); upd(*p); upd(*t); }
             Instruction::StrReplaceN(d, s, p, r, n) => { upd(*d); upd(*s); upd(*p); upd(*r); upd(*n); }
@@ -2875,6 +3346,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::RoundFloat(d, s, _) | Instruction::TruncFloat(d, s, _) => { upd(*d); upd(*s); }
             Instruction::LoadErrorKind(d) => upd(*d),
             Instruction::TryCatch(r) => upd(*r),
+            Instruction::LoadGlobal(d, _) => upd(*d),
+            Instruction::StoreGlobal(_, s) => upd(*s),
             // No-register instructions
             Instruction::SetupOutputWriteback(_) | Instruction::TryBegin(_)
             | Instruction::TryEnd(_) | Instruction::RaiseError(_)

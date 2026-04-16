@@ -1,0 +1,9 @@
+// Test: circular module imports are detected as a static error
+// Dependency graph: circ_mod_a → circ_mod_b → circ_mod_c → circ_mod_a
+//
+// Expected: E004 Circular dependency detected at semantic analysis phase
+// (program never executes)
+
+<# ./circ_mod_a <= a
+
+>> a::fun_a(1) ¶

@@ -119,6 +119,8 @@ pub enum TokenKind {
     DollarMinusMinus,
     /// $~~ (replace pattern with text, with optional count)
     DollarTildeTilde,
+    /// $/ (split string by delimiter)
+    DollarSlash,
 
     // Error handling operators
     /// $! (is_error - check if value is an error)
@@ -193,6 +195,8 @@ pub enum TokenKind {
     AtBreak,
     /// @> (continue)
     AtContinue,
+    /// @label (labeled loop declaration: @outer i:1..5 { })
+    AtLabel(String),
 
     // Member access and range operators
     /// . (member access)
@@ -233,6 +237,12 @@ pub enum TokenKind {
     HashDot,
     /// #! (trunc prefix - for precision truncation: #!2|expr|)
     HashExclaim,
+    /// ##. (cast to Float: ##.expr)
+    HashHashDot,
+    /// ### (cast to Int rounding: ###expr)
+    HashHashHash,
+    /// ##! (cast to Int truncating: ##!expr)
+    HashHashBang,
 
     // Delimiters
     /// { (left brace)
@@ -271,8 +281,10 @@ pub enum TokenKind {
     ExecuteCommand(String),
     /// >< (CLI args capture)
     CliArgsCapture,
-    /// <\ command \> (bash execute — raw command string)
-    BashCommand(String),
+    /// <\ (bash execute open — content is normal Zymbol tokens until \>)
+    BashOpen,
+    /// \> (bash execute close)
+    BashClose,
 
     // Comments (for formatter preservation)
     /// Single-line comment // ...
@@ -308,6 +320,7 @@ pub struct Lexer {
     column: u32,
     file_id: FileId,
     diagnostics: Vec<Diagnostic>,
+    bash_depth: u32,
 }
 
 impl Lexer {
@@ -319,6 +332,7 @@ impl Lexer {
             column: 1,
             file_id,
             diagnostics: Vec::new(),
+            bash_depth: 0,
         }
     }
 
@@ -498,30 +512,12 @@ impl Lexer {
             return Token::new(TokenKind::ExecuteCommand(raw.trim().to_string()), self.span(start));
         }
 
-        // Check for <\ (bash execute) — raw-string mode: read everything literally until \>
+        // Check for <\ (bash execute open) — normal tokenization until \>
         if ch == '<' && self.peek() == Some('\\') {
             self.advance(); // consume <
             self.advance(); // consume \
-            let mut raw = String::new();
-            loop {
-                if self.is_at_end() {
-                    self.diagnostics.push(
-                        Diagnostic::error("unterminated bash execute expression")
-                            .with_span(self.span(start))
-                            .with_help("bash execute syntax: <\\ command \\>"),
-                    );
-                    break;
-                }
-                let c = self.current_char();
-                if c == '\\' && self.peek() == Some('>') {
-                    self.advance(); // consume \
-                    self.advance(); // consume >
-                    break;
-                }
-                raw.push(c);
-                self.advance();
-            }
-            return Token::new(TokenKind::BashCommand(raw.trim().to_string()), self.span(start));
+            self.bash_depth += 1;
+            return Token::new(TokenKind::BashOpen, self.span(start));
         }
 
         // Check for < (less than)
@@ -603,12 +599,23 @@ impl Lexer {
             return Token::new(TokenKind::Or, self.span(start));
         }
 
-        // Check for !? (try block) or ! (logical NOT)
+        // Check for !? (try block), != (invalid — guide to <>), or ! (logical NOT)
         if ch == '!' {
             if self.peek() == Some('?') {
                 self.advance(); // consume !
                 self.advance(); // consume ?
                 return Token::new(TokenKind::TryBlock, self.span(start));
+            }
+            if self.peek() == Some('=') {
+                self.advance(); // consume !
+                self.advance(); // consume =
+                let span = self.span(start);
+                self.diagnostics.push(
+                    Diagnostic::error("'!=' is not a valid Zymbol operator")
+                        .with_span(span)
+                        .with_help("use '<>' for not-equal  →  a <> b"),
+                );
+                return Token::new(TokenKind::Error("invalid operator '!='".to_string()), span);
             }
             self.advance();
             return Token::new(TokenKind::Not, self.span(start));
@@ -671,6 +678,27 @@ impl Lexer {
                     self.advance(); // consume #
                     self.advance(); // consume ?
                     return Token::new(TokenKind::HashQuestion, self.span(start));
+                }
+                // Check for ##. / ### / ##! (numeric cast operators)
+                else if next == '#' {
+                    let third = self.peek_ahead(2);
+                    if third == Some('.') {
+                        self.advance(); // consume first #
+                        self.advance(); // consume second #
+                        self.advance(); // consume .
+                        return Token::new(TokenKind::HashHashDot, self.span(start));
+                    } else if third == Some('#') {
+                        self.advance(); // consume first #
+                        self.advance(); // consume second #
+                        self.advance(); // consume third #
+                        return Token::new(TokenKind::HashHashHash, self.span(start));
+                    } else if third == Some('!') {
+                        self.advance(); // consume first #
+                        self.advance(); // consume second #
+                        self.advance(); // consume !
+                        return Token::new(TokenKind::HashHashBang, self.span(start));
+                    }
+                    // unrecognized ##X — fall through to emit lone Hash
                 }
                 // Check for #. (round prefix for precision)
                 else if next == '.' {
@@ -1367,6 +1395,7 @@ mod tests {
 
     #[test]
     fn test_string_interpolation_simple() {
+        // {var} is interpolation
         let tokens = lex(r#""Hello {name}!""#);
         assert_eq!(tokens.len(), 2); // StringInterpolated + Eof
 
@@ -1399,16 +1428,16 @@ mod tests {
     }
 
     #[test]
-    fn test_string_interpolation_escape() {
-        let tokens = lex(r#""Use \{curly braces\} for code""#);
+    fn test_string_literal_braces() {
+        // \{ and \} are escapes that produce literal { and }
+        let tokens = lex(r#""Use \{curly\} braces literally""#);
         assert_eq!(tokens.len(), 2);
 
-        // Escaped braces should produce simple String, not StringInterpolated
         match &tokens[0] {
             TokenKind::String(s) => {
-                assert_eq!(s, "Use {curly braces} for code");
+                assert_eq!(s, "Use {curly} braces literally");
             }
-            _ => panic!("Expected String (not interpolated)"),
+            _ => panic!("Expected plain String with literal braces"),
         }
     }
 

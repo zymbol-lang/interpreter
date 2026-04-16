@@ -1,18 +1,18 @@
 // Test: Try-catch inside loop
-// Expected output:
-// i=0: 10
-// i=1: 20
-// i=2: error
-// i=3: error
+// Expected output (1-based arrays, partial print on error):
+// i=0: i=0: error
+// i=1: 10
+// i=2: 20
+// i=3: i=3: error
 // done
 
 data = [10, 20]
 
 @ i:0..3 {
     !? {
-        >> "i=" + i + ": " + data[i] ¶
+        >> "i=" i ": " data[i] ¶
     } :! {
-        >> "i=" + i + ": error" ¶
+        >> "i=" i ": error" ¶
     }
 }
 

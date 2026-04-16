@@ -1,0 +1,23 @@
+// Test: @! break and @> continue inside ranged loops
+// Break: stop at first multiple of 4 >= 4
+@ i:1..20 {
+    ? i >= 4 && i % 4 == 0 { @! }
+    >> i " "
+}
+>> ¶
+
+// Continue: skip even numbers
+@ i:1..10 {
+    ? i % 2 == 0 { @> }
+    >> i " "
+}
+>> ¶
+
+// Continue in while loop
+j = 0
+@ j < 10 {
+    j++
+    ? j % 3 == 0 { @> }
+    >> j " "
+}
+>> ¶

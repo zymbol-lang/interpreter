@@ -1,0 +1,22 @@
+=== Correct Patterns for Scope Isolation ===
+--- Pattern 1: Configuration via parameters ---
+Attempt 1 of 3: connect to server
+Attempt 2 of 3: connect to server
+Attempt 3 of 3: connect to server
+Total attempts: 3
+--- Pattern 2: State management via return values ---
+Counter: 9
+Expected: 9
+--- Pattern 3: Data transformation pipeline ---
+Processed: 'Hello World'
+Expected: 'Hello World'
+--- Pattern 4: Array of operations ---
+operations[1](10) = 20
+operations[2](10) = 20
+operations[3](10) = 5
+Expected: 20, 20, 5
+--- Pattern 5: Explicit state passing ---
+add_amount(10, 7) = 17
+add_amount(5, 3) = 8
+Expected: 17 and 8
+=== All patterns work correctly! ===

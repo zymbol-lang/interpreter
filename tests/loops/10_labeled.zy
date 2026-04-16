@@ -1,0 +1,32 @@
+// Test: labeled loops with @! label and @> label
+// Labeled break out of inner loop from outer condition
+found = #0
+@ i:0..4 {
+    @ j:0..4 {
+        ? i + j == 6 {
+            found = #1
+            @!
+        }
+    }
+    ? found { @! }
+}
+>> found ¶
+
+// Explicit label: @!outer
+count = 0
+@outer {
+    count++
+    ? count >= 3 { @! outer }
+}
+>> count ¶
+
+// Labeled continue: @>outer skips the rest of outer loop body
+result = 0
+@outer _i:1..4 {
+    @ j:1..4 {
+        ? j == 2 { @> outer }
+        result += 1
+    }
+    result += 100
+}
+>> result ¶

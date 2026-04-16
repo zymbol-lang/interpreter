@@ -1,0 +1,8 @@
+[1m[31merror[39m[0m: tuple index 3 is out of bounds (tuple has 3 elements)
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/safe_access/practical_example.zy:16:42
+[1m[34m  16[39m[0m [34m|[39m
+[1m[34m  16[39m[0m [34m|[39m     >> "Using optional variable: " check[3] ¶
+[1m[31merror[39m[0m: tuple index 3 is out of bounds (tuple has 3 elements)
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/safe_access/practical_example.zy:39:32
+[1m[34m  39[39m[0m [34m|[39m
+[1m[34m  39[39m[0m [34m|[39m     final_value = choice_check[3]

@@ -1,0 +1,11 @@
+// Test: variable used only inside string interpolation
+// The static analyzer may warn "unused variable" even when the variable
+// IS used inside an interpolated string. This is a known analyzer limitation.
+// The program output must still be correct regardless of the warning.
+
+name = "Alice"
+msg = "Hello {name}!"
+>> msg ¶
+
+city = "Paris"
+>> "Welcome to {city}" ¶

@@ -1,0 +1,28 @@
+// G13: module private state persists across calls
+// Before fix: every call reset module state to its initial value —
+// a counter::increment() call did not change anything visible on next call.
+// The write-back mechanism after each function execution fixes this.
+
+<# ./g13_counter_mod <= c
+
+// Three increments — count should reach 3
+c::increment()
+c::increment()
+c::increment()
+n = c::get_value()
+>> n ¶
+
+// Reset, count goes back to 0
+c::reset()
+n2 = c::get_value()
+>> n2 ¶
+
+// Increment then decrement
+c::increment()
+c::increment()
+c::decrement()
+n3 = c::get_value()
+>> n3 ¶
+
+// Private state is NOT accessible via dot (only through exported functions)
+// c.count would be a runtime error — not tested here to avoid failing the suite

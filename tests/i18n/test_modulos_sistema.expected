@@ -1,0 +1,8 @@
+Runtime error: failed to parse module: 7 parse error(s) in '/home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/sistema.zy'
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/sistema.zy:56:23: expected expression, found Pipe
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/sistema.zy:56:28: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/sistema.zy:56:33: unexpected token: BashClose
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/sistema.zy:62:30: expected field name after '.'
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/sistema.zy:68:27: expected expression, found Pipe
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/sistema.zy:68:32: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/sistema.zy:68:37: unexpected token: BashClose

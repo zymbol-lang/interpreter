@@ -32,6 +32,7 @@ mod modules;
 mod arithmetic_ops;
 mod functions_lambda;
 mod expr_eval;
+mod index_nav;
 
 pub(crate) use modules::LoadedModule;
 
@@ -55,6 +56,9 @@ pub enum RuntimeError {
 
     #[error("circular dependency detected")]
     CircularDependency,
+
+    #[error("E004: Circular import detected: module '{module}' is already being loaded")]
+    CircularImport { module: String },
 
     #[error("failed to parse module: {0}")]
     ParseError(String),
@@ -238,6 +242,8 @@ pub struct Interpreter<W: Write> {
     const_vars_stack: Vec<HashSet<String>>,
     /// Loaded modules cache (file_path -> LoadedModule)
     loaded_modules: HashMap<PathBuf, LoadedModule>,
+    /// Modules currently being loaded (for circular import detection)
+    loading_modules: HashSet<PathBuf>,
     /// Import aliases (alias -> file_path)
     import_aliases: HashMap<String, PathBuf>,
     /// Current file path (for resolving relative imports)
@@ -361,9 +367,13 @@ impl<W: Write> Interpreter<W> {
     /// Only safe when the variable will not be referenced again (e.g., on Return).
     #[inline(always)]
     pub(crate) fn take_variable(&mut self, name: &str) -> Option<Value> {
+        // Remove the entry entirely rather than replacing with Unit sentinel.
+        // A Unit sentinel would be written back to module.all_variables on write-back,
+        // corrupting module constants returned via bare-identifier <~ CONST expressions.
+        // After a Return statement the variable is unreachable anyway, so removal is safe.
         for scope in self.scope_stack.iter_mut().rev() {
-            if let Some(v) = scope.get_mut(name) {
-                return Some(std::mem::replace(v, Value::Unit));
+            if scope.contains_key(name) {
+                return scope.remove(name);
             }
         }
         None
@@ -386,7 +396,7 @@ impl<W: Write> Interpreter<W> {
 
     /// Check if a variable is a constant in any scope.
     #[inline(always)]
-    fn is_const(&self, name: &str) -> bool {
+    pub(crate) fn is_const(&self, name: &str) -> bool {
         if !self.has_any_const { return false; }  // B8: short-circuit
         for const_set in self.const_vars_stack.iter().rev() {
             if const_set.contains(name) {
@@ -531,6 +541,7 @@ impl Interpreter<std::io::Stdout> {
             mutable_vars_stack: vec![HashSet::new()],
             const_vars_stack: vec![HashSet::new()],
             loaded_modules: HashMap::new(),
+            loading_modules: HashSet::new(),
             import_aliases: HashMap::new(),
             current_file: None,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -574,6 +585,7 @@ impl<W: Write> Interpreter<W> {
             mutable_vars_stack: vec![HashSet::new()],
             const_vars_stack: vec![HashSet::new()],
             loaded_modules: HashMap::new(),
+            loading_modules: HashSet::new(),
             import_aliases: HashMap::new(),
             current_file: None,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -1022,6 +1034,9 @@ impl<W: Write> Interpreter<W> {
             Expr::CollectionUpdate(op) => self.eval_collection_update(op),
             Expr::CollectionSlice(op) => self.eval_collection_slice(op),
             Expr::StringReplace(op) => self.eval_string_replace(op),
+            Expr::StringSplit(op) => self.eval_string_split(op),
+            Expr::ConcatBuild(op) => self.eval_concat_build(op),
+            Expr::NumericCast(op) => self.eval_numeric_cast(op),
             Expr::NumericEval(op) => self.eval_numeric_eval(op),
             Expr::TypeMetadata(op) => self.eval_type_metadata(op),
             Expr::Format(op) => self.eval_format(op),
@@ -1051,6 +1066,9 @@ impl<W: Write> Interpreter<W> {
                 }
                 Ok(value)
             }
+            Expr::DeepIndex(di) => self.eval_deep_index(di),
+            Expr::FlatExtract(fe) => self.eval_flat_extract(fe),
+            Expr::StructuredExtract(se) => self.eval_structured_extract(se),
         }
     }
 
@@ -1144,6 +1162,12 @@ impl<W: Write> Interpreter<W> {
             }
             RuntimeError::CircularDependency => {
                 Value::Error(ErrorValue::generic("circular dependency detected"))
+            }
+            RuntimeError::CircularImport { module } => {
+                Value::Error(ErrorValue::generic(format!(
+                    "E004: Circular import detected: module '{}' is already being loaded",
+                    module
+                )))
             }
             RuntimeError::ParseError(msg) => {
                 Value::Error(ErrorValue::parse(msg.clone()))

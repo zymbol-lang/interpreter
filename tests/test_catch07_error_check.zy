@@ -6,16 +6,16 @@
 
 x = 42
 ? x$! {
-    >> x + " is error" ¶
+    >> x " is error" ¶
 } _ {
-    >> x + " is not error" ¶
+    >> x " is not error" ¶
 }
 
 y = "hello"
 ? y$! {
-    >> y + " is error" ¶
+    >> y " is error" ¶
 } _ {
-    >> y + " is not error" ¶
+    >> y " is not error" ¶
 }
 
 arr = [1, 2]

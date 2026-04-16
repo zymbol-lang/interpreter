@@ -1,0 +1,21 @@
+// Test: negative indices in 2D navigation — m[-1>-1] accesses last row, last col
+m = [
+    [1, 2, 3],
+    [4, 5, 6],
+    [7, 8, 9]
+]
+
+// Last row, last col
+>> m[-1>-1] ¶
+
+// Last row, second-to-last col
+>> m[-1>-2] ¶
+
+// Second-to-last row, last col
+>> m[-2>-1] ¶
+
+// Negative row, positive col
+>> m[-1>1] ¶
+
+// Positive row, negative col
+>> m[1>-1] ¶

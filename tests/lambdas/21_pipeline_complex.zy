@@ -20,12 +20,7 @@ users = [
 ¶
 
 // Pipeline: Filter adults (>=18) AND active -> Extract scores -> Calculate average
-adults_active = users$| (u -> {
-    age = u[2]
-    active = u[4]
-    is_adult = age >= 18
-    <~ is_adult && active
-})
+adults_active = users$| (u -> u[2] >= 18 && u[4])
 
 >> "Adults (>=18) and active: " >> adults_active$# ¶
 

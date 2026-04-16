@@ -1,0 +1,13 @@
+// Module used by g13_module_private_state.zy
+// G13: module-level variables declared with = are private mutable state
+// that persists across function calls (write-back mechanism)
+
+# g13_counter
+#> { increment, decrement, get_value, reset }
+
+count = 0
+
+increment() { count = count + 1 }
+decrement() { count = count - 1 }
+get_value() { <~ count }
+reset()     { count = 0 }

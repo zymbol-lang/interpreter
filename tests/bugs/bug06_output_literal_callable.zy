@@ -1,0 +1,17 @@
+// BUG-06: >> "literal" (expr) must output both items, not crash
+// Before fix: parser interpreted literal as callable, runtime crashed with
+// "expression is not callable"
+
+ok = (#1 == #1)
+>> "Result: " (ok) ¶
+
+>> "Value: " (1 + 2) ¶
+
+x = 5
+>> "Double: " (x * 2) ¶
+
+flag = (#0 == #0)
+>> "Flag: " (flag) ¶
+
+// Integer literal followed by parenthesized expr
+>> "Sum: " (3 + 4) ¶

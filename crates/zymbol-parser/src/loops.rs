@@ -4,7 +4,7 @@
 //! - Universal loop: @ [condition] { }
 //! - For-each loop: @ var:iterable { }
 //! - Loop control: BREAK (@!), CONTINUE (@>)
-//! - Labeled loops: @ @label { }
+//! - Labeled loops: @label { }  (fused — @label is a single token)
 
 use zymbol_ast::{Break, Continue, Loop, Statement};
 use zymbol_error::Diagnostic;
@@ -50,25 +50,14 @@ impl Parser {
 
     /// Parse loop statement: @ condition { } or @ var:iterable { }
     pub(crate) fn parse_loop(&mut self) -> Result<Statement, Diagnostic> {
-        let start_span = self.advance().span; // consume @
+        // Consume the opening token: either @ (plain) or @label (fused labeled loop)
+        let opening = self.advance();
+        let start_span = opening.span;
 
-        // Check for optional label: @ @label ...
-        let label = if matches!(self.peek().kind, TokenKind::At) {
-            self.advance(); // consume second @
-            let label_token = self.peek().clone();
-            match &label_token.kind {
-                TokenKind::Ident(name) => {
-                    self.advance(); // consume label identifier
-                    Some(name.clone())
-                }
-                _ => {
-                    return Err(Diagnostic::error("expected label identifier after @@")
-                        .with_span(label_token.span)
-                        .with_help("loop labels must be identifiers: @ @label ..."));
-                }
-            }
-        } else {
-            None
+        // Extract label if this is an @label token
+        let label = match &opening.kind {
+            TokenKind::AtLabel(name) => Some(name.clone()),
+            _ => None,
         };
 
         // Check for for-each syntax: var:iterable

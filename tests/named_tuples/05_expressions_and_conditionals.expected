@@ -1,0 +1,5 @@
+✓ Boolean field in conditional works
+✓ Numeric field in arithmetic works
+✓ Field in comparison works
+✓ Multiple fields in expression works
+Test 5 PASSED

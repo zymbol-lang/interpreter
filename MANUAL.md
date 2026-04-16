@@ -4,8 +4,8 @@
 > `zymbol run` (tree-walker) and `zymbol run --vm` (register VM).
 > If a construct is not documented here, it may not be implemented.
 
-**Interpreter version**: v0.0.2
-**Test coverage**: 243/246 vm_compare PASS (3 skipped: HTTP + CLI args not in VM)
+**Interpreter version**: v0.0.4
+**Test coverage**: 150/150 interpreter PASS (wt + vm); 13/13 index_nav PASS
 
 ---
 
@@ -23,6 +23,7 @@
 10. [Lambdas and Closures](#10-lambdas-and-closures)
 11. [Arrays](#11-arrays)
 11b. [Destructuring Assignment](#11b-destructuring-assignment)
+11c. [Multi-dimensional Indexing](#11c-multi-dimensional-indexing)
 12. [Tuples](#12-tuples)
 13. [Strings](#13-strings)
 14. [Higher-Order Functions](#14-higher-order-functions)
@@ -109,6 +110,19 @@ Output uses **juxtaposition** (Haskell-style) — values separated by spaces are
 >> "Score: " + score ¶             // ✗ type error — + is not string concat
 ```
 
+**Parenthesized expressions** can be used as output items directly:
+
+```zymbol
+ok = a == b
+>> "Equal: " ok ¶                  // ✅ variable
+>> "Equal: " (a == b) ¶            // ✅ parenthesized expression — two separate items
+>> "Sum: " (x + y) ¶               // ✅ arithmetic in parens
+```
+
+> **Note**: `identifier(args)` is a function call in `>>`. `"literal"(expr)` is two
+> separate items — the literal and the parenthesized expression — never a call.
+> Literals (strings, numbers, booleans) are not callable.
+
 ### Newline
 
 ```zymbol
@@ -164,6 +178,106 @@ x++       // x = 5  (equivalent to x += 1)
 x--       // x = 4  (equivalent to x -= 1)
 ```
 
+### Variable Scope
+
+Regular variables follow **lexical scoping**: a variable declared in an outer block is
+visible and writable from any inner block. A variable declared inside a block is
+destroyed automatically when that block ends — it is not visible outside.
+
+```zymbol
+x = 10
+
+? x > 0 {
+    y = x * 2    // x is visible here (outer → inner: allowed)
+    >> y ¶       // → 20
+}
+
+// y no longer exists here — destroyed when the block ended
+// x is still alive
+>> x ¶           // → 10
+```
+
+This applies to `? {}`, `_? {}`, `_ {}`, `@ {}`, and any other block construct.
+
+```zymbol
+total = 0
+@ i:1..5 {
+    partial = i * 10    // partial lives only for this iteration
+    total = total + i   // total is outer — writable from here
+}
+>> total ¶   // → 15
+// partial no longer exists
+```
+
+### Underscore Variables (`_name`)
+
+A variable whose name begins with `_` has **exact block scope**: it exists only within
+the block where it is declared. It is not visible from inner blocks, outer blocks, or
+sibling blocks.
+
+```zymbol
+// Valid — _temp used only in its own block
+? #1 {
+    _temp = expensive_call()
+    >> _temp ¶
+}   // _temp destroyed here
+
+// Valid — independent _temp in a sibling block
+? #1 {
+    _temp = other_call()
+    >> _temp ¶
+}
+```
+
+```zymbol
+// ERROR — _outer declared in outer block, accessed from inner block
+? #1 {
+    _outer = 42
+    ? #1 {
+        >> _outer ¶   // semantic error: cannot access underscore variable from inner scope
+    }
+}
+```
+
+```zymbol
+// ERROR — _counter declared in outer scope, modified from loop body
+_counter = 0
+@ i:1..5 {
+    _counter = _counter + 1   // semantic error: cannot access underscore variable from inner scope
+}
+```
+
+Use a regular variable when you need to read or mutate a value across scope boundaries:
+
+```zymbol
+// Correct pattern: pre-declare as a regular variable
+cmd  = ""
+args = ""
+? has_space {
+    cmd  = input$[1..p-1]
+    args = input$[p+1..-1]
+}
+// cmd and args are still alive here
+```
+
+The `_` prefix is intended for short-lived temporaries that must not leak outside their
+block. The compiler enforces this at the semantic analysis phase.
+
+### Explicit Lifetime End
+
+`\ var` destroys a variable before its block ends:
+
+```zymbol
+? #1 {
+    _resource = load_data()
+    process(_resource)
+    \ _resource           // released here, before block exit
+    do_other_work()       // _resource no longer exists
+}
+```
+
+This works for both regular and `_`-prefixed variables.
+
 ### String Interpolation
 
 Works in **any context** — assignments, arguments, array literals, etc.:
@@ -176,6 +290,13 @@ arr = ["item {name}", "x"]      // in array literal
 x = 42
 combined = "val={x}, name={name}"
 >> combined ¶                   // → val=42, name=World
+```
+
+To include a **literal `{` or `}`** in a string (without triggering interpolation), escape with a backslash:
+
+```zymbol
+>> "Use \{ and \} as literal braces" ¶   // → Use { and } as literal braces
+json = "\{\"key\":\"value\"\}"            // → {"key":"value"}
 ```
 
 > **⚠ False warning**: `unused variable 'name'` may appear even when `name` is used
@@ -230,7 +351,7 @@ is displayed with the active script digit:
 
 ### String Concatenation
 
-Three correct forms — use the one that fits the context:
+Two correct forms — use the one that fits the context:
 
 ```zymbol
 name = "Alice"
@@ -239,17 +360,12 @@ n = 42
 // 1. Juxtaposition in >> (canonical output form)
 >> "Hello " name " you have " n " items" ¶
 
-// 2. Comma operator in assignments (spec-correct for = and :=)
-msg = "Hello ", name, "!"
-TITLE := "Welcome, ", name
-
-// 3. Interpolation (most readable for complex strings)
+// 2. Interpolation (most readable for complex strings)
 desc = "Hello {name}, you have {n} items"
 ```
 
-> **Spec note**: `+` is defined for **numbers only**. Using `"text" + value` works as
-> an extension but triggers `arithmetic operation on non-numeric type` warning.
-> Use `,`, juxtaposition, or interpolation for strings.
+> **Note**: `+` is for **numeric addition only**. `"text" + value` is a type error.
+> Use juxtaposition or interpolation for strings.
 
 ---
 
@@ -326,6 +442,39 @@ n = 42
         >> "positive: " n ¶
     }
 }
+```
+
+### List Patterns
+
+Match on array contents using `[...]` patterns. Each element position is matched against a
+literal or wildcard `_`:
+
+```zymbol
+arr = [1, 2, 3]
+?? arr {
+    [1, 2, 3] : { >> "exact match" ¶ }
+    _         : { >> "other" ¶ }
+}
+// → exact match
+
+cmd = ["run", "main.zy"]
+?? cmd {
+    ["run", _]    : { >> "run command" ¶ }
+    ["build", _]  : { >> "build command" ¶ }
+    []            : { >> "empty" ¶ }
+    _             : { >> "unknown" ¶ }
+}
+// → run command
+
+// Match on array length/shape
+data = [10, 20, 30]
+?? data {
+    [_]       : { >> "one element" ¶ }
+    [_, _]    : { >> "two elements" ¶ }
+    [_, _, _] : { >> "three elements" ¶ }
+    _         : { >> "more" ¶ }
+}
+// → three elements
 ```
 
 > **⚠ Not implemented**: Multi-value arms (`1, 2 : "low"`) are not supported.
@@ -419,8 +568,28 @@ fruits = ["apple", "pear", "grape"]
 
 ### Labeled Loops
 
+A label is written as `@name` fused (no space) before the loop body or iterator.
+Use `@! name` to break and `@> name` to continue the labeled loop.
+
 ```zymbol
-// Manual label simulation (nested break)
+// Labeled infinite loop
+count = 0
+@outer {
+    count++
+    ? count >= 3 { @! outer }
+}
+>> count ¶    // → 3
+
+// Labeled for-each
+@outer i:1..4 {
+    @ j:1..4 {
+        ? j == 2 { @> outer }   // skip rest of outer body when j == 2
+        >> "{i}{j} "
+    }
+}
+>> ¶
+
+// Manual label simulation without explicit labels (nested break)
 found = #0
 @ i:0..4 {
     @ j:0..4 {
@@ -432,15 +601,10 @@ found = #0
     ? found { @! }
 }
 >> found ¶    // → #1
-
-// Explicit label syntax
-count = 0
-@ @outer {
-    count++
-    ? count >= 3 { @! outer }
-}
->> count ¶    // → 3
 ```
+
+> **Note**: `@label` (fused) is the loop declaration. `@ label` (with space) is a
+> while loop where `label` is the condition variable. The space is significant.
 
 ---
 
@@ -933,6 +1097,196 @@ person = (name: "Ana", age: 25, city: "Madrid")
 
 ---
 
+## 11c. Multi-dimensional Indexing
+
+Zymbol provides a coherent, symbol-first system for navigating nested arrays. Inside a
+postfix `[...]`, the `>` character is always a **depth separator**, not a comparison operator.
+
+### Overview
+
+| Syntax | Returns | Description |
+|---|---|---|
+| `arr[i]` | value | 1-D access (unchanged, 1-based) |
+| `arr[i>j]` | value | Scalar deep access — row i, col j |
+| `arr[i>j>k]` | value | Depth 3+ — any nesting level |
+| `arr[(expr)>j]` | value | Computed index — expression in `()` |
+| `arr[-1>-1]` | value | Negative indices — last row, last col |
+| `arr[[i>j]]` | `[value]` | Flat extraction — single path wrapped |
+| `arr[p ; q ; r]` | `[v, v, v]` | Flat extraction — multiple paths |
+| `arr[[g] ; [g]]` | `[[…], […]]` | Structured extraction — array of arrays |
+| `arr[[p,q] ; [r,s]]` | `[[…], […]]` | Multiple values per group |
+| `arr[i>r1..r2]` | `[v, …]` | Range on last step — expand along final axis |
+| `arr[r1..r2>j]` | `[v, …]` | Range on intermediate step — fan-out |
+
+All forms are fully supported by **both** the tree-walker and the register VM (`--vm`).
+
+---
+
+### Scalar Deep Access
+
+`>` navigates one level deeper per separator. All indices are 1-based.
+
+```zymbol
+m = [[1,2,3], [4,5,6], [7,8,9]]
+
+>> m[2>3] ¶        // → 6    (row 2, col 3)
+>> m[1>1] ¶        // → 1    (row 1, col 1)
+>> m[-1>-1] ¶      // → 9    (last row, last col)
+
+// Depth 3
+cubo = [[[1,2],[3,4]], [[5,6],[7,8]]]
+>> cubo[1>2>1] ¶   // → 3
+>> cubo[2>2>2] ¶   // → 8
+```
+
+### Computed Indices
+
+Plain identifiers work directly as nav atoms. Expressions with operators require `(expr)`:
+
+```zymbol
+m = [[1,2,3,4], [5,6,7,8], [9,10,11,12], [13,14,15,16]]
+n = 4
+mitad = 2
+
+>> m[n>n] ¶             // → 16  (plain variables, no parens needed)
+>> m[(mitad)>(n)] ¶     // → 8   (explicit grouping — equivalent)
+>> m[(mitad+1)>n] ¶     // → 12  (expression requires parens)
+>> m[3>(mitad*2)] ¶     // → 12  (arithmetic in atom)
+```
+
+> **Rule**: `arr[a>b]` where `a` and `b` are identifiers is **navigation** (their values
+> are used as depth indices). `arr[(a>b)]` is a 1-D index where `(a>b)` evaluates to Bool
+> — which causes a runtime type error, as expected.
+
+### Flat Extraction
+
+Returns a **flat array** of values collected from multiple paths.
+
+```zymbol
+m = [[1,2,3], [4,5,6], [7,8,9]]
+
+// Single path wrapped → [value]
+>> m[[2>3]] ¶                    // → [6]
+
+// Multiple paths → [v1, v2, v3]
+>> m[1>1 ; 2>3 ; 3>2] ¶         // → [1, 6, 8]
+
+// Assign and use
+diag = m[1>1 ; 2>2 ; 3>3]
+>> diag ¶                        // → [1, 5, 9]
+>> (diag$#) ¶                    // → 3
+```
+
+### Structured Extraction
+
+Returns an **array of arrays**. Each group `[...]` becomes one sub-array.
+
+```zymbol
+m = [[1,2,3], [4,5,6], [7,8,9]]
+
+// Each single path → [[v1], [v2], [v3]]
+>> m[[1>1] ; [2>3] ; [3>2]] ¶         // → [[1], [6], [8]]
+
+// Multiple values per group → [[v1, v2], [v3, v4]]
+>> m[[1>1, 1>3] ; [3>1, 3>3]] ¶       // → [[1, 3], [7, 9]]
+
+// Corners of the matrix
+corners = m[[1>1, 1>3] ; [3>1, 3>3]]
+>> corners[1] ¶                        // → [1, 3]
+>> corners[2] ¶                        // → [7, 9]
+```
+
+### Ranges (`..`) on Navigation Steps
+
+The `..` range can appear on **any** step. Its position determines which dimension expands.
+
+#### Range on the last step — expands columns
+
+```zymbol
+m = [[1,2,3], [4,5,6], [7,8,9]]
+
+// Row 1, cols 2 to 3
+>> m[[1>2..3]] ¶                  // → [2, 3]
+
+// Two groups with col ranges → sub-matrices
+>> m[[1>2..3] ; [2>2..3]] ¶       // → [[2, 3], [5, 6]]
+
+// Reconstruct full matrix
+>> m[[1>1..3] ; [2>1..3] ; [3>1..3]] ¶   // → [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+```
+
+#### Range on an intermediate step — fan-out
+
+The range expands that dimension; remaining steps apply to each element in the range.
+
+```zymbol
+m = [[1,2,3], [4,5,6], [7,8,9]]
+
+// Rows 1-2 at col 2; rows 2-3 at col 3 → [[2, 5], [6, 9]]
+>> m[[1..2>2] ; [2..3>3]] ¶
+
+// Layer 1, rows 1..3, col 2 (3D cube example)
+cubo = [
+    [[1,2,3], [4,5,6], [7,8,9]],
+    [[10,11,12], [13,14,15], [16,17,18]]
+]
+>> cubo[1>1..3>2] ¶               // → [2, 5, 8]
+```
+
+#### Ranges with variable bounds
+
+Range ends can be any nav atom — literal, identifier, or `(expr)`:
+
+```zymbol
+m = [[1,2,3,4], [5,6,7,8], [9,10,11,12], [13,14,15,16]]
+inicio = 2
+fin = 4
+mitad = 2
+
+>> m[1>inicio..fin] ¶             // → [2, 3, 4]
+>> m[[1>1..(mitad)] ; [(mitad+1)>1..(mitad)]] ¶   // → [[1, 2], [9, 10]]
+```
+
+### Nested Ranges (Double Fan-out)
+
+A single path can carry ranges on multiple steps. Each range emits an inner loop:
+
+```zymbol
+cubo = [
+    [[1,2,3], [4,5,6], [7,8,9]],
+    [[10,11,12], [13,14,15], [16,17,18]]
+]
+
+// Layers 1-2, rows 1-2 — four rows total (flat)
+>> cubo[1..2>1..2] ¶
+// → [[1, 2, 3], [4, 5, 6], [10, 11, 12], [13, 14, 15]]
+```
+
+### Deprecated: Chained `arr[i][j]`
+
+The old C/Python-style chained index `arr[i][j]` still parses, but `arr[i>j]` is the
+canonical form. A semantic warning may be added in a future version.
+
+```zymbol
+m = [[1,2,3], [4,5,6], [7,8,9]]
+>> m[2][3] ¶    // → 6  (still works, deprecated)
+>> m[2>3] ¶     // → 6  (canonical form)
+```
+
+### Error Cases
+
+```zymbol
+m = [[1,2], [3,4]]
+
+// Index 0 is always invalid in nav paths
+!? { >> m[1>0] ¶ } :! { >> "caught: index 0 is invalid" ¶ }
+
+// Out of bounds
+!? { >> m[5>1] ¶ } :! { >> "caught: out of bounds" ¶ }
+```
+
+---
+
 ## 12. Tuples
 
 Tuples are **immutable** ordered containers. Once created, their elements cannot be
@@ -1030,10 +1384,12 @@ sub = s$[1..5]
 sub2 = s$[1:5]
 >> sub2 ¶    // → Hello  (identical result)
 
-// Split by char
-parts = "a,b,c,d" / ','
+// Split by char or substring — $/ operator
+parts = "a,b,c,d" $/ ','
 >> parts ¶    // → [a, b, c, d]
-// ⚠ false warning: "arithmetic on non-numeric" — ignore it
+
+parts2 = "one::two::three" $/ "::"
+>> parts2 ¶   // → [one, two, three]
 ```
 
 ### Advanced String Operators
@@ -1045,8 +1401,8 @@ s = "hello world"
 s2 = s$+ "!"
 >> s2 ¶    // → hello world!
 
-// $+[i] — insert at char position
-ins = s$+[5] "!!!"
+// $+[i] — insert before char position i (1-based)
+ins = s$+[6] "!!!"
 >> ins ¶    // → hello!!! world
 
 // $- val — remove first occurrence of char or substring
@@ -1080,9 +1436,42 @@ rep = s$~~["l":"L"]
 // $~~[pattern:replacement:N] — replace only first N occurrences
 rep1 = s$~~["l":"L":1]
 >> rep1 ¶   // → heLlo world
+
+// $/ — split by char or substring
+parts = "a,b,c,d" $/ ','
+>> parts ¶    // → [a, b, c, d]
+
+parts2 = "one::two::three" $/ "::"
+>> parts2 ¶   // → [one, two, three]
 ```
 
-### Concatenation — Three Correct Forms
+### Build Strings with `$++`
+
+`$++` builds a string (or array) by appending items to a base. All items must
+be on the same line. Non-string values are converted to their string representation:
+
+```zymbol
+n = 42
+pi = 3.14
+flag = #1
+
+// String base — append any number of values
+s = "n=" $++ n " pi=" pi " ok=" flag
+>> s ¶    // → n=42 pi=3.14 ok=#1
+
+// Equivalent to interpolation, but useful when values are computed
+// Note: (expr) closes the juxtaposition chain — use an intermediate variable
+label = "result"
+tmp = 100 * 2
+out = label $++ "=" tmp
+>> out ¶    // → result=200
+
+// Array base — append elements
+arr = [1, 2, 3] $++ 4 5 6
+>> arr ¶    // → [1, 2, 3, 4, 5, 6]
+```
+
+### Concatenation — Two Correct Forms
 
 ```zymbol
 name = "Alice"
@@ -1091,11 +1480,7 @@ n = 42
 // 1. Juxtaposition in >> (canonical)
 >> "Hello " name " you have " n " items" ¶
 
-// 2. Comma operator in assignments (spec-correct)
-msg = "Hello ", name, "!"
-GREETING := "Welcome, ", name
-
-// 3. String interpolation (most readable)
+// 2. String interpolation (most readable)
 desc = "Hello {name}, you have {n} items"
 >> desc ¶
 ```
@@ -1286,23 +1671,65 @@ process(value) {
 
 ### Module File Structure
 
-> **Important**: The `#>` export block **must come first**, before all definitions.
+> **Note**: The `#>` export block can appear either immediately after `# module_name` or after the `<#` import statements — both positions are valid. Comments between `# name` and `#>` are always safe (stripped by the lexer).
 
 ```zymbol
 // file: lib/utils.zy
 # utils                // module declaration (must be at absolute start)
 
-#> {                   // exports — MUST come before function definitions
+<# ./dep <= d          // imports can come before OR after #>
+
+#> {                   // exports — before OR after <# imports, either works
     add
-    PI
-    VERSION
+    PI                 // := constant — exportable via alias.PI
+    get_count          // getter for private mutable state
+    set_count          // setter for private mutable state
 }
 
-PI := 3.14159
-VERSION := "1.0.0"
+PI    := 3.14159       // exported constant — immutable, accessible as alias.PI
+count = 0              // private mutable state — persists across calls, NOT accessible externally
 
 add(a, b) { <~ a + b }
-private_fn(x) { <~ x * 2 }    // not exported — inaccessible from outside
+
+get_count() { <~ count }
+set_count(n) { count = n }
+
+private_fn(x) { <~ x * 2 }    // not in #> — inaccessible from outside
+```
+
+### Visibility Model
+
+Three levels of visibility for module-level names:
+
+| Declaration | Exported in `#>` | External access | Persists across calls |
+|-------------|------------------|-----------------|-----------------------|
+| `PI := 3.14` | yes | `alias.PI` (read-only) | yes (immutable) |
+| `count = 0` | no (silently excluded even if listed) | ✗ error | **yes — write-back** |
+| `fn()` | yes | `alias::fn()` | — |
+| `private_fn()` | no | ✗ error | — |
+
+**Private mutable state** (`=` variables) persists between calls and is only reachable through exported getter/setter functions:
+
+```zymbol
+# counter
+#> { increment, get_value }
+
+count = 0              // private — only accessible via the functions below
+
+increment() { count = count + 1 }
+get_value() { <~ count }
+```
+
+```zymbol
+// main.zy
+<# ./counter <= c
+
+c::increment()         // count → 1
+c::increment()         // count → 2
+n = c::get_value()     // n = 2
+>> n ¶
+
+x = c.count            // ✗ Runtime error: Module 'c' has no constant 'count'
 ```
 
 ### Importing and Using
@@ -1311,22 +1738,14 @@ private_fn(x) { <~ x * 2 }    // not exported — inaccessible from outside
 // Import with alias (alias is required)
 <# ./lib/utils <= u
 
-// Call exported function via ::
+// Call exported function
 result = u::add(5, 3)
 >> result ¶    // → 8
-```
 
-> **⚠ Known limitation**: Direct constant access `alias.CONST` does not work currently:
-> ```zymbol
-> pi = u.PI    // ❌ "undefined variable 'u'"
-> ```
-> **Workaround**: Use a getter function in the module:
-> ```zymbol
-> // In module:
-> get_PI() { <~ PI }
-> // In main:
-> pi = u::get_PI()    // ✅
-> ```
+// Access exported constant
+pi = u.PI
+>> pi ¶        // → 3.14159
+```
 
 ### Import Paths
 
@@ -1376,6 +1795,11 @@ Use `::` to re-export a function imported from another module, and `.` to re-exp
 
 ### Numeric Eval `#|expr|` — Parse String to Number
 
+Converts a string to its numeric value. Accepts ASCII digits and **any of the 69
+Unicode digit scripts** supported by the lexer (Thai, Devanagari, Arabic-Indic,
+Klingon pIqaD, etc.). Fail-safe: returns the original string unchanged if conversion
+fails, without raising an error.
+
 ```zymbol
 v1 = #|"42"|
 >> v1 ¶    // → 42  (Int)
@@ -1388,7 +1812,21 @@ v3 = #|"abc"|
 
 v4 = #|99|
 >> v4 ¶    // → 99  (pass-through if already a number)
+
+// Unicode digit strings — same result as ASCII equivalents
+v5 = #|"๔๒"|
+>> v5 ¶    // → 42  (Thai digits U+0E54, U+0E52)
+
+v6 = #|"४२"|
+>> v6 ¶    // → 42  (Devanagari digits U+0967, U+0966)
+
+v7 = #|"٣.١٤"|
+>> v7 ¶    // → 3.14  (Arabic-Indic float)
 ```
+
+> **Note**: `#|"๔๒"| == #|"42"|` — both evaluate to the integer `42`.
+> The conversion uses the same normalization as the lexer, so every script
+> that the lexer recognizes as integer literals also works inside `#|…|`.
 
 ### Type Metadata `expr#?`
 
@@ -1430,6 +1868,51 @@ t2 = #!2|pi|
 // Also works on numeric strings
 rstr = #.2|"19.876"|
 >> rstr ¶    // → 19.88
+
+// Rounding to 0 decimals — result is Float but displayed without .0
+r0 = #.0|19.9|
+>> r0 ¶    // → 20
+t0 = #!0|19.9|
+>> t0 ¶    // → 19
+```
+
+### Type Conversion Casts
+
+Three prefix operators convert between Int and Float:
+
+| Operator | Name | Behaviour |
+|----------|------|-----------|
+| `##.expr` | ToFloat | Converts Int or Float to Float |
+| `###expr` | ToIntRound | Converts Float to Int, rounding (half away from zero) |
+| `##!expr` | ToIntTrunc | Converts Float to Int, truncating toward zero |
+
+> **Convention**: `##.` mirrors `#.N` (round/decimal), `##!` mirrors `#!N` (truncate).
+> `###` is a dedicated rounding cast with no decimal-precision argument.
+
+```zymbol
+i = 42
+f = 3.7
+
+// Int → Float
+fi = ##.i
+>> fi ¶    // → 42  (Float type — displayed without .0 when integer-valued)
+
+// Float → Int (round — 3.7 rounds to 4)
+ir = ###f
+>> ir ¶    // → 4
+
+// Float → Int (truncate — 3.7 truncates to 3)
+it = ##!f
+>> it ¶    // → 3
+
+// Negative values
+nf = -2.9
+>> ###nf ¶    // → -3  (rounds away from zero)
+>> ##!nf ¶    // → -2  (truncates toward zero)
+
+// Works on any expression
+>> ###(7 / 2.0) ¶    // → 4  (3.5 rounds to 4)
+>> ##!(7 / 2.0) ¶    // → 3  (3.5 truncates to 3)
 ```
 
 ### Number Formatting
@@ -1735,21 +2218,27 @@ ASCII `#` (U+0023). This means:
 Executes a system command and captures stdout + stderr:
 
 ```zymbol
-// Capture result as string (includes trailing \n)
-date = <\ date +%Y-%m-%d \>
->> "Today: " date    // no ¶ needed — date already contains \n
+// Capture result as string
+date = <\ "date +%Y-%m-%d" \>
+>> "Today: " date ¶
 
-// Interpolation in commands
+// Variable in command (identifier or string interpolation)
 file = "data.txt"
-content = <\ cat {file} \>
+content = <\ "cat " file \>
 >> content
 
+// String interpolation inside command string
+dir = "/tmp"
+listing = <\ "ls {dir}" \>
+>> listing ¶
+
 // Arithmetic via shell
-result = <\ echo "scale=2; 355/113" | bc \>
->> result
+result = <\ "echo 'scale=2; 355/113' | bc" \>
+>> result ¶
 ```
 
-> **Note**: Output always includes a trailing `\n`. Account for this when concatenating.
+> **Note**: Trailing `\n` is stripped automatically (consistent with shell `$(...)` substitution).
+> Internal newlines are preserved. Add `¶` explicitly when needed.
 
 ### Execute Script `</ file.zy />`
 
@@ -1778,31 +2267,40 @@ n = arr$#            // ✅ intermediate variable
 >> "has=" (arr$? 3) ¶
 ```
 
-### L3 — Module alias.CONST does not work
+### ~~L3 — Module alias.CONST does not work~~ Fixed
 
-**Symptom**: `x = m.PI` → "undefined variable 'm'".
+`alias.CONST` access now works correctly:
 
 ```zymbol
-// In module:
-get_PI() { <~ PI }
-// In main:
-pi = m::get_PI()    // ✅
+<# ./math <= m
+pi = m.PI    // ✅ works
+e  = m.E     // ✅ works
 ```
 
-### L4 — `#>` export block must come before definitions
+**Root cause fixed**: the TypeChecker was emitting a fatal "undefined variable" error
+for the module alias identifier before the interpreter could evaluate the member access.
+Fix: `TypeChecker` now registers import aliases from `program.imports` before analysis passes.
+
+### ~~L4 — `#>` export block must come before definitions~~ Fixed
+
+`#>` can now appear in any of these positions — all are valid:
 
 ```zymbol
-// ❌ Incorrect — #> at the end:
-PI := 3.14
-add(a, b) { <~ a + b }
-#> { add, PI }
-
-// ✅ Correct — #> immediately after # declaration:
+// ✅ Position 1 — right after # declaration (always worked):
 # module_name
 #> { add, PI }
 PI := 3.14
 add(a, b) { <~ a + b }
+
+// ✅ Position 2 — after imports (G14 fix):
+# module_name
+<# ./dep <= d
+#> { add, PI }
+PI := 3.14
+add(a, b) { <~ a + b }
 ```
+
+The only remaining restriction: `#>` must come before executable statements and function definitions (not at the end of the file).
 
 ### L5 — Named functions are not first-class values
 
@@ -1849,7 +2347,6 @@ arr = [10, 20, 30, 40, 50]
 |---------|-------|--------|
 | `unused variable 'x'` when `x` is used in `"{x}"` interpolation | Static analyzer does not track interpolation usage | Ignore |
 | `unused variable 'x'` when `x` is used in `<\ bash {x} \>` | Analyzer does not track BashExec variable usage | Ignore, or prefix with `_`: `_x` and `{_x}` |
-| `arithmetic on non-numeric type` when using `/` for string split | Analyzer cannot distinguish string `/` from arithmetic `/` | Ignore |
 
 ### L10 — Collection operators cannot be chained
 
@@ -1933,6 +2430,7 @@ n_labels = labels$#
 | `_?` | Else-if | `_? x < 0 { }` |
 | `_` | Else / wildcard | `_{ }` |
 | `??` | Match | `?? x { pat : val }` |
+| `[p, q]` | Match list pattern | `?? arr { [_, _] : ... }` |
 | `@` | Loop | `@ cond { }` |
 | `@!` | Break | `@!` or `@! label` |
 | `@>` | Continue | `@>` or `@> label` |
@@ -1952,6 +2450,17 @@ n_labels = labels$#
 | `arr[i] = val` | Direct element update (arrays only) | `arr[2] = 99` |
 | `arr[i] += val` | Compound element update (arrays only) | `arr[1] += 5` |
 | `arr[i]$~` | Functional update — returns new collection | `arr[2]$~ 99` |
+| `arr[i>j]` | Scalar deep access (row i, col j) | `m[2>3]` → `6` |
+| `arr[i>j>k]` | Scalar deep access depth 3+ | `cubo[1>2>1]` |
+| `arr[(e)>j]` | Computed first step | `m[(n)>(n)]` |
+| `arr[a>b]` | Variable indices as nav atoms | `m[row>col]` |
+| `arr[-1>-1]` | Negative indices in nav path | last row, last col |
+| `arr[[i>j]]` | Flat extraction — single path wrapped | `m[[2>3]]` → `[6]` |
+| `arr[p ; q]` | Flat extraction — multiple paths | `m[1>1 ; 2>3]` → `[1, 6]` |
+| `arr[[g] ; [g]]` | Structured extraction | `m[[1>1] ; [2>3]]` → `[[1], [6]]` |
+| `arr[[p,q] ; [r,s]]` | Structured, multi-value groups | `m[[1>1,1>3] ; [3>1,3>3]]` |
+| `arr[i>r1..r2]` | Range on last step (expand axis) | `m[[1>2..3]]` → `[2, 3]` |
+| `arr[r1..r2>j]` | Range on intermediate step (fan-out) | `m[[1..2>3]]` |
 | `$[i..j]` | Slice (1-based inclusive) | `arr$[1..3]` |
 | `$[i:n]` | Slice (count-based) | `arr$[1:2]` |
 | `$^+` | Sort ascending (primitives) | `arr$^+` |
@@ -1961,18 +2470,22 @@ n_labels = labels$#
 | `$\|` | Filter | `arr$\| (x -> cond)` |
 | `$<` | Reduce | `arr$< (0, (a,x) -> a+x)` |
 | `$~~[p:r]` | String replace | `s$~~["o":"0"]` |
-| `/` | String split | `"a,b" / ','` |
+| `$/` | String split by char or substring | `"a,b" $/ ','` |
+| `$++` | ConcatBuild — append to string or array | `"x=" $++ n flag` |
 | `!?` | Try | `!? { } :! { }` |
 | `:!` | Catch | `:! ##Div { }` |
 | `:>` | Finally | `:> { }` |
 | `$!` | Is error | `val$!` |
 | `$!!` | Propagate error | `val$!!` |
-| `#\|x\|` | Numeric eval | `#\|"42"\|` |
+| `#\|x\|` | Numeric eval (ASCII + 69 Unicode scripts) | `#\|"42"\|`, `#\|"๔๒"\|` |
 | `x#?` | Type metadata | `42#?` |
 | `#.N\|x\|` | Round N decimals | `#.2\|3.14159\|` |
 | `#!N\|x\|` | Truncate N decimals | `#!2\|3.14159\|` |
-| `c\|x\|` | Comma format | `c\|1234567\|` |
-| `e\|x\|` | Scientific notation | `e\|12345.0\|` |
+| `##.expr` | Cast to Float | `##.42` → `42` (Float) |
+| `###expr` | Cast to Int (rounding) | `###3.7` → `4` |
+| `##!expr` | Cast to Int (truncating) | `##!3.7` → `3` |
+| `#,\|x\|` | Comma format | `#,\|1234567\|` |
+| `#^\|x\|` | Scientific notation | `#^\|12345.0\|` |
 | `0x`, `0b`, `0o`, `0d` | Base literals | `0x41` → `'A'` |
 | `#` | Module declaration | `# name` |
 | `#>` | Module export | `#> { fn, CONST }` |
@@ -1986,7 +2499,6 @@ n_labels = labels$#
 | `\ var` | Explicit lifetime end | `\ x` |
 | `#1` / `#0` | Bool true / false | `? #1 { }` |
 | `#d0d9#` | Numeral mode switch | `#०९#` (Devanagari), `#09#` (reset) |
-| `,` | String concat in assignments | `msg = "a", "b"` |
 | `++` / `--` | Increment / decrement | `x++` |
 | `+=` `-=` `*=` `/=` `%=` `^=` | Compound assignment | `x += 5` |
 
@@ -2133,6 +2645,7 @@ parse_number(s) {
 | Compound assignment operators | ✅ | ✅ | |
 | if / else-if / else | ✅ | ✅ | |
 | match (literal, range, guard, wildcard) | ✅ | ✅ | |
+| match list pattern `[a, b, _]` | ✅ | ✅ | v0.0.3 |
 | match multi-value arm | ❌ | ❌ | Not implemented |
 | match identifier binding | ❌ | ❌ | Not implemented |
 | Loops (all types) | ✅ | ✅ | |
@@ -2143,6 +2656,13 @@ parse_number(s) {
 | Arrays (full CRUD) | ✅ | ✅ | |
 | `arr[i] = val` (direct update) | ✅ | ✅ | Sprint 5I |
 | `arr[i] += val` (compound indexed update) | ✅ | ✅ | |
+| `arr[i>j]` scalar deep access | ✅ | ✅ | v0.0.4 |
+| `arr[p;q]` flat extraction | ✅ | ✅ | v0.0.4 |
+| `arr[[g];[g]]` structured extraction | ✅ | ✅ | v0.0.4 |
+| `arr[i>r1..r2]` range on last step | ✅ | ✅ | v0.0.4 |
+| `arr[r1..r2>j]` range fan-out | ✅ | ✅ | v0.0.4 |
+| Computed nav atoms `(expr)` | ✅ | ✅ | v0.0.4 |
+| Negative nav indices `-1` | ✅ | ✅ | v0.0.4 |
 | Tuple immutability (`t[i]=val` → runtime error) | ✅ | ✅ | |
 | Named tuples | ✅ | ✅ | |
 | HOF: map / filter / reduce | ✅ | ✅ | |
@@ -2151,10 +2671,14 @@ parse_number(s) {
 | Typed catch `:! ##Type` | ✅ | ✅ | |
 | Modules (functions via `::`) | ✅ | ✅ | |
 | Modules (constants via `.`) | ❌ | ❌ | Known gap |
-| Advanced string operators | ✅ | ✅ | |
-| Numeric eval / type metadata | ✅ | ✅ | |
+| Advanced string operators (`$+`, `$-`, `$~~`, `$??`) | ✅ | ✅ | |
+| String split `$/` | ✅ | ⚠ | VM: Unsupported (tree-walker only) |
+| String build `$++` | ✅ | ⚠ | VM: Unsupported (tree-walker only) |
+| Numeric eval `#\|x\|` (ASCII + Unicode) | ✅ | ✅ | Unicode normalization via digit_blocks |
+| Type metadata `x#?` | ✅ | ✅ | |
 | Precision `#.N` / `#!N` | ✅ | ✅ | |
-| Format `c\|x\|` / `e\|x\|` | ✅ | ⚠ | Full parity pending in VM |
+| Casts `##.` / `###` / `##!` | ✅ | ⚠ | VM: Unsupported (tree-walker only) |
+| Format `#,\|x\|` / `#^\|x\|` | ✅ | ⚠ | Full parity pending in VM |
 | Base literals / conversions | ✅ | ✅ | |
 | BashExec / Execute script | ✅ | ✅ | |
 | CLI args capture `><` | ✅ | — | VM not supported |

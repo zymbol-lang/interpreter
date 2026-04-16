@@ -1,0 +1,10 @@
+=== Comparing Lambda vs Function variable access ===
+--- Test with TRADITIONAL FUNCTION ---
+Traditional function: isolated scope ✓
+--- Test with LAMBDA ---
+Global value from lambda: 42
+Lambda result: 42
+=== INCONSISTENCY DEMONSTRATED ===
+Traditional function: NO access to outer scope ✓
+Lambda: HAS access to outer scope (via capture) ✗
+Expected behavior: BOTH should be isolated

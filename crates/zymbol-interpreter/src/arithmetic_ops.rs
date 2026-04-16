@@ -13,7 +13,8 @@ use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
 
 impl<W: Write> Interpreter<W> {
-    /// Evaluate addition and string concatenation
+    /// Evaluate numeric addition (+)
+    /// Note: + is arithmetic only. Use juxtaposition for string concatenation.
     pub(crate) fn eval_add(&self, left: &Value, right: &Value, span: &Span) -> Result<Value> {
         match (left, right) {
             // Integer addition
@@ -24,26 +25,32 @@ impl<W: Write> Interpreter<W> {
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + *b as f64)),
 
-            // String concatenation (String + String)
-            (Value::String(a), Value::String(b)) => Ok(Value::String(format!("{}{}", a, b))),
-
-            // String + anything else → convert to string and concatenate
-            (Value::String(s), Value::Int(n)) => Ok(Value::String(format!("{}{}", s, n))),
-            (Value::String(s), Value::Float(f)) => Ok(Value::String(format!("{}{}", s, f))),
-            (Value::String(s), Value::Bool(b)) => Ok(Value::String(format!("{}{}", s, if *b { "#1" } else { "#0" }))),
-            (Value::String(s), Value::Char(c)) => Ok(Value::String(format!("{}{}", s, c))),
-
-            // Anything + String → convert to string and concatenate
-            (Value::Int(n), Value::String(s)) => Ok(Value::String(format!("{}{}", n, s))),
-            (Value::Float(f), Value::String(s)) => Ok(Value::String(format!("{}{}", f, s))),
-            (Value::Bool(b), Value::String(s)) => Ok(Value::String(format!("{}{}", if *b { "#1" } else { "#0" }, s))),
-            (Value::Char(c), Value::String(s)) => Ok(Value::String(format!("{}{}", c, s))),
-
             _ => Err(RuntimeError::Generic {
                 message: format!(
-                    "cannot add values of incompatible types: {:?} + {:?}",
-                    left, right
+                    "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\""
                 ),
+                span: *span,
+            }),
+        }
+    }
+
+    /// Evaluate juxtaposition concatenation (implicit, no explicit operator)
+    /// Converts all values to their string representation and concatenates.
+    pub(crate) fn eval_concat(&self, left: &Value, right: &Value, span: &Span) -> Result<Value> {
+        let l = self.value_to_concat_str(left, span)?;
+        let r = self.value_to_concat_str(right, span)?;
+        Ok(Value::String(format!("{}{}", l, r)))
+    }
+
+    pub(crate) fn value_to_concat_str(&self, v: &Value, span: &Span) -> Result<String> {
+        match v {
+            Value::String(s) => Ok(s.clone()),
+            Value::Char(c) => Ok(c.to_string()),
+            Value::Int(n) => Ok(n.to_string()),
+            Value::Float(f) => Ok(f.to_string()),
+            Value::Bool(b) => Ok(if *b { "#1" } else { "#0" }.to_string()),
+            _ => Err(RuntimeError::Generic {
+                message: format!("cannot juxtapose value of type {:?} in string context", v),
                 span: *span,
             }),
         }
@@ -73,15 +80,6 @@ impl<W: Write> Interpreter<W> {
     /// Evaluate division (with zero check and string split)
     pub(crate) fn eval_div(&self, left: &Value, right: &Value, span: &Span) -> Result<Value> {
         match (left, right) {
-            // String split: String / Char → Array
-            (Value::String(s), Value::Char(delimiter)) => {
-                let parts: Vec<Value> = s
-                    .split(*delimiter)
-                    .map(|part| Value::String(part.to_string()))
-                    .collect();
-                Ok(Value::Array(parts))
-            }
-
             // Integer division
             (Value::Int(a), Value::Int(b)) => {
                 if *b == 0 {
@@ -126,7 +124,7 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             _ => Err(RuntimeError::Generic {
-                message: format!("division requires numeric operands or string/char for split: {:?}, {:?}", left, right),
+                message: format!("/ requires numeric operands — use $/ to split strings"),
                 span: *span,
             }),
         }

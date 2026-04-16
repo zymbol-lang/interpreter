@@ -1,0 +1,7 @@
+// Test: invalid cast — non-numeric string to Int raises a runtime error
+!? {
+    result = ###"hello"
+    >> result ¶
+} :! {
+    >> "type error caught" ¶
+}

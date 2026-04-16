@@ -1,10 +1,10 @@
 // Test: String split operator /
-parts = "a,b,c,d" / ','
+parts = "a,b,c,d"$/ ','
 >> parts ¶
 >> (parts$#) ¶
 >> parts[1] ¶
 >> parts[4] ¶
 
-words = "hello world foo" / ' '
+words = "hello world foo"$/ ' '
 >> words ¶
 >> (words$#) ¶

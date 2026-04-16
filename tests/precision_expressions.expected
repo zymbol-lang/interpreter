@@ -1,0 +1,35 @@
+=== Rounding Tests ===
+Original value: 19.876543
+Round to 2 decimals: 19.88
+Round to 3 decimals: 19.877
+Round to 0 decimals: 20
+Value 19.874 to 2 decimals: 19.87
+Value 19.875 to 2 decimals: 19.88
+=== Truncation Tests ===
+Original price: 19.879999
+Truncate to 2 decimals: 19.87
+Truncate to 3 decimals: 19.879
+Truncate to 0 decimals: 19
+=== Round vs Truncate Comparison ===
+Value: 19.999
+Rounded to 2: 20
+Truncated to 2: 19.99
+=== Financial Calculation Example ===
+Unit price: 19.876543
+Quantity: 4
+Total (round final): 79.51
+Rounded unit price: 19.877
+Total (round intermediate): 79.51
+=== With Expressions ===
+a = 10.5, b = 3.7
+Round a + b to 1 decimal: 14.2
+Round a * b to 2 decimals: 38.85
+Truncate a / b to 2 decimals: 2.83
+=== PI Approximation ===
+PI = 3.141592653589793
+PI to 1 decimal: 3.1
+PI to 2 decimals: 3.14
+PI to 3 decimals: 3.142
+PI to 4 decimals: 3.1416
+PI to 5 decimals: 3.14159
+=== Tests Complete ===

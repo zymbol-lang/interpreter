@@ -1,0 +1,32 @@
+// Test: workaround for multi-value arms (not implemented)
+// Instead of  "1, 2 : low"  use guard  "_? n == 1 || n == 2 : low"
+
+classify(n) {
+    <~ ?? n {
+        _? n == 1 || n == 2 : "low"
+        _? n == 3 || n == 4 : "mid"
+        _? n == 5 || n == 6 : "high"
+        _                   : "other"
+    }
+}
+
+>> classify(1) ¶
+>> classify(2) ¶
+>> classify(3) ¶
+>> classify(4) ¶
+>> classify(5) ¶
+>> classify(6) ¶
+>> classify(9) ¶
+
+// Workaround for multiple string values
+day_type(day) {
+    <~ ?? day {
+        _? day == "Mon" || day == "Tue" || day == "Wed" || day == "Thu" || day == "Fri" : "weekday"
+        _? day == "Sat" || day == "Sun" : "weekend"
+        _ : "unknown"
+    }
+}
+
+>> day_type("Mon") ¶
+>> day_type("Sat") ¶
+>> day_type("Sun") ¶

@@ -314,21 +314,28 @@ impl ModuleAnalyzer {
         module_path: &ModulePath,
         current_file: &Path,
     ) -> Result<PathBuf, SemanticError> {
-        let current_dir = current_file.parent().unwrap_or(&self.base_dir);
-
-        let mut resolved = current_dir.to_path_buf();
-
-        // Handle parent directory navigation
-        if module_path.is_relative {
+        let mut resolved = if module_path.is_absolute {
+            // Absolute path: /foo/bar or ~/foo/bar
+            if module_path.home_relative {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+                PathBuf::from(home)
+            } else {
+                PathBuf::from("/")
+            }
+        } else {
+            // Relative path: ./foo or ../foo
+            let current_dir = current_file.parent().unwrap_or(&self.base_dir);
+            let mut base = current_dir.to_path_buf();
             for _ in 0..module_path.parent_levels {
-                if !resolved.pop() {
+                if !base.pop() {
                     return Err(SemanticError::PathResolutionFailed {
                         path: format!("{:?}", module_path.components),
                         span: module_path.span,
                     });
                 }
             }
-        }
+            base
+        };
 
         // Add path components
         for component in &module_path.components {

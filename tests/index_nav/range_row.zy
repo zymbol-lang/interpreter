@@ -1,0 +1,7 @@
+// Range on intermediate step — fan-out: expands that dimension,
+// then applies remaining steps to each element in the range
+// arr[[row1..row2>col]] → [[values at col for each row in range]]
+matriz = [[1,2,3], [4,5,6], [7,8,9]]
+
+// Rows 1-2 at col 2; rows 2-3 at col 3
+>> matriz[[1..2>2] ; [2..3>3]] ¶

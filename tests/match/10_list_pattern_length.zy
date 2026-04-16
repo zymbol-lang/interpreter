@@ -1,0 +1,39 @@
+// Test: list patterns — discriminate by array length/shape
+one = [42]
+>> ?? one {
+    [_]       : "one element"
+    [_, _]    : "two elements"
+    [_, _, _] : "three elements"
+    _         : "more"
+} ¶
+
+two = [1, 2]
+>> ?? two {
+    [_]       : "one element"
+    [_, _]    : "two elements"
+    [_, _, _] : "three elements"
+    _         : "more"
+} ¶
+
+three = [1, 2, 3]
+>> ?? three {
+    [_]       : "one element"
+    [_, _]    : "two elements"
+    [_, _, _] : "three elements"
+    _         : "more"
+} ¶
+
+empty = []
+>> ?? empty {
+    []        : "empty"
+    [_]       : "one element"
+    _         : "more"
+} ¶
+
+four = [1, 2, 3, 4]
+>> ?? four {
+    [_]       : "one element"
+    [_, _]    : "two elements"
+    [_, _, _] : "three elements"
+    _         : "more"
+} ¶

@@ -1,0 +1,37 @@
+=== FUNCTIONAL PROGRAMMING FEATURES TEST ===
+1. Simple Lambda:
+  double(5) = 10
+2. Multi-Parameter Lambda:
+  add(3, 7) = 10
+3. Closures:
+  make_mult(5) with factor=10: 50
+4. Currying:
+  curry_add(5)(10) = 15
+  Partial application add_five(10) = 15
+5. Triple Currying:
+  curry3(1)(2)(3) = 6
+6. Map ($>):
+  [1,2,3,4,5]$> (x -> x * 2) = 2 4 6 8 10 
+7. Filter ($|):
+  [1-10]$| (x -> x % 2 == 0) = 2 4 6 8 10 
+8. Reduce ($<):
+  [1,2,3,4,5]$< (0, (acc,x) -> acc + x) = 15
+9. Complex Chaining:
+  Filter evens, square, sum = 220
+  (Expected: 2² + 4² + 6² + 8² + 10² = 220)
+10. Lambdas with Closures in Map:
+  [1,2,3,4,5]$> (x -> x * 3) = 3 6 9 12 15 
+11. Functions in Arrays:
+  operations[1](10) = 20
+  operations[2](10) = 15
+=== ALL TESTS PASSED! ===
+Implemented features:
+  ✓ Lambda expressions (x -> expr)
+  ✓ Multi-parameter lambdas ((a,b) -> expr)
+  ✓ Closures (variable capture)
+  ✓ Currying (f(a)(b)(c))
+  ✓ Map operator ($>)
+  ✓ Filter operator ($|)
+  ✓ Reduce operator ($<)
+  ✓ Chained function calls
+  ✓ Functions as first-class values

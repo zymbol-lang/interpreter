@@ -1,0 +1,47 @@
+// Test: $++ ConcatBuild operator
+// String base → concatenate items; Array base → append elements
+
+// ── String base ───────────────────────────────────────────────────────────
+
+// Basic: string + int + string + float + bool
+n = 42
+pi = 3.14
+flag = #1
+s = "n=" $++ n " pi=" pi " ok=" flag
+>> s ¶
+
+// Single item
+s2 = "value=" $++ n
+>> s2 ¶
+
+// No items — returns base unchanged
+s3 = "solo" $++
+>> s3 ¶
+
+// Char item
+s4 = "hello" $++ '!'
+>> s4 ¶
+
+// Multiple strings
+s5 = "a" $++ "b" "c" "d"
+>> s5 ¶
+
+// Intermediate variable for computed value (grouped expr closes chain)
+tmp = 100 * 2
+out = "result=" $++ tmp
+>> out ¶
+
+// ── Array base ────────────────────────────────────────────────────────────
+
+// Append multiple ints
+arr = [1, 2, 3] $++ 4 5 6
+>> arr ¶
+>> (arr$#) ¶
+
+// Append single element
+arr2 = [10, 20] $++ 30
+>> arr2 ¶
+
+// ── Type check: $++ on string preserves type ─────────────────────────────
+meta = s#?
+>> meta[1] ¶    // ##"  (String)

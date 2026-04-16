@@ -538,6 +538,28 @@ impl<'a> FormatVisitor<'a> {
             Expr::CollectionUpdate(op) => self.format_collection_update(op),
             Expr::CollectionSlice(op) => self.format_collection_slice(op),
             Expr::StringReplace(op) => self.format_string_replace(op),
+            Expr::StringSplit(op) => {
+                self.format_expr(&op.string);
+                self.output.write("$/ ");
+                self.format_expr(&op.delimiter);
+            }
+            Expr::ConcatBuild(op) => {
+                self.format_expr(&op.base);
+                self.output.write("$++");
+                for item in &op.items {
+                    self.output.write(" ");
+                    self.format_expr(item);
+                }
+            }
+            Expr::NumericCast(op) => {
+                let prefix = match op.kind {
+                    zymbol_ast::CastKind::ToFloat    => "##.",
+                    zymbol_ast::CastKind::ToIntRound => "###",
+                    zymbol_ast::CastKind::ToIntTrunc => "##!",
+                };
+                self.output.write(prefix);
+                self.format_expr(&op.expr);
+            }
             Expr::NumericEval(op) => self.format_numeric_eval(op),
             Expr::TypeMetadata(op) => self.format_type_metadata(op),
             Expr::Format(op) => self.format_format_expr(op),
@@ -556,6 +578,8 @@ impl<'a> FormatVisitor<'a> {
             Expr::Trunc(trunc) => self.format_trunc(trunc),
             Expr::ErrorCheck(check) => self.format_error_check(check),
             Expr::ErrorPropagate(prop) => self.format_error_propagate(prop),
+            // Multi-dimensional indexing — format as source text (not yet pretty-printed)
+            Expr::DeepIndex(_) | Expr::FlatExtract(_) | Expr::StructuredExtract(_) => {}
         }
     }
 
@@ -564,7 +588,7 @@ impl<'a> FormatVisitor<'a> {
         match &lit.value {
             Literal::Int(n) => self.output.write(&n.to_string()),
             Literal::Float(f) => self.output.write(&format_float(*f)),
-            Literal::String(s) => {
+            Literal::String(s) | Literal::InterpolatedString(s) => {
                 self.output.write("\"");
                 self.output.write(&escape_string(s));
                 self.output.write("\"");
@@ -612,6 +636,10 @@ impl<'a> FormatVisitor<'a> {
             BinaryOp::Range => {
                 // No spaces around ..
                 self.output.write("..");
+            }
+            BinaryOp::Concat => {
+                // Juxtaposition: no explicit operator, just a space separator
+                self.output.write(" ");
             }
             _ => {
                 if should_break {
@@ -696,6 +724,7 @@ impl<'a> FormatVisitor<'a> {
             BinaryOp::Pipe => 0,
             BinaryOp::Comma => 0,
             BinaryOp::Range => 8,
+            BinaryOp::Concat => 9, // tightest: juxtaposition binds tighter than arithmetic
         }
     }
 
@@ -782,7 +811,7 @@ impl<'a> FormatVisitor<'a> {
             Expr::Literal(lit) => match &lit.value {
                 Literal::Int(n) => n.to_string().len(),
                 Literal::Float(f) => format_float(*f).len(),
-                Literal::String(s) => s.len() + 2,
+                Literal::String(s) | Literal::InterpolatedString(s) => s.len() + 2,
                 Literal::Char(_) => 3,
                 Literal::Bool(_) => 2,
             },
@@ -1273,17 +1302,14 @@ impl<'a> FormatVisitor<'a> {
 
     /// Format bash execute expression
     fn format_bash_exec(&mut self, bash: &BashExecExpr) {
-        self.output.write("<\\");
-        // Reconstruct the command with interpolated variables
-        for (i, part) in bash.parts.iter().enumerate() {
-            self.output.write(part);
-            if i < bash.variables.len() {
-                self.output.write("{");
-                self.output.write(&bash.variables[i]);
-                self.output.write("}");
+        self.output.write("<\\ ");
+        for (i, arg) in bash.args.iter().enumerate() {
+            if i > 0 {
+                self.output.write(" ");
             }
+            self.format_expr(arg);
         }
-        self.output.write("\\>");
+        self.output.write(" \\>");
     }
 
     /// Format round expression
@@ -1340,13 +1366,15 @@ fn escape_string(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for ch in s.chars() {
         match ch {
-            '\n' => result.push_str("\\n"),
-            '\r' => result.push_str("\\r"),
-            '\t' => result.push_str("\\t"),
-            '\\' => result.push_str("\\\\"),
-            '"' => result.push_str("\\\""),
-            '{' => result.push_str("\\{"),
-            '}' => result.push_str("\\}"),
+            '\n'   => result.push_str("\\n"),
+            '\r'   => result.push_str("\\r"),
+            '\t'   => result.push_str("\\t"),
+            '\\'   => result.push_str("\\\\"),
+            '"'    => result.push_str("\\\""),
+            // \x01 is the sentinel for \{ (escaped brace) — restore to source form
+            '\x01' => result.push_str("\\{"),
+            // { and } are NOT escaped: plain strings have no real {, interpolated strings
+            // need { as-is for variable interpolation markers
             _ => result.push(ch),
         }
     }

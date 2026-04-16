@@ -6,8 +6,8 @@
 //! 2. Second pass: infer parameter types from usage
 //! 3. Third pass: type check statements and expressions
 
-use std::collections::HashMap;
-use zymbol_ast::{DestructureItem, DestructurePattern, Expr, Statement, Program, FunctionDecl, Block};
+use std::collections::{HashMap, HashSet};
+use zymbol_ast::{CastKind, DestructureItem, DestructurePattern, Expr, Statement, Program, FunctionDecl, Block};
 use zymbol_common::{BinaryOp, Literal, UnaryOp};
 use zymbol_error::Diagnostic;
 
@@ -261,6 +261,9 @@ pub struct TypeChecker {
     errors: Vec<Diagnostic>,
     /// Collected warnings (non-fatal)
     warnings: Vec<Diagnostic>,
+    /// Import aliases registered in the current program (e.g. `u` from `<# ./utils <= u`)
+    /// These are valid identifiers that resolve to modules, not regular variables.
+    module_aliases: HashSet<String>,
 }
 
 impl TypeChecker {
@@ -270,6 +273,7 @@ impl TypeChecker {
             env: TypeEnv::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
+            module_aliases: HashSet::new(),
         }
     }
 
@@ -277,6 +281,12 @@ impl TypeChecker {
     pub fn check(&mut self, program: &Program) -> Vec<Diagnostic> {
         self.errors.clear();
         self.warnings.clear();
+
+        // Register import aliases so they are not flagged as undefined variables
+        self.module_aliases.clear();
+        for import in &program.imports {
+            self.module_aliases.insert(import.alias.clone());
+        }
 
         // First pass: collect function declarations with placeholder types
         for stmt in &program.statements {
@@ -311,6 +321,12 @@ impl TypeChecker {
     pub fn check_errors(&mut self, program: &Program) -> Vec<Diagnostic> {
         self.errors.clear();
         self.warnings.clear();
+
+        // Register import aliases so they are not flagged as undefined variables
+        self.module_aliases.clear();
+        for import in &program.imports {
+            self.module_aliases.insert(import.alias.clone());
+        }
 
         // First pass: collect function declarations with placeholder types
         for stmt in &program.statements {
@@ -750,25 +766,23 @@ impl TypeChecker {
                 let right_param = self.get_param_name(&binary.right, params);
 
                 match binary.op {
+                    // Juxtaposition constrains parameters to be string-compatible
+                    BinaryOp::Concat => {
+                        if let Some(param) = left_param {
+                            self.env.add_param_constraint(&param, TypeConstraint::CompatibleWith(ZymbolType::String));
+                        }
+                        if let Some(param) = right_param {
+                            self.env.add_param_constraint(&param, TypeConstraint::CompatibleWith(ZymbolType::String));
+                        }
+                    }
                     // Arithmetic operations constrain parameters to be numeric
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div |
                     BinaryOp::Mod | BinaryOp::Pow => {
                         if let Some(param) = left_param {
-                            // If adding with a string, the param might be for concat
-                            let right_type = self.infer_expr_for_constraint(&binary.right, params);
-                            if matches!(right_type, ZymbolType::String) && matches!(binary.op, BinaryOp::Add) {
-                                self.env.add_param_constraint(&param, TypeConstraint::CompatibleWith(ZymbolType::String));
-                            } else {
-                                self.env.add_param_constraint(&param, TypeConstraint::Numeric);
-                            }
+                            self.env.add_param_constraint(&param, TypeConstraint::Numeric);
                         }
                         if let Some(param) = right_param {
-                            let left_type = self.infer_expr_for_constraint(&binary.left, params);
-                            if matches!(left_type, ZymbolType::String) && matches!(binary.op, BinaryOp::Add) {
-                                self.env.add_param_constraint(&param, TypeConstraint::CompatibleWith(ZymbolType::String));
-                            } else {
-                                self.env.add_param_constraint(&param, TypeConstraint::Numeric);
-                            }
+                            self.env.add_param_constraint(&param, TypeConstraint::Numeric);
                         }
                     }
                     // Logical operations constrain parameters to be boolean
@@ -879,7 +893,7 @@ impl TypeChecker {
             Expr::Literal(lit) => match &lit.value {
                 Literal::Int(_) => ZymbolType::Int,
                 Literal::Float(_) => ZymbolType::Float,
-                Literal::String(_) => ZymbolType::String,
+                Literal::String(_) | Literal::InterpolatedString(_) => ZymbolType::String,
                 Literal::Char(_) => ZymbolType::Char,
                 Literal::Bool(_) => ZymbolType::Bool,
             },
@@ -978,7 +992,7 @@ impl TypeChecker {
                 let pattern_type = match lit {
                     Literal::Int(_) => ZymbolType::Int,
                     Literal::Float(_) => ZymbolType::Float,
-                    Literal::String(_) => ZymbolType::String,
+                    Literal::String(_) | Literal::InterpolatedString(_) => ZymbolType::String,
                     Literal::Char(_) => ZymbolType::Char,
                     Literal::Bool(_) => ZymbolType::Bool,
                 };
@@ -1146,7 +1160,7 @@ impl TypeChecker {
             Expr::Literal(lit) => match &lit.value {
                 Literal::Int(_) => ZymbolType::Int,
                 Literal::Float(_) => ZymbolType::Float,
-                Literal::String(_) => ZymbolType::String,
+                Literal::String(_) | Literal::InterpolatedString(_) => ZymbolType::String,
                 Literal::Char(_) => ZymbolType::Char,
                 Literal::Bool(_) => ZymbolType::Bool,
             },
@@ -1156,6 +1170,10 @@ impl TypeChecker {
                     ty.clone()
                 } else if self.env.lookup_function(&ident.name).is_some() {
                     // It's a function reference, return Function type
+                    ZymbolType::Any
+                } else if self.module_aliases.contains(&ident.name) {
+                    // It's a module alias (e.g. `u` from `<# ./utils <= u`)
+                    // Valid as the object of a member access (u.CONST) — not an undefined variable
                     ZymbolType::Any
                 } else {
                     // Variable not defined - emit error
@@ -1173,11 +1191,12 @@ impl TypeChecker {
                 let right_type = self.infer_expr(&binary.right);
 
                 match binary.op {
-                    // Arithmetic operations
+                    // Juxtaposition concatenation — always produces String
+                    BinaryOp::Concat => ZymbolType::String,
+
+                    // Arithmetic operations (numeric only — + does NOT concatenate strings)
                     BinaryOp::Add => {
-                        if matches!(left_type, ZymbolType::String) || matches!(right_type, ZymbolType::String) {
-                            ZymbolType::String // String concatenation
-                        } else if left_type.is_numeric() && right_type.is_numeric() {
+                        if left_type.is_numeric() && right_type.is_numeric() {
                             if matches!(left_type, ZymbolType::Float) || matches!(right_type, ZymbolType::Float) {
                                 ZymbolType::Float
                             } else {
@@ -1187,7 +1206,23 @@ impl TypeChecker {
                             ZymbolType::Any
                         }
                     }
-                    BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
+                    BinaryOp::Div => {
+                        if !left_type.is_numeric() && !matches!(left_type, ZymbolType::Any | ZymbolType::Unknown) {
+                            self.warnings.push(
+                                Diagnostic::warning(format!(
+                                    "arithmetic operation on non-numeric type: {}",
+                                    left_type.name()
+                                ))
+                                .with_span(binary.left.span())
+                            );
+                        }
+                        if matches!(left_type, ZymbolType::Float) || matches!(right_type, ZymbolType::Float) {
+                            ZymbolType::Float
+                        } else {
+                            ZymbolType::Int
+                        }
+                    }
+                    BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Mod | BinaryOp::Pow => {
                         if !left_type.is_numeric() && !matches!(left_type, ZymbolType::Any | ZymbolType::Unknown) {
                             self.warnings.push(
                                 Diagnostic::warning(format!(
@@ -1227,6 +1262,9 @@ impl TypeChecker {
 
                     // Other
                     BinaryOp::Pipe | BinaryOp::Comma => ZymbolType::Any,
+
+                    // Unreachable — Concat handled above, but needed for exhaustiveness
+                    // (already matched in first arm)
                 }
             }
 
@@ -1599,6 +1637,19 @@ impl TypeChecker {
 
             // String operations
             Expr::StringReplace(_) => ZymbolType::String,
+            Expr::StringSplit(_) => ZymbolType::Array(Box::new(ZymbolType::String)),
+            Expr::ConcatBuild(op) => {
+                // Type depends on base: String base → String, Array base → Array
+                match self.infer_expr(&op.base) {
+                    ZymbolType::Array(_) => ZymbolType::Array(Box::new(ZymbolType::Any)),
+                    _ => ZymbolType::String,
+                }
+            }
+
+            Expr::NumericCast(op) => match op.kind {
+                CastKind::ToFloat => ZymbolType::Float,
+                CastKind::ToIntRound | CastKind::ToIntTrunc => ZymbolType::Int,
+            },
 
             // Data operations
             Expr::NumericEval(_) => ZymbolType::Float,
@@ -1734,6 +1785,18 @@ impl TypeChecker {
                         ZymbolType::Any
                     }
                 }
+            }
+            Expr::DeepIndex(di) => {
+                self.infer_expr(&di.array);
+                ZymbolType::Any
+            }
+            Expr::FlatExtract(fe) => {
+                self.infer_expr(&fe.array);
+                ZymbolType::Array(Box::new(ZymbolType::Any))
+            }
+            Expr::StructuredExtract(se) => {
+                self.infer_expr(&se.array);
+                ZymbolType::Array(Box::new(ZymbolType::Array(Box::new(ZymbolType::Any))))
             }
         }
     }

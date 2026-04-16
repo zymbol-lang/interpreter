@@ -46,14 +46,8 @@ result5 = 10 |> times_three(_) |> times_five(_)
 >> "10 -> *3 -> *5: " >> result5 >> " (expected: 150)" ¶
 ¶
 
-// Closure that captures and returns function
-make_accumulator = start -> {
-    current = start
-    <~ x -> {
-        total = current + x
-        <~ total
-    }
-}
+// Closure that captures outer variable and returns a lambda
+make_accumulator = start -> (x -> start + x)
 
 acc_100 = make_accumulator(100)
 result6 = 25 |> acc_100(_)

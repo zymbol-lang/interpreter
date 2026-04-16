@@ -1,0 +1,4 @@
+✓ Field access: product.id works: 101
+✓ Field access: product.name works: Laptop
+✓ Field access: product.price works: 999
+Test 1 PASSED

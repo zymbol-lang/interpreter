@@ -1,0 +1,19 @@
+=== Correct Block Scope Usage ===
+--- Test 1: IF block with local variables ---
+Grade: B, Good job!
+Score was: 85
+--- Test 2: Loop with iteration variables ---
+i=1, squared=1, total=1
+i=2, squared=4, total=5
+i=3, squared=9, total=14
+i=4, squared=16, total=30
+i=5, squared=25, total=55
+Final total: 55
+--- Test 3: Nested blocks see outer variables ---
+Can see outer: OUTER
+Can see outer: OUTER
+Can see middle: MIDDLE
+Can see inner: INNER
+After inner block, can still see middle: MIDDLE
+After all blocks, can still see outer: OUTER
+=== All tests passed! ===

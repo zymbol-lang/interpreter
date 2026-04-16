@@ -1,0 +1,23 @@
+// G17: top-level functions in script files can use module aliases
+// Before fix: take_call_state() wiped import_aliases when entering a
+// script-level function — alias::fn() calls inside the function body
+// failed with "module not found".
+
+<# ./g17_helper_mod <= h
+
+// Top-level script function that uses a module alias internally
+say_hello(name) {
+    msg = h::greet(name)
+    >> msg ¶
+}
+
+// Another top-level function calling a different module function
+say_labeled(prefix, suffix) {
+    lbl = h::make_label(prefix, suffix)
+    >> lbl ¶
+}
+
+// Call the functions — aliases must be accessible inside their bodies
+say_hello("Alice")
+say_hello("Bob")
+say_labeled("status", "ok")

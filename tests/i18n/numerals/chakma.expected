@@ -1,0 +1,49 @@
+--- Integer arithmetic (ASCII mode) ---
+12
+4
+32
+2
+2
+64
+--- Negative numbers ---
+-8
+-4
+-32
+--- Float / decimal ---
+4.75
+2.25
+4.375
+2.8
+12.25
+-1.25
+--- Large numbers ---
+108
+400
+--- Hex literal 0xFF (decoded to decimal) ---
+ÿ
+--- Output mode (Chakma) ---
+𑄷𑄸
+𑄺
+𑄹𑄸
+𑄸
+𑄸
+𑄼𑄺
+-𑄾
+-𑄺
+-𑄹𑄸
+𑄺.𑄽𑄻
+𑄸.𑄸𑄻
+𑄺.𑄹𑄽𑄻
+𑄸.𑄾
+𑄷𑄸.𑄸𑄻
+-𑄷.𑄸𑄻
+𑄷𑄶𑄾
+𑄺𑄶𑄶
+ÿ
+--- Booleans ---
+#𑄷
+#𑄶
+#𑄷
+#𑄶
+#𑄷
+#𑄶

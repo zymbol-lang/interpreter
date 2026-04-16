@@ -1,14 +1,14 @@
 // Test: functions with output parameters (<~)
-// Multiple values via tuple
+// Multiple values via named tuple (positional last-element bug workaround)
 divmod(a, b) {
     q = a / b
     r = a % b
-    <~ (q, r)
+    <~ (q: q, r: r)
 }
 
 result = divmod(17, 5)
->> result[1] ¶
->> result[2] ¶
+>> result.q ¶
+>> result.r ¶
 
 // Named output tuple
 minmax(arr) {

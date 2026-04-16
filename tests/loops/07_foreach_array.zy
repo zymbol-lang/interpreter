@@ -1,0 +1,13 @@
+// Test: for-each loop over array @ var:array { }
+fruits = ["apple", "pear", "grape"]
+@ fruit:fruits {
+    >> fruit ¶
+}
+
+// Accumulate with for-each
+nums = [10, 20, 30, 40]
+total = 0
+@ n:nums {
+    total += n
+}
+>> total ¶

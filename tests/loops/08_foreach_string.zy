@@ -1,0 +1,8 @@
+// Test: for-each loop over string @ c:"str" { } — iterates char by char
+@ c:"hello" { >> c "-" }
+>> ¶
+
+// Count chars
+len = 0
+@ _c:"zymbol" { len++ }
+>> len ¶

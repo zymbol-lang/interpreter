@@ -1,0 +1,25 @@
+=== E-COMMERCE ORDER PROCESSING ===
+Total orders: 10
+Processed orders (id, original, discounted, shipping, final):
+  Order 1001: $150 -> $135 + $15 = $150
+  Order 1002: $50 -> $50 + $10 = $60
+  Order 1003: $300 -> $270 + $50 = $320
+  Order 1004: $80 -> $80 + $10 = $90
+  Order 1005: $500 -> $450 + $80 = $530
+  Order 1006: $25 -> $25 + $5 = $30
+  Order 1007: $200 -> $180 + $20 = $200
+  Order 1008: $350 -> $315 + $60 = $375
+  Order 1009: $100 -> $100 + $20 = $120
+  Order 1010: $175 -> $158 + $15 = $173
+Priority orders count: 5
+Total revenue: $2048
+Average order value: $204
+Customer 501 total spending: $405
+High-value orders (>=$200 final): 4
+Orders with both discount and priority: 3
+Revenue from special orders: $1225
+Highest value order: #1005 at $530
+Test discount calculators:
+  $100 with 20% off: $80
+  $100 with 30% off: $70
+=== ALL ANALYTICS COMPLETED ===

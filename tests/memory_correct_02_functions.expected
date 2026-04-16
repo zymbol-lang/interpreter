@@ -1,0 +1,19 @@
+=== Correct Function Usage ===
+Functions execute in isolated scopes
+--- Test 1: Simple function with parameters ---
+add(5, 3) = 8
+Expected: 8
+--- Test 2: Function with local variables ---
+Calculating area: 5 x 10
+Area: 50
+Expected: 50
+--- Test 3: Function calling another function ---
+sum_of_squares(3, 4) = 25
+Expected: 25
+--- Test 4: Function with output parameter ---
+17 / 5 = 3 remainder 2
+Expected: 3 remainder 2
+--- Test 5: Recursive function ---
+factorial(5) = 120
+Expected: 120
+=== All tests passed! ===

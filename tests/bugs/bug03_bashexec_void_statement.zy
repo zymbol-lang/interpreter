@@ -1,0 +1,15 @@
+// BUG-03: <\ cmd \> as standalone statement (no assignment)
+// Before fix: parser rejected BashExec at statement level — required
+// the workaround: disc = <\ cmd \>
+
+// Void BashExec statements (result discarded)
+<\ "true" \>
+<\ "mkdir" "-p" "/tmp/zy_bug03_test" \>
+
+// Result is still usable when assigned
+r = <\ "echo ok" \>
+>> r ¶
+
+// Cleanup (also void)
+<\ "rmdir /tmp/zy_bug03_test" \>
+>> "done" ¶

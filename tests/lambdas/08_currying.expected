@@ -1,0 +1,7 @@
+=== Currying Tests ===
+curry_add(5)(10): 15
+curry_add(3)(7): 10
+curry3(1)(2)(3): 6
+double(5): 10
+triple(5): 15
+=== All currying tests passed! ===

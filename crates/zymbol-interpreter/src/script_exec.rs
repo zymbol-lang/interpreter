@@ -2,7 +2,7 @@
 //!
 //! Handles runtime execution of scripts:
 //! - Execute expressions: </ file.zy /> (runs Zymbol scripts, captures output)
-//! - Bash exec expressions: <\ command \> (runs shell commands with variable interpolation)
+//! - Bash exec expressions: <\ expr1 expr2 ... \> (runs shell commands — expressions concatenated)
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -95,13 +95,19 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Evaluate bash execute expression: <\ command \>
-    /// Executes a bash command and captures its output
-    /// Supports variable interpolation with {variable} syntax
+    /// Executes a bash command and captures its output.
+    /// Each arg is evaluated as a Zymbol expression; results are concatenated to form the command.
+    /// No implicit separator — use char/string literals for spacing: <\ "ls" ' ' dir \>
     pub(crate) fn eval_bash_exec(&mut self, bash: &BashExecExpr) -> Result<Value> {
-        // Build the command by interpolating variables
-        let command = self.interpolate_bash_command(&bash.parts, &bash.variables, &bash.span)?;
+        // Evaluate all args and concatenate to build the shell command
+        let mut command = String::new();
+        for arg in &bash.args {
+            let value = self.eval_expr(arg)?;
+            let s = Self::value_to_bash_str(&value)?;
+            command.push_str(&s);
+        }
 
-        // Execute the bash command
+        // Execute the shell command
         let output = Command::new("sh")
             .arg("-c")
             .arg(&command)
@@ -114,7 +120,6 @@ impl<W: Write> Interpreter<W> {
         // Capture both stdout and stderr
         let mut result = String::from_utf8_lossy(&output.stdout).to_string();
 
-        // Append stderr if there's any
         if !output.stderr.is_empty() {
             let stderr_str = String::from_utf8_lossy(&output.stderr);
             if !result.is_empty() {
@@ -124,49 +129,10 @@ impl<W: Write> Interpreter<W> {
             }
         }
 
-        // Check if command succeeded
-        if !output.status.success() {
-            // Don't fail - just return the output (which may include error messages)
-            // This allows users to handle command failures themselves
-        }
+        // Strip trailing newline (consistent with shell command substitution $(...) behavior)
+        let result = result.trim_end_matches('\n').to_string();
 
         Ok(Value::String(result))
-    }
-
-    /// Interpolate variables into a bash command
-    /// Takes parts and variables, builds final command string
-    /// Example: parts=["cat ", " | head"], vars=["file"] with file="test.txt"
-    /// Result: "cat test.txt | head"
-    fn interpolate_bash_command(&mut self, parts: &[String], variables: &[String], span: &Span) -> Result<String> {
-        let mut command = String::new();
-
-        // Interleave parts and variable values
-        for (i, part) in parts.iter().enumerate() {
-            command.push_str(part);
-
-            // Add variable value if there's a corresponding variable
-            if i < variables.len() {
-                let var_name = &variables[i];
-
-                // Look up the variable in the environment
-                let value = self.get_variable(var_name)
-                    .ok_or_else(|| RuntimeError::Generic {
-                        message: format!("undefined variable '{}' in bash interpolation", var_name),
-                        span: *span,
-                    })?;
-
-                // Convert value to string for bash command
-                let value_str = self.value_to_bash_string(value)?;
-                command.push_str(&value_str);
-            }
-        }
-
-        Ok(command)
-    }
-
-    /// Convert a Zymbol value to a string suitable for bash commands
-    fn value_to_bash_string(&self, value: &Value) -> Result<String> {
-        Self::value_to_bash_str(value)
     }
 
     fn value_to_bash_str(value: &Value) -> Result<String> {

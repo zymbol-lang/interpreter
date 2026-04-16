@@ -40,11 +40,8 @@ row_sums = matrix$> (row -> row$< (0, (acc, x) -> acc + x))
 >> " (expected: 6 15 24)" ¶
 ¶
 
-// Filter rows where sum > 10
-filtered_matrix = matrix$| (row -> {
-    sum = row$< (0, (acc, x) -> acc + x)
-    <~ sum > 10
-})
+// Filter rows where sum > 10 — inline: compute directly
+filtered_matrix = matrix$| (row -> row$< (0, (acc, x) -> acc + x) > 10)
 
 >> "Rows with sum > 10:" ¶
 @ row:filtered_matrix {
@@ -55,24 +52,13 @@ filtered_matrix = matrix$| (row -> {
 }
 ¶
 
-// Flatten matrix and get sum of all elements
-all_elements = matrix$< ([], (acc, row) -> {
-    combined = acc
-    @ elem:row {
-        combined = combined$+ elem
-    }
-    <~ combined
-})
-
-total_sum = all_elements$< (0, (acc, x) -> acc + x)
+// Sum all elements: nested reduce (sum of row sums)
+total_sum = matrix$< (0, (acc, row) -> acc + row$< (0, (racc, x) -> racc + x))
 >> "Total sum of all elements: " >> total_sum >> " (expected: 45)" ¶
 ¶
 
-// Create identity-like pattern: multiply each element by row index
-indexed = matrix$> (row -> {
-    result = row$> (x -> x * 0)
-    <~ result
-})
+// Zero matrix: nested map with inline expression
+indexed = matrix$> (row -> row$> (x -> x * 0))
 
 >> "Zero matrix (all * 0):" ¶
 @ row:indexed {

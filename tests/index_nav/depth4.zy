@@ -1,0 +1,17 @@
+// 4-level deep nesting: tensor[a][b][c][d]
+tensor = [
+    [[[1,2],[3,4]], [[5,6],[7,8]]],
+    [[[9,10],[11,12]], [[13,14],[15,16]]]
+]
+
+// Scalar depth-4
+>> tensor[2>1>2>1] ¶
+
+// Flat diagonal depth-4
+>> tensor[1>1>1>1 ; 2>2>2>2] ¶
+
+// Range on last step at depth 4
+>> tensor[1>2>1>1..2] ¶
+
+// Structured: two groups, range on last step
+>> tensor[[1>1>1>1..2] ; [2>1>2>1..2]] ¶

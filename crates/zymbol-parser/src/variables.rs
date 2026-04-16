@@ -160,27 +160,11 @@ impl Parser {
             let span = ident_token.span.to(&binary_expr.span());
             Ok(Statement::Assignment(Assignment::new(name, binary_expr, span)))
         } else {
-            // Regular assignment: name = expr [, expr ...]
-            // Comma concatenation: fullname = first, ' ', last  (strings/values)
+            // Regular assignment: name = expr [expr ...]
+            // Juxtaposition concatenation: s = "hello" ' ' name " world"
+            // Same-line adjacent primaries are implicitly concatenated (no separator needed)
             let first = self.parse_expr()?;
-            let value = if matches!(self.peek().kind, TokenKind::Comma) {
-                // Collect comma-separated expressions and wrap in Concat chain
-                let mut acc = first;
-                while matches!(self.peek().kind, TokenKind::Comma) {
-                    self.advance(); // consume ','
-                    let next = self.parse_expr()?;
-                    let span = acc.span().to(&next.span());
-                    acc = Expr::Binary(BinaryExpr::new(
-                        BinaryOp::Add,
-                        Box::new(acc),
-                        Box::new(next),
-                        span,
-                    ));
-                }
-                acc
-            } else {
-                first
-            };
+            let value = self.parse_juxtapose_chain(first)?;
             let span = ident_token.span.to(&value.span());
             Ok(Statement::Assignment(Assignment::new(name, value, span)))
         }
@@ -204,28 +188,53 @@ impl Parser {
 
         self.advance(); // consume :=
 
-        // Parse value expression (with comma concatenation: NAME := "a", " ", "b")
+        // Parse value expression with juxtaposition concatenation: NAME := "hello" ' ' name
         let first = self.parse_expr()?;
-        let value = if matches!(self.peek().kind, TokenKind::Comma) {
-            let mut acc = first;
-            while matches!(self.peek().kind, TokenKind::Comma) {
-                self.advance(); // consume ','
-                let next = self.parse_expr()?;
-                let span = acc.span().to(&next.span());
-                acc = Expr::Binary(BinaryExpr::new(
-                    BinaryOp::Add,
-                    Box::new(acc),
-                    Box::new(next),
-                    span,
-                ));
-            }
-            acc
-        } else {
-            first
-        };
+        let value = self.parse_juxtapose_chain(first)?;
         let span = ident_token.span.to(&value.span());
 
         Ok(Statement::ConstDecl(ConstDecl::new(name, value, span)))
+    }
+
+    /// Build a juxtaposition-concatenation chain from an initial expression.
+    /// Same-line adjacent primaries are treated as implicit string concatenation:
+    ///   s = "hello" ' ' name " world"
+    /// The comma operator is no longer used for concat — use juxtaposition or + for strings.
+    pub(crate) fn parse_juxtapose_chain(&mut self, first: Expr) -> Result<Expr, Diagnostic> {
+        let mut acc = first;
+        loop {
+            let next_tok = self.peek();
+            let same_line = next_tok.span.start.line == acc.span().end.line;
+            if same_line && Self::can_juxtapose(&next_tok.kind) {
+                let next_expr = self.parse_expr()?;
+                let span = acc.span().to(&next_expr.span());
+                acc = Expr::Binary(BinaryExpr::new(
+                    BinaryOp::Concat,
+                    Box::new(acc),
+                    Box::new(next_expr),
+                    span,
+                ));
+            } else {
+                break;
+            }
+        }
+        Ok(acc)
+    }
+
+    /// Returns true if this token kind can start a juxtaposed expression.
+    /// Used to detect implicit concatenation: s = "hello" ' ' name " world"
+    /// Note: LParen is intentionally excluded — it is ambiguous with lambda
+    /// comparators (e.g. arr$^+ (a, b -> ...)) and grouped expressions.
+    pub(crate) fn can_juxtapose(kind: &TokenKind) -> bool {
+        matches!(kind,
+            TokenKind::String(_) |
+            TokenKind::StringInterpolated(_) |
+            TokenKind::Char(_) |
+            TokenKind::Integer(_) |
+            TokenKind::Float(_) |
+            TokenKind::Boolean(_) |
+            TokenKind::Ident(_)
+        )
     }
 
     /// Returns true if current `[` starts a destructure assignment (not an array literal).

@@ -16,6 +16,7 @@ use std::rc::Rc;
 
 use thiserror::Error;
 use zymbol_bytecode::{BuildPart, Chunk, CompiledProgram, FuncIdx, Instruction, Reg};
+use zymbol_lexer::digit_blocks::digit_value;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Numeral-mode helpers (mirrors zymbol-interpreter::numeral_mode)
@@ -303,6 +304,29 @@ fn cmp_direct(va: &Value, vb: &Value) -> i32 {
     }
 }
 
+fn normalize_unicode_digits(s: &str) -> Option<String> {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    if chars.peek() == Some(&'-') {
+        result.push('-');
+        chars.next();
+    }
+    let mut has_digit = false;
+    let mut has_dot = false;
+    for ch in chars {
+        if let Some(dv) = digit_value(ch) {
+            result.push(char::from_digit(dv as u32, 10).unwrap());
+            has_digit = true;
+        } else if ch == '.' && !has_dot {
+            result.push('.');
+            has_dot = true;
+        } else {
+            return None;
+        }
+    }
+    if has_digit { Some(result) } else { None }
+}
+
 #[inline(always)]
 fn get_chunk(program: &CompiledProgram, chunk_idx: usize) -> &Chunk {
     // chunk_idx == usize::MAX OR u32::MAX as usize both indicate the main chunk
@@ -331,6 +355,8 @@ pub struct VM<W: Write> {
     string_rcs: Vec<Rc<String>>,
     /// Active numeral mode: block base codepoint (0x0030 = ASCII default).
     numeral_mode: u32,
+    /// Module-level global variables (mutable, shared across all calls)
+    global_vars: Vec<Value>,
     output: W,
 }
 
@@ -343,6 +369,7 @@ impl<W: Write> VM<W> {
             pending_output_writeback: Vec::new(),
             string_rcs: Vec::new(),
             numeral_mode: 0x0030, // ASCII_BASE default
+            global_vars: Vec::new(),
             output,
         }
     }
@@ -354,6 +381,16 @@ impl<W: Write> VM<W> {
 
         // Pre-intern string pool: O(n) once, then LoadStr is O(1) Rc clone
         self.string_rcs = program.string_pool.iter().map(|s| Rc::new(s.clone())).collect();
+
+        // Initialize global variables from program inits
+        self.global_vars = program.global_var_inits.iter().map(|init| match init {
+            zymbol_bytecode::GlobalInit::Int(n) => Value::Int(*n),
+            zymbol_bytecode::GlobalInit::Float(f) => Value::Float(*f),
+            zymbol_bytecode::GlobalInit::Bool(b) => Value::Bool(*b),
+            zymbol_bytecode::GlobalInit::Char(c) => Value::Char(*c),
+            zymbol_bytecode::GlobalInit::Str(s) => Value::String(Rc::new(s.clone())),
+            zymbol_bytecode::GlobalInit::Unit => Value::Unit,
+        }).collect();
 
         // Push initial frame for main chunk
         let num_regs = program.main.num_registers as usize;
@@ -548,7 +585,30 @@ impl<W: Write> VM<W> {
                 &Instruction::NegFloat(dst, src)  => { let v = rf!(src); wreg!(dst, Value::Float(-v)); }
 
                 // ── Type conversion ─────────────────────────────────────────
-                &Instruction::IntToFloat(dst, src) => { let v = ri!(src); wreg!(dst, Value::Float(v as f64)); }
+                &Instruction::IntToFloat(dst, src) => {
+                    let v = match rreg!(src) {
+                        Value::Int(n)   => *n as f64,
+                        Value::Float(f) => *f,
+                        other => raise!(VmError::TypeError { expected: "Int or Float", got: other.type_name().to_string() }),
+                    };
+                    wreg!(dst, Value::Float(v));
+                }
+                &Instruction::FloatToIntRound(dst, src) => {
+                    let v = match rreg!(src) {
+                        Value::Float(f) => f.round() as i64,
+                        Value::Int(n)   => *n,
+                        other => raise!(VmError::TypeError { expected: "Float", got: other.type_name().to_string() }),
+                    };
+                    wreg!(dst, Value::Int(v));
+                }
+                &Instruction::FloatToIntTrunc(dst, src) => {
+                    let v = match rreg!(src) {
+                        Value::Float(f) => f.trunc() as i64,
+                        Value::Int(n)   => *n,
+                        other => raise!(VmError::TypeError { expected: "Float", got: other.type_name().to_string() }),
+                    };
+                    wreg!(dst, Value::Int(v));
+                }
 
                 // ── String ops ──────────────────────────────────────────────
                 &Instruction::ConcatStr(dst, a, b) => {
@@ -595,6 +655,27 @@ impl<W: Write> VM<W> {
                         }
                     };
                     wreg!(dst, Value::String(Rc::new(result)));
+                }
+                Instruction::ConcatBuild(dst, base_reg, item_regs) => {
+                    let (dst, base_reg) = (*dst, *base_reg);
+                    let base_val = rreg!(base_reg).clone();
+                    let result = match base_val {
+                        Value::Array(arr) => {
+                            let mut new_arr = arr.as_ref().clone();
+                            for &ir in item_regs {
+                                new_arr.push(rreg!(ir).clone());
+                            }
+                            Value::Array(Rc::new(new_arr))
+                        }
+                        other => {
+                            let mut s = other.to_string_repr();
+                            for &ir in item_regs {
+                                s.push_str(&rreg!(ir).to_string_repr());
+                            }
+                            Value::String(Rc::new(s))
+                        }
+                    };
+                    wreg!(dst, result);
                 }
                 &Instruction::StrLen(dst, src) => {
                     let n = match rreg!(src) {
@@ -1608,11 +1689,19 @@ impl<W: Write> VM<W> {
                     let result = match self.reg_get(src) {
                         Value::String(s) => {
                             let s_rc = s.clone();
-                            let s_str = s_rc.as_ref().trim();
-                            if let Ok(i) = s_str.parse::<i64>() {
+                            let trimmed = s_rc.as_ref().trim();
+                            if let Ok(i) = trimmed.parse::<i64>() {
                                 Value::Int(i)
-                            } else if let Ok(f) = s_str.parse::<f64>() {
+                            } else if let Ok(f) = trimmed.parse::<f64>() {
                                 Value::Float(f)
+                            } else if let Some(normalized) = normalize_unicode_digits(trimmed) {
+                                if let Ok(i) = normalized.parse::<i64>() {
+                                    Value::Int(i)
+                                } else if let Ok(f) = normalized.parse::<f64>() {
+                                    Value::Float(f)
+                                } else {
+                                    Value::String(s_rc)
+                                }
                             } else {
                                 Value::String(s_rc)
                             }
@@ -1751,6 +1840,8 @@ impl<W: Write> VM<W> {
                             result.push_str(&stderr_str);
                         }
                     }
+                    // Strip trailing newline (consistent with shell $(...) behavior)
+                    let result = result.trim_end_matches('\n').to_string();
                     self.reg_set(dst, Value::String(Rc::new(result)));
                 }
 
@@ -1848,6 +1939,21 @@ impl<W: Write> VM<W> {
                 &Instruction::RaiseError(msg_idx) => {
                     let msg = program.string_pool[msg_idx as usize].clone();
                     raise!(VmError::Generic(msg));
+                }
+
+                &Instruction::LoadGlobal(dst, gvar_idx) => {
+                    let val = self.global_vars
+                        .get(gvar_idx as usize)
+                        .cloned()
+                        .unwrap_or(Value::Unit);
+                    wreg!(dst, val);
+                }
+
+                &Instruction::StoreGlobal(gvar_idx, src) => {
+                    let val = rreg!(src).clone();
+                    if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
+                        *slot = val;
+                    }
                 }
 
                 Instruction::Halt => return Ok(()),
@@ -2038,6 +2144,27 @@ impl<W: Write> VM<W> {
                     };
                     w!(dst, Value::String(Rc::new(result)));
                 }
+                Instruction::ConcatBuild(dst, base_reg, item_regs) => {
+                    let (dst, base_reg) = (*dst, *base_reg);
+                    let base_val = r!(base_reg).clone();
+                    let result = match base_val {
+                        Value::Array(arr) => {
+                            let mut new_arr = arr.as_ref().clone();
+                            for &ir in item_regs {
+                                new_arr.push(r!(ir).clone());
+                            }
+                            Value::Array(Rc::new(new_arr))
+                        }
+                        other => {
+                            let mut s = other.to_string_repr();
+                            for &ir in item_regs {
+                                s.push_str(&r!(ir).to_string_repr());
+                            }
+                            Value::String(Rc::new(s))
+                        }
+                    };
+                    w!(dst, result);
+                }
                 &Instruction::MakeFunc(dst, func_idx) => {
                     w!(dst, Value::Function(func_idx));
                 }
@@ -2121,6 +2248,357 @@ impl<W: Write> VM<W> {
                     };
                     self.value_stack[base + dst as usize] = result;
                 }
+
+                // ── Array/Tuple indexing ──────────────────────────────────────
+                &Instruction::ArrayGet(dst, arr_reg, idx_reg) => {
+                    let idx = match r!(idx_reg) { Value::Int(n) => *n, _ => 0 };
+                    let val = match r!(arr_reg).clone() {
+                        Value::Array(arr) => {
+                            let i = if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
+                            if i >= 0 && (i as usize) < arr.len() { arr[i as usize].clone() } else {
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                            }
+                        }
+                        Value::Tuple(items) => {
+                            let i = if idx < 0 { items.len() as i64 + idx } else { idx - 1 };
+                            if i >= 0 && (i as usize) < items.len() { items[i as usize].clone() } else {
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: items.len() });
+                            }
+                        }
+                        Value::NamedTuple(fields) => {
+                            let i = if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
+                            if i >= 0 && (i as usize) < fields.len() { fields[i as usize].1.clone() } else {
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
+                            }
+                        }
+                        Value::String(s) => {
+                            let char_count = s.chars().count();
+                            let i = if idx < 0 { char_count as i64 + idx } else { idx - 1 };
+                            if i >= 0 && (i as usize) < char_count {
+                                Value::Char(s.chars().nth(i as usize).unwrap())
+                            } else {
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: char_count });
+                            }
+                        }
+                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    w!(dst, val);
+                }
+                &Instruction::ArrayLen(dst, src) => {
+                    let n = match r!(src) {
+                        Value::Array(arr) => arr.len() as i64,
+                        Value::String(s)  => if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 },
+                        _ => 0,
+                    };
+                    w!(dst, Value::Int(n));
+                }
+                &Instruction::NewArray(dst) => { w!(dst, Value::Array(Rc::new(Vec::new()))); }
+                &Instruction::ArrayPush(arr_reg, val_reg) => {
+                    let val = r!(val_reg).clone();
+                    if let Value::Array(rc) = &mut self.value_stack[base + arr_reg as usize] {
+                        Rc::make_mut(rc).push(val);
+                    }
+                }
+                &Instruction::ArrayContains(dst, arr_reg, elem_reg) => {
+                    let elem = r!(elem_reg).clone();
+                    let found = match r!(arr_reg) {
+                        Value::Array(arr) => arr.iter().any(|v| v.equals(&elem)),
+                        _ => false,
+                    };
+                    w!(dst, Value::Bool(found));
+                }
+
+                // ── Integer arithmetic (missing from secondary loop) ──────────
+                &Instruction::DivInt(dst, a, b) => {
+                    if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
+                        if *vb == 0 { return Err(VmError::DivisionByZero); }
+                        w!(dst, Value::Int(va / vb));
+                    }
+                }
+                &Instruction::PowInt(dst, a, b) => {
+                    if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
+                        w!(dst, Value::Int(va.wrapping_pow(*vb as u32)));
+                    }
+                }
+                &Instruction::NegInt(dst, src) => {
+                    if let Value::Int(v) = r!(src) { w!(dst, Value::Int(-v)); }
+                }
+
+                // ── Float arithmetic ─────────────────────────────────────────
+                &Instruction::AddFloat(dst, a, b) => {
+                    let (va, vb) = match (r!(a), r!(b)) {
+                        (Value::Float(x), Value::Float(y)) => (*x, *y),
+                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
+                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
+                        _ => return Ok(Value::Unit),
+                    };
+                    w!(dst, Value::Float(va + vb));
+                }
+                &Instruction::SubFloat(dst, a, b) => {
+                    let (va, vb) = match (r!(a), r!(b)) {
+                        (Value::Float(x), Value::Float(y)) => (*x, *y),
+                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
+                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
+                        _ => return Ok(Value::Unit),
+                    };
+                    w!(dst, Value::Float(va - vb));
+                }
+                &Instruction::MulFloat(dst, a, b) => {
+                    let (va, vb) = match (r!(a), r!(b)) {
+                        (Value::Float(x), Value::Float(y)) => (*x, *y),
+                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
+                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
+                        _ => return Ok(Value::Unit),
+                    };
+                    w!(dst, Value::Float(va * vb));
+                }
+                &Instruction::DivFloat(dst, a, b) => {
+                    let (va, vb) = match (r!(a), r!(b)) {
+                        (Value::Float(x), Value::Float(y)) => (*x, *y),
+                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
+                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
+                        _ => return Ok(Value::Unit),
+                    };
+                    w!(dst, Value::Float(va / vb));
+                }
+                &Instruction::PowFloat(dst, a, b) => {
+                    let (va, vb) = match (r!(a), r!(b)) {
+                        (Value::Float(x), Value::Float(y)) => (*x, *y),
+                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
+                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
+                        _ => return Ok(Value::Unit),
+                    };
+                    w!(dst, Value::Float(va.powf(vb)));
+                }
+                &Instruction::NegFloat(dst, src) => {
+                    match r!(src) {
+                        Value::Float(f) => { let v = -f; w!(dst, Value::Float(v)); }
+                        Value::Int(n)   => { let v = *n as f64; w!(dst, Value::Float(-v)); }
+                        _ => {}
+                    }
+                }
+                &Instruction::IntToFloat(dst, src) => {
+                    match r!(src) {
+                        Value::Int(n)   => { let v = *n as f64; w!(dst, Value::Float(v)); }
+                        Value::Float(f) => { let v = *f; w!(dst, Value::Float(v)); }
+                        _ => {}
+                    }
+                }
+                &Instruction::FloatToIntRound(dst, src) => {
+                    match r!(src) {
+                        Value::Float(f) => { let v = f.round() as i64; w!(dst, Value::Int(v)); }
+                        Value::Int(n)   => { let v = *n; w!(dst, Value::Int(v)); }
+                        _ => {}
+                    }
+                }
+                &Instruction::FloatToIntTrunc(dst, src) => {
+                    match r!(src) {
+                        Value::Float(f) => { let v = f.trunc() as i64; w!(dst, Value::Int(v)); }
+                        Value::Int(n)   => { let v = *n; w!(dst, Value::Int(v)); }
+                        _ => {}
+                    }
+                }
+
+                // ── Logical ──────────────────────────────────────────────────
+                &Instruction::And(dst, a, b) => {
+                    let res = r!(a).is_truthy() && r!(b).is_truthy();
+                    w!(dst, Value::Bool(res));
+                }
+                &Instruction::Or(dst, a, b) => {
+                    let res = r!(a).is_truthy() || r!(b).is_truthy();
+                    w!(dst, Value::Bool(res));
+                }
+
+                // ── Tuples ───────────────────────────────────────────────────
+                Instruction::MakeTuple(dst, regs) => {
+                    let dst = *dst;
+                    let items: Vec<Value> = regs.iter().map(|&r| self.value_stack[base + r as usize].clone()).collect();
+                    w!(dst, Value::Tuple(Rc::new(items)));
+                }
+                Instruction::MakeNamedTuple(dst, field_names, field_regs) => {
+                    let dst = *dst;
+                    let fields: Vec<(String, Value)> = field_names.iter().zip(field_regs.iter())
+                        .map(|(&ni, &ri)| (program.string_pool[ni as usize].clone(), self.value_stack[base + ri as usize].clone()))
+                        .collect();
+                    w!(dst, Value::NamedTuple(Rc::new(fields)));
+                }
+
+                // ── String ops ───────────────────────────────────────────────
+                &Instruction::StrLen(dst, src) => {
+                    let n = match r!(src) {
+                        Value::String(s) => if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 },
+                        Value::Array(a)  => a.len() as i64,
+                        _ => 0,
+                    };
+                    w!(dst, Value::Int(n));
+                }
+                &Instruction::StrContains(dst, str_reg, elem_reg) => {
+                    let found = match (r!(str_reg), r!(elem_reg)) {
+                        (Value::String(s), Value::String(p)) => s.contains(p.as_ref()),
+                        (Value::String(s), Value::Char(c))   => s.contains(*c),
+                        _ => false,
+                    };
+                    w!(dst, Value::Bool(found));
+                }
+                Instruction::BuildStr(dst, parts) => {
+                    let dst = *dst;
+                    let mut result = String::new();
+                    for part in parts {
+                        match part {
+                            zymbol_bytecode::BuildPart::Lit(idx) => result.push_str(&program.string_pool[*idx as usize]),
+                            zymbol_bytecode::BuildPart::Reg(reg) => result.push_str(&self.value_stack[base + *reg as usize].to_string_repr()),
+                        }
+                    }
+                    w!(dst, Value::String(Rc::new(result)));
+                }
+
+                // ── Output ───────────────────────────────────────────────────
+                &Instruction::Print(src) => {
+                    let mode = self.numeral_mode;
+                    match r!(src) {
+                        Value::String(s)  => { let _ = write!(self.output, "{}", s); }
+                        Value::Int(n)     => { let _ = write!(self.output, "{}", numeral_int(*n, mode)); }
+                        Value::Float(f)   => { let _ = write!(self.output, "{}", numeral_float(*f, mode)); }
+                        Value::Bool(b)    => { let _ = write!(self.output, "{}", numeral_bool(*b, mode)); }
+                        Value::Char(c)    => { let _ = write!(self.output, "{}", c); }
+                        Value::Unit       => {}
+                        other             => { let _ = write!(self.output, "{}", other); }
+                    }
+                }
+                &Instruction::PrintNewline => { let _ = writeln!(self.output); }
+
+                // ── HOF (nested) ──────────────────────────────────────────────
+                &Instruction::ArrayMap(dst, arr_reg, func_reg) => {
+                    let callable = self.value_stack[base + func_reg as usize].clone();
+                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
+                        Value::Array(a) => a.as_ref().clone(),
+                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    let mut results = Vec::with_capacity(arr.len());
+                    for elem in arr {
+                        let result = self.call_callable(callable.clone(), vec![elem], program, 0, chunk_idx)?;
+                        results.push(result);
+                    }
+                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
+                }
+                &Instruction::ArrayFilter(dst, arr_reg, func_reg) => {
+                    let callable = self.value_stack[base + func_reg as usize].clone();
+                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
+                        Value::Array(a) => a.as_ref().clone(),
+                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    let mut results = Vec::new();
+                    for elem in arr {
+                        let keep = self.call_callable(callable.clone(), vec![elem.clone()], program, 0, chunk_idx)?;
+                        if keep.is_truthy() { results.push(elem); }
+                    }
+                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
+                }
+                &Instruction::ArrayReduce(dst, arr_reg, init_reg, func_reg) => {
+                    let callable = self.value_stack[base + func_reg as usize].clone();
+                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
+                        Value::Array(a) => a.as_ref().clone(),
+                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    let mut acc = self.value_stack[base + init_reg as usize].clone();
+                    for elem in arr {
+                        acc = self.call_callable(callable.clone(), vec![acc, elem], program, 0, chunk_idx)?;
+                    }
+                    self.value_stack[base + dst as usize] = acc;
+                }
+                &Instruction::ArraySort(dst, arr_reg, ascending, func_reg) => {
+                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
+                        Value::Array(a) => a.as_ref().clone(),
+                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    let mut items = arr;
+                    if func_reg == u16::MAX {
+                        items.sort_by(|a, b| vm_natural_cmp(a, b));
+                        if !ascending { items.reverse(); }
+                    } else {
+                        let callable = self.value_stack[base + func_reg as usize].clone();
+                        let n = items.len();
+                        for i in 0..n {
+                            for j in 0..n.saturating_sub(i + 1) {
+                                let keep = self.call_callable(callable.clone(), vec![items[j].clone(), items[j+1].clone()], program, 0, chunk_idx)?;
+                                if !keep.is_truthy() { items.swap(j, j+1); }
+                            }
+                        }
+                    }
+                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(items));
+                }
+
+                // ── Data ops ────────────────────────────────────────────────
+                &Instruction::NumericEval(dst, src) => {
+                    let result = match r!(src) {
+                        Value::String(s) => {
+                            let s_rc = s.clone();
+                            let trimmed = s_rc.as_ref().trim();
+                            if let Ok(i) = trimmed.parse::<i64>() { Value::Int(i) }
+                            else if let Ok(f) = trimmed.parse::<f64>() { Value::Float(f) }
+                            else if let Some(norm) = normalize_unicode_digits(trimmed) {
+                                if let Ok(i) = norm.parse::<i64>() { Value::Int(i) }
+                                else if let Ok(f) = norm.parse::<f64>() { Value::Float(f) }
+                                else { Value::String(s_rc) }
+                            } else { Value::String(s_rc) }
+                        }
+                        Value::Int(n) => Value::Int(*n),
+                        Value::Float(f) => Value::Float(*f),
+                        other => other.clone(),
+                    };
+                    w!(dst, result);
+                }
+                &Instruction::TypeOf(dst, src) => {
+                    let val = r!(src).clone();
+                    let (type_sym, len) = match &val {
+                        Value::Int(n) => ("###", n.to_string().len() as i64),
+                        Value::Float(fl) => ("##.", fl.to_string().len() as i64),
+                        Value::String(s) => ("##\"", s.as_ref().chars().count() as i64),
+                        Value::Char(_) => ("##'", 1),
+                        Value::Bool(_) => ("##?", 1),
+                        Value::Array(a) => ("##]", a.as_ref().len() as i64),
+                        _ => ("##_", 0),
+                    };
+                    w!(dst, Value::Tuple(Rc::new(vec![val.clone(), Value::String(Rc::new(type_sym.to_string())), Value::Int(len)])));
+                }
+
+                // ── Precision ops ────────────────────────────────────────────
+                &Instruction::RoundFloat(dst, src, prec) => {
+                    match r!(src) {
+                        Value::Float(f) => {
+                            let factor = 10f64.powi(prec as i32);
+                            w!(dst, Value::Float((f * factor).round() / factor));
+                        }
+                        Value::Int(n) => { w!(dst, Value::Int(*n)); }
+                        _ => {}
+                    }
+                }
+                &Instruction::TruncFloat(dst, src, prec) => {
+                    match r!(src) {
+                        Value::Float(f) => {
+                            let factor = 10f64.powi(prec as i32);
+                            w!(dst, Value::Float((f * factor).trunc() / factor));
+                        }
+                        Value::Int(n) => { w!(dst, Value::Int(*n)); }
+                        _ => {}
+                    }
+                }
+
+                &Instruction::LoadGlobal(dst, gvar_idx) => {
+                    let val = self.global_vars
+                        .get(gvar_idx as usize)
+                        .cloned()
+                        .unwrap_or(Value::Unit);
+                    w!(dst, val);
+                }
+
+                &Instruction::StoreGlobal(gvar_idx, src) => {
+                    let val = r!(src).clone();
+                    if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
+                        *slot = val;
+                    }
+                }
+
                 _ => {
                     // For unsupported instructions in HOF mini-VM, skip
                 }

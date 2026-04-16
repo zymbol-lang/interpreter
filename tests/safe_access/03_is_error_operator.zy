@@ -1,0 +1,15 @@
+// Test: $! operator — check if a value is an error
+
+// Normal values: $! returns #0
+x = 42
+? x$! { >> "error" ¶ } _ { >> "not error" ¶ }
+
+y = "hello"
+? y$! { >> "error" ¶ } _ { >> "not error" ¶ }
+
+arr = [1, 2, 3]
+? arr$! { >> "error" ¶ } _ { >> "not error" ¶ }
+
+// Bool values
+flag = #1
+? flag$! { >> "error" ¶ } _ { >> "not error" ¶ }

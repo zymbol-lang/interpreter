@@ -1,0 +1,18 @@
+// Error cases — out-of-bounds and index 0 in nav paths
+// These produce runtime errors; caught with try/catch (!? ... :! ...)
+
+// Index 0 is always invalid
+!? {
+    matriz = [[1,2], [3,4]]
+    >> matriz[1>0] ¶
+} :! {
+    >> "caught: index 0 is invalid" ¶
+}
+
+// Row out of bounds
+!? {
+    matriz = [[1,2], [3,4]]
+    >> matriz[5>1] ¶
+} :! {
+    >> "caught: out of bounds" ¶
+}

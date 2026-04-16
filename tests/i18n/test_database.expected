@@ -1,0 +1,52 @@
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_database.zy:50:20
+[1m[34m  50[39m[0m [34m|[39m
+[1m[34m  50[39m[0m [34m|[39m total = <\ sqlite3 {database} "SELECT COUNT(*) FROM usuarios;" \>
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_database.zy:50:29
+[1m[34m  50[39m[0m [34m|[39m
+[1m[34m  50[39m[0m [34m|[39m total = <\ sqlite3 {database} "SELECT COUNT(*) FROM usuarios;" \>
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: String("SELECT COUNT(*) FROM usuarios;")
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_database.zy:50:31
+[1m[34m  50[39m[0m [34m|[39m
+[1m[34m  50[39m[0m [34m|[39m total = <\ sqlite3 {database} "SELECT COUNT(*) FROM usuarios;" \>
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_database.zy:50:64
+[1m[34m  50[39m[0m [34m|[39m
+[1m[34m  50[39m[0m [34m|[39m total = <\ sqlite3 {database} "SELECT COUNT(*) FROM usuarios;" \>
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_database.zy:53:22
+[1m[34m  53[39m[0m [34m|[39m
+[1m[34m  53[39m[0m [34m|[39m mayores = <\ sqlite3 {database} "SELECT nombre, edad FROM usuarios WHERE edad > 25;" \>
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_database.zy:53:31
+[1m[34m  53[39m[0m [34m|[39m
+[1m[34m  53[39m[0m [34m|[39m mayores = <\ sqlite3 {database} "SELECT nombre, edad FROM usuarios WHERE edad > 25;" \>
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: String("SELECT nombre, edad FROM usuarios WHERE edad > 25;")
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_database.zy:53:33
+[1m[34m  53[39m[0m [34m|[39m
+[1m[34m  53[39m[0m [34m|[39m mayores = <\ sqlite3 {database} "SELECT nombre, edad FROM usuarios WHERE edad > 25;" \>
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_database.zy:53:86
+[1m[34m  53[39m[0m [34m|[39m
+[1m[34m  53[39m[0m [34m|[39m mayores = <\ sqlite3 {database} "SELECT nombre, edad FROM usuarios WHERE edad > 25;" \>
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_database.zy:67:20
+[1m[34m  67[39m[0m [34m|[39m
+[1m[34m  67[39m[0m [34m|[39m dummy = <\ rm "-f" {database} \>
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_database.zy:67:29
+[1m[34m  67[39m[0m [34m|[39m
+[1m[34m  67[39m[0m [34m|[39m dummy = <\ rm "-f" {database} \>
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_database.zy:67:31
+[1m[34m  67[39m[0m [34m|[39m
+[1m[34m  67[39m[0m [34m|[39m dummy = <\ rm "-f" {database} \>
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)

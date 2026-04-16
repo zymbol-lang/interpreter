@@ -1,0 +1,11 @@
+// G11: alias::fn() as void statement — no assignment required
+// Before fix: parser rejected module function calls at statement level,
+// requiring the workaround: disc = ui::banner()
+
+<# ./g11_printer_mod <= ui
+
+// All of these are void calls — result is discarded
+ui::banner()
+ui::show_info("ready")
+ui::show_info("running tests")
+ui::show_count("items", 3)

@@ -1,0 +1,19 @@
+=== MATRIX OPERATIONS TEST ===
+Original matrix:
+1 2 3 
+4 5 6 
+7 8 9 
+Doubled matrix:
+2 4 6 
+8 10 12 
+14 16 18 
+Row sums: 6 15 24  (expected: 6 15 24)
+Rows with sum > 10:
+4 5 6 
+7 8 9 
+Total sum of all elements: 45 (expected: 45)
+Zero matrix (all * 0):
+0 0 0 
+0 0 0 
+0 0 0 
+=== TEST PASSED ===

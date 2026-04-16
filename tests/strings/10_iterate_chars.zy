@@ -5,7 +5,7 @@ count = 0
 
 // Collect chars
 result = ""
-@ c:"abc" { result = result, c }
+@ c:"abc" { result = "{result}{c}" }
 >> result ¶
 
 // Count specific char

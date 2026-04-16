@@ -6,6 +6,7 @@
 //! - Format expressions: #,|expr| (thousands), #^|expr| (scientific)
 //! - Base conversions: 0x|expr|, 0b|expr|, 0o|expr|, 0d|expr| (char/int/text)
 //! - Precision expressions: #.N|expr| (round), #!N|expr| (truncate)
+//! - Numeric casts: ##.expr (→Float), ###expr (→Int round), ##!expr (→Int trunc)
 
 use zymbol_span::Span;
 use crate::Expr;
@@ -155,5 +156,31 @@ impl RoundExpr {
 impl TruncExpr {
     pub fn new(precision: u32, expr: Box<Expr>, span: Span) -> Self {
         Self { precision, expr, span }
+    }
+}
+
+/// Numeric cast kind
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CastKind {
+    /// ##. — cast to Float (lossless from Int)
+    ToFloat,
+    /// ### — cast to Int rounding (Float 3.7 → 4)
+    ToIntRound,
+    /// ##! — cast to Int truncating (Float 3.7 → 3)
+    ToIntTrunc,
+}
+
+/// Numeric cast expression: ##.expr / ###expr / ##!expr
+/// Explicit type conversion between numeric types.
+#[derive(Debug, Clone)]
+pub struct NumericCastExpr {
+    pub kind: CastKind,
+    pub expr: Box<Expr>,
+    pub span: Span,
+}
+
+impl NumericCastExpr {
+    pub fn new(kind: CastKind, expr: Box<Expr>, span: Span) -> Self {
+        Self { kind, expr, span }
     }
 }

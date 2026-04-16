@@ -1,0 +1,38 @@
+// Test: output parameters (<~) — pass by reference patterns
+
+// Increment: modifies caller's variable
+increment(counter<~) {
+    counter = counter + 1
+}
+
+x = 0
+increment(x)
+>> x ¶
+
+increment(x)
+increment(x)
+>> x ¶
+
+// Swap: exchanges two variables
+swap(a<~, b<~) {
+    tmp = a
+    a = b
+    b = tmp
+}
+
+p = 10
+q = 20
+swap(p, q)
+>> p ¶
+>> q ¶
+
+// Output param + return value simultaneously
+get_and_increment(val<~) {
+    val = val + 1
+    <~ val
+}
+
+n = 5
+result = get_and_increment(n)
+>> result ¶
+>> n ¶

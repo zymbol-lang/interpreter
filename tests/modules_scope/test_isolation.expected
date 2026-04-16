@@ -1,0 +1,14 @@
+=== Testing Module Isolation ===
+--- Main program variable ---
+Main variable: I am in main program
+--- Calling module function (should NOT see main_variable) ---
+Safe function - using only parameter: test data
+Result: test data [processed]
+--- Module function with local variable ---
+Local: local to module function
+Param: 10
+Result: 20
+--- Verify main_variable still exists in main ---
+Main variable: I am in main program
+=== Isolation test passed! ===
+Module functions correctly isolated from main program

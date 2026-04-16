@@ -4,9 +4,9 @@
 //! Phase 1: Parses assignments and identifiers
 
 use zymbol_ast::{
-    BasePrefix, Block, CollectionLengthExpr, Expr, FormatKind,
+    BasePrefix, Block, CastKind, CollectionLengthExpr, Expr, ExprStatement, FormatKind,
     FunctionCallExpr, IdentifierExpr, IndexExpr, LiteralExpr,
-    Program, RangeExpr, Statement, TypeMetadataExpr,
+    NumericCastExpr, Program, RangeExpr, Statement, TypeMetadataExpr,
 };
 use zymbol_common::Literal;
 use zymbol_error::Diagnostic;
@@ -27,6 +27,7 @@ mod data_ops;
 mod script_exec;
 mod modules;
 mod error_handling;
+mod index_nav;
 
 /// Parser for Zymbol source code
 pub struct Parser {
@@ -71,6 +72,33 @@ impl Parser {
             }
         }
 
+        // G14 fix: allow #> export block after imports.
+        // The canonical position is right after # module_name (parsed in parse_module_declaration).
+        // This second check allows: # name → <# imports → #> { exports } → code.
+        // If #> already appeared right after # name, this branch is skipped (export_block is Some).
+        let module_decl = if matches!(self.peek().kind, TokenKind::ExportBlock) {
+            match self.parse_export_block() {
+                Ok(block) => match module_decl {
+                    Some(mut decl) => {
+                        if decl.export_block.is_none() {
+                            decl.export_block = Some(block);
+                        }
+                        Some(decl)
+                    }
+                    None => {
+                        // #> without a module declaration — ignore silently
+                        module_decl
+                    }
+                },
+                Err(diag) => {
+                    self.diagnostics.push(diag);
+                    module_decl
+                }
+            }
+        } else {
+            module_decl
+        };
+
         // Parse regular statements
         let mut statements = Vec::new();
         while !self.is_at_end() {
@@ -113,7 +141,7 @@ impl Parser {
             TokenKind::CliArgsCapture => self.parse_cli_args_capture(),
             TokenKind::Question => self.parse_if(),
             TokenKind::DoubleQuestion => self.parse_match_statement(),
-            TokenKind::At => self.parse_loop(),
+            TokenKind::At | TokenKind::AtLabel(_) => self.parse_loop(),
             TokenKind::AtBreak => self.parse_break(),
             TokenKind::AtContinue => self.parse_continue(),
             TokenKind::TryBlock => self.parse_try_statement(),
@@ -130,6 +158,11 @@ impl Parser {
                 // Check for const declaration first (:=)
                 if self.peek_ahead(1).map(|t| matches!(t.kind, TokenKind::ConstAssign)).unwrap_or(false) {
                     return self.parse_const_decl();
+                }
+
+                // Check for module void call: alias::fn(...) — GAP G11
+                if self.peek_ahead(1).map(|t| matches!(t.kind, TokenKind::ScopeResolution)).unwrap_or(false) {
+                    return self.parse_function_call_statement();
                 }
 
                 if self.peek_ahead(1).map(|t| matches!(t.kind, TokenKind::LParen)).unwrap_or(false) {
@@ -193,6 +226,12 @@ impl Parser {
                         .with_span(span)
                         .with_help("use '(a, b) = expr' for tuple destructuring"))
                 }
+            }
+            TokenKind::BashOpen => {
+                // BashExec as void statement: <\ expr... \> (side-effect only, result discarded)
+                let expr = self.parse_expr()?;
+                let span = expr.span();
+                Ok(Statement::Expr(ExprStatement::new(expr, span)))
             }
             TokenKind::Eof => Err(Diagnostic::error("unexpected end of file")
                 .with_span(token.span)),
@@ -305,20 +344,24 @@ impl Parser {
                     if self.peek().span.start.line != expr.span().end.line {
                         break;
                     }
-                    self.advance(); // consume [
+                    if self.is_nav_index() {
+                        expr = self.parse_nav_index(expr)?;
+                    } else {
+                        self.advance(); // consume [
 
-                    let index = self.parse_expr()?;
+                        let index = self.parse_expr()?;
 
-                    let close_token = self.peek().clone();
-                    if !matches!(close_token.kind, TokenKind::RBracket) {
-                        return Err(Diagnostic::error("expected ']' after index")
-                            .with_span(close_token.span)
-                            .with_help("array indexing must use brackets: arr[index]"));
+                        let close_token = self.peek().clone();
+                        if !matches!(close_token.kind, TokenKind::RBracket) {
+                            return Err(Diagnostic::error("expected ']' after index")
+                                .with_span(close_token.span)
+                                .with_help("array indexing must use brackets: arr[index]"));
+                        }
+                        self.advance(); // consume ]
+
+                        let span = expr.span().to(&close_token.span);
+                        expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
                     }
-                    self.advance(); // consume ]
-
-                    let span = expr.span().to(&close_token.span);
-                    expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
                 }
                 TokenKind::Dot => {
                     self.advance(); // consume .
@@ -419,6 +462,9 @@ impl Parser {
                 }
                 TokenKind::DollarTildeTilde => {
                     expr = self.parse_string_replace(expr)?;
+                }
+                TokenKind::DollarSlash => {
+                    expr = self.parse_string_split(expr)?;
                 }
                 TokenKind::DollarTilde => {
                     expr = self.parse_collection_update(expr)?;
@@ -526,20 +572,24 @@ impl Parser {
                     if self.peek().span.start.line != expr.span().end.line {
                         break;
                     }
-                    self.advance(); // consume [
+                    if self.is_nav_index() {
+                        expr = self.parse_nav_index(expr)?;
+                    } else {
+                        self.advance(); // consume [
 
-                    let index = self.parse_expr()?;
+                        let index = self.parse_expr()?;
 
-                    let close_token = self.peek().clone();
-                    if !matches!(close_token.kind, TokenKind::RBracket) {
-                        return Err(Diagnostic::error("expected ']' after index")
-                            .with_span(close_token.span)
-                            .with_help("array indexing must use brackets: arr[index]"));
+                        let close_token = self.peek().clone();
+                        if !matches!(close_token.kind, TokenKind::RBracket) {
+                            return Err(Diagnostic::error("expected ']' after index")
+                                .with_span(close_token.span)
+                                .with_help("array indexing must use brackets: arr[index]"));
+                        }
+                        self.advance(); // consume ]
+
+                        let span = expr.span().to(&close_token.span);
+                        expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
                     }
-                    self.advance(); // consume ]
-
-                    let span = expr.span().to(&close_token.span);
-                    expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
                 }
                 TokenKind::Dot => {
                     self.advance(); // consume .
@@ -594,6 +644,9 @@ impl Parser {
                 TokenKind::DollarTildeTilde => {
                     expr = self.parse_string_replace(expr)?;
                 }
+                TokenKind::DollarSlash => {
+                    expr = self.parse_string_split(expr)?;
+                }
                 TokenKind::DollarLBracket => {
                     expr = self.parse_collection_slice(expr)?;
                 }
@@ -647,7 +700,8 @@ impl Parser {
                 )))
             }
             TokenKind::StringInterpolated(parts) => {
-                // Reconstruct "{var}" form so the compiler's interpolation path handles it
+                // Reconstruct "{var}" form — stored as InterpolatedString so the
+                // interpreter resolves variables at runtime without touching plain strings
                 let mut reconstructed = String::new();
                 for part in parts {
                     match part {
@@ -661,7 +715,7 @@ impl Parser {
                 }
                 self.advance(); // consume interpolated string token
                 Ok(Expr::Literal(LiteralExpr::new(
-                    Literal::String(reconstructed),
+                    Literal::InterpolatedString(reconstructed),
                     token.span,
                 )))
             }
@@ -839,6 +893,30 @@ impl Parser {
                 // Parse numeric evaluation: #|expr|
                 self.parse_numeric_eval()
             }
+            TokenKind::HashHashDot => {
+                // Cast to Float: ##.expr
+                let start = self.peek().span;
+                self.advance(); // consume ##.
+                let expr = self.parse_postfix()?;
+                let span = start.to(&expr.span());
+                Ok(Expr::NumericCast(NumericCastExpr::new(CastKind::ToFloat, Box::new(expr), span)))
+            }
+            TokenKind::HashHashHash => {
+                // Cast to Int rounding: ###expr
+                let start = self.peek().span;
+                self.advance(); // consume ###
+                let expr = self.parse_postfix()?;
+                let span = start.to(&expr.span());
+                Ok(Expr::NumericCast(NumericCastExpr::new(CastKind::ToIntRound, Box::new(expr), span)))
+            }
+            TokenKind::HashHashBang => {
+                // Cast to Int truncating: ##!expr
+                let start = self.peek().span;
+                self.advance(); // consume ##!
+                let expr = self.parse_postfix()?;
+                let span = start.to(&expr.span());
+                Ok(Expr::NumericCast(NumericCastExpr::new(CastKind::ToIntTrunc, Box::new(expr), span)))
+            }
             TokenKind::HashDot => {
                 // Parse round expression: #.N|expr|
                 self.parse_round_expr()
@@ -875,8 +953,8 @@ impl Parser {
                 // Parse execute expression: </ file.zy />
                 self.parse_execute_expr()
             }
-            TokenKind::BashCommand(_) => {
-                // Parse bash execute expression: <\ command \>
+            TokenKind::BashOpen => {
+                // Parse bash execute expression: <\ expr... \>
                 self.parse_bash_exec_expr()
             }
             TokenKind::Eof => Err(Diagnostic::error("expected expression, found end of file")

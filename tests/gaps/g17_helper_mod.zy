@@ -1,0 +1,9 @@
+// Module used by g17_script_toplevel_functions.zy
+// G17: import aliases must be visible inside top-level script functions
+
+# g17_helper
+#> { greet, make_label }
+
+greet(name) { <~ "Hello, " $++ name }
+
+make_label(prefix, suffix) { <~ prefix $++ ": " $++ suffix }

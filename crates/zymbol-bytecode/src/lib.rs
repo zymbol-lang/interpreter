@@ -49,9 +49,15 @@ pub enum Instruction {
     PowFloat(Reg, Reg, Reg),
     NegFloat(Reg, Reg),
     IntToFloat(Reg, Reg),
+    /// dst = (src as Float).round() as Int  — ##|expr| / ###expr
+    FloatToIntRound(Reg, Reg),
+    /// dst = (src as Float).trunc() as Int  — ##!expr
+    FloatToIntTrunc(Reg, Reg),
 
     // ── String ops ────────────────────────────────────────────────────────
     ConcatStr(Reg, Reg, Reg),
+    /// dst = base $++ item0 item1 …  — concat string parts, or push to array
+    ConcatBuild(Reg, Reg, Vec<Reg>),
     StrLen(Reg, Reg),
     /// dst = str.split(char_reg) → Array of Strings
     StrSplit(Reg, Reg, Reg),
@@ -206,6 +212,12 @@ pub enum Instruction {
     /// On Return, callee's param registers are written back to caller's dst registers.
     SetupOutputWriteback(Vec<(u16, Reg)>),
 
+    // ── Module global vars ────────────────────────────────────────────────
+    /// Load a module-level global variable: dst = global_vars[idx]
+    LoadGlobal(Reg, u16),
+    /// Store to a module-level global variable: global_vars[idx] = src
+    StoreGlobal(u16, Reg),
+
     // ── Halt ─────────────────────────────────────────────────────────────
     Halt,
 }
@@ -238,11 +250,24 @@ impl Chunk {
     }
 }
 
+/// Initial value for a module-level global variable
+#[derive(Debug, Clone)]
+pub enum GlobalInit {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Char(char),
+    Str(String),
+    Unit,
+}
+
 #[derive(Debug)]
 pub struct CompiledProgram {
     pub main: Chunk,
     pub functions: Vec<Chunk>,
     pub string_pool: Vec<String>,
+    /// Initial values for module global variables (indexed by LoadGlobal/StoreGlobal idx)
+    pub global_var_inits: Vec<GlobalInit>,
 }
 
 impl CompiledProgram {
@@ -251,6 +276,7 @@ impl CompiledProgram {
             main,
             functions: Vec::new(),
             string_pool: Vec::new(),
+            global_var_inits: Vec::new(),
         }
     }
 }

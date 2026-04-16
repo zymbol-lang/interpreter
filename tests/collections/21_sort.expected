@@ -1,0 +1,30 @@
+[1m[31merror[39m[0m: unexpected token: Assign
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/21_sort.zy:7:6
+[1m[34m   7[39m[0m [34m|[39m
+[1m[34m   7[39m[0m [34m|[39m desc = nums$^-
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/21_sort.zy:7:12
+[1m[34m   7[39m[0m [34m|[39m
+[1m[34m   7[39m[0m [34m|[39m desc = nums$^-
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: Assign
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/21_sort.zy:16:4
+[1m[34m  16[39m[0m [34m|[39m
+[1m[34m  16[39m[0m [34m|[39m wd = words$^-
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/21_sort.zy:16:11
+[1m[34m  16[39m[0m [34m|[39m
+[1m[34m  16[39m[0m [34m|[39m wd = words$^-
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: Assign
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/21_sort.zy:28:4
+[1m[34m  28[39m[0m [34m|[39m
+[1m[34m  28[39m[0m [34m|[39m fd = flt$^-
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/21_sort.zy:28:9
+[1m[34m  28[39m[0m [34m|[39m
+[1m[34m  28[39m[0m [34m|[39m fd = flt$^-
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable

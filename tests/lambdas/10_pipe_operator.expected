@@ -1,0 +1,18 @@
+=== PIPE OPERATOR TESTS ===
+1. Simple Pipe with Lambda:
+  5 |> (x -> x * 2)(_) = 10
+2. Pipe with Multi-Parameter Lambda:
+  10 |> add(_, 5) = 15
+3. Chained Pipes:
+  5 |> double(_) |> add_ten(_) = 20
+4. Pipe with Helper Function:
+  7 |> square(_) = 49
+5. Pipe with Multiple Arguments:
+  5 |> multiply(2, _, 3) = 30
+6. Pipe Transformation Chain:
+  15 |> increment |> increment |> increment = 18
+7. Collection Operators (direct):
+  [1,2,3,4,5]$> (x -> x * 2) = 2 4 6 8 10 
+8. Pipe with Closure:
+  7 |> triple(_) with multiplier=3: 21
+=== ALL PIPE TESTS PASSED! ===

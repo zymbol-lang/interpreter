@@ -1,0 +1,8 @@
+// Deep scalar access at depth 3+: arr[i>j>k]
+cubo = [[[1,2],[3,4]], [[5,6],[7,8]]]
+
+>> cubo[1>1>1] ¶
+>> cubo[1>1>2] ¶
+>> cubo[1>2>1] ¶
+>> cubo[2>1>2] ¶
+>> cubo[2>2>2] ¶

@@ -1,0 +1,23 @@
+// G12: BashExec is a first-class Zymbol expression
+// Can be used in match arms, assignments, conditionals, and output
+
+// BashExec in match arm (was impossible before G12 redesign)
+lang = "py"
+label = ?? lang {
+    "py" : <\ "echo python" \>
+    "sh" : <\ "echo shell" \>
+    _    : "unknown"
+}
+>> label ¶
+
+// BashExec directly in conditional
+result = <\ "echo 42" \>
+? (result == "42") {
+    >> "correct" ¶
+}
+
+// BashExec with Zymbol variable interpolated into string (G12 design)
+dir = "/tmp"
+exists = <\ "test -d " dir " && echo yes || echo no" \>
+>> exists ¶
+>> "done" ¶

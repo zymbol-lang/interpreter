@@ -818,6 +818,18 @@ impl DefUseAnalyzer {
                 }
             }
 
+            Expr::StringSplit(op) => {
+                self.analyze_expr(&op.string, node_index);
+                self.analyze_expr(&op.delimiter, node_index);
+            }
+
+            Expr::ConcatBuild(op) => {
+                self.analyze_expr(&op.base, node_index);
+                for item in &op.items { self.analyze_expr(item, node_index); }
+            }
+
+            Expr::NumericCast(op) => self.analyze_expr(&op.expr, node_index),
+
             // Data operations
             Expr::NumericEval(num_eval) => {
                 self.analyze_expr(&num_eval.expr, node_index);
@@ -860,18 +872,8 @@ impl DefUseAnalyzer {
             }
 
             Expr::BashExec(bash_exec) => {
-                // Register all interpolated variables as uses
-                for var_name in &bash_exec.variables {
-                    let chain = self.chains.entry(var_name.clone()).or_insert_with(|| {
-                        DefUseChain::new(var_name.clone())
-                    });
-
-                    chain.add_use(Use {
-                        var_name: var_name.clone(),
-                        node: node_index,
-                        span: bash_exec.span,
-                        use_type: UseType::Read,
-                    });
+                for arg in &bash_exec.args {
+                    self.analyze_expr(arg, node_index);
                 }
             }
 
@@ -883,6 +885,34 @@ impl DefUseAnalyzer {
             Expr::ErrorPropagate(prop) => {
                 // Analyze the inner expression
                 self.analyze_expr(&prop.expr, node_index);
+            }
+
+            Expr::DeepIndex(di) => {
+                self.analyze_expr(&di.array, node_index);
+                for step in &di.path.steps {
+                    self.analyze_expr(&step.index, node_index);
+                    if let Some(end) = &step.range_end { self.analyze_expr(end, node_index); }
+                }
+            }
+            Expr::FlatExtract(fe) => {
+                self.analyze_expr(&fe.array, node_index);
+                for path in &fe.paths {
+                    for step in &path.steps {
+                        self.analyze_expr(&step.index, node_index);
+                        if let Some(end) = &step.range_end { self.analyze_expr(end, node_index); }
+                    }
+                }
+            }
+            Expr::StructuredExtract(se) => {
+                self.analyze_expr(&se.array, node_index);
+                for group in &se.groups {
+                    for path in &group.paths {
+                        for step in &path.steps {
+                            self.analyze_expr(&step.index, node_index);
+                            if let Some(end) = &step.range_end { self.analyze_expr(end, node_index); }
+                        }
+                    }
+                }
             }
 
             // Literals and other leaf nodes - no variable uses

@@ -309,46 +309,43 @@ impl Parser {
         Ok(ImportStmt::new(path, alias, span))
     }
 
-    /// Parse module path: ./dir/module, ../module, etc.
+    /// Parse module path: ./dir/module, ../module, /absolute/path, ~/home/path
     /// Supports:
-    /// - Relative current: ./file or ./dir/file
-    /// - Relative parent: ../file or ../../dir/file
-    /// - Absolute: file (treated as current directory)
+    /// - Relative current:  ./file or ./dir/file
+    /// - Relative parent:   ../file or ../../dir/file
+    /// - Absolute:          /absolute/path/module
+    /// - Home-relative:     ~/path/module  (expands to $HOME/path/module)
     pub(crate) fn parse_module_path(&mut self) -> Result<ModulePath, Diagnostic> {
         let start = self.peek().span;
         let mut components = Vec::new();
         let mut is_relative = false;
+        let mut is_absolute = false;
+        let mut home_relative = false;
         let mut parent_levels = 0;
         let mut end_span = start;
 
-        // Check for relative path markers (./ or ../)
         if matches!(self.peek().kind, TokenKind::Dot) {
+            // Relative current: ./
             is_relative = true;
             self.advance(); // consume .
-
-            // Check for /
             if matches!(self.peek().kind, TokenKind::Slash) {
                 self.advance(); // consume /
-                parent_levels = 0; // ./
+                parent_levels = 0;
             } else {
                 return Err(Diagnostic::error("expected '/' after '.'")
                     .with_span(self.peek().span));
             }
         } else if matches!(self.peek().kind, TokenKind::DotDot) {
-            // Handle ../ parent directory path
+            // Relative parent: ../
             is_relative = true;
             parent_levels = 1;
             self.advance(); // consume ..
-
-            // Expect /
             let slash_token = self.peek().clone();
             if !matches!(slash_token.kind, TokenKind::Slash) {
                 return Err(Diagnostic::error("expected '/' after '..'")
                     .with_span(slash_token.span));
             }
             self.advance(); // consume /
-
-            // Count additional ../ levels
             while matches!(self.peek().kind, TokenKind::DotDot) {
                 self.advance(); // consume ..
                 if matches!(self.peek().kind, TokenKind::Slash) {
@@ -359,6 +356,20 @@ impl Parser {
                         .with_span(self.peek().span));
                 }
             }
+        } else if matches!(self.peek().kind, TokenKind::Slash) {
+            // Absolute: /foo/bar/module
+            is_absolute = true;
+            self.advance(); // consume leading /
+        } else if matches!(self.peek().kind, TokenKind::Tilde) {
+            // Home-relative: ~/foo/bar/module
+            is_absolute = true;
+            home_relative = true;
+            self.advance(); // consume ~
+            if !matches!(self.peek().kind, TokenKind::Slash) {
+                return Err(Diagnostic::error("expected '/' after '~'")
+                    .with_span(self.peek().span));
+            }
+            self.advance(); // consume /
         }
 
         // Parse path components (identifiers separated by /)
@@ -369,13 +380,9 @@ impl Parser {
                     components.push(name.clone());
                     end_span = token.span;
                     self.advance();
-
-                    // Check for / to continue path
                     if matches!(self.peek().kind, TokenKind::Slash) {
                         self.advance(); // consume /
-                        // Continue to next component
                     } else {
-                        // End of path
                         break;
                     }
                 }
@@ -390,7 +397,11 @@ impl Parser {
         }
 
         let span = start.to(&end_span);
-        Ok(ModulePath::new(components, is_relative, parent_levels, span))
+        if is_absolute {
+            Ok(ModulePath::new_absolute(components, home_relative, span))
+        } else {
+            Ok(ModulePath::new(components, is_relative, parent_levels, span))
+        }
     }
 }
 

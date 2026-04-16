@@ -1,0 +1,13 @@
+// Test: module private variables are not accessible from outside
+// Only exported functions/constants are visible via the module alias
+
+<# ./complex_module <= cm
+
+// Calling exported function works
+r1 = cm::process_with_blocks(15)
+>> r1 ¶
+
+// Calling exported filter function
+nums = [3, -1, 7, -2, 5]
+filtered = cm::filter_values(nums)
+>> filtered ¶

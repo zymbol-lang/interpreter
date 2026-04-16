@@ -1,0 +1,15 @@
+// Test: arrays use value semantics — assigning copies the array
+a = [1, 2, 3]
+b = a
+
+// Creating updated copy of a does not affect b (a[1]$~ value returns new array)
+a = a[1]$~ 99
+>> a ¶
+>> b ¶
+
+// Appending to a copy does not affect the original
+c = [10, 20]
+d = c
+c = c$+ 30
+>> c ¶
+>> d ¶

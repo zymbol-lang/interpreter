@@ -1,0 +1,12 @@
+// Double ranges in a single path: range on step 0 AND step 1
+// Also tests structured with range-per-group that returns rows as values
+cubo = [
+    [[1,2,3], [4,5,6], [7,8,9]],
+    [[10,11,12], [13,14,15], [16,17,18]]
+]
+
+// Flat: layers 1..2, rows 1..2 — two nested range expansions → 4 rows
+>> cubo[1..2>1..2] ¶
+
+// Structured: each group collects full rows (range on last step returns row arrays)
+>> cubo[[1>2..3] ; [2>2..3]] ¶

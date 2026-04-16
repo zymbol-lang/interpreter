@@ -19,51 +19,40 @@ orders = [
 >> "Total orders: " >> orders$# ¶
 ¶
 
-// Business Rule 1: Calculate shipping cost
-calculate_shipping = order -> {
+// Business Rule 1: Calculate shipping cost (named function — local vars work here)
+calculate_shipping(order) {
     items = order[3]
     is_priority = order[6]
-
     base_cost = items * 5
-
-    ? is_priority {
-        <~ base_cost * 2
-    }
-    _{
-        <~ base_cost
-    }
+    ? is_priority { <~ base_cost * 2 }
+    _ { <~ base_cost }
 }
 
-// Business Rule 2: Apply discount
-apply_discount = order -> {
+// Business Rule 2: Apply discount (named function — local vars work here)
+apply_discount(order) {
     total = order[4]
     has_discount = order[5]
-
-    ? has_discount {
-        discount = total / 10
-        <~ total - discount
-    }
-    _{
-        <~ total
-    }
+    ? has_discount { <~ total - total / 10 }
+    _ { <~ total }
 }
 
-// Process all orders: extract relevant data
-processed_orders = orders$> (order -> {
+// Build processed order named tuple (named function — local vars work here)
+process_order(order) {
     order_id = order[1]
     original_price = order[4]
     discounted_price = apply_discount(order)
     shipping = calculate_shipping(order)
-    final_price = discounted_price + shipping
+    <~ (id: order_id, orig: original_price, disc: discounted_price, ship: shipping, total: discounted_price + shipping)
+}
 
-    <~ (order_id, original_price, discounted_price, shipping, final_price)
-})
+// Process all orders: extract relevant data
+processed_orders = orders$> (order -> process_order(order))
 
 >> "Processed orders (id, original, discounted, shipping, final):" ¶
 @ po:processed_orders {
-    >> "  Order " >> po[1] >> ": $" >> po[2]
-    >> " -> $" >> po[3] >> " + $" >> po[4]
-    >> " = $" >> po[5] ¶
+    >> "  Order " >> po.id >> ": $" >> po.orig
+    >> " -> $" >> po.disc >> " + $" >> po.ship
+    >> " = $" >> po.total ¶
 }
 ¶
 
@@ -72,7 +61,7 @@ priority_orders = orders$| (o -> o[6])
 >> "Priority orders count: " >> priority_orders$# ¶
 
 // Analytics: Total revenue (with discounts and shipping)
-total_revenue = processed_orders$< (0, (acc, po) -> acc + po[5])
+total_revenue = processed_orders$< (0, (acc, po) -> acc + po.total)
 >> "Total revenue: $" >> total_revenue ¶
 ¶
 
@@ -88,16 +77,12 @@ customer_501_total = customer_501_orders$< (0, (acc, o) -> acc + o[4])
 ¶
 
 // High-value orders (>= $200 after processing)
-high_value = processed_orders$| (po -> po[5] >= 200)
+high_value = processed_orders$| (po -> po.total >= 200)
 >> "High-value orders (>=$200 final): " >> high_value$# ¶
 ¶
 
 // Complex aggregation: Orders with discount AND priority
-special_orders = orders$| (o -> {
-    has_discount = o[5]
-    is_priority = o[6]
-    <~ has_discount && is_priority
-})
+special_orders = orders$| (o -> o[5] && o[6])
 
 special_count = special_orders$#
 >> "Orders with both discount and priority: " >> special_count ¶
@@ -109,9 +94,10 @@ special_revenue = special_orders
 >> "Revenue from special orders: $" >> special_revenue ¶
 ¶
 
-// Top 3 orders by final price (manual selection - no sort yet)
-top1 = processed_orders$< (processed_orders[1], (max, po) -> {
-    ? po[5] > max[5] {
+// Top order by final price
+first_po = processed_orders[1]
+top1 = processed_orders$< (first_po, (max, po) -> {
+    ? po.total > max.total {
         <~ po
     }
     _{
@@ -119,16 +105,11 @@ top1 = processed_orders$< (processed_orders[1], (max, po) -> {
     }
 })
 
->> "Highest value order: #" >> top1[1] >> " at $" >> top1[5] ¶
+>> "Highest value order: #" >> top1.id >> " at $" >> top1.total ¶
 ¶
 
 // Closure-based discount calculator factory
-make_discount_calculator = discount_percent -> {
-    <~ price -> {
-        discount_amount = price * discount_percent / 100
-        <~ price - discount_amount
-    }
-}
+make_discount_calculator = discount_percent -> (price -> price - price * discount_percent / 100)
 
 discount_20 = make_discount_calculator(20)
 discount_30 = make_discount_calculator(30)

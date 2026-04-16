@@ -14,7 +14,7 @@ try_access_main_var(param) {
     // >> "Main variable: " main_variable ¶
 
     >> "Safe function - using only parameter: " param ¶
-    <~ param + " [processed]"
+    <~ param " [processed]"
 }
 
 // This function demonstrates correct behavior

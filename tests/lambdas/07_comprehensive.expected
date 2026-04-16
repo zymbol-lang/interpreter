@@ -1,0 +1,9 @@
+=== Lambda Functions & Higher-Order Operations ===
+Double 5: 10
+Add 3 + 7: 10
+Closure 5 * 10: 50
+Map [1-5] * 2: 2 4 6 8 10 
+Filter evens: 2 4 6 8 10 
+Sum [1-5]: 15
+Chain (filter evens, square, sum): 220
+=== All tests passed! ===

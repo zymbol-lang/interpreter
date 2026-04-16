@@ -1,0 +1,4 @@
+✓ Type symbol for named tuple is ##)
+✓ Count returns number of fields
+✓ Positional and named tuples have same type symbol
+Edge Test 2 PASSED

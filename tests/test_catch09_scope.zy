@@ -6,14 +6,14 @@
 // after: finalized
 
 status = "initial"
->> "before: " + status ¶
+>> "before: " status ¶
 
 !? {
     status = "modified"
-    >> "in try: " + status ¶
+    >> "in try: " status ¶
 } :> {
     status = "finalized"
-    >> "in finally: " + status ¶
+    >> "in finally: " status ¶
 }
 
->> "after: " + status ¶
+>> "after: " status ¶

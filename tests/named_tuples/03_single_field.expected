@@ -1,0 +1,5 @@
+✓ Single-field named tuple works
+✓ Single-field positional access works
+✓ Single-field string works
+✓ Single-field boolean works
+Test 3 PASSED

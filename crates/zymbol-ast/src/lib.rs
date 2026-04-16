@@ -44,12 +44,13 @@ pub use collection_ops::{
 };
 
 mod string_ops;
-pub use string_ops::StringReplaceExpr;
+pub use string_ops::{StringReplaceExpr, StringSplitExpr, ConcatBuildExpr};
 
 mod data_ops;
 pub use data_ops::{
     NumericEvalExpr, TypeMetadataExpr, FormatExpr, FormatKind, PrecisionOp,
     BaseConversionExpr, BasePrefix, RoundExpr, TruncExpr,
+    NumericCastExpr, CastKind,
 };
 
 mod expressions;
@@ -60,6 +61,12 @@ pub use script_exec::{ExecuteExpr, BashExecExpr};
 
 mod modules;
 pub use modules::{ModuleDecl, ExportBlock, ExportItem, ItemType, ImportStmt, ModulePath};
+
+mod index_nav;
+pub use index_nav::{
+    DeepIndexExpr, FlatExtractExpr, StructuredExtractExpr,
+    NavPath, NavStep, ExtractGroup,
+};
 
 mod error_handling;
 pub use error_handling::{
@@ -186,6 +193,10 @@ pub enum Expr {
     CollectionSlice(CollectionSliceExpr),
     /// String replace: string$~~[pattern:replacement:count?] - replace pattern with replacement
     StringReplace(StringReplaceExpr),
+    /// String split: string$/ delimiter → Array(String)
+    StringSplit(StringSplitExpr),
+    /// Concat-build: base$++ item1 item2 ... → String (concat) or Array (append)
+    ConcatBuild(ConcatBuildExpr),
     /// Numeric evaluation: #|expr| - safe string to number conversion
     NumericEval(NumericEvalExpr),
     /// Type metadata: expr? - returns (type, count, value) tuple
@@ -218,10 +229,18 @@ pub enum Expr {
     Round(RoundExpr),
     /// Truncate expression: #!N|expr| - truncate to N decimal places
     Trunc(TruncExpr),
+    /// Numeric cast: ##.expr (→Float), ###expr (→Int round), ##!expr (→Int trunc)
+    NumericCast(NumericCastExpr),
     /// Error check expression: expr$! - returns #1 if error, #0 otherwise
     ErrorCheck(ErrorCheckExpr),
     /// Error propagate expression: expr$!! - propagates error to caller
     ErrorPropagate(ErrorPropagateExpr),
+    /// Deep scalar access: arr[i>j>k] — returns value at the given depth
+    DeepIndex(DeepIndexExpr),
+    /// Flat extraction: arr[p ; q] or arr[[i>j]] — returns flat Array
+    FlatExtract(FlatExtractExpr),
+    /// Structured extraction: arr[[g] ; [g]] — returns Array of Arrays
+    StructuredExtract(StructuredExtractExpr),
 }
 
 
@@ -354,6 +373,8 @@ impl Expr {
             Expr::CollectionUpdate(op) => op.span,
             Expr::CollectionSlice(op) => op.span,
             Expr::StringReplace(op) => op.span,
+            Expr::StringSplit(op) => op.span,
+            Expr::ConcatBuild(op) => op.span,
             Expr::NumericEval(op) => op.span,
             Expr::TypeMetadata(op) => op.span,
             Expr::Format(op) => op.span,
@@ -370,8 +391,12 @@ impl Expr {
             Expr::BashExec(bash) => bash.span,
             Expr::Round(round) => round.span,
             Expr::Trunc(trunc) => trunc.span,
+            Expr::NumericCast(cast) => cast.span,
             Expr::ErrorCheck(check) => check.span,
             Expr::ErrorPropagate(prop) => prop.span,
+            Expr::DeepIndex(di) => di.span,
+            Expr::FlatExtract(fe) => fe.span,
+            Expr::StructuredExtract(se) => se.span,
         }
     }
 }

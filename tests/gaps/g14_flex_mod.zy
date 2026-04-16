@@ -1,0 +1,15 @@
+// Module used by g14_export_block_position.zy
+// G14: #> export block can appear AFTER <# imports (not just before them)
+// This module uses Form 2: #> follows the <# imports
+
+# g14_flex_mod
+<# ./g09_config_mod <= cfg
+
+#> { greet, HOST }
+
+HOST := "localhost"
+
+greet(name) {
+    base = cfg.BASE_URL
+    >> "Hello, " name "! Base: " base ¶
+}

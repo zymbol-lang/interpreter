@@ -1,0 +1,19 @@
+// Jagged array: rows have different lengths
+datos = [[10], [20, 21], [30, 31, 32]]
+
+// Scalar on non-first row
+>> datos[2>2] ¶
+
+// Negative index: last element of last row
+>> datos[-1>-1] ¶
+
+// Variable indices
+fila = 3
+col = 1
+>> datos[fila>col] ¶
+
+// Flat: first element from each row
+>> datos[1>1 ; 2>1 ; 3>1] ¶
+
+// Structured: multiple elements per group from rows that have them
+>> datos[[2>1, 2>2] ; [3>1, 3>3]] ¶

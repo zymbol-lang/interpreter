@@ -1,15 +1,10 @@
-// Test block lambda with map - CORRECTED
+// Test: map with inline lambda expression (direct computation)
 >> "Testing block lambda..." ¶
 
 sales = [(100, 5), (250, 3), (75, 10)]
 
-// Lambda DEBE ser inline con operadores de colección
-revenues = sales$> (sale -> {
-    price = sale[1]
-    quantity = sale[2]
-    result = price * quantity
-    <~ result
-})
+// Inline lambda: direct expression, no intermediate variables needed
+revenues = sales$> (sale -> sale[1] * sale[2])
 
 >> "Revenues: "
 @ r:revenues {

@@ -105,7 +105,10 @@ impl Parser {
         ) {
             None
         } else {
-            Some(Box::new(self.parse_expr()?))
+            // Support juxtaposition: <~ "result: " val " ok"
+            let first = self.parse_expr()?;
+            let expr = self.parse_juxtapose_chain(first)?;
+            Some(Box::new(expr))
         };
 
         let span = value

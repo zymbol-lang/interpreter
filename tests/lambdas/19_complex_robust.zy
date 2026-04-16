@@ -15,16 +15,17 @@ sales = [
     (150, 8, 10)
 ]
 
-// Calculate total revenue after discount - inline lambda
-revenues = sales$> (sale -> {
+// Helper function: revenue after discount (local vars work in named functions)
+calc_revenue(sale) {
     price = sale[1]
     quantity = sale[2]
     discount = sale[3]
     subtotal = price * quantity
-    discount_amount = subtotal * discount / 100
-    final = subtotal - discount_amount
-    <~ final
-})
+    <~ subtotal - subtotal * discount / 100
+}
+
+// Calculate total revenue after discount
+revenues = sales$> (sale -> calc_revenue(sale))
 
 // Filter high-value sales (> 500)
 high_value = revenues$| (r -> r > 500)

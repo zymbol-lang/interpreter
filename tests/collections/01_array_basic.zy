@@ -19,8 +19,10 @@ arr = [10, 20, 30, 40, 50]
 >> arr[-2] ¶ // == 40
 >> arr[-1] ¶ /// == 50
 
+/*
 // and 
 >> arr[0] ¶ // == arr[] == Error: Index out of bounds
 //>> arr[] ¶ // == arr[0] == Error: Index its requires an index
 >> arr[6] ¶ // == Error: Index out of bounds
 >> arr[-6] ¶ // == Error: Index out of bounds
+*/

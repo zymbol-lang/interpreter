@@ -2,11 +2,12 @@
 //!
 //! Handles runtime execution of string-specific operators:
 //! - $~~ (replace pattern with replacement text)
+//! - $/ (split string by delimiter)
 //!
 //! Note: $?? is now CollectionFindAllExpr (eval_collection_find_all in collection_ops.rs).
 //! $++ and old $-- are retired in v0.0.2.
 
-use zymbol_ast::StringReplaceExpr;
+use zymbol_ast::{ConcatBuildExpr, StringReplaceExpr, StringSplitExpr};
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
 
@@ -129,5 +130,58 @@ impl<W: Write> Interpreter<W> {
         };
 
         Ok(Value::String(result))
+    }
+
+    /// Evaluate concat-build: base$++ item1 item2 ...
+    /// String base → concatenates all items as strings.
+    /// Array base → appends all items to the array.
+    pub(crate) fn eval_concat_build(&mut self, op: &ConcatBuildExpr) -> Result<Value> {
+        let base = self.eval_expr(&op.base)?;
+        match base {
+            Value::String(mut s) => {
+                for item in &op.items {
+                    let v = self.eval_expr(item)?;
+                    let part = self.value_to_concat_str(&v, &op.span)?;
+                    s.push_str(&part);
+                }
+                Ok(Value::String(s))
+            }
+            Value::Array(mut arr) => {
+                for item in &op.items {
+                    let v = self.eval_expr(item)?;
+                    arr.push(v);
+                }
+                Ok(Value::Array(arr))
+            }
+            other => Err(RuntimeError::Generic {
+                message: format!("$++ requires a string or array as base, got {:?}", other),
+                span: op.span,
+            }),
+        }
+    }
+
+    /// Evaluate string split: string$/ delimiter → Array(String)
+    pub(crate) fn eval_string_split(&mut self, op: &StringSplitExpr) -> Result<Value> {
+        let string_value = self.eval_expr(&op.string)?;
+        let delimiter_value = self.eval_expr(&op.delimiter)?;
+
+        let string = match string_value {
+            Value::String(s) => s,
+            _ => return Err(RuntimeError::Generic {
+                message: format!("$/ requires a string on the left, got {:?}", string_value),
+                span: op.span,
+            }),
+        };
+
+        let parts: Vec<Value> = match delimiter_value {
+            Value::Char(c) => string.split(c).map(|p| Value::String(p.to_string())).collect(),
+            Value::String(ref s) => string.split(s.as_str()).map(|p| Value::String(p.to_string())).collect(),
+            _ => return Err(RuntimeError::Generic {
+                message: format!("$/ delimiter must be a char or string, got {:?}", delimiter_value),
+                span: op.span,
+            }),
+        };
+
+        Ok(Value::Array(parts))
     }
 }

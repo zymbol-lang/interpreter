@@ -1,0 +1,41 @@
+// Test: #|expr| with Unicode digit scripts
+// Extended numeric eval: accepts all 69 Unicode digit blocks via digit_blocks.rs
+
+// ASCII baseline
+>> #|"42"| ¶
+>> #|"3.14"| ¶
+>> #|"abc"| ¶     // fail-safe: returns string unchanged
+>> #|99| ¶        // pass-through if already Int
+
+// Thai digits (U+0E50–U+0E59)
+>> #|"๔๒"| ¶      // 42
+>> #|"๓.๑๔"| ¶    // 3.14
+
+// Devanagari digits (U+0966–U+096F)
+>> #|"४२"| ¶      // 42
+>> #|"३.१४"| ¶    // 3.14
+
+// Arabic-Indic digits (U+0660–U+0669)
+>> #|"٤٢"| ¶      // 42
+>> #|"٣.١٤"| ¶    // 3.14
+
+// Equality: Unicode == ASCII numerically
+eq1 = #|"๔๒"| == #|"42"|
+>> eq1 ¶     // #1
+
+eq2 = #|"४२"| == 42
+>> eq2 ¶     // #1
+
+// Type of result
+meta_int = (#|"๔๒"|)#?
+>> meta_int[1] ¶    // ###  (Int)
+
+meta_flt = (#|"٣.١٤"|)#?
+>> meta_flt[1] ¶    // ##.  (Float)
+
+// Arithmetic on result
+x = #|"๔๒"| + 8
+>> x ¶    // 50
+
+// Mixed: fail-safe returns original on partial Unicode
+>> #|"๔abc"| ¶    // ๔abc  (not parseable — returned unchanged)

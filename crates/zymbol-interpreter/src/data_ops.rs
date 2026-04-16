@@ -8,9 +8,37 @@
 //! - Precision expressions: #.N|expr| (round), #!N|expr| (truncate)
 
 use std::io::Write;
-use zymbol_ast::{BaseConversionExpr, Expr, FormatExpr, NumericEvalExpr, RoundExpr, TruncExpr, TypeMetadataExpr};
+use zymbol_ast::{BaseConversionExpr, CastKind, Expr, FormatExpr, NumericCastExpr, NumericEvalExpr, RoundExpr, TruncExpr, TypeMetadataExpr};
+use zymbol_lexer::digit_blocks::digit_value;
 
 use crate::{Interpreter, Result, RuntimeError, Value};
+
+/// Normalize a string containing Unicode numerals to ASCII digits.
+/// Accepts: Unicode decimal digits (any of 69 scripts), '.', '-' (leading only).
+/// Returns None if any non-numeric character is found.
+fn normalize_unicode_digits(s: &str) -> Option<String> {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    // Optional leading minus
+    if chars.peek() == Some(&'-') {
+        result.push('-');
+        chars.next();
+    }
+    let mut has_digit = false;
+    let mut has_dot = false;
+    for ch in chars {
+        if let Some(dv) = digit_value(ch) {
+            result.push(char::from_digit(dv as u32, 10).unwrap());
+            has_digit = true;
+        } else if ch == '.' && !has_dot {
+            result.push('.');
+            has_dot = true;
+        } else {
+            return None; // non-numeric character — not a number
+        }
+    }
+    if has_digit { Some(result) } else { None }
+}
 
 impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_numeric_eval(&mut self, op: &NumericEvalExpr) -> Result<Value> {
@@ -20,19 +48,61 @@ impl<W: Write> Interpreter<W> {
         if let Value::String(s) = value {
             // Trim whitespace/newlines first — BashExec output always has trailing \n
             let trimmed = s.trim();
-            // Try parsing as integer first
+            // Try native ASCII parse first (handles scientific notation, etc.)
             if let Ok(n) = trimmed.parse::<i64>() {
                 return Ok(Value::Int(n));
             }
-            // Try parsing as float
             if let Ok(f) = trimmed.parse::<f64>() {
                 return Ok(Value::Float(f));
             }
-            // Parsing failed - return original string (fail-safe!)
+            // Try Unicode digit normalization (Thai, Arabic, Devanagari, etc.)
+            if let Some(normalized) = normalize_unicode_digits(trimmed) {
+                if let Ok(n) = normalized.parse::<i64>() {
+                    return Ok(Value::Int(n));
+                }
+                if let Ok(f) = normalized.parse::<f64>() {
+                    return Ok(Value::Float(f));
+                }
+            }
+            // Parsing failed — fail-safe: return original string
             Ok(Value::String(s))
         } else {
-            // Not a string - return as-is
+            // Not a string — return as-is
             Ok(value)
+        }
+    }
+
+    /// Evaluate numeric cast: ##.expr / ###expr / ##!expr
+    /// ##.  → Float (lossless from Int, identity from Float)
+    /// ###  → Int rounding  (Float 3.7 → 4, Int identity)
+    /// ##!  → Int truncating (Float 3.7 → 3, Int identity)
+    pub(crate) fn eval_numeric_cast(&mut self, op: &NumericCastExpr) -> Result<Value> {
+        let value = self.eval_expr(&op.expr)?;
+        match op.kind {
+            CastKind::ToFloat => match value {
+                Value::Float(_) => Ok(value),
+                Value::Int(n) => Ok(Value::Float(n as f64)),
+                other => Err(RuntimeError::Generic {
+                    message: format!("##. requires a numeric value, got {:?}", other),
+                    span: op.span,
+                }),
+            },
+            CastKind::ToIntRound => match value {
+                Value::Int(_) => Ok(value),
+                Value::Float(f) => Ok(Value::Int(f.round() as i64)),
+                other => Err(RuntimeError::Generic {
+                    message: format!("### requires a numeric value, got {:?}", other),
+                    span: op.span,
+                }),
+            },
+            CastKind::ToIntTrunc => match value {
+                Value::Int(_) => Ok(value),
+                Value::Float(f) => Ok(Value::Int(f.trunc() as i64)),
+                other => Err(RuntimeError::Generic {
+                    message: format!("##! requires a numeric value, got {:?}", other),
+                    span: op.span,
+                }),
+            },
         }
     }
 

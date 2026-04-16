@@ -376,19 +376,23 @@ impl Parser {
             match token.kind {
                 // ── Structural postfix ────────────────────────────────────────
                 TokenKind::LBracket => {
-                    self.advance(); // consume [
-                    let index = self.parse_expr()?;
+                    if self.is_nav_index() {
+                        expr = self.parse_nav_index(expr)?;
+                    } else {
+                        self.advance(); // consume [
+                        let index = self.parse_expr()?;
 
-                    let close_token = self.peek().clone();
-                    if !matches!(close_token.kind, TokenKind::RBracket) {
-                        return Err(Diagnostic::error("expected ']' after index")
-                            .with_span(close_token.span)
-                            .with_help("array indexing must use brackets: arr[index]"));
+                        let close_token = self.peek().clone();
+                        if !matches!(close_token.kind, TokenKind::RBracket) {
+                            return Err(Diagnostic::error("expected ']' after index")
+                                .with_span(close_token.span)
+                                .with_help("array indexing must use brackets: arr[index]"));
+                        }
+                        self.advance(); // consume ]
+
+                        let span = expr.span().to(&close_token.span);
+                        expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
                     }
-                    self.advance(); // consume ]
-
-                    let span = expr.span().to(&close_token.span);
-                    expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
                 }
                 TokenKind::Dot => {
                     self.advance(); // consume .
@@ -410,6 +414,18 @@ impl Parser {
                     ));
                 }
                 TokenKind::LParen => {
+                    // BUG-06: only form a function call if the base expression is callable.
+                    // Literals (string, int, bool, char, float) are never callable — a `(`
+                    // following a literal in `>>` context starts a new parenthesized output
+                    // item, not a function call. Without this guard:
+                    //   >> "label" (expr) ¶  →  FunctionCall("label", [expr])  →  runtime error
+                    let is_callable = matches!(&expr,
+                        Expr::Identifier(_) | Expr::MemberAccess(_) | Expr::FunctionCall(_)
+                    );
+                    if !is_callable {
+                        break;
+                    }
+
                     self.advance(); // consume (
 
                     let mut arguments = Vec::new();
@@ -468,6 +484,9 @@ impl Parser {
                 }
                 TokenKind::DollarTildeTilde => {
                     expr = self.parse_string_replace(expr)?;
+                }
+                TokenKind::DollarSlash => {
+                    expr = self.parse_string_split(expr)?;
                 }
                 TokenKind::DollarTilde => {
                     expr = self.parse_collection_update(expr)?;

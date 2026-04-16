@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use zymbol_ast::{Block, DestructureItem, DestructurePattern, Expr, Program, Statement};
+use zymbol_common::Literal;
 use zymbol_span::Span;
 use zymbol_error::Diagnostic;
 
@@ -802,6 +803,18 @@ impl VariableAnalyzer {
                 }
             }
 
+            Expr::StringSplit(op) => {
+                self.analyze_expr(&op.string);
+                self.analyze_expr(&op.delimiter);
+            }
+
+            Expr::ConcatBuild(op) => {
+                self.analyze_expr(&op.base);
+                for item in &op.items { self.analyze_expr(item); }
+            }
+
+            Expr::NumericCast(op) => self.analyze_expr(&op.expr),
+
             // Numeric/Type operations
             Expr::NumericEval(op) => {
                 self.analyze_expr(&op.expr);
@@ -830,10 +843,33 @@ impl VariableAnalyzer {
                 self.analyze_expr(&op.expr);
             }
 
-            // Literals don't use variables
-            Expr::Literal(_) => {
-                // Literals are constant values - no variable usage
-                // In the future, we could analyze string interpolation {var} syntax
+            Expr::Literal(lit) => {
+                // Only InterpolatedString can reference variables at runtime.
+                // Literal::String is a plain (never-interpolated) string — scanning it
+                // for {varname} would produce false positives (e.g. "\{foo\}" stores
+                // "{foo}" as a plain string but never resolves 'foo').
+                if let Literal::InterpolatedString(s) = &lit.value {
+                    let mut in_var = false;
+                    let mut var_name = String::new();
+                    for ch in s.chars() {
+                        if ch == '{' && !in_var {
+                            in_var = true;
+                            var_name.clear();
+                        } else if ch == '}' && in_var {
+                            in_var = false;
+                            if !var_name.is_empty() {
+                                self.use_variable(&var_name, lit.span);
+                            }
+                        } else if in_var {
+                            if ch.is_alphanumeric() || ch == '_' {
+                                var_name.push(ch);
+                            } else {
+                                // Non-identifier char inside {…} — not a variable reference
+                                in_var = false;
+                            }
+                        }
+                    }
+                }
             }
 
             Expr::Range(_) => {
@@ -847,8 +883,8 @@ impl VariableAnalyzer {
             }
 
             Expr::BashExec(bash) => {
-                for var_name in &bash.variables {
-                    self.use_variable(var_name, bash.span);
+                for arg in &bash.args {
+                    self.analyze_expr(arg);
                 }
             }
 
@@ -859,6 +895,34 @@ impl VariableAnalyzer {
 
             Expr::ErrorPropagate(prop) => {
                 self.analyze_expr(&prop.expr);
+            }
+
+            Expr::DeepIndex(di) => {
+                self.analyze_expr(&di.array);
+                for step in &di.path.steps {
+                    self.analyze_expr(&step.index);
+                    if let Some(end) = &step.range_end { self.analyze_expr(end); }
+                }
+            }
+            Expr::FlatExtract(fe) => {
+                self.analyze_expr(&fe.array);
+                for path in &fe.paths {
+                    for step in &path.steps {
+                        self.analyze_expr(&step.index);
+                        if let Some(end) = &step.range_end { self.analyze_expr(end); }
+                    }
+                }
+            }
+            Expr::StructuredExtract(se) => {
+                self.analyze_expr(&se.array);
+                for group in &se.groups {
+                    for path in &group.paths {
+                        for step in &path.steps {
+                            self.analyze_expr(&step.index);
+                            if let Some(end) = &step.range_end { self.analyze_expr(end); }
+                        }
+                    }
+                }
             }
         }
     }

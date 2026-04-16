@@ -134,6 +134,7 @@ impl Parser {
                 TokenKind::Question        // if statement
                 | TokenKind::DoubleQuestion // match statement
                 | TokenKind::At            // loop/break/continue
+                | TokenKind::AtLabel(_)    // labeled loop
                 | TokenKind::Input         // input statement
                 | TokenKind::Return        // return statement
                 => {

@@ -1,0 +1,17 @@
+// Module used by g11_module_void_call.zy
+// G11: alias::fn() is valid as a void statement
+
+# g11_printer
+#> { banner, show_info, show_count }
+
+banner() {
+    >> "=== Zymbol ===" ¶
+}
+
+show_info(msg) {
+    >> "[info] " msg ¶
+}
+
+show_count(label, n) {
+    >> label " x" n ¶
+}

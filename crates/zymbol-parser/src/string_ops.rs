@@ -4,12 +4,13 @@
 //! - $?? (find all indices of value — now unified across arrays, tuples, strings)
 //! - $++ (RETIRED in v0.0.2 — emits migration error, use $+[ instead)
 //! - $~~ (replace pattern with replacement text)
+//! - $/ (split string by delimiter)
 //!
 //! Note: $+[i] (insert) and $-[i..j] (remove range) are handled in collection_ops
 //! since they apply uniformly to arrays, tuples, and strings.
 
 use zymbol_ast::{
-    CollectionFindAllExpr, StringReplaceExpr, Expr,
+    CollectionFindAllExpr, ConcatBuildExpr, StringReplaceExpr, StringSplitExpr, Expr,
 };
 use zymbol_error::Diagnostic;
 use zymbol_lexer::TokenKind;
@@ -32,13 +33,29 @@ impl Parser {
         )))
     }
 
-    /// RETIRED: $++ was string insert in v0.0.1 — emits a migration error
-    /// Use string$+[position] text instead
-    pub(crate) fn parse_string_insert(&mut self, _collection: Expr) -> Result<Expr, Diagnostic> {
+    /// Parse concat-build: base$++ item1 item2 item3 ...
+    /// Consumes all same-line juxtaposable items after $++.
+    /// At runtime: String base → string concat; Array base → array append.
+    pub(crate) fn parse_string_insert(&mut self, base: Expr) -> Result<Expr, Diagnostic> {
+        let start_span = base.span();
         let op_token = self.advance(); // consume $++
-        Err(Diagnostic::error("$++ is retired — use $+[position] element instead")
-            .with_span(op_token.span)
-            .with_help("v0.0.2: string$++[p:text] → string$+[p] text"))
+        let mut items = Vec::new();
+        let mut last_span = op_token.span;
+
+        loop {
+            let next_tok = self.peek();
+            let same_line = next_tok.span.start.line == op_token.span.start.line;
+            if same_line && Self::can_juxtapose(&next_tok.kind) {
+                let item = self.parse_postfix()?;
+                last_span = item.span();
+                items.push(item);
+            } else {
+                break;
+            }
+        }
+
+        let span = start_span.to(&last_span);
+        Ok(Expr::ConcatBuild(ConcatBuildExpr::new(Box::new(base), items, span)))
     }
 
     /// Parse string replace: string$~~[pattern:replacement] or string$~~[pattern:replacement:count]
@@ -97,6 +114,22 @@ impl Parser {
             Box::new(pattern),
             Box::new(replacement),
             count,
+            span,
+        )))
+    }
+
+    /// Parse string split: string$/ delimiter → Array(String)
+    /// Splits a string by a char or string delimiter.
+    pub(crate) fn parse_string_split(&mut self, string: Expr) -> Result<Expr, Diagnostic> {
+        let start_span = string.span();
+        self.advance(); // consume $/
+
+        let delimiter = self.parse_postfix()?;
+        let span = start_span.to(&delimiter.span());
+
+        Ok(Expr::StringSplit(StringSplitExpr::new(
+            Box::new(string),
+            Box::new(delimiter),
             span,
         )))
     }

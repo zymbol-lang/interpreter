@@ -2094,4 +2094,5 @@ version = "0.0.4"
 dependencies = [
  "thiserror 1.0.69",
  "zymbol-bytecode",
+ "zymbol-lexer",
 ]

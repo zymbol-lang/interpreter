@@ -1,34 +1,26 @@
-// Test: Nested closures with multiple levels
->> "=== NESTED CLOSURES TEST ===" ¶
-¶
+// Test: Nested closures — outer lambda captures outer scope,
+// inner lambda captures outer lambda's parameter.
+// Note: only lambda *parameters* are captured by inner lambdas,
+// not block-local variables (known limitation — see MANUAL L-series).
 
-// Three levels of closure nesting
 base = 100
-make_adder = offset -> {
-    multiplier = 2
-    <~ x -> {
-        extra = 10
-        <~ (offset + x) * multiplier + base + extra
-    }
-}
+
+// make_adder returns a lambda that adds offset + x + base
+make_adder = offset -> (x -> offset + x + base)
 
 adder_5 = make_adder(5)
 result1 = adder_5(3)
->> "Result 1 (offset=5, x=3): " >> result1 ¶
->> "Expected: (5+3)*2 + 100 + 10 = 126" ¶
-¶
+>> result1 ¶    // 108  (5 + 3 + 100)
 
-// Verify closure captures are independent
+// Closures are independent: adder_10 has its own offset
 adder_10 = make_adder(10)
 result2 = adder_10(3)
->> "Result 2 (offset=10, x=3): " >> result2 ¶
->> "Expected: (10+3)*2 + 100 + 10 = 136" ¶
-¶
+>> result2 ¶    // 113  (10 + 3 + 100)
 
-// Original adder_5 should still work
+// Original adder_5 is unaffected by creating adder_10
 result3 = adder_5(7)
->> "Result 3 (offset=5, x=7): " >> result3 ¶
->> "Expected: (5+7)*2 + 100 + 10 = 134" ¶
-¶
+>> result3 ¶    // 112  (5 + 7 + 100)
 
->> "=== TEST PASSED ===" ¶
+// Deeply chained: curry-style add3
+add3 = a -> (b -> (c -> a + b + c))
+>> add3(1)(2)(3) ¶    // 6

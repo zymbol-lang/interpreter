@@ -1,0 +1,4 @@
+// Test: heterogeneous array raises a static type error
+// All elements must have the same type as the first element
+mixed = [1, "hello", #1]
+>> mixed ¶

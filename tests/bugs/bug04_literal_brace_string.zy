@@ -1,0 +1,27 @@
+// BUG-04: \{ produces literal { without triggering interpolation
+// BUG-07: \} produces literal } (symmetry — both escapes work)
+
+// Single braces
+ob = "\{"
+cb = "\}"
+>> ob ¶
+>> cb ¶
+
+// Pair: { }
+json_empty = "\{\}"
+>> json_empty ¶
+
+// Escaped braces with valid identifier inside — must NOT interpolate
+name = "Alice"
+template = "\{name\}"
+>> template ¶
+
+// Mixed: \{ literal and {var} interpolation in same string
+mixed = "Hello {name}, code: \{42\}"
+>> mixed ¶
+
+// JSON-like structure
+key = "model"
+val = "gemma3"
+json_pair = "\{\"" key "\":\"" val "\"\}"
+>> json_pair ¶

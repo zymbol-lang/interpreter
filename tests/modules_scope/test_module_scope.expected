@@ -1,0 +1,15 @@
+=== Test 1: Module function using module constants ===
+Using PI from module: 3.14159
+Result: 8
+=== Test 2: Module function using module variables ===
+Module VERSION: 1.0.0
+Result: 28
+=== Test 3: Module function using private module variable ===
+Scaled area: 157.0795
+=== Test 4: Access module constants from main ===
+PI: 3.14159
+Version: 1.0.0
+=== Test 5: Module function in IF block ===
+Using PI from module: 3.14159
+Block result: 30
+=== All module tests passed! ===

@@ -1,0 +1,34 @@
+// Test: ##. (ToFloat) cast operator
+// Converts Int or Float to Float type
+
+// Int → Float
+i = 42
+fi = ##.i
+>> fi ¶            // 42  (Float type — no .0 when integer-valued)
+
+// Float → Float (pass-through)
+f = 3.14
+ff = ##.f
+>> ff ¶            // 3.14
+
+// Negative int
+ni = -7
+>> ##.ni ¶         // -7
+
+// Float with fractional part
+nf = -2.5
+>> ##.nf ¶         // -2.5
+
+// Type is Float
+meta = fi#?
+>> meta[1] ¶       // ##.
+
+// Arithmetic confirms Float behavior: Float / Int → Float
+ratio = ##.i / 5
+>> ratio ¶         // 8.4  (42.0 / 5 = 8.4, Float type)
+meta2 = ratio#?
+>> meta2[1] ¶      // ##.
+
+// Literal int
+>> ##.100 ¶        // 100
+>> ##.0 ¶          // 0
