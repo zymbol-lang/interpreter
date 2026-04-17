@@ -3,11 +3,15 @@
 //! Sprint 4: replaces tree-walker for hot paths.
 //! Sprint 5C: flat register stack — all frames share one Vec<Value>.
 //! Sprint 5D: Value uses Rc<T> for heap payloads → sizeof(Value) = 16 bytes.
+//! Sprint 5G: ZyStr tagged-pointer SSO — strings ≤ 7 bytes stored inline.
 //! Design goals:
 //! - registers[idx] O(1) vs HashMap lookup
 //! - Flat value_stack: no per-call heap alloc, better cache locality
 //! - mem::replace for Return → O(1) move of String/Array
 //! - Rc<T> payloads: 2.5x cheaper memset/memcpy on flat stack
+
+mod zy_str;
+pub use zy_str::ZyStr;
 
 use std::fmt;
 use std::io::Write;
@@ -59,7 +63,8 @@ pub enum Value {
     Unit,
     /// Function/lambda reference stored as index into program.functions
     Function(FuncIdx),
-    String(Rc<String>),
+    /// Sprint 5G: ZyStr (8 bytes) — inline for ≤ 7 bytes, heap Rc<String> otherwise.
+    String(ZyStr),
     Array(Rc<Vec<Value>>),
     /// Positional tuple: (v1, v2, v3)
     Tuple(Rc<Vec<Value>>),
@@ -123,7 +128,7 @@ impl Value {
 
     fn to_string_repr(&self) -> String {
         match self {
-            Value::String(s) => s.as_ref().clone(),
+            Value::String(s) => s.to_string(),
             other => other.to_string(),
         }
     }
@@ -299,7 +304,7 @@ fn cmp_direct(va: &Value, vb: &Value) -> i32 {
         (Value::Float(x), Value::Float(y)) => ord(x.partial_cmp(y).unwrap_or(Ordering::Equal)),
         (Value::Int(x), Value::Float(y))   => ord((*x as f64).partial_cmp(y).unwrap_or(Ordering::Equal)),
         (Value::Float(x), Value::Int(y))   => ord(x.partial_cmp(&(*y as f64)).unwrap_or(Ordering::Equal)),
-        (Value::String(x), Value::String(y)) => ord(x.as_ref().as_str().cmp(y.as_ref().as_str())),
+        (Value::String(x), Value::String(y)) => ord(x.as_str().cmp(y.as_str())),
         (Value::Char(x), Value::Char(y))   => ord(x.cmp(y)),
         (Value::Bool(x), Value::Bool(y))   => ord(x.cmp(y)),
         _ => 1,
@@ -353,8 +358,8 @@ pub struct VM<W: Write> {
     tco_buf: Vec<Value>,
     /// Pending output param writeback set by SetupOutputWriteback, consumed by Call
     pending_output_writeback: Vec<(usize, Reg)>,
-    /// Interned string pool — Rc<String> for each entry, shared across LoadStr calls
-    string_rcs: Vec<Rc<String>>,
+    /// Interned string pool — ZyStr for each entry, shared across LoadStr calls
+    string_rcs: Vec<ZyStr>,
     /// Active numeral mode: block base codepoint (0x0030 = ASCII default).
     numeral_mode: u32,
     /// Module-level global variables (mutable, shared across all calls)
@@ -382,7 +387,7 @@ impl<W: Write> VM<W> {
         self.frame_stack.clear();
 
         // Pre-intern string pool: O(n) once, then LoadStr is O(1) Rc clone
-        self.string_rcs = program.string_pool.iter().map(|s| Rc::new(s.clone())).collect();
+        self.string_rcs = program.string_pool.iter().map(|s| ZyStr::from_str_ref(s)).collect();
 
         // Initialize global variables from program inits
         self.global_vars = program.global_var_inits.iter().map(|init| match init {
@@ -390,7 +395,7 @@ impl<W: Write> VM<W> {
             zymbol_bytecode::GlobalInit::Float(f) => Value::Float(*f),
             zymbol_bytecode::GlobalInit::Bool(b) => Value::Bool(*b),
             zymbol_bytecode::GlobalInit::Char(c) => Value::Char(*c),
-            zymbol_bytecode::GlobalInit::Str(s) => Value::String(Rc::new(s.clone())),
+            zymbol_bytecode::GlobalInit::Str(s) => Value::String(ZyStr::new(s.clone())),
             zymbol_bytecode::GlobalInit::Unit => Value::Unit,
         }).collect();
 
@@ -460,7 +465,7 @@ impl<W: Write> VM<W> {
                         frame.try_depth = 0;
                         let err_data = frame.error.get_or_insert_with(|| Box::new(FrameError { error_val: None, error_kind: String::new() }));
                         err_data.error_kind = kind.to_string();
-                        err_data.error_val = Some(Value::String(Rc::new(format!("{}", _err))));
+                        err_data.error_val = Some(Value::String(ZyStr::new(format!("{}", _err))));
                         ip = catch as usize;
                         continue;
                     }
@@ -656,7 +661,7 @@ impl<W: Write> VM<W> {
                             s
                         }
                     };
-                    wreg!(dst, Value::String(Rc::new(result)));
+                    wreg!(dst, Value::String(ZyStr::new(result)));
                 }
                 Instruction::ConcatBuild(dst, base_reg, item_regs) => {
                     let (dst, base_reg) = (*dst, *base_reg);
@@ -674,7 +679,7 @@ impl<W: Write> VM<W> {
                             for &ir in item_regs {
                                 s.push_str(&rreg!(ir).to_string_repr());
                             }
-                            Value::String(Rc::new(s))
+                            Value::String(ZyStr::new(s))
                         }
                     };
                     wreg!(dst, result);
@@ -943,9 +948,9 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::ArrayRemove(arr_reg, idx_reg) => {
                     let idx = self.as_int(idx_reg)?;
-                    let result = match self.value_stack[base + arr_reg as usize].clone() {
-                        Value::Array(rc_arr) => {
-                            let mut arr = rc_arr.as_ref().clone();
+                    let result = match std::mem::replace(&mut self.value_stack[base + arr_reg as usize], Value::Unit) {
+                        Value::Array(mut rc_arr) => {
+                            let arr = Rc::make_mut(&mut rc_arr);
                             let i = if idx == 0 {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
                             } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
@@ -953,7 +958,7 @@ impl<W: Write> VM<W> {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
                             }
                             arr.remove(i as usize);
-                            Value::Array(Rc::new(arr))
+                            Value::Array(rc_arr)
                         }
                         Value::Tuple(rc_tup) => {
                             let mut tup = rc_tup.as_ref().clone();
@@ -986,7 +991,7 @@ impl<W: Write> VM<W> {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() });
                             }
                             chars.remove(i as usize);
-                            Value::String(Rc::new(chars.iter().collect()))
+                            Value::String(ZyStr::new(chars.iter().collect()))
                         }
                         other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
                     };
@@ -1009,10 +1014,10 @@ impl<W: Write> VM<W> {
                                     let chars: Vec<char> = rc_s.chars().collect();
                                     if let Some(pos) = chars.iter().position(|ch| ch == c) {
                                         let mut out = chars; out.remove(pos); out.iter().collect()
-                                    } else { rc_s.as_ref().clone() }
+                                    } else { rc_s.to_string() }
                                 }
                                 Value::String(p) => {
-                                    let s = rc_s.as_ref();
+                                    let s = rc_s.as_str();
                                     let pc: Vec<char> = p.chars().collect();
                                     let sc: Vec<char> = s.chars().collect();
                                     if pc.is_empty() { s.to_string() } else {
@@ -1028,7 +1033,7 @@ impl<W: Write> VM<W> {
                                 }
                                 _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
                             };
-                            self.value_stack[base + arr_reg as usize] = Value::String(Rc::new(result));
+                            self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(result));
                         }
                         other => raise!(VmError::TypeError { expected: "Array or String", got: other.type_name().to_string() }),
                     }
@@ -1049,12 +1054,12 @@ impl<W: Write> VM<W> {
                             let result = match &val {
                                 Value::Char(c) => rc_s.chars().filter(|ch| ch != c).collect(),
                                 Value::String(p) => {
-                                    if p.is_empty() { rc_s.as_ref().clone() }
+                                    if p.is_empty() { rc_s.to_string() }
                                     else { rc_s.replace(p.as_str(), "") }
                                 }
                                 _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
                             };
-                            self.value_stack[base + arr_reg as usize] = Value::String(Rc::new(result));
+                            self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(result));
                         }
                         other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
                     }
@@ -1093,7 +1098,7 @@ impl<W: Write> VM<W> {
                                 }
                                 _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
                             }
-                            self.value_stack[base + arr_reg as usize] = Value::String(Rc::new(chars.iter().collect()));
+                            self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(chars.iter().collect()));
                         }
                         other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
                     }
@@ -1134,7 +1139,7 @@ impl<W: Write> VM<W> {
                             if lo <= hi && hi <= chars.len() {
                                 chars.drain(lo..hi);
                             }
-                            self.value_stack[base + arr_reg as usize] = Value::String(Rc::new(chars.iter().collect()));
+                            self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(chars.iter().collect()));
                         }
                         other => raise!(VmError::TypeError { expected: "Array, Tuple, NamedTuple, or String", got: other.type_name().to_string() }),
                     }
@@ -1182,11 +1187,11 @@ impl<W: Write> VM<W> {
                         match (s_val, sep_val) {
                             (Value::String(s), Value::Char(c)) => {
                                 let c = *c;
-                                s.split(c).map(|p| Value::String(Rc::new(p.to_string()))).collect()
+                                s.split(c).map(|p| Value::String(ZyStr::from_str_ref(p))).collect()
                             }
                             (Value::String(s), Value::String(sep)) => {
-                                let sep = sep.clone(); // Rc clone only
-                                s.split(sep.as_str()).map(|p| Value::String(Rc::new(p.to_string()))).collect()
+                                let sep = sep.clone();
+                                s.split(sep.as_str()).map(|p| Value::String(ZyStr::from_str_ref(p))).collect()
                             }
                             (Value::String(_), other) => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
                             (other, _) => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
@@ -1236,7 +1241,7 @@ impl<W: Write> VM<W> {
                         }
                         other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
                     };
-                    self.reg_set(dst, Value::String(Rc::new(result)));
+                    self.reg_set(dst, Value::String(ZyStr::new(result)));
                 }
                 &Instruction::StrChars(dst, src) => {
                     // String → Array<Char> (O(N) once per loop start).
@@ -1345,7 +1350,7 @@ impl<W: Write> VM<W> {
                             r
                         }
                     };
-                    wreg!(dst, Value::String(Rc::new(result)));
+                    wreg!(dst, Value::String(ZyStr::new(result)));
                 }
                 &Instruction::StrRemove(dst, str_reg, pos_reg, count_reg) => {
                     let result = {
@@ -1384,7 +1389,7 @@ impl<W: Write> VM<W> {
                             r
                         }
                     };
-                    wreg!(dst, Value::String(Rc::new(result)));
+                    wreg!(dst, Value::String(ZyStr::new(result)));
                 }
                 &Instruction::StrReplace(dst, str_reg, pat_reg, rep_reg) => {
                     let result = {
@@ -1402,7 +1407,7 @@ impl<W: Write> VM<W> {
                             other => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
                         }
                     };
-                    wreg!(dst, Value::String(Rc::new(result)));
+                    wreg!(dst, Value::String(ZyStr::new(result)));
                 }
                 &Instruction::StrReplaceN(dst, str_reg, pat_reg, rep_reg, n_reg) => {
                     let result = {
@@ -1450,19 +1455,23 @@ impl<W: Write> VM<W> {
                             out
                         }
                     };
-                    wreg!(dst, Value::String(Rc::new(result)));
+                    wreg!(dst, Value::String(ZyStr::new(result)));
                 }
 
                 Instruction::BuildStr(dst, parts) => {
                     let dst = *dst;
-                    let mut result = String::new();
+                    let cap: usize = parts.iter().map(|p| match p {
+                        BuildPart::Lit(idx) => program.string_pool[*idx as usize].len(),
+                        BuildPart::Reg(_) => 4,
+                    }).sum();
+                    let mut result = String::with_capacity(cap);
                     for part in parts {
                         match part {
                             BuildPart::Lit(idx) => result.push_str(&program.string_pool[*idx as usize]),
                             BuildPart::Reg(r) => result.push_str(&self.reg_get(*r).to_string_repr()),
                         }
                     }
-                    self.reg_set(dst, Value::String(Rc::new(result)));
+                    self.reg_set(dst, Value::String(ZyStr::new(result)));
                 }
 
                 // ── Dynamic call (lambdas / closures stored in variables) ────
@@ -1738,7 +1747,7 @@ impl<W: Write> VM<W> {
                         Value::Unit => ("##_", 0),
                     };
                     let tuple_val = Value::Tuple(Rc::new(vec![
-                        Value::String(Rc::new(type_sym.to_string())),
+                        Value::String(ZyStr::new(type_sym.to_string())),
                         Value::Int(len),
                         val,
                     ]));
@@ -1757,7 +1766,7 @@ impl<W: Write> VM<W> {
                                 10 => format!("0d{:04}", code),
                                 _  => format!("0x{:04X}", code),
                             };
-                            Value::String(Rc::new(s))
+                            Value::String(ZyStr::new(s))
                         }
                         // Int → String (format integer in specified base)
                         Value::Int(n) => {
@@ -1767,7 +1776,7 @@ impl<W: Write> VM<W> {
                                 10 => format!("0d{:04}", n),
                                 _  => format!("0x{:04X}", n),
                             };
-                            Value::String(Rc::new(s))
+                            Value::String(ZyStr::new(s))
                         }
                         // String → Char (parse in given base, then create char)
                         Value::String(s) => {
@@ -1822,7 +1831,7 @@ impl<W: Write> VM<W> {
                     let err = self.frame_stack.last_mut().unwrap()
                         .error.as_mut()
                         .and_then(|e| e.error_val.take())
-                        .unwrap_or_else(|| Value::String(Rc::new("unknown error".to_string())));
+                        .unwrap_or_else(|| Value::String(ZyStr::new("unknown error".to_string())));
                     unsafe { *self.value_stack.get_unchecked_mut(base + err_reg as usize) = err; }
                 }
 
@@ -1853,7 +1862,7 @@ impl<W: Write> VM<W> {
                     }
                     // Strip trailing newline (consistent with shell $(...) behavior)
                     let result = result.trim_end_matches('\n').to_string();
-                    self.reg_set(dst, Value::String(Rc::new(result)));
+                    self.reg_set(dst, Value::String(ZyStr::new(result)));
                 }
 
                 // ── Execute expression </ path /> ─────────────────────────────
@@ -1880,7 +1889,7 @@ impl<W: Write> VM<W> {
                         return Err(VmError::Generic(format!("runtime error: {}", msg)));
                     }
                     let result = String::from_utf8_lossy(&out.stdout).into_owned();
-                    self.reg_set(dst, Value::String(Rc::new(result)));
+                    self.reg_set(dst, Value::String(ZyStr::new(result)));
                 }
 
                 // ── Format ops ────────────────────────────────────────────────
@@ -1891,7 +1900,7 @@ impl<W: Write> VM<W> {
                         other => other.to_string().parse::<f64>().unwrap_or(0.0),
                     };
                     let s = vm_fmt_thousands(f, prec_kind, prec_n);
-                    self.reg_set(dst, Value::String(Rc::new(s)));
+                    self.reg_set(dst, Value::String(ZyStr::new(s)));
                 }
                 &Instruction::FmtScientific(dst, src, prec_kind, prec_n) => {
                     let f = match self.reg_get(src) {
@@ -1900,7 +1909,7 @@ impl<W: Write> VM<W> {
                         other => other.to_string().parse::<f64>().unwrap_or(0.0),
                     };
                     let s = vm_fmt_scientific(f, prec_kind, prec_n);
-                    self.reg_set(dst, Value::String(Rc::new(s)));
+                    self.reg_set(dst, Value::String(ZyStr::new(s)));
                 }
 
                 // ── Precision ops ─────────────────────────────────────────────
@@ -1937,7 +1946,7 @@ impl<W: Write> VM<W> {
                         .and_then(|f| f.error.as_ref())
                         .map(|e| e.error_kind.clone())
                         .unwrap_or_default();
-                    unsafe { *self.value_stack.get_unchecked_mut(base + dst as usize) = Value::String(Rc::new(kind)); }
+                    unsafe { *self.value_stack.get_unchecked_mut(base + dst as usize) = Value::String(ZyStr::new(kind)); }
                 }
 
                 // ── Output param writeback setup ──────────────────────────────
@@ -2153,7 +2162,7 @@ impl<W: Write> VM<W> {
                             s
                         }
                     };
-                    w!(dst, Value::String(Rc::new(result)));
+                    w!(dst, Value::String(ZyStr::new(result)));
                 }
                 Instruction::ConcatBuild(dst, base_reg, item_regs) => {
                     let (dst, base_reg) = (*dst, *base_reg);
@@ -2171,7 +2180,7 @@ impl<W: Write> VM<W> {
                             for &ir in item_regs {
                                 s.push_str(&r!(ir).to_string_repr());
                             }
-                            Value::String(Rc::new(s))
+                            Value::String(ZyStr::new(s))
                         }
                     };
                     w!(dst, result);
@@ -2453,14 +2462,18 @@ impl<W: Write> VM<W> {
                 }
                 Instruction::BuildStr(dst, parts) => {
                     let dst = *dst;
-                    let mut result = String::new();
+                    let cap: usize = parts.iter().map(|p| match p {
+                        zymbol_bytecode::BuildPart::Lit(idx) => program.string_pool[*idx as usize].len(),
+                        zymbol_bytecode::BuildPart::Reg(_) => 4,
+                    }).sum();
+                    let mut result = String::with_capacity(cap);
                     for part in parts {
                         match part {
                             zymbol_bytecode::BuildPart::Lit(idx) => result.push_str(&program.string_pool[*idx as usize]),
                             zymbol_bytecode::BuildPart::Reg(reg) => result.push_str(&self.value_stack[base + *reg as usize].to_string_repr()),
                         }
                     }
-                    w!(dst, Value::String(Rc::new(result)));
+                    w!(dst, Value::String(ZyStr::new(result)));
                 }
 
                 // ── Output ───────────────────────────────────────────────────
@@ -2570,7 +2583,7 @@ impl<W: Write> VM<W> {
                         Value::Array(a) => ("##]", a.as_ref().len() as i64),
                         _ => ("##_", 0),
                     };
-                    w!(dst, Value::Tuple(Rc::new(vec![val.clone(), Value::String(Rc::new(type_sym.to_string())), Value::Int(len)])));
+                    w!(dst, Value::Tuple(Rc::new(vec![val.clone(), Value::String(ZyStr::new(type_sym.to_string())), Value::Int(len)])));
                 }
 
                 // ── Precision ops ────────────────────────────────────────────

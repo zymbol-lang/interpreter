@@ -107,6 +107,54 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 - Limitation L3: `alias.CONST` now resolves correctly in all contexts.
 - Limitation L4: `#>` export block can now appear after function definitions.
 
+### VM performance — Sprint 5G: Small String Optimization (2026-04-17)
+
+`Value::String` payload changed from `Rc<String>` (always heap) to `ZyStr` — an 8-byte
+tagged-pointer type that stores strings ≤ 7 bytes inline (no heap allocation, no atomic ops)
+and falls back to a raw `Rc<String>` pointer for longer strings.
+
+**`ZyStr` encoding (little-endian, 8 bytes):**
+```
+Inline (byte[7] bit7 == 1): bytes[0..len] = UTF-8 data, byte[7] = 0x80 | len
+Heap   (byte[7] bit7 == 0): bytes[0..8] as u64 (LE) = raw *const String from Rc::into_raw()
+```
+Valid on x86-64 / arm64 where user-space pointers have bit 63 == 0.
+
+**Changes in `crates/zymbol-vm/src/zy_str.rs` (new file):**
+- `ZyStr::new(String)`: wraps the `String` directly in `Rc` (1 allocation for heap strings).
+- `ZyStr::from_str_ref(&str)`: inline if ≤ 7 bytes, otherwise `Rc::new(s.to_string())`.
+- `ZyStr::clone` (heap): `Rc::increment_strong_count` — single atomic op, no intermediate Rc value.
+- `ZyStr::drop` (heap): `drop(Rc::from_raw(ptr))` — decrements and frees when last owner.
+- `Deref<Target = str>`: all `&str` methods available on `&ZyStr` without `.as_str()` calls.
+- 11 unit tests: size_is_8_bytes, inline/heap boundary, clone safety, Deref, Unicode.
+
+**Additional micro-optimizations applied in the same sprint:**
+- `StrSplit`: changed `ZyStr::new(p.to_string())` → `ZyStr::from_str_ref(p)`. Short split
+  parts (≤ 7 bytes) now go inline with zero allocation.
+- `ArrayRemove` (Array arm): replaced `rc_arr.as_ref().clone()` + `Rc::new(arr)` with
+  `std::mem::replace` + `Rc::make_mut` — mutates the Vec in-place when refcount == 1,
+  clones only when shared.
+- `BuildStr` (both dispatch sites): added `String::with_capacity(sum_of_lit_lens + 4×reg_parts)`
+  pre-pass to avoid reallocation during string interpolation.
+
+**Benchmark results (VM, 5-run min, release binary):**
+
+| Benchmark | Sprint 5F | Sprint 5G | Delta |
+|-----------|-----------|-----------|-------|
+| Stress core | 80 ms | 69 ms | −11 ms |
+| Pattern Match | 74 ms | 43 ms | −31 ms |
+| Recursion | 261 ms | 279 ms | +18 ms |
+| Collections | 38 ms | 36 ms | −2 ms |
+| Strings | 25 ms | 33 ms | +8 ms |
+| Strings Stress | 42 ms | 56 ms | +14 ms |
+| Strings Modify | 49 ms | 57 ms | +8 ms |
+
+*Sprint 5F numbers from single-run baseline; Sprint 5G numbers from 5-run min. Net: CPU-bound
+benchmarks (Stress, Pattern Match, Collections) improve; string-heavy benchmarks are neutral
+to slightly worse because the benchmark strings are mostly > 7 bytes (bypass inline SSO path).*
+
+---
+
 ### VM performance — Sprint 5F (2026-04-16)
 
 Targeted micro-optimizations to the register VM hot paths.
