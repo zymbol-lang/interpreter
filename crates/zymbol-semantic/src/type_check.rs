@@ -1342,8 +1342,12 @@ impl TypeChecker {
                 let array_type = self.infer_expr(&index.array);
                 let index_type = self.infer_expr(&index.index);
 
-                // Validate index is Int
-                if !matches!(index_type, ZymbolType::Int | ZymbolType::Any | ZymbolType::Unknown) {
+                // Validate index type — Bool is excluded here intentionally:
+                // arr[bool_value] is a runtime error catchable by !? (BUG-NEW-02 fix)
+                if !matches!(
+                    index_type,
+                    ZymbolType::Int | ZymbolType::Bool | ZymbolType::Any | ZymbolType::Unknown
+                ) {
                     self.errors.push(
                         Diagnostic::error(format!(
                             "array index must be Int, got {}",

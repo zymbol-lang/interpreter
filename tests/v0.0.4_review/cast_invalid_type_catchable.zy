@@ -1,0 +1,12 @@
+// v0.0.4 review — cast on non-numeric type raises catchable RuntimeError
+// NOTE (BUG-NEW-03): error message differs between WT and VM:
+//   WT: "##_(##. requires a numeric value, got String(...))"
+//   VM: "type error: expected Int or Float, got String"
+// Test catches without inspecting _err to pass both modes.
+
+!? {
+    x = ##."hello"
+    >> x ¶
+} :! {
+    >> "caught invalid cast" ¶
+}

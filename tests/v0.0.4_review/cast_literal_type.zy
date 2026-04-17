@@ -1,0 +1,7 @@
+// v0.0.4 review — ##. on integer literal produces typed Float
+// meta[1] should be ##. (Float tag)
+
+x = ##.10
+>> x ¶
+meta = x#?
+>> meta[1] ¶

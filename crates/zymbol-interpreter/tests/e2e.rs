@@ -406,7 +406,7 @@ pair = (1, "hello")
 #[test]
 fn test_string_concatenation() {
     let out = run(r#"
->> "Hello" + " " + "World" ¶
+>> "Hello" " " "World" ¶
 "#);
     assert_eq!(out, "Hello World\n");
 }
@@ -414,7 +414,7 @@ fn test_string_concatenation() {
 #[test]
 fn test_string_auto_convert_concat() {
     let out = run(r#"
->> "Score: " + 95 ¶
+>> "Score: " 95 ¶
 "#);
     assert_eq!(out, "Score: 95\n");
 }
@@ -422,7 +422,7 @@ fn test_string_auto_convert_concat() {
 #[test]
 fn test_string_split() {
     let out = run(r#"
-parts = "a,b,c" / ','
+parts = "a,b,c" $/ ','
 len = parts$#
 >> parts ¶
 >> len ¶
@@ -951,7 +951,7 @@ pair = (1, "hello")
 #[test]
 fn test_string_concatenation_vm() {
     let src = r#"
->> "Hello" + " " + "World" ¶
+>> "Hello" " " "World" ¶
 "#;
     assert_eq!(run_vm(src).expect("VM"), run(src));
 }
@@ -959,7 +959,7 @@ fn test_string_concatenation_vm() {
 #[test]
 fn test_string_auto_convert_concat_vm() {
     let src = r#"
->> "Score: " + 95 ¶
+>> "Score: " 95 ¶
 "#;
     assert_eq!(run_vm(src).expect("VM"), run(src));
 }
@@ -967,7 +967,7 @@ fn test_string_auto_convert_concat_vm() {
 #[test]
 fn test_string_split_vm() {
     let src = r#"
-parts = "a,b,c" / ','
+parts = "a,b,c" $/ ','
 len = parts$#
 >> parts ¶
 >> len ¶

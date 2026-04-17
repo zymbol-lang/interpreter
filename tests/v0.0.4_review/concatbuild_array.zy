@@ -1,0 +1,8 @@
+// v0.0.4 review — $++ with Array base appends elements
+
+arr = [1, 2, 3] $++ 4 5 6
+>> arr ¶
+>> (arr$#) ¶
+
+arr2 = [10] $++ 20
+>> arr2 ¶

@@ -1,6 +1,8 @@
 # time_utils
 // Timing utilities for Zymbol-Lang benchmarks.
-// Uses <\ date +%s%N \> (Unix epoch nanoseconds via system call) — no built-ins.
+// Uses <\ "date +%s%N" \> (Unix epoch nanoseconds via system call) — no built-ins.
+// Note: BashExec args are Zymbol expressions; shell commands with non-Zymbol tokens
+//       (like +%s%N) must be quoted as string literals.
 //
 // Usage:
 //   <# ./lib_time <= T
@@ -13,37 +15,37 @@
 
 // Return current time in milliseconds (epoch nanoseconds / 1_000_000).
 now() {
-    <~ #|<\ date +%s%N \>| / 1000000
+    <~ #|<\ "date +%s%N" \>| / 1000000
 }
 
 // Format elapsed time since start_ms as "(X.XXXs)".
 elapsed(start_ms) {
-    diff = #|<\ date +%s%N \>| / 1000000 - start_ms
+    diff = #|<\ "date +%s%N" \>| / 1000000 - start_ms
     s    = diff / 1000
     ms   = diff - (s * 1000)
     ? ms < 10 {
-        <~ "(" + s + ".00" + ms + "s)"
+        <~ "(" s ".00" ms "s)"
     }
     _? ms < 100 {
-        <~ "(" + s + ".0" + ms + "s)"
+        <~ "(" s ".0" ms "s)"
     }
     _ {
-        <~ "(" + s + "." + ms + "s)"
+        <~ "(" s "." ms "s)"
     }
 }
 
 // Format elapsed time since start_ms as "X.XXXs total".
 total(start_ms) {
-    diff = #|<\ date +%s%N \>| / 1000000 - start_ms
+    diff = #|<\ "date +%s%N" \>| / 1000000 - start_ms
     s    = diff / 1000
     ms   = diff - (s * 1000)
     ? ms < 10 {
-        <~ s + ".00" + ms + "s total"
+        <~ s ".00" ms "s total"
     }
     _? ms < 100 {
-        <~ s + ".0" + ms + "s total"
+        <~ s ".0" ms "s total"
     }
     _ {
-        <~ s + "." + ms + "s total"
+        <~ s "." ms "s total"
     }
 }

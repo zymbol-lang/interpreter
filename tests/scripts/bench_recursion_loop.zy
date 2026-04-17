@@ -132,12 +132,12 @@ t_total = T::now()
 // ── fib(30) recursivo ────────────────────────────────────────────────────────
 t = T::now()
 r1 = fib_rec(30)
->> "fib_rec(30)        = " + r1[1] + "  " + T::elapsed(t) + "  (" + #,|r1[2]| + " calls)" ¶
+>> "fib_rec(30)        = " r1[1] "  " T::elapsed(t) "  (" #,|r1[2]| " calls)" ¶
 
 // ── fib(30) iterativo ─────────────────────────────────────────────────────────
 t = T::now()
 r2 = fib_loop(30)
->> "fib_loop(30)       = " + r2[1] + "  " + T::elapsed(t) + "  (" + #,|r2[2]| + " calls, " + r2[3] + " iters)" ¶
+>> "fib_loop(30)       = " r2[1] "  " T::elapsed(t) "  (" #,|r2[2]| " calls, " r2[3] " iters)" ¶
 
 // ── fib(30) puro loop ─────────────────────────────────────────────────────────
 t = T::now()
@@ -150,24 +150,24 @@ pure_iters = 0
     b = c
     pure_iters = pure_iters + 1
 }
->> "fib_pure(30)       = " + b + "  " + T::elapsed(t) + "  (0 calls, " + pure_iters + " iters)" ¶
+>> "fib_pure(30)       = " b "  " T::elapsed(t) "  (0 calls, " pure_iters " iters)" ¶
 
 >> "" ¶
 
 // ── ackermann(3,6) recursivo ─────────────────────────────────────────────────
 t = T::now()
 r4 = ackermann_rec(3, 6)
->> "ackermann_rec(3,6)  = " + r4[1] + "  " + T::elapsed(t) + "  (" + #,|r4[2]| + " calls)" ¶
+>> "ackermann_rec(3,6)  = " r4[1] "  " T::elapsed(t) "  (" #,|r4[2]| " calls)" ¶
 
 // ── ackermann(3,6) iterativo v1 (stack dinámico $+/$-) ────────────────────────
 t = T::now()
 r5 = ackermann_loop(3, 6)
->> "ackermann_loop(3,6)    = " + r5[1] + "  " + T::elapsed(t) + "  (" + #,|r5[2]| + " call, " + r5[3] + " iters)" ¶
+>> "ackermann_loop(3,6)    = " r5[1] "  " T::elapsed(t) "  (" #,|r5[2]| " call, " r5[3] " iters)" ¶
 
 // ── ackermann(3,6) iterativo v2 ($~ in-place + index read fast path) ──────────
 t = T::now()
 r6 = ackermann_loop_v2(3, 6)
->> "ackermann_loop_v2(3,6) = " + r6[1] + "  " + T::elapsed(t) + "  (" + #,|r6[2]| + " call, " + r6[3] + " iters)" ¶
+>> "ackermann_loop_v2(3,6) = " r6[1] "  " T::elapsed(t) "  (" #,|r6[2]| " call, " r6[3] " iters)" ¶
 
 >> "" ¶
->> "=== Done (" + T::total(t_total) + ") ===" ¶
+>> "=== Done (" T::total(t_total) ") ===" ¶

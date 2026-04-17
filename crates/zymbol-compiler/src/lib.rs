@@ -657,7 +657,13 @@ impl Compiler {
             // Unsupported — produce meaningful error
             Statement::Input(_) => Err(CompileError::Unsupported("input (<<)".into())),
             Statement::Try(ts) => self.compile_try(ts, ctx),
-            Statement::LifetimeEnd(_) => Ok(()), // no-op in VM
+            Statement::LifetimeEnd(lifetime_end) => {
+                if let Ok(r) = ctx.get_reg(&lifetime_end.variable_name) {
+                    ctx.emit(Instruction::LoadUnit(r));
+                    ctx.register_map.remove(&lifetime_end.variable_name);
+                }
+                Ok(())
+            }
             Statement::CliArgsCapture(_) => {
                 Err(CompileError::Unsupported("CLI args capture — VM Fase 4C".into()))
             }

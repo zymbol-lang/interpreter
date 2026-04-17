@@ -13,12 +13,12 @@ fib_tail(n, a, b) {
 
 t = T::now()
 r1 = fib_rec(30)
->> "fib_rec(30)  = " + r1 + "  " + T::elapsed(t) + "  (2,692,537 calls)" ¶
+>> "fib_rec(30)  = " r1 "  " T::elapsed(t) "  (2,692,537 calls)" ¶
 
 t = T::now()
 r2 = fib_tail(30, 0, 1)
->> "fib_tail(30) = " + r2 + "  " + T::elapsed(t) + "  (30 calls)" ¶
+>> "fib_tail(30) = " r2 "  " T::elapsed(t) "  (30 calls)" ¶
 
 t = T::now()
 r3 = fib_tail(30, 0, 1)
->> "fib_tail(30) = " + r3 + "  " + T::elapsed(t) + "  (40 calls)" ¶
+>> "fib_tail(30) = " r3 "  " T::elapsed(t) "  (40 calls)" ¶

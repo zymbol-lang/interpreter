@@ -1,0 +1,10 @@
+// v0.0.4 review — \ var destroys the variable; program continues after destruction
+// GAP-01 is now fixed: \ _resource genuinely removes _resource from scope
+// Variable is not accessed after destruction in this test
+
+? #1 {
+    _resource = 42
+    >> _resource ¶
+    \ _resource
+    >> "after release" ¶
+}

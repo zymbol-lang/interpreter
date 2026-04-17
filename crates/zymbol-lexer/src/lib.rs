@@ -1429,13 +1429,15 @@ mod tests {
 
     #[test]
     fn test_string_literal_braces() {
-        // \{ and \} are escapes that produce literal { and }
+        // Two-phase design: \{ stores sentinel \x01 in the lexer token;
+        // zymbol-interpreter/src/literals.rs resolves \x01 → '{' at runtime.
+        // This test verifies the LEXER contract (the sentinel), not the runtime output.
         let tokens = lex(r#""Use \{curly\} braces literally""#);
         assert_eq!(tokens.len(), 2);
 
         match &tokens[0] {
             TokenKind::String(s) => {
-                assert_eq!(s, "Use {curly} braces literally");
+                assert_eq!(s, "Use \x01curly} braces literally");
             }
             _ => panic!("Expected plain String with literal braces"),
         }

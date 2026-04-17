@@ -20,7 +20,7 @@ tests/
 ├── safe_access/         # $? safe navigation, $! propagation
 ├── strings/             # String operators: $/, $++, #|x|, format, precision
 ├── analysis/            # Static analysis (unused vars, circular imports)
-├── gaps/                # Language gap regression tests — one test per GAP documented in ZeethyCLI/GAPS.md
+├── gaps/                # Language gap regression tests — one test per GAP documented in ZethyCLICLI/GAPS.md
 ├── bugs/                # Bug regression tests — one test per BUG; must never regress
 └── scripts/             # Test runner scripts and benchmarks
 ```
@@ -28,7 +28,7 @@ tests/
 ### `gaps/` — Language gap regression tests
 
 Each file documents and exercises a specific language limitation discovered during
-real-world usage (ZeethyCLI). Naming: `g<ID>_<short_description>.zy`.
+real-world usage (ZethyCLICLI). Naming: `g<ID>_<short_description>.zy`.
 
 The test proves the **intended behavior** — either that the workaround works correctly,
 or that a formerly broken behavior is now fixed. Adding a test here is mandatory when

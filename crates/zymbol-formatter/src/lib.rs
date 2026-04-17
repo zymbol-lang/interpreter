@@ -494,13 +494,13 @@ mod tests {
 
     #[test]
     fn test_format_loop() {
-        let result = format("@x<10{x=x+1}").unwrap();
+        let result = format("@ x<10{x=x+1}").unwrap();
         assert_eq!(result, "@ x < 10 { x = x + 1 }\n");
     }
 
     #[test]
     fn test_format_foreach_loop() {
-        let result = format("@i:1..10{>>i}").unwrap();
+        let result = format("@ i:1..10{>>i}").unwrap();
         assert_eq!(result, "@ i:1..10 { >> i }\n");
     }
 

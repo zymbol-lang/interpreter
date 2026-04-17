@@ -200,6 +200,8 @@ struct FrameInfo {
 pub enum VmError {
     #[error("type error: expected {expected}, got {got}")]
     TypeError { expected: &'static str, got: String },
+    #[error("{op} requires a numeric value, got {got}")]
+    CastError { op: &'static str, got: String },
     #[error("division by zero")]
     DivisionByZero,
     #[error("index out of bounds: index {index}, length {length}")]
@@ -449,7 +451,7 @@ impl<W: Write> VM<W> {
                         let catch = frame.catch_ip;
                         frame.catch_ip = u32::MAX;
                         let kind = match &_err {
-                            VmError::TypeError { .. } => "Type",
+                            VmError::TypeError { .. } | VmError::CastError { .. } => "Type",
                             VmError::DivisionByZero => "Div",
                             VmError::IndexOutOfBounds { .. } => "Index",
                             VmError::Io(_) => "IO",
@@ -589,7 +591,7 @@ impl<W: Write> VM<W> {
                     let v = match rreg!(src) {
                         Value::Int(n)   => *n as f64,
                         Value::Float(f) => *f,
-                        other => raise!(VmError::TypeError { expected: "Int or Float", got: other.type_name().to_string() }),
+                        other => raise!(VmError::CastError { op: "##.", got: other.type_name().to_string() }),
                     };
                     wreg!(dst, Value::Float(v));
                 }
@@ -597,7 +599,7 @@ impl<W: Write> VM<W> {
                     let v = match rreg!(src) {
                         Value::Float(f) => f.round() as i64,
                         Value::Int(n)   => *n,
-                        other => raise!(VmError::TypeError { expected: "Float", got: other.type_name().to_string() }),
+                        other => raise!(VmError::CastError { op: "###", got: other.type_name().to_string() }),
                     };
                     wreg!(dst, Value::Int(v));
                 }
@@ -605,7 +607,7 @@ impl<W: Write> VM<W> {
                     let v = match rreg!(src) {
                         Value::Float(f) => f.trunc() as i64,
                         Value::Int(n)   => *n,
-                        other => raise!(VmError::TypeError { expected: "Float", got: other.type_name().to_string() }),
+                        other => raise!(VmError::CastError { op: "##!", got: other.type_name().to_string() }),
                     };
                     wreg!(dst, Value::Int(v));
                 }
@@ -711,14 +713,15 @@ impl<W: Write> VM<W> {
                         raise!(VmError::UndefinedFunction(func_idx));
                     }
                     let num_regs = program.functions[func_idx as usize].num_registers as usize;
-                    let num_args = arg_regs.len();
+                    let _num_args = arg_regs.len();
 
                     // Save current IP to caller frame before pushing callee
                     self.frame_stack.last_mut().unwrap().ip = ip as u32;
 
                     let new_base = self.value_stack.len();
-                    // Extend flat stack: initialize only non-arg slots to Unit;
-                    // arg slots are written immediately after, avoiding double-write.
+                    // Extend flat stack with Unit (single vectorizable loop), then
+                    // overwrite the arg slots with the actual arg values via unsafe
+                    // indexed write (no bounds check, no double capacity check).
                     self.value_stack.resize(new_base + num_regs, Value::Unit);
 
                     // Copy args from caller into callee arg registers
@@ -726,7 +729,6 @@ impl<W: Write> VM<W> {
                         let val = unsafe { self.value_stack.get_unchecked(base + reg as usize).clone() };
                         unsafe { *self.value_stack.get_unchecked_mut(new_base + i) = val; }
                     }
-                    let _ = num_args; // used above
 
                     let wb = mem::take(&mut self.pending_output_writeback);
                     self.frame_stack.push(FrameInfo {
@@ -864,7 +866,10 @@ impl<W: Write> VM<W> {
                     }
                 }
                 &Instruction::ArrayGet(dst, arr_reg, idx_reg) => {
-                    let idx = self.as_int(idx_reg)?;
+                    let idx = match self.as_int(idx_reg) {
+                        Ok(n) => n,
+                        Err(e) => raise!(e),
+                    };
                     let val = match &self.value_stack[base + arr_reg as usize] {
                         Value::Array(arr) => {
                             let i = if idx == 0 {
@@ -1393,11 +1398,7 @@ impl<W: Write> VM<W> {
                         };
                         match &self.value_stack[base + pat_reg as usize] {
                             Value::String(pat) => s.replace(pat.as_str(), rep.as_str()),
-                            Value::Char(c) => {
-                                let mut ps = String::with_capacity(4);
-                                ps.push(*c);
-                                s.replace(ps.as_str(), rep.as_str())
-                            }
+                            Value::Char(c) => s.replace(*c, rep.as_str()),
                             other => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
                         }
                     };
@@ -1414,22 +1415,32 @@ impl<W: Write> VM<W> {
                             other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
                         };
                         let max = ri!(n_reg).max(0) as usize;
-                        let pat_str = match &self.value_stack[base + pat_reg as usize] {
-                            Value::String(p) => p.to_string(),
-                            Value::Char(c) => c.to_string(),
+                        // Avoid heap-allocating a String for char patterns: use char directly.
+                        #[derive(Copy, Clone)]
+                        enum Pat<'a> { Ch(char), Str(&'a str) }
+                        let pat = match &self.value_stack[base + pat_reg as usize] {
+                            Value::String(p) => Pat::Str(p.as_str()),
+                            Value::Char(c) => Pat::Ch(*c),
                             other => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
                         };
                         if max == 0 {
-                            s.replace(pat_str.as_str(), rep.as_str())
+                            match pat {
+                                Pat::Str(p) => s.replace(p, rep.as_str()),
+                                Pat::Ch(c)  => s.replace(c, rep.as_str()),
+                            }
                         } else {
                             let mut out = String::with_capacity(s.len());
                             let mut remaining = s.as_str();
                             let mut count = 0;
                             while count < max {
-                                if let Some(pos) = remaining.find(pat_str.as_str()) {
+                                let found = match pat {
+                                    Pat::Str(p) => remaining.find(p).map(|pos| (pos, p.len())),
+                                    Pat::Ch(c)  => remaining.find(c).map(|pos| (pos, c.len_utf8())),
+                                };
+                                if let Some((pos, pat_len)) = found {
                                     out.push_str(&remaining[..pos]);
                                     out.push_str(&rep);
-                                    remaining = &remaining[pos + pat_str.len()..];
+                                    remaining = &remaining[pos + pat_len..];
                                     count += 1;
                                 } else {
                                     break;

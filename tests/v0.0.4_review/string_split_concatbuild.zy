@@ -1,0 +1,22 @@
+// v0.0.4 review — $/ split and $++ ConcatBuild operators
+
+parts = "a,b,c,d" $/ ','
+>> parts ¶
+
+parts2 = "one::two::three" $/ "::"
+>> parts2 ¶
+
+n = 42
+pi = 3.14
+flag = #1
+
+s = "n=" $++ n " pi=" pi " ok=" flag
+>> s ¶
+
+label = "result"
+tmp = 100 * 2
+out = label $++ "=" tmp
+>> out ¶
+
+arr = [1, 2, 3] $++ 4 5 6
+>> arr ¶

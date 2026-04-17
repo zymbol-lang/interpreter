@@ -1,0 +1,12 @@
+// v0.0.4 review — 1-based indexing: arr[0] raises catchable RuntimeError
+// arr[1] = first, arr[-1] = last, arr[0] = error
+
+arr = [10, 20, 30]
+>> arr[1] ¶
+>> arr[3] ¶
+>> arr[-1] ¶
+!? {
+    >> arr[0] ¶
+} :! {
+    >> "caught index 0" ¶
+}

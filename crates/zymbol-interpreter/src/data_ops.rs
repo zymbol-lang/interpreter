@@ -13,6 +13,21 @@ use zymbol_lexer::digit_blocks::digit_value;
 
 use crate::{Interpreter, Result, RuntimeError, Value};
 
+fn value_type(v: Value) -> &'static str {
+    match v {
+        Value::Int(_) => "Int",
+        Value::Float(_) => "Float",
+        Value::String(_) => "String",
+        Value::Char(_) => "Char",
+        Value::Bool(_) => "Bool",
+        Value::Array(_) => "Array",
+        Value::Tuple(_) | Value::NamedTuple(_) => "Tuple",
+        Value::Function(_) => "Function",
+        Value::Error(_) => "Error",
+        Value::Unit => "Unit",
+    }
+}
+
 /// Normalize a string containing Unicode numerals to ASCII digits.
 /// Accepts: Unicode decimal digits (any of 69 scripts), '.', '-' (leading only).
 /// Returns None if any non-numeric character is found.
@@ -83,7 +98,7 @@ impl<W: Write> Interpreter<W> {
                 Value::Float(_) => Ok(value),
                 Value::Int(n) => Ok(Value::Float(n as f64)),
                 other => Err(RuntimeError::Generic {
-                    message: format!("##. requires a numeric value, got {:?}", other),
+                    message: format!("##. requires a numeric value, got {}", value_type(other)),
                     span: op.span,
                 }),
             },
@@ -91,7 +106,7 @@ impl<W: Write> Interpreter<W> {
                 Value::Int(_) => Ok(value),
                 Value::Float(f) => Ok(Value::Int(f.round() as i64)),
                 other => Err(RuntimeError::Generic {
-                    message: format!("### requires a numeric value, got {:?}", other),
+                    message: format!("### requires a numeric value, got {}", value_type(other)),
                     span: op.span,
                 }),
             },
@@ -99,7 +114,7 @@ impl<W: Write> Interpreter<W> {
                 Value::Int(_) => Ok(value),
                 Value::Float(f) => Ok(Value::Int(f.trunc() as i64)),
                 other => Err(RuntimeError::Generic {
-                    message: format!("##! requires a numeric value, got {:?}", other),
+                    message: format!("##! requires a numeric value, got {}", value_type(other)),
                     span: op.span,
                 }),
             },

@@ -51,7 +51,7 @@ hits = 0
     label = classify(val)
     ? label <> "other" { hits = hits + 1 }
 }
->> "value_match: " + hits + " non-other hits  " + T::elapsed(t) ¶
+>> "value_match: "  hits " non-other hits  " T::elapsed(t) ¶
 
 t = T::now()
 a_count = 0
@@ -60,7 +60,7 @@ a_count = 0
     g = grade(score)
     ? g == "A" { a_count = a_count + 1 }
 }
->> "range_match: " + a_count + " A-grades  " + T::elapsed(t) ¶
+>> "range_match: "  a_count " A-grades  " T::elapsed(t) ¶
 
 t = T::now()
 q1_count = 0
@@ -70,6 +70,6 @@ q1_count = 0
     q = quadrant(x, y)
     ? q == "Q1" { q1_count = q1_count + 1 }
 }
->> "nested_match: " + q1_count + " Q1 hits  " + T::elapsed(t) ¶
+>> "nested_match: " q1_count " Q1 hits  " T::elapsed(t) ¶
 
->> "=== Done (" + T::total(t_total) + ") ===" ¶
+>> "=== Done (" T::total(t_total) ") ===" ¶

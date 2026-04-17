@@ -1,0 +1,22 @@
+// v0.0.4 review — runtime errors that must be catchable by !? ... :!
+// Regression: div-by-zero, index 0, out-of-bounds
+
+!? {
+    _x = 1 / 0
+} :! {
+    >> "caught div0" ¶
+}
+
+!? {
+    arr = [1,2,3]
+    >> arr[0] ¶
+} :! {
+    >> "caught idx0" ¶
+}
+
+!? {
+    arr = [1,2,3]
+    >> arr[99] ¶
+} :! {
+    >> "caught oob" ¶
+}

@@ -37,22 +37,22 @@ t_total = T::now()
 
 t = T::now()
 r1 = fib(30)
->> "fib(30) = " + r1 + "  " + T::elapsed(t) ¶
+>> "fib(30) = " r1 "  " T::elapsed(t) ¶
 
 t = T::now()
 r2 = fact(20)
->> "fact(20) = " + r2 + "  " + T::elapsed(t) ¶
+>> "fact(20) = " r2 "  " T::elapsed(t) ¶
 
 t = T::now()
 r3 = pow(2, 20)
->> "pow(2,20) = " + r3 + "  " + T::elapsed(t) ¶
+>> "pow(2,20) = " r3 "  " T::elapsed(t) ¶
 
 t = T::now()
 r4 = ackermann(3, 6)
->> "ackermann(3,6) = " + r4 + "  " + T::elapsed(t) ¶
+>> "ackermann(3,6) = " r4 "  " T::elapsed(t) ¶
 
 t = T::now()
 r5 = sum_down(1000, 0)
->> "sum_down(1000) = " + r5 + "  " + T::elapsed(t) ¶
+>> "sum_down(1000) = " r5 "  " T::elapsed(t) ¶
 
->> "=== Done (" + T::total(t_total) + ") ===" ¶
+>> "=== Done (" T::total(t_total) ") ===" ¶

@@ -901,10 +901,8 @@ impl<W: Write> Interpreter<W> {
                 self.set_variable(&cli_args.variable_name, Value::Array(args_array));
                 Ok(())
             }
-            Statement::LifetimeEnd(_lifetime_end) => {
-                // Phase 1: Placeholder for explicit variable destruction
-                // Full implementation will come in Phase 5 (Runtime Integration)
-                // For now, this is a no-op
+            Statement::LifetimeEnd(lifetime_end) => {
+                self.destroy_variable(&lifetime_end.variable_name);
                 Ok(())
             }
             Statement::DestructureAssign(d) => self.eval_destructure_assign(d),
@@ -1725,7 +1723,7 @@ mod error_handling_tests {
                     x = arr[i]
                     >> x ¶
                 } :! {
-                    >> "error at " + i ¶
+                    >> "error at " i ¶
                 }
             }
         "#;

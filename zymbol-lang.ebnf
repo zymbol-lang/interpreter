@@ -1,7 +1,7 @@
 (*
   Zymbol-Lang EBNF Grammar
   Version: 2.3.0
-  Sprint: v0.0.5
+  Sprint: v0.0.4_1
 
   A minimalist symbolic programming language.
   No keywords — pure symbolic syntax with full Unicode support.
@@ -10,11 +10,11 @@
   Test coverage:  150/150 interpreter PASS (wt + vm)
   Execution:      Tree-walker (default) | Register VM (--vm)
 
-  IMPLEMENTATION STATUS: Feature-complete as of v0.0.5.
+  IMPLEMENTATION STATUS: Feature-complete as of v0.0.4_1.
   All rules in this grammar are implemented unless marked [NOT IMPLEMENTED].
 
   Version History:
-    2.3.0 (v0.0.5)     — New operators (tree-walker only):
+    2.3.0 (v0.0.4_1)     — New operators (tree-walker only):
                           $/ (StringSplit): string$/ delimiter → Array(String).
                           $++ (ConcatBuild): base$++ item1 item2 ... (repurposed from
                             retired $++[i] insert — new semantics: String base → concat,
@@ -337,7 +337,7 @@ lambda_params  = identifier
    ========================================================================= *)
 
 expr           = pipe_expr ;
-(* NOTE: comma concatenation was removed in v0.0.5. Assignments now use
+(* NOTE: comma concatenation was removed in v0.0.4_1. Assignments now use
    juxtaposition (same-line adjacent primaries) or string interpolation:
      msg = "Hello " name "!"         ✅ juxtaposition (canonical)
      msg = "Hello {name}!"           ✅ interpolation (most readable)
@@ -856,7 +856,7 @@ whitespace     = " " | "\t" | "\r" | "\n" ;
    Replacement: s$+[i] val
    Parser emits: "v0.0.2: use $+[ instead of $++"
 
-   NOTE: The bare $++ token (without bracket) was REPURPOSED in v0.0.5 as ConcatBuild.
+   NOTE: The bare $++ token (without bracket) was REPURPOSED in v0.0.4_1 as ConcatBuild.
    New semantics: base$++ item1 item2 ...
      String base → concatenate all items (coercing non-strings to string representation)
      Array base  → append all items to the array

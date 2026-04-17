@@ -1,0 +1,19 @@
+// v0.0.4 review — type metadata #? for all four primitive types
+// Int → (###, digits, value)   Float → (##., digits, value)
+// String → (##", len, value)   Char → (##', 1, value)
+
+ti = 42#?
+>> ti ¶
+
+tf = 3.14#?
+>> tf ¶
+
+ts = "hello"#?
+>> ts ¶
+
+tc = 'A'#?
+>> tc ¶
+
+meta = 42#?
+t = meta[1]
+>> t ¶
