@@ -226,27 +226,27 @@ match_stmt     = "??" , expr , "{" , { match_case } , "}" ;
 match_case     = pattern , ":" , ( expr | block ) ;
 
 pattern        = range_pattern                (* 90..100 *)
-               | guard_pattern                (* _? condition *)
-               | list_pattern                 (* [a, b, c] *)
-               | literal_pattern             (* 42, "red", 'A', #1 *)
+               | comparison_pattern           (* < 0, >= 100, == "x" *)
+               | ident_pattern                (* variable name *)
+               | list_pattern                 (* [a, b, c] — structural or containment *)
+               | literal_pattern              (* 42, "red", 'A', #1 *)
                | wildcard_pattern ;           (* _ *)
 
-literal_pattern  = literal ;
-range_pattern    = range_bound , ".." , range_bound ;
-range_bound      = literal | identifier ;
-guard_pattern    = "_?" , expr                (* wildcard guard — _? condition *)
-               | pattern , "?" , expr ;      (* pattern guard — literal/range ? condition *)
-wildcard_pattern = "_" ;
-list_pattern     = "[" , [ pattern , { "," , pattern } ] , "]" ;  (* [] empty list allowed *)
+literal_pattern     = literal ;
+range_pattern       = range_bound , ".." , range_bound ;
+range_bound         = literal | identifier ;
+comparison_pattern  = ( "<" | ">" | "<=" | ">=" | "==" | "<>" ) , expr ;
+ident_pattern       = identifier ;            (* scalar var → equality; array var → containment *)
+wildcard_pattern    = "_" ;
+list_pattern        = "[" , [ pattern , { "," , pattern } ] , "]" ;
 (*
-  ?? val {
-      [1, 2]:    { >> "starts with 1,2" ¶ }
-      [_, _, _]: { >> "exactly 3 elems" ¶ }
-      _:         { >> "other" ¶ }
-  }
+  Scalar scrutinee vs list_pattern → containment: ?? n { [1, 2] : "low"  _ : "other" }
+  Array  scrutinee vs list_pattern → structural:   ?? arr { ["run", _] : "cmd"  _ : "other" }
+  Comparison pattern:                              ?? temp { < 0 : "ice"  >= 100 : "steam"  _ : "water" }
+  Ident pattern (scalar):                          ?? code { expected : "ok"  _ : "fail" }
+  Ident pattern (array var):                       ?? day { weekdays : "work"  _ : "rest" }
 *)
 
-(* [NOT IMPLEMENTED] multi-value arm:  1, 2 : "low"     *)
 (* [NOT IMPLEMENTED] binding pattern:  n : n * 2        *)
 
 (* =========================================================================
@@ -260,8 +260,11 @@ loop_stmt      = "@" , [ loop_label ] , [ loop_spec ] , block ;
 loop_label     = "@" , identifier ;
 
 loop_spec      = identifier , ":" , iterable   (* for-each / range *)
-               | expr ;                         (* while condition *)
-(* "@" alone (no label, no spec) = infinite loop *)
+               | expr ;                         (* times loop (Int literal > 0) or while condition (Bool expr) *)
+(* Form inferred at runtime from the initial value of expr:
+   - Int n > 0  → TIMES loop: body executes exactly n times (condition evaluated once)
+   - otherwise  → WHILE loop: condition re-evaluated before each iteration
+   "@" alone (no label, no spec) = infinite loop *)
 
 iterable       = range_expr | expr ;            (* array, string, or range *)
 

@@ -402,6 +402,12 @@ x = 7
 
 ## 7. Match
 
+`??` is **pure pattern matching** — it does not evaluate boolean conditions (use `?`/`_?` for
+conditional branching). Six pattern types are available: Literal, Range, Comparison, Wildcard,
+Ident, and List.
+
+### Literal and Range Patterns
+
 ```zymbol
 score = 85
 grade = ?? score {
@@ -413,7 +419,6 @@ grade = ?? score {
 }
 >> "grade: " grade ¶
 
-// Match on string literals
 color = "red"
 code = ?? color {
     "red"   : "#FF0000"
@@ -422,41 +427,74 @@ code = ?? color {
     _       : "#000000"
 }
 >> code ¶
+```
 
-// Guard patterns with _?
+### Comparison Patterns
+
+A comparison pattern (`< expr`, `> expr`, `<= expr`, `>= expr`, `== expr`, `<> expr`) implicitly
+compares the scrutinee against `expr`. Arms are tested in order; first match wins.
+
+```zymbol
 temperature = -5
 state = ?? temperature {
-    _? temperature < 0   : "ice"
-    _? temperature < 20  : "cold"
-    _? temperature < 35  : "warm"
-    _                    : "hot"
+    < 0   : "ice"
+    < 20  : "cold"
+    < 35  : "warm"
+    _     : "hot"
 }
 >> state ¶    // → ice
 
-// Match as statement (block arms)
 n = 42
 ?? n {
-    0 : { >> "zero" ¶ }
-    _? n < 0 : { >> "negative" ¶ }
-    _ : {
-        >> "positive: " n ¶
-    }
+    == 0    : { >> "zero" ¶ }
+    < 0     : { >> "negative" ¶ }
+    _       : { >> "positive: " n ¶ }
 }
+```
+
+### Ident Patterns
+
+An identifier used as a pattern looks up the named variable at runtime:
+- **Scalar variable** → equality check (`scrutinee == var`)
+- **Array variable** → containment check (`scrutinee ∈ var`)
+
+```zymbol
+expected = 200
+code = 200
+?? code {
+    expected : "ok"
+    _        : "fail"
+}
+// → ok
+
+weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+day = "Mon"
+?? day {
+    weekdays : "weekday"
+    _        : "weekend"
+}
+// → weekday
 ```
 
 ### List Patterns
 
-Match on array contents using `[...]` patterns. Each element position is matched against a
-literal or wildcard `_`:
+`[...]` patterns have **dual semantics** based on the scrutinee's type at runtime:
+
+- **Array scrutinee** → structural match (length + element-by-element)
+- **Scalar scrutinee** → containment: does the scalar appear in the literal list?
 
 ```zymbol
-arr = [1, 2, 3]
-?? arr {
-    [1, 2, 3] : { >> "exact match" ¶ }
-    _         : { >> "other" ¶ }
+// Scalar containment
+n = 3
+?? n {
+    [1, 2] : "low"
+    [3, 4] : "mid"
+    [5, 6] : "high"
+    _      : "other"
 }
-// → exact match
+// → mid
 
+// Structural array match
 cmd = ["run", "main.zy"]
 ?? cmd {
     ["run", _]    : { >> "run command" ¶ }
@@ -477,9 +515,6 @@ data = [10, 20, 30]
 // → three elements
 ```
 
-> **⚠ Not implemented**: Multi-value arms (`1, 2 : "low"`) are not supported.
-> Workaround: use guard `_? n == 1 || n == 2 : "low"`.
-
 > **⚠ Not implemented**: Identifier binding in patterns (`n : n * 2`).
 
 ---
@@ -497,6 +532,29 @@ i = 0
 }
 >> ¶    // → 1 2 3 4
 ```
+
+### Times Loop — repeat exactly N times
+
+When the loop specifier is a positive integer literal, the body executes **exactly N times**. The condition is evaluated once and never re-evaluated:
+
+```zymbol
+@ 5 { >> "Zz" }
+// → ZzZzZzZzZz
+
+@ 100 { >> "*" }
+// → (100 asterisks)
+```
+
+The counter is implicit — no iterator variable is exposed. Use `@!` to break early if needed:
+
+```zymbol
+@ 10 {
+    >> "tick " ¶
+}
+// prints "tick " exactly 10 times
+```
+
+> **Note**: The analyzer emits `loop condition should be Bool, got Int` because the grammar shares the `expr` production with While. This warning is expected and harmless — the runtime correctly identifies the form as a TIMES loop.
 
 ### While Loop
 
@@ -2319,15 +2377,14 @@ nums$> fn              // ❌ not accepted
 nums$> (x -> fn(x))    // ✅ always works
 ```
 
-### L7 — Match multi-value arms not implemented
+### ~~L7 — Match multi-value arms not implemented~~ Fixed in v0.0.4
+
+Multi-value arms are supported via list containment patterns:
 
 ```zymbol
-?? y { 1, 2 : "low"  _ : "other" }    // ❌ parser error
-
-// Workaround:
 ?? y {
-    _? y == 1 || y == 2 : "low"
-    _ : "other"
+    [1, 2] : "low"
+    _      : "other"
 }  // ✅
 ```
 
@@ -2431,7 +2488,9 @@ n_labels = labels$#
 | `_` | Else / wildcard | `_{ }` |
 | `??` | Match | `?? x { pat : val }` |
 | `[p, q]` | Match list pattern | `?? arr { [_, _] : ... }` |
-| `@` | Loop | `@ cond { }` |
+| `@` | Loop (while) | `@ cond { }` |
+| `@` | Loop (times) | `@ N { }` — repeats exactly N times when N is a positive Int |
+| `@` | Loop (infinite) | `@ { }` |
 | `@!` | Break | `@!` or `@! label` |
 | `@>` | Continue | `@>` or `@> label` |
 | `->` | Lambda | `x -> x * 2` |
@@ -2644,9 +2703,11 @@ parse_number(s) {
 | Arithmetic / comparison / logical | ✅ | ✅ | |
 | Compound assignment operators | ✅ | ✅ | |
 | if / else-if / else | ✅ | ✅ | |
-| match (literal, range, guard, wildcard) | ✅ | ✅ | |
-| match list pattern `[a, b, _]` | ✅ | ✅ | v0.0.3 |
-| match multi-value arm | ❌ | ❌ | Not implemented |
+| match (literal, range, wildcard) | ✅ | ✅ | |
+| match comparison pattern `< expr` | ✅ | ✅ | v0.0.4 |
+| match ident pattern (scalar/array) | ✅ | ✅ | v0.0.4 |
+| match list pattern `[a, b, _]` (structural) | ✅ | ✅ | v0.0.3 |
+| match list pattern `[v1, v2]` (containment) | ✅ | ✅ | v0.0.4 |
 | match identifier binding | ❌ | ❌ | Not implemented |
 | Loops (all types) | ✅ | ✅ | |
 | Range with step and reverse | ✅ | ✅ | Sprint 5I |
@@ -2685,4 +2746,5 @@ parse_number(s) {
 | Negative array indices | ✅ | ✅ | `arr[-1]` normalized in both modes (v0.0.2) |
 | Destructuring assignment | ✅ | ✅ | `[a, b] = arr`, `(name: n) = t` (v0.0.2) |
 | `$!!` error propagation | ✅ | ✅ | Named functions only — lambdas not supported (L13) |
+| Times loop `@ N { }` | ✅ | ✅ | Int condition evaluated once → repeat exactly N times |
 | `do-while ~>` (post-cond loop) | ❌ | ❌ | Not implemented — EBNF spec, planned |
