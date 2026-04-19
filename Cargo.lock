@@ -2011,6 +2011,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "zymbol-intrinsics"
+version = "0.0.4"
+
+[[package]]
 name = "zymbol-lexer"
 version = "0.0.4"
 dependencies = [
@@ -2094,5 +2098,6 @@ version = "0.0.4"
 dependencies = [
  "thiserror 1.0.69",
  "zymbol-bytecode",
+ "zymbol-intrinsics",
  "zymbol-lexer",
 ]

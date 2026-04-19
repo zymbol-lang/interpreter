@@ -102,6 +102,46 @@ if [[ $REGEN -eq 1 ]]; then
     exit 0
 fi
 
+# ── Wildcard match: **** in .expected matches any sequence of characters ──────
+# Line-by-line: a golden line with **** is matched as a glob against the actual line.
+matches_golden() {
+    local actual="$1"
+    local golden="$2"
+
+    # Fast path: no wildcard → exact comparison
+    if [[ "$golden" != *"****"* ]]; then
+        [[ "$actual" == "$golden" ]]
+        return
+    fi
+
+    # Line-by-line comparison
+    local actual_line golden_line
+    local actual_lines golden_lines
+    mapfile -t actual_lines <<< "$actual"
+    mapfile -t golden_lines <<< "$golden"
+
+    [[ ${#actual_lines[@]} -eq ${#golden_lines[@]} ]] || return 1
+
+    local i
+    for (( i=0; i<${#golden_lines[@]}; i++ )); do
+        golden_line="${golden_lines[$i]}"
+        actual_line="${actual_lines[$i]}"
+        if [[ "$golden_line" == *"****"* ]]; then
+            # Convert **** to glob: check with case/esac pattern matching
+            # Replace **** with a unique token, build glob pattern
+            local glob_pat="${golden_line//\*\*\*\*/*}"
+            # shellcheck disable=SC2254
+            case "$actual_line" in
+                $glob_pat) ;;
+                *) return 1 ;;
+            esac
+        else
+            [[ "$actual_line" == "$golden_line" ]] || return 1
+        fi
+    done
+    return 0
+}
+
 # ── Normal mode: compare output against existing .expected ───────────────────
 PASS=0; FAIL=0; SKIP=0
 declare -a FAILURES=()
@@ -138,7 +178,7 @@ for file in "${PAIRS[@]}"; do
     actual="$(run_file "$file")"
     golden="$(cat "$expected")"
 
-    if [[ "$actual" == "$golden" ]]; then
+    if matches_golden "$actual" "$golden"; then
         PASS=$((PASS + 1))
         echo -e "  ${GREEN}PASS${RESET}  $rel"
     else

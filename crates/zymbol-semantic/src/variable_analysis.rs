@@ -494,14 +494,12 @@ impl VariableAnalyzer {
 
                 // Analyze each case
                 for case in &match_stmt.cases {
-                    // Pattern might have variable bindings (we skip pattern analysis for now)
+                    self.analyze_pattern(&case.pattern);
 
-                    // Analyze value expression if present
                     if let Some(value) = &case.value {
                         self.analyze_expr(value);
                     }
 
-                    // Analyze side effect block if present
                     if let Some(block) = &case.block {
                         self.analyze_block(block);
                     }
@@ -586,6 +584,26 @@ impl VariableAnalyzer {
     }
 
     /// Analyze a block of statements
+    fn analyze_pattern(&mut self, pattern: &zymbol_ast::Pattern) {
+        use zymbol_ast::Pattern;
+        match pattern {
+            Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
+            Pattern::Range(lo, hi, _) => {
+                self.analyze_expr(lo);
+                self.analyze_expr(hi);
+            }
+            Pattern::List(patterns, _) => {
+                for p in patterns { self.analyze_pattern(p); }
+            }
+            Pattern::Comparison(_, expr, _) => {
+                self.analyze_expr(expr);
+            }
+            Pattern::Ident(name, span) => {
+                self.use_variable(name, *span);
+            }
+        }
+    }
+
     fn analyze_block(&mut self, block: &Block) {
         self.enter_scope();
 
@@ -648,14 +666,12 @@ impl VariableAnalyzer {
 
                 // Analyze each case
                 for case in &match_expr.cases {
-                    // Pattern might have variable bindings (skip for now)
+                    self.analyze_pattern(&case.pattern);
 
-                    // Analyze value expression if present
                     if let Some(value) = &case.value {
                         self.analyze_expr(value);
                     }
 
-                    // Analyze side effect block if present
                     if let Some(block) = &case.block {
                         self.analyze_block(block);
                     }

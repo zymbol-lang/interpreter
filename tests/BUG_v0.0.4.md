@@ -230,6 +230,9 @@ The parser already requires `@` to be followed by whitespace and then the loop v
 | GAP-01 | `tests/bugs/gap01_lifetime_end_noop.zy` | ✅ Fixed | `\ var` removes var from scope |
 | BUG-PRE-01 | `cargo test -p zymbol-formatter` | ✅ Fixed | 52/52 pass |
 | BUG-PRE-02 | `cargo test -p zymbol-lexer` | ✅ Fixed | test assertion corrected (sentinel `\x01` is correct lexer output) |
+| BUG-NEW-04 | `tests/collections/21_sort.zy` | ✅ Fixed | `$^+` followed by `$^-` on next line parses correctly |
+| BUG-NEW-05 | `tests/scripts/vm_compare.sh` + bench scripts | ✅ Fixed | `"str" (expr)` juxtaposes, not calls |
+| BUG-NEW-06 | `tests/v0.0.4_review/scope_underscore_inner_error.zy` + `_loop_error.zy` | ✅ Fixed | Caret shown; `-->` uses relative path; 354/354 expected pass |
 
 ---
 
@@ -274,6 +277,143 @@ assert_eq!(s, "Use \x01curly} braces literally");
 ```
 
 And a comment explaining the design is added.
+
+---
+
+## BUG-NEW-04 — `$^+` followed by `$^-` on next line fails to parse
+
+**Status:** Fixed (2026-04-17)  
+**Type:** Parser span-capture bug  
+**Crate:** `zymbol-parser`  
+**Source:** `crates/zymbol-parser/src/collection_ops.rs` — `parse_collection_sort`
+
+### Description
+
+When `$^+` (sort ascending) appeared on one line and `$^-` (sort descending) on the next,
+the second sort call produced a parse error:
+
+```
+error: unexpected token: Assign
+  --> file.zy:N:5
+  |   desc = nums$^-
+  |   ^^^^
+```
+
+### Root Cause
+
+`parse_collection_sort` called `self.advance()` to consume `$^+`, then immediately
+called `self.peek().span` to build the expression span. At that point `self.peek()` 
+returned the first token of the **next line** (`desc`), extending the sort expression's
+span to include `desc`. The same-line continuation check then treated `desc = ...` as
+part of the `$^+` expression's postfix chain and failed.
+
+### Fix applied
+
+Capture the operator token returned by `self.advance()`:
+
+```rust
+// Before (buggy)
+self.advance();
+let span = start_span.to(&self.peek().span);
+
+// After (fixed)
+let op_token = self.advance();
+let span = start_span.to(&op_token.span);
+```
+
+Same fix applied to `parse_collection_sort_custom` (used `self.peek()` after parsing the lambda).
+
+---
+
+## BUG-NEW-05 — String literal followed by `(expr)` parsed as function call
+
+**Status:** Fixed (2026-04-17)  
+**Type:** Parser postfix ambiguity  
+**Crate:** `zymbol-parser`  
+**Source:** `crates/zymbol-parser/src/lib.rs` — postfix loop; `crates/zymbol-parser/src/variables.rs` — `parse_juxtapose_chain`
+
+### Description
+
+In an assignment RHS, a string literal immediately followed by a parenthesized
+expression was incorrectly parsed as a function call:
+
+```zymbol
+row = i "," (i * 2) "," (i * 3)
+// Error: runtime error: expression is not callable
+// "," was being called as a function with (i * 2) as argument
+```
+
+### Root Cause
+
+Two separate issues:
+
+1. **Postfix loop** (`lib.rs`): `LParen` after any expr triggered function-call parsing
+   regardless of whether the expression could be callable. String/number/bool literals
+   are never callable.
+2. **Juxtapose chain** (`variables.rs`): `LParen` was excluded from `can_juxtapose`
+   to avoid ambiguity with `arr$^ (a, b -> ...)`. This meant `"," (i*2)` could neither
+   be a call (fixed by #1) nor be juxtaposed, leaving `(i*2)` stranded.
+
+### Fix applied
+
+- `lib.rs` postfix loop: skip function-call branch when `expr` is `Expr::Literal(_)`.
+- `variables.rs` `parse_juxtapose_chain`: allow `LParen` as a juxtaposition start when
+  the accumulated expression is a `Literal` or `Binary` (the result of a previous concat).
+
+**Before:** `i "," (i * 2) "," (i * 3)` → runtime error  
+**After:** `i "," (i * 2) "," (i * 3)` → `"1,2,3"` (both tree-walker and VM)
+
+---
+
+## BUG-NEW-06 — Diagnostic caret line stripped by `strip_warnings`; absolute path in `-->`
+
+**Status:** Fixed (2026-04-17)
+**Type:** Diagnostic rendering bug + test infrastructure mismatch
+**Crates:** `zymbol-error`, `zymbol-cli`
+**Source:**
+- `crates/zymbol-error/src/lib.rs` — `Diagnostic::emit`
+- `crates/zymbol-cli/src/main.rs` — `source_map.add_file`
+
+### Description
+
+Two separate issues caused `scope_underscore_inner_error.zy` and `scope_underscore_loop_error.zy`
+to fail `expected_compare.sh`:
+
+**Issue A — Caret line stripped**
+
+`Diagnostic::emit` formatted the caret indicator as:
+```rust
+eprintln!("     {} {}", "|".blue(), carets.red().bold());
+```
+The literal `"     "` prefix (5 spaces) came before the ANSI escape sequence. `strip_warnings`
+in `expected_compare.sh` runs `grep -v "^   "` to remove Rust compiler warning source lines —
+this pattern also matched the 5-space caret line, silently removing it from the test output.
+
+**Issue B — Absolute path in `-->`**
+
+`main.rs` passed `path.display().to_string()` to `source_map.add_file`. When the test runner
+invokes `zymbol` with an absolute path, the `-->` diagnostic line printed the full absolute
+path (`/home/rakzo/.../tests/...`) instead of the relative path (`tests/...`) stored in the
+golden `.expected` files.
+
+### Reproduction
+
+```bash
+bash tests/scripts/expected_compare.sh v0.0.4_review
+# FAIL  v0.0.4_review/scope_underscore_inner_error.zy
+# FAIL  v0.0.4_review/scope_underscore_loop_error.zy
+```
+
+### Fix applied
+
+- `zymbol-error/src/lib.rs`: changed `"     {} {}"` to `"{} {}"` with `"     |".blue()` so
+  the line starts with the ANSI escape, not literal spaces — `strip_warnings` no longer strips it.
+- `zymbol-cli/src/main.rs`: all 3 `source_map.add_file` call-sites now strip the CWD prefix
+  via `path.strip_prefix(current_dir())` before storing the display name — produces relative
+  paths when the file is under the working directory.
+- All `.expected` files regenerated via `--regen` to reflect the corrected caret ANSI format
+  and relative paths. `collections/21_sort.expected` also updated to reflect BUG-NEW-04 fix
+  (was still holding the pre-fix parse errors).
 
 ---
 

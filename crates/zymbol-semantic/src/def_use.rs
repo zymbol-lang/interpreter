@@ -920,30 +920,34 @@ impl DefUseAnalyzer {
         }
     }
 
-    /// Analyze pattern for variable uses (mainly guards)
+    /// Analyze pattern for variable uses
     fn analyze_pattern(&mut self, pattern: &zymbol_ast::Pattern, node_index: usize) {
         use zymbol_ast::Pattern;
 
         match pattern {
-            Pattern::Literal(_, _) | Pattern::Wildcard(_) => {
-                // No variables to analyze
-            }
+            Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
             Pattern::Range(start, end, _) => {
-                // Range bounds may contain variables
                 self.analyze_expr(start, node_index);
                 self.analyze_expr(end, node_index);
             }
             Pattern::List(patterns, _) => {
-                // Recursively analyze nested patterns
                 for p in patterns {
                     self.analyze_pattern(p, node_index);
                 }
             }
-            Pattern::Guard(inner, condition, _) => {
-                // Analyze inner pattern
-                self.analyze_pattern(inner, node_index);
-                // Analyze guard condition
-                self.analyze_expr(condition, node_index);
+            Pattern::Comparison(_, expr, _) => {
+                self.analyze_expr(expr, node_index);
+            }
+            Pattern::Ident(name, span) => {
+                let chain = self.chains.entry(name.clone()).or_insert_with(|| {
+                    DefUseChain::new(name.clone())
+                });
+                chain.add_use(Use {
+                    var_name: name.clone(),
+                    node: node_index,
+                    span: *span,
+                    use_type: UseType::Read,
+                });
             }
         }
     }

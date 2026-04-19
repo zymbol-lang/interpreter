@@ -391,8 +391,8 @@ impl Parser {
     /// No comparator — direction is encoded in the token.
     pub(crate) fn parse_collection_sort(&mut self, collection: Expr, ascending: bool) -> Result<Expr, Diagnostic> {
         let start_span = collection.span();
-        self.advance(); // consume $^+ or $^-
-        let span = start_span.to(&self.peek().span);
+        let op_token = self.advance(); // consume $^+ or $^-
+        let span = start_span.to(&op_token.span);
         let sort_expr = CollectionSortExpr::new(Box::new(collection), ascending, None, span);
         if ascending {
             Ok(Expr::CollectionSortAsc(sort_expr))
@@ -413,7 +413,7 @@ impl Parser {
                 .with_span(self.peek().span));
         }
         let lambda = self.parse_lambda()?;
-        let span = start_span.to(&self.peek().span);
+        let span = start_span.to(&lambda.span());
         let sort_expr = CollectionSortExpr::new(
             Box::new(collection),
             true, // ascending field unused for custom sort

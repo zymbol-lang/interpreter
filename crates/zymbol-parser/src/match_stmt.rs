@@ -6,7 +6,7 @@
 //! - Pattern matching: All pattern types (literals, ranges, lists, guards)
 
 use zymbol_ast::{Expr, LiteralExpr, MatchCase, MatchExpr, Pattern, Statement};
-use zymbol_common::Literal;
+use zymbol_common::{BinaryOp, Literal};
 use zymbol_error::Diagnostic;
 use zymbol_lexer::TokenKind;
 use crate::Parser;
@@ -65,7 +65,9 @@ impl Parser {
                 (None, block)
             } else {
                 // Value case: pattern : value [ { block } ]
-                let value = Some(self.parse_expr()?);
+                // Use parse_match_arm_value to avoid consuming comparison operators
+                // from the next arm's pattern (e.g. "ice" < 20 would be a false parse)
+                let value = Some(self.parse_match_arm_value()?);
                 let block = if matches!(self.peek().kind, TokenKind::LBrace) {
                     Some(self.parse_block()?)
                 } else {
@@ -232,16 +234,49 @@ impl Parser {
                 let span = start_token.span.to(&end_token.span);
                 Pattern::List(patterns, span)
             }
-            // _? is tokenized as ElseIf — treat as guard pattern with Wildcard base
-            TokenKind::ElseIf => {
-                self.advance(); // consume _?
-                let condition = Box::new(self.parse_expr()?);
-                let span = token.span.to(&condition.span());
-                return Ok(Pattern::Guard(
-                    Box::new(Pattern::Wildcard(token.span)),
-                    condition,
-                    span,
-                ));
+            // Comparison patterns: < 0, > 10, <= 5, >= 1, == x, <> x
+            // Use parse_addition() to avoid consuming comparison operators from the next arm
+            TokenKind::Lt => {
+                self.advance(); // consume <
+                let rhs = Box::new(self.parse_addition()?);
+                let span = token.span.to(&rhs.span());
+                Pattern::Comparison(BinaryOp::Lt, rhs, span)
+            }
+            TokenKind::Gt => {
+                self.advance(); // consume >
+                let rhs = Box::new(self.parse_addition()?);
+                let span = token.span.to(&rhs.span());
+                Pattern::Comparison(BinaryOp::Gt, rhs, span)
+            }
+            TokenKind::Le => {
+                self.advance(); // consume <=
+                let rhs = Box::new(self.parse_addition()?);
+                let span = token.span.to(&rhs.span());
+                Pattern::Comparison(BinaryOp::Le, rhs, span)
+            }
+            TokenKind::Ge => {
+                self.advance(); // consume >=
+                let rhs = Box::new(self.parse_addition()?);
+                let span = token.span.to(&rhs.span());
+                Pattern::Comparison(BinaryOp::Ge, rhs, span)
+            }
+            TokenKind::Eq => {
+                self.advance(); // consume ==
+                let rhs = Box::new(self.parse_addition()?);
+                let span = token.span.to(&rhs.span());
+                Pattern::Comparison(BinaryOp::Eq, rhs, span)
+            }
+            TokenKind::Neq => {
+                self.advance(); // consume <>
+                let rhs = Box::new(self.parse_addition()?);
+                let span = token.span.to(&rhs.span());
+                Pattern::Comparison(BinaryOp::Neq, rhs, span)
+            }
+            // Identifier pattern: variable reference — equality or containment at runtime
+            TokenKind::Ident(name) => {
+                let name = name.clone();
+                self.advance(); // consume identifier
+                Pattern::Ident(name, token.span)
             }
             _ => {
                 return Err(Diagnostic::error(format!(
@@ -252,15 +287,6 @@ impl Parser {
             }
         };
 
-        // Check for guard: pattern ? condition
-        if matches!(self.peek().kind, TokenKind::Question) {
-            self.advance(); // consume ?
-
-            let condition = Box::new(self.parse_expr()?);
-            let span = pattern.span().to(&condition.span());
-            Ok(Pattern::Guard(Box::new(pattern), condition, span))
-        } else {
-            Ok(pattern)
-        }
+        Ok(pattern)
     }
 }

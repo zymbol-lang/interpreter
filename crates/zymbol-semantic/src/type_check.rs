@@ -470,7 +470,11 @@ impl TypeChecker {
                 // Check condition if present
                 if let Some(condition) = &loop_stmt.condition {
                     let cond_type = self.infer_expr(condition);
-                    if !matches!(cond_type, ZymbolType::Bool | ZymbolType::Any | ZymbolType::Unknown) {
+                    let is_times_loop = matches!(
+                        condition.as_ref(),
+                        Expr::Literal(lit) if matches!(lit.value, zymbol_common::Literal::Int(n) if n > 0)
+                    );
+                    if !is_times_loop && !matches!(cond_type, ZymbolType::Bool | ZymbolType::Any | ZymbolType::Unknown) {
                         self.warnings.push(
                             Diagnostic::warning(format!(
                                 "loop condition should be Bool, got {}",
@@ -1044,20 +1048,17 @@ impl TypeChecker {
                 }
             }
 
-            Pattern::List(patterns, span) => {
-                // Scrutinee should be an array
+            Pattern::List(patterns, _span) => {
                 if let ZymbolType::Array(elem_type) = scrutinee_type {
+                    // Structural: check each sub-pattern against element type
                     for p in patterns {
                         self.check_pattern_type(p, elem_type);
                     }
-                } else if !matches!(scrutinee_type, ZymbolType::Any | ZymbolType::Unknown) {
-                    self.errors.push(
-                        Diagnostic::error(format!(
-                            "list pattern requires array scrutinee, got {}",
-                            scrutinee_type.name()
-                        ))
-                        .with_span(*span)
-                    );
+                } else {
+                    // Containment: scalar ∈ [p1, p2, ...] — check sub-patterns against scrutinee
+                    for p in patterns {
+                        self.check_pattern_type(p, scrutinee_type);
+                    }
                 }
             }
 
@@ -1065,21 +1066,26 @@ impl TypeChecker {
                 // Wildcard matches any type
             }
 
-            Pattern::Guard(inner_pattern, condition, _span) => {
-                // Check inner pattern
-                self.check_pattern_type(inner_pattern, scrutinee_type);
-
-                // Guard condition must be Bool
-                let cond_type = self.infer_expr(condition);
-                if !matches!(cond_type, ZymbolType::Bool | ZymbolType::Any | ZymbolType::Unknown) {
+            Pattern::Comparison(_, expr, span) => {
+                // Comparison patterns work on scalars and strings
+                if !matches!(scrutinee_type,
+                    ZymbolType::Int | ZymbolType::Float | ZymbolType::Char |
+                    ZymbolType::String | ZymbolType::Any | ZymbolType::Unknown)
+                {
                     self.errors.push(
                         Diagnostic::error(format!(
-                            "pattern guard must be Bool, got {}",
-                            cond_type.name()
+                            "comparison pattern requires scalar scrutinee, got {}",
+                            scrutinee_type.name()
                         ))
-                        .with_span(condition.span())
+                        .with_span(*span)
                     );
                 }
+                // Infer rhs type but don't report errors here — runtime will catch mismatches
+                let _ = self.infer_expr(expr);
+            }
+
+            Pattern::Ident(_, _) => {
+                // Identifier patterns are resolved at runtime — accept any scrutinee type
             }
         }
     }

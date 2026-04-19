@@ -124,7 +124,11 @@ fn run_file(path: PathBuf, args: Vec<String>, use_vm: bool) -> Result<()> {
 
     // Setup source map
     let mut source_map = SourceMap::new();
-    let file_id = source_map.add_file(path.display().to_string(), source.clone());
+    let display_name = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| path.display().to_string());
+    let file_id = source_map.add_file(display_name, source.clone());
 
     // Lex
     let lexer = Lexer::new(&source, file_id);
@@ -267,7 +271,11 @@ fn build_file(path: PathBuf, output: Option<PathBuf>, release: bool) -> Result<(
 
     // Verify it compiles (early error detection)
     let mut source_map = SourceMap::new();
-    let file_id = source_map.add_file(path.display().to_string(), source.clone());
+    let display_name = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| path.display().to_string());
+    let file_id = source_map.add_file(display_name, source.clone());
 
     let lexer = Lexer::new(&source, file_id);
     let (tokens, lex_diagnostics) = lexer.tokenize();
@@ -377,7 +385,11 @@ fn check_file(path: PathBuf) -> Result<()> {
 
     // Setup source map
     let mut source_map = SourceMap::new();
-    let file_id = source_map.add_file(path.display().to_string(), source.clone());
+    let display_name = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| path.display().to_string());
+    let file_id = source_map.add_file(display_name, source.clone());
 
     // Lex
     let lexer = Lexer::new(&source, file_id);

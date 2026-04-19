@@ -2,23 +2,28 @@
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_archivos.zy:48:35
 [1m[34m  48[39m[0m [34m|[39m
 [1m[34m  48[39m[0m [34m|[39m agregar = <\ echo "Segunda linea" >> "test_archivo.txt" && echo "Agregado" \>
+[34m     |[39m [1m[31m                                  ^^[39m[0m
 [1m[31merror[39m[0m: unexpected token: String("test_archivo.txt")
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_archivos.zy:48:38
 [1m[34m  48[39m[0m [34m|[39m
 [1m[34m  48[39m[0m [34m|[39m agregar = <\ echo "Segunda linea" >> "test_archivo.txt" && echo "Agregado" \>
+[34m     |[39m [1m[31m                                     ^^^^^^^^^^^^^^^^^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: unexpected token: And
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_archivos.zy:48:57
 [1m[34m  48[39m[0m [34m|[39m
 [1m[34m  48[39m[0m [34m|[39m agregar = <\ echo "Segunda linea" >> "test_archivo.txt" && echo "Agregado" \>
+[34m     |[39m [1m[31m                                                        ^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_archivos.zy:48:65
 [1m[34m  48[39m[0m [34m|[39m
 [1m[34m  48[39m[0m [34m|[39m agregar = <\ echo "Segunda linea" >> "test_archivo.txt" && echo "Agregado" \>
+[34m     |[39m [1m[31m                                                                ^^^^^^^^^^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected token: BashClose
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_archivos.zy:48:76
 [1m[34m  48[39m[0m [34m|[39m
 [1m[34m  48[39m[0m [34m|[39m agregar = <\ echo "Segunda linea" >> "test_archivo.txt" && echo "Agregado" \>
+[34m     |[39m [1m[31m                                                                           ^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)

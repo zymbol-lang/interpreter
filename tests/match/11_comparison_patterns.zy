@@ -1,0 +1,46 @@
+// Test: comparison patterns in match (implicit scrutinee)
+temperature = -5
+state = ?? temperature {
+    < 0  : "ice"
+    < 20 : "cold"
+    < 35 : "warm"
+    _    : "hot"
+}
+>> state ¶
+
+// Comparison with >=
+score = 87
+grade = ?? score {
+    >= 90 : "A"
+    >= 80 : "B"
+    >= 70 : "C"
+    >= 60 : "D"
+    _     : "F"
+}
+>> grade ¶
+
+// Equality comparison
+n = 42
+tag = ?? n {
+    == 0  : "zero"
+    == 42 : "answer"
+    _     : "other"
+}
+>> tag ¶
+
+// Not-equal comparison
+code = 200
+msg = ?? code {
+    <> 200 : "error"
+    _      : "ok"
+}
+>> msg ¶
+
+// Greater than
+x = 100
+category = ?? x {
+    > 200 : "high"
+    > 50  : "mid"
+    _     : "low"
+}
+>> category ¶

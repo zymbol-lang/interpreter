@@ -1,0 +1,8 @@
+=== Zymbol Text v2 ===
+T1_template_build:  total=198393  (****)
+T2_join_sim:        total=45000  (****)
+T3_word_buckets:    short=13000 long=6000  (****)
+T4_sort_by_len:     first=fig last=elderberry  (****)
+T5_sort_dedup:      unique=6  (****)
+T6_transform_pipe:  total=5500  (****)
+=== Done (****) ===

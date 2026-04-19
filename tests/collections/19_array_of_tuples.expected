@@ -2,7 +2,9 @@
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/19_array_of_tuples.zy:102:11
 [1m[34m 102[39m[0m [34m|[39m
 [1m[34m 102[39m[0m [34m|[39m >> pts[3][2] ¶
+[34m     |[39m [1m[31m          ^[39m[0m
 [1m[31merror[39m[0m: tuple index 2 is out of bounds (tuple has 2 elements)
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/19_array_of_tuples.zy:103:12
 [1m[34m 103[39m[0m [34m|[39m
 [1m[34m 103[39m[0m [34m|[39m >> ptsb[3][2] ¶
+[34m     |[39m [1m[31m           ^[39m[0m

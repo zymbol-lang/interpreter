@@ -51,6 +51,7 @@ run_file() {
 mapfile -t FILES < <(
     find "$TESTS_DIR" -name "*.zy" \
         ! -path "*/scripts/*" \
+        ! -path "*/stress_v2/*" \
         ! -path "*/matematicas/module.zy" \
         | sort
 )

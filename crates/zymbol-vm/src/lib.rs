@@ -4,6 +4,7 @@
 //! Sprint 5C: flat register stack — all frames share one Vec<Value>.
 //! Sprint 5D: Value uses Rc<T> for heap payloads → sizeof(Value) = 16 bytes.
 //! Sprint 5G: ZyStr tagged-pointer SSO — strings ≤ 7 bytes stored inline.
+//! Sprint 6A: fused split+HOF instructions (StrSplitMap/Filter/Reduce/Count).
 //! Design goals:
 //! - registers[idx] O(1) vs HashMap lookup
 //! - Flat value_stack: no per-call heap alloc, better cache locality
@@ -12,6 +13,8 @@
 
 mod zy_str;
 pub use zy_str::ZyStr;
+
+use zymbol_intrinsics as intrinsics;
 
 use std::fmt;
 use std::io::Write;
@@ -385,6 +388,14 @@ impl<W: Write> VM<W> {
         // Reset flat stack for this execution
         self.value_stack.clear();
         self.frame_stack.clear();
+        // Pre-allocate to avoid Vec reallocation during deep recursion.
+        // 128K Value slots (~2MB) covers fib(30)'s 2.7M-call stack depth of ≤30.
+        if self.value_stack.capacity() < (1 << 17) {
+            self.value_stack.reserve((1 << 17) - self.value_stack.capacity());
+        }
+        if self.frame_stack.capacity() < 1024 {
+            self.frame_stack.reserve(1024 - self.frame_stack.capacity());
+        }
 
         // Pre-intern string pool: O(n) once, then LoadStr is O(1) Rc clone
         self.string_rcs = program.string_pool.iter().map(|s| ZyStr::from_str_ref(s)).collect();
@@ -619,46 +630,78 @@ impl<W: Write> VM<W> {
 
                 // ── String ops ──────────────────────────────────────────────
                 &Instruction::ConcatStr(dst, a, b) => {
-                    let result = match (rreg!(a), rreg!(b)) {
-                        // Fast path: String ++ String — one alloc with known capacity
-                        (Value::String(l), Value::String(r)) => {
-                            let mut s = String::with_capacity(l.len() + r.len());
-                            s.push_str(l.as_ref());
-                            s.push_str(r.as_ref());
-                            s
+                    use std::fmt::Write as _;
+                    // In-place buffer reuse: only valid when dst == a, so the left
+                    // register is overwritten anyway. try_into_string reuses the heap
+                    // buffer when Rc::strong_count == 1, avoiding O(N) allocs in loops.
+                    let can_reuse = dst == a && a != b;
+                    let result = if can_reuse {
+                        let left = std::mem::replace(
+                            unsafe { self.value_stack.get_unchecked_mut(base + a as usize) },
+                            Value::Unit,
+                        );
+                        match (left, unsafe { self.value_stack.get_unchecked(base + b as usize) }) {
+                            (Value::String(l), Value::String(r)) => {
+                                let r_str = r.as_str().to_string();
+                                let mut s = l.try_into_string();
+                                s.push_str(&r_str);
+                                s
+                            }
+                            (Value::String(l), Value::Int(n)) => {
+                                let n = *n;
+                                let mut s = l.try_into_string();
+                                let _ = write!(s, "{}", n);
+                                s
+                            }
+                            (Value::String(l), Value::Float(f)) => {
+                                let f = *f;
+                                let mut s = l.try_into_string();
+                                let _ = write!(s, "{}", f);
+                                s
+                            }
+                            (l, r) => {
+                                let ls = l.to_string_repr();
+                                let rs = r.to_string_repr();
+                                let mut s = String::with_capacity(ls.len() + rs.len());
+                                s.push_str(&ls);
+                                s.push_str(&rs);
+                                s
+                            }
                         }
-                        // Fast path: String ++ Int — avoid intermediate to_string alloc
-                        (Value::String(l), Value::Int(n)) => {
-                            let mut s = String::with_capacity(l.len() + 20);
-                            s.push_str(l.as_ref());
-                            use std::fmt::Write as _;
-                            let _ = write!(s, "{}", n);
-                            s
-                        }
-                        // Fast path: Int ++ String — avoid intermediate to_string alloc
-                        (Value::Int(n), Value::String(r)) => {
-                            let mut s = String::with_capacity(20 + r.len());
-                            use std::fmt::Write as _;
-                            let _ = write!(s, "{}", n);
-                            s.push_str(r.as_ref());
-                            s
-                        }
-                        // Fast path: String ++ Float
-                        (Value::String(l), Value::Float(f)) => {
-                            let mut s = String::with_capacity(l.len() + 24);
-                            s.push_str(l.as_ref());
-                            use std::fmt::Write as _;
-                            let _ = write!(s, "{}", f);
-                            s
-                        }
-                        // Slow path: anything else — convert both sides
-                        (l, r) => {
-                            let ls = l.to_string_repr();
-                            let rs = r.to_string_repr();
-                            let mut s = String::with_capacity(ls.len() + rs.len());
-                            s.push_str(&ls);
-                            s.push_str(&rs);
-                            s
+                    } else {
+                        match (rreg!(a), rreg!(b)) {
+                            (Value::String(l), Value::String(r)) => {
+                                let mut s = String::with_capacity(l.len() + r.len());
+                                s.push_str(l.as_ref());
+                                s.push_str(r.as_ref());
+                                s
+                            }
+                            (Value::String(l), Value::Int(n)) => {
+                                let mut s = String::with_capacity(l.len() + 20);
+                                s.push_str(l.as_ref());
+                                let _ = write!(s, "{}", n);
+                                s
+                            }
+                            (Value::Int(n), Value::String(r)) => {
+                                let mut s = String::with_capacity(20 + r.len());
+                                let _ = write!(s, "{}", n);
+                                s.push_str(r.as_ref());
+                                s
+                            }
+                            (Value::String(l), Value::Float(f)) => {
+                                let mut s = String::with_capacity(l.len() + 24);
+                                s.push_str(l.as_ref());
+                                let _ = write!(s, "{}", f);
+                                s
+                            }
+                            (l, r) => {
+                                let ls = l.to_string_repr();
+                                let rs = r.to_string_repr();
+                                let mut s = String::with_capacity(ls.len() + rs.len());
+                                s.push_str(&ls);
+                                s.push_str(&rs);
+                                s
+                            }
                         }
                     };
                     wreg!(dst, Value::String(ZyStr::new(result)));
@@ -1199,6 +1242,118 @@ impl<W: Write> VM<W> {
                     };
                     self.reg_set(dst, Value::Array(Rc::new(parts)));
                 }
+                // ── Fused split instructions (via zymbol-intrinsics) ────────
+                &Instruction::StrSplitCount(dst, str_reg, sep_reg) => {
+                    let count = {
+                        let s_v   = &self.value_stack[base + str_reg  as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(c))   => intrinsics::split::count(s.as_str(), *c),
+                            (Value::String(s), Value::String(sep)) => intrinsics::split::count_str(s.as_str(), sep.as_str()),
+                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    self.reg_set(dst, Value::Int(count));
+                }
+                &Instruction::StrSplitMap(dst, str_reg, sep_reg, func_reg) => {
+                    let callable = self.reg_get(func_reg).clone();
+                    let (s_owned, sep_owned) = {
+                        let s_v   = &self.value_stack[base + str_reg as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
+                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    let mut results = Vec::new();
+                    match &sep_owned {
+                        Value::Char(c) => {
+                            let c = *c;
+                            for part in s_owned.split(c) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                results.push(self.call_callable(callable.clone(), vec![v], program, ip, chunk_idx)?);
+                            }
+                        }
+                        Value::String(sep_s) => {
+                            let sep_str = sep_s.to_string();
+                            for part in s_owned.split(sep_str.as_str()) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                results.push(self.call_callable(callable.clone(), vec![v], program, ip, chunk_idx)?);
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    self.reg_set(dst, Value::Array(Rc::new(results)));
+                }
+                &Instruction::StrSplitFilter(dst, str_reg, sep_reg, func_reg) => {
+                    let callable = self.reg_get(func_reg).clone();
+                    let (s_owned, sep_owned) = {
+                        let s_v   = &self.value_stack[base + str_reg as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
+                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    let mut results = Vec::new();
+                    match &sep_owned {
+                        Value::Char(c) => {
+                            let c = *c;
+                            for part in s_owned.split(c) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, ip, chunk_idx)?;
+                                if keep.is_truthy() { results.push(v); }
+                            }
+                        }
+                        Value::String(sep_s) => {
+                            let sep_str = sep_s.to_string();
+                            for part in s_owned.split(sep_str.as_str()) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, ip, chunk_idx)?;
+                                if keep.is_truthy() { results.push(v); }
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    self.reg_set(dst, Value::Array(Rc::new(results)));
+                }
+                &Instruction::StrSplitReduce(dst, str_reg, sep_reg, init_reg, func_reg) => {
+                    let callable = self.reg_get(func_reg).clone();
+                    let mut acc = self.reg_get(init_reg).clone();
+                    let (s_owned, sep_owned) = {
+                        let s_v   = &self.value_stack[base + str_reg as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
+                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    match &sep_owned {
+                        Value::Char(c) => {
+                            let c = *c;
+                            for part in s_owned.split(c) {
+                                let elem = Value::String(ZyStr::from_str_ref(part));
+                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, ip, chunk_idx)?;
+                            }
+                        }
+                        Value::String(sep_s) => {
+                            let sep_str = sep_s.to_string();
+                            for part in s_owned.split(sep_str.as_str()) {
+                                let elem = Value::String(ZyStr::from_str_ref(part));
+                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, ip, chunk_idx)?;
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    self.reg_set(dst, acc);
+                }
                 &Instruction::StrContains(dst, str_reg, elem_reg) => {
                     let result = {
                         let s_val = &self.value_stack[base + str_reg as usize];
@@ -1260,6 +1415,26 @@ impl<W: Write> VM<W> {
                         }),
                     };
                     wreg!(dst, val);
+                }
+                &Instruction::StrCharAt(dst, str_reg, idx_reg) => {
+                    let ch = match (&self.value_stack[base + str_reg as usize],
+                                    &self.value_stack[base + idx_reg as usize]) {
+                        (Value::String(s), Value::Int(i)) => {
+                            let i = *i as usize;
+                            if s.is_ascii() {
+                                // O(1) ASCII fast path
+                                s.as_bytes().get(i).map(|&b| b as char)
+                                    .unwrap_or('\0')
+                            } else {
+                                s.chars().nth(i).unwrap_or('\0')
+                            }
+                        }
+                        (o, _) => raise!(VmError::TypeError {
+                            expected: "String",
+                            got: o.type_name().to_string(),
+                        }),
+                    };
+                    wreg!(dst, Value::Char(ch));
                 }
                 // ── String modification operators ─────────────────────────────
                 &Instruction::StrFindPos(dst, str_reg, pat_reg) => {
@@ -1732,6 +1907,10 @@ impl<W: Write> VM<W> {
                     };
                     self.reg_set(dst, result);
                 }
+                &Instruction::IsArray(dst, src) => {
+                    let is_arr = matches!(self.reg_get(src), Value::Array(_));
+                    self.reg_set(dst, Value::Bool(is_arr));
+                }
                 &Instruction::TypeOf(dst, src) => {
                     let val = self.reg_get(src).clone();
                     let (type_sym, len) = match &val {
@@ -2146,20 +2325,43 @@ impl<W: Write> VM<W> {
                 &Instruction::JumpIf(cond, label) => { if r!(cond).is_truthy() { ip = label as usize; } }
                 &Instruction::JumpIfNot(cond, label) => { if !r!(cond).is_truthy() { ip = label as usize; } }
                 &Instruction::ConcatStr(dst, a, b) => {
-                    let result = match (r!(a), r!(b)) {
-                        (Value::String(l), Value::String(r)) => {
-                            let mut s = String::with_capacity(l.len() + r.len());
-                            s.push_str(l.as_ref());
-                            s.push_str(r.as_ref());
-                            s
+                    let result = if dst == a && a != b {
+                        let left = std::mem::replace(
+                            &mut self.value_stack[base + a as usize],
+                            Value::Unit,
+                        );
+                        match (left, &self.value_stack[base + b as usize]) {
+                            (Value::String(l), Value::String(r)) => {
+                                let r_str = r.as_str().to_string();
+                                let mut s = l.try_into_string();
+                                s.push_str(&r_str);
+                                s
+                            }
+                            (l, r) => {
+                                let ls = l.to_string_repr();
+                                let rs = r.to_string_repr();
+                                let mut s = String::with_capacity(ls.len() + rs.len());
+                                s.push_str(&ls);
+                                s.push_str(&rs);
+                                s
+                            }
                         }
-                        (l, r) => {
-                            let ls = l.to_string_repr();
-                            let rs = r.to_string_repr();
-                            let mut s = String::with_capacity(ls.len() + rs.len());
-                            s.push_str(&ls);
-                            s.push_str(&rs);
-                            s
+                    } else {
+                        match (r!(a), r!(b)) {
+                            (Value::String(l), Value::String(r)) => {
+                                let mut s = String::with_capacity(l.len() + r.len());
+                                s.push_str(l.as_ref());
+                                s.push_str(r.as_ref());
+                                s
+                            }
+                            (l, r) => {
+                                let ls = l.to_string_repr();
+                                let rs = r.to_string_repr();
+                                let mut s = String::with_capacity(ls.len() + rs.len());
+                                s.push_str(&ls);
+                                s.push_str(&rs);
+                                s
+                            }
                         }
                     };
                     w!(dst, Value::String(ZyStr::new(result)));
@@ -2452,6 +2654,23 @@ impl<W: Write> VM<W> {
                     };
                     w!(dst, Value::Int(n));
                 }
+                &Instruction::StrCharAt(dst, str_reg, idx_reg) => {
+                    let ch = match (r!(str_reg), r!(idx_reg)) {
+                        (Value::String(s), Value::Int(i)) => {
+                            let i = *i as usize;
+                            if s.is_ascii() {
+                                s.as_bytes().get(i).map(|&b| b as char).unwrap_or('\0')
+                            } else {
+                                s.chars().nth(i).unwrap_or('\0')
+                            }
+                        }
+                        _ => return Err(VmError::TypeError {
+                            expected: "String",
+                            got: "non-String".to_string(),
+                        }),
+                    };
+                    w!(dst, Value::Char(ch));
+                }
                 &Instruction::StrContains(dst, str_reg, elem_reg) => {
                     let found = match (r!(str_reg), r!(elem_reg)) {
                         (Value::String(s), Value::String(p)) => s.contains(p.as_ref()),
@@ -2530,6 +2749,117 @@ impl<W: Write> VM<W> {
                     }
                     self.value_stack[base + dst as usize] = acc;
                 }
+                &Instruction::StrSplitCount(dst, str_reg, sep_reg) => {
+                    let count = {
+                        let s_v   = &self.value_stack[base + str_reg  as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(c))   => intrinsics::split::count(s.as_str(), *c),
+                            (Value::String(s), Value::String(sep)) => intrinsics::split::count_str(s.as_str(), sep.as_str()),
+                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    self.value_stack[base + dst as usize] = Value::Int(count);
+                }
+                &Instruction::StrSplitMap(dst, str_reg, sep_reg, func_reg) => {
+                    let callable = self.value_stack[base + func_reg as usize].clone();
+                    let (s_owned, sep_owned) = {
+                        let s_v   = &self.value_stack[base + str_reg as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
+                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    let mut results = Vec::new();
+                    match &sep_owned {
+                        Value::Char(c) => {
+                            let c = *c;
+                            for part in s_owned.split(c) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                results.push(self.call_callable(callable.clone(), vec![v], program, 0, chunk_idx)?);
+                            }
+                        }
+                        Value::String(sep_s) => {
+                            let sep_str = sep_s.to_string();
+                            for part in s_owned.split(sep_str.as_str()) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                results.push(self.call_callable(callable.clone(), vec![v], program, 0, chunk_idx)?);
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
+                }
+                &Instruction::StrSplitFilter(dst, str_reg, sep_reg, func_reg) => {
+                    let callable = self.value_stack[base + func_reg as usize].clone();
+                    let (s_owned, sep_owned) = {
+                        let s_v   = &self.value_stack[base + str_reg as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
+                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    let mut results = Vec::new();
+                    match &sep_owned {
+                        Value::Char(c) => {
+                            let c = *c;
+                            for part in s_owned.split(c) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, 0, chunk_idx)?;
+                                if keep.is_truthy() { results.push(v); }
+                            }
+                        }
+                        Value::String(sep_s) => {
+                            let sep_str = sep_s.to_string();
+                            for part in s_owned.split(sep_str.as_str()) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, 0, chunk_idx)?;
+                                if keep.is_truthy() { results.push(v); }
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
+                }
+                &Instruction::StrSplitReduce(dst, str_reg, sep_reg, init_reg, func_reg) => {
+                    let callable = self.value_stack[base + func_reg as usize].clone();
+                    let mut acc = self.value_stack[base + init_reg as usize].clone();
+                    let (s_owned, sep_owned) = {
+                        let s_v   = &self.value_stack[base + str_reg as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
+                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    match &sep_owned {
+                        Value::Char(c) => {
+                            let c = *c;
+                            for part in s_owned.split(c) {
+                                let elem = Value::String(ZyStr::from_str_ref(part));
+                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, 0, chunk_idx)?;
+                            }
+                        }
+                        Value::String(sep_s) => {
+                            let sep_str = sep_s.to_string();
+                            for part in s_owned.split(sep_str.as_str()) {
+                                let elem = Value::String(ZyStr::from_str_ref(part));
+                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, 0, chunk_idx)?;
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    self.value_stack[base + dst as usize] = acc;
+                }
                 &Instruction::ArraySort(dst, arr_reg, ascending, func_reg) => {
                     let arr = match self.value_stack[base + arr_reg as usize].clone() {
                         Value::Array(a) => a.as_ref().clone(),
@@ -2571,6 +2901,10 @@ impl<W: Write> VM<W> {
                         other => other.clone(),
                     };
                     w!(dst, result);
+                }
+                &Instruction::IsArray(dst, src) => {
+                    let is_arr = matches!(r!(src), Value::Array(_));
+                    w!(dst, Value::Bool(is_arr));
                 }
                 &Instruction::TypeOf(dst, src) => {
                     let val = r!(src).clone();

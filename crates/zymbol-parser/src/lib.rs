@@ -388,6 +388,10 @@ impl Parser {
                     // Chained function call: expr(args) — only if on the same line.
                     // A '(' on a new line starts a new statement (e.g. destructure pattern),
                     // not a chained call.
+                    // Literals (strings, numbers, bools, chars) are never callable.
+                    if matches!(expr, Expr::Literal(_)) {
+                        break;
+                    }
                     if self.peek().span.start.line != expr.span().end.line {
                         break;
                     }

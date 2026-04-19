@@ -205,7 +205,10 @@ impl Parser {
         loop {
             let next_tok = self.peek();
             let same_line = next_tok.span.start.line == acc.span().end.line;
-            if same_line && Self::can_juxtapose(&next_tok.kind) {
+            let can_juxt = Self::can_juxtapose(&next_tok.kind)
+                || (matches!(next_tok.kind, TokenKind::LParen)
+                    && matches!(acc, Expr::Literal(_) | Expr::Binary(_)));
+            if same_line && can_juxt {
                 let next_expr = self.parse_expr()?;
                 let span = acc.span().to(&next_expr.span());
                 acc = Expr::Binary(BinaryExpr::new(

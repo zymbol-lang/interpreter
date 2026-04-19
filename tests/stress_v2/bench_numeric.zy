@@ -1,0 +1,90 @@
+// ============================================================================
+// STRESS V2 — Numeric Algorithms (loop-based, no recursion)
+// Shows integer arithmetic and loop throughput vs Python.
+// Comparison: tests/stress_v2/bench_numeric.py
+//
+// Run: zymbol run tests/stress_v2/bench_numeric.zy --vm
+// ============================================================================
+
+<# ../scripts/lib_time <= T
+
+>> "=== Zymbol Numeric v2 ===" ¶
+t_total = T::now()
+
+// N1: iterative fibonacci fib(40) — 10 repetitions
+t = T::now()
+result = 0
+@ _rep:1..10 {
+    a = 0
+    b = 1
+    @ _step:1..39 {
+        tmp = a + b
+        a = b
+        b = tmp
+    }
+    result = b
+}
+>> "N1_fib40_loop:      result=" result "  " T::elapsed(t) ¶
+
+// N2: sum of digits for all numbers 1..50 000
+t = T::now()
+grand_total = 0
+@ n:1..50000 {
+    x = n
+    digit_sum = 0
+    @ x > 0 {
+        digit_sum = digit_sum + (x % 10)
+        x = x / 10
+    }
+    grand_total = grand_total + digit_sum
+}
+>> "N2_digit_sum:       total=" grand_total "  " T::elapsed(t) ¶
+
+// N3: prime counting up to 5 000 (trial division, while-loop early exit)
+t = T::now()
+prime_count = 0
+@ n:2..5000 {
+    is_prime = #1
+    d = 2
+    @ is_prime && d * d <= n {
+        ? n % d == 0 { is_prime = #0 }
+        d = d + 1
+    }
+    ? is_prime { prime_count = prime_count + 1 }
+}
+>> "N3_primes_5k:       count=" prime_count "  " T::elapsed(t) ¶
+
+// N4: modular square accumulation — 200 000 iterations
+t = T::now()
+total = 0
+@ i:1..200000 {
+    total = total + (i * i) % 1000
+}
+>> "N4_modular_sq:      total=" total "  " T::elapsed(t) ¶
+
+// N5: FizzBuzz count — 1 000 000 iterations
+t = T::now()
+fizz_count = 0
+buzz_count = 0
+fizzbuzz_count = 0
+@ i:1..1000000 {
+    fb = i % 15 == 0
+    f  = !fb && i % 3 == 0
+    b  = !fb && i % 5 == 0
+    ? fb { fizzbuzz_count = fizzbuzz_count + 1 }
+    _? f  { fizz_count = fizz_count + 1 }
+    _? b  { buzz_count = buzz_count + 1 }
+}
+>> "N5_fizzbuzz_1M:     fizz=" fizz_count " buzz=" buzz_count " fb=" fizzbuzz_count "  " T::elapsed(t) ¶
+
+// N6: dot product — two 5 000-element arrays
+t = T::now()
+a_arr = []
+b_arr = []
+@ i:1..5000 { a_arr = a_arr$+ i }
+@ i:1..5000 { b_arr = b_arr$+ (5001 - i) }
+dot = 0
+@ i:1..5000 { dot = dot + a_arr[i] * b_arr[i] }
+>> "N6_dot_product:     result=" dot "  " T::elapsed(t) ¶
+
+>> "=== Done (" T::total(t_total) ") ===" ¶

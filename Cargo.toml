@@ -19,6 +19,7 @@ members = [
     "crates/zymbol-bytecode",
     "crates/zymbol-vm",
     "crates/zymbol-compiler",
+    "crates/zymbol-intrinsics",
     # Uncomment as you create each crate:
     # "crates/zymbol-codegen",
     # "crates/zymbol-runtime",
@@ -47,6 +48,7 @@ zymbol-interpreter = { path = "crates/zymbol-interpreter" }
 zymbol-bytecode = { path = "crates/zymbol-bytecode" }
 zymbol-vm = { path = "crates/zymbol-vm" }
 zymbol-compiler = { path = "crates/zymbol-compiler" }
+zymbol-intrinsics = { path = "crates/zymbol-intrinsics" }
 zymbol-standalone = { path = "crates/zymbol-standalone" }
 zymbol-runtime = { path = "crates/zymbol-runtime" }
 zymbol-stdlib = { path = "crates/zymbol-stdlib" }

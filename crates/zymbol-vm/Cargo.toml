@@ -8,4 +8,5 @@ description = "Register-based virtual machine executor for Zymbol-Lang"
 [dependencies]
 zymbol-bytecode.workspace = true
 zymbol-lexer.workspace = true
+zymbol-intrinsics.workspace = true
 thiserror.workspace = true

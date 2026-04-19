@@ -107,6 +107,46 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 - Limitation L3: `alias.CONST` now resolves correctly in all contexts.
 - Limitation L4: `#>` export block can now appear after function definitions.
 
+### VM performance — Sprint 6A: Fused split intrinsics (2026-04-17)
+
+New crate `zymbol-intrinsics` — pure Rust functions operating on `&str` / primitives,
+zero VM types, zero boxing. Architecture mirrors CPython `Objects/unicodeobject.c`:
+VM → adapter (unbox `ZyStr` → `&str`) → intrinsic fn → primitive → adapter (box → `Value`).
+Circular dependencies avoided: `zymbol-intrinsics` has zero workspace dependencies.
+
+**New crate `crates/zymbol-intrinsics/`:**
+- `split.rs` — `count`, `count_str`, `first`, `last`, `join`, `join_str`, `count_where`, `parts`, `parts_str`.
+- `search.rs` — `count_char`, `count_str`, `find_positions_char`, `find_positions_str`.
+- `transform.rs` — `replace_char`, `replace_str`, `replace_n_char`, `replace_n_str`, `repeat`, `trim`.
+
+**4 new fused bytecode instructions in `zymbol-bytecode`:**
+- `StrSplitCount(dst, str, sep)` — fused `(s $/ sep)$#`; calls `intrinsics::split::count`, zero `Vec<Value>`.
+- `StrSplitMap(dst, str, sep, fn)` — fused `(s $/ sep) $> fn`; iterates parts directly.
+- `StrSplitFilter(dst, str, sep, fn)` — fused `(s $/ sep) $| fn`; no intermediate array.
+- `StrSplitReduce(dst, str, sep, init, fn)` — fused `(s $/ sep) $< (init, fn)`; streaming fold.
+
+**Compiler pattern detection (`zymbol-compiler`):**
+- `compile_collection_length` detects `(s $/ sep)$#` → emits `StrSplitCount`.
+- `compile_collection_map` detects `(s $/ sep) $> fn` → emits `StrSplitMap`.
+- `compile_collection_filter` detects `(s $/ sep) $| fn` → emits `StrSplitFilter`.
+- `compile_collection_reduce` detects `(s $/ sep) $< (init, fn)` → emits `StrSplitReduce`.
+- `max_reg_used` updated with all 4 new instruction arms.
+
+**VM dispatch (both sites) updated in `zymbol-vm`:**
+- Both dispatch sites handle all 4 new instructions; `Char` and `String` separator variants dispatched.
+
+**Benchmark (release, split-count inline vs 2-statement, 100 000 iterations):**
+
+| Pattern | Time |
+|---------|------|
+| `(csv $/ ',')$#` (fused `StrSplitCount`) | 5 ms |
+| `parts = csv $/ ','` ; `parts$#` (unfused) | 10 ms |
+
+*50% reduction for the inline form. The 2-statement form cannot be fused without
+dataflow analysis and still uses `StrSplit` + `ArrayLen`.*
+
+---
+
 ### VM performance — Sprint 5G: Small String Optimization (2026-04-17)
 
 `Value::String` payload changed from `Rc<String>` (always heap) to `ZyStr` — an 8-byte

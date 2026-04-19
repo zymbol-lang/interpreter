@@ -74,6 +74,32 @@ impl ZyStr {
         }
     }
 
+    /// Consume self and return an owned String, reusing the heap buffer when
+    /// the Rc has exactly one strong reference (avoids allocation in concat loops).
+    #[inline]
+    pub fn try_into_string(self) -> String {
+        if self.is_inline() {
+            self.as_str().to_string()
+        } else {
+            let ptr = self.heap_ptr();
+            unsafe {
+                // Peek at strong count without constructing an Rc.
+                let rc = ManuallyDrop::new(Rc::from_raw(ptr));
+                if Rc::strong_count(&*rc) == 1 {
+                    // Exclusive ownership — unwrap the String without copying.
+                    // Forget self so Drop doesn't call Rc::from_raw a second time.
+                    let owned_rc = ManuallyDrop::into_inner(rc);
+                    std::mem::forget(self);
+                    // strong_count == 1, so try_unwrap always succeeds.
+                    Rc::try_unwrap(owned_rc).unwrap_or_else(|rc| (*rc).clone())
+                } else {
+                    // Shared — must copy.
+                    rc.as_str().to_string()
+                }
+            }
+        }
+    }
+
     /// Wrap an existing Rc<String> (takes ownership).
     #[inline]
     pub fn from_rc(rc: Rc<String>) -> Self {

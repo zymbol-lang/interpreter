@@ -2,127 +2,154 @@
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:18:30
 [1m[34m  18[39m[0m [34m|[39m
 [1m[34m  18[39m[0m [34m|[39m     resultado = <\ curl "-s" {url} \>
+[34m     |[39m [1m[31m                             ^[39m[0m
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:18:34
 [1m[34m  18[39m[0m [34m|[39m
 [1m[34m  18[39m[0m [34m|[39m     resultado = <\ curl "-s" {url} \>
+[34m     |[39m [1m[31m                                 ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected token: BashClose
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:18:36
 [1m[34m  18[39m[0m [34m|[39m
 [1m[34m  18[39m[0m [34m|[39m     resultado = <\ curl "-s" {url} \>
+[34m     |[39m [1m[31m                                   ^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: expected expression, found LBrace
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:24:47
 [1m[34m  24[39m[0m [34m|[39m
 [1m[34m  24[39m[0m [34m|[39m     resultado = <\ curl "-s" "-X" "POST" "-d" {data} {url} \>
+[34m     |[39m [1m[31m                                              ^[39m[0m
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:24:52
 [1m[34m  24[39m[0m [34m|[39m
 [1m[34m  24[39m[0m [34m|[39m     resultado = <\ curl "-s" "-X" "POST" "-d" {data} {url} \>
+[34m     |[39m [1m[31m                                                   ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected token: LBrace
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:24:54
 [1m[34m  24[39m[0m [34m|[39m
 [1m[34m  24[39m[0m [34m|[39m     resultado = <\ curl "-s" "-X" "POST" "-d" {data} {url} \>
+[34m     |[39m [1m[31m                                                     ^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:24:58
 [1m[34m  24[39m[0m [34m|[39m
 [1m[34m  24[39m[0m [34m|[39m     resultado = <\ curl "-s" "-X" "POST" "-d" {data} {url} \>
+[34m     |[39m [1m[31m                                                         ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected token: BashClose
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:24:60
 [1m[34m  24[39m[0m [34m|[39m
 [1m[34m  24[39m[0m [34m|[39m     resultado = <\ curl "-s" "-X" "POST" "-d" {data} {url} \>
+[34m     |[39m [1m[31m                                                           ^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: expected expression, found LBrace
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:31:67
 [1m[34m  31[39m[0m [34m|[39m
 [1m[34m  31[39m[0m [34m|[39m     resultado = <\ curl "-s" "-L" "-H" "Accept: application/json" {url} \>
+[34m     |[39m [1m[31m                                                                  ^[39m[0m
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:31:71
 [1m[34m  31[39m[0m [34m|[39m
 [1m[34m  31[39m[0m [34m|[39m     resultado = <\ curl "-s" "-L" "-H" "Accept: application/json" {url} \>
+[34m     |[39m [1m[31m                                                                      ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected token: BashClose
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:31:73
 [1m[34m  31[39m[0m [34m|[39m
 [1m[34m  31[39m[0m [34m|[39m     resultado = <\ curl "-s" "-L" "-H" "Accept: application/json" {url} \>
+[34m     |[39m [1m[31m                                                                        ^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: expected expression, found LBrace
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:37:85
 [1m[34m  37[39m[0m [34m|[39m
 [1m[34m  37[39m[0m [34m|[39m     resultado = <\ curl "-s" "-X" "POST" "-H" "Content-Type: application/json" "-d" {json_data} {url} \>
+[34m     |[39m [1m[31m                                                                                    ^[39m[0m
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:37:95
 [1m[34m  37[39m[0m [34m|[39m
 [1m[34m  37[39m[0m [34m|[39m     resultado = <\ curl "-s" "-X" "POST" "-H" "Content-Type: application/json" "-d" {json_data} {url} \>
+[34m     |[39m [1m[31m                                                                                              ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected token: LBrace
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:37:97
 [1m[34m  37[39m[0m [34m|[39m
 [1m[34m  37[39m[0m [34m|[39m     resultado = <\ curl "-s" "-X" "POST" "-H" "Content-Type: application/json" "-d" {json_data} {url} \>
+[34m     |[39m [1m[31m                                                                                                ^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:37:101
 [1m[34m  37[39m[0m [34m|[39m
 [1m[34m  37[39m[0m [34m|[39m     resultado = <\ curl "-s" "-X" "POST" "-H" "Content-Type: application/json" "-d" {json_data} {url} \>
+[34m     |[39m [1m[31m                                                                                                    ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected token: BashClose
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:37:103
 [1m[34m  37[39m[0m [34m|[39m
 [1m[34m  37[39m[0m [34m|[39m     resultado = <\ curl "-s" "-X" "POST" "-H" "Content-Type: application/json" "-d" {json_data} {url} \>
+[34m     |[39m [1m[31m                                                                                                      ^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: expected expression, found LBrace
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:43:35
 [1m[34m  43[39m[0m [34m|[39m
 [1m[34m  43[39m[0m [34m|[39m     resultado = <\ curl "-s" "-o" {output_file} {url} \>
+[34m     |[39m [1m[31m                                  ^[39m[0m
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:43:47
 [1m[34m  43[39m[0m [34m|[39m
 [1m[34m  43[39m[0m [34m|[39m     resultado = <\ curl "-s" "-o" {output_file} {url} \>
+[34m     |[39m [1m[31m                                              ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected token: LBrace
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:43:49
 [1m[34m  43[39m[0m [34m|[39m
 [1m[34m  43[39m[0m [34m|[39m     resultado = <\ curl "-s" "-o" {output_file} {url} \>
+[34m     |[39m [1m[31m                                                ^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:43:53
 [1m[34m  43[39m[0m [34m|[39m
 [1m[34m  43[39m[0m [34m|[39m     resultado = <\ curl "-s" "-o" {output_file} {url} \>
+[34m     |[39m [1m[31m                                                    ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected token: BashClose
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:43:55
 [1m[34m  43[39m[0m [34m|[39m
 [1m[34m  43[39m[0m [34m|[39m     resultado = <\ curl "-s" "-o" {output_file} {url} \>
+[34m     |[39m [1m[31m                                                      ^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: expected expression, found LBrace
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:49:67
 [1m[34m  49[39m[0m [34m|[39m
 [1m[34m  49[39m[0m [34m|[39m     resultado = <\ curl "-s" "-o" "/dev/null" "-w" "%{http_code}" {url} \>
+[34m     |[39m [1m[31m                                                                  ^[39m[0m
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:49:71
 [1m[34m  49[39m[0m [34m|[39m
 [1m[34m  49[39m[0m [34m|[39m     resultado = <\ curl "-s" "-o" "/dev/null" "-w" "%{http_code}" {url} \>
+[34m     |[39m [1m[31m                                                                      ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected token: BashClose
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:49:73
 [1m[34m  49[39m[0m [34m|[39m
 [1m[34m  49[39m[0m [34m|[39m     resultado = <\ curl "-s" "-o" "/dev/null" "-w" "%{http_code}" {url} \>
+[34m     |[39m [1m[31m                                                                        ^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: expected expression, found LBrace
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:55:35
 [1m[34m  55[39m[0m [34m|[39m
 [1m[34m  55[39m[0m [34m|[39m     resultado = <\ curl "-s" "-I" {url} \>
+[34m     |[39m [1m[31m                                  ^[39m[0m
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:55:39
 [1m[34m  55[39m[0m [34m|[39m
 [1m[34m  55[39m[0m [34m|[39m     resultado = <\ curl "-s" "-I" {url} \>
+[34m     |[39m [1m[31m                                      ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected token: BashClose
   [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:55:41
 [1m[34m  55[39m[0m [34m|[39m
 [1m[34m  55[39m[0m [34m|[39m     resultado = <\ curl "-s" "-I" {url} \>
+[34m     |[39m [1m[31m                                        ^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)

@@ -174,6 +174,9 @@ impl FunctionCtx {
             Instruction::Jump(lbl) => *lbl = target,
             Instruction::JumpIf(_, lbl) => *lbl = target,
             Instruction::JumpIfNot(_, lbl) => *lbl = target,
+            Instruction::MatchStr(_, _, lbl) => *lbl = target,
+            Instruction::MatchInt(_, _, lbl) => *lbl = target,
+            Instruction::MatchBool(_, _, lbl) => *lbl = target,
             _ => panic!("patch_jump called on non-jump instruction at {}", pos),
         }
     }
@@ -2068,49 +2071,23 @@ impl Compiler {
                     let next_case = ctx.current_label();
                     ctx.patch_jump(skip_patch, next_case);
                 }
-                Pattern::Guard(inner, cond, _) => {
-                    // Guard pattern: evaluate inner pattern first (if not wildcard),
-                    // then evaluate condition. Skip case if either fails.
-                    let skip_patch = match inner.as_ref() {
-                        Pattern::Wildcard(_) => {
-                            // No inner match check needed — just evaluate condition
-                            None
-                        }
-                        Pattern::Literal(lit, _) => {
-                            let p = match lit {
-                                zymbol_common::Literal::Int(n) => {
-                                    let r_cmp = ctx.alloc_temp()?;
-                                    ctx.emit(Instruction::CmpEqImm(r_cmp, r_sub, *n as i32));
-                                    Some(ctx.emit_jump_if_not_placeholder(r_cmp))
-                                }
-                                zymbol_common::Literal::Bool(b) => {
-                                    let r_cmp = ctx.alloc_temp()?;
-                                    ctx.emit(Instruction::LoadBool(r_cmp, *b));
-                                    let r_eq = ctx.alloc_temp()?;
-                                    ctx.emit(Instruction::CmpEq(r_eq, r_sub, r_cmp));
-                                    Some(ctx.emit_jump_if_not_placeholder(r_eq))
-                                }
-                                _ => None,
-                            };
-                            p
-                        }
-                        Pattern::Range(start, end_expr, _) => {
-                            let lo = if let Expr::Literal(l) = start.as_ref() {
-                                if let Literal::Int(n) = l.value { n } else { 0 }
-                            } else { 0 };
-                            let hi = if let Expr::Literal(l) = end_expr.as_ref() {
-                                if let Literal::Int(n) = l.value { n } else { 0 }
-                            } else { 0 };
-                            let body_label = (ctx.current_label() + 2) as Label;
-                            ctx.emit(Instruction::MatchRange(r_sub, lo, hi, body_label));
-                            Some(ctx.emit_jump_placeholder())
-                        }
-                        _ => None,
+                Pattern::Comparison(op, expr, _) => {
+                    // Comparison pattern: implicit scrutinee op rhs
+                    let r_rhs = self.compile_expr(expr, ctx)?;
+                    let r_cmp = ctx.alloc_temp()?;
+                    let instr = match op {
+                        BinaryOp::Lt  => Instruction::CmpLt(r_cmp, r_sub, r_rhs),
+                        BinaryOp::Gt  => Instruction::CmpGt(r_cmp, r_sub, r_rhs),
+                        BinaryOp::Le  => Instruction::CmpLe(r_cmp, r_sub, r_rhs),
+                        BinaryOp::Ge  => Instruction::CmpGe(r_cmp, r_sub, r_rhs),
+                        BinaryOp::Eq  => Instruction::CmpEq(r_cmp, r_sub, r_rhs),
+                        BinaryOp::Neq => Instruction::CmpNe(r_cmp, r_sub, r_rhs),
+                        _ => return Err(CompileError::Unsupported(
+                            format!("unsupported op {:?} in comparison pattern", op)
+                        )),
                     };
-                    // Now evaluate the guard condition
-                    let r_guard = self.compile_expr(cond, ctx)?;
-                    let guard_skip_patch = ctx.emit_jump_if_not_placeholder(r_guard);
-                    // Body (guard passed)
+                    ctx.emit(instr);
+                    let skip_patch = ctx.emit_jump_if_not_placeholder(r_cmp);
                     if let Some(val) = &case.value {
                         let r = self.compile_expr(val, ctx)?;
                         ctx.emit(Instruction::CopyReg(dst, r));
@@ -2120,27 +2097,74 @@ impl Compiler {
                     let j = ctx.emit_jump_placeholder();
                     end_patches.push(j);
                     let next_case = ctx.current_label();
-                    if let Some(sp) = skip_patch {
-                        ctx.patch_jump(sp, next_case);
+                    ctx.patch_jump(skip_patch, next_case);
+                }
+                Pattern::Ident(name, _) => {
+                    // Load the variable; if array → containment, else → equality
+                    let r_var = if let Ok(r) = ctx.get_reg(name) {
+                        r
+                    } else if let Some(mc) = self.global_consts.get(name).cloned() {
+                        let r = ctx.alloc_temp()?;
+                        let instr = match mc {
+                            ModuleConst::Int(n)    => Instruction::LoadInt(r, n),
+                            ModuleConst::Float(f)  => { ctx.set_reg_type(r, StaticType::Float); Instruction::LoadFloat(r, f) }
+                            ModuleConst::String(s) => { let idx = self.intern_string(&s); ctx.set_reg_type(r, StaticType::String); Instruction::LoadStr(r, idx) }
+                            ModuleConst::Bool(b)   => { ctx.set_reg_type(r, StaticType::Bool); Instruction::LoadBool(r, b) }
+                            ModuleConst::Char(c)   => { ctx.set_reg_type(r, StaticType::Char); Instruction::LoadChar(r, c) }
+                        };
+                        ctx.emit(instr);
+                        r
+                    } else if let Some(&gvar_idx) = self.global_var_map.get(name) {
+                        let r = ctx.alloc_temp()?;
+                        ctx.emit(Instruction::LoadGlobal(r, gvar_idx));
+                        r
+                    } else {
+                        return Err(CompileError::UndefinedVariable(name.clone()));
+                    };
+                    // Runtime dispatch: array variable → containment check, scalar → equality
+                    let r_is_arr = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::IsArray(r_is_arr, r_var));
+                    let patch_to_eq = ctx.emit_jump_if_not_placeholder(r_is_arr);
+                    // Array branch: ArrayContains(r_cmp, r_var, r_sub)
+                    let r_cmp = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::ArrayContains(r_cmp, r_var, r_sub));
+                    let patch_arr_skip = ctx.emit_jump_placeholder(); // jump over eq branch
+                    // Scalar branch:
+                    let eq_label = ctx.current_label();
+                    ctx.patch_jump(patch_to_eq, eq_label);
+                    ctx.emit(Instruction::CmpEq(r_cmp, r_sub, r_var));
+                    // Merge point:
+                    let merge_label = ctx.current_label();
+                    ctx.patch_jump(patch_arr_skip, merge_label);
+                    let skip_patch = ctx.emit_jump_if_not_placeholder(r_cmp);
+                    if let Some(val) = &case.value {
+                        let r = self.compile_expr(val, ctx)?;
+                        ctx.emit(Instruction::CopyReg(dst, r));
+                    } else if let Some(block) = &case.block {
+                        self.compile_block(block, ctx)?;
                     }
-                    ctx.patch_jump(guard_skip_patch, next_case);
+                    let j = ctx.emit_jump_placeholder();
+                    end_patches.push(j);
+                    let next_case = ctx.current_label();
+                    ctx.patch_jump(skip_patch, next_case);
                 }
                 Pattern::List(patterns, _) => {
-                    let mut skip_patches: Vec<usize> = Vec::new();
+                    // Runtime dual dispatch: structural for array scrutinee, containment for scalar
+                    let r_is_arr = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::IsArray(r_is_arr, r_sub));
+                    let patch_to_contain = ctx.emit_jump_if_not_placeholder(r_is_arr);
 
-                    // Check array length matches pattern count
+                    // === Structural path (scrutinee is array) ===
+                    let mut struct_skip_patches: Vec<usize> = Vec::new();
                     let r_len = ctx.alloc_temp()?;
                     ctx.emit(Instruction::ArrayLen(r_len, r_sub));
                     let r_ok = ctx.alloc_temp()?;
                     ctx.emit(Instruction::CmpEqImm(r_ok, r_len, patterns.len() as i32));
-                    skip_patches.push(ctx.emit_jump_if_not_placeholder(r_ok));
+                    struct_skip_patches.push(ctx.emit_jump_if_not_placeholder(r_ok));
 
-                    // Check each element against its sub-pattern
                     for (i, sub_pat) in patterns.iter().enumerate() {
                         match sub_pat {
-                            Pattern::Wildcard(_) => {
-                                // Always matches — no check needed
-                            }
+                            Pattern::Wildcard(_) => {}
                             Pattern::Literal(lit, _) => {
                                 let r_idx = ctx.alloc_temp()?;
                                 ctx.emit(Instruction::LoadInt(r_idx, (i + 1) as i64));
@@ -2150,37 +2174,89 @@ impl Compiler {
                                     zymbol_common::Literal::Int(n) => {
                                         let r_cmp = ctx.alloc_temp()?;
                                         ctx.emit(Instruction::CmpEqImm(r_cmp, r_elem, *n as i32));
-                                        skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
+                                        struct_skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                                     }
                                     zymbol_common::Literal::String(s) | zymbol_common::Literal::InterpolatedString(s) => {
                                         let resolved = s.replace('\x01', "{");
                                         let idx = self.intern_string(&resolved);
-                                        let body_label = (ctx.current_label() + 2) as Label;
-                                        ctx.emit(Instruction::MatchStr(r_elem, idx, body_label));
-                                        skip_patches.push(ctx.emit_jump_placeholder());
+                                        let body_lbl = (ctx.current_label() + 2) as Label;
+                                        ctx.emit(Instruction::MatchStr(r_elem, idx, body_lbl));
+                                        struct_skip_patches.push(ctx.emit_jump_placeholder());
                                     }
                                     zymbol_common::Literal::Bool(b) => {
                                         let r_b = ctx.alloc_temp()?;
                                         ctx.emit(Instruction::LoadBool(r_b, *b));
                                         let r_cmp = ctx.alloc_temp()?;
                                         ctx.emit(Instruction::CmpEq(r_cmp, r_elem, r_b));
-                                        skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
+                                        struct_skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                                     }
                                     zymbol_common::Literal::Char(c) => {
                                         let r_c = ctx.alloc_temp()?;
                                         ctx.emit(Instruction::LoadChar(r_c, *c));
                                         let r_cmp = ctx.alloc_temp()?;
                                         ctx.emit(Instruction::CmpEq(r_cmp, r_elem, r_c));
-                                        skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
+                                        struct_skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                                     }
-                                    _ => {} // unsupported literal type — skip check (always matches)
+                                    _ => {}
                                 }
                             }
-                            _ => {} // nested list/range/guard patterns not supported in list elements
+                            _ => {}
                         }
                     }
+                    // Structural matched — jump to body (placeholder, patched after body label)
+                    let patch_struct_to_body = ctx.emit_jump_placeholder();
 
-                    // Body
+                    // === Containment path (scrutinee is scalar) ===
+                    let containment_label = ctx.current_label();
+                    ctx.patch_jump(patch_to_contain, containment_label);
+
+                    let mut jump_to_body_patches: Vec<usize> = Vec::new();
+                    for sub_pat in patterns.iter() {
+                        match sub_pat {
+                            Pattern::Wildcard(_) => {
+                                // Wildcard in containment: always matches
+                                jump_to_body_patches.push(ctx.emit_jump_placeholder());
+                            }
+                            Pattern::Literal(lit, _) => {
+                                let r_cmp = ctx.alloc_temp()?;
+                                match lit {
+                                    zymbol_common::Literal::Int(n) => {
+                                        ctx.emit(Instruction::CmpEqImm(r_cmp, r_sub, *n as i32));
+                                        jump_to_body_patches.push(ctx.emit(Instruction::JumpIf(r_cmp, 0)));
+                                    }
+                                    zymbol_common::Literal::String(s) | zymbol_common::Literal::InterpolatedString(s) => {
+                                        let resolved = s.replace('\x01', "{");
+                                        let idx = self.intern_string(&resolved);
+                                        jump_to_body_patches.push(ctx.emit(Instruction::MatchStr(r_sub, idx, 0)));
+                                    }
+                                    zymbol_common::Literal::Bool(b) => {
+                                        let r_b = ctx.alloc_temp()?;
+                                        ctx.emit(Instruction::LoadBool(r_b, *b));
+                                        ctx.emit(Instruction::CmpEq(r_cmp, r_sub, r_b));
+                                        jump_to_body_patches.push(ctx.emit(Instruction::JumpIf(r_cmp, 0)));
+                                    }
+                                    zymbol_common::Literal::Char(c) => {
+                                        let r_c = ctx.alloc_temp()?;
+                                        ctx.emit(Instruction::LoadChar(r_c, *c));
+                                        ctx.emit(Instruction::CmpEq(r_cmp, r_sub, r_c));
+                                        jump_to_body_patches.push(ctx.emit(Instruction::JumpIf(r_cmp, 0)));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    // No containment match → skip to next case
+                    let patch_contain_no_match = ctx.emit_jump_placeholder();
+
+                    // === Body (shared by both paths) ===
+                    let body_label = ctx.current_label();
+                    ctx.patch_jump(patch_struct_to_body, body_label);
+                    for p in jump_to_body_patches {
+                        ctx.patch_jump(p, body_label);
+                    }
+
                     if let Some(val) = &case.value {
                         let r = self.compile_expr(val, ctx)?;
                         ctx.emit(Instruction::CopyReg(dst, r));
@@ -2190,11 +2266,12 @@ impl Compiler {
                     let j = ctx.emit_jump_placeholder();
                     end_patches.push(j);
 
-                    // Patch all skip jumps to the next case
+                    // Patch all "no match" skips to next case
                     let next_case = ctx.current_label();
-                    for sp in skip_patches {
+                    for sp in struct_skip_patches {
                         ctx.patch_jump(sp, next_case);
                     }
+                    ctx.patch_jump(patch_contain_no_match, next_case);
                 }
             }
         }
@@ -2226,6 +2303,15 @@ impl Compiler {
         cl: &zymbol_ast::CollectionLengthExpr,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
+        // Fusion: (s $/ sep)$#  →  StrSplitCount  (zero Vec<Value>, via intrinsics)
+        if let zymbol_ast::Expr::StringSplit(split) = cl.collection.as_ref() {
+            let r_str = self.compile_expr(&split.string, ctx)?;
+            let r_sep = self.compile_expr(&split.delimiter, ctx)?;
+            let dst   = ctx.alloc_temp()?;
+            ctx.emit(Instruction::StrSplitCount(dst, r_str, r_sep));
+            ctx.set_reg_type(dst, StaticType::Int);
+            return Ok(dst);
+        }
         let r = self.compile_expr(&cl.collection, ctx)?;
         let dst = ctx.alloc_temp()?;
         if ctx.get_reg_type(r) == StaticType::String {
@@ -2435,9 +2521,18 @@ impl Compiler {
         cm: &zymbol_ast::CollectionMapExpr,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
+        // Fusion: (str $/ sep) $> fn  →  StrSplitMap (no intermediate Vec<Value>)
+        if let zymbol_ast::Expr::StringSplit(split) = cm.collection.as_ref() {
+            let r_str = self.compile_expr(&split.string, ctx)?;
+            let r_sep = self.compile_expr(&split.delimiter, ctx)?;
+            let r_fn  = self.compile_expr(&cm.lambda, ctx)?;
+            let dst   = ctx.alloc_temp()?;
+            ctx.emit(Instruction::StrSplitMap(dst, r_str, r_sep, r_fn));
+            return Ok(dst);
+        }
         let r_arr = self.compile_expr(&cm.collection, ctx)?;
-        let r_fn = self.compile_expr(&cm.lambda, ctx)?;
-        let dst = ctx.alloc_temp()?;
+        let r_fn  = self.compile_expr(&cm.lambda, ctx)?;
+        let dst   = ctx.alloc_temp()?;
         ctx.emit(Instruction::ArrayMap(dst, r_arr, r_fn));
         Ok(dst)
     }
@@ -2447,9 +2542,18 @@ impl Compiler {
         cf: &zymbol_ast::CollectionFilterExpr,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
+        // Fusion: (str $/ sep) $| fn  →  StrSplitFilter
+        if let zymbol_ast::Expr::StringSplit(split) = cf.collection.as_ref() {
+            let r_str = self.compile_expr(&split.string, ctx)?;
+            let r_sep = self.compile_expr(&split.delimiter, ctx)?;
+            let r_fn  = self.compile_expr(&cf.lambda, ctx)?;
+            let dst   = ctx.alloc_temp()?;
+            ctx.emit(Instruction::StrSplitFilter(dst, r_str, r_sep, r_fn));
+            return Ok(dst);
+        }
         let r_arr = self.compile_expr(&cf.collection, ctx)?;
-        let r_fn = self.compile_expr(&cf.lambda, ctx)?;
-        let dst = ctx.alloc_temp()?;
+        let r_fn  = self.compile_expr(&cf.lambda, ctx)?;
+        let dst   = ctx.alloc_temp()?;
         ctx.emit(Instruction::ArrayFilter(dst, r_arr, r_fn));
         Ok(dst)
     }
@@ -2459,10 +2563,20 @@ impl Compiler {
         cr: &zymbol_ast::CollectionReduceExpr,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
-        let r_arr = self.compile_expr(&cr.collection, ctx)?;
+        // Fusion: (str $/ sep) $< (init, fn)  →  StrSplitReduce
+        if let zymbol_ast::Expr::StringSplit(split) = cr.collection.as_ref() {
+            let r_str  = self.compile_expr(&split.string, ctx)?;
+            let r_sep  = self.compile_expr(&split.delimiter, ctx)?;
+            let r_init = self.compile_expr(&cr.initial, ctx)?;
+            let r_fn   = self.compile_expr(&cr.lambda, ctx)?;
+            let dst    = ctx.alloc_temp()?;
+            ctx.emit(Instruction::StrSplitReduce(dst, r_str, r_sep, r_init, r_fn));
+            return Ok(dst);
+        }
+        let r_arr  = self.compile_expr(&cr.collection, ctx)?;
         let r_init = self.compile_expr(&cr.initial, ctx)?;
-        let r_fn = self.compile_expr(&cr.lambda, ctx)?;
-        let dst = ctx.alloc_temp()?;
+        let r_fn   = self.compile_expr(&cr.lambda, ctx)?;
+        let dst    = ctx.alloc_temp()?;
         ctx.emit(Instruction::ArrayReduce(dst, r_arr, r_init, r_fn));
         Ok(dst)
     }
@@ -2618,19 +2732,27 @@ impl Compiler {
         let iterable = lp.iterable.as_ref().unwrap();
 
         let r_coll = self.compile_expr(iterable, ctx)?;
-        // Convert String → Array<Char> once before the loop (O(N)).
-        // For Array/Tuple this is an O(1) Rc clone — no overhead.
-        // Eliminates the O(N²) pattern of ArrayGet-on-String per iteration.
-        ctx.emit(Instruction::StrChars(r_coll, r_coll));
+        let coll_is_string = ctx.get_reg_type(r_coll) == StaticType::String;
 
         let r_len = ctx.alloc_temp()?;
         let r_idx = ctx.alloc_temp()?;
         let r_item = ctx.alloc_reg(iter_var)?;
         let r_cmp = ctx.alloc_temp()?;
-        let r_one = ctx.alloc_temp()?;
 
-        ctx.emit(Instruction::ArrayLen(r_len, r_coll));
-        ctx.emit(Instruction::LoadInt(r_idx, 1));  // 1-based: start at 1
+        if coll_is_string {
+            // String-specific path: StrLen + StrCharAt, 0-based index.
+            // Avoids StrChars Vec<Value::Char> allocation — critical when this
+            // loop appears inside another loop (N outer × O(len) allocs otherwise).
+            ctx.emit(Instruction::StrLen(r_len, r_coll));
+            ctx.emit(Instruction::LoadInt(r_idx, 0));
+        } else {
+            // Generic path: StrChars converts String→Array<Char> once, O(1) for arrays.
+            ctx.emit(Instruction::StrChars(r_coll, r_coll));
+            ctx.emit(Instruction::ArrayLen(r_len, r_coll));
+            ctx.emit(Instruction::LoadInt(r_idx, 1));  // 1-based: start at 1
+        }
+
+        let r_one = ctx.alloc_temp()?;
         ctx.emit(Instruction::LoadInt(r_one, 1));
 
         let loop_start = ctx.current_label();
@@ -2640,31 +2762,34 @@ impl Compiler {
             label: lp.label.clone(),
         });
 
-        // Exit if r_idx > r_len (1-based: indices 1..=len)
-        ctx.emit(Instruction::CmpGt(r_cmp, r_idx, r_len));
-        let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
-
-        // Load item (ArrayGet normalizes 1-based → 0-based)
-        ctx.emit(Instruction::ArrayGet(r_item, r_coll, r_idx));
-
-        self.compile_block(&lp.body, ctx)?;
-
-        // @> must increment r_idx before re-checking condition
-        let inc_label = ctx.current_label();
-
-        // Increment idx
-        ctx.emit(Instruction::AddInt(r_idx, r_idx, r_one));
-        ctx.emit(Instruction::Jump(loop_start));
-
-        let loop_end = ctx.current_label();
-        ctx.patch_jump(exit_patch, loop_end);
-
-        let lctx = ctx.loop_stack.pop().unwrap();
-        for pos in lctx.break_patches {
-            ctx.patch_jump(pos, loop_end);
-        }
-        for pos in lctx.continue_patches {
-            ctx.patch_jump(pos, inc_label);
+        if coll_is_string {
+            // Exit if r_idx >= r_len (0-based: indices 0..len)
+            ctx.emit(Instruction::CmpGe(r_cmp, r_idx, r_len));
+            let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
+            ctx.emit(Instruction::StrCharAt(r_item, r_coll, r_idx));
+            self.compile_block(&lp.body, ctx)?;
+            let inc_label = ctx.current_label();
+            ctx.emit(Instruction::AddIntImm(r_idx, r_idx, 1));
+            ctx.emit(Instruction::Jump(loop_start));
+            let loop_end = ctx.current_label();
+            ctx.patch_jump(exit_patch, loop_end);
+            let lctx = ctx.loop_stack.pop().unwrap();
+            for pos in lctx.break_patches    { ctx.patch_jump(pos, loop_end); }
+            for pos in lctx.continue_patches { ctx.patch_jump(pos, inc_label); }
+        } else {
+            // Exit if r_idx > r_len (1-based: indices 1..=len)
+            ctx.emit(Instruction::CmpGt(r_cmp, r_idx, r_len));
+            let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
+            ctx.emit(Instruction::ArrayGet(r_item, r_coll, r_idx));
+            self.compile_block(&lp.body, ctx)?;
+            let inc_label = ctx.current_label();
+            ctx.emit(Instruction::AddInt(r_idx, r_idx, r_one));
+            ctx.emit(Instruction::Jump(loop_start));
+            let loop_end = ctx.current_label();
+            ctx.patch_jump(exit_patch, loop_end);
+            let lctx = ctx.loop_stack.pop().unwrap();
+            for pos in lctx.break_patches    { ctx.patch_jump(pos, loop_end); }
+            for pos in lctx.continue_patches { ctx.patch_jump(pos, inc_label); }
         }
         Ok(())
     }
@@ -3085,9 +3210,14 @@ fn collect_free_in_pattern(
     free: &mut Vec<String>,
 ) {
     match pattern {
-        zymbol_ast::Pattern::Guard(inner, guard_expr, _) => {
-            collect_free_in_pattern(inner, locals, outer_ctx, seen, free);
-            collect_free_in_expr(guard_expr, locals, outer_ctx, seen, free);
+        zymbol_ast::Pattern::Comparison(_, expr, _) => {
+            collect_free_in_expr(expr, locals, outer_ctx, seen, free);
+        }
+        zymbol_ast::Pattern::Ident(name, _) => {
+            if !locals.contains(name) && outer_ctx.get_reg(name).is_ok() && !seen.contains(name) {
+                seen.insert(name.clone());
+                free.push(name.clone());
+            }
         }
         zymbol_ast::Pattern::Range(lo, hi, _) => {
             collect_free_in_expr(lo, locals, outer_ctx, seen, free);
@@ -3333,10 +3463,13 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::ArrayMap(d, a, f) | Instruction::ArrayFilter(d, a, f) => { upd(*d); upd(*a); upd(*f); }
             Instruction::ArrayReduce(d, a, i, f) => { upd(*d); upd(*a); upd(*i); upd(*f); }
             Instruction::ArraySort(d, a, _, f) => { upd(*d); upd(*a); if *f != u16::MAX { upd(*f); } }
+            Instruction::StrSplitCount(d, s, p) => { upd(*d); upd(*s); upd(*p); }
+            Instruction::StrSplitMap(d, s, p, f) | Instruction::StrSplitFilter(d, s, p, f) => { upd(*d); upd(*s); upd(*p); upd(*f); }
+            Instruction::StrSplitReduce(d, s, p, i, f) => { upd(*d); upd(*s); upd(*p); upd(*i); upd(*f); }
             Instruction::StrLen(d, s) | Instruction::StrChars(d, s) => { upd(*d); upd(*s); }
             Instruction::StrSplit(d, s, p) | Instruction::StrContains(d, s, p)
             | Instruction::StrSlice(d, s, p) | Instruction::StrFindPos(d, s, p)
-            | Instruction::ConcatStr(d, s, p) => { upd(*d); upd(*s); upd(*p); }
+            | Instruction::ConcatStr(d, s, p) | Instruction::StrCharAt(d, s, p) => { upd(*d); upd(*s); upd(*p); }
             Instruction::ConcatBuild(d, b, items) => { upd(*d); upd(*b); for &i in items { upd(i); } }
             Instruction::StrInsert(d, s, p, t) | Instruction::StrRemove(d, s, p, t)
             | Instruction::StrReplace(d, s, p, t) => { upd(*d); upd(*s); upd(*p); upd(*t); }
@@ -3348,7 +3481,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             | Instruction::Execute(d, _) => upd(*d),
             Instruction::FmtThousands(d, s, _, _) | Instruction::FmtScientific(d, s, _, _)
             | Instruction::NumericEval(d, s) | Instruction::TypeOf(d, s)
-            | Instruction::IsError(d, s) | Instruction::BaseConvert(d, s, _) => { upd(*d); upd(*s); }
+            | Instruction::IsError(d, s) | Instruction::IsArray(d, s)
+            | Instruction::BaseConvert(d, s, _) => { upd(*d); upd(*s); }
             Instruction::RoundFloat(d, s, _) | Instruction::TruncFloat(d, s, _) => { upd(*d); upd(*s); }
             Instruction::LoadErrorKind(d) => upd(*d),
             Instruction::TryCatch(r) => upd(*r),

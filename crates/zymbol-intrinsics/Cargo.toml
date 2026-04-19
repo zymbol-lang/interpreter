@@ -1,0 +1,10 @@
+[package]
+name = "zymbol-intrinsics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure-Rust string and collection intrinsics for Zymbol-Lang VM — no boxing, no VM types"
+
+[dependencies]
+# Intentionally empty: intrinsics operate on &str / primitive types only.
+# The VM adapter layer owns the boxing/unboxing.

@@ -1025,10 +1025,13 @@ impl<'a> FormatVisitor<'a> {
             Pattern::Wildcard(_) => {
                 self.output.write("_");
             }
-            Pattern::Guard(inner, condition, _) => {
-                self.format_pattern(inner);
-                self.output.write(" ? ");
-                self.format_expr(condition);
+            Pattern::Comparison(op, expr, _) => {
+                self.output.write(&op.to_string());
+                self.output.write(" ");
+                self.format_expr(expr);
+            }
+            Pattern::Ident(name, _) => {
+                self.output.write(name);
             }
         }
     }
@@ -1041,12 +1044,13 @@ impl<'a> FormatVisitor<'a> {
     fn estimate_pattern_length_static(pattern: &Pattern) -> usize {
         match pattern {
             Pattern::Literal(lit, _) => lit.to_string().len(),
-            Pattern::Range(_, _, _) => 7, // Rough estimate
+            Pattern::Range(_, _, _) => 7,
             Pattern::List(patterns, _) => {
                 2 + patterns.iter().map(|p| Self::estimate_pattern_length_static(p) + 2).sum::<usize>()
             }
             Pattern::Wildcard(_) => 1,
-            Pattern::Guard(inner, _, _) => Self::estimate_pattern_length_static(inner) + 10,
+            Pattern::Comparison(_, _, _) => 6,
+            Pattern::Ident(name, _) => name.len(),
         }
     }
 

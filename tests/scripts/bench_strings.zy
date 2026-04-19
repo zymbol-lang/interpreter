@@ -76,4 +76,23 @@ build_total = 0
 }
 >> "multi_token_build: total_chars = " build_total "  " T::elapsed(t) ¶
 
+t = T::now()
+csv2 = "alpha,beta,gamma,delta,epsilon,zeta,eta,theta,iota,kappa"
+unfused_len = 0
+@ _iter:0..1000 {
+    parts2 = csv2 $/ ','
+    lengths2 = parts2 $> (w -> w$#)
+    unfused_len = unfused_len + lengths2$#
+}
+>> "split_map_unfused: total = " unfused_len "  " T::elapsed(t) ¶
+
+t = T::now()
+fused_len = 0
+@ _iter:0..1000 {
+    // Fused: StrSplitMap — no intermediate Vec<Value> allocation
+    lengths = (csv2 $/ ',') $> (w -> w$#)
+    fused_len = fused_len + lengths$#
+}
+>> "split_map_fused:   total = " fused_len "  " T::elapsed(t) ¶
+
 >> "=== Done (" T::total(t_total) ") ===" ¶

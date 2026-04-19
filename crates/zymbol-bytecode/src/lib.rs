@@ -69,6 +69,10 @@ pub enum Instruction {
     /// Emitted before every for-each loop to convert strings to char arrays once
     /// (O(N)), avoiding the O(N²) pattern of ArrayGet on String per iteration.
     StrChars(Reg, Reg),
+    /// dst = str[idx] → Char  (0-based, no allocation).
+    /// ASCII fast path: O(1) byte lookup. Unicode fallback: O(N) chars().nth().
+    /// Used by the string-specific for-each loop to avoid StrChars allocations.
+    StrCharAt(Reg, Reg, Reg),
     /// dst = str$??pat → Array<Int>  — all char-indices where pat is found
     StrFindPos(Reg, Reg, Reg),
     /// dst = str$++[pos:text] → String  — insert text at char position
@@ -140,6 +144,14 @@ pub enum Instruction {
     ArrayFilter(Reg, Reg, Reg),
     /// HOF: dst = arr.reduce(init_reg, lambda_reg)
     ArrayReduce(Reg, Reg, Reg, Reg),
+    /// Fused: dst = (str $/ sep)$#  — count parts, zero Vec<Value> (via intrinsics::split::count)
+    StrSplitCount(Reg, Reg, Reg),
+    /// Fused: dst = (str $/ sep) $> fn  — no intermediate Vec<Value>
+    StrSplitMap(Reg, Reg, Reg, Reg),
+    /// Fused: dst = (str $/ sep) $| fn  — filter parts without materializing split
+    StrSplitFilter(Reg, Reg, Reg, Reg),
+    /// Fused: dst = (str $/ sep) $< (init, fn)  — reduce over parts directly
+    StrSplitReduce(Reg, Reg, Reg, Reg, Reg),
     /// HOF: dst = arr.sort(ascending, opt_func_reg)
     /// ascending: true=$^+, false=$^-; func_reg=u8::MAX means natural order
     ArraySort(Reg, Reg, bool, Reg),
@@ -165,6 +177,8 @@ pub enum Instruction {
     NumericEval(Reg, Reg),
     /// dst = (type_symbol_str, len, value) tuple
     TypeOf(Reg, Reg),
+    /// dst = Bool(true) if src is an Array, false otherwise
+    IsArray(Reg, Reg),
     /// Base conversion: 0x|expr|, 0b|expr|, 0o|expr|, 0d|expr|
     /// prefix: 2=binary, 8=octal, 10=decimal, 16=hex
     BaseConvert(Reg, Reg, u8),

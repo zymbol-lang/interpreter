@@ -6,7 +6,7 @@
 //! - Pattern matching: All pattern types (literals, ranges, lists, guards)
 
 use zymbol_ast::{MatchExpr, Pattern};
-use zymbol_common::Literal;
+use zymbol_common::{BinaryOp, Literal};
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
 
@@ -132,15 +132,12 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             Pattern::List(patterns, _span) => {
-                // Match against list/array
                 match value {
                     Value::Array(arr) => {
-                        // Check if lengths match
+                        // Structural match: element-by-element
                         if patterns.len() != arr.len() {
                             return Ok(None);
                         }
-
-                        // Check each element
                         for (pattern, val) in patterns.iter().zip(arr.iter()) {
                             if let Some(matched) = self.pattern_matches(pattern, val)? {
                                 if !matched {
@@ -150,31 +147,70 @@ impl<W: Write> Interpreter<W> {
                                 return Ok(None);
                             }
                         }
-
                         Ok(Some(true))
                     }
-                    _ => Ok(None),
+                    _ => {
+                        // Containment check: scalar ∈ [p1, p2, ...]
+                        for pat in patterns {
+                            if let Some(true) = self.pattern_matches(pat, value)? {
+                                return Ok(Some(true));
+                            }
+                        }
+                        Ok(None)
+                    }
                 }
             }
-            Pattern::Guard(inner_pattern, condition, _) => {
-                // First check if inner pattern matches
-                if let Some(matched) = self.pattern_matches(inner_pattern, value)? {
-                    if matched {
-                        // Pattern matched, now check guard condition
-                        let guard_result = self.eval_expr(condition)?;
-                        match guard_result {
-                            Value::Bool(true) => Ok(Some(true)),
-                            Value::Bool(false) => Ok(Some(false)), // Pattern matched but guard failed
-                            _ => Err(RuntimeError::Generic {
-                                message: "guard condition must evaluate to boolean".to_string(),
-                                span: condition.span(),
-                            }),
+            Pattern::Comparison(op, rhs_expr, span) => {
+                let rhs = self.eval_expr(rhs_expr)?;
+                let result = match op {
+                    BinaryOp::Lt  => self.compare_values(value, &rhs, |a, b| a < b, |a, b| a < b, op)?,
+                    BinaryOp::Gt  => self.compare_values(value, &rhs, |a, b| a > b, |a, b| a > b, op)?,
+                    BinaryOp::Le  => self.compare_values(value, &rhs, |a, b| a <= b, |a, b| a <= b, op)?,
+                    BinaryOp::Ge  => self.compare_values(value, &rhs, |a, b| a >= b, |a, b| a >= b, op)?,
+                    BinaryOp::Eq  => Value::Bool(self.values_equal(value, &rhs)),
+                    BinaryOp::Neq => Value::Bool(!self.values_equal(value, &rhs)),
+                    _ => return Err(RuntimeError::Generic {
+                        message: format!("unsupported operator in comparison pattern: {:?}", op),
+                        span: *span,
+                    }),
+                };
+                match result {
+                    Value::Bool(true)  => Ok(Some(true)),
+                    Value::Bool(false) => Ok(None),
+                    _ => Err(RuntimeError::Generic {
+                        message: "comparison pattern did not produce a boolean".to_string(),
+                        span: *span,
+                    }),
+                }
+            }
+            Pattern::Ident(name, span) => {
+                match self.get_variable(name) {
+                    Some(var_val) => {
+                        let var_val = var_val.clone();
+                        match &var_val {
+                            Value::Array(arr) => {
+                                // Containment: scalar ∈ array variable
+                                for elem in arr.iter() {
+                                    if self.values_equal(value, elem) {
+                                        return Ok(Some(true));
+                                    }
+                                }
+                                Ok(None)
+                            }
+                            _ => {
+                                // Scalar equality
+                                if self.values_equal(value, &var_val) {
+                                    Ok(Some(true))
+                                } else {
+                                    Ok(None)
+                                }
+                            }
                         }
-                    } else {
-                        Ok(Some(false))
                     }
-                } else {
-                    Ok(None)
+                    None => Err(RuntimeError::Generic {
+                        message: format!("undefined variable '{}' in match pattern", name),
+                        span: *span,
+                    }),
                 }
             }
         }

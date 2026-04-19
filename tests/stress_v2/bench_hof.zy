@@ -1,0 +1,99 @@
+// ============================================================================
+// STRESS V2 — Higher-Order Functions
+// Optimal Zymbol: $> $| $< chained, $^+ $^- $^ sort.
+// Comparison: tests/stress_v2/bench_hof.py
+//
+// Run: zymbol run tests/stress_v2/bench_hof.zy --vm
+// ============================================================================
+
+<# ../scripts/lib_time <= T
+
+>> "=== Zymbol HOF v2 ===" ¶
+t_total = T::now()
+
+// Build 10 000-element array once (1-based: 1..10000)
+nums = []
+@ i:1..10000 { nums = nums$+ i }
+
+// H1: map — square all elements (20 passes)
+t = T::now()
+total = 0
+@ _rep:1..20 {
+    sq = nums$> (x -> x * x)
+    total = total + sq$#
+}
+>> "H1_map_square:      reps=20 len=" total "  " T::elapsed(t) ¶
+
+// H2: filter — keep multiples of 7 (20 passes)
+t = T::now()
+total = 0
+@ _rep:1..20 {
+    sevens = nums$| (x -> x % 7 == 0)
+    total = total + sevens$#
+}
+>> "H2_filter_mod7:     reps=20 len=" total "  " T::elapsed(t) ¶
+
+// H3: reduce — sum all (50 passes)
+t = T::now()
+total = 0
+@ _rep:1..50 {
+    s = nums$< (0, (acc, x) -> acc + x)
+    total = total + s
+}
+>> "H3_reduce_sum:      reps=50 result=" total "  " T::elapsed(t) ¶
+
+// H4: filter → reduce, no intermediate variable (10 passes)
+t = T::now()
+total = 0
+@ _rep:1..10 {
+    even_sum = (nums$| (x -> x % 2 == 0))$< (0, (acc, x) -> acc + x)
+    total = total + even_sum
+}
+>> "H4_filter_reduce:   reps=10 result=" total "  " T::elapsed(t) ¶
+
+// H5: map → reduce (10 passes)
+t = T::now()
+total = 0
+@ _rep:1..10 {
+    sum_sq = (nums$> (x -> x * x))$< (0, (acc, x) -> acc + x)
+    total = total + sum_sq
+}
+>> "H5_map_reduce:      reps=10 result=" total "  " T::elapsed(t) ¶
+
+// H6: sort ascending natural (10 passes)
+t = T::now()
+asc = nums$^+
+@ _rep:1..9 {
+    asc = nums$^+
+}
+>> "H6_sort_asc:        reps=10 len=" asc$# "  " T::elapsed(t) ¶
+
+// H7: sort descending natural (5 passes)
+t = T::now()
+desc = nums$^-
+@ _rep:1..4 {
+    desc = nums$^-
+}
+>> "H7_sort_desc:       reps=5 first=" desc[1] "  " T::elapsed(t) ¶
+
+// H8: sort with custom comparator — ascending by value (3 passes, 500-element slice)
+// Custom sort calls back into the VM per comparison: O(N log N) lambda calls.
+t = T::now()
+small = nums$[1..500]
+custom = small$^ (a, b -> a < b)
+@ _rep:1..2 {
+    custom = small$^ (a, b -> a < b)
+}
+>> "H8_sort_custom:     reps=3 first=" custom[1] "  " T::elapsed(t) ¶
+
+// H9: filter → map → sort (full pipeline, 5 passes)
+t = T::now()
+total = 0
+@ _rep:1..5 {
+    pipeline = (nums$| (x -> x % 3 == 0))$> (x -> x * 2)
+    sorted_p = pipeline$^-
+    total = total + sorted_p$#
+}
+>> "H9_filter_map_sort: reps=5 len=" total "  " T::elapsed(t) ¶
+
+>> "=== Done (" T::total(t_total) ") ===" ¶

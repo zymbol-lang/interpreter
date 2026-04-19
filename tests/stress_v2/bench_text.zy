@@ -1,0 +1,92 @@
+// ============================================================================
+// STRESS V2 — Text Processing (optimal patterns for each language)
+// Zymbol: interpolated strings, $^, $>/$| on word arrays.
+// Comparison: tests/stress_v2/bench_text.py
+//
+// Run: zymbol run tests/stress_v2/bench_text.zy --vm
+// ============================================================================
+
+<# ../scripts/lib_time <= T
+
+>> "=== Zymbol Text v2 ===" ¶
+t_total = T::now()
+
+// T1: template building — interpolated strings (BuildStr), 5 000 iters
+t = T::now()
+total_len = 0
+names = ["Alice", "Bob", "Carol", "Dave", "Eve"]
+@ i:1..5000 {
+    name = names[(i - 1) % 5 + 1]
+    score = i % 100
+    line = "User {name} scored {score} points in round {i}"
+    total_len = total_len + line$#
+}
+>> "T1_template_build:  total=" total_len "  " T::elapsed(t) ¶
+
+// T2: join simulation — accumulate with separator (1 000 iters)
+t = T::now()
+words = ["apple", "banana", "cherry", "date", "elderberry", "fig", "grape"]
+total_len = 0
+@ 1000 {
+    result = ""
+    @ i:1..7 {
+        ? i > 1 { result = result "," }
+        result = result words[i]
+    }
+    total_len = total_len + result$#
+}
+>> "T2_join_sim:        total=" total_len "  " T::elapsed(t) ¶
+
+// T3: word bucket — split by space, count short and long words (1 000 iters)
+t = T::now()
+corpus = "the quick brown fox jumps over the lazy dog and the cat sat on the mat by the tree"
+short_total = 0
+long_total  = 0
+@ 1000 {
+    short = (corpus $/ ' ')$| (w -> w$# <= 3)
+    long  = (corpus $/ ' ')$| (w -> w$# > 3)
+    short_total = short_total + short$#
+    long_total  = long_total  + long$#
+}
+>> "T3_word_buckets:    short=" short_total " long=" long_total "  " T::elapsed(t) ¶
+
+// T4: sort strings by length (custom comparator), 500 iters
+t = T::now()
+items = ["banana", "apple", "fig", "elderberry", "date", "cherry", "grape", "avocado", "kiwi", "mango"]
+by_len = items$^ (a, b -> a$# < b$#)
+@ 499 {
+    by_len = items$^ (a, b -> a$# < b$#)
+}
+>> "T4_sort_by_len:     first=" by_len[1] " last=" by_len[10] "  " T::elapsed(t) ¶
+
+// T5: sort + unique count — sort words then count transitions, 200 iters
+t = T::now()
+text = "one two three one two four five three six one two three four"
+sorted_tokens = []
+@ 200 {
+    tokens = text $/ ' '
+    sorted_tokens = tokens$^+
+}
+uniq_count = 0
+prev = ""
+@ tok:sorted_tokens {
+    ? tok <> prev {
+        uniq_count = uniq_count + 1
+        prev = tok
+    }
+}
+>> "T5_sort_dedup:      unique=" uniq_count "  " T::elapsed(t) ¶
+
+// T6: transform pipeline — replace + split + count (500 iters)
+t = T::now()
+total = 0
+log = "ERROR: timeout at 192.168.1.1 port 8080 after 30 seconds"
+@ 500 {
+    cleaned = log$~~["ERROR: ":""]
+    cleaned = cleaned$~~[".":" "]
+    word_count = (cleaned $/ ' ')$#
+    total = total + word_count
+}
+>> "T6_transform_pipe:  total=" total "  " T::elapsed(t) ¶
+
+>> "=== Done (" T::total(t_total) ") ===" ¶

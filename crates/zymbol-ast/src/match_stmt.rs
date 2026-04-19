@@ -2,9 +2,9 @@
 //!
 //! Contains AST structures for pattern matching:
 //! - MATCH expression: ?? expr { cases }
-//! - Pattern types: literals, ranges, lists, wildcards, guards
+//! - Pattern types: literals, ranges, lists, wildcards, comparisons, identifiers
 
-use zymbol_common::Literal;
+use zymbol_common::{BinaryOp, Literal};
 use zymbol_span::Span;
 use crate::{Block, Expr};
 
@@ -33,12 +33,14 @@ pub enum Pattern {
     Literal(Literal, Span),
     /// Range pattern: 1..10, 'a'..'z'
     Range(Box<Expr>, Box<Expr>, Span),
-    /// List pattern: [1, 2, 3]
+    /// List pattern: [1, 2, 3] — structural if scrutinee is array; containment if scalar
     List(Vec<Pattern>, Span),
     /// Wildcard pattern: _
     Wildcard(Span),
-    /// Guarded pattern: pattern ? condition
-    Guard(Box<Pattern>, Box<Expr>, Span),
+    /// Comparison pattern: < 0, >= 100, == "x" — implicit scrutinee
+    Comparison(BinaryOp, Box<Expr>, Span),
+    /// Identifier pattern: variable — scalar equality or array containment at runtime
+    Ident(String, Span),
 }
 
 impl MatchExpr {
@@ -79,8 +81,12 @@ impl Pattern {
         Pattern::Wildcard(span)
     }
 
-    pub fn guard(pattern: Box<Pattern>, condition: Box<Expr>, span: Span) -> Self {
-        Pattern::Guard(pattern, condition, span)
+    pub fn comparison(op: BinaryOp, expr: Box<Expr>, span: Span) -> Self {
+        Pattern::Comparison(op, expr, span)
+    }
+
+    pub fn ident(name: String, span: Span) -> Self {
+        Pattern::Ident(name, span)
     }
 
     /// Get the span of a pattern
@@ -90,7 +96,8 @@ impl Pattern {
             Pattern::Range(_, _, span) => *span,
             Pattern::List(_, span) => *span,
             Pattern::Wildcard(span) => *span,
-            Pattern::Guard(_, _, span) => *span,
+            Pattern::Comparison(_, _, span) => *span,
+            Pattern::Ident(_, span) => *span,
         }
     }
 }

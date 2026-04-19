@@ -1,0 +1,11 @@
+=== Zymbol HOF v2 ===
+H1_map_square:      reps=20 len=200000  (****)
+H2_filter_mod7:     reps=20 len=28560  (****)
+H3_reduce_sum:      reps=50 result=2500250000  (****)
+H4_filter_reduce:   reps=10 result=250050000  (****)
+H5_map_reduce:      reps=10 result=3333833350000  (****)
+H6_sort_asc:        reps=10 len=10000  (****)
+H7_sort_desc:       reps=5 first=10000  (****)
+H8_sort_custom:     reps=3 first=1  (****)
+H9_filter_map_sort: reps=5 len=16665  (****)
+=== Done (****) ===

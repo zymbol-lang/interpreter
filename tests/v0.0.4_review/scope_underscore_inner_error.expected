@@ -1,8 +1,8 @@
 [1m[31merror[39m[0m: cannot access underscore variable '_outer' from inner scope
-  [1m[34m-->[39m[0m tests/v0.0.4_review/scope_underscore_inner_error.zy:7:12
+  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/v0.0.4_review/scope_underscore_inner_error.zy:7:12
 [1m[34m   7[39m[0m [34m|[39m
 [1m[34m   7[39m[0m [34m|[39m         >> _outer ¶
-     [34m|[39m [1m[31m           ^^^^^^[39m[0m
+[34m     |[39m [1m[31m           ^^^^^^[39m[0m
   [1m[34m=[39m[0m '_outer' was declared at 5:5
   [1m[32mhelp:[39m[0m underscore variables are strictly local to their declaration block
 '_outer' was declared in an outer scope and cannot be accessed from nested blocks
