@@ -353,6 +353,7 @@ interpreter/
 ## Documentation
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — Interpreter architecture and pipelines
+- [I18N.md](./I18N.md) — Multilingual code architecture: writing libraries in any natural language and bridging them with translation modules
 - [zymbol.ebnf](./zymbol.ebnf) — Formal grammar specification
 - [docs/](./docs/) — Extended documentation
 

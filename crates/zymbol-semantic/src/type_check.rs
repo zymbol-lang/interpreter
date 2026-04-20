@@ -1367,22 +1367,24 @@ impl TypeChecker {
                     ZymbolType::Array(elem) => *elem,
                     ZymbolType::String => ZymbolType::Char,
                     ZymbolType::Tuple(types) => {
-                        // Try to get index as literal for static validation
+                        // Try to get index as literal for static validation (indices are 1-based)
                         if let Expr::Literal(lit) = &*index.index {
                             if let Literal::Int(i) = &lit.value {
-                                let idx = *i as usize;
-                                if idx >= types.len() {
-                                    self.errors.push(
-                                        Diagnostic::error(format!(
-                                            "tuple index {} is out of bounds (tuple has {} elements)",
-                                            idx, types.len()
-                                        ))
-                                        .with_span(index.index.span())
-                                    );
-                                    return ZymbolType::Any;
-                                }
-                                if let Some(ty) = types.get(idx) {
-                                    return ty.clone();
+                                if *i > 0 {
+                                    let idx = (*i as usize) - 1; // convert 1-based to 0-based
+                                    if idx >= types.len() {
+                                        self.errors.push(
+                                            Diagnostic::error(format!(
+                                                "tuple index {} is out of bounds (tuple has {} elements)",
+                                                i, types.len()
+                                            ))
+                                            .with_span(index.index.span())
+                                        );
+                                        return ZymbolType::Any;
+                                    }
+                                    if let Some(ty) = types.get(idx) {
+                                        return ty.clone();
+                                    }
                                 }
                             }
                         }
