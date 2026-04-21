@@ -1,5 +1,5 @@
 [1m[31merror[39m[0m: '!=' is not a valid Zymbol operator
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/11_hof_filter_reduce.zy:7:27
+  [1m[34m-->[39m[0m tests/collections/11_hof_filter_reduce.zy:7:27
 [1m[34m   7[39m[0m [34m|[39m
 [1m[34m   7[39m[0m [34m|[39m odds = nums$| (x -> x % 2 != 0)
 [34m     |[39m [1m[31m                          ^^[39m[0m

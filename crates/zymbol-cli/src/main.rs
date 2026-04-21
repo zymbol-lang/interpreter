@@ -157,6 +157,14 @@ fn run_file(path: PathBuf, args: Vec<String>, use_vm: bool) -> Result<()> {
         }
     };
 
+    // Module files are not directly executable
+    if program.module_decl.is_some() {
+        let module_name = program.module_decl.as_ref().map(|m| m.name.as_str()).unwrap_or("?");
+        eprintln!("warning: '{}' is a module file and cannot be run directly", path.display());
+        eprintln!("  = help: module '{}' is meant to be imported with <# ./{} <= alias", module_name, path.file_stem().and_then(|s| s.to_str()).unwrap_or("module"));
+        std::process::exit(1);
+    }
+
     // Run semantic analysis before execution
     let mut analyzer = VariableAnalyzer::new();
     let warnings = analyzer.analyze(&program);

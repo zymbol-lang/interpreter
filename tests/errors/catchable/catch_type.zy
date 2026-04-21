@@ -1,0 +1,7 @@
+!? {
+    x = ##."not a number"
+    >> x ¶
+} :! {
+    >> "caught: cast error" ¶
+}
+>> "continues" ¶

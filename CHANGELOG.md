@@ -51,6 +51,24 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
   of a stack overflow. The detection set propagates transitively to sub-modules.
 - Private functions in modules can now call each other (intra-module calls, BUG-01 fix).
 - Re-export from another module via `ExportItem::ReExport` (used by i18n nested modules).
+- **Closed block syntax** (`# name { ... }`): module body is now explicitly delimited by
+  braces. Flat/open syntax is no longer valid. Any token after the closing `}` is a parse
+  error. `<#` imports, `#>` export block, literal constants, literal variables, and function
+  definitions are the only elements permitted inside the block.
+- **E013 — ExecutableStatementInModule**: new semantic error raised when an executable
+  statement (`>>`, `<<`, function call, `?`, `@`, `!?`, `<~`, `<\ \>`, etc.) appears at
+  module top-level. Variable and constant initializers must use a literal RHS; non-literal
+  initializers also trigger E013.
+- All existing module files migrated to block syntax (modules_scope, gaps, bugs, i18n).
+- New tests `11_block_syntax_basic` and `12_private_state_block` covering block syntax
+  end-to-end and private mutable state persistence inside blocks.
+- MANUAL.md §17 rewritten: required block syntax, allowed/forbidden element table,
+  E013 reference, all code examples updated.
+- **E001 enforcement**: `# name { }` declaration must exactly match the filename stem.
+  Dot-prefix convention (`# .name`) supported for subdirectory modules.
+  E001 was previously defined but not triggered; it now fires on every `zymbol check`.
+- **Module-file guard**: `zymbol run module.zy` detects a module declaration and exits
+  with a clear error instead of silently doing nothing. Exit code 1.
 
 **VM — full parity (320/320 tests)**
 - Module private mutable state: new instructions `LoadGlobal(Reg, u16)` and
@@ -66,6 +84,15 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
   Unicode digit scripts to ASCII before `#|expr|` evaluation.
 
 **Test suite**
+- `tests/errors/runtime/` — 10 regression cases: one per catchable/runtime error type
+  (div-zero, index-zero, index-oob, type-cast, undefined-var, module-not-found, E004,
+  E008, E010, E012). Verified with `expected_compare.sh errors/runtime`.
+- `tests/errors/catchable/` — 5 catch-block cases: `##Div`, `##Index`, `##Type`,
+  generic `:!`, and a combined all-types sequence. Verified with `expected_compare.sh errors/catchable`.
+- `tests/errors/semantic/` — 18 semantic regression cases (E001–E013 + support modules).
+  Verified with the new `tests/scripts/semantic_compare.sh` (uses `zymbol check`).
+- `tests/scripts/semantic_compare.sh` — new script: runs `zymbol check`, strips ANSI
+  codes, supports `****` wildcards and `--regen`. Mirrors `expected_compare.sh`.
 - `tests/index_nav/` — 15 cases covering all navigation forms and error bounds.
 - `tests/casts/` — 6 cases: to_float, to_int_round, to_int_trunc, expressions, errors.
 - `tests/gaps/` — 8 cases: module const access, private state, export block position,
@@ -106,6 +133,8 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
   (was using a Unit sentinel; fix: `scope.remove(name)`).
 - Limitation L3: `alias.CONST` now resolves correctly in all contexts.
 - Limitation L4: `#>` export block can now appear after function definitions.
+- False positive "unused variable" warnings for constants and variables listed in `#>`:
+  `VariableAnalyzer` now marks exported items as used before emitting diagnostics.
 
 ### VM performance — Sprint 6A: Fused split intrinsics (2026-04-17)
 

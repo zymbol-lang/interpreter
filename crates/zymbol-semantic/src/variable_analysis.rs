@@ -7,7 +7,7 @@
 //! - Invalid access to underscore variables (_variable)
 
 use std::collections::{HashMap, HashSet};
-use zymbol_ast::{Block, DestructureItem, DestructurePattern, Expr, Program, Statement};
+use zymbol_ast::{Block, DestructureItem, DestructurePattern, Expr, ExportItem, Program, Statement};
 use zymbol_common::Literal;
 use zymbol_span::Span;
 use zymbol_error::Diagnostic;
@@ -275,6 +275,19 @@ impl VariableAnalyzer {
         // Analyze all statements in the program
         for statement in &program.statements {
             self.analyze_statement(statement);
+        }
+
+        // Constants and variables listed in #> are "used" — mark them before diagnostics
+        if let Some(module_decl) = &program.module_decl {
+            if let Some(export_block) = &module_decl.export_block {
+                for item in &export_block.items {
+                    if let ExportItem::Own { name, span, .. } = item {
+                        if let Some(var) = self.variables.get_mut(name) {
+                            var.usage_spans.push(*span);
+                        }
+                    }
+                }
+            }
         }
 
         // Generate diagnostics for unused variables

@@ -1,15 +1,6 @@
-[1m[31merror[39m[0m: tuple index 2 is out of bounds (tuple has 2 elements)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/07_tuple_positional.zy:4:6
-[1m[34m   4[39m[0m [34m|[39m
-[1m[34m   4[39m[0m [34m|[39m >> p[2] ¶
-[34m     |[39m [1m[31m     ^[39m[0m
-[1m[31merror[39m[0m: tuple index 2 is out of bounds (tuple has 2 elements)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/07_tuple_positional.zy:9:14
-[1m[34m   9[39m[0m [34m|[39m
-[1m[34m   9[39m[0m [34m|[39m >> points[2][2] ¶
-[34m     |[39m [1m[31m             ^[39m[0m
-[1m[31merror[39m[0m: tuple index 2 is out of bounds (tuple has 2 elements)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/07_tuple_positional.zy:15:9
-[1m[34m  15[39m[0m [34m|[39m
-[1m[34m  15[39m[0m [34m|[39m >> pair[2] ¶
-[34m     |[39m [1m[31m        ^[39m[0m
+10
+20
+1
+4
+7
+8

@@ -1729,53 +1729,74 @@ process(value) {
 
 ### Module File Structure
 
-> **Note**: The `#>` export block can appear either immediately after `# module_name` or after the `<#` import statements — both positions are valid. Comments between `# name` and `#>` are always safe (stripped by the lexer).
+A module file contains exactly one closed block: `# name { ... }`. Everything inside the braces is the module body. Nothing is allowed before `#` or after the closing `}`.
 
 ```zymbol
 // file: lib/utils.zy
-# utils                // module declaration (must be at absolute start)
+# utils {
+    <# ./dep <= d          // imports (must precede re-exports that reference the alias)
 
-<# ./dep <= d          // imports can come before OR after #>
+    #> {                   // export block
+        add
+        PI                 // constant — accessible as alias.PI
+        get_count          // getter for private mutable state
+        set_count
+    }
 
-#> {                   // exports — before OR after <# imports, either works
-    add
-    PI                 // := constant — exportable via alias.PI
-    get_count          // getter for private mutable state
-    set_count          // setter for private mutable state
+    PI    := 3.14159       // exported constant — immutable
+    count = 0              // private mutable state — persists across calls
+
+    add(a, b) { <~ a + b }
+
+    get_count() { <~ count }
+    set_count(n) { count = n }
+
+    private_fn(x) { <~ x * 2 }    // not in #> — inaccessible from outside
 }
-
-PI    := 3.14159       // exported constant — immutable, accessible as alias.PI
-count = 0              // private mutable state — persists across calls, NOT accessible externally
-
-add(a, b) { <~ a + b }
-
-get_count() { <~ count }
-set_count(n) { count = n }
-
-private_fn(x) { <~ x * 2 }    // not in #> — inaccessible from outside
 ```
 
-### Visibility Model
+**Recommended ordering inside the block**: `<#` imports → `#>` export block → constants/variables → function definitions. The parser accepts any ordering, but `<#` aliases used in `#>` re-exports must appear before the `#>` block.
 
-Three levels of visibility for module-level names:
+### Allowed and Forbidden Inside a Module Body
+
+| Element | Allowed | Notes |
+|---------|---------|-------|
+| `<# path <= alias` | ✓ | Import |
+| `#> { ... }` | ✓ | Export block |
+| `NAME := literal` | ✓ | Exported constant (literal RHS only) |
+| `var = literal` | ✓ | Private mutable state (literal RHS only) |
+| `fn(params) { }` | ✓ | Function definition |
+| `>> expr` | ✗ | **E013** — output not allowed in module body |
+| `<< var` | ✗ | **E013** — input not allowed in module body |
+| `fn_call()` standalone | ✗ | **E013** — call not allowed at module top-level |
+| `x = fn_call()` | ✗ | **E013** — non-literal initializer |
+| `? / @ / ?? / !?` | ✗ | **E013** — control flow not allowed in module body |
+| `! "shell"` | ✗ | **E013** — shell exec not allowed in module body |
+| `<~ expr` | ✗ | **E013** — return not allowed outside function |
+
+**E013** is raised whenever an executable statement appears at the module top-level. Function bodies are unrestricted — the limitation only applies to the module block itself.
+
+### Visibility Model
 
 | Declaration | Exported in `#>` | External access | Persists across calls |
 |-------------|------------------|-----------------|-----------------------|
 | `PI := 3.14` | yes | `alias.PI` (read-only) | yes (immutable) |
-| `count = 0` | no (silently excluded even if listed) | ✗ error | **yes — write-back** |
+| `count = 0` | no (excluded even if listed) | ✗ error | **yes — write-back** |
 | `fn()` | yes | `alias::fn()` | — |
 | `private_fn()` | no | ✗ error | — |
 
 **Private mutable state** (`=` variables) persists between calls and is only reachable through exported getter/setter functions:
 
 ```zymbol
-# counter
-#> { increment, get_value }
+// counter.zy
+# counter {
+    #> { increment, get_value }
 
-count = 0              // private — only accessible via the functions below
+    count = 0
 
-increment() { count = count + 1 }
-get_value() { <~ count }
+    increment() { count = count + 1 }
+    get_value() { <~ count }
+}
 ```
 
 ```zymbol
@@ -1825,17 +1846,19 @@ pi = u.PI
 
 ### Re-export from Another Module
 
-Use `::` to re-export a function imported from another module, and `.` to re-export a constant. The alias always follows `<=`:
+Use `::` to re-export a function imported from another module, and `.` to re-export a constant. Place the `<#` import before `#>` so the alias is in scope. The re-export alias follows `<=`:
 
 ```zymbol
-// In module math.zy:
-<# ./core <= c
+// math.zy
+# math {
+    <# ./core <= c
 
-#> {
-    c::add           // re-export function as-is (callers use m::add)
-    c::add <= sum    // re-export function with different public name
-    c.PI             // re-export constant (⚠ requires alias.CONST fix — see L3)
-    c.PI <= TAU      // re-export constant with different name
+    #> {
+        c::add           // re-export function as-is (callers use m::add)
+        c::add <= sum    // re-export function with different public name
+        c.PI             // re-export constant
+        c.PI <= TAU      // re-export constant with different name
+    }
 }
 ```
 
@@ -1844,7 +1867,10 @@ Use `::` to re-export a function imported from another module, and `.` to re-exp
 ### Subdirectory Module Convention
 
 ```zymbol
-# .subfolder_file    // dot convention for modules inside subfolders
+# .subfolder_file {    // dot prefix for modules inside subfolders
+    #> { ... }
+    // ...
+}
 ```
 
 ---

@@ -1,0 +1,7 @@
+<# ./private_state_block <= c
+
+c::increment()
+c::increment()
+c::increment()
+n = c::get()
+>> n ¶

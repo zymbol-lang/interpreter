@@ -74,6 +74,7 @@ mapfile -t ZY_FILES < <(
     find "$SEARCH_DIR" -name "*.zy" \
         ! -path "*/scripts/*" \
         ! -path "*/matematicas/module.zy" \
+        ! -path "*/errors/semantic/*" \
         | sort
 )
 

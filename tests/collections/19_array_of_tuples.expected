@@ -1,10 +1,55 @@
-[1m[31merror[39m[0m: tuple index 2 is out of bounds (tuple has 2 elements)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/19_array_of_tuples.zy:102:11
-[1m[34m 102[39m[0m [34m|[39m
-[1m[34m 102[39m[0m [34m|[39m >> pts[3][2] ¶
-[34m     |[39m [1m[31m          ^[39m[0m
-[1m[31merror[39m[0m: tuple index 2 is out of bounds (tuple has 2 elements)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/19_array_of_tuples.zy:103:12
-[1m[34m 103[39m[0m [34m|[39m
-[1m[34m 103[39m[0m [34m|[39m >> ptsb[3][2] ¶
-[34m     |[39m [1m[31m           ^[39m[0m
+5
+2
+2
+Ana
+Ana
+Bob
+Bob
+2
+2
+Carla
+Carla
+Dan
+Dan
+Eva
+Eva
+3
+3
+Bob
+Bob
+Dan
+Dan
+Carla
+Carla
+4
+4
+Bob
+Bob
+3
+3
+Ana
+Ana
+Dan
+Dan
+4
+4
+Dan
+Dan
+0
+0
+3
+3
+1
+1
+6
+6
+3
+3
+3
+3
+bob@corp.com
+bob@corp.com
+28
+28
+Dan
+Dan

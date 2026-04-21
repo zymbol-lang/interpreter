@@ -1,0 +1,8 @@
+# E006_reexport_missing {
+    <# ./E006_base <= base
+
+    #> {
+        base::real_fn
+        base::ghost_fn
+    }
+}

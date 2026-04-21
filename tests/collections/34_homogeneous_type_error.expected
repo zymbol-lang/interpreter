@@ -1,11 +1,11 @@
 [1m[31merror[39m[0m: array element 2 has type String, but expected Int (same as first element)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/34_homogeneous_type_error.zy:3:13
+  [1m[34m-->[39m[0m tests/collections/34_homogeneous_type_error.zy:3:13
 [1m[34m   3[39m[0m [34m|[39m
 [1m[34m   3[39m[0m [34m|[39m mixed = [1, "hello", #1]
 [34m     |[39m [1m[31m            ^^^^^^^[39m[0m
   [1m[32mhelp:[39m[0m all array elements must have the same type
 [1m[31merror[39m[0m: array element 3 has type Bool, but expected Int (same as first element)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/34_homogeneous_type_error.zy:3:22
+  [1m[34m-->[39m[0m tests/collections/34_homogeneous_type_error.zy:3:22
 [1m[34m   3[39m[0m [34m|[39m
 [1m[34m   3[39m[0m [34m|[39m mixed = [1, "hello", #1]
 [34m     |[39m [1m[31m                     ^^[39m[0m

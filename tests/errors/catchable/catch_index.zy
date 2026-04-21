@@ -1,0 +1,15 @@
+arr = [1, 2, 3]
+
+!? {
+    >> arr[0] ¶
+} :! ##Index {
+    >> "caught: Index (zero)" ¶
+}
+
+!? {
+    >> arr[99] ¶
+} :! ##Index {
+    >> "caught: Index (oob)" ¶
+}
+
+>> "continues" ¶

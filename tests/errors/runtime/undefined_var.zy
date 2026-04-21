@@ -1,0 +1,8 @@
+// Variables inside functions cannot access outer scope (isolated scope)
+outer = "I exist outside"
+
+access_outer() {
+    >> outer ¶
+}
+
+access_outer()

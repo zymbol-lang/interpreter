@@ -1,0 +1,5 @@
+# E005_bad_export {
+    #> { real_fn, ghost_fn }
+
+    real_fn() { <~ 42 }
+}

@@ -1,0 +1,7 @@
+# E007_reexport_type {
+    <# ./E007_base <= base
+
+    #> {
+        base::PI
+    }
+}

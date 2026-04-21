@@ -1,9 +1,10 @@
-# export_alias
-// Tests export aliases: #> { internal_name <= public_name }
-// Callers use the public name, the internal name stays private.
+# export_alias {
+    // Tests export aliases: #> { internal_name <= public_name }
+    // Callers use the public name, the internal name stays private.
 
-#> {
-    _add <= sum
+    #> {
+        _add <= sum
+    }
+
+    _add(a, b) { <~ a + b }
 }
-
-_add(a, b) { <~ a + b }

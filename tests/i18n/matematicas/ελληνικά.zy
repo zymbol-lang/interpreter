@@ -1,11 +1,12 @@
-# .matematicas_ελληνικά
-#> {
-    mat::sumar <= προσθέτω
-    mat::restar <= αφαιρώ
-    mat::multiplicar <= πολλαπλασιάζω
-    mat::dividir <= διαιρώ
-    mat.PI <= ΠΙ
-    mat.E <= Ε
-}
+# .ελληνικά {
+    <# ./module <= mat
 
-<# ./module <= mat
+    #> {
+        mat::sumar <= προσθέτω
+        mat::restar <= αφαιρώ
+        mat::multiplicar <= πολλαπλασιάζω
+        mat::dividir <= διαιρώ
+        mat.PI <= ΠΙ
+        mat.E <= Ε
+    }
+}

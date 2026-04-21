@@ -1,125 +1,125 @@
 [1m[31merror[39m[0m: unexpected '(' at statement level
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:11:20
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:11:20
 [1m[34m  11[39m[0m [34m|[39m
 [1m[34m  11[39m[0m [34m|[39m by_age = people$^+ (a, b -> a.age < b.age)
 [34m     |[39m [1m[31m                   ^[39m[0m
   [1m[32mhelp:[39m[0m use '(a, b) = expr' for tuple destructuring
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:11:22
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:11:22
 [1m[34m  11[39m[0m [34m|[39m
 [1m[34m  11[39m[0m [34m|[39m by_age = people$^+ (a, b -> a.age < b.age)
 [34m     |[39m [1m[31m                     ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:11:26
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:11:26
 [1m[34m  11[39m[0m [34m|[39m
 [1m[34m  11[39m[0m [34m|[39m by_age = people$^+ (a, b -> a.age < b.age)
 [34m     |[39m [1m[31m                         ^^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:11:30
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:11:30
 [1m[34m  11[39m[0m [34m|[39m
 [1m[34m  11[39m[0m [34m|[39m by_age = people$^+ (a, b -> a.age < b.age)
 [34m     |[39m [1m[31m                             ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:11:35
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:11:35
 [1m[34m  11[39m[0m [34m|[39m
 [1m[34m  11[39m[0m [34m|[39m by_age = people$^+ (a, b -> a.age < b.age)
 [34m     |[39m [1m[31m                                  ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:11:38
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:11:38
 [1m[34m  11[39m[0m [34m|[39m
 [1m[34m  11[39m[0m [34m|[39m by_age = people$^+ (a, b -> a.age < b.age)
 [34m     |[39m [1m[31m                                     ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:11:42
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:11:42
 [1m[34m  11[39m[0m [34m|[39m
 [1m[34m  11[39m[0m [34m|[39m by_age = people$^+ (a, b -> a.age < b.age)
 [34m     |[39m [1m[31m                                         ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected '(' at statement level
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:19:27
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:19:27
 [1m[34m  19[39m[0m [34m|[39m
 [1m[34m  19[39m[0m [34m|[39m by_score_desc = people$^- (a, b -> a.score > b.score)
 [34m     |[39m [1m[31m                          ^[39m[0m
   [1m[32mhelp:[39m[0m use '(a, b) = expr' for tuple destructuring
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:19:29
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:19:29
 [1m[34m  19[39m[0m [34m|[39m
 [1m[34m  19[39m[0m [34m|[39m by_score_desc = people$^- (a, b -> a.score > b.score)
 [34m     |[39m [1m[31m                            ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:19:33
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:19:33
 [1m[34m  19[39m[0m [34m|[39m
 [1m[34m  19[39m[0m [34m|[39m by_score_desc = people$^- (a, b -> a.score > b.score)
 [34m     |[39m [1m[31m                                ^^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:19:37
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:19:37
 [1m[34m  19[39m[0m [34m|[39m
 [1m[34m  19[39m[0m [34m|[39m by_score_desc = people$^- (a, b -> a.score > b.score)
 [34m     |[39m [1m[31m                                    ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:19:44
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:19:44
 [1m[34m  19[39m[0m [34m|[39m
 [1m[34m  19[39m[0m [34m|[39m by_score_desc = people$^- (a, b -> a.score > b.score)
 [34m     |[39m [1m[31m                                           ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:19:47
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:19:47
 [1m[34m  19[39m[0m [34m|[39m
 [1m[34m  19[39m[0m [34m|[39m by_score_desc = people$^- (a, b -> a.score > b.score)
 [34m     |[39m [1m[31m                                              ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:19:53
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:19:53
 [1m[34m  19[39m[0m [34m|[39m
 [1m[34m  19[39m[0m [34m|[39m by_score_desc = people$^- (a, b -> a.score > b.score)
 [34m     |[39m [1m[31m                                                    ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected '(' at statement level
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:28:21
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:28:21
 [1m[34m  28[39m[0m [34m|[39m
 [1m[34m  28[39m[0m [34m|[39m by_name = people$^+ (a, b -> a.name < b.name)
 [34m     |[39m [1m[31m                    ^[39m[0m
   [1m[32mhelp:[39m[0m use '(a, b) = expr' for tuple destructuring
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:28:23
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:28:23
 [1m[34m  28[39m[0m [34m|[39m
 [1m[34m  28[39m[0m [34m|[39m by_name = people$^+ (a, b -> a.name < b.name)
 [34m     |[39m [1m[31m                      ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:28:27
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:28:27
 [1m[34m  28[39m[0m [34m|[39m
 [1m[34m  28[39m[0m [34m|[39m by_name = people$^+ (a, b -> a.name < b.name)
 [34m     |[39m [1m[31m                          ^^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:28:31
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:28:31
 [1m[34m  28[39m[0m [34m|[39m
 [1m[34m  28[39m[0m [34m|[39m by_name = people$^+ (a, b -> a.name < b.name)
 [34m     |[39m [1m[31m                              ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:28:37
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:28:37
 [1m[34m  28[39m[0m [34m|[39m
 [1m[34m  28[39m[0m [34m|[39m by_name = people$^+ (a, b -> a.name < b.name)
 [34m     |[39m [1m[31m                                    ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:28:40
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:28:40
 [1m[34m  28[39m[0m [34m|[39m
 [1m[34m  28[39m[0m [34m|[39m by_name = people$^+ (a, b -> a.name < b.name)
 [34m     |[39m [1m[31m                                       ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/collections/22_sort_named.zy:28:45
+  [1m[34m-->[39m[0m tests/collections/22_sort_named.zy:28:45
 [1m[34m  28[39m[0m [34m|[39m
 [1m[34m  28[39m[0m [34m|[39m by_name = people$^+ (a, b -> a.name < b.name)
 [34m     |[39m [1m[31m                                            ^[39m[0m

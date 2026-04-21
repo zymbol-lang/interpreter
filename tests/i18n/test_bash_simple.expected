@@ -1,34 +1,34 @@
 [1m[31merror[39m[0m: expected expression, found Pipe
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_bash_simple.zy:30:32
-[1m[34m  30[39m[0m [34m|[39m
-[1m[34m  30[39m[0m [34m|[39m piped = <\ echo "uno dos tres" | wc -w \>
+  [1m[34m-->[39m[0m tests/i18n/test_bash_simple.zy:29:32
+[1m[34m  29[39m[0m [34m|[39m
+[1m[34m  29[39m[0m [34m|[39m piped = <\ echo "uno dos tres" | wc -w \>
 [34m     |[39m [1m[31m                               ^[39m[0m
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_bash_simple.zy:30:37
-[1m[34m  30[39m[0m [34m|[39m
-[1m[34m  30[39m[0m [34m|[39m piped = <\ echo "uno dos tres" | wc -w \>
+  [1m[34m-->[39m[0m tests/i18n/test_bash_simple.zy:29:37
+[1m[34m  29[39m[0m [34m|[39m
+[1m[34m  29[39m[0m [34m|[39m piped = <\ echo "uno dos tres" | wc -w \>
 [34m     |[39m [1m[31m                                    ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_bash_simple.zy:30:40
-[1m[34m  30[39m[0m [34m|[39m
-[1m[34m  30[39m[0m [34m|[39m piped = <\ echo "uno dos tres" | wc -w \>
+  [1m[34m-->[39m[0m tests/i18n/test_bash_simple.zy:29:40
+[1m[34m  29[39m[0m [34m|[39m
+[1m[34m  29[39m[0m [34m|[39m piped = <\ echo "uno dos tres" | wc -w \>
 [34m     |[39m [1m[31m                                       ^^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected expression, found Pipe
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_bash_simple.zy:35:22
-[1m[34m  35[39m[0m [34m|[39m
-[1m[34m  35[39m[0m [34m|[39m num_archivos = <\ ls | wc -l \>
+  [1m[34m-->[39m[0m tests/i18n/test_bash_simple.zy:34:22
+[1m[34m  34[39m[0m [34m|[39m
+[1m[34m  34[39m[0m [34m|[39m num_archivos = <\ ls | wc -l \>
 [34m     |[39m [1m[31m                     ^[39m[0m
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_bash_simple.zy:35:27
-[1m[34m  35[39m[0m [34m|[39m
-[1m[34m  35[39m[0m [34m|[39m num_archivos = <\ ls | wc -l \>
+  [1m[34m-->[39m[0m tests/i18n/test_bash_simple.zy:34:27
+[1m[34m  34[39m[0m [34m|[39m
+[1m[34m  34[39m[0m [34m|[39m num_archivos = <\ ls | wc -l \>
 [34m     |[39m [1m[31m                          ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_bash_simple.zy:35:30
-[1m[34m  35[39m[0m [34m|[39m
-[1m[34m  35[39m[0m [34m|[39m num_archivos = <\ ls | wc -l \>
+  [1m[34m-->[39m[0m tests/i18n/test_bash_simple.zy:34:30
+[1m[34m  34[39m[0m [34m|[39m
+[1m[34m  34[39m[0m [34m|[39m num_archivos = <\ ls | wc -l \>
 [34m     |[39m [1m[31m                             ^^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable

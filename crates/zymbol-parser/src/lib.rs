@@ -47,73 +47,55 @@ impl Parser {
 
     /// Parse the token stream into an AST
     pub fn parse(mut self) -> Result<Program, Vec<Diagnostic>> {
-        // Parse optional module declaration (must be first)
-        let module_decl = if matches!(self.peek().kind, TokenKind::Hash) {
-            match self.parse_module_declaration() {
-                Ok(decl) => Some(decl),
-                Err(diag) => {
-                    self.diagnostics.push(diag);
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        // Parse imports (must come before other statements)
+        let mut module_decl = None;
         let mut imports = Vec::new();
-        while matches!(self.peek().kind, TokenKind::ModuleImport) {
-            match self.parse_import_statement() {
-                Ok(import) => imports.push(import),
+        let mut statements = Vec::new();
+
+        if matches!(self.peek().kind, TokenKind::Hash) {
+            // Module file: parse the closed block # name { ... }
+            match self.parse_module_block() {
+                Ok((decl, mod_imports, mod_stmts)) => {
+                    module_decl = Some(decl);
+                    imports = mod_imports;
+                    statements = mod_stmts;
+                }
                 Err(diag) => {
                     self.diagnostics.push(diag);
-                    self.advance(); // Skip to next token
                 }
             }
-        }
-
-        // G14 fix: allow #> export block after imports.
-        // The canonical position is right after # module_name (parsed in parse_module_declaration).
-        // This second check allows: # name → <# imports → #> { exports } → code.
-        // If #> already appeared right after # name, this branch is skipped (export_block is Some).
-        let module_decl = if matches!(self.peek().kind, TokenKind::ExportBlock) {
-            match self.parse_export_block() {
-                Ok(block) => match module_decl {
-                    Some(mut decl) => {
-                        if decl.export_block.is_none() {
-                            decl.export_block = Some(block);
-                        }
-                        Some(decl)
-                    }
-                    None => {
-                        // #> without a module declaration — ignore silently
-                        module_decl
-                    }
-                },
-                Err(diag) => {
-                    self.diagnostics.push(diag);
-                    module_decl
-                }
+            // Nothing is allowed after the closing }
+            if !self.is_at_end() && self.diagnostics.is_empty() {
+                let span = self.peek().span;
+                self.diagnostics.push(
+                    Diagnostic::error("unexpected token after module block")
+                        .with_span(span)
+                        .with_help("a module file must contain only: # name { ... }"),
+                );
             }
         } else {
-            module_decl
-        };
-
-        // Parse regular statements
-        let mut statements = Vec::new();
-        while !self.is_at_end() {
-            match self.parse_statement() {
-                Ok(stmt) => {
-                    statements.push(stmt);
-                    // Consume optional semicolon after statement
-                    if matches!(self.peek().kind, TokenKind::Semicolon) {
+            // Executable program: imports first, then statements
+            while matches!(self.peek().kind, TokenKind::ModuleImport) {
+                match self.parse_import_statement() {
+                    Ok(import) => imports.push(import),
+                    Err(diag) => {
+                        self.diagnostics.push(diag);
                         self.advance();
                     }
                 }
-                Err(diag) => {
-                    self.diagnostics.push(diag);
-                    // Try to synchronize to next statement
-                    self.advance();
+            }
+
+            while !self.is_at_end() {
+                match self.parse_statement() {
+                    Ok(stmt) => {
+                        statements.push(stmt);
+                        if matches!(self.peek().kind, TokenKind::Semicolon) {
+                            self.advance();
+                        }
+                    }
+                    Err(diag) => {
+                        self.diagnostics.push(diag);
+                        self.advance();
+                    }
                 }
             }
         }

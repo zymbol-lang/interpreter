@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-use zymbol_ast::{ExportItem, ImportStmt, ItemType, ModuleDecl, ModulePath, Program};
+use zymbol_ast::{Expr, ExportItem, ImportStmt, ItemType, ModuleDecl, ModulePath, Program, Statement};
 use zymbol_error::Diagnostic;
 use zymbol_span::{Position, Span};
 
@@ -72,6 +72,9 @@ pub enum SemanticError {
         item: String,
         span: Span,
     },
+
+    #[error("E013: executable statement '{stmt_kind}' is not allowed in a module body")]
+    ExecutableStatementInModule { stmt_kind: String, span: Span },
 }
 
 impl SemanticError {
@@ -141,6 +144,12 @@ impl SemanticError {
                 Diagnostic::error(self.to_string())
                     .with_span(*span)
                     .with_help("Check the module's export block")
+            }
+
+            SemanticError::ExecutableStatementInModule { span, .. } => {
+                Diagnostic::error(self.to_string())
+                    .with_span(*span)
+                    .with_help("modules may only contain imports, exports, constants, variables, and function definitions")
             }
         }
     }
@@ -258,6 +267,13 @@ impl ModuleAnalyzer {
             if let Err(err) = self.validate_module_name(module_decl, file_path) {
                 self.diagnostics.push(err.to_diagnostic());
             }
+
+            // E013: reject executable statements in module body (defense-in-depth)
+            for stmt in &program.statements {
+                if let Some(err) = Self::check_module_statement(stmt) {
+                    self.diagnostics.push(err.to_diagnostic());
+                }
+            }
         }
 
         // Validate and register imports
@@ -286,6 +302,50 @@ impl ModuleAnalyzer {
         }
     }
 
+    /// Returns E013 if `stmt` is an executable statement not allowed in module body.
+    fn check_module_statement(stmt: &Statement) -> Option<SemanticError> {
+        let (kind, span) = match stmt {
+            Statement::Output(s) => ("output (>>)", s.span),
+            Statement::Input(s) => ("input (<<)", s.span),
+            Statement::If(s) => ("if (?)", s.span),
+            Statement::Loop(s) => ("loop (@)", s.span),
+            Statement::Break(s) => ("break (@!)", s.span),
+            Statement::Continue(s) => ("continue (@>)", s.span),
+            Statement::Try(s) => ("try (!?)", s.span),
+            Statement::Return(s) => ("return (<~)", s.span),
+            Statement::Match(s) => ("match (??)", s.span),
+            Statement::Expr(s) => ("expression statement", s.span),
+            Statement::CliArgsCapture(s) => ("cli args capture (><)", s.span),
+            Statement::SetNumeralMode { span, .. } => ("numeral mode switch", *span),
+            Statement::Newline(s) => ("newline (¶)", s.span),
+            Statement::LifetimeEnd(s) => ("lifetime end (\\)", s.span),
+            Statement::DestructureAssign(s) => ("destructure assignment", s.span),
+            Statement::Assignment(s) => {
+                if !matches!(s.value, Expr::Literal(_)) {
+                    return Some(SemanticError::ExecutableStatementInModule {
+                        stmt_kind: "variable with non-literal initializer".to_string(),
+                        span: s.value.span(),
+                    });
+                }
+                return None;
+            }
+            Statement::ConstDecl(s) => {
+                if !matches!(s.value, Expr::Literal(_)) {
+                    return Some(SemanticError::ExecutableStatementInModule {
+                        stmt_kind: "constant with non-literal initializer".to_string(),
+                        span: s.value.span(),
+                    });
+                }
+                return None;
+            }
+            Statement::FunctionDecl(_) => return None,
+        };
+        Some(SemanticError::ExecutableStatementInModule {
+            stmt_kind: kind.to_string(),
+            span,
+        })
+    }
+
     /// Validate that module name matches filename
     pub(crate) fn validate_module_name(
         &self,
@@ -297,7 +357,10 @@ impl ModuleAnalyzer {
             .and_then(|s| s.to_str())
             .unwrap_or("");
 
-        if module_decl.name != file_stem {
+        // Strip leading dot from module name (subdirectory convention: # .name)
+        let declared = module_decl.name.strip_prefix('.').unwrap_or(&module_decl.name);
+
+        if declared != file_stem {
             return Err(SemanticError::ModuleNameMismatch {
                 module_name: module_decl.name.clone(),
                 file_name: file_stem.to_string(),

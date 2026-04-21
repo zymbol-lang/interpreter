@@ -1,26 +1,26 @@
 // Module: isolated_module
 // Tests that module functions CANNOT see main program variables
 
-# isolated_module
+# isolated_module {
+    #> {
+        try_access_main_var
+        safe_function
+    }
 
-#> {
-    try_access_main_var
-    safe_function
-}
+    // This function should NOT be able to see variables from main program
+    try_access_main_var(param) {
+        // If we uncomment this, it should cause an error
+        // >> "Main variable: " main_variable ¶
 
-// This function should NOT be able to see variables from main program
-try_access_main_var(param) {
-    // If we uncomment this, it should cause an error
-    // >> "Main variable: " main_variable ¶
+        >> "Safe function - using only parameter: " param ¶
+        <~ param " [processed]"
+    }
 
-    >> "Safe function - using only parameter: " param ¶
-    <~ param " [processed]"
-}
-
-// This function demonstrates correct behavior
-safe_function(value) {
-    local = "local to module function"
-    >> "Local: " local ¶
-    >> "Param: " value ¶
-    <~ value * 2
+    // This function demonstrates correct behavior
+    safe_function(value) {
+        local = "local to module function"
+        >> "Local: " local ¶
+        >> "Param: " value ¶
+        <~ value * 2
+    }
 }

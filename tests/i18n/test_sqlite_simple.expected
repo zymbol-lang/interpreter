@@ -1,63 +1,63 @@
 [1m[31merror[39m[0m: expected expression, found LBrace
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_sqlite_simple.zy:12:20
-[1m[34m  12[39m[0m [34m|[39m
-[1m[34m  12[39m[0m [34m|[39m dummy = <\ sqlite3 {db_name} "CREATE TABLE greetings (id INTEGER PRIMARY KEY, message TEXT); INSERT INTO greetings (message) VALUES ('Hello from Zymbol!'); INSERT INTO greetings (message) VALUES ('SQLite works!');" \>
+  [1m[34m-->[39m[0m tests/i18n/test_sqlite_simple.zy:11:20
+[1m[34m  11[39m[0m [34m|[39m
+[1m[34m  11[39m[0m [34m|[39m dummy = <\ sqlite3 {db_name} "CREATE TABLE greetings (id INTEGER PRIMARY KEY, message TEXT); INSERT INTO greetings (message) VALUES ('Hello from Zymbol!'); INSERT INTO greetings (message) VALUES ('SQLite works!');" \>
 [34m     |[39m [1m[31m                   ^[39m[0m
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_sqlite_simple.zy:12:28
-[1m[34m  12[39m[0m [34m|[39m
-[1m[34m  12[39m[0m [34m|[39m dummy = <\ sqlite3 {db_name} "CREATE TABLE greetings (id INTEGER PRIMARY KEY, message TEXT); INSERT INTO greetings (message) VALUES ('Hello from Zymbol!'); INSERT INTO greetings (message) VALUES ('SQLite works!');" \>
+  [1m[34m-->[39m[0m tests/i18n/test_sqlite_simple.zy:11:28
+[1m[34m  11[39m[0m [34m|[39m
+[1m[34m  11[39m[0m [34m|[39m dummy = <\ sqlite3 {db_name} "CREATE TABLE greetings (id INTEGER PRIMARY KEY, message TEXT); INSERT INTO greetings (message) VALUES ('Hello from Zymbol!'); INSERT INTO greetings (message) VALUES ('SQLite works!');" \>
 [34m     |[39m [1m[31m                           ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected token: String("CREATE TABLE greetings (id INTEGER PRIMARY KEY, message TEXT); INSERT INTO greetings (message) VALUES ('Hello from Zymbol!'); INSERT INTO greetings (message) VALUES ('SQLite works!');")
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_sqlite_simple.zy:12:30
-[1m[34m  12[39m[0m [34m|[39m
-[1m[34m  12[39m[0m [34m|[39m dummy = <\ sqlite3 {db_name} "CREATE TABLE greetings (id INTEGER PRIMARY KEY, message TEXT); INSERT INTO greetings (message) VALUES ('Hello from Zymbol!'); INSERT INTO greetings (message) VALUES ('SQLite works!');" \>
+  [1m[34m-->[39m[0m tests/i18n/test_sqlite_simple.zy:11:30
+[1m[34m  11[39m[0m [34m|[39m
+[1m[34m  11[39m[0m [34m|[39m dummy = <\ sqlite3 {db_name} "CREATE TABLE greetings (id INTEGER PRIMARY KEY, message TEXT); INSERT INTO greetings (message) VALUES ('Hello from Zymbol!'); INSERT INTO greetings (message) VALUES ('SQLite works!');" \>
 [34m     |[39m [1m[31m                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: unexpected token: BashClose
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_sqlite_simple.zy:12:216
-[1m[34m  12[39m[0m [34m|[39m
-[1m[34m  12[39m[0m [34m|[39m dummy = <\ sqlite3 {db_name} "CREATE TABLE greetings (id INTEGER PRIMARY KEY, message TEXT); INSERT INTO greetings (message) VALUES ('Hello from Zymbol!'); INSERT INTO greetings (message) VALUES ('SQLite works!');" \>
+  [1m[34m-->[39m[0m tests/i18n/test_sqlite_simple.zy:11:216
+[1m[34m  11[39m[0m [34m|[39m
+[1m[34m  11[39m[0m [34m|[39m dummy = <\ sqlite3 {db_name} "CREATE TABLE greetings (id INTEGER PRIMARY KEY, message TEXT); INSERT INTO greetings (message) VALUES ('Hello from Zymbol!'); INSERT INTO greetings (message) VALUES ('SQLite works!');" \>
 [34m     |[39m [1m[31m                                                                                                                                                                                                                       ^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: expected expression, found LBrace
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_sqlite_simple.zy:17:21
-[1m[34m  17[39m[0m [34m|[39m
-[1m[34m  17[39m[0m [34m|[39m result = <\ sqlite3 {db_name} "SELECT * FROM greetings;" \>
+  [1m[34m-->[39m[0m tests/i18n/test_sqlite_simple.zy:16:21
+[1m[34m  16[39m[0m [34m|[39m
+[1m[34m  16[39m[0m [34m|[39m result = <\ sqlite3 {db_name} "SELECT * FROM greetings;" \>
 [34m     |[39m [1m[31m                    ^[39m[0m
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_sqlite_simple.zy:17:29
-[1m[34m  17[39m[0m [34m|[39m
-[1m[34m  17[39m[0m [34m|[39m result = <\ sqlite3 {db_name} "SELECT * FROM greetings;" \>
+  [1m[34m-->[39m[0m tests/i18n/test_sqlite_simple.zy:16:29
+[1m[34m  16[39m[0m [34m|[39m
+[1m[34m  16[39m[0m [34m|[39m result = <\ sqlite3 {db_name} "SELECT * FROM greetings;" \>
 [34m     |[39m [1m[31m                            ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected token: String("SELECT * FROM greetings;")
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_sqlite_simple.zy:17:31
-[1m[34m  17[39m[0m [34m|[39m
-[1m[34m  17[39m[0m [34m|[39m result = <\ sqlite3 {db_name} "SELECT * FROM greetings;" \>
+  [1m[34m-->[39m[0m tests/i18n/test_sqlite_simple.zy:16:31
+[1m[34m  16[39m[0m [34m|[39m
+[1m[34m  16[39m[0m [34m|[39m result = <\ sqlite3 {db_name} "SELECT * FROM greetings;" \>
 [34m     |[39m [1m[31m                              ^^^^^^^^^^^^^^^^^^^^^^^^^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: unexpected token: BashClose
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_sqlite_simple.zy:17:58
-[1m[34m  17[39m[0m [34m|[39m
-[1m[34m  17[39m[0m [34m|[39m result = <\ sqlite3 {db_name} "SELECT * FROM greetings;" \>
+  [1m[34m-->[39m[0m tests/i18n/test_sqlite_simple.zy:16:58
+[1m[34m  16[39m[0m [34m|[39m
+[1m[34m  16[39m[0m [34m|[39m result = <\ sqlite3 {db_name} "SELECT * FROM greetings;" \>
 [34m     |[39m [1m[31m                                                         ^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: expected expression, found LBrace
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_sqlite_simple.zy:22:20
-[1m[34m  22[39m[0m [34m|[39m
-[1m[34m  22[39m[0m [34m|[39m dummy = <\ rm "-f" {db_name} \>
+  [1m[34m-->[39m[0m tests/i18n/test_sqlite_simple.zy:21:20
+[1m[34m  21[39m[0m [34m|[39m
+[1m[34m  21[39m[0m [34m|[39m dummy = <\ rm "-f" {db_name} \>
 [34m     |[39m [1m[31m                   ^[39m[0m
 [1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_sqlite_simple.zy:22:28
-[1m[34m  22[39m[0m [34m|[39m
-[1m[34m  22[39m[0m [34m|[39m dummy = <\ rm "-f" {db_name} \>
+  [1m[34m-->[39m[0m tests/i18n/test_sqlite_simple.zy:21:28
+[1m[34m  21[39m[0m [34m|[39m
+[1m[34m  21[39m[0m [34m|[39m dummy = <\ rm "-f" {db_name} \>
 [34m     |[39m [1m[31m                           ^[39m[0m
   [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
 [1m[31merror[39m[0m: unexpected token: BashClose
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/test_sqlite_simple.zy:22:30
-[1m[34m  22[39m[0m [34m|[39m
-[1m[34m  22[39m[0m [34m|[39m dummy = <\ rm "-f" {db_name} \>
+  [1m[34m-->[39m[0m tests/i18n/test_sqlite_simple.zy:21:30
+[1m[34m  21[39m[0m [34m|[39m
+[1m[34m  21[39m[0m [34m|[39m dummy = <\ rm "-f" {db_name} \>
 [34m     |[39m [1m[31m                             ^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)

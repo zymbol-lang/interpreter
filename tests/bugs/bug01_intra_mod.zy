@@ -1,18 +1,19 @@
 // Module used by bug01_module_intra_calls.zy
 // BUG-01: functions within the same module must be able to call each other
 
-# bug01_intra_mod
-#> { foo, compute, chain_a }
+# bug01_intra_mod {
+    #> { foo, compute, chain_a }
 
-// foo calls bar — bar is private (not exported), but visible inside module
-foo() { <~ bar() }
-bar() { <~ 42 }
+    // foo calls bar — bar is private (not exported), but visible inside module
+    foo() { <~ bar() }
+    bar() { <~ 42 }
 
-// compute calls private helper double
-compute(n) { <~ double(n) }
-double(n) { <~ n * 2 }
+    // compute calls private helper double
+    compute(n) { <~ double(n) }
+    double(n) { <~ n * 2 }
 
-// chain: a -> b -> c (three-deep intra-module call)
-chain_a() { <~ chain_b() }
-chain_b() { <~ chain_c() }
-chain_c() { <~ "deep" }
+    // chain: a -> b -> c (three-deep intra-module call)
+    chain_a() { <~ chain_b() }
+    chain_b() { <~ chain_c() }
+    chain_c() { <~ "deep" }
+}

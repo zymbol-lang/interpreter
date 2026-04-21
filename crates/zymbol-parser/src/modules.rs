@@ -1,21 +1,31 @@
 //! Module system parsing for Zymbol-Lang
 //!
 //! Handles parsing of module declarations, imports, and exports:
-//! - Module declaration: # module_name (with optional dot prefix for folders)
+//! - Module declaration: # module_name { ... } (block syntax required)
 //! - Export blocks: #> { items } (public API definition)
 //! - Import statements: <# path <= alias (import with required alias)
 //! - Module paths: ./relative, ../parent, absolute paths
 
-use zymbol_ast::{ExportBlock, ExportItem, ImportStmt, ItemType, ModuleDecl, ModulePath};
+use zymbol_ast::{Expr, ExportBlock, ExportItem, ImportStmt, ItemType, ModuleDecl, ModulePath, Statement};
 use zymbol_error::Diagnostic;
 use zymbol_lexer::TokenKind;
 
 use crate::Parser;
 
 impl Parser {
-    /// Parse module declaration: # [.]module_name [#> { exports }]
-    /// Supports dot prefix for folder indication: # .folder_file
-    pub(crate) fn parse_module_declaration(&mut self) -> Result<ModuleDecl, Diagnostic> {
+    /// Parse a complete module block: # [.]name { imports, exports, consts, vars, fns }
+    ///
+    /// Only the following are allowed inside a module block:
+    ///   <# path <= alias      — import
+    ///   #> { ... }            — export block
+    ///   NAME := literal       — constant (literal RHS only)
+    ///   var = literal         — private mutable state (literal RHS only)
+    ///   fn(params) { }        — function definition
+    ///
+    /// Returns (ModuleDecl, imports, statements) to be placed in Program.
+    pub(crate) fn parse_module_block(
+        &mut self,
+    ) -> Result<(ModuleDecl, Vec<ImportStmt>, Vec<Statement>), Diagnostic> {
         let start_token = self.peek().clone();
 
         // Consume #
@@ -23,19 +33,14 @@ impl Parser {
             return Err(Diagnostic::error("expected '#' for module declaration")
                 .with_span(start_token.span));
         }
-        self.advance(); // consume #
+        self.advance();
 
         // Parse module name (supports optional leading dot for folder indication)
-        // Syntax: # .folder_file or # file
         let mut name = String::new();
-
-        // Check for optional leading dot (indicates file is in a folder)
         if matches!(self.peek().kind, TokenKind::Dot) {
             name.push('.');
-            self.advance(); // consume dot
+            self.advance();
         }
-
-        // Parse identifier after optional dot
         match &self.peek().kind {
             TokenKind::Ident(ident) => {
                 name.push_str(ident);
@@ -47,25 +52,132 @@ impl Parser {
             }
         }
 
-        // Consume optional semicolon
-        if matches!(self.peek().kind, TokenKind::Semicolon) {
-            self.advance();
+        // Expect opening {
+        let lbrace_token = self.peek().clone();
+        if !matches!(lbrace_token.kind, TokenKind::LBrace) {
+            return Err(Diagnostic::error("expected '{' after module name")
+                .with_span(lbrace_token.span)
+                .with_help("module body must be enclosed in braces: # name { ... }"));
+        }
+        self.advance(); // consume {
+
+        let mut imports: Vec<ImportStmt> = Vec::new();
+        let mut export_block: Option<ExportBlock> = None;
+        let mut statements: Vec<Statement> = Vec::new();
+
+        // Parse module body elements
+        while !matches!(self.peek().kind, TokenKind::RBrace) && !self.is_at_end() {
+            match self.peek().kind.clone() {
+                TokenKind::ModuleImport => {
+                    imports.push(self.parse_import_statement()?);
+                }
+                TokenKind::ExportBlock => {
+                    if export_block.is_some() {
+                        return Err(Diagnostic::error("duplicate export block in module")
+                            .with_span(self.peek().span)
+                            .with_help("a module may only have one #> export block"));
+                    }
+                    export_block = Some(self.parse_export_block()?);
+                }
+                TokenKind::Ident(_) => {
+                    let is_const = self
+                        .peek_ahead(1)
+                        .map(|t| matches!(t.kind, TokenKind::ConstAssign))
+                        .unwrap_or(false);
+                    let is_assign = self
+                        .peek_ahead(1)
+                        .map(|t| matches!(t.kind, TokenKind::Assign))
+                        .unwrap_or(false);
+                    let is_fn_call = self
+                        .peek_ahead(1)
+                        .map(|t| matches!(t.kind, TokenKind::LParen))
+                        .unwrap_or(false);
+
+                    if is_const {
+                        let stmt = self.parse_const_decl()?;
+                        if let Statement::ConstDecl(ref decl) = stmt {
+                            if !Self::is_literal_expr(&decl.value) {
+                                return Err(
+                                    Diagnostic::error("E013: constant initializer in module must be a literal")
+                                        .with_span(decl.value.span())
+                                        .with_help("module-level constants must use literal values, not expressions or function calls"),
+                                );
+                            }
+                        }
+                        statements.push(stmt);
+                    } else if is_assign {
+                        let stmt = self.parse_assignment()?;
+                        if let Statement::Assignment(ref assign) = stmt {
+                            if !Self::is_literal_expr(&assign.value) {
+                                return Err(
+                                    Diagnostic::error("E013: variable initializer in module must be a literal")
+                                        .with_span(assign.value.span())
+                                        .with_help("module-level variables must use literal values, not expressions or function calls"),
+                                );
+                            }
+                        }
+                        statements.push(stmt);
+                    } else if is_fn_call {
+                        // Distinguish function declaration (ident(...) { }) from call (ident(...))
+                        let saved = self.current;
+                        self.advance(); // skip ident
+                        self.advance(); // skip (
+                        let mut depth = 1usize;
+                        while depth > 0 && !self.is_at_end() {
+                            match self.peek().kind {
+                                TokenKind::LParen => depth += 1,
+                                TokenKind::RParen => depth -= 1,
+                                _ => {}
+                            }
+                            self.advance();
+                        }
+                        let has_block = matches!(self.peek().kind, TokenKind::LBrace);
+                        self.current = saved;
+
+                        if has_block {
+                            statements.push(self.parse_function_decl()?);
+                        } else {
+                            return Err(Diagnostic::error(
+                                "E013: executable statement not allowed in module body",
+                            )
+                            .with_span(self.peek().span)
+                            .with_help("modules may only contain imports, exports, constants, variables, and function definitions"));
+                        }
+                    } else {
+                        return Err(Diagnostic::error(
+                            "E013: executable statement not allowed in module body",
+                        )
+                        .with_span(self.peek().span)
+                        .with_help("modules may only contain imports, exports, constants, variables, and function definitions"));
+                    }
+                }
+                _ => {
+                    return Err(Diagnostic::error(
+                        "E013: executable statement not allowed in module body",
+                    )
+                    .with_span(self.peek().span)
+                    .with_help("modules may only contain imports, exports, constants, variables, and function definitions"));
+                }
+            }
         }
 
-        // Track end span for final span calculation
-        let mut end_span = self.peek().span;
+        // Consume closing }
+        let rbrace_token = self.peek().clone();
+        if !matches!(rbrace_token.kind, TokenKind::RBrace) {
+            return Err(Diagnostic::error("expected '}' to close module body")
+                .with_span(rbrace_token.span));
+        }
+        self.advance(); // consume }
 
-        // Parse optional export block
-        let export_block = if matches!(self.peek().kind, TokenKind::ExportBlock) {
-            let block = self.parse_export_block()?;
-            end_span = block.span;
-            Some(block)
-        } else {
-            None
-        };
+        let span = start_token.span.to(&rbrace_token.span);
+        let module_decl = ModuleDecl::new(name, export_block, span);
+        Ok((module_decl, imports, statements))
+    }
 
-        let span = start_token.span.to(&end_span);
-        Ok(ModuleDecl::new(name, export_block, span))
+    /// Returns true if `expr` is a pure literal value (int, float, string, bool, char).
+    /// Module-level constants and variables must be initialized with literals only.
+    fn is_literal_expr(expr: &Expr) -> bool {
+        matches!(expr, Expr::Literal(_))
     }
 
     /// Parse export block: #> { items }
@@ -426,7 +538,7 @@ mod tests {
 
     #[test]
     fn test_parse_module_declaration() {
-        let program = parse("# math_utils").expect("should parse");
+        let program = parse("# math_utils { }").expect("should parse");
         assert!(program.module_decl.is_some());
         let module = program.module_decl.unwrap();
         assert_eq!(module.name, "math_utils");
@@ -435,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_parse_module_with_export_block() {
-        let program = parse("# math_utils\n#> { add, subtract, PI }").expect("should parse");
+        let program = parse("# math_utils {\n#> { add, subtract, PI }\nadd(a, b) { <~ a + b }\nsubtract(a, b) { <~ a - b }\nPI := 3.14\n}").expect("should parse");
         assert!(program.module_decl.is_some());
         let module = program.module_decl.unwrap();
         assert_eq!(module.name, "math_utils");
@@ -479,7 +591,6 @@ mod tests {
         match &program.statements[0] {
             Statement::Assignment(assign) => match &assign.value {
                 Expr::FunctionCall(call) => {
-                    // Callable should be a MemberAccessExpr (math.add)
                     match call.callable.as_ref() {
                         Expr::MemberAccess(member) => {
                             match member.object.as_ref() {
@@ -502,7 +613,7 @@ mod tests {
 
     #[test]
     fn test_parse_export_own_item() {
-        let program = parse("# test\n#> { my_function }").expect("should parse");
+        let program = parse("# test {\n#> { my_function }\nmy_function() { <~ 1 }\n}").expect("should parse");
         let module = program.module_decl.unwrap();
         let export_block = module.export_block.unwrap();
 
@@ -517,7 +628,7 @@ mod tests {
 
     #[test]
     fn test_parse_export_reexport_function() {
-        let program = parse("# facade\n#> { math::add }").expect("should parse");
+        let program = parse("# facade {\n#> { math::add }\n}").expect("should parse");
         let module = program.module_decl.unwrap();
         let export_block = module.export_block.unwrap();
 
@@ -535,7 +646,7 @@ mod tests {
 
     #[test]
     fn test_parse_export_reexport_constant() {
-        let program = parse("# facade\n#> { math.PI }").expect("should parse");
+        let program = parse("# facade {\n#> { math.PI }\n}").expect("should parse");
         let module = program.module_decl.unwrap();
         let export_block = module.export_block.unwrap();
 
@@ -553,7 +664,7 @@ mod tests {
 
     #[test]
     fn test_parse_export_reexport_renamed() {
-        let program = parse("# facade\n#> { math::subtract <= minus }").expect("should parse");
+        let program = parse("# facade {\n#> { math::subtract <= minus }\n}").expect("should parse");
         let module = program.module_decl.unwrap();
         let export_block = module.export_block.unwrap();
 
@@ -571,31 +682,24 @@ mod tests {
 
     #[test]
     fn test_parse_export_mixed_items() {
-        let program = parse("# core\n#> { math::add, own_func, math.PI, text::trim <= strip }").expect("should parse");
+        let program = parse("# core {\n#> { math::add, own_func, math.PI, text::trim <= strip }\nown_func() { <~ 1 }\n}").expect("should parse");
         let module = program.module_decl.unwrap();
         let export_block = module.export_block.unwrap();
 
         assert_eq!(export_block.items.len(), 4);
 
-        // First: re-export function
         match &export_block.items[0] {
             ExportItem::ReExport { item_type, .. } => assert_eq!(item_type, &ItemType::Function),
             _ => panic!("Expected re-export"),
         }
-
-        // Second: own item
         match &export_block.items[1] {
             ExportItem::Own { name, .. } => assert_eq!(name, "own_func"),
             _ => panic!("Expected own item"),
         }
-
-        // Third: re-export constant
         match &export_block.items[2] {
             ExportItem::ReExport { item_type, .. } => assert_eq!(item_type, &ItemType::Constant),
             _ => panic!("Expected re-export"),
         }
-
-        // Fourth: re-export renamed
         match &export_block.items[3] {
             ExportItem::ReExport { rename, .. } => {
                 assert_eq!(rename.as_ref().unwrap(), "strip");
@@ -607,32 +711,25 @@ mod tests {
     #[test]
     fn test_parse_complete_module_example() {
         let source = r#"
-# app
-<# ./lib/math_utils <= math
-<# ./lib/text_utils <= text
-
-result = math::add(5, 10)
-name = text::uppercase("alice")
+# app {
+    <# ./lib/math_utils <= math
+    <# ./lib/text_utils <= text
+}
 "#;
 
         let program = parse(source).expect("should parse");
 
-        // Check module declaration
         assert!(program.module_decl.is_some());
         assert_eq!(program.module_decl.unwrap().name, "app");
-
-        // Check imports
         assert_eq!(program.imports.len(), 2);
         assert_eq!(program.imports[0].alias, "math");
         assert_eq!(program.imports[1].alias, "text");
-
-        // Check statements
-        assert_eq!(program.statements.len(), 2);
+        assert_eq!(program.statements.len(), 0);
     }
 
     #[test]
     fn test_parse_export_own_renamed() {
-        let program = parse("# calc\n#> { internal_add <= sum }").expect("should parse");
+        let program = parse("# calc {\n#> { internal_add <= sum }\ninternal_add(a, b) { <~ a + b }\n}").expect("should parse");
         let module = program.module_decl.unwrap();
         let export_block = module.export_block.unwrap();
 
@@ -644,5 +741,23 @@ name = text::uppercase("alice")
             }
             _ => panic!("Expected own export item with rename"),
         }
+    }
+
+    #[test]
+    fn test_module_rejects_output_statement() {
+        let result = parse("# bad_mod {\n>> \"hello\" ¶\n}");
+        assert!(result.is_err(), "output statement in module should fail");
+    }
+
+    #[test]
+    fn test_module_rejects_fn_call_rhs() {
+        let result = parse("# bad_mod {\ncount = other()\n}");
+        assert!(result.is_err(), "function call as initializer should fail");
+    }
+
+    #[test]
+    fn test_module_allows_literal_const_and_var() {
+        let program = parse("# ok_mod {\nPI := 3.14\ncount = 0\nadd(a, b) { <~ a + b }\n}").expect("should parse");
+        assert_eq!(program.statements.len(), 3);
     }
 }

@@ -1,0 +1,8 @@
+# private_state_block {
+    #> { increment, get }
+
+    count = 0
+
+    increment() { count = count + 1 }
+    get() { <~ count }
+}

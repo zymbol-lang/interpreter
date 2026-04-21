@@ -1,11 +1,12 @@
-# .matematicas_עִברִית
-#> {
-    mat::sumar <= חיבור
-    mat::restar <= חיסור
-    mat::multiplicar <= כפל
-    mat::dividir <= חילוק
-    mat.PI <= פאי
-    mat.E <= אי
-}
+# .עִברִית {
+    <# ./module <= mat
 
-<# ./module <= mat
+    #> {
+        mat::sumar <= חיבור
+        mat::restar <= חיסור
+        mat::multiplicar <= כפל
+        mat::dividir <= חילוק
+        mat.PI <= פאי
+        mat.E <= אי
+    }
+}

@@ -1,5 +1,5 @@
 [1m[31merror[39m[0m: undefined variable 'match_var'
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/scope04_match_block.zy:23:14
+  [1m[34m-->[39m[0m tests/scope04_match_block.zy:23:14
 [1m[34m  23[39m[0m [34m|[39m
 [1m[34m  23[39m[0m [34m|[39m >> "Value: " match_var ¶
 [34m     |[39m [1m[31m             ^^^^^^^^^[39m[0m

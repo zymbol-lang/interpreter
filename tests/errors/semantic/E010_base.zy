@@ -1,0 +1,6 @@
+# E010_base {
+    #> { public_fn }
+
+    public_fn() { <~ "public" }
+    secret_fn()  { <~ "secret" }
+}

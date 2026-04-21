@@ -1,13 +1,13 @@
 // Module A — imports Module B and calls b::fun_b
-# circ_mod_a
+# circ_mod_a {
+    <# ./circ_mod_b <= b
 
-<# ./circ_mod_b <= b
+    #> {
+        fun_a
+    }
 
-#> {
-    fun_a
-}
-
-fun_a(n) {
-    >> "A::fun_a(" n ")" ¶
-    <~ b::fun_b(n + 1)
+    fun_a(n) {
+        >> "A::fun_a(" n ")" ¶
+        <~ b::fun_b(n + 1)
+    }
 }

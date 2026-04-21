@@ -1,43 +1,43 @@
 // Module: math_test
 // Tests module-level variables with scope system
 
-# math_test
+# math_test {
+    #> {
+        add
+        multiply
+        calculate_area
+        PI
+        VERSION
+    }
 
-#> {
-    add
-    multiply
-    calculate_area
-    PI
-    VERSION
-}
+    // Module-level constants (should be accessible to module functions)
+    PI := 3.14159
+    VERSION := "1.0.0"
 
-// Module-level constants (should be accessible to module functions)
-PI := 3.14159
-VERSION := "1.0.0"
+    // Private module variable (not exported)
+    internal_multiplier := 2
 
-// Private module variable (not exported)
-internal_multiplier := 2
+    // Public function that uses module constant
+    add(a, b) {
+        >> "Using PI from module: " PI ¶
+        <~ a + b
+    }
 
-// Public function that uses module constant
-add(a, b) {
-    >> "Using PI from module: " PI ¶
-    <~ a + b
-}
+    // Public function that uses module variable
+    multiply(a, b) {
+        result = a * b
+        >> "Module VERSION: " VERSION ¶
+        <~ result
+    }
 
-// Public function that uses module variable
-multiply(a, b) {
-    result = a * b
-    >> "Module VERSION: " VERSION ¶
-    <~ result
-}
+    // Function that uses private module variable
+    calculate_area(radius) {
+        // Should be able to see PI (module constant)
+        area = PI * radius * radius
 
-// Function that uses private module variable
-calculate_area(radius) {
-    // Should be able to see PI (module constant)
-    area = PI * radius * radius
+        // Should be able to see internal_multiplier (module variable)
+        scaled = area * internal_multiplier
 
-    // Should be able to see internal_multiplier (module variable)
-    scaled = area * internal_multiplier
-
-    <~ scaled
+        <~ scaled
+    }
 }

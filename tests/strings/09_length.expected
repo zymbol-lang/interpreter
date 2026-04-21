@@ -1,29 +1,29 @@
 [1m[31merror[39m[0m: unexpected '[' at statement level
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/strings/09_length.zy:11:11
+  [1m[34m-->[39m[0m tests/strings/09_length.zy:11:11
 [1m[34m  11[39m[0m [34m|[39m
 [1m[34m  11[39m[0m [34m|[39m ins = s$++[5:"!!!"]
 [34m     |[39m [1m[31m          ^[39m[0m
   [1m[32mhelp:[39m[0m use '[a, b] = expr' for array destructuring
 [1m[31merror[39m[0m: unexpected token: Integer(5)
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/strings/09_length.zy:11:12
+  [1m[34m-->[39m[0m tests/strings/09_length.zy:11:12
 [1m[34m  11[39m[0m [34m|[39m
 [1m[34m  11[39m[0m [34m|[39m ins = s$++[5:"!!!"]
 [34m     |[39m [1m[31m           ^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: unexpected token: Colon
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/strings/09_length.zy:11:13
+  [1m[34m-->[39m[0m tests/strings/09_length.zy:11:13
 [1m[34m  11[39m[0m [34m|[39m
 [1m[34m  11[39m[0m [34m|[39m ins = s$++[5:"!!!"]
 [34m     |[39m [1m[31m            ^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: unexpected token: String("!!!")
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/strings/09_length.zy:11:14
+  [1m[34m-->[39m[0m tests/strings/09_length.zy:11:14
 [1m[34m  11[39m[0m [34m|[39m
 [1m[34m  11[39m[0m [34m|[39m ins = s$++[5:"!!!"]
 [34m     |[39m [1m[31m             ^^^^^[39m[0m
   [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: unexpected token: RBracket
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/strings/09_length.zy:11:19
+  [1m[34m-->[39m[0m tests/strings/09_length.zy:11:19
 [1m[34m  11[39m[0m [34m|[39m
 [1m[34m  11[39m[0m [34m|[39m ins = s$++[5:"!!!"]
 [34m     |[39m [1m[31m                  ^[39m[0m

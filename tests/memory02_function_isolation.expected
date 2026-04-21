@@ -1,5 +1,5 @@
 [1m[31merror[39m[0m: argument 1 has type String, but function 'process_value' expects Int
-  [1m[34m-->[39m[0m /home/rakzo/github/zymbol-lang/interpreter/tests/memory02_function_isolation.zy:30:24
+  [1m[34m-->[39m[0m tests/memory02_function_isolation.zy:30:24
 [1m[34m  30[39m[0m [34m|[39m
 [1m[34m  30[39m[0m [34m|[39m result = process_value(data)
 [34m     |[39m [1m[31m                       ^^^^[39m[0m
