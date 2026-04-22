@@ -45,11 +45,29 @@ See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar, coverage stat
 
 ## 0. Design Philosophy
 
-### Origin: Genuine Minimalism
+### Origin: An Esolang That Grew
 
-Zymbol was born from a simple constraint: **no keywords**. Every construct — conditionals, loops, functions, I/O, error handling, modules — is expressed through symbols. It is a commitment to a different kind of readability: one where the shape of the code carries meaning independently of natural language.
+Zymbol started as an **esoteric programming language** — a small, experimental construct with a single guiding question: *what happens if you remove every keyword from a programming language?* No `if`, no `while`, no `function`, no `return`. Nothing borrowed from English or any other natural language. Just symbols.
 
-The language grew organically from that constraint. As it became more complete, complexity entered — but the goal remained to contain it within a coherent symbolic grammar rather than letting keywords leak in.
+That constraint was minimalist by design, in the tradition of esolangs: a tight idea taken seriously, with no ambition beyond exploring whether it worked. The original publication is on [esolangs.org](https://esolangs.org). It was a toy with a point.
+
+Then the idea grew — like a little monster. Not because features were added for their own sake, but because the founding constraint turned out to have more depth than expected. Once you commit to "no keywords", you discover that symbols can carry consistent meaning across very different contexts (`_` is always non-binding, `#` is always meta-level), and that Unicode support is not an afterthought but a natural consequence of the same principle. The language kept growing as each piece clicked into place.
+
+**The founding question**, now stated plainly: every mainstream language — Python, Java, Ruby, Go, Rust — shares an invisible assumption that the programmer reads English. Keywords like `if`, `while`, `function`, `return` are English words. A developer in Spanish, Arabic, or Devanagari is permanently coding in a second language at the syntactic level, even when identifiers and strings can be localized.
+
+Removing keywords entirely is the minimum change needed to break that assumption. A symbol carries no etymology. `?` does not say *if* in English — it says *condition* in the visual grammar of the program. A developer writing `? edad >= 18` and one writing `? age >= 18` are doing exactly the same thing, and neither is translating.
+
+The practical result: any human language can be the *native* language of a Zymbol program. Spanish with full accents (`función`, `índice`), Devanagari (`सक्रिय`, `फलन`), Arabic (`متغير`, `دالة`), Korean (`변수`, `함수`), and yes — Klingon pIqaD for the ones who want to program in the language of the Empire. The digit block is registered (CSUR U+F8F0–U+F8F9) and the interpreter supports it completely. No judgment. It is the logical endpoint of the principle.
+
+This is **not** a reaction to APL or J or K. Those languages are dense because they optimize for mathematical array notation. Zymbol is dense because it refuses to reserve any identifier for the runtime. The convergence in symbol count is incidental; the motivations are orthogonal.
+
+### Symbolic Minimalism, Not Minimal Language
+
+Zymbol is no longer a small language. It has arrays, tuples, closures, modules, HOFs, pattern matching, a pipe operator, shell integration, 69 Unicode numeral scripts, and multi-dimensional indexing. The esolang became a general-purpose language.
+
+What remained minimal is the **mechanism of growth**: every new construct is expressed through existing symbols, or through a new symbol that the programmer learns once and recognizes everywhere. No construct ever borrows a word from any natural language. The constraint is not "few features" — it is "no vocabulary debt to any human tongue."
+
+The measure of Zymbol's minimalism is: *can this new construct be expressed with existing symbols, or does it require coining a new one?* If the answer is "new symbol", it enters the grammar reluctantly, with a clear consistent meaning. That discipline is the minimalism. The feature count is a separate axis.
 
 ### Symbolic Coherence: Shared Meaning, Similar Spirit
 
@@ -82,20 +100,19 @@ All are the same idea: *this slot is intentionally left unbound*.
 | Module declaration | `# calc` | names the file as a module (meta-identifier) |
 | Module export | `#> { }` | declares the public surface of a module |
 | Module import | `<# ./calc <= c` | brings a module into scope |
+| Numeral mode | `#०९#` | switches output digit script |
 
-Types and modules share `#` because both are about *what something is*, not *what value it holds*.
+Types, modules, and numeral modes share `#` because all three are about *what something is or how it is represented*, not *what value it holds*.
 
 ### Self-Referential Grammar
 
 Zymbol's symbolic vocabulary is its own. The symbols have no external standard to conform to — their meaning is defined by the language itself and built up through consistent use. A programmer learns Zymbol by reading Zymbol, not by mapping it onto another language.
 
-This creates an initial learning curve. It also means the language can evolve its symbol system with full internal consistency, without being constrained by conventions inherited elsewhere.
+This creates an initial learning curve. It also means the language can evolve its symbol system with full internal consistency, without being constrained by conventions inherited from English-based predecessors.
 
-### Complexity Within Minimalism
+### The Numeral Modes as Proof of Concept
 
-The language is no longer small. It has arrays, tuples, modules, closures, error handling, HOFs, a pipe operator, shell integration, and Unicode numeral modes. None of this contradicts the minimalist origin — complexity entered through **depth**, not through **keywords**. Each new construct reuses and extends the existing symbolic grammar rather than introducing new vocabulary.
-
-The measure of minimalism in Zymbol is not line count or feature count. It is: *can a new construct be expressed with existing symbols, or does it require inventing new ones?*
+The 69 Unicode digit scripts (`#०९#` Devanagari, `#٠٩#` Arabic-Indic, `#๐๙#` Thai, `#𝟎𝟗#` Mathematical Bold, Klingon pIqaD, and 64 others) are not a curiosity. They are the most explicit demonstration of the founding principle: a program written entirely in Devanagari — identifiers, literals, output — is a first-class Zymbol program. No special mode, no pragma, no flag. That is what "no hegemony" means in practice.
 
 ---
 

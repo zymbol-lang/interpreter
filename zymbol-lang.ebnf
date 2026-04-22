@@ -6,15 +6,15 @@
   A minimalist symbolic programming language.
   No keywords — pure symbolic syntax with full Unicode support.
 
-  Implementation: Rust workspace (17 crates)
-  Test coverage:  393/393 interpreter PASS (wt + vm)
+  Implementation: Rust workspace (18 crates)
+  Test coverage:  403/405 interpreter PASS (wt + vm, 2 vm-skip)
   Execution:      Tree-walker (default) | Register VM (--vm)
 
   IMPLEMENTATION STATUS: Feature-complete as of v0.0.4_1.
   All rules in this grammar are implemented unless marked [NOT IMPLEMENTED].
 
   Version History:
-    2.3.0 (v0.0.4_1)     — New operators (tree-walker only):
+    2.3.0 (v0.0.4_1)     — New operators (tree-walker + VM):
                           $/ (StringSplit): string$/ delimiter → Array(String).
                           $++ (ConcatBuild): base$++ item1 item2 ... (repurposed from
                             retired $++[i] insert — new semantics: String base → concat,
@@ -116,7 +116,7 @@ assignment     = identifier , "=" , expr ;
 (* Indexed assignment — direct element update *)
 indexed_assign = identifier , { "[" , expr , "]" } , "=" , expr ;
 (*
-  arr[0] = 99
+  arr[1] = 99     -- first element (1-based; arr[0] is a runtime error)
   matrix[1][2] = 0
 *)
 
@@ -201,6 +201,7 @@ numeral_nine      = ? the "9" digit of the same block as numeral_zero ? ;
   #०९#   — Devanagari
   #๐๙#   — Thai
   #𞥐𞥙#   — Adlam
+  ##   — Klingon pIqaD (CSUR PUA U+F8F0–U+F8F9; requires pIqaD font)
 *)
 
 (* --- Explicit lifetime end --- *)
@@ -380,9 +381,7 @@ unary          = [ "!" | "-" | "+" ] , member_access_expr ;
 member_access_expr = postfix_expr , { "." , identifier } ;
 (*
   person.name     — named tuple field
-  m.CONST         — module constant  [KNOWN ISSUE: parser accepts this syntax but the
-                    interpreter does not resolve module-scoped constants via dot notation.
-                    Workaround: export a zero-argument getter function — m::getConst()]
+  m.CONST         — module constant (fixed v0.0.4: alias.CONST resolves correctly)
 *)
 
 (* Postfix *)
@@ -495,8 +494,8 @@ collection_op_suffix
                | "$<" , "(" , expr , "," , lambda , ")"                        (* reduce → scalar *)
                | "$[" , expr , "]" , "$~" , expr                               (* functional update → new collection *)
                | "$~~" , "[" , expr , ":" , expr , [ ":" , expr ] , "]"       (* string replace [pattern:repl:count?] *)
-               | "$/" , expr                                                   (* string split by char or substring → Array(String) [WT only] *)
-               | "$++" , { primary_expr } ;                                   (* concat-build: String→concat, Array→append; variadic same-line [WT only] *)
+               | "$/" , expr                                                   (* string split by char or substring → Array(String) *)
+               | "$++" , { primary_expr } ;                                   (* concat-build: String→concat, Array→append; variadic same-line *)
 (*
   $/ examples:
     "a,b,c,d" $/ ','      → ["a", "b", "c", "d"]
@@ -613,7 +612,7 @@ error_op_suffix
 
 (* Numeric evaluation — fail-safe string-to-number *)
 (* Accepts ASCII digits and all 69 Unicode digit scripts supported by the lexer
-   (Thai U+0E50, Devanagari U+0966, Arabic-Indic U+0660, Klingon pIqaD U+F8F0, etc.).
+   (Thai ๐..๙, Devanagari ०..९, Arabic-Indic ٠..٩, Klingon pIqaD , etc.).
    Uses the same digit normalization as the lexer (digit_blocks.rs). *)
 numeric_eval_expr = "#|" , expr , "|" ;
 (*
@@ -626,7 +625,7 @@ numeric_eval_expr = "#|" , expr , "|" ;
   #|"٣.١٤"|  → 3.14   (Arabic-Indic float)
 *)
 
-(* Numeric cast operators — prefix; convert between Int and Float [WT only] *)
+(* Numeric cast operators — prefix; convert between Int and Float *)
 (* Convention: ##. mirrors #.N (decimal/round), ##! mirrors #!N (truncate).
                ### is a rounding cast with no precision argument.             *)
 numeric_cast_expr = "##." , primary_expr    (* ToFloat:    Int or Float → Float           *)
@@ -782,7 +781,7 @@ escape_sequence = "\\n"                          (* newline *)
                 | "\\\\"                         (* backslash *)
                 | "\\{"                          (* literal { *)
                 | "\\}"                          (* literal } *)
-                | "\\u{" , hex_digit , { hex_digit } , "}" ; (* Unicode codepoint *)
+                ; (* NOTE: \u{XXXX} Unicode escape is NOT implemented — see GUIDE.md §1b *)
 
 (* Character — single Unicode codepoint *)
 char_literal   = "'" , ( char_content | escape_sequence ) , "'" ;
