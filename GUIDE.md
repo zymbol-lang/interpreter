@@ -77,7 +77,7 @@ All are the same idea: *this slot is intentionally left unbound*.
 | Context | Example | Meaning |
 |---------|---------|---------|
 | Boolean literals | `#1` / `#0` | typed truth values (not integers) |
-| Type reflection | `##int`, `##->`, `##type` | introspect the type of a value |
+| Type reflection | `x#?`, `##->`, `###`, `##.` | inspect the type of a value; type symbols are pure symbol sequences |
 | Precision / cast | `#.2\|x\|`, `##.x`, `###x` | numeric transformations at the type boundary |
 | Module declaration | `# calc` | names the file as a module (meta-identifier) |
 | Module export | `#> { }` | declares the public surface of a module |

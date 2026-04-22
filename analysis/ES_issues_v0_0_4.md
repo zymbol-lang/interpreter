@@ -66,7 +66,7 @@ Fuente: `revision_segunda_pasada_v0_0_4.md` §1, §2, §3.
 
 ### P5 — Sincronización documental (§1 del informe)
 
-- [ ] **P5-A** — Corregir §0 GUIDE.md: símbolos `##int` (no existe) y `##type` (no existe) en la tabla de coherencia `#`. Reemplazar por `x#?`, `###`, `##.`, `##!` que sí existen. (§2.1 del informe)
+- [x] **P5-A** — §0 GUIDE.md: `##int` y `##type` eliminados — violan el dogma no-keywords (son palabras latinas, no símbolos). Reemplazados por `x#?`, `##->`, `###`, `##.` — todos símbolos puros verificados. (§2.1 del informe)
 - [ ] **P5-B** — §23 IMPLEMENTATION.md: fila "Modules (constants via `.`)" dice `❌|❌|Known gap` pero L3 está marcada Fixed y verificada empíricamente en TW y VM → actualizar a `✅|✅|Fixed in v0.0.4`. (§1.3 del informe)
 - [ ] **P5-C** — §23 IMPLEMENTATION.md: reconciliar las filas `⚠` (features TW-only) con la afirmación "393/393 parity". Añadir nota explícita: la paridad se mide sobre el subconjunto de features soportadas por ambos modos; los features marcados `⚠` quedan excluidos de ese conteo. (§1.4 del informe)
 
@@ -103,7 +103,7 @@ Fuente: `revision_segunda_pasada_v0_0_4.md` §1, §2, §3.
 | P4-A   | ✅ decisión | 2026-04-22 | Mantener `arr[a>b]`; contexto resuelve ambigüedad; §11c anotado |
 | P4-B   | ✅ completo | 2026-04-22 | §11 GUIDE.md: 4 razones + simetría +/-  + loop natural + índice 0 = error |
 | P4-C   | ✅ decisión | 2026-04-22 | No documentar; conexión solo convergencia de gestos, no relación estructural |
-| P5-A   | pendiente  |            | §0 GUIDE.md: `##int`/`##type` no existen → reemplazar por símbolos reales |
+| P5-A   | ✅ completo | 2026-04-22 | §0 GUIDE.md: `##int`/`##type` eliminados (violan dogma no-keywords); reemplazados por `x#?`, `##->`, `###`, `##.` |
 | P5-B   | pendiente  |            | §23 IMPL: fila L3 dice `❌` pero está Fixed → actualizar a `✅` |
 | P5-C   | pendiente  |            | §23 IMPL: reconciliar filas `⚠` con afirmación "393/393 parity" |
 | P5-D   | pendiente  |            | §9 vs §10b: añadir aviso explícito sobre asimetría captura directa/as-value |
