@@ -205,9 +205,9 @@ impl Value {
             }
             Value::Function(f) => {
                 if f.is_named_fn {
-                    format!("<function/{}>", f.params.len())
+                    format!("<funct/{}>", f.params.len())
                 } else {
-                    format!("<lambda/{}>", f.params.len())
+                    format!("<lambd/{}>", f.params.len())
                 }
             }
             Value::Error(err) => {
@@ -754,7 +754,7 @@ impl<W: Write> Interpreter<W> {
                         .collect();
                     format!("##)({})", types.join(", "))
                 }
-                Value::Function(_) => "##->".to_string(),
+                Value::Function(f) => if f.is_named_fn { "##()".to_string() } else { "##->".to_string() },
                 Value::Error(err) => format!("##{}", err.error_type),
                 Value::Unit => "##_".to_string(),
             };
@@ -773,7 +773,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(_) => "##]".to_string(),
             Value::Tuple(_) => "##)".to_string(),
             Value::NamedTuple(_) => "##)".to_string(),
-            Value::Function(_) => "##->".to_string(),
+            Value::Function(f) => if f.is_named_fn { "##()".to_string() } else { "##->".to_string() },
             Value::Error(err) => format!("##{}", err.error_type),
             Value::Unit => "##_".to_string(),
         }

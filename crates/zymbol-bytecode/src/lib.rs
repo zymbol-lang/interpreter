@@ -14,8 +14,10 @@ pub enum Instruction {
     LoadStr(Reg, StrIdx),
     LoadChar(Reg, char),
     LoadUnit(Reg),
-    /// Load a function/lambda reference (stored as FuncIdx)
+    /// Load a named-function reference (type ##())
     MakeFunc(Reg, FuncIdx),
+    /// Load a no-capture lambda reference (type ##->)
+    MakeLambda(Reg, FuncIdx),
     /// Create a closure: dst = Closure(func_idx, upvalues captured from current frame)
     MakeClosure(Reg, FuncIdx, Vec<Reg>),
 

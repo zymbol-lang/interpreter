@@ -1,0 +1,23 @@
+// BUG-NEW-07 (non-trigger): unrelated errors inside !? do NOT corrupt scope
+// Contrast with the trigger case in BUG_v0.0.4.md
+
+base = 10
+other = 99
+
+// Index error inside !? — scope intact after
+!? {
+    dummy = [1, 2, 3][99]
+} :! {
+    >> "caught index" ¶
+}
+>> base ¶
+>> other ¶
+
+// Div by zero inside !? — scope intact after
+!? {
+    dummy2 = 10 / 0
+} :! ##Div {
+    >> "caught div" ¶
+}
+>> base ¶
+>> other ¶

@@ -1216,6 +1216,12 @@ impl Compiler {
                     ctx.emit(Instruction::LoadGlobal(dst, gvar_idx));
                     return Ok(dst);
                 }
+                // Named function used as first-class value: f = myFunc, arr$> myFunc, x |> myFunc
+                if let Some(&func_idx) = self.function_index.get(&id.name) {
+                    let dst = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::MakeFunc(dst, func_idx));
+                    return Ok(dst);
+                }
                 // In function bodies, defer to runtime (matches tree-walker behavior)
                 if self.in_function_body {
                     let msg = format!("undefined variable: '{}'", id.name);
@@ -1318,6 +1324,17 @@ impl Compiler {
                 let dst = ctx.alloc_temp()?;
                 ctx.emit(Instruction::IsError(dst, src));
                 Ok(dst)
+            }
+            Expr::ErrorPropagate(ep) => {
+                // expr$!! — if value is an error, return it early from the current function
+                let r_val = self.compile_expr(&ep.expr, ctx)?;
+                let r_is_err = ctx.alloc_temp()?;
+                ctx.emit(Instruction::IsError(r_is_err, r_val));
+                let skip = ctx.emit_jump_if_not_placeholder(r_is_err);
+                ctx.emit(Instruction::Return(r_val));
+                let after = ctx.current_label();
+                ctx.patch_jump(skip, after);
+                Ok(r_val)
             }
             // ── 4F: Pipe operator (value |> callable(_, args)) ────────────────
             Expr::Pipe(pipe) => {
@@ -2671,7 +2688,7 @@ impl Compiler {
 
         let dst = ctx.alloc_temp()?;
         if free_vars.is_empty() {
-            ctx.emit(Instruction::MakeFunc(dst, func_idx));
+            ctx.emit(Instruction::MakeLambda(dst, func_idx));
         } else {
             // Capture the registers from the caller's frame
             let captured: Vec<Reg> = free_vars.iter()
@@ -3453,7 +3470,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::LoadInt(r, _) | Instruction::LoadFloat(r, _)
             | Instruction::LoadBool(r, _) | Instruction::LoadStr(r, _)
             | Instruction::LoadChar(r, _) | Instruction::LoadUnit(r)
-            | Instruction::MakeFunc(r, _) => upd(*r),
+            | Instruction::MakeFunc(r, _)
+            | Instruction::MakeLambda(r, _) => upd(*r),
             Instruction::CopyReg(d, s) | Instruction::MoveReg(d, s) => { upd(*d); upd(*s); }
             Instruction::AddInt(d, a, b) | Instruction::SubInt(d, a, b)
             | Instruction::MulInt(d, a, b) | Instruction::DivInt(d, a, b)

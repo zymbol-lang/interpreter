@@ -417,6 +417,58 @@ bash tests/scripts/expected_compare.sh v0.0.4_review
 
 ---
 
+## BUG-NEW-07 — `!?` corrupts outer scope after catching "undefined variable" from a function
+
+**Status:** Open  
+**Type:** Scope restoration bug  
+**Discovered:** 2026-04-22 (consulting analysis second-pass review, P5-E)  
+**Documented as:** L16 in REFERENCE.md §20
+
+### Description
+
+When a named function is called inside `!?` and fails with "undefined variable" (because direct calls have isolated scope), the error recovery corrupts the caller's outer scope — all outer variables become undefined after the block.
+
+### Reproduction
+
+```zymbol
+base = 10
+fn_outer(n) { <~ n + base }
+
+!? {
+    fn_outer(5)        // fails: undefined variable 'base'
+} :! {
+    >> "caught" ¶
+}
+
+>> base ¶              // runtime error: undefined variable 'base'
+```
+
+**TW output:** `caught` → then crashes on `>> base ¶`  
+**VM output:** `:!` does not fire → crashes on `>> base ¶`
+
+### Non-trigger (scope NOT corrupted)
+
+```zymbol
+base = 10
+!? { dummy = [1][99] } :! { }
+>> base ¶    // → 10  (unrelated error, scope intact)
+```
+
+### Root cause hypothesis
+
+The `!?` entry saves a scope snapshot. When the error originates inside the function's isolated scope (a fresh empty scope), the restoration unwinds past the outer scope's bindings, clearing all variables defined before `!?`.
+
+### Impact
+
+- Any code calling a function that references outer variables inside `!?` may silently lose all outer state after the catch.
+- The VM additionally fails to execute the `:!` block entirely.
+
+### Workaround
+
+Do not call functions that reference outer variables directly inside `!?`. Assign to a variable via `f = fn` (captures scope) before entering the try block, or restructure to avoid the pattern.
+
+---
+
 ## v0.0.4 Review Test Suite
 
 All confirmed-working features from this review are covered in `tests/v0.0.4_review/`:
@@ -451,3 +503,14 @@ All confirmed-working features from this review are covered in `tests/v0.0.4_rev
 | `scope_underscore_inner_error.zy` | `_name` from outer block → semantic error |
 | `scope_underscore_loop_error.zy` | `_name` from outer scope in loop → semantic error |
 | `lifetime_end_parsed.zy` | `\ var` parses without error (documents GAP-01 behavior) |
+| `analysis/p1e_destructuring_overwrite.zy` | Destructuring overwrites mutable vars; TW+VM parity ✅ |
+| `analysis/p3e_type_model.zy` | `#?` on fn/lambda/error/unit — type symbol, arity, display; TW-only |
+| `analysis/p3h_error_flows.zy` | `!?`/`:!`, `$!`, `$!!` return propagation; TW-only |
+| `analysis/p5d_fn_capture_asymmetry.zy` | Named fn capture snapshot on first-class use; TW-only |
+| `bugs/bug_new07_scope_noncorrupt.zy` | Index/Div errors inside `!?` do NOT corrupt outer scope; TW+VM parity ✅ |
+| `analysis/p0a_named_fn_firstclass.zy` | Named fn assigned to var, HOF ($>, $|, $<), returned from fn, implicit pipe; TW-only |
+| `analysis/p1c_lexical_basics.zy` | String escapes (`\t \\ \" \{ \}`), interpolation `{var}`; TW+VM parity ✅ |
+| `analysis/p2a_append_chaining.zy` | `$+` chaining `arr$+ a$+ b$+ c`; TW-only (VM: tuple $+ unsupported) |
+| `analysis/p2b_implicit_pipe.zy` | `x \|> f` implicit pipe with named fns and lambdas; TW-only |
+| `analysis/p2d_index_callable.zy` | `arr[i](args)` — lambda stored at index, callable in all contexts; TW+VM parity ✅ |
+| `analysis/p6d_is_error_vm_gap.zy` | `$!` IsError VM stub — TW `#1` vs VM `#0` silent wrong result (P6-D); TW-only |

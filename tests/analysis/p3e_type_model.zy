@@ -1,0 +1,36 @@
+// @vm-skip: TypeOf(Value::Error) returns ##_ instead of ##Kind in VM
+// P3-E: Complete type model — #? tuple structure
+
+// Named function: type ##(), display <funct/N>
+double(x) { <~ x * 2 }
+fn_ref = double
+>> (fn_ref#?)[1] ¶
+>> (fn_ref#?)[2] ¶
+
+// Lambda: type ##->, display <lambd/N>
+lam = x -> x * 2
+>> (lam#?)[1] ¶
+>> (lam#?)[2] ¶
+
+// Multi-param arity
+f2(a, b) { <~ a + b }
+r2 = f2
+>> (r2#?)[2] ¶
+
+// Function display: <funct/N>, lambda display: <lambd/N>
+fn_display = (fn_ref#?)[3]
+lam_display = (lam#?)[3]
+>> fn_display ¶
+>> lam_display ¶
+
+// Error type = kind symbol (not generic)
+get_err() { !? { <~ [1, 2][99] } :! { <~ _err } }
+e = get_err()
+>> (e#?)[1] ¶
+>> e$! ¶
+
+// Unit type
+nothing() {}
+u = nothing()
+>> (u#?)[1] ¶
+>> (u#?)[2] ¶

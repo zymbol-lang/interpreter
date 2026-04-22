@@ -177,7 +177,8 @@ impl<W: Write> Interpreter<W> {
             }
             Value::Function(func) => {
                 let count = func.params.len() as i64;
-                ("##->".to_string(), count)  // Function type with parameter count
+                let sym = if func.is_named_fn { "##()" } else { "##->" };
+                (sym.to_string(), count)
             }
             Value::Error(err) => {
                 let count = err.message.len() as i64;

@@ -33,6 +33,10 @@ A. [Normative EBNF Grammar](#appendix-a-normative-ebnf-grammar)
 
 The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) and reproduced in full in [Appendix A](#appendix-a-normative-ebnf-grammar). The table below summarizes implementation status per feature.
 
+> **What "393/393 parity" means**: all 393 parity tests exercise features marked ✅|✅ and produce identical output in both tree-walker and VM. Tests for features marked ⚠ (VM unsupported) or `—` (VM not applicable) run against the tree-walker only and are not part of the parity count.
+>
+> **Legend**: ✅ fully supported · ⚠ tree-walker only · ❌ not implemented · `—` not applicable to this mode
+
 | Feature | Tree-walker | VM | Notes |
 |---------|:-----------:|:--:|-------|
 | Variables / constants | ✅ | ✅ | |
@@ -71,21 +75,24 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 | Error handling (full) | ✅ | ✅ | |
 | Typed catch `:! ##Type` | ✅ | ✅ | |
 | Modules (functions via `::`) | ✅ | ✅ | |
-| Modules (constants via `.`) | ❌ | ❌ | Known gap |
+| Modules (constants via `.`) | ✅ | ✅ | Fixed in v0.0.4 (~~L3~~) |
 | Advanced string operators (`$+`, `$-`, `$~~`, `$??`) | ✅ | ✅ | |
-| String split `$/` | ✅ | ⚠ | VM: Unsupported (tree-walker only) |
-| String build `$++` | ✅ | ⚠ | VM: Unsupported (tree-walker only) |
+| Tuple `$+` append | ✅ | ✅ | Fixed v0.0.4 audit: `ArrayPush` extended to handle `Value::Tuple` |
+| String split `$/` | ✅ | ✅ | Corrected v0.0.4 audit — was incorrectly marked ⚠ |
+| String build `$++` | ✅ | ✅ | Corrected v0.0.4 audit — was incorrectly marked ⚠ |
 | Numeric eval `#\|x\|` (ASCII + Unicode) | ✅ | ✅ | Unicode normalization via digit_blocks |
 | Type metadata `x#?` | ✅ | ✅ | |
 | Precision `#.N` / `#!N` | ✅ | ✅ | |
-| Casts `##.` / `###` / `##!` | ✅ | ⚠ | VM: Unsupported (tree-walker only) |
-| Format `#,\|x\|` / `#^\|x\|` | ✅ | ⚠ | Full parity pending in VM |
+| Casts `##.` / `###` / `##!` | ✅ | ✅ | Corrected v0.0.4 audit — was incorrectly marked ⚠ |
+| Format `#,\|x\|` / `#^\|x\|` | ✅ | ✅ | Corrected v0.0.4 audit — was incorrectly marked ⚠ |
 | Base literals / conversions | ✅ | ✅ | |
 | BashExec / Execute script | ✅ | ✅ | |
 | CLI args capture `><` | ✅ | — | VM not supported |
 | Negative array indices | ✅ | ✅ | `arr[-1]` normalized in both modes (v0.0.2) |
 | Destructuring assignment | ✅ | ✅ | `[a, b] = arr`, `(name: n) = t` (v0.0.2) |
-| `$!!` error propagation | ✅ | ✅ | Named functions only — lambdas not supported (L13) |
+| Named functions as first-class values | ✅ | ✅ | Fixed v0.0.4 audit: identifier → `MakeFunc`; fns with outer-scope captures remain TW-only |
+| `$!` error check | ✅ | ✅ | Fixed v0.0.4 audit: `Value::Error` variant + real `IsError` check |
+| `$!!` error propagation | ✅ | ✅ | Fixed v0.0.4 audit: `Expr::ErrorPropagate` compiled (IsError + branch + Return) |
 | Times loop `@ N { }` | ✅ | ✅ | Int condition evaluated once → repeat exactly N times |
 | `do-while ~>` (post-cond loop) | ❌ | ❌ | Not implemented — EBNF spec, planned |
 

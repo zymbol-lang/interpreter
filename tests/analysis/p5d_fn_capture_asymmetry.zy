@@ -1,0 +1,17 @@
+// @vm-skip: named fn with free var (base) — VM named fn compilation doesn't capture outer scope
+// P5-D: Named function capture asymmetry — first-class snapshot
+// When used as a value, the function captures the outer scope at assignment time.
+// Subsequent changes to the outer variable do not affect the captured snapshot.
+
+base = 10
+adder(n) { <~ n + base }
+
+f = adder           // captures: base = 10
+>> f(5) ¶           // 15
+
+base = 99
+>> f(5) ¶           // 15 — snapshot, not live binding
+>> base ¶           // 99 — outer scope updated
+
+g = adder           // re-captured: base = 99
+>> g(5) ¶           // 104

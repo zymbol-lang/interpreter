@@ -1,0 +1,26 @@
+// P1-C: Lexical structure — string escapes and interpolation
+
+// Tab escape
+>> "a\tb" ¶
+
+// Quote escape
+>> "say \"hi\"" ¶
+
+// Backslash escape
+>> "a\\b" ¶
+
+// Literal brace escape \{ \}
+>> "\{42\}" ¶
+
+// String interpolation: {identifier}
+name = "Zymbol"
+>> "Hello {name}!" ¶
+
+n = 10
+>> "n is {n}" ¶
+
+// Interpolation with computed value
+arr = [1, 2, 3]
+meta = arr#?
+len = meta[2]
+>> "len: {len}" ¶

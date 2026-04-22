@@ -64,8 +64,8 @@ pub enum Value {
     Bool(bool),
     Char(char),
     Unit,
-    /// Function/lambda reference stored as index into program.functions
-    Function(FuncIdx),
+    /// Named function reference (type ##(), display <funct/N>)
+    Function(FuncIdx, u8),
     /// Sprint 5G: ZyStr (8 bytes) — inline for ≤ 7 bytes, heap Rc<String> otherwise.
     String(ZyStr),
     Array(Rc<Vec<Value>>),
@@ -73,8 +73,11 @@ pub enum Value {
     Tuple(Rc<Vec<Value>>),
     /// Named tuple: Vec of (field_name, value) pairs
     NamedTuple(Rc<Vec<(String, Value)>>),
-    /// Closure: function + captured upvalues from the enclosing scope
-    Closure(FuncIdx, Rc<Vec<Value>>),
+    /// Lambda (with or without captures): function + arity + upvalues (type ##->, display <lambd/N>)
+    Closure(FuncIdx, u8, Rc<Vec<Value>>),
+    /// Error value (error-as-value flow: <~ _err inside :! block)
+    /// Inner string is the formatted error: "##Kind(message)"
+    Error(ZyStr),
 }
 
 impl fmt::Display for Value {
@@ -111,9 +114,10 @@ impl fmt::Display for Value {
                 }
                 write!(f, ")")
             }
-            Value::Function(_) => write!(f, "<lambda>"),
-            Value::Closure(_, _) => write!(f, "<lambda>"),
+            Value::Function(_, arity) => write!(f, "<funct/{}>", arity),
+            Value::Closure(_, arity, _) => write!(f, "<lambd/{}>", arity),
             Value::Unit => write!(f, "()"),
+            Value::Error(s) => write!(f, "{}", s.as_ref()),
         }
     }
 }
@@ -146,9 +150,10 @@ impl Value {
             Value::Array(_) => "Array",
             Value::Tuple(_) => "Tuple",
             Value::NamedTuple(_) => "Tuple",
-            Value::Function(_) => "Function",
-            Value::Closure(_, _) => "Function",
+            Value::Function(_, _) => "Function",
+            Value::Closure(_, _, _) => "Function",
             Value::Unit => "Unit",
+            Value::Error(_) => "Error",
         }
     }
 
@@ -478,7 +483,7 @@ impl<W: Write> VM<W> {
                         frame.try_depth = 0;
                         let err_data = frame.error.get_or_insert_with(|| Box::new(FrameError { error_val: None, error_kind: String::new() }));
                         err_data.error_kind = kind.to_string();
-                        err_data.error_val = Some(Value::String(ZyStr::new(format!("##{}({})", kind, _err))));
+                        err_data.error_val = Some(Value::Error(ZyStr::new(format!("##{}({})", kind, _err))));
                         ip = catch as usize;
                         continue;
                     }
@@ -912,6 +917,7 @@ impl<W: Write> VM<W> {
                     let val = unsafe { self.value_stack.get_unchecked(base + val_reg as usize).clone() };
                     match unsafe { self.value_stack.get_unchecked_mut(base + arr_reg as usize) } {
                         Value::Array(rc_arr) => Rc::make_mut(rc_arr).push(val),
+                        Value::Tuple(rc_tup) => Rc::make_mut(rc_tup).push(val),
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
                     }
                 }
@@ -1204,14 +1210,23 @@ impl<W: Write> VM<W> {
 
                 // ── Function refs / closures ─────────────────────────────────
                 &Instruction::MakeFunc(dst, func_idx) => {
-                    self.reg_set(dst, Value::Function(func_idx));
+                    let arity = program.functions.get(func_idx as usize)
+                        .map(|c| c.num_params as u8).unwrap_or(0);
+                    self.reg_set(dst, Value::Function(func_idx, arity));
+                }
+                &Instruction::MakeLambda(dst, func_idx) => {
+                    let arity = program.functions.get(func_idx as usize)
+                        .map(|c| c.num_params as u8).unwrap_or(0);
+                    self.reg_set(dst, Value::Closure(func_idx, arity, Rc::new(vec![])));
                 }
                 Instruction::MakeClosure(dst, func_idx, captured_regs) => {
                     let (dst, func_idx) = (*dst, *func_idx);
+                    let arity = program.functions.get(func_idx as usize)
+                        .map(|c| c.num_params as u8).unwrap_or(0);
                     let upvalues: Vec<Value> = captured_regs.iter()
                         .map(|&r| self.reg_get(r).clone())
                         .collect();
-                    self.reg_set(dst, Value::Closure(func_idx, Rc::new(upvalues)));
+                    self.reg_set(dst, Value::Closure(func_idx, arity, Rc::new(upvalues)));
                 }
 
                 // ── String ops ──────────────────────────────────────────────
@@ -1648,8 +1663,8 @@ impl<W: Write> VM<W> {
                     let callable = unsafe { self.value_stack.get_unchecked(base + callee_reg as usize).clone() };
 
                     let (func_idx, upvalues): (FuncIdx, Vec<Value>) = match callable {
-                        Value::Function(idx) => (idx, Vec::new()),
-                        Value::Closure(idx, uvs) => (idx, uvs.as_ref().clone()),
+                        Value::Function(idx, _) => (idx, Vec::new()),
+                        Value::Closure(idx, _, uvs) => (idx, uvs.as_ref().clone()),
                         other => raise!(VmError::TypeError { expected: "Function", got: other.type_name().to_string() }),
                     };
 
@@ -1918,8 +1933,10 @@ impl<W: Write> VM<W> {
                         Value::Array(a) => ("##]", a.as_ref().len() as i64),
                         Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
                         Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
-                        Value::Function(_) | Value::Closure(_, _) => ("##>", 0),
+                        Value::Function(_, arity) => ("##()", *arity as i64),
+                        Value::Closure(_, arity, _) => ("##->", *arity as i64),
                         Value::Unit => ("##_", 0),
+                        Value::Error(_) => ("##_", 0),
                     };
                     let tuple_val = Value::Tuple(Rc::new(vec![
                         Value::String(ZyStr::new(type_sym.to_string())),
@@ -2110,11 +2127,9 @@ impl<W: Write> VM<W> {
                 }
 
                 // ── Error check ───────────────────────────────────────────────
-                &Instruction::IsError(dst, _src) => {
-                    // In the VM, error values never exist in registers (errors are caught by
-                    // try/catch and stored in _err as String). So $! always returns #0 for
-                    // any value that can appear in a register.
-                    self.reg_set(dst, Value::Bool(false));
+                &Instruction::IsError(dst, src) => {
+                    let is_err = matches!(self.reg_get(src), Value::Error(_));
+                    self.reg_set(dst, Value::Bool(is_err));
                 }
                 &Instruction::LoadErrorKind(dst) => {
                     let kind = self.frame_stack.last()
@@ -2192,8 +2207,8 @@ impl<W: Write> VM<W> {
         caller_chunk: usize,
     ) -> Result<Value, VmError> {
         match callable {
-            Value::Function(idx) => self.call_function(idx, args, &[], program, caller_ip, caller_chunk),
-            Value::Closure(idx, upvalues) => self.call_function(idx, args, upvalues.as_ref(), program, caller_ip, caller_chunk),
+            Value::Function(idx, _) => self.call_function(idx, args, &[], program, caller_ip, caller_chunk),
+            Value::Closure(idx, _, upvalues) => self.call_function(idx, args, upvalues.as_ref(), program, caller_ip, caller_chunk),
             other => Err(VmError::TypeError { expected: "Function", got: other.type_name().to_string() }),
         }
     }
@@ -2384,14 +2399,23 @@ impl<W: Write> VM<W> {
                     w!(dst, result);
                 }
                 &Instruction::MakeFunc(dst, func_idx) => {
-                    w!(dst, Value::Function(func_idx));
+                    let arity = program.functions.get(func_idx as usize)
+                        .map(|c| c.num_params as u8).unwrap_or(0);
+                    w!(dst, Value::Function(func_idx, arity));
+                }
+                &Instruction::MakeLambda(dst, func_idx) => {
+                    let arity = program.functions.get(func_idx as usize)
+                        .map(|c| c.num_params as u8).unwrap_or(0);
+                    w!(dst, Value::Closure(func_idx, arity, Rc::new(vec![])));
                 }
                 Instruction::MakeClosure(dst, func_idx, captured_regs) => {
                     let (dst, func_idx) = (*dst, *func_idx);
+                    let arity = program.functions.get(func_idx as usize)
+                        .map(|c| c.num_params as u8).unwrap_or(0);
                     let upvalues: Vec<Value> = captured_regs.iter()
                         .map(|&cr| self.value_stack[base + cr as usize].clone())
                         .collect();
-                    self.value_stack[base + dst as usize] = Value::Closure(func_idx, Rc::new(upvalues));
+                    self.value_stack[base + dst as usize] = Value::Closure(func_idx, arity, Rc::new(upvalues));
                 }
                 Instruction::Call(dst, func_idx, arg_regs) => {
                     let (dst, func_idx) = (*dst, *func_idx);
@@ -2513,8 +2537,10 @@ impl<W: Write> VM<W> {
                 &Instruction::NewArray(dst) => { w!(dst, Value::Array(Rc::new(Vec::new()))); }
                 &Instruction::ArrayPush(arr_reg, val_reg) => {
                     let val = r!(val_reg).clone();
-                    if let Value::Array(rc) = &mut self.value_stack[base + arr_reg as usize] {
-                        Rc::make_mut(rc).push(val);
+                    match &mut self.value_stack[base + arr_reg as usize] {
+                        Value::Array(rc) => Rc::make_mut(rc).push(val),
+                        Value::Tuple(rc) => Rc::make_mut(rc).push(val),
+                        _ => {}
                     }
                 }
                 &Instruction::ArrayContains(dst, arr_reg, elem_reg) => {
@@ -2911,6 +2937,10 @@ impl<W: Write> VM<W> {
                         Value::Char(_) => ("##'", 1),
                         Value::Bool(_) => ("##?", 1),
                         Value::Array(a) => ("##]", a.as_ref().len() as i64),
+                        Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
+                        Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
+                        Value::Function(_, arity) => ("##()", *arity as i64),
+                        Value::Closure(_, arity, _) => ("##->", *arity as i64),
                         _ => ("##_", 0),
                     };
                     w!(dst, Value::Tuple(Rc::new(vec![val.clone(), Value::String(ZyStr::new(type_sym.to_string())), Value::Int(len)])));

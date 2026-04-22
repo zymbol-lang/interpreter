@@ -232,6 +232,48 @@ limit := 100
 >> limit ¶          // 100  — original constant preserved
 ```
 
+### L16 — `!?` corrupts outer scope when a function fails with "undefined variable" *(implementation gap)*
+
+When a named function is called inside `!?` and fails because it references an outer variable (which is inaccessible in direct-call isolated scope), the error recovery corrupts the caller's scope — **all outer variables become undefined** after the `!?` block completes.
+
+```zymbol
+base = 10
+adder(n) { <~ n + base }   // references 'base' — inaccessible on direct call
+
+!? {
+    adder(5)               // fails: undefined variable 'base'
+} :! {
+    >> "caught" ¶          // executes correctly in TW
+}
+
+>> base ¶                  // ⚠ runtime error: undefined variable 'base'
+                           //   outer scope was corrupted
+```
+
+**Both modes are affected** but differently:
+- **Tree-walker**: `:!` fires correctly, but all outer variables are gone afterward.
+- **VM**: `:!` does not even execute; outer scope is also corrupted.
+
+**Root cause hypothesis**: the scope snapshot taken on entering `!?` is restored incorrectly when the error originates inside the function's isolated scope — the interpreter unwinds past the outer scope's variable bindings.
+
+**Trigger condition**: specifically a function referencing an outer variable, called directly inside `!?`. Errors from other sources (index out of bounds, division by zero, etc.) do **not** cause this corruption:
+
+```zymbol
+base = 10
+!? { dummy = [1][99] } :! { }
+>> base ¶    // → 10  (scope intact — unrelated error does not corrupt)
+```
+
+**Workaround**: never call functions that reference outer variables directly inside `!?`. Use a wrapper that converts the error before entering the try block, or restructure to avoid the direct call pattern:
+
+```zymbol
+base = 10
+adder(n) { <~ n + base }
+
+// Workaround: call outside !?, catch the result
+result = adder(base)       // works when base is captured via f = adder
+```
+
 ---
 
 ## 20b. Error Taxonomy

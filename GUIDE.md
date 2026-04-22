@@ -1184,14 +1184,36 @@ To share mutable state across calls, use a named function with a module-level va
 
 ### Named Functions vs Lambdas
 
-Named functions (`name(params) { }`) execute in a **fully isolated scope** — they do not capture outer variables and cannot read or write the caller's locals. Their only inputs are their parameters (including `<~` output params):
+Named functions (`name(params) { }`) called **directly by name** execute in a **fully isolated scope** — they cannot read or write outer variables. Their only inputs are their parameters:
 
 ```zymbol
 x = 42
 peek() { <~ x }    // runtime error: undefined variable: 'x'
 ```
 
-Use lambdas when you need to close over outer state; use named functions when you want strict isolation.
+> ⚠ **Asymmetric capture**: a named function's behavior depends on how it is used, not only on how it is defined.
+>
+> | Usage | Scope | Outer variables |
+> |-------|-------|-----------------|
+> | `fn(args)` — direct call | isolated | not accessible |
+> | `f = fn` then `f(args)` — as first-class value | captures at assignment | snapshot, read-only |
+>
+> ```zymbol
+> base = 10
+> adder(n) { <~ n + base }
+>
+> adder(5)       // runtime error: undefined variable: 'base'
+>
+> f = adder      // captures current scope: { base: 10 }
+> >> f(5) ¶      // → 15
+>
+> base = 99
+> >> f(5) ¶      // → 15  (snapshot — change to base does not affect f)
+> ```
+>
+> This means `adder(5)` and `(f = adder)(5)` are **not equivalent** when the function body references outer names. If you need a function that always has access to outer state regardless of how it is called, use a lambda.
+
+Use lambdas when you need to close over outer state; use named functions when you want strict isolation on direct calls.
 
 ---
 

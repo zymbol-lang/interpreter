@@ -1,0 +1,18 @@
+// P2-D: arr[i](args) — calling a lambda stored at an array index
+// Fixed in v0.0.4: parse_output_item_postfix is_callable guard
+
+ops = [x -> x * 2, x -> x + 10, x -> x * x]
+
+// Call each lambda by index
+>> ops[1](5) ¶
+>> ops[2](5) ¶
+>> ops[3](5) ¶
+
+// Assign indexed lambda to variable, then call
+f = ops[2]
+>> f(7) ¶
+
+// Multi-argument lambdas in array
+calc = [(a, b) -> a + b, (a, b) -> a * b]
+>> calc[1](3, 4) ¶
+>> calc[2](3, 4) ¶
