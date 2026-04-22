@@ -27,6 +27,7 @@ impl<W: Write> Interpreter<W> {
             params: lambda.params.clone(),
             body: lambda.body.clone(),
             captures: Rc::new(captures),
+            is_named_fn: false,
         }))
     }
 
@@ -103,6 +104,7 @@ impl<W: Write> Interpreter<W> {
 
         // QW1: execute_block_no_scope avoids the extra push_scope/pop_scope that
         // execute_block would add — take_call_state already created scope[0].
+        let is_named = func.is_named_fn;
         let result = match &func.body {
             zymbol_ast::LambdaBody::Expr(expr) => {
                 self.eval_expr(expr)?
@@ -115,10 +117,14 @@ impl<W: Write> Interpreter<W> {
                         val.unwrap_or(Value::Unit)
                     }
                     _ => {
-                        return Err(RuntimeError::Generic {
-                            message: "block lambda must use <~ to return value".to_string(),
-                            span: *span,
-                        });
+                        if is_named {
+                            Value::Unit
+                        } else {
+                            return Err(RuntimeError::Generic {
+                                message: "block lambda must use <~ to return value".to_string(),
+                                span: *span,
+                            });
+                        }
                     }
                 }
             }
@@ -212,6 +218,22 @@ impl<W: Write> Interpreter<W> {
                     }
                 }
             }
+        }
+    }
+
+    /// Convert a named FunctionDef into a first-class FunctionValue (Opción A).
+    /// Selectively captures only the variables referenced in the function body
+    /// from the current scope, so the result behaves like a closure.
+    pub(crate) fn func_def_to_value(&self, func_def: &Rc<FunctionDef>) -> FunctionValue {
+        let mut refs = HashSet::new();
+        let mut locals: HashSet<String> = func_def.parameters.iter().map(|p| p.name.clone()).collect();
+        collect_refs_in_stmts(&func_def.body.statements, &mut locals, &mut refs);
+        let captures = self.capture_only(&refs);
+        FunctionValue {
+            params: func_def.parameters.iter().map(|p| p.name.clone()).collect(),
+            body: zymbol_ast::LambdaBody::Block(func_def.body.clone()),
+            captures: Rc::new(captures),
+            is_named_fn: true,
         }
     }
 

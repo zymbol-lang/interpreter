@@ -1,0 +1,26 @@
+// test_me.zy — Loop @ with literal vs variable count, and labeled loops
+
+// Case 1: literal integer — always worked
+@ 5 {
+    >> "literal" ¶
+}
+
+// Case 2: variable integer — previously warned "loop condition should be Bool, got Int"
+count = 5
+@ count {
+    >> "variable" ¶
+}
+
+// Case 3: labeled loop (infinite) — @:label syntax
+i = 0
+@:outer {
+    i++
+    ? i >= 3 { @:outer! }
+}
+>> "outer stopped at i=" i ¶
+
+// Case 4: labeled loop with variable count
+n = 3
+@:timed n {
+    >> "timed-labeled" ¶
+}

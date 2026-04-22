@@ -212,8 +212,10 @@ pub enum VmError {
     CastError { op: &'static str, got: String },
     #[error("division by zero")]
     DivisionByZero,
-    #[error("index out of bounds: index {index}, length {length}")]
+    #[error("array index out of bounds: index {index} for array of length {length}")]
     IndexOutOfBounds { index: i64, length: usize },
+    #[error("index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)")]
+    IndexZero,
     #[error("undefined function index {0}")]
     UndefinedFunction(FuncIdx),
     #[error("register {0} out of range")]
@@ -469,14 +471,14 @@ impl<W: Write> VM<W> {
                         let kind = match &_err {
                             VmError::TypeError { .. } | VmError::CastError { .. } => "Type",
                             VmError::DivisionByZero => "Div",
-                            VmError::IndexOutOfBounds { .. } => "Index",
+                            VmError::IndexOutOfBounds { .. } | VmError::IndexZero => "Index",
                             VmError::Io(_) => "IO",
                             _ => "_",
                         };
                         frame.try_depth = 0;
                         let err_data = frame.error.get_or_insert_with(|| Box::new(FrameError { error_val: None, error_kind: String::new() }));
                         err_data.error_kind = kind.to_string();
-                        err_data.error_val = Some(Value::String(ZyStr::new(format!("{}", _err))));
+                        err_data.error_val = Some(Value::String(ZyStr::new(format!("##{}({})", kind, _err))));
                         ip = catch as usize;
                         continue;
                     }
@@ -920,8 +922,7 @@ impl<W: Write> VM<W> {
                     };
                     let val = match &self.value_stack[base + arr_reg as usize] {
                         Value::Array(arr) => {
-                            let i = if idx == 0 {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
@@ -929,8 +930,7 @@ impl<W: Write> VM<W> {
                             arr[i as usize].clone()
                         }
                         Value::Tuple(items) => {
-                            let i = if idx == 0 {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: items.len() });
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { items.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= items.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: items.len() });
@@ -938,8 +938,7 @@ impl<W: Write> VM<W> {
                             items[i as usize].clone()
                         }
                         Value::NamedTuple(fields) => {
-                            let i = if idx == 0 {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= fields.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
@@ -949,8 +948,7 @@ impl<W: Write> VM<W> {
                         Value::String(s) => {
                             // Single-pass: find the i-th char without collecting Vec<char>
                             let char_count = s.chars().count();
-                            let i = if idx == 0 {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: char_count });
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { char_count as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= char_count {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: char_count });
@@ -968,8 +966,7 @@ impl<W: Write> VM<W> {
                     match &mut self.value_stack[base + arr_reg as usize] {
                         Value::Array(rc_arr) => {
                             let arr = Rc::make_mut(rc_arr);
-                            let i = if idx == 0 {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
@@ -994,8 +991,7 @@ impl<W: Write> VM<W> {
                     let result = match std::mem::replace(&mut self.value_stack[base + arr_reg as usize], Value::Unit) {
                         Value::Array(mut rc_arr) => {
                             let arr = Rc::make_mut(&mut rc_arr);
-                            let i = if idx == 0 {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
@@ -1005,8 +1001,7 @@ impl<W: Write> VM<W> {
                         }
                         Value::Tuple(rc_tup) => {
                             let mut tup = rc_tup.as_ref().clone();
-                            let i = if idx == 0 {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() });
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { tup.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= tup.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() });
@@ -1016,8 +1011,7 @@ impl<W: Write> VM<W> {
                         }
                         Value::NamedTuple(rc_fields) => {
                             let mut fields = rc_fields.as_ref().clone();
-                            let i = if idx == 0 {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= fields.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
@@ -1027,8 +1021,7 @@ impl<W: Write> VM<W> {
                         }
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
-                            let i = if idx == 0 {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() });
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { chars.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= chars.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() });
@@ -1851,13 +1844,16 @@ impl<W: Write> VM<W> {
                     let result = match self.reg_get(tuple_reg) {
                         Value::NamedTuple(fields) => {
                             let field_name = field_name.clone();
-                            let available: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
-                            fields.iter().find(|(n, _)| *n == field_name)
-                                .map(|(_, v)| v.clone())
-                                .ok_or_else(|| VmError::Generic(format!(
-                                    "runtime error: Named tuple has no field '{}'. Available fields: {}",
-                                    field_name, available.join(", ")
-                                )))?
+                            match fields.iter().find(|(n, _)| *n == field_name).map(|(_, v)| v.clone()) {
+                                Some(v) => v,
+                                None => {
+                                    let available: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
+                                    raise!(VmError::Generic(format!(
+                                        "Named tuple has no field '{}'. Available fields: {}",
+                                        field_name, available.join(", ")
+                                    )));
+                                }
+                            }
                         }
                         // positional index on array (tuple[0])
                         Value::Array(arr) => {
@@ -1870,7 +1866,7 @@ impl<W: Write> VM<W> {
                         Value::Tuple(_) => {
                             let field_name = field_name.clone();
                             raise!(VmError::Generic(format!(
-                                "runtime error: Cannot access field '{}' on positional tuple. Use positional indexing like tuple[1]",
+                                "Cannot access field '{}' on positional tuple. Use positional indexing like tuple[1]",
                                 field_name
                             )));
                         }
@@ -2065,7 +2061,7 @@ impl<W: Write> VM<W> {
                             msg = String::from_utf8_lossy(&out.stdout).into_owned();
                         }
                         let msg = msg.trim_end().to_string();
-                        return Err(VmError::Generic(format!("runtime error: {}", msg)));
+                        return Err(VmError::Generic(msg));
                     }
                     let result = String::from_utf8_lossy(&out.stdout).into_owned();
                     self.reg_set(dst, Value::String(ZyStr::new(result)));

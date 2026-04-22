@@ -106,15 +106,22 @@ impl<W: Write> Interpreter<W> {
 
     /// Evaluate an identifier (variable reference)
     pub(crate) fn eval_identifier(&self, ident: &IdentifierExpr) -> Result<Value> {
-        // Check if variable has been destroyed (use-after-free detection)
         self.check_variable_alive(&ident.name, &ident.span)?;
 
-        self.get_variable(&ident.name)
-            .cloned()
-            .ok_or_else(|| RuntimeError::Generic {
-                message: format!("undefined variable: '{}'", ident.name),
-                span: ident.span,
-            })
+        if let Some(val) = self.get_variable(&ident.name) {
+            return Ok(val.clone());
+        }
+
+        // Not in scope — check if it's a named function used as a first-class value.
+        // Captures the current scope at point of use (Opción A).
+        if let Some(func_def) = self.functions.get(&ident.name) {
+            return Ok(Value::Function(self.func_def_to_value(func_def)));
+        }
+
+        Err(RuntimeError::Generic {
+            message: format!("undefined variable: '{}'", ident.name),
+            span: ident.span,
+        })
     }
 
     /// Evaluate member access expression: object.field

@@ -42,7 +42,7 @@ impl Parser {
         let start_span = collection.span();
         self.advance(); // consume $+
 
-        let element = self.parse_postfix()?; // Parse the element to append
+        let element = self.parse_postfix_structural()?; // Stop before next $+ to allow chaining
         let span = start_span.to(&element.span());
 
         Ok(Expr::CollectionAppend(CollectionAppendExpr::new(
@@ -316,7 +316,7 @@ impl Parser {
         let start_span = collection.span();
         self.advance(); // consume $>
 
-        let lambda = self.parse_lambda()?; // Parse the lambda function
+        let lambda = self.parse_lambda_or_ident()?; // Parse lambda or function reference
         let span = start_span.to(&lambda.span());
 
         Ok(Expr::CollectionMap(zymbol_ast::CollectionMapExpr {
@@ -331,7 +331,7 @@ impl Parser {
         let start_span = collection.span();
         self.advance(); // consume $|
 
-        let lambda = self.parse_lambda()?; // Parse the lambda function
+        let lambda = self.parse_lambda_or_ident()?; // Parse lambda or function reference
         let span = start_span.to(&lambda.span());
 
         Ok(Expr::CollectionFilter(zymbol_ast::CollectionFilterExpr {
@@ -366,7 +366,7 @@ impl Parser {
         }
         self.advance(); // consume ,
 
-        let lambda = self.parse_lambda()?; // Parse the lambda function
+        let lambda = self.parse_lambda_or_ident()?; // Parse lambda or function reference
 
         // Expect )
         let close_token = self.peek().clone();

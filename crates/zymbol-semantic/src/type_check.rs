@@ -470,10 +470,11 @@ impl TypeChecker {
                 // Check condition if present
                 if let Some(condition) = &loop_stmt.condition {
                     let cond_type = self.infer_expr(condition);
-                    let is_times_loop = matches!(
-                        condition.as_ref(),
-                        Expr::Literal(lit) if matches!(lit.value, zymbol_common::Literal::Int(n) if n > 0)
-                    );
+                    let is_times_loop = matches!(cond_type, ZymbolType::Int)
+                        || matches!(
+                            condition.as_ref(),
+                            Expr::Literal(lit) if matches!(lit.value, zymbol_common::Literal::Int(_))
+                        );
                     if !is_times_loop && !matches!(cond_type, ZymbolType::Bool | ZymbolType::Any | ZymbolType::Unknown) {
                         self.warnings.push(
                             Diagnostic::warning(format!(

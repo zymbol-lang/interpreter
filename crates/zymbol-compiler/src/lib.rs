@@ -48,6 +48,8 @@ pub enum CompileError {
     UndefinedVariable(String),
     #[error("unsupported construct: {0}")]
     Unsupported(String),
+    #[error("module not found: {0}")]
+    ModuleNotFound(String),
     #[error("break outside loop")]
     BreakOutsideLoop,
     #[error("continue outside loop")]
@@ -262,6 +264,9 @@ pub struct Compiler {
     global_var_map: HashMap<String, u16>,
     /// Initial values for global module variables (indexed by u16)
     global_var_inits: Vec<zymbol_bytecode::GlobalInit>,
+    /// Known module aliases (registered via import). Used to distinguish
+    /// "private function" errors from "completely unknown" errors at call sites.
+    known_module_aliases: HashSet<String>,
 }
 
 impl Compiler {
@@ -283,6 +288,7 @@ impl Compiler {
             module_scope: HashMap::new(),
             global_var_map: HashMap::new(),
             global_var_inits: Vec::new(),
+            known_module_aliases: HashSet::new(),
         };
 
         // Process imports first — register module functions as "alias::func"
@@ -384,7 +390,7 @@ impl Compiler {
 
         // Read module source
         let source = std::fs::read_to_string(&path)
-            .map_err(|e| CompileError::Unsupported(format!("cannot read module '{}': {}", path.display(), e)))?;
+            .map_err(|_| CompileError::ModuleNotFound(path.display().to_string()))?;
 
         // Lex + parse
         let file_id = zymbol_span::FileId(0);
@@ -468,6 +474,9 @@ impl Compiler {
             local_scope.insert(name.clone(), idx);
             self.functions.push(Chunk::new(name.as_str()));
         }
+
+        // Mark this module alias as known (for private-function error detection)
+        self.known_module_aliases.insert(alias.to_string());
 
         // Register exported functions in function_index as "alias::public_name"
         for (internal, public) in &own_func_exports {
@@ -1209,7 +1218,7 @@ impl Compiler {
                 }
                 // In function bodies, defer to runtime (matches tree-walker behavior)
                 if self.in_function_body {
-                    let msg = format!("runtime error: undefined variable: '{}'", id.name);
+                    let msg = format!("undefined variable: '{}'", id.name);
                     let idx = self.intern_string(&msg);
                     let dst = ctx.alloc_temp()?;
                     ctx.emit(Instruction::RaiseError(idx));
@@ -1800,6 +1809,27 @@ impl Compiler {
             }
             _ => None,
         };
+
+        // If call target is an unresolved module call (alias::func not exported),
+        // emit a RaiseError so the VM produces the correct runtime message.
+        if maybe_func_idx.is_none() {
+            if let Expr::MemberAccess(ma) = call.callable.as_ref() {
+                if let Expr::Identifier(obj) = ma.object.as_ref() {
+                    if self.known_module_aliases.contains(&obj.name) {
+                        let msg = format!("module '{}' does not export function '{}'", obj.name, ma.field);
+                        let idx = self.intern_string(&msg);
+                        // Compile arguments for side effects (dropped), then emit RaiseError
+                        for arg in &call.arguments {
+                            self.compile_expr(arg, ctx)?;
+                        }
+                        let dst = ctx.alloc_temp()?;
+                        ctx.emit(Instruction::RaiseError(idx));
+                        ctx.emit(Instruction::LoadUnit(dst));
+                        return Ok(dst);
+                    }
+                }
+            }
+        }
 
         // Compile arguments
         let mut arg_regs = Vec::with_capacity(call.arguments.len());

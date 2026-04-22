@@ -6,7 +6,7 @@
 //! - Return statements: <~ expr
 //! - Function call statements
 
-use zymbol_ast::{Expr, ExprStatement, FunctionDecl, LambdaBody, Parameter, ParameterKind, ReturnStmt, Statement};
+use zymbol_ast::{Expr, ExprStatement, FunctionDecl, IdentifierExpr, LambdaBody, Parameter, ParameterKind, ReturnStmt, Statement};
 use zymbol_error::Diagnostic;
 use zymbol_lexer::TokenKind;
 use crate::Parser;
@@ -240,5 +240,28 @@ impl Parser {
             body,
             span,
         }))
+    }
+
+    /// Parse a lambda expression OR a bare identifier used as a function reference.
+    /// Called by HOF operators ($>, $?, $<, $^) to support named functions as callables.
+    ///
+    /// - `ident` (not followed by `->`) → `Expr::Identifier` (function reference)
+    /// - `x -> expr` / `(a, b) -> expr` → `Expr::Lambda`
+    pub(crate) fn parse_lambda_or_ident(&mut self) -> Result<Expr, Diagnostic> {
+        // If the current token is an identifier not followed by `->`, it's a function reference.
+        if let TokenKind::Ident(ref name) = self.peek().kind.clone() {
+            let is_lambda = matches!(
+                self.peek_ahead(1).map(|t| &t.kind),
+                Some(TokenKind::Arrow)
+            );
+            if !is_lambda {
+                let token = self.advance();
+                return Ok(Expr::Identifier(IdentifierExpr {
+                    name: name.clone(),
+                    span: token.span,
+                }));
+            }
+        }
+        self.parse_lambda()
     }
 }

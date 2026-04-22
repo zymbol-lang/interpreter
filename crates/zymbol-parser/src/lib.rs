@@ -123,9 +123,9 @@ impl Parser {
             TokenKind::CliArgsCapture => self.parse_cli_args_capture(),
             TokenKind::Question => self.parse_if(),
             TokenKind::DoubleQuestion => self.parse_match_statement(),
-            TokenKind::At | TokenKind::AtLabel(_) => self.parse_loop(),
-            TokenKind::AtBreak => self.parse_break(),
-            TokenKind::AtContinue => self.parse_continue(),
+            TokenKind::At | TokenKind::AtLabel(_) | TokenKind::AtColonLabel(_) => self.parse_loop(),
+            TokenKind::AtBreak | TokenKind::AtColonLabelBreak(_) => self.parse_break(),
+            TokenKind::AtContinue | TokenKind::AtColonLabelContinue(_) => self.parse_continue(),
             TokenKind::TryBlock => self.parse_try_statement(),
             TokenKind::Newline | TokenKind::Backslash2 => self.parse_newline(),
             TokenKind::Backslash => self.parse_lifetime_end(),
@@ -310,6 +310,78 @@ impl Parser {
         } else {
             Ok(start)
         }
+    }
+
+    /// Parse unary + structural postfix only: `[]`, `.`, `()`.
+    /// Stops before any `$X` collection operator.
+    /// Used as the argument parser for binary collection ops so that
+    /// `arr$+ 4$+ 5` chains as `(arr$+ 4)$+ 5` instead of `arr$+(4$+5)`.
+    pub(crate) fn parse_postfix_structural(&mut self) -> Result<Expr, Diagnostic> {
+        let mut expr = self.parse_unary()?;
+        loop {
+            match self.peek().kind {
+                TokenKind::LBracket => {
+                    if self.peek().span.start.line != expr.span().end.line { break; }
+                    if self.is_nav_index() {
+                        expr = self.parse_nav_index(expr)?;
+                    } else {
+                        self.advance();
+                        let index = self.parse_expr()?;
+                        let close = self.peek().clone();
+                        if !matches!(close.kind, TokenKind::RBracket) {
+                            return Err(Diagnostic::error("expected ']' after index")
+                                .with_span(close.span));
+                        }
+                        self.advance();
+                        let span = expr.span().to(&close.span);
+                        expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
+                    }
+                }
+                TokenKind::Dot => {
+                    self.advance();
+                    let field_token = self.peek().clone();
+                    let field_name = if let TokenKind::Ident(ref name) = field_token.kind {
+                        name.clone()
+                    } else {
+                        return Err(Diagnostic::error("expected field name after '.'")
+                            .with_span(field_token.span));
+                    };
+                    self.advance();
+                    let span = expr.span().to(&field_token.span);
+                    expr = Expr::MemberAccess(zymbol_ast::MemberAccessExpr::new(
+                        Box::new(expr), field_name, span,
+                    ));
+                }
+                TokenKind::LParen => {
+                    if matches!(expr, Expr::Literal(_)) { break; }
+                    if self.peek().span.start.line != expr.span().end.line { break; }
+                    self.advance();
+                    let mut arguments = Vec::new();
+                    if !matches!(self.peek().kind, TokenKind::RParen) {
+                        loop {
+                            arguments.push(self.parse_expr()?);
+                            if matches!(self.peek().kind, TokenKind::Comma) {
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    let rparen = self.peek().clone();
+                    if !matches!(rparen.kind, TokenKind::RParen) {
+                        return Err(Diagnostic::error("expected ')' after arguments")
+                            .with_span(rparen.span));
+                    }
+                    self.advance();
+                    let span = expr.span().to(&rparen.span);
+                    expr = Expr::FunctionCall(FunctionCallExpr::new(
+                        Box::new(expr), arguments, span,
+                    ));
+                }
+                _ => break,
+            }
+        }
+        Ok(expr)
     }
 
     /// Parse postfix expressions (indexing, member access, function calls)

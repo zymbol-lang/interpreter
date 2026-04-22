@@ -7,7 +7,7 @@
   No keywords — pure symbolic syntax with full Unicode support.
 
   Implementation: Rust workspace (17 crates)
-  Test coverage:  150/150 interpreter PASS (wt + vm)
+  Test coverage:  393/393 interpreter PASS (wt + vm)
   Execution:      Tree-walker (default) | Register VM (--vm)
 
   IMPLEMENTATION STATUS: Feature-complete as of v0.0.4_1.
@@ -254,22 +254,26 @@ list_pattern        = "[" , [ pattern , { "," , pattern } ] , "]" ;
    ========================================================================= *)
 
 (* Universal loop — form inferred from specifier *)
-loop_stmt      = "@" , [ loop_label ] , [ loop_spec ] , block ;
-(* Label comes BEFORE the specifier — parser reads @label then condition/for-each *)
+loop_stmt      = loop_head , [ loop_spec ] , block ;
+(* Label comes BEFORE the specifier — parser reads @:label then condition/for-each *)
 
-loop_label     = "@" , identifier ;
+loop_head      = "@:label"                      (* labeled loop: @:name (v0.0.4) *)
+               | "@" ;                          (* unlabeled loop *)
+(* "label" is any identifier fused after @: — e.g. @:outer, @:inner *)
 
 loop_spec      = identifier , ":" , iterable   (* for-each / range *)
                | expr ;                         (* times loop (Int literal > 0) or while condition (Bool expr) *)
 (* Form inferred at runtime from the initial value of expr:
    - Int n > 0  → TIMES loop: body executes exactly n times (condition evaluated once)
    - otherwise  → WHILE loop: condition re-evaluated before each iteration
-   "@" alone (no label, no spec) = infinite loop *)
+   "@" or "@:name" alone (no spec) = infinite loop *)
 
 iterable       = range_expr | expr ;            (* array, string, or range *)
 
-break_stmt     = "@!" , [ identifier ] ;        (* @! or @! label *)
-continue_stmt  = "@>" , [ identifier ] ;        (* @> or @> label *)
+break_stmt     = "@:label!"                     (* labeled break:    @:name!  (v0.0.4) *)
+               | "@!" ;                         (* unlabeled break: @! *)
+continue_stmt  = "@:label>"                     (* labeled continue: @:name>  (v0.0.4) *)
+               | "@>" ;                         (* unlabeled continue: @> *)
 
 (* =========================================================================
    ERROR HANDLING
@@ -351,12 +355,10 @@ base_expr      = pipe_expr ;
 (* Pipe — value |> function(_) *)
 pipe_expr      = logic_or , { "|>" , pipe_call } ;
 
-pipe_call      = identifier , "(" , pipe_args , ")"
-               | lambda , "(" , pipe_args , ")" ;
-(* NOTE: identifier here must be a lambda-variable (stored in self.variables).
-   Named functions (stored in self.functions) are NOT first-class and will fail
-   with "undefined variable" when used as pipe callables.
-   Workaround: wrap named function in lambda — add_fn = (a, b) -> add(a, b) *)
+pipe_call      = ( identifier | lambda ) , [ "(" , pipe_args , ")" ] ;
+(* NOTE: omitting ( pipe_args ) is implicit first-position: x |> f  ≡  f(x)  (v0.0.4).
+   When the piped value goes in a non-first position, an explicit "(" pipe_args ")" with
+   at least one "_" placeholder is required. *)
 
 pipe_args      = pipe_arg , { "," , pipe_arg } ;
 pipe_arg       = "_"                            (* placeholder for piped value *)

@@ -195,8 +195,14 @@ pub enum TokenKind {
     AtBreak,
     /// @> (continue)
     AtContinue,
-    /// @label (labeled loop declaration: @outer i:1..5 { })
+    /// @label (labeled loop declaration, legacy — fused without colon)
     AtLabel(String),
+    /// @:label (labeled loop declaration: @:outer i:1..5 { })
+    AtColonLabel(String),
+    /// @:label! (labeled break: @:outer!)
+    AtColonLabelBreak(String),
+    /// @:label> (labeled continue: @:outer>)
+    AtColonLabelContinue(String),
 
     // Member access and range operators
     /// . (member access)

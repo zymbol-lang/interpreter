@@ -12,37 +12,51 @@ use zymbol_lexer::TokenKind;
 use crate::Parser;
 
 impl Parser {
-    /// Parse break statement: @!
+    /// Parse break statement: @! [label] or @:label!
     pub(crate) fn parse_break(&mut self) -> Result<Statement, Diagnostic> {
-        let start_span = self.advance().span; // consume @!
+        let token = self.advance(); // consume @! or @:label!
+        let start_span = token.span;
 
-        // Check for optional label: @! label
-        let label = if matches!(self.peek().kind, TokenKind::Ident(_)) {
-            let label_token = self.advance();
-            match &label_token.kind {
-                TokenKind::Ident(name) => Some(name.clone()),
-                _ => unreachable!(),
+        let label = match &token.kind {
+            // @:label! — label is embedded in the token
+            TokenKind::AtColonLabelBreak(name) => Some(name.clone()),
+            // @! — check for optional space-separated label (legacy @! label)
+            _ => {
+                if matches!(self.peek().kind, TokenKind::Ident(_)) {
+                    let label_token = self.advance();
+                    match &label_token.kind {
+                        TokenKind::Ident(name) => Some(name.clone()),
+                        _ => unreachable!(),
+                    }
+                } else {
+                    None
+                }
             }
-        } else {
-            None
         };
 
         Ok(Statement::Break(Break::new(label, start_span)))
     }
 
-    /// Parse continue statement: @>
+    /// Parse continue statement: @> [label] or @:label>
     pub(crate) fn parse_continue(&mut self) -> Result<Statement, Diagnostic> {
-        let start_span = self.advance().span; // consume @>
+        let token = self.advance(); // consume @> or @:label>
+        let start_span = token.span;
 
-        // Check for optional label: @> label
-        let label = if matches!(self.peek().kind, TokenKind::Ident(_)) {
-            let label_token = self.advance();
-            match &label_token.kind {
-                TokenKind::Ident(name) => Some(name.clone()),
-                _ => unreachable!(),
+        let label = match &token.kind {
+            // @:label> — label is embedded in the token
+            TokenKind::AtColonLabelContinue(name) => Some(name.clone()),
+            // @> — check for optional space-separated label (legacy @> label)
+            _ => {
+                if matches!(self.peek().kind, TokenKind::Ident(_)) {
+                    let label_token = self.advance();
+                    match &label_token.kind {
+                        TokenKind::Ident(name) => Some(name.clone()),
+                        _ => unreachable!(),
+                    }
+                } else {
+                    None
+                }
             }
-        } else {
-            None
         };
 
         Ok(Statement::Continue(Continue::new(label, start_span)))
@@ -50,13 +64,13 @@ impl Parser {
 
     /// Parse loop statement: @ condition { } or @ var:iterable { }
     pub(crate) fn parse_loop(&mut self) -> Result<Statement, Diagnostic> {
-        // Consume the opening token: either @ (plain) or @label (fused labeled loop)
+        // Consume the opening token: @, @label (legacy), or @:label
         let opening = self.advance();
         let start_span = opening.span;
 
-        // Extract label if this is an @label token
+        // Extract label from @label (legacy) or @:label token
         let label = match &opening.kind {
-            TokenKind::AtLabel(name) => Some(name.clone()),
+            TokenKind::AtLabel(name) | TokenKind::AtColonLabel(name) => Some(name.clone()),
             _ => None,
         };
 

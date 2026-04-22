@@ -231,10 +231,11 @@ fn run_file(path: PathBuf, args: Vec<String>, use_vm: bool) -> Result<()> {
         let compiled = match Compiler::compile_with_dir(&program, path.parent()) {
             Ok(c) => c,
             Err(e) => {
-                // Circular imports and module parse errors match WT "Runtime error:" format
+                // These errors match the tree-walker "Runtime error:" format
                 if matches!(e,
                     zymbol_compiler::CompileError::CircularImport(_) |
-                    zymbol_compiler::CompileError::ModuleParse(_)
+                    zymbol_compiler::CompileError::ModuleParse(_) |
+                    zymbol_compiler::CompileError::ModuleNotFound(_)
                 ) {
                     eprintln!("Runtime error: {}", e);
                 } else {

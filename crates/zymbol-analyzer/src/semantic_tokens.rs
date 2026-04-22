@@ -66,9 +66,12 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         | TokenKind::Underscore      // _  (else/wildcard)
         | TokenKind::DoubleQuestion  // ?? (match)
         | TokenKind::At              // @  (loop)
-        | TokenKind::AtBreak         // @! (break)
-        | TokenKind::AtContinue      // @> (continue)
-        | TokenKind::AtLabel(_)      // @label (labeled loop)
+        | TokenKind::AtBreak              // @! (break)
+        | TokenKind::AtContinue           // @> (continue)
+        | TokenKind::AtLabel(_)           // @label (labeled loop, legacy)
+        | TokenKind::AtColonLabel(_)      // @:label
+        | TokenKind::AtColonLabelBreak(_) // @:label!
+        | TokenKind::AtColonLabelContinue(_) // @:label>
         | TokenKind::TryBlock        // !? (try)
         | TokenKind::CatchBlock      // :! (catch)
         | TokenKind::FinallyBlock    // :> (finally)
@@ -266,6 +269,8 @@ fn token_length(kind: &TokenKind) -> u32 {
         | TokenKind::DoubleQuestion // ??
         | TokenKind::AtBreak        // @!
         | TokenKind::AtContinue     // @>
+        | TokenKind::AtColonLabelBreak(_)    // @:label! (2+name+1 chars, approximated as 2 here)
+        | TokenKind::AtColonLabelContinue(_) // @:label> (2+name+1 chars, approximated as 2 here)
         | TokenKind::TryBlock       // !?
         | TokenKind::CatchBlock     // :!
         | TokenKind::FinallyBlock   // :>
@@ -327,7 +332,8 @@ fn token_length(kind: &TokenKind) -> u32 {
         => 2,
 
         // Variable-length tokens - use span information
-        TokenKind::AtLabel(name) => (1 + name.len()) as u32, // @ + label
+        TokenKind::AtLabel(name) => (1 + name.len()) as u32, // @ + label (legacy)
+        TokenKind::AtColonLabel(name) => (2 + name.len()) as u32, // @: + label
         TokenKind::String(s) => (s.len() + 2) as u32, // +2 for quotes
         TokenKind::StringInterpolated(parts) => {
             // Estimate: sum of parts + braces + quotes

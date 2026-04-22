@@ -39,7 +39,7 @@ pub(crate) use modules::LoadedModule;
 /// Runtime errors
 #[derive(Debug, Error)]
 pub enum RuntimeError {
-    #[error("runtime error: {message}")]
+    #[error("{message}")]
     Generic { message: String, span: Span },
 
     #[error("io error: {0}")]
@@ -159,12 +159,13 @@ pub struct FunctionValue {
     pub params: Vec<String>,
     pub body: zymbol_ast::LambdaBody,
     pub captures: std::rc::Rc<std::collections::HashMap<String, Value>>,  // Shared closure env (Rc → O(1) clone)
+    /// True when this value was created from a named FunctionDecl used as a first-class value.
+    /// Named functions may complete their block without <~ and return Unit (unlike block lambdas).
+    pub is_named_fn: bool,
 }
 
 impl PartialEq for FunctionValue {
     fn eq(&self, other: &Self) -> bool {
-        // Note: We only compare params and body, not captures
-        // Closures with different captures are considered different by reference
         self.params == other.params
     }
 }
@@ -202,8 +203,12 @@ impl Value {
                     .join(", ");
                 format!("({})", contents)
             }
-            Value::Function(_) => {
-                "<lambda>".to_string()
+            Value::Function(f) => {
+                if f.is_named_fn {
+                    format!("<function/{}>", f.params.len())
+                } else {
+                    format!("<lambda/{}>", f.params.len())
+                }
             }
             Value::Error(err) => {
                 format!("##{}({})", err.error_type, err.message)

@@ -36,11 +36,16 @@ impl Parser {
             // We need to parse postfix operations like indexing and member access, but NOT function calls
             let callable = self.parse_postfix_without_calls()?;
 
-            // Expect function call syntax: callable(args)
+            // Implicit first-position pipe: x |> f  ≡  f(x)
             if !matches!(self.peek().kind, TokenKind::LParen) {
-                return Err(Diagnostic::error("expected '(' after pipe operator")
-                    .with_span(self.peek().span)
-                    .with_help("pipe syntax: value |> func(_) or value |> (x -> x * 2)(_)"));
+                let span = left.span().to(&callable.span());
+                left = Expr::Pipe(zymbol_ast::PipeExpr {
+                    left: Box::new(left),
+                    callable: Box::new(callable),
+                    arguments: vec![zymbol_ast::PipeArg::Placeholder],
+                    span,
+                });
+                continue;
             }
             self.advance(); // consume (
 
@@ -103,10 +108,16 @@ impl Parser {
         while matches!(self.peek().kind, TokenKind::PipeOp) {
             self.advance();
             let callable = self.parse_postfix_without_calls()?;
+            // Implicit first-position pipe: x |> f  ≡  f(x)
             if !matches!(self.peek().kind, TokenKind::LParen) {
-                return Err(Diagnostic::error("expected '(' after pipe operator")
-                    .with_span(self.peek().span)
-                    .with_help("pipe syntax: value |> func(_) or value |> (x -> x * 2)(_)"));
+                let span = left.span().to(&callable.span());
+                left = Expr::Pipe(zymbol_ast::PipeExpr {
+                    left: Box::new(left),
+                    callable: Box::new(callable),
+                    arguments: vec![zymbol_ast::PipeArg::Placeholder],
+                    span,
+                });
+                continue;
             }
             self.advance();
             let mut arguments = Vec::new();
@@ -489,10 +500,9 @@ impl Parser {
                     // following a literal in `>>` context starts a new parenthesized output
                     // item, not a function call. Without this guard:
                     //   >> "label" (expr) ¶  →  FunctionCall("label", [expr])  →  runtime error
-                    let is_callable = matches!(&expr,
-                        Expr::Identifier(_) | Expr::MemberAccess(_) | Expr::FunctionCall(_)
-                    );
-                    if !is_callable {
+                    // Any non-literal expression may evaluate to a Function at runtime.
+                    let is_literal = matches!(&expr, Expr::Literal(_));
+                    if is_literal {
                         break;
                     }
 
