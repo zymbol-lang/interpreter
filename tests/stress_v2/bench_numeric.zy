@@ -3,7 +3,7 @@
 // Shows integer arithmetic and loop throughput vs Python.
 // Comparison: tests/stress_v2/bench_numeric.py
 //
-// Run: zymbol run tests/stress_v2/bench_numeric.zy --vm
+// Run: zymbol run --vm tests/stress_v2/bench_numeric.zy
 // ============================================================================
 
 <# ../scripts/lib_time <= T

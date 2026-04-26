@@ -3,7 +3,7 @@
 // Optimal Zymbol: (s $/ sep)$> fn  — StrSplitMap, no intermediate array.
 // Comparison: tests/stress_v2/bench_pipeline.py
 //
-// Run: zymbol run tests/stress_v2/bench_pipeline.zy --vm
+// Run: zymbol run --vm tests/stress_v2/bench_pipeline.zy
 // ============================================================================
 
 <# ../scripts/lib_time <= T

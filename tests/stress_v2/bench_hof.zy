@@ -3,7 +3,7 @@
 // Optimal Zymbol: $> $| $< chained, $^+ $^- $^ sort.
 // Comparison: tests/stress_v2/bench_hof.py
 //
-// Run: zymbol run tests/stress_v2/bench_hof.zy --vm
+// Run: zymbol run --vm tests/stress_v2/bench_hof.zy
 // ============================================================================
 
 <# ../scripts/lib_time <= T

@@ -42,7 +42,7 @@ impl Default for FormatterConfig {
             use_spaces: true,
             max_inline_array_elements: 5,
             max_inline_array_length: 60,
-            trailing_commas: true,
+            trailing_commas: false,
             brace_same_line: true,
             inline_single_statement: true,
         }

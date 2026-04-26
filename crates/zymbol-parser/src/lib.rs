@@ -183,7 +183,31 @@ impl Parser {
                         self.parse_function_call_statement()
                     }
                 } else {
-                    self.parse_assignment()
+                    // If next token is an assignment operator, route to parse_assignment.
+                    // A bare identifier (or expression starting with one) gets parsed as
+                    // an expression statement — this makes REPL inspection work naturally.
+                    let is_assignment_op = self.peek_ahead(1)
+                        .map(|t| matches!(t.kind,
+                            TokenKind::Assign
+                            | TokenKind::PlusAssign
+                            | TokenKind::MinusAssign
+                            | TokenKind::StarAssign
+                            | TokenKind::SlashAssign
+                            | TokenKind::PercentAssign
+                            | TokenKind::CaretAssign
+                            | TokenKind::PlusPlus
+                            | TokenKind::MinusMinus
+                            | TokenKind::LBracket
+                            | TokenKind::DollarExclaimExclaim
+                        ))
+                        .unwrap_or(false);
+                    if is_assignment_op {
+                        self.parse_assignment()
+                    } else {
+                        let expr = self.parse_expr()?;
+                        let span = expr.span();
+                        Ok(Statement::Expr(ExprStatement::new(expr, span)))
+                    }
                 }
             }
             TokenKind::LBracket => {
@@ -865,9 +889,9 @@ impl Parser {
 
                     let span = span_start.to(&rparen_token.span);
 
-                    // Create a module member access as the callable: module.func
+                    // Create a module member access as the callable: module::func
                     let module_ident = Expr::Identifier(IdentifierExpr::new(name, span_start));
-                    let member_access = Expr::MemberAccess(zymbol_ast::MemberAccessExpr::new(
+                    let member_access = Expr::MemberAccess(zymbol_ast::MemberAccessExpr::new_module(
                         Box::new(module_ident),
                         func_name,
                         span_start.to(&self.tokens[self.current - 2].span), // Up to func_name

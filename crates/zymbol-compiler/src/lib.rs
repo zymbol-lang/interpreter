@@ -1433,10 +1433,6 @@ impl Compiler {
             Expr::DeepIndex(di) => self.compile_deep_index(di, ctx),
             Expr::FlatExtract(fe) => self.compile_flat_extract(fe, ctx),
             Expr::StructuredExtract(se) => self.compile_structured_extract(se, ctx),
-
-            _ => Err(CompileError::Unsupported(format!(
-                "expression {:?}", std::mem::discriminant(expr)
-            ))),
         }
     }
 

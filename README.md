@@ -100,7 +100,7 @@ bash install-zymbol.sh
 zymbol run hello.zy
 
 # Register VM (faster for compute-heavy programs)
-zymbol run hello.zy --vm
+zymbol run --vm hello.zy
 
 # Interactive REPL
 zymbol repl
@@ -468,14 +468,14 @@ performance benchmarks.
 
 ## Performance
 
-Benchmarks vs CPython 3 (release build):
+Benchmarks (release build):
 
-| Benchmark | Tree-walker | VM | Python |
-|-----------|:-----------:|:--:|:------:|
-| Stress loop | ~200ms | **67ms** | 77ms |
-| Match | ~165ms | **50ms** | 75ms |
-| Collections | ~14s | **33ms** | 44ms |
-| Recursion | ~1480ms | 308ms | **218ms** |
+| Benchmark | Tree-walker | VM |
+|-----------|:-----------:|:--:|
+| Stress loop | ~200ms | **67ms** |
+| Match | ~165ms | **50ms** |
+| Collections | ~14s | **33ms** |
+| Recursion | ~1480ms | 308ms |
 
 The VM is 4.4× faster than the tree-walker on `fib(35)`.
 

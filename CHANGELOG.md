@@ -316,21 +316,20 @@ Full record: `tests/BUG_v0.0.4.md`.
 | `vm_compare.sh` (WT vs VM parity) | **350 / 350 pass** |
 | `run_all.sh` (7 benchmark suites) | **7 / 7 pass** |
 
-**Python comparison benchmarks** (`run_all.sh --python --runs 3`, release binary):
+**Benchmark results** (`run_all.sh --runs 3`, release binary):
 
-| Benchmark | Zymbol (avg) | Python (avg) | Ratio |
-|-----------|-------------|-------------|-------|
-| Stress core | 224 ms | 80 ms | ~2.8× |
-| Pattern match | 177 ms | 74 ms | ~2.4× |
-| Recursion (`fib(30)` + `ackermann(3,6)`) | 1 760 ms | 209 ms | ~8.4× |
-| Collections | 61 ms | 38 ms | ~1.6× |
-| Strings | 45 ms | 25 ms | ~1.8× |
-| Strings Stress | 123 ms | 42 ms | ~2.9× |
-| Strings Modify | 62 ms | 38 ms | ~1.6× |
+| Benchmark | Zymbol tree-walker | Zymbol VM |
+|-----------|-------------------|-----------|
+| Stress core | 224 ms | — |
+| Pattern match | 177 ms | — |
+| Recursion (`fib(30)` + `ackermann(3,6)`) | 1 760 ms | — |
+| Collections | 61 ms | 33 ms |
+| Strings | 45 ms | 36 ms |
+| Strings Stress | 123 ms | — |
+| Strings Modify | 62 ms | — |
 
 The recursion benchmark is dominated by `fib_rec(30)` (2.7 M recursive calls in the
-tree-walker); iterative and VM paths are significantly faster. All other benchmarks
-run within 2–3× of CPython, with collections and string modification at ~1.6×.
+tree-walker); iterative and VM paths are significantly faster.
 
 ---
 

@@ -3,7 +3,7 @@
 // Zymbol: interpolated strings, $^, $>/$| on word arrays.
 // Comparison: tests/stress_v2/bench_text.py
 //
-// Run: zymbol run tests/stress_v2/bench_text.zy --vm
+// Run: zymbol run --vm tests/stress_v2/bench_text.zy
 // ============================================================================
 
 <# ../scripts/lib_time <= T

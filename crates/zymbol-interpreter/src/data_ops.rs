@@ -55,34 +55,34 @@ fn normalize_unicode_digits(s: &str) -> Option<String> {
     if has_digit { Some(result) } else { None }
 }
 
+/// Try to parse a trimmed string as `Int` or `Float`.
+/// Returns the original `String` value if parsing fails (fail-safe).
+/// Also handles Unicode digit scripts (Thai, Arabic, Devanagari, etc.).
+pub(crate) fn parse_numeric_string(s: String) -> Value {
+    let trimmed = s.trim();
+    if let Ok(n) = trimmed.parse::<i64>() {
+        return Value::Int(n);
+    }
+    if let Ok(f) = trimmed.parse::<f64>() {
+        return Value::Float(f);
+    }
+    if let Some(normalized) = normalize_unicode_digits(trimmed) {
+        if let Ok(n) = normalized.parse::<i64>() {
+            return Value::Int(n);
+        }
+        if let Ok(f) = normalized.parse::<f64>() {
+            return Value::Float(f);
+        }
+    }
+    Value::String(s)
+}
+
 impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_numeric_eval(&mut self, op: &NumericEvalExpr) -> Result<Value> {
         let value = self.eval_expr(&op.expr)?;
-
-        // If it's a string, try to parse as number
         if let Value::String(s) = value {
-            // Trim whitespace/newlines first — BashExec output always has trailing \n
-            let trimmed = s.trim();
-            // Try native ASCII parse first (handles scientific notation, etc.)
-            if let Ok(n) = trimmed.parse::<i64>() {
-                return Ok(Value::Int(n));
-            }
-            if let Ok(f) = trimmed.parse::<f64>() {
-                return Ok(Value::Float(f));
-            }
-            // Try Unicode digit normalization (Thai, Arabic, Devanagari, etc.)
-            if let Some(normalized) = normalize_unicode_digits(trimmed) {
-                if let Ok(n) = normalized.parse::<i64>() {
-                    return Ok(Value::Int(n));
-                }
-                if let Ok(f) = normalized.parse::<f64>() {
-                    return Ok(Value::Float(f));
-                }
-            }
-            // Parsing failed — fail-safe: return original string
-            Ok(Value::String(s))
+            Ok(parse_numeric_string(s))
         } else {
-            // Not a string — return as-is
             Ok(value)
         }
     }

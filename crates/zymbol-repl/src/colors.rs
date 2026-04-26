@@ -38,3 +38,13 @@ pub fn value(val: &str) -> String {
 pub fn command(cmd: &str) -> String {
     cmd.with(Color::Cyan).bold().to_string()
 }
+
+/// The `=>` arrow shown before an evaluated result
+pub fn result_arrow() -> String {
+    "=>".with(Color::Green).bold().to_string()
+}
+
+/// Dim text for secondary info (e.g., `::` and the type label)
+pub fn dim(s: &str) -> String {
+    s.with(Color::DarkGrey).to_string()
+}

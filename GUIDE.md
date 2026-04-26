@@ -248,8 +248,8 @@ The following identifiers have conventional meaning but are not reserved: `_err`
 | Array | `[1, 2, 3]` | `##]` | Homogeneous (same type) |
 | Tuple | `(a, b)` | `##)` | Positional |
 | NamedTuple | `(x: 1, y: 2)` | `##)` | Named fields |
-| Function | named function ref | `##->` | First-class since v0.0.4; display `<function/N>` |
-| Lambda | `x -> x * 2` | `##->` | Same type symbol as Function; display `<lambda/N>` |
+| Function | named function ref | `##()` | First-class since v0.0.4; display `<funct/N>` |
+| Lambda | `x -> x * 2` | `##->` | Lambda definition symbol; display `<lambd/N>` |
 | Error | _(runtime value)_ | `##<Kind>` | Type IS the kind: `##Index`, `##Div`, `##IO`, … |
 | Unit | _(void return)_ | `##_` | Returned by functions with no `<~`; display is empty |
 
@@ -275,8 +275,8 @@ The `#?` postfix operator returns a 3-tuple: `(type_symbol, count, display)`.
 | Bool | `(##?, 1, val)` | always 1 |
 | Array | `(##], N, val)` | element count |
 | Tuple / NamedTuple | `(##), N, val)` | field count |
-| Function | `(##->, N, <function/N>)` | arity |
-| Lambda | `(##->, N, <lambda/N>)` | arity |
+| Function | `(##(), N, <funct/N>)` | arity |
+| Lambda | `(##->, N, <lambd/N>)` | arity |
 | Error | `(##Kind, N, ##Kind(msg))` | message length |
 | Unit | `(##_, 0, )` | always 0 |
 
@@ -286,10 +286,10 @@ x = 42
 
 f(a, b) { <~ a + b }
 fn_ref = f
->> fn_ref#? ¶          // → (##->, 2, <function/2>)
+>> fn_ref#? ¶          // → (##(), 2, <funct/2>)
 
 lam = (a, b) -> a + b
->> lam#? ¶             // → (##->, 2, <lambda/2>)
+>> lam#? ¶             // → (##->, 2, <lambd/2>)
 
 // Extract type symbol
 meta = x#?
@@ -297,7 +297,7 @@ t = meta[1]
 >> t ¶                 // → ###
 ```
 
-Both named functions and lambdas share the type symbol `##->`. Distinguish them by the display string in field 3: `<function/N>` vs `<lambda/N>`.
+Named functions use `##()` — the call-syntax symbol. Lambdas use `##->` — their definition syntax. This distinction is visible in both the type symbol (field 1) and the display string (field 3): `<funct/N>` vs `<lambd/N>`.
 
 Error values use their **kind** as the type symbol — there is no generic `##error` symbol:
 
@@ -2434,10 +2434,10 @@ tc = 'A'#?
 // Functions and lambdas — count is arity
 double(x) { <~ x * 2 }
 f = double
->> f#? ¶              // → (##->, 1, <function/1>)
+>> f#? ¶              // → (##(), 1, <funct/1>)
 
 lam = (a, b) -> a + b
->> lam#? ¶            // → (##->, 2, <lambda/2>)
+>> lam#? ¶            // → (##->, 2, <lambd/2>)
 
 // Extract just the type (intermediate variable required)
 meta = 42#?
@@ -2445,7 +2445,7 @@ t = meta[1]
 >> t ¶    // → ###
 ```
 
-**Display format**: named functions show as `<function/N>`, anonymous lambdas as `<lambda/N>`, where `N` is the arity.
+**Display format**: named functions show as `<funct/N>`, anonymous lambdas as `<lambd/N>`, where `N` is the arity.
 
 ### Precision: Rounding and Truncation
 

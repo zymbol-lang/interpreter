@@ -16,7 +16,7 @@ Zymbol has two execution strategies that produce identical output for all suppor
 | Mode | Invocation | Description |
 |------|-----------|-------------|
 | Tree-walker | `zymbol run file.zy` | Walks the AST directly. Default. Supports all language features. |
-| Register VM | `zymbol run file.zy --vm` | Compiles to bytecode first, then executes. ~4× faster. Module system support is partial. |
+| Register VM | `zymbol run --vm file.zy` | Compiles to bytecode first, then executes. ~4× faster. Module system support is partial. |
 
 All examples in GUIDE.md are verified against both modes. A feature listed as "TW only" in the coverage table below is not yet supported by the VM.
 

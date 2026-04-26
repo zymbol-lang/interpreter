@@ -71,7 +71,7 @@ ackermann_loop(m_init, n_init) {
     @ sz > 0 {
         iters = iters + 1
         m = stack[sz]
-        stack = stack$- sz
+        stack = stack$-[sz]
         ? m == 0 {
             n = n + 1
         }

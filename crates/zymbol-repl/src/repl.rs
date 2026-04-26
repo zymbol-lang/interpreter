@@ -2,6 +2,7 @@
 
 use crate::colors;
 use crate::line_editor::LineEditor;
+use crate::raw_writer::RawModeWriter;
 use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
@@ -14,8 +15,9 @@ use zymbol_interpreter::{Interpreter, Value};
 
 /// The REPL instance
 pub struct Repl {
-    /// The persistent interpreter instance
-    interpreter: Interpreter<std::io::Stdout>,
+    /// The persistent interpreter instance; uses RawModeWriter so that
+    /// bare `\n` from the interpreter becomes `\r\n` in raw-mode terminal.
+    interpreter: Interpreter<RawModeWriter<io::Stdout>>,
     /// The line editor for input handling
     editor: LineEditor,
     /// Whether the REPL should continue running
@@ -31,8 +33,20 @@ impl Default for Repl {
 impl Repl {
     /// Create a new REPL instance
     pub fn new() -> Self {
+        let mut interpreter = Interpreter::with_output(RawModeWriter::new(io::stdout()));
+
+        // When a `<<` input statement executes, the terminal must temporarily leave raw
+        // mode so the user can type with echo and press Enter normally.
+        interpreter.set_input_fn(|| {
+            terminal::disable_raw_mode()?;
+            let mut buf = String::new();
+            io::stdin().read_line(&mut buf)?;
+            terminal::enable_raw_mode()?;
+            Ok(buf)
+        });
+
         Self {
-            interpreter: Interpreter::new(),
+            interpreter,
             editor: LineEditor::new(),
             running: true,
         }
@@ -401,17 +415,37 @@ impl Repl {
 
     /// Execute Zymbol code
     fn execute_code(&mut self, code: &str, stdout: &mut io::Stdout) -> io::Result<()> {
-        // Parse and execute
-        match self.interpreter.execute_line(code) {
+        // Reset newline tracking so we can detect dangling output from this execution.
+        self.interpreter.writer_mut().reset_newline_tracking();
+
+        let result = self.interpreter.execute_line(code);
+
+        // Flush interpreter output before inspecting the newline state.
+        self.interpreter.flush_output()?;
+
+        // If the interpreter produced output without a trailing newline (e.g. `>> x`
+        // without `¶`), move to a fresh line before showing the next prompt or result.
+        if !self.interpreter.writer().ended_with_newline() {
+            stdout.write_all(b"\r\n")?;
+        }
+
+        match result {
             Ok(Some(value)) => {
-                // Print the result value if not Unit
                 if !matches!(value, Value::Unit) {
-                    writeln!(stdout, "{}\r", self.interpreter.format_value(&value))?;
+                    let repr = self.interpreter.format_value_repr(&value);
+                    let type_label = value_type_name(&value);
+                    writeln!(
+                        stdout,
+                        "{} {} {}{}{}\r",
+                        colors::result_arrow(),
+                        colors::value(&repr),
+                        colors::dim("::"),
+                        colors::dim(" "),
+                        colors::type_name(&type_label),
+                    )?;
                 }
             }
-            Ok(None) => {
-                // No value returned (statement executed successfully)
-            }
+            Ok(None) => {}
             Err(e) => {
                 writeln!(stdout, "{}\r", colors::error(&format!("Error: {}", e)))?;
             }

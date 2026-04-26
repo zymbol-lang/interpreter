@@ -11,7 +11,7 @@ mod literals;
 pub use literals::LiteralExpr;
 
 mod io;
-pub use io::{Input, InputPrompt, Newline, Output};
+pub use io::{Input, InputCast, InputPrompt, Newline, Output};
 
 mod if_stmt;
 pub use if_stmt::{ElseIfBranch, IfStmt};
@@ -262,12 +262,13 @@ pub struct RangeExpr {
     pub span: Span,
 }
 
-/// Member access expression: object.field
-/// Used for both module member access (math.PI) and named tuple field access (person.name)
+/// Member access expression: object.field or module::func
+/// `is_module_access` is true when the source used `::` (scope resolution) rather than `.`
 #[derive(Debug, Clone)]
 pub struct MemberAccessExpr {
     pub object: Box<Expr>,
     pub field: String,
+    pub is_module_access: bool,
     pub span: Span,
 }
 
@@ -332,7 +333,11 @@ impl RangeExpr {
 
 impl MemberAccessExpr {
     pub fn new(object: Box<Expr>, field: String, span: Span) -> Self {
-        Self { object, field, span }
+        Self { object, field, is_module_access: false, span }
+    }
+
+    pub fn new_module(object: Box<Expr>, field: String, span: Span) -> Self {
+        Self { object, field, is_module_access: true, span }
     }
 }
 

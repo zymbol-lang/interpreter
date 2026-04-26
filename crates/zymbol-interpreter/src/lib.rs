@@ -217,6 +217,42 @@ impl Value {
         }
     }
 
+    /// Repr form: like `to_display_string` but with delimiters that make the
+    /// type unambiguous — strings get `"..."`, chars get `'...'`, Unit shows
+    /// as `()`.  Used by the REPL to display evaluated expression results.
+    pub fn to_repr_string(&self) -> String {
+        match self {
+            Value::String(s) => format!("\"{}\"", s),
+            Value::Char(c)   => format!("'{}'", c),
+            Value::Unit      => "()".to_string(),
+            Value::Array(elements) => {
+                let contents = elements
+                    .iter()
+                    .map(|v| v.to_repr_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{}]", contents)
+            }
+            Value::Tuple(elements) => {
+                let contents = elements
+                    .iter()
+                    .map(|v| v.to_repr_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({})", contents)
+            }
+            Value::NamedTuple(fields) => {
+                let contents = fields
+                    .iter()
+                    .map(|(name, v)| format!("{}: {}", name, v.to_repr_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({})", contents)
+            }
+            _ => self.to_display_string(),
+        }
+    }
+
     /// Check if this value is an error
     pub fn is_error(&self) -> bool {
         matches!(self, Value::Error(_))
@@ -300,6 +336,11 @@ pub struct Interpreter<W: Write> {
     /// Default: 0x0030 (ASCII). Changed by #<d0><d9># statements.
     /// Applies only to >> numeric outputs; does not affect to_display_string().
     pub(crate) numeral_mode: u32,
+    /// Called by `<<` (input) statements to read one line from the user.
+    /// Receives no arguments; the prompt is printed by execute_input via self.output
+    /// before invoking this function.  The default implementation reads from stdin.
+    /// Override in the REPL to temporarily exit raw mode while the user types.
+    pub(crate) input_fn: Box<dyn FnMut() -> std::io::Result<String>>,
 }
 
 impl<W: Write> Interpreter<W> {
@@ -362,6 +403,10 @@ impl<W: Write> Interpreter<W> {
     /// into a freshly created isolated scope). Saves ~20-30ns vs set_variable for new vars.
     #[inline(always)]
     pub(crate) fn set_variable_new(&mut self, name: &str, value: Value) {
+        // A new assignment after explicit destruction (`\var`) resurrects the variable.
+        if !self.dead_variables.is_empty() {
+            self.dead_variables.remove(name);
+        }
         if let Some(scope) = self.scope_stack.last_mut() {
             scope.insert(name.to_string(), value);
         }
@@ -388,6 +433,10 @@ impl<W: Write> Interpreter<W> {
     /// B9: zero allocation on the UPDATE path (hot path).
     #[inline(always)]
     fn set_variable(&mut self, name: &str, value: Value) {
+        // A new assignment after explicit destruction (`\var`) resurrects the variable.
+        if !self.dead_variables.is_empty() {
+            self.dead_variables.remove(name);
+        }
         for scope in self.scope_stack.iter_mut().rev() {
             if let Some(existing) = scope.get_mut(name) {
                 *existing = value;
@@ -536,6 +585,14 @@ pub(crate) struct SavedCallState {
     has_any_const: bool,
 }
 
+fn default_input_fn() -> Box<dyn FnMut() -> std::io::Result<String>> {
+    Box::new(|| {
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf)?;
+        Ok(buf)
+    })
+}
+
 impl Interpreter<std::io::Stdout> {
     pub fn new() -> Self {
         Self {
@@ -569,6 +626,7 @@ impl Interpreter<std::io::Stdout> {
             tco_args: Vec::new(),
             current_output_params: std::collections::HashSet::new(),
             numeral_mode: numeral_mode::ASCII_BASE,
+            input_fn: default_input_fn(),
         }
     }
 }
@@ -613,7 +671,21 @@ impl<W: Write> Interpreter<W> {
             tco_args: Vec::new(),
             current_output_params: std::collections::HashSet::new(),
             numeral_mode: numeral_mode::ASCII_BASE,
+            input_fn: default_input_fn(),
         }
+    }
+
+    /// Override the input callback used by `<<` statements.
+    /// The provided function must read one line and return it (including the trailing newline).
+    pub fn set_input_fn(&mut self, f: impl FnMut() -> std::io::Result<String> + 'static) {
+        self.input_fn = Box::new(f);
+    }
+
+    pub fn writer(&self) -> &W { &self.output }
+    pub fn writer_mut(&mut self) -> &mut W { &mut self.output }
+
+    pub fn flush_output(&mut self) -> std::io::Result<()> {
+        self.output.flush()
     }
 
     /// Set the current file path for module resolution
@@ -790,6 +862,18 @@ impl<W: Write> Interpreter<W> {
             Value::Float(f) => numeral_mode::to_numeral_float(*f, mode),
             Value::Bool(b)  => numeral_mode::to_numeral_bool(*b, mode),
             _               => value.to_display_string(),
+        }
+    }
+
+    /// Repr form of `format_value`: numerals respect the active numeral mode,
+    /// strings/chars are quoted, Unit shows as `()`.  Used by the REPL.
+    pub fn format_value_repr(&self, value: &Value) -> String {
+        let mode = self.numeral_mode;
+        match value {
+            Value::Int(n)   => numeral_mode::to_numeral_int(*n, mode),
+            Value::Float(f) => numeral_mode::to_numeral_float(*f, mode),
+            Value::Bool(b)  => numeral_mode::to_numeral_bool(*b, mode),
+            _               => value.to_repr_string(),
         }
     }
 

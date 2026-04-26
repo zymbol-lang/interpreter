@@ -171,7 +171,7 @@ Run each test individually to identify sub-categories:
 ```bash
 for f in 15 17 18 19 21 23 26; do
     echo "=== lambdas/${f}_* ==="
-    ./target/release/zymbol run tests/lambdas/${f}_*.zy --vm 2>&1 | head -5
+    ./target/release/zymbol run --vm tests/lambdas/${f}_*.zy 2>&1 | head -5
 done
 ```
 

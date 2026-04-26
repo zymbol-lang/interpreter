@@ -145,9 +145,8 @@ They are documented in the manual as known limitations.
   compilation if source unchanged. Target: startup 15–40ms → ~2ms.
 
 - **Recursion performance in VM**
-  Current: 1.41× slower than Python on `fib(35)`. Root cause: frame allocation cost.
-  Target: match Python. Strategy: pre-allocate frame pool, reduce `Box` allocations
-  in `FrameInfo`.
+  Root cause: frame allocation cost on deep call stacks. Strategy: pre-allocate frame
+  pool, reduce `Box` allocations in `FrameInfo`.
 
 - **DCE (Dead Code Elimination) improvements**
   Sprint 5I added a basic DCE pass. Extend to eliminate unused variables across
@@ -168,7 +167,7 @@ They are documented in the manual as known limitations.
 #### JIT Compilation (Cranelift backend)
 
 Planned as Sprint 5E in the VM perf roadmap. Use `cranelift-jit` to compile hot
-functions to native code at runtime. Target: match or exceed Python on all benchmarks,
+functions to native code at runtime. Target: maximum throughput on all benchmarks,
 including recursion.
 
 Architecture:
@@ -218,18 +217,18 @@ A minimal package manager for sharing Zymbol modules:
 
 ## Performance Targets
 
-Current benchmarks vs CPython 3 (release build, post-Sprint 5D+):
+Current benchmarks (release build, post-Sprint 5D+):
 
-| Benchmark | Tree-walker | VM (now) | VM (target) | Python |
-|-----------|:-----------:|:--------:|:-----------:|:------:|
-| Stress | ~200ms | **67ms** | <60ms | 77ms |
-| Match | ~165ms | **50ms** | <50ms | 75ms |
-| Collections | ~14s | **33ms** | <30ms | 44ms |
-| Strings | ~43ms | 36ms | <25ms | 25ms |
-| Recursion | ~1480ms | 308ms | <200ms | 218ms |
+| Benchmark | Tree-walker | VM (now) | VM (target) |
+|-----------|:-----------:|:--------:|:-----------:|
+| Stress | ~200ms | **67ms** | <60ms |
+| Match | ~165ms | **50ms** | <50ms |
+| Collections | ~14s | **33ms** | <30ms |
+| Strings | ~43ms | 36ms | <25ms |
+| Recursion | ~1480ms | 308ms | <200ms |
 
-Recursion and strings are the remaining areas where VM trails Python.
-Both are targeted by the Cranelift JIT milestone.
+Recursion and strings are the remaining performance targets.
+Both are addressed by the Cranelift JIT milestone.
 
 ---
 

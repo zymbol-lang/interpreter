@@ -113,7 +113,7 @@ zymbol run --help
 
 **When to use each mode:**
 - **Tree-walker**: canonical behavior, descriptive error messages, debugging
-- **VM**: production, ~1.1–1.5× faster than Python for most workloads
+- **VM**: production, ~1.1–4.4× faster than tree-walker for most workloads
 
 Both modes produce **identical output** on 393/393 parity tests.
 

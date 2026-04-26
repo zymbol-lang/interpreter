@@ -6,7 +6,7 @@
 //! - Newline statements: ¶ OR \\
 //! - CLI args capture: >< variable
 
-use zymbol_ast::{CliArgsCaptureStmt, Expr, IdentifierExpr, Input, InputPrompt, LiteralExpr, Newline, Output};
+use zymbol_ast::{CliArgsCaptureStmt, Expr, IdentifierExpr, Input, InputCast, InputPrompt, LiteralExpr, Newline, Output};
 use zymbol_common::Literal;
 use zymbol_error::Diagnostic;
 use zymbol_lexer::{StringPart, TokenKind};
@@ -19,12 +19,15 @@ impl Parser {
         Ok(Statement::Newline(Newline::new(span)))
     }
 
-    /// Parse input statement: << variable or << "prompt" variable
+    /// Parse input statement:
+    ///   << variable           — store raw string
+    ///   << #|variable|        — store as numeric (int/float)
+    ///   << "prompt" variable
+    ///   << "prompt" #|variable|
     pub(crate) fn parse_input(&mut self) -> Result<Statement, Diagnostic> {
         let start_span = self.advance().span; // consume <<
 
-        // Check for optional string prompt: << "prompt" variable
-        // The prompt can be a simple string or an interpolated string
+        // Optional string prompt: << "prompt" ...
         let prompt = if matches!(self.peek().kind, TokenKind::String(_) | TokenKind::StringInterpolated(_)) {
             let token = self.advance();
             match &token.kind {
@@ -38,6 +41,14 @@ impl Parser {
             None
         };
 
+        // Detect optional cast: #|variable| (NumericEval)
+        let cast = if matches!(self.peek().kind, TokenKind::HashPipe) {
+            self.advance(); // consume #|
+            InputCast::Numeric
+        } else {
+            InputCast::String
+        };
+
         // Parse variable name
         let var_token = self.peek().clone();
         let variable = match &var_token.kind {
@@ -48,13 +59,23 @@ impl Parser {
             _ => {
                 return Err(Diagnostic::error("expected variable name in input statement")
                     .with_span(var_token.span)
-                    .with_help("input syntax: << variable or << \"prompt\" variable"));
+                    .with_help("input syntax: << var  or  << #|var|  or  << \"prompt\" var"));
             }
         };
 
-        let span = start_span.to(&var_token.span);
+        // If numeric cast, consume closing `|`
+        if cast == InputCast::Numeric {
+            let pipe_tok = self.peek().clone();
+            if !matches!(pipe_tok.kind, TokenKind::Pipe) {
+                return Err(Diagnostic::error("expected '|' to close #|variable|")
+                    .with_span(pipe_tok.span)
+                    .with_help("numeric input syntax: << #|variable|"));
+            }
+            self.advance(); // consume |
+        }
 
-        Ok(Statement::Input(Input::new(variable, prompt, span)))
+        let span = start_span.to(&var_token.span);
+        Ok(Statement::Input(Input::new(variable, prompt, cast, span)))
     }
 
     /// Parse output statement: >> expr

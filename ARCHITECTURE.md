@@ -377,7 +377,7 @@ zymbol-cli       (all of the above) ──────────────�
 | Command | Description |
 |---------|-------------|
 | `zymbol run FILE` | Execute with tree-walker (default) |
-| `zymbol run FILE --vm` | Execute with register VM |
+| `zymbol run --vm FILE` | Execute with register VM |
 | `zymbol run FILE [ARGS]` | Pass CLI arguments to program (`><` capture) |
 | `zymbol build FILE -o OUT [--release]` | Compile to standalone executable |
 | `zymbol check FILE` | Syntax and semantic check only |
