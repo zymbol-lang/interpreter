@@ -1,0 +1,6 @@
+[1m[31merror[39m[0m: undefined variable 'loop_var'
+  [1m[34m-->[39m[0m tests/scope03_loop_block.zy:15:14
+[1m[34m  15[39m[0m [34m|[39m
+[1m[34m  15[39m[0m [34m|[39m >> "Value: " loop_var ¶
+[34m     |[39m [1m[31m             ^^^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m variables must be defined before use

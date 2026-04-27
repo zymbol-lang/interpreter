@@ -6,10 +6,10 @@
 // Variable never created
 info = nonexistent#?
 
->> "Type symbol: " info[0] ¶
->> "Count: " info[1] ¶
+>> "Type symbol: " info[1] ¶
+>> "Count: " info[2] ¶
 
-? info[0] == "##_" {
+? info[1] == "##_" {
     >> "✅ Variable is undefined (as expected)" ¶
 }
 _{
@@ -27,7 +27,7 @@ _{
 // Variable was auto-destroyed when IF block ended
 check = destroyed_var#?
 
-? check[0] == "##_" {
+? check[1] == "##_" {
     >> "✅ Variable was auto-destroyed (as expected)" ¶
 }
 _{
@@ -41,10 +41,10 @@ _{
 existing = 42
 exists_check = existing#?
 
->> "Type: " exists_check[0] ¶
->> "Value: " exists_check[2] ¶
+>> "Type: " exists_check[1] ¶
+>> "Value: " exists_check[3] ¶
 
-? exists_check[0] == "###" {
+? exists_check[1] == "###" {
     >> "✅ Existing variable detected correctly" ¶
 }
 _{

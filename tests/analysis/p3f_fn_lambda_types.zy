@@ -1,0 +1,52 @@
+// P3-F: ##() vs ##-> — named function vs lambda type distinction
+
+// ── Named function: type ##() ─────────────────────────────────────────────
+
+inc(x) { <~ x + 1 }
+add(a, b) { <~ a + b }
+
+f1 = inc
+>> (f1#?)[1] ¶           // ##()
+>> (f1#?)[2] ¶           // 1  (arity)
+>> (f1#?)[3] ¶           // <funct/1>
+
+f2 = add
+>> (f2#?)[1] ¶           // ##()
+>> (f2#?)[2] ¶           // 2
+>> (f2#?)[3] ¶           // <funct/2>
+
+// ── Lambda (no captures): type ##-> ──────────────────────────────────────
+
+lam1 = x -> x * 2
+>> (lam1#?)[1] ¶         // ##->
+>> (lam1#?)[2] ¶         // 1
+>> (lam1#?)[3] ¶         // <lambd/1>
+
+lam2 = (a, b) -> a + b
+>> (lam2#?)[1] ¶         // ##->
+>> (lam2#?)[2] ¶         // 2
+>> (lam2#?)[3] ¶         // <lambd/2>
+
+// ── Lambda (with capture): still ##-> ────────────────────────────────────
+
+base = 10
+lam_cap = x -> x + base
+>> (lam_cap#?)[1] ¶      // ##->
+>> (lam_cap#?)[2] ¶      // 1
+>> (lam_cap#?)[3] ¶      // <lambd/1>
+
+// ── Type symbol is distinct ───────────────────────────────────────────────
+
+fn_type = (f1#?)[1]
+lam_type = (lam1#?)[1]
+>> fn_type ¶             // ##()
+>> lam_type ¶            // ##->
+>> (fn_type == lam_type) ¶   // #0 — different types
+
+// ── HOF: type survives passing as argument ────────────────────────────────
+
+arr = [1, 2, 3]
+mapped_fn  = arr$> inc
+mapped_lam = arr$> (x -> x + 1)
+>> mapped_fn ¶           // [2, 3, 4]
+>> mapped_lam ¶          // [2, 3, 4]

@@ -46,6 +46,12 @@
       </Component>
       <!-- Add zymbol to system PATH -->
       <Component Id="PathEnv" Guid="A1B2C3D4-0003-0003-0003-EF1234567890">
+        <RegistryValue Root="HKLM"
+                       Key="Software\Zymbol-Lang"
+                       Name="InstallDir"
+                       Type="string"
+                       Value="[INSTALLFOLDER]"
+                       KeyPath="yes" />
         <Environment Id="ZymbolPATH"
                      Action="set"
                      Name="PATH"
@@ -53,12 +59,6 @@
                      Permanent="no"
                      System="yes"
                      Value="[INSTALLFOLDER]" />
-        <RegistryValue Root="HKLM"
-                       Key="Software\Zymbol-Lang"
-                       Name="installed"
-                       Type="integer"
-                       Value="1"
-                       KeyPath="yes" />
       </Component>
     </ComponentGroup>
 

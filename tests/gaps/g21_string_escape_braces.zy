@@ -1,0 +1,30 @@
+// G21 — String brace escaping: \{ and \} produce literal braces, never interpolated
+// Previously broken: \{foo\} with foo defined would interpolate → "bar" instead of "{foo}"
+// Fix: Literal::InterpolatedString separates interpolated from plain strings
+
+foo = "bar"
+
+// \{ and \} must produce literal braces — interpolation must NOT happen
+s1 = "\{foo\}"         // → {foo}   (not bar)
+s2 = "prefix \{foo\} suffix"   // → prefix {foo} suffix
+s3 = "\{foo\} \{foo\}" // → {foo} {foo}
+
+// Unescaped {foo} must still interpolate normally
+s4 = "{foo}"           // → bar
+s5 = "result: {foo}!"  // → result: bar!
+
+// $ before escaped brace — critical for bash ${var} injection via BashExec
+s6 = "$\{foo\}"        // → ${foo}  (not $bar)
+s7 = "$\{foo/_/ }"     // → ${foo/_/ }
+
+// $ before unescaped brace — $ is literal, {foo} interpolates
+s8 = "${foo}"          // → $bar
+
+>> s1 ¶
+>> s2 ¶
+>> s3 ¶
+>> s4 ¶
+>> s5 ¶
+>> s6 ¶
+>> s7 ¶
+>> s8 ¶

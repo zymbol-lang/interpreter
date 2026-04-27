@@ -6,8 +6,8 @@ arr = []
 arr = arr$+ (1, 2, 3)
 arr = arr$+ (4, 5, 6)
 >> arr$# ¶
->> arr[0][0] ¶
->> arr[1][2] ¶
+>> arr[1][1] ¶
+>> arr[2][3] ¶
 
 // ── Positional tuples — from variable ─────────────────────────────────────────
 t1 = (10, 20)
@@ -16,9 +16,9 @@ pts = []
 pts = pts$+ t1
 pts = pts$+ t2
 >> pts$# ¶
->> pts[0][0] ¶
->> pts[0][1] ¶
->> pts[1][0] ¶
+>> pts[1][1] ¶
+>> pts[1][2] ¶
+>> pts[2][1] ¶
 
 // ── Named tuples — literal ────────────────────────────────────────────────────
 db = []
@@ -26,9 +26,9 @@ db = db$+ (id: 1, name: "Ana",   age: 25, mail: "ana@corp.com")
 db = db$+ (id: 2, name: "Bob",   age: 30, mail: "bob@corp.com")
 db = db$+ (id: 3, name: "Carla", age: 28, mail: "carla@corp.com")
 >> db$# ¶
->> db[0].name ¶
->> db[1].age ¶
->> db[2].mail ¶
+>> db[1].name ¶
+>> db[2].age ¶
+>> db[3].mail ¶
 
 // ── Named tuples — from variable ──────────────────────────────────────────────
 r1 = (id: 4, name: "Dan",  age: 35, mail: "dan@corp.com")
@@ -36,17 +36,17 @@ r2 = (id: 5, name: "Eva",  age: 22, mail: "eva@corp.com")
 db = db$+ r1
 db = db$+ r2
 >> db$# ¶
->> db[3].name ¶
 >> db[4].name ¶
->> db[4].id ¶
+>> db[5].name ¶
+>> db[5].id ¶
 
 // ── Mixed: positional and named in same array ─────────────────────────────────
 mixed = []
 mixed = mixed$+ (0, 0)
 mixed = mixed$+ (name: "origin", x: 0, y: 0)
 >> mixed$# ¶
->> mixed[0][0] ¶
->> mixed[1].name ¶
+>> mixed[1][1] ¶
+>> mixed[2].name ¶
 
 // ── Build table in loop then query ────────────────────────────────────────────
 table = []
@@ -54,16 +54,16 @@ table = []
     table = table$+ (id: i, val: i * 10)
 }
 >> table$# ¶
->> table[0].id ¶
->> table[0].val ¶
->> table[3].id ¶
->> table[3].val ¶
+>> table[1].id ¶
+>> table[1].val ¶
+>> table[4].id ¶
+>> table[4].val ¶
 
 // ── Append and immediately slice ──────────────────────────────────────────────
 base = [(id: 1, name: "A"), (id: 2, name: "B")]
 extra = (id: 3, name: "C")
 full = base$+ extra
-page = full$[1:2]
+page = full$[2:2]
 >> page$# ¶
->> page[0].name ¶
 >> page[1].name ¶
+>> page[2].name ¶

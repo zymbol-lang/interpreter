@@ -1,0 +1,12 @@
+// v0.0.4 review — ##. produces a true Float, not just displays without .0
+// Verifies: type metadata shows ##., float arithmetic works on result
+
+i = 42
+fi = ##.i
+>> fi ¶
+
+meta = fi#?
+>> meta ¶
+
+f2 = fi + 0.5
+>> f2 ¶

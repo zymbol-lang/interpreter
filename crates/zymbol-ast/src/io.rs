@@ -15,11 +15,21 @@ pub struct Output {
     pub span: Span,
 }
 
-/// Input statement: << variable
+/// Type conversion applied to the raw string after reading input.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputCast {
+    /// Store as raw `String` (default).
+    String,
+    /// Apply `#|...|` numeric eval: parse to `Int` or `Float`, fall back to `String`.
+    Numeric,
+}
+
+/// Input statement: << variable  OR  << #|variable|
 #[derive(Debug, Clone)]
 pub struct Input {
     pub variable: String,
     pub prompt: Option<InputPrompt>, // Optional prompt (simple or interpolated)
+    pub cast: InputCast,             // Type conversion applied after reading
     pub span: Span,
 }
 
@@ -47,22 +57,8 @@ impl Output {
 }
 
 impl Input {
-    pub fn new(variable: String, prompt: Option<InputPrompt>, span: Span) -> Self {
-        Self {
-            variable,
-            prompt,
-            span,
-        }
-    }
-
-    /// Helper to create Input with simple string prompt
-    pub fn with_simple_prompt(variable: String, prompt: String, span: Span) -> Self {
-        Self::new(variable, Some(InputPrompt::Simple(prompt)), span)
-    }
-
-    /// Helper to create Input with interpolated prompt
-    pub fn with_interpolated_prompt(variable: String, parts: Vec<zymbol_lexer::StringPart>, span: Span) -> Self {
-        Self::new(variable, Some(InputPrompt::Interpolated(parts)), span)
+    pub fn new(variable: String, prompt: Option<InputPrompt>, cast: InputCast, span: Span) -> Self {
+        Self { variable, prompt, cast, span }
     }
 }
 

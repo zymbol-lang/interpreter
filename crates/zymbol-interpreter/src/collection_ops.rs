@@ -103,7 +103,16 @@ impl<W: Write> Interpreter<W> {
         match collection {
             Value::Array(mut arr) => {
                 let len = arr.len();
-                let i = if index < 0 { len as i64 + index } else { index };
+                let i = if index == 0 {
+                    return Err(RuntimeError::Generic {
+                        message: "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)".to_string(),
+                        span: op.span,
+                    });
+                } else if index < 0 {
+                    len as i64 + index
+                } else {
+                    index - 1
+                };
                 if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!("index out of bounds: index {} for array of length {}", index, len),
@@ -115,7 +124,16 @@ impl<W: Write> Interpreter<W> {
             }
             Value::Tuple(mut tup) => {
                 let len = tup.len();
-                let i = if index < 0 { len as i64 + index } else { index };
+                let i = if index == 0 {
+                    return Err(RuntimeError::Generic {
+                        message: "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)".to_string(),
+                        span: op.span,
+                    });
+                } else if index < 0 {
+                    len as i64 + index
+                } else {
+                    index - 1
+                };
                 if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!("index out of bounds: index {} for tuple of length {}", index, len),
@@ -127,7 +145,16 @@ impl<W: Write> Interpreter<W> {
             }
             Value::NamedTuple(mut fields) => {
                 let len = fields.len();
-                let i = if index < 0 { len as i64 + index } else { index };
+                let i = if index == 0 {
+                    return Err(RuntimeError::Generic {
+                        message: "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)".to_string(),
+                        span: op.span,
+                    });
+                } else if index < 0 {
+                    len as i64 + index
+                } else {
+                    index - 1
+                };
                 if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!("index out of bounds: index {} for named tuple of length {}", index, len),
@@ -140,7 +167,16 @@ impl<W: Write> Interpreter<W> {
             Value::String(s) => {
                 let mut chars: Vec<char> = s.chars().collect();
                 let len = chars.len();
-                let i = if index < 0 { len as i64 + index } else { index };
+                let i = if index == 0 {
+                    return Err(RuntimeError::Generic {
+                        message: "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)".to_string(),
+                        span: op.span,
+                    });
+                } else if index < 0 {
+                    len as i64 + index
+                } else {
+                    index - 1
+                };
                 if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!("index out of bounds: index {} for string of length {}", index, len),
@@ -240,35 +276,63 @@ impl<W: Write> Interpreter<W> {
 
         match collection {
             Value::Array(mut arr) => {
-                // Check bounds
-                if index < 0 || index as usize >= arr.len() {
+                let len = arr.len();
+                let i = if index == 0 {
                     return Err(RuntimeError::Generic {
-                        message: format!(
-                            "index out of bounds: index {} for array of length {}",
-                            index,
-                            arr.len()
-                        ),
+                        message: "index 0 is invalid — Zymbol uses 1-based indexing".to_string(),
                         span: op.span,
                     });
-                }
+                } else if index < 0 {
+                    let i = len as i64 + index;
+                    if i < 0 || i as usize >= len {
+                        return Err(RuntimeError::Generic {
+                            message: format!("index out of bounds: index {} for array of length {}", index, len),
+                            span: op.span,
+                        });
+                    }
+                    i as usize
+                } else {
+                    let i = (index - 1) as usize;
+                    if i >= len {
+                        return Err(RuntimeError::Generic {
+                            message: format!("index out of bounds: index {} for array of length {}", index, len),
+                            span: op.span,
+                        });
+                    }
+                    i
+                };
                 // Create a new array with the value updated (immutability)
-                arr[index as usize] = new_value;
+                arr[i] = new_value;
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
-                // Check bounds
-                if index < 0 || index as usize >= tup.len() {
+                let len = tup.len();
+                let i = if index == 0 {
                     return Err(RuntimeError::Generic {
-                        message: format!(
-                            "index out of bounds: index {} for tuple of length {}",
-                            index,
-                            tup.len()
-                        ),
+                        message: "index 0 is invalid — Zymbol uses 1-based indexing".to_string(),
                         span: op.span,
                     });
-                }
+                } else if index < 0 {
+                    let i = len as i64 + index;
+                    if i < 0 || i as usize >= len {
+                        return Err(RuntimeError::Generic {
+                            message: format!("index out of bounds: index {} for tuple of length {}", index, len),
+                            span: op.span,
+                        });
+                    }
+                    i as usize
+                } else {
+                    let i = (index - 1) as usize;
+                    if i >= len {
+                        return Err(RuntimeError::Generic {
+                            message: format!("index out of bounds: index {} for tuple of length {}", index, len),
+                            span: op.span,
+                        });
+                    }
+                    i
+                };
                 // Create a new tuple with the value updated (immutability)
-                tup[index as usize] = new_value;
+                tup[i] = new_value;
                 Ok(Value::Tuple(tup))
             }
             _ => Err(RuntimeError::Generic {
@@ -334,9 +398,24 @@ impl<W: Write> Interpreter<W> {
             length as i64
         };
 
-        // Normalize negative indices (Python-style: -1 = last element)
-        let start = if start < 0 { length as i64 + start } else { start };
-        let raw_end = if !op.count_based && raw_end < 0 { length as i64 + raw_end } else { raw_end };
+        // Normalize indices (1-based: positive i maps to internal i-1; 0 = default start)
+        let start = if start == 0 {
+            // None/default: maps to 0-based start (first element)
+            0
+        } else if start < 0 {
+            length as i64 + start
+        } else {
+            start - 1  // 1-based to 0-based
+        };
+        let raw_end = if !op.count_based {
+            if raw_end < 0 {
+                length as i64 + raw_end + 1  // 1-based inclusive negative → 0-based exclusive
+            } else {
+                raw_end  // 1-based inclusive positive = 0-based exclusive (no change)
+            }
+        } else {
+            raw_end  // count_based: count is unchanged, start was already normalized
+        };
 
         // count_based: end field holds count → actual_end = start + count
         let end = if op.count_based { start + raw_end } else { raw_end };
@@ -589,13 +668,13 @@ impl<W: Write> Interpreter<W> {
                 span: op.span,
             }),
         };
-        if index < 0 {
+        if index <= 0 {
             return Err(RuntimeError::Generic {
-                message: format!("$+[i] index must be non-negative, got {}", index),
+                message: format!("$+[i] index must be positive (1-based, use 1 to insert at the beginning), got {}", index),
                 span: op.span,
             });
         }
-        let i = index as usize;
+        let i = (index - 1) as usize;
 
         match collection {
             Value::Array(mut arr) => {
@@ -779,11 +858,11 @@ impl<W: Write> Interpreter<W> {
         let start = if let Some(ref s_expr) = op.start {
             match self.eval_expr(s_expr)? {
                 Value::Int(n) => {
-                    if n < 0 { return Err(RuntimeError::Generic {
-                        message: format!("$-[start..] start must be non-negative, got {}", n),
+                    if n <= 0 { return Err(RuntimeError::Generic {
+                        message: format!("$-[start..] start must be positive (1-based), got {}", n),
                         span: op.span,
                     }); }
-                    n as usize
+                    (n - 1) as usize  // normalize 1-based to 0-based
                 }
                 other => return Err(RuntimeError::Generic {
                     message: format!("$-[..] start must be an integer, got {:?}", other),
@@ -795,11 +874,20 @@ impl<W: Write> Interpreter<W> {
         let raw_end = if let Some(ref e_expr) = op.end {
             match self.eval_expr(e_expr)? {
                 Value::Int(n) => {
-                    if n < 0 { return Err(RuntimeError::Generic {
-                        message: format!("$-[..end] end must be non-negative, got {}", n),
-                        span: op.span,
-                    }); }
-                    n as usize
+                    if !op.count_based && n <= 0 {
+                        // For range-based $-[start..end], end must be positive (1-based)
+                        return Err(RuntimeError::Generic {
+                            message: format!("$-[..end] end must be positive (1-based), got {}", n),
+                            span: op.span,
+                        });
+                    }
+                    if n < 0 {
+                        return Err(RuntimeError::Generic {
+                            message: format!("$-[..] count must be non-negative, got {}", n),
+                            span: op.span,
+                        });
+                    }
+                    n as usize  // range: 1-based inclusive = 0-based exclusive; count: raw count
                 }
                 other => return Err(RuntimeError::Generic {
                     message: format!("$-[..] end must be an integer, got {:?}", other),
@@ -853,7 +941,7 @@ impl<W: Write> Interpreter<W> {
                 let indices: Vec<Value> = arr.iter()
                     .enumerate()
                     .filter(|(_, item)| self.values_equal(item, &value))
-                    .map(|(i, _)| Value::Int(i as i64))
+                    .map(|(i, _)| Value::Int((i + 1) as i64))
                     .collect();
                 Ok(Value::Array(indices))
             }
@@ -861,7 +949,7 @@ impl<W: Write> Interpreter<W> {
                 let indices: Vec<Value> = tup.iter()
                     .enumerate()
                     .filter(|(_, item)| self.values_equal(item, &value))
-                    .map(|(i, _)| Value::Int(i as i64))
+                    .map(|(i, _)| Value::Int((i + 1) as i64))
                     .collect();
                 Ok(Value::Array(indices))
             }
@@ -876,7 +964,7 @@ impl<W: Write> Interpreter<W> {
                         let mut positions = Vec::new();
                         for i in 0..=(string_chars.len().saturating_sub(pattern_chars.len())) {
                             if string_chars[i..i + pattern_chars.len()] == pattern_chars[..] {
-                                positions.push(Value::Int(i as i64));
+                                positions.push(Value::Int((i + 1) as i64));
                             }
                         }
                         positions
@@ -885,7 +973,7 @@ impl<W: Write> Interpreter<W> {
                         string_chars.iter()
                             .enumerate()
                             .filter(|(_, c)| **c == ch)
-                            .map(|(i, _)| Value::Int(i as i64))
+                            .map(|(i, _)| Value::Int((i + 1) as i64))
                             .collect()
                     }
                     _ => {
@@ -923,3 +1011,4 @@ fn natural_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         _ => None,
     }
 }
+

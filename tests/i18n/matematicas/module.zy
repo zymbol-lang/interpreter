@@ -1,29 +1,29 @@
-# .matematicas_module
+# .module {
+    #> {
+        sumar
+        restar
+        multiplicar
+        dividir
+        PI
+        E
+    }
 
-#> {
-    sumar
-    restar
-    multiplicar
-    dividir
-    PI
-    E
-}
+    PI := 3.14159
+    E := 2.71828
 
-PI := 3.14159
-E := 2.71828
+    sumar(a, b) {
+        <~ a + b
+    }
 
-sumar(a, b) {
-    <~ a + b
-}
+    restar(a, b) {
+        <~ a - b
+    }
 
-restar(a, b) {
-    <~ a - b
-}
+    multiplicar(a, b) {
+        <~ a * b
+    }
 
-multiplicar(a, b) {
-    <~ a * b
-}
-
-dividir(a, b) {
-    <~ a / b
+    dividir(a, b) {
+        <~ a / b
+    }
 }

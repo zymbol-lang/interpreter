@@ -1,0 +1,3 @@
+caught: generic error
+##_(Named tuple has no field 'salary'. Available fields: name, age)
+continues

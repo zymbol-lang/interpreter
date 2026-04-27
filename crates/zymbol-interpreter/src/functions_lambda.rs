@@ -27,6 +27,7 @@ impl<W: Write> Interpreter<W> {
             params: lambda.params.clone(),
             body: lambda.body.clone(),
             captures: Rc::new(captures),
+            is_named_fn: false,
         }))
     }
 
@@ -103,6 +104,7 @@ impl<W: Write> Interpreter<W> {
 
         // QW1: execute_block_no_scope avoids the extra push_scope/pop_scope that
         // execute_block would add — take_call_state already created scope[0].
+        let is_named = func.is_named_fn;
         let result = match &func.body {
             zymbol_ast::LambdaBody::Expr(expr) => {
                 self.eval_expr(expr)?
@@ -115,10 +117,14 @@ impl<W: Write> Interpreter<W> {
                         val.unwrap_or(Value::Unit)
                     }
                     _ => {
-                        return Err(RuntimeError::Generic {
-                            message: "block lambda must use <~ to return value".to_string(),
-                            span: *span,
-                        });
+                        if is_named {
+                            Value::Unit
+                        } else {
+                            return Err(RuntimeError::Generic {
+                                message: "block lambda must use <~ to return value".to_string(),
+                                span: *span,
+                            });
+                        }
                     }
                 }
             }
@@ -215,6 +221,22 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
+    /// Convert a named FunctionDef into a first-class FunctionValue (Opción A).
+    /// Selectively captures only the variables referenced in the function body
+    /// from the current scope, so the result behaves like a closure.
+    pub(crate) fn func_def_to_value(&self, func_def: &Rc<FunctionDef>) -> FunctionValue {
+        let mut refs = HashSet::new();
+        let mut locals: HashSet<String> = func_def.parameters.iter().map(|p| p.name.clone()).collect();
+        collect_refs_in_stmts(&func_def.body.statements, &mut locals, &mut refs);
+        let captures = self.capture_only(&refs);
+        FunctionValue {
+            params: func_def.parameters.iter().map(|p| p.name.clone()).collect(),
+            body: zymbol_ast::LambdaBody::Block(func_def.body.clone()),
+            captures: Rc::new(captures),
+            is_named_fn: true,
+        }
+    }
+
     /// Helper to evaluate traditional (non-lambda) function calls
     pub(crate) fn eval_traditional_function_call(
         &mut self,
@@ -254,15 +276,29 @@ impl<W: Write> Interpreter<W> {
             scope.reserve(func_def.parameters.len());
         }
 
-        // If this is a module function call, restore module's execution context
-        if let Some((_, module_path)) = &module_info {
+        // If this is a module function call, restore module's execution context.
+        // BUG-01: also swap self.functions with the module's full function table so that
+        // intra-module calls (private or exported) resolve correctly inside the function body.
+        // G17 fix: for script-level functions (module_info = None), restore the caller's
+        // import_aliases so that module calls (ollama::fn, ui::fn, etc.) resolve correctly.
+        // take_call_state() clears import_aliases — without this, alias lookups fail silently.
+        let saved_functions = if let Some((_, module_path)) = &module_info {
             if let Some(module) = self.loaded_modules.get(module_path).cloned() {
                 for (name, value) in &module.all_variables {
                     self.set_variable(name, value.clone());
                 }
                 self.import_aliases = module.import_aliases.clone();
+                // Swap in the module's complete function table; save caller's table
+                Some(std::mem::replace(&mut self.functions, module.all_functions.clone()))
+            } else {
+                None
             }
-        }
+        } else {
+            // Script-level function: inherit caller's import aliases so module calls
+            // (alias::fn()) resolve correctly inside the function body.
+            self.import_aliases = saved.import_aliases.clone();
+            None  // function table unchanged — script fns share caller's table
+        };
 
         // QW8: move values out of arg_values instead of cloning
         // set_variable_new: skip scope-stack scan for Normal params (fresh isolated scope)
@@ -330,6 +366,31 @@ impl<W: Write> Interpreter<W> {
         self.current_function = prev_fn;
         self.current_output_params = prev_output_params;
 
+        // MODULE STATE WRITE-BACK: persist changes to module-level variables back to LoadedModule.
+        // Only keys that existed in all_variables at module load time are written back.
+        // Function parameters and locally-declared variables are excluded automatically —
+        // they were not in all_variables, so they are not candidates for write-back.
+        // This implements private mutable module state: variables declared with `=` at module
+        // level persist across calls but are never directly accessible from outside the module.
+        if let Some((_, module_path)) = &module_info {
+            // Step 1: collect keys (drops the immutable borrow immediately)
+            let module_keys: Vec<String> = self.loaded_modules
+                .get(module_path)
+                .map(|m| m.all_variables.keys().cloned().collect())
+                .unwrap_or_default();
+            // Step 2: read current scope values for those keys
+            let writeback: Vec<(String, Value)> = module_keys
+                .iter()
+                .filter_map(|key| self.get_variable(key).map(|val| (key.clone(), val.clone())))
+                .collect();
+            // Step 3: write back to module (separate mut borrow)
+            if let Some(module) = self.loaded_modules.get_mut(module_path) {
+                for (key, val) in writeback {
+                    module.all_variables.insert(key, val);
+                }
+            }
+        }
+
         // QW2: lazy output-param collection — only allocate if function has output params.
         // Eliminates HashMap::new() on every call (most functions have no output params).
         let has_output_params = func_def.parameters.iter().any(|p| matches!(p.kind, ParameterKind::Output));
@@ -349,6 +410,11 @@ impl<W: Write> Interpreter<W> {
             }
         } else {
             self.restore_call_state(saved);
+        }
+
+        // BUG-01: restore caller's function table after module function execution
+        if let Some(caller_functions) = saved_functions {
+            self.functions = caller_functions;
         }
 
         Ok(return_value)
@@ -510,6 +576,42 @@ fn collect_refs_in_expr(
             collect_refs_in_expr(&op.pattern, locals, refs);
             collect_refs_in_expr(&op.replacement, locals, refs);
             if let Some(c) = &op.count { collect_refs_in_expr(c, locals, refs); }
+        }
+        Expr::StringSplit(op) => {
+            collect_refs_in_expr(&op.string, locals, refs);
+            collect_refs_in_expr(&op.delimiter, locals, refs);
+        }
+        Expr::ConcatBuild(op) => {
+            collect_refs_in_expr(&op.base, locals, refs);
+            for item in &op.items { collect_refs_in_expr(item, locals, refs); }
+        }
+        Expr::NumericCast(op) => collect_refs_in_expr(&op.expr, locals, refs),
+        Expr::DeepIndex(di) => {
+            collect_refs_in_expr(&di.array, locals, refs);
+            for step in &di.path.steps {
+                collect_refs_in_expr(&step.index, locals, refs);
+                if let Some(end) = &step.range_end { collect_refs_in_expr(end, locals, refs); }
+            }
+        }
+        Expr::FlatExtract(fe) => {
+            collect_refs_in_expr(&fe.array, locals, refs);
+            for path in &fe.paths {
+                for step in &path.steps {
+                    collect_refs_in_expr(&step.index, locals, refs);
+                    if let Some(end) = &step.range_end { collect_refs_in_expr(end, locals, refs); }
+                }
+            }
+        }
+        Expr::StructuredExtract(se) => {
+            collect_refs_in_expr(&se.array, locals, refs);
+            for group in &se.groups {
+                for path in &group.paths {
+                    for step in &path.steps {
+                        collect_refs_in_expr(&step.index, locals, refs);
+                        if let Some(end) = &step.range_end { collect_refs_in_expr(end, locals, refs); }
+                    }
+                }
+            }
         }
         // Literals and shell exprs have no capturable sub-expressions
         Expr::Literal(_) | Expr::Execute(_) | Expr::BashExec(_) => {}

@@ -1,0 +1,12 @@
+// GAP-01 (v0.0.4): \ var now correctly destroys the variable.
+//
+// Implementation: crates/zymbol-interpreter/src/lib.rs
+//   Statement::LifetimeEnd(lifetime_end) => self.destroy_variable(&lifetime_end.variable_name)
+//
+// This test verifies that \ var executes without error and the program continues.
+// Variable is NOT accessed after destruction (that produces a runtime/compile error).
+
+x = 100
+>> x ¶
+\ x
+>> "done" ¶

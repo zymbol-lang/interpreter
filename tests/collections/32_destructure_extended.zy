@@ -34,7 +34,7 @@ b = 0
 [head, *tail] = [10, 20, 30, 40, 50]
 >> head ¶                        // → 10
 >> tail$# ¶                      // → 4
->> tail[0] ¶                     // → 20
+>> tail[1] ¶                     // → 20
 >> tail[-1] ¶                    // → 50
 
 // ── Array — ignore multiple positions ────────────────────────────────────────
@@ -44,9 +44,9 @@ b = 0
 
 // ── Destructure inside function — unpack return value ───────────────────────
 minmax(nums) {
-    mn = nums[0]
-    mx = nums[0]
-    @ i:1..(nums$#-1) {
+    mn = nums[1]
+    mx = nums[1]
+    @ i:2..nums$# {
         ? nums[i] < mn { mn = nums[i] }
         ? nums[i] > mx { mx = nums[i] }
     }
@@ -73,7 +73,7 @@ people = [
     (name: "Cara", score: 88)
 ]
 
-(name: best_name, score: best_score) = (people$^ (a, b -> a.score > b.score))[0]
+(name: best_name, score: best_score) = (people$^ (a, b -> a.score > b.score))[1]
 >> best_name ¶                   // → Ana
 >> best_score ¶                  // → 95
 

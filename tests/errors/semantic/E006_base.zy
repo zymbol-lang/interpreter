@@ -1,0 +1,5 @@
+# E006_base {
+    #> { real_fn }
+
+    real_fn() { <~ "real" }
+}

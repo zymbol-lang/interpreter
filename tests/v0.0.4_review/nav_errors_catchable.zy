@@ -1,0 +1,7 @@
+// v0.0.4 review — nav path errors are catchable: index 0 and out-of-bounds
+
+m = [[1,2], [3,4]]
+
+!? { >> m[1>0] ¶ } :! { >> "caught: index 0 is invalid" ¶ }
+
+!? { >> m[5>1] ¶ } :! { >> "caught: out of bounds" ¶ }

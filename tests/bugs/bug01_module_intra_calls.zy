@@ -1,0 +1,16 @@
+// BUG-01: functions in the same module can call each other
+// Before fix: "undefined function 'bar'" even when both are in the same module
+
+<# ./bug01_intra_mod <= m
+
+// exported calling exported
+r1 = m::foo()
+>> r1 ¶
+
+// exported calling private helper
+r2 = m::compute(7)
+>> r2 ¶
+
+// three-deep intra-module chain
+r3 = m::chain_a()
+>> r3 ¶

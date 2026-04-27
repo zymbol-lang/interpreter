@@ -1,0 +1,38 @@
+// BUG — Double interpolation: interpreter was re-interpolating Literal::String at runtime
+//
+// Root cause: parser collapsed StringInterpolated and escaped-brace String into the
+// same Literal::String("{foo}"). The interpreter's interpolate_string() then processed
+// both, making \{foo\} behave identically to {foo} when the variable was defined.
+//
+// Fix: Literal::InterpolatedString distinguishes interpolated strings from plain ones.
+// Only InterpolatedString reaches interpolate_string(); String is always literal.
+//
+// This test is a regression guard — all assertions must hold simultaneously.
+
+name = "world"
+path = "/tmp/test"
+
+// Escaped braces must NEVER interpolate, even when variable is defined
+plain1 = "\{name\}"           // must be: {name}
+plain2 = "hello \{name\}"     // must be: hello {name}
+plain3 = "\{name\} end"       // must be: {name} end
+plain4 = "\{path\}"           // must be: {path}
+
+// Unescaped braces must interpolate normally
+interp1 = "{name}"            // must be: world
+interp2 = "hello {name}!"     // must be: hello world!
+interp3 = "{path}/file"       // must be: /tmp/test/file
+
+// Mixed in same string: escaped stays literal, unescaped interpolates
+mixed1 = "\{name\} vs {name}" // must be: {name} vs world
+mixed2 = "{name} vs \{name\}" // must be: world vs {name}
+
+>> plain1 ¶
+>> plain2 ¶
+>> plain3 ¶
+>> plain4 ¶
+>> interp1 ¶
+>> interp2 ¶
+>> interp3 ¶
+>> mixed1 ¶
+>> mixed2 ¶

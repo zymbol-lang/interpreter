@@ -79,7 +79,10 @@ impl Interner {
 pub enum Literal {
     Int(i64),
     Float(f64),
+    /// Plain string literal — braces are literal characters, never interpolated
     String(String),
+    /// String with {var} interpolation — variables resolved at runtime
+    InterpolatedString(String),
     Char(char),
     Bool(bool),
 }
@@ -90,6 +93,7 @@ impl fmt::Display for Literal {
             Literal::Int(n) => write!(f, "{}", n),
             Literal::Float(n) => write!(f, "{}", n),
             Literal::String(s) => write!(f, "\"{}\"", s),
+            Literal::InterpolatedString(s) => write!(f, "\"{}\"", s),
             Literal::Char(c) => write!(f, "'{}'", c),
             Literal::Bool(b) => write!(f, "{}", if *b { "#1" } else { "#0" }),
         }
@@ -120,9 +124,10 @@ pub enum BinaryOp {
     Or,  // ||
 
     // Special operators
-    Pipe,  // |>
-    Comma, // , (concatenation)
-    Range, // ..
+    Pipe,   // |>
+    Comma,  // , (separator: args, arrays, tuples)
+    Range,  // ..
+    Concat, // juxtaposition: implicit string concatenation
 }
 
 impl fmt::Display for BinaryOp {
@@ -145,6 +150,7 @@ impl fmt::Display for BinaryOp {
             BinaryOp::Pipe => "|>",
             BinaryOp::Comma => ",",
             BinaryOp::Range => "..",
+            BinaryOp::Concat => " ", // juxtaposition — rendered as space
         };
         write!(f, "{}", s)
     }

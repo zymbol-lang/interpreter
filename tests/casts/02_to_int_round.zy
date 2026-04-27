@@ -1,0 +1,34 @@
+// Test: ### (ToIntRound) cast operator
+// Converts Float to Int using half-up rounding
+
+// Basic rounding
+>> ###3.7 ¶    // 4
+>> ###3.5 ¶    // 4  (half-up)
+>> ###3.4 ¶    // 3
+>> ###3.0 ¶    // 3
+
+// Negative values — rounds away from zero (toward negative infinity)
+>> ###(-2.9) ¶    // -3
+>> ###(-2.5) ¶    // -3  (half-up toward negative)
+>> ###(-2.1) ¶    // -2
+
+// Large values
+>> ###1000.9 ¶    // 1001
+>> ###(-1000.4) ¶ // -1000
+
+// Variable form
+f = 7.8
+r = ###f
+>> r ¶     // 8
+
+// Type is Int
+meta = r#?
+>> meta[1] ¶    // ###
+
+// Works in expressions
+arr = [1.1, 2.6, 3.5, 4.4, 5.9]
+rounded = arr$> (x -> ###x)
+>> rounded ¶    // [1, 3, 4, 4, 6]
+
+// Zero stays zero
+>> ###0.0 ¶    // 0

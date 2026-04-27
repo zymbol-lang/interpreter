@@ -1,0 +1,10 @@
+=== Example 1: Conditional variable creation ===
+Optional variable not created, using default
+=== Example 2: Default values pattern ===
+Using default value: 50
+=== Example 3: Safe cleanup check ===
+Processing temporary data...
+✅ Temporary data was properly cleaned up
+=== Example 4: Variable existence validation ===
+SUCCESS: Processing complete
+=== All practical examples completed ===

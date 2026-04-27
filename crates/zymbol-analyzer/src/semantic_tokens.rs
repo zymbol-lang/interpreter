@@ -66,8 +66,12 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         | TokenKind::Underscore      // _  (else/wildcard)
         | TokenKind::DoubleQuestion  // ?? (match)
         | TokenKind::At              // @  (loop)
-        | TokenKind::AtBreak         // @! (break)
-        | TokenKind::AtContinue      // @> (continue)
+        | TokenKind::AtBreak              // @! (break)
+        | TokenKind::AtContinue           // @> (continue)
+        | TokenKind::AtLabel(_)           // @label (labeled loop, legacy)
+        | TokenKind::AtColonLabel(_)      // @:label
+        | TokenKind::AtColonLabelBreak(_) // @:label!
+        | TokenKind::AtColonLabelContinue(_) // @:label>
         | TokenKind::TryBlock        // !? (try)
         | TokenKind::CatchBlock      // :! (catch)
         | TokenKind::FinallyBlock    // :> (finally)
@@ -86,7 +90,8 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         | TokenKind::ScopeResolution // ::
         | TokenKind::PipeOp          // |>
         | TokenKind::CliArgsCapture   // ><
-        | TokenKind::BashCommand(_)   // <\ command \>
+        | TokenKind::BashOpen          // <\
+        | TokenKind::BashClose         // \>
         | TokenKind::ExecuteCommand(_) // </ path />
         => Some(token_type_index::OPERATOR),
 
@@ -143,6 +148,7 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         | TokenKind::DollarPlusPlus  // $++
         | TokenKind::DollarMinusMinus // $--
         | TokenKind::DollarTildeTilde // $~~
+        | TokenKind::DollarSlash     // $/
         | TokenKind::DollarExclaim   // $!
         | TokenKind::DollarExclaimExclaim // $!!
         | TokenKind::DollarCaretPlus  // $^+
@@ -157,6 +163,9 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         | TokenKind::HashExclaim     // #!
         | TokenKind::HashComma       // #,
         | TokenKind::HashCaret       // #^
+        | TokenKind::HashHashDot     // ##.
+        | TokenKind::HashHashHash    // ###
+        | TokenKind::HashHashBang    // ##!
         | TokenKind::BaseBinary      // 0b
         | TokenKind::BaseOctal       // 0o
         | TokenKind::BaseDecimal     // 0d
@@ -260,6 +269,8 @@ fn token_length(kind: &TokenKind) -> u32 {
         | TokenKind::DoubleQuestion // ??
         | TokenKind::AtBreak        // @!
         | TokenKind::AtContinue     // @>
+        | TokenKind::AtColonLabelBreak(_)    // @:label! (2+name+1 chars, approximated as 2 here)
+        | TokenKind::AtColonLabelContinue(_) // @:label> (2+name+1 chars, approximated as 2 here)
         | TokenKind::TryBlock       // !?
         | TokenKind::CatchBlock     // :!
         | TokenKind::FinallyBlock   // :>
@@ -292,6 +303,7 @@ fn token_length(kind: &TokenKind) -> u32 {
         | TokenKind::DollarPipe     // $|
         | TokenKind::DollarLt       // $<
         | TokenKind::DollarExclaim  // $!
+        | TokenKind::DollarSlash    // $/
         | TokenKind::HashPipe       // #|
         | TokenKind::HashQuestion   // #?
         | TokenKind::HashDot        // #.
@@ -320,6 +332,8 @@ fn token_length(kind: &TokenKind) -> u32 {
         => 2,
 
         // Variable-length tokens - use span information
+        TokenKind::AtLabel(name) => (1 + name.len()) as u32, // @ + label (legacy)
+        TokenKind::AtColonLabel(name) => (2 + name.len()) as u32, // @: + label
         TokenKind::String(s) => (s.len() + 2) as u32, // +2 for quotes
         TokenKind::StringInterpolated(parts) => {
             // Estimate: sum of parts + braces + quotes
@@ -334,7 +348,10 @@ fn token_length(kind: &TokenKind) -> u32 {
         TokenKind::Float(f) => format!("{}", f).len() as u32,
         TokenKind::Ident(name) => name.len() as u32,
         TokenKind::HashComma | TokenKind::HashCaret => 2, // #, or #^ (two-char tokens)
-        TokenKind::BashCommand(cmd) => (cmd.len() + 4) as u32,    // +4 for <\ and \>
+        TokenKind::HashHashDot | TokenKind::HashHashBang => 3, // ##. or ##! (three-char)
+        TokenKind::HashHashHash => 3, // ### (three-char)
+        TokenKind::BashOpen => 2,   // <\
+        TokenKind::BashClose => 2,  // \>
         TokenKind::ExecuteCommand(path) => (path.len() + 4) as u32, // +4 for </ and />
         TokenKind::LineComment(content) => (content.len() + 2) as u32, // +2 for //
         TokenKind::BlockComment(content) => (content.len() + 4) as u32, // +4 for /* */

@@ -1,0 +1,21 @@
+// v0.0.4 review — type conversion casts: ##. ###  ##!
+// Covers: Int→Float, Float→Int round, Float→Int trunc, negatives, expressions
+
+i = 42
+f = 3.7
+
+fi = ##.i
+>> fi ¶
+
+ir = ###f
+>> ir ¶
+
+it = ##!f
+>> it ¶
+
+nf = -2.9
+>> ###nf ¶
+>> ##!nf ¶
+
+>> ###(7 / 2.0) ¶
+>> ##!(7 / 2.0) ¶

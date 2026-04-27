@@ -1,0 +1,13 @@
+// Test: range with step @ i:start..end:step { }
+@ i:1..9:2 { >> i " " }
+>> ¶
+
+@ i:0..10:3 { >> i " " }
+>> ¶
+
+// Reverse range
+@ i:10..1:3 { >> i " " }
+>> ¶
+
+@ i:5..0:1 { >> i " " }
+>> ¶

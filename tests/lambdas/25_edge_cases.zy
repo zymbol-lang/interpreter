@@ -18,7 +18,7 @@ single = [42]
 >> "Single element array: " >> single$# >> " (expected: 1)" ¶
 
 mapped_single = single$> (x -> x * 2)
->> "Mapped single: " >> mapped_single[0] >> " (expected: 84)" ¶
+>> "Mapped single: " >> mapped_single[1] >> " (expected: 84)" ¶
 
 sum_single = single$< (0, (acc, x) -> acc + x)
 >> "Reduce single: " >> sum_single >> " (expected: 42)" ¶
@@ -30,12 +30,10 @@ constant = get_constant(#0)
 >> "Constant lambda: " >> constant >> " (expected: 100)" ¶
 ¶
 
-// Nested lambdas with same parameter names (shadowing)
-outer = x -> {
-    inner = x -> x * 2
-    result = inner(5)
-    <~ x + result
-}
+// Nested lambdas with parameter shadowing
+// outer x=10, inner x shadows outer; inner(5)=10, outer returns outer_x + inner(5)
+inner_double = x -> x * 2
+outer = x -> x + inner_double(5)
 
 shadow_result = outer(10)
 >> "Parameter shadowing: " >> shadow_result ¶

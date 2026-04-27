@@ -1,0 +1,53 @@
+=== EXPRESSION STATEMENTS VERIFICATION TEST SUITE ===
+TEST 1: Basic Function Call with Output Parameters
+Counter after 1st call: 1
+Counter after 2nd call: 2
+Counter after 3rd call: 3
+✅ TEST 1 PASSED
+TEST 2: Function Call with Return (Discarded)
+✅ TEST 2 PASSED (no crash, values discarded)
+TEST 3: Multiple Expression Statements in Sequence
+Sequence count: 5
+✅ TEST 3 PASSED
+TEST 4: Expression Statements in IF Blocks
+IF result: 1
+✅ TEST 4 PASSED
+TEST 5: Expression Statements in While Loops
+While loop result: 5
+✅ TEST 5 PASSED
+TEST 6: Expression Statements in For-Each Loops
+For-each sum: 15
+✅ TEST 6 PASSED
+TEST 7: Expression Statements in Times Loops
+Times loop counter: 10
+✅ TEST 7 PASSED
+TEST 8: Expression Statements with Multiple Output Parameters
+Modified values: 10 and 30
+✅ TEST 8 PASSED
+TEST 9: Nested Expression Statements
+Nested result: 3
+✅ TEST 9 PASSED
+TEST 10: Expression Statements in Match Blocks
+Match result: 2
+✅ TEST 10 PASSED
+TEST 11: Expression Statements Mixed with Assignments
+Mixed: counter=4 result1=2 result2=4
+✅ TEST 11 PASSED
+TEST 12: Expression Statements in Array Iteration
+Array sum: 150
+✅ TEST 12 PASSED
+TEST 13: Void Functions (No Return)
+Void result: 10
+✅ TEST 13 PASSED
+TEST 14: Multiple Parameters
+Multi param result: 10
+✅ TEST 14 PASSED
+TEST 15: Complex Nested Calls
+Complex result: 20
+✅ TEST 15 PASSED
+================================================
+VERIFICATION TEST SUITE COMPLETE
+================================================
+All 15 tests executed
+Check output above for ✅ PASSED or ❌ FAILED
+================================================

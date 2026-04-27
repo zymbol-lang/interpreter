@@ -1,6 +1,6 @@
 #!/bin/bash
 # Installation script for Zymbol-Lang
-# Creates a global symlink to the zymbol executable
+# Builds release binaries and creates global symlinks
 
 set -e
 
@@ -9,45 +9,35 @@ echo "Zymbol-Lang Installation"
 echo "========================================="
 echo ""
 
-# Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 ZYMBOL_BIN="$SCRIPT_DIR/target/release/zymbol"
+LSP_BIN="$SCRIPT_DIR/target/release/zymbol-lsp"
 
-# Check if the release binary exists
-if [ ! -f "$ZYMBOL_BIN" ]; then
-    echo "❌ Error: Release binary not found at $ZYMBOL_BIN"
-    echo "Please build the project first:"
-    echo "  cargo build --release"
-    exit 1
-fi
+echo "Building release binaries..."
+echo "  cargo build --release --bin zymbol --bin zymbol-lsp"
+echo ""
 
-# Create symlink in /usr/bin/
-echo "📦 Creating symlink in /usr/bin/..."
-echo "This requires sudo permissions."
+cd "$SCRIPT_DIR"
+cargo build --release --bin zymbol --bin zymbol-lsp
+
+echo ""
+echo "Installing symlinks in /usr/bin/ (requires sudo)..."
 echo ""
 
 sudo ln -sf "$ZYMBOL_BIN" /usr/bin/zymbol
+echo "  /usr/bin/zymbol     -> $ZYMBOL_BIN"
 
-# Verify installation
-if command -v zymbol &> /dev/null; then
-    echo ""
-    echo "========================================="
-    echo "✅ Installation successful!"
-    echo "========================================="
-    echo "Zymbol-Lang is now available globally."
-    echo ""
-    echo "Usage:"
-    echo "  zymbol run <file.zy>    # Run a Zymbol file"
-    echo "  zymbol --help           # Show help"
-    echo ""
-    echo "Version:"
-    zymbol --version
-    echo ""
-    echo "Location:"
-    echo "  Executable: $ZYMBOL_BIN"
-    echo "  Symlink:    /usr/bin/zymbol"
-    echo "========================================="
-else
-    echo "❌ Installation failed. Please check for errors above."
-    exit 1
-fi
+sudo ln -sf "$LSP_BIN" /usr/bin/zymbol-lsp
+echo "  /usr/bin/zymbol-lsp -> $LSP_BIN"
+
+echo ""
+echo "========================================="
+echo "Installation complete"
+echo "========================================="
+echo ""
+/usr/bin/zymbol -V
+echo ""
+echo "Verification:"
+echo "  zymbol:     $(readlink -f /usr/bin/zymbol)"
+echo "  zymbol-lsp: $(readlink -f /usr/bin/zymbol-lsp)"
+echo "========================================="

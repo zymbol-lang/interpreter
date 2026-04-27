@@ -20,16 +20,11 @@ users = [
 ¶
 
 // Pipeline: Filter adults (>=18) AND active -> Extract scores -> Calculate average
-adults_active = users$| (u -> {
-    age = u[1]
-    active = u[3]
-    is_adult = age >= 18
-    <~ is_adult && active
-})
+adults_active = users$| (u -> u[2] >= 18 && u[4])
 
 >> "Adults (>=18) and active: " >> adults_active$# ¶
 
-scores = adults_active$> (u -> u[2])
+scores = adults_active$> (u -> u[3])
 >> "Scores: "
 @ s:scores {
     >> s " "
@@ -45,7 +40,7 @@ average = sum / count
 ¶
 
 // Find top performer
-top_score = scores$< (scores[0], (max, x) -> {
+top_score = scores$< (scores[1], (max, x) -> {
     ? x > max {
         <~ x
     }
@@ -60,10 +55,10 @@ top_score = scores$< (scores[0], (max, x) -> {
 
 // Chain with pipes
 result = users
-    $| (u -> u[1] >= 18 && u[3])
-    $> (u -> u[2])
+    $| (u -> u[2] >= 18 && u[4])
+    $> (u -> u[3])
 
-top = result$< (result[0], (max, x) -> {
+top = result$< (result[1], (max, x) -> {
     ? x > max {
         <~ x
     }

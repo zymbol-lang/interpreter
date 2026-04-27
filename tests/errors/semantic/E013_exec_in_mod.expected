@@ -1,0 +1,6 @@
+error: E013: executable statement not allowed in module body
+  --> tests/errors/semantic/E013_exec_in_mod.zy:6:5
+   6 |
+   6 |     >> "this should not be allowed" ¶
+     |     ^^
+  help: modules may only contain imports, exports, constants, variables, and function definitions

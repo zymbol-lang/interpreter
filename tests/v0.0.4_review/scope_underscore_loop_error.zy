@@ -1,0 +1,8 @@
+// v0.0.4 review — _name declared in outer scope, modified from loop = semantic error
+// Expected: semantic analysis rejects this program before execution
+
+_counter = 0
+@ i:1..5 {
+    _counter = _counter + 1
+}
+>> _counter ¶

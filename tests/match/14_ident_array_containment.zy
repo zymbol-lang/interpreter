@@ -1,0 +1,25 @@
+// Test: ident pattern — scalar ∈ array variable
+codigos_ok = [200, 201, 202]
+codigo = 201
+result = ?? codigo {
+    codigos_ok : "success"
+    _          : "other"
+}
+>> result ¶
+
+// Not in array
+codigo2 = 404
+result2 = ?? codigo2 {
+    codigos_ok : "success"
+    _          : "other"
+}
+>> result2 ¶
+
+// String containment
+dias_habil = ["lun", "mar", "mie", "jue", "vie"]
+hoy = "mar"
+tipo = ?? hoy {
+    dias_habil : "weekday"
+    _          : "weekend"
+}
+>> tipo ¶

@@ -35,6 +35,14 @@ impl Lexer {
             return Some(Token::new(TokenKind::Input, self.span(start)));
         }
 
+        // Check for \> (bash execute close) — only when inside a bash exec block
+        if ch == '\\' && self.peek() == Some('>') && self.bash_depth > 0 {
+            self.advance(); // consume \
+            self.advance(); // consume >
+            self.bash_depth -= 1;
+            return Some(Token::new(TokenKind::BashClose, self.span(start)));
+        }
+
         // Check for \\ (double backslash - explicit newline)
         if ch == '\\' && self.peek() == Some('\\') {
             self.advance();

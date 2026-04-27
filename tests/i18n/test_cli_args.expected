@@ -1,0 +1,12 @@
+[1m[31merror[39m[0m: undefined variable 'args'
+  [1m[34m-->[39m[0m tests/i18n/test_cli_args.zy:9:7
+[1m[34m   9[39m[0m [34m|[39m
+[1m[34m   9[39m[0m [34m|[39m @ arg:args {
+[34m     |[39m [1m[31m      ^^^^[39m[0m
+  [1m[32mhelp:[39m[0m variables must be defined before use
+[1m[31merror[39m[0m: undefined variable 'args'
+  [1m[34m-->[39m[0m tests/i18n/test_cli_args.zy:15:29
+[1m[34m  15[39m[0m [34m|[39m
+[1m[34m  15[39m[0m [34m|[39m     >> "Primer argumento: " args[0] ¶
+[34m     |[39m [1m[31m                            ^^^^[39m[0m
+  [1m[32mhelp:[39m[0m variables must be defined before use

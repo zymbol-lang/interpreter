@@ -8,31 +8,116 @@
 //! - Precision expressions: #.N|expr| (round), #!N|expr| (truncate)
 
 use std::io::Write;
-use zymbol_ast::{BaseConversionExpr, Expr, FormatExpr, NumericEvalExpr, RoundExpr, TruncExpr, TypeMetadataExpr};
+use zymbol_ast::{BaseConversionExpr, CastKind, Expr, FormatExpr, NumericCastExpr, NumericEvalExpr, RoundExpr, TruncExpr, TypeMetadataExpr};
+use zymbol_lexer::digit_blocks::digit_value;
 
 use crate::{Interpreter, Result, RuntimeError, Value};
+
+fn value_type(v: Value) -> &'static str {
+    match v {
+        Value::Int(_) => "Int",
+        Value::Float(_) => "Float",
+        Value::String(_) => "String",
+        Value::Char(_) => "Char",
+        Value::Bool(_) => "Bool",
+        Value::Array(_) => "Array",
+        Value::Tuple(_) | Value::NamedTuple(_) => "Tuple",
+        Value::Function(_) => "Function",
+        Value::Error(_) => "Error",
+        Value::Unit => "Unit",
+    }
+}
+
+/// Normalize a string containing Unicode numerals to ASCII digits.
+/// Accepts: Unicode decimal digits (any of 69 scripts), '.', '-' (leading only).
+/// Returns None if any non-numeric character is found.
+fn normalize_unicode_digits(s: &str) -> Option<String> {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    // Optional leading minus
+    if chars.peek() == Some(&'-') {
+        result.push('-');
+        chars.next();
+    }
+    let mut has_digit = false;
+    let mut has_dot = false;
+    for ch in chars {
+        if let Some(dv) = digit_value(ch) {
+            result.push(char::from_digit(dv as u32, 10).unwrap());
+            has_digit = true;
+        } else if ch == '.' && !has_dot {
+            result.push('.');
+            has_dot = true;
+        } else {
+            return None; // non-numeric character — not a number
+        }
+    }
+    if has_digit { Some(result) } else { None }
+}
+
+/// Try to parse a trimmed string as `Int` or `Float`.
+/// Returns the original `String` value if parsing fails (fail-safe).
+/// Also handles Unicode digit scripts (Thai, Arabic, Devanagari, etc.).
+pub(crate) fn parse_numeric_string(s: String) -> Value {
+    let trimmed = s.trim();
+    if let Ok(n) = trimmed.parse::<i64>() {
+        return Value::Int(n);
+    }
+    if let Ok(f) = trimmed.parse::<f64>() {
+        return Value::Float(f);
+    }
+    if let Some(normalized) = normalize_unicode_digits(trimmed) {
+        if let Ok(n) = normalized.parse::<i64>() {
+            return Value::Int(n);
+        }
+        if let Ok(f) = normalized.parse::<f64>() {
+            return Value::Float(f);
+        }
+    }
+    Value::String(s)
+}
 
 impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_numeric_eval(&mut self, op: &NumericEvalExpr) -> Result<Value> {
         let value = self.eval_expr(&op.expr)?;
-
-        // If it's a string, try to parse as number
         if let Value::String(s) = value {
-            // Trim whitespace/newlines first — BashExec output always has trailing \n
-            let trimmed = s.trim();
-            // Try parsing as integer first
-            if let Ok(n) = trimmed.parse::<i64>() {
-                return Ok(Value::Int(n));
-            }
-            // Try parsing as float
-            if let Ok(f) = trimmed.parse::<f64>() {
-                return Ok(Value::Float(f));
-            }
-            // Parsing failed - return original string (fail-safe!)
-            Ok(Value::String(s))
+            Ok(parse_numeric_string(s))
         } else {
-            // Not a string - return as-is
             Ok(value)
+        }
+    }
+
+    /// Evaluate numeric cast: ##.expr / ###expr / ##!expr
+    /// ##.  → Float (lossless from Int, identity from Float)
+    /// ###  → Int rounding  (Float 3.7 → 4, Int identity)
+    /// ##!  → Int truncating (Float 3.7 → 3, Int identity)
+    pub(crate) fn eval_numeric_cast(&mut self, op: &NumericCastExpr) -> Result<Value> {
+        let value = self.eval_expr(&op.expr)?;
+        match op.kind {
+            CastKind::ToFloat => match value {
+                Value::Float(_) => Ok(value),
+                Value::Int(n) => Ok(Value::Float(n as f64)),
+                other => Err(RuntimeError::Generic {
+                    message: format!("##. requires a numeric value, got {}", value_type(other)),
+                    span: op.span,
+                }),
+            },
+            CastKind::ToIntRound => match value {
+                Value::Int(_) => Ok(value),
+                Value::Float(f) => Ok(Value::Int(f.round() as i64)),
+                other => Err(RuntimeError::Generic {
+                    message: format!("### requires a numeric value, got {}", value_type(other)),
+                    span: op.span,
+                }),
+            },
+            CastKind::ToIntTrunc => match value {
+                Value::Int(_) => Ok(value),
+                Value::Float(f) => Ok(Value::Int(f.trunc() as i64)),
+                other => Err(RuntimeError::Generic {
+                    message: format!("##! requires a numeric value, got {}", value_type(other)),
+                    span: op.span,
+                }),
+            },
         }
     }
 
@@ -92,7 +177,8 @@ impl<W: Write> Interpreter<W> {
             }
             Value::Function(func) => {
                 let count = func.params.len() as i64;
-                ("##->".to_string(), count)  // Function type with parameter count
+                let sym = if func.is_named_fn { "##()" } else { "##->" };
+                (sym.to_string(), count)
             }
             Value::Error(err) => {
                 let count = err.message.len() as i64;
@@ -490,9 +576,9 @@ y = #|x|
         let code = r#"
 x = 456
 info = x#?
->> info[0] ¶
 >> info[1] ¶
 >> info[2] ¶
+>> info[3] ¶
 "#;
         let output = run(code);
         assert_eq!(output, "###\n3\n456\n");
@@ -503,9 +589,9 @@ info = x#?
         let code = r#"
 x = "Hello"
 info = x#?
->> info[0] ¶
 >> info[1] ¶
 >> info[2] ¶
+>> info[3] ¶
 "#;
         let output = run(code);
         assert_eq!(output, "##\"\n5\nHello\n");
@@ -516,8 +602,8 @@ info = x#?
         let code = r#"
 x = [1, 2, 3, 4, 5]
 info = x#?
->> info[0] ¶
 >> info[1] ¶
+>> info[2] ¶
 "#;
         let output = run(code);
         assert_eq!(output, "##]\n5\n");
@@ -528,12 +614,12 @@ info = x#?
         let code = r#"
 x = #1
 info = x#?
->> info[0] ¶
 >> info[1] ¶
 >> info[2] ¶
+>> info[3] ¶
 "#;
         let output = run(code);
-        // info[2] is the bool value; >> renders it with # prefix to distinguish from integer
+        // info[3] is the bool value; >> renders it with # prefix to distinguish from integer
         assert_eq!(output, "##?\n1\n#1\n");
     }
 
@@ -647,9 +733,9 @@ b = 500000
         let code = r#"
 x = "789"
 info = #|x|#?
->> info[0] ¶
 >> info[1] ¶
 >> info[2] ¶
+>> info[3] ¶
 "#;
         let output = run(code);
         assert_eq!(output, "###\n3\n789\n");
@@ -661,8 +747,8 @@ info = #|x|#?
 x = "notanumber"
 result = #|x|
 info = result#?
->> info[0] ¶
->> info[2] ¶
+>> info[1] ¶
+>> info[3] ¶
 "#;
         let output = run(code);
         assert_eq!(output, "##\"\nnotanumber\n");

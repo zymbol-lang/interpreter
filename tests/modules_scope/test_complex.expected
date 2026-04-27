@@ -1,0 +1,19 @@
+=== Test 1: Module function with IF blocks ===
+Processing in ComplexModule
+High value: 30
+Result: 30
+Processing in ComplexModule
+Medium value: 17
+Result: 17
+Processing in ComplexModule
+Low value: 8
+Result: 8
+=== Test 2: Module function with loop and blocks ===
+Filtered 4 positive numbers
+Filtered array: [5, 10, 3, 7]
+Length: 4
+=== Test 3: Nested usage in main program blocks ===
+Processing in ComplexModule
+High value: 24
+Block result: 24
+=== All complex module tests passed! ===

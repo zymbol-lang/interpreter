@@ -1,0 +1,30 @@
+// Verifica que cada tipo de error se captura con su handler correcto
+
+!? {
+    _x = 1 / 0
+} :! ##Div {
+    >> "div caught" ¶
+}
+
+!? {
+    arr = [1, 2, 3]
+    _y = arr[0]
+} :! ##Index {
+    >> "index caught" ¶
+}
+
+!? {
+    _z = ##."text"
+} :! {
+    >> "cast caught" ¶
+}
+
+// Generic: named tuple field not found (runtime error)
+t = (name: "Alice")
+!? {
+    _w = t.nonexistent
+} :! {
+    >> "generic caught" ¶
+}
+
+>> "all done" ¶

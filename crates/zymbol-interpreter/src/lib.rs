@@ -32,13 +32,14 @@ mod modules;
 mod arithmetic_ops;
 mod functions_lambda;
 mod expr_eval;
+mod index_nav;
 
 pub(crate) use modules::LoadedModule;
 
 /// Runtime errors
 #[derive(Debug, Error)]
 pub enum RuntimeError {
-    #[error("runtime error: {message}")]
+    #[error("{message}")]
     Generic { message: String, span: Span },
 
     #[error("io error: {0}")]
@@ -55,6 +56,9 @@ pub enum RuntimeError {
 
     #[error("circular dependency detected")]
     CircularDependency,
+
+    #[error("E004: Circular import detected: module '{module}' is already being loaded")]
+    CircularImport { module: String },
 
     #[error("failed to parse module: {0}")]
     ParseError(String),
@@ -155,12 +159,13 @@ pub struct FunctionValue {
     pub params: Vec<String>,
     pub body: zymbol_ast::LambdaBody,
     pub captures: std::rc::Rc<std::collections::HashMap<String, Value>>,  // Shared closure env (Rc → O(1) clone)
+    /// True when this value was created from a named FunctionDecl used as a first-class value.
+    /// Named functions may complete their block without <~ and return Unit (unlike block lambdas).
+    pub is_named_fn: bool,
 }
 
 impl PartialEq for FunctionValue {
     fn eq(&self, other: &Self) -> bool {
-        // Note: We only compare params and body, not captures
-        // Closures with different captures are considered different by reference
         self.params == other.params
     }
 }
@@ -198,13 +203,53 @@ impl Value {
                     .join(", ");
                 format!("({})", contents)
             }
-            Value::Function(_) => {
-                "<lambda>".to_string()
+            Value::Function(f) => {
+                if f.is_named_fn {
+                    format!("<funct/{}>", f.params.len())
+                } else {
+                    format!("<lambd/{}>", f.params.len())
+                }
             }
             Value::Error(err) => {
                 format!("##{}({})", err.error_type, err.message)
             }
             Value::Unit => "".to_string(),
+        }
+    }
+
+    /// Repr form: like `to_display_string` but with delimiters that make the
+    /// type unambiguous — strings get `"..."`, chars get `'...'`, Unit shows
+    /// as `()`.  Used by the REPL to display evaluated expression results.
+    pub fn to_repr_string(&self) -> String {
+        match self {
+            Value::String(s) => format!("\"{}\"", s),
+            Value::Char(c)   => format!("'{}'", c),
+            Value::Unit      => "()".to_string(),
+            Value::Array(elements) => {
+                let contents = elements
+                    .iter()
+                    .map(|v| v.to_repr_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{}]", contents)
+            }
+            Value::Tuple(elements) => {
+                let contents = elements
+                    .iter()
+                    .map(|v| v.to_repr_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({})", contents)
+            }
+            Value::NamedTuple(fields) => {
+                let contents = fields
+                    .iter()
+                    .map(|(name, v)| format!("{}: {}", name, v.to_repr_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({})", contents)
+            }
+            _ => self.to_display_string(),
         }
     }
 
@@ -238,6 +283,8 @@ pub struct Interpreter<W: Write> {
     const_vars_stack: Vec<HashSet<String>>,
     /// Loaded modules cache (file_path -> LoadedModule)
     loaded_modules: HashMap<PathBuf, LoadedModule>,
+    /// Modules currently being loaded (for circular import detection)
+    loading_modules: HashSet<PathBuf>,
     /// Import aliases (alias -> file_path)
     import_aliases: HashMap<String, PathBuf>,
     /// Current file path (for resolving relative imports)
@@ -289,6 +336,11 @@ pub struct Interpreter<W: Write> {
     /// Default: 0x0030 (ASCII). Changed by #<d0><d9># statements.
     /// Applies only to >> numeric outputs; does not affect to_display_string().
     pub(crate) numeral_mode: u32,
+    /// Called by `<<` (input) statements to read one line from the user.
+    /// Receives no arguments; the prompt is printed by execute_input via self.output
+    /// before invoking this function.  The default implementation reads from stdin.
+    /// Override in the REPL to temporarily exit raw mode while the user types.
+    pub(crate) input_fn: Box<dyn FnMut() -> std::io::Result<String>>,
 }
 
 impl<W: Write> Interpreter<W> {
@@ -351,6 +403,10 @@ impl<W: Write> Interpreter<W> {
     /// into a freshly created isolated scope). Saves ~20-30ns vs set_variable for new vars.
     #[inline(always)]
     pub(crate) fn set_variable_new(&mut self, name: &str, value: Value) {
+        // A new assignment after explicit destruction (`\var`) resurrects the variable.
+        if !self.dead_variables.is_empty() {
+            self.dead_variables.remove(name);
+        }
         if let Some(scope) = self.scope_stack.last_mut() {
             scope.insert(name.to_string(), value);
         }
@@ -361,9 +417,13 @@ impl<W: Write> Interpreter<W> {
     /// Only safe when the variable will not be referenced again (e.g., on Return).
     #[inline(always)]
     pub(crate) fn take_variable(&mut self, name: &str) -> Option<Value> {
+        // Remove the entry entirely rather than replacing with Unit sentinel.
+        // A Unit sentinel would be written back to module.all_variables on write-back,
+        // corrupting module constants returned via bare-identifier <~ CONST expressions.
+        // After a Return statement the variable is unreachable anyway, so removal is safe.
         for scope in self.scope_stack.iter_mut().rev() {
-            if let Some(v) = scope.get_mut(name) {
-                return Some(std::mem::replace(v, Value::Unit));
+            if scope.contains_key(name) {
+                return scope.remove(name);
             }
         }
         None
@@ -373,6 +433,10 @@ impl<W: Write> Interpreter<W> {
     /// B9: zero allocation on the UPDATE path (hot path).
     #[inline(always)]
     fn set_variable(&mut self, name: &str, value: Value) {
+        // A new assignment after explicit destruction (`\var`) resurrects the variable.
+        if !self.dead_variables.is_empty() {
+            self.dead_variables.remove(name);
+        }
         for scope in self.scope_stack.iter_mut().rev() {
             if let Some(existing) = scope.get_mut(name) {
                 *existing = value;
@@ -386,7 +450,7 @@ impl<W: Write> Interpreter<W> {
 
     /// Check if a variable is a constant in any scope.
     #[inline(always)]
-    fn is_const(&self, name: &str) -> bool {
+    pub(crate) fn is_const(&self, name: &str) -> bool {
         if !self.has_any_const { return false; }  // B8: short-circuit
         for const_set in self.const_vars_stack.iter().rev() {
             if const_set.contains(name) {
@@ -521,6 +585,14 @@ pub(crate) struct SavedCallState {
     has_any_const: bool,
 }
 
+fn default_input_fn() -> Box<dyn FnMut() -> std::io::Result<String>> {
+    Box::new(|| {
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf)?;
+        Ok(buf)
+    })
+}
+
 impl Interpreter<std::io::Stdout> {
     pub fn new() -> Self {
         Self {
@@ -531,6 +603,7 @@ impl Interpreter<std::io::Stdout> {
             mutable_vars_stack: vec![HashSet::new()],
             const_vars_stack: vec![HashSet::new()],
             loaded_modules: HashMap::new(),
+            loading_modules: HashSet::new(),
             import_aliases: HashMap::new(),
             current_file: None,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -553,6 +626,7 @@ impl Interpreter<std::io::Stdout> {
             tco_args: Vec::new(),
             current_output_params: std::collections::HashSet::new(),
             numeral_mode: numeral_mode::ASCII_BASE,
+            input_fn: default_input_fn(),
         }
     }
 }
@@ -574,6 +648,7 @@ impl<W: Write> Interpreter<W> {
             mutable_vars_stack: vec![HashSet::new()],
             const_vars_stack: vec![HashSet::new()],
             loaded_modules: HashMap::new(),
+            loading_modules: HashSet::new(),
             import_aliases: HashMap::new(),
             current_file: None,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -596,7 +671,21 @@ impl<W: Write> Interpreter<W> {
             tco_args: Vec::new(),
             current_output_params: std::collections::HashSet::new(),
             numeral_mode: numeral_mode::ASCII_BASE,
+            input_fn: default_input_fn(),
         }
+    }
+
+    /// Override the input callback used by `<<` statements.
+    /// The provided function must read one line and return it (including the trailing newline).
+    pub fn set_input_fn(&mut self, f: impl FnMut() -> std::io::Result<String> + 'static) {
+        self.input_fn = Box::new(f);
+    }
+
+    pub fn writer(&self) -> &W { &self.output }
+    pub fn writer_mut(&mut self) -> &mut W { &mut self.output }
+
+    pub fn flush_output(&mut self) -> std::io::Result<()> {
+        self.output.flush()
     }
 
     /// Set the current file path for module resolution
@@ -737,7 +826,7 @@ impl<W: Write> Interpreter<W> {
                         .collect();
                     format!("##)({})", types.join(", "))
                 }
-                Value::Function(_) => "##->".to_string(),
+                Value::Function(f) => if f.is_named_fn { "##()".to_string() } else { "##->".to_string() },
                 Value::Error(err) => format!("##{}", err.error_type),
                 Value::Unit => "##_".to_string(),
             };
@@ -756,7 +845,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(_) => "##]".to_string(),
             Value::Tuple(_) => "##)".to_string(),
             Value::NamedTuple(_) => "##)".to_string(),
-            Value::Function(_) => "##->".to_string(),
+            Value::Function(f) => if f.is_named_fn { "##()".to_string() } else { "##->".to_string() },
             Value::Error(err) => format!("##{}", err.error_type),
             Value::Unit => "##_".to_string(),
         }
@@ -773,6 +862,18 @@ impl<W: Write> Interpreter<W> {
             Value::Float(f) => numeral_mode::to_numeral_float(*f, mode),
             Value::Bool(b)  => numeral_mode::to_numeral_bool(*b, mode),
             _               => value.to_display_string(),
+        }
+    }
+
+    /// Repr form of `format_value`: numerals respect the active numeral mode,
+    /// strings/chars are quoted, Unit shows as `()`.  Used by the REPL.
+    pub fn format_value_repr(&self, value: &Value) -> String {
+        let mode = self.numeral_mode;
+        match value {
+            Value::Int(n)   => numeral_mode::to_numeral_int(*n, mode),
+            Value::Float(f) => numeral_mode::to_numeral_float(*f, mode),
+            Value::Bool(b)  => numeral_mode::to_numeral_bool(*b, mode),
+            _               => value.to_repr_string(),
         }
     }
 
@@ -889,10 +990,8 @@ impl<W: Write> Interpreter<W> {
                 self.set_variable(&cli_args.variable_name, Value::Array(args_array));
                 Ok(())
             }
-            Statement::LifetimeEnd(_lifetime_end) => {
-                // Phase 1: Placeholder for explicit variable destruction
-                // Full implementation will come in Phase 5 (Runtime Integration)
-                // For now, this is a no-op
+            Statement::LifetimeEnd(lifetime_end) => {
+                self.destroy_variable(&lifetime_end.variable_name);
                 Ok(())
             }
             Statement::DestructureAssign(d) => self.eval_destructure_assign(d),
@@ -1022,6 +1121,9 @@ impl<W: Write> Interpreter<W> {
             Expr::CollectionUpdate(op) => self.eval_collection_update(op),
             Expr::CollectionSlice(op) => self.eval_collection_slice(op),
             Expr::StringReplace(op) => self.eval_string_replace(op),
+            Expr::StringSplit(op) => self.eval_string_split(op),
+            Expr::ConcatBuild(op) => self.eval_concat_build(op),
+            Expr::NumericCast(op) => self.eval_numeric_cast(op),
             Expr::NumericEval(op) => self.eval_numeric_eval(op),
             Expr::TypeMetadata(op) => self.eval_type_metadata(op),
             Expr::Format(op) => self.eval_format(op),
@@ -1051,6 +1153,9 @@ impl<W: Write> Interpreter<W> {
                 }
                 Ok(value)
             }
+            Expr::DeepIndex(di) => self.eval_deep_index(di),
+            Expr::FlatExtract(fe) => self.eval_flat_extract(fe),
+            Expr::StructuredExtract(se) => self.eval_structured_extract(se),
         }
     }
 
@@ -1144,6 +1249,12 @@ impl<W: Write> Interpreter<W> {
             }
             RuntimeError::CircularDependency => {
                 Value::Error(ErrorValue::generic("circular dependency detected"))
+            }
+            RuntimeError::CircularImport { module } => {
+                Value::Error(ErrorValue::generic(format!(
+                    "E004: Circular import detected: module '{}' is already being loaded",
+                    module
+                )))
             }
             RuntimeError::ParseError(msg) => {
                 Value::Error(ErrorValue::parse(msg.clone()))
@@ -1701,14 +1812,14 @@ mod error_handling_tests {
                     x = arr[i]
                     >> x ¶
                 } :! {
-                    >> "error at " + i ¶
+                    >> "error at " i ¶
                 }
             }
         "#;
         let (output, result) = parse_and_run(code);
         assert!(result.is_ok());
-        // i=0 succeeds, i=1,2 fail (range 0..2 is inclusive: 0,1,2)
-        assert_eq!(String::from_utf8_lossy(&output), "1\nerror at 1\nerror at 2\n");
+        // 1-based: i=0 invalid index, i=1 succeeds (arr has 1 element), i=2 out of bounds
+        assert_eq!(String::from_utf8_lossy(&output), "error at 0\n1\nerror at 2\n");
     }
 
     #[test]
@@ -1729,7 +1840,8 @@ mod error_handling_tests {
         "#;
         let (output, result) = parse_and_run(code);
         assert!(result.is_ok());
-        assert_eq!(String::from_utf8_lossy(&output), "20\n-1\n");
+        // 1-based: arr[1] = first element = 10; arr[99] = out of bounds → -1
+        assert_eq!(String::from_utf8_lossy(&output), "10\n-1\n");
     }
 
     #[test]
@@ -1739,7 +1851,7 @@ mod error_handling_tests {
             arr = [1]
 
             !? {
-                >> arr[0] ¶
+                >> arr[1] ¶
             } :! {
                 >> "error 1" ¶
             }

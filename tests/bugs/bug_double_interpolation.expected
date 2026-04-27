@@ -1,0 +1,9 @@
+{name}
+hello {name}
+{name} end
+{path}
+world
+hello world!
+/tmp/test/file
+{name} vs world
+world vs {name}

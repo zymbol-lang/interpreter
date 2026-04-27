@@ -1,0 +1,28 @@
+Runtime error: failed to parse module: 27 parse error(s) in '/home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy'
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:17:34: expected expression, found LBrace
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:17:38: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:17:40: unexpected token: BashClose
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:23:51: expected expression, found LBrace
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:23:56: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:23:58: unexpected token: LBrace
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:23:62: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:23:64: unexpected token: BashClose
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:29:71: expected expression, found LBrace
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:29:75: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:29:77: unexpected token: BashClose
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:35:89: expected expression, found LBrace
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:35:99: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:35:101: unexpected token: LBrace
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:35:105: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:35:107: unexpected token: BashClose
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:41:39: expected expression, found LBrace
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:41:51: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:41:53: unexpected token: LBrace
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:41:57: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:41:59: unexpected token: BashClose
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:47:71: expected expression, found LBrace
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:47:75: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:47:77: unexpected token: BashClose
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:53:39: expected expression, found LBrace
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:53:43: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:53:45: unexpected token: BashClose

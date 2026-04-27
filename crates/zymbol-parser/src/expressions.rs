@@ -36,11 +36,16 @@ impl Parser {
             // We need to parse postfix operations like indexing and member access, but NOT function calls
             let callable = self.parse_postfix_without_calls()?;
 
-            // Expect function call syntax: callable(args)
+            // Implicit first-position pipe: x |> f  ≡  f(x)
             if !matches!(self.peek().kind, TokenKind::LParen) {
-                return Err(Diagnostic::error("expected '(' after pipe operator")
-                    .with_span(self.peek().span)
-                    .with_help("pipe syntax: value |> func(_) or value |> (x -> x * 2)(_)"));
+                let span = left.span().to(&callable.span());
+                left = Expr::Pipe(zymbol_ast::PipeExpr {
+                    left: Box::new(left),
+                    callable: Box::new(callable),
+                    arguments: vec![zymbol_ast::PipeArg::Placeholder],
+                    span,
+                });
+                continue;
             }
             self.advance(); // consume (
 
@@ -87,6 +92,82 @@ impl Parser {
             });
         }
 
+        Ok(left)
+    }
+
+    /// Parse a match arm value expression.
+    /// Like parse_expr but does not consume bare comparison operators (`<`, `>`, `<=`, `>=`, `==`, `<>`)
+    /// at the top level — these would be ambiguous with the next arm's comparison pattern.
+    /// Comparison operators are still valid inside parentheses.
+    pub(crate) fn parse_match_arm_value(&mut self) -> Result<Expr, Diagnostic> {
+        self.parse_pipe_no_comparison()
+    }
+
+    fn parse_pipe_no_comparison(&mut self) -> Result<Expr, Diagnostic> {
+        let mut left = self.parse_logic_or_no_comparison()?;
+        while matches!(self.peek().kind, TokenKind::PipeOp) {
+            self.advance();
+            let callable = self.parse_postfix_without_calls()?;
+            // Implicit first-position pipe: x |> f  ≡  f(x)
+            if !matches!(self.peek().kind, TokenKind::LParen) {
+                let span = left.span().to(&callable.span());
+                left = Expr::Pipe(zymbol_ast::PipeExpr {
+                    left: Box::new(left),
+                    callable: Box::new(callable),
+                    arguments: vec![zymbol_ast::PipeArg::Placeholder],
+                    span,
+                });
+                continue;
+            }
+            self.advance();
+            let mut arguments = Vec::new();
+            if !matches!(self.peek().kind, TokenKind::RParen) {
+                loop {
+                    if matches!(self.peek().kind, TokenKind::Underscore) {
+                        self.advance();
+                        arguments.push(zymbol_ast::PipeArg::Placeholder);
+                    } else {
+                        let arg_expr = self.parse_logic_or_no_comparison()?;
+                        arguments.push(zymbol_ast::PipeArg::Expr(arg_expr));
+                    }
+                    if !matches!(self.peek().kind, TokenKind::Comma) { break; }
+                    self.advance();
+                }
+            }
+            let end_paren = self.peek().clone();
+            self.advance(); // consume )
+            let span = left.span().to(&end_paren.span);
+            left = Expr::Pipe(zymbol_ast::PipeExpr {
+                left: Box::new(left),
+                callable: Box::new(callable),
+                arguments,
+                span,
+            });
+        }
+        Ok(left)
+    }
+
+    fn parse_logic_or_no_comparison(&mut self) -> Result<Expr, Diagnostic> {
+        let mut left = self.parse_logic_and_no_comparison()?;
+        while matches!(self.peek().kind, TokenKind::Or) {
+            self.advance();
+            let right = self.parse_logic_and_no_comparison()?;
+            let span = left.span().to(&right.span());
+            left = Expr::Binary(BinaryExpr::new(BinaryOp::Or, Box::new(left), Box::new(right), span));
+        }
+        Ok(left)
+    }
+
+    fn parse_logic_and_no_comparison(&mut self) -> Result<Expr, Diagnostic> {
+        // Skips parse_comparison and goes directly to parse_addition
+        // so bare comparison ops don't consume the next match arm's pattern
+        let mut left = self.parse_addition()?;
+        while matches!(self.peek().kind, TokenKind::And) {
+            self.advance();
+            let right = self.parse_addition()?;
+            let span = left.span().to(&right.span());
+            left = Expr::Binary(BinaryExpr::new(BinaryOp::And, Box::new(left), Box::new(right), span));
+        }
         Ok(left)
     }
 
@@ -376,19 +457,23 @@ impl Parser {
             match token.kind {
                 // ── Structural postfix ────────────────────────────────────────
                 TokenKind::LBracket => {
-                    self.advance(); // consume [
-                    let index = self.parse_expr()?;
+                    if self.is_nav_index() {
+                        expr = self.parse_nav_index(expr)?;
+                    } else {
+                        self.advance(); // consume [
+                        let index = self.parse_expr()?;
 
-                    let close_token = self.peek().clone();
-                    if !matches!(close_token.kind, TokenKind::RBracket) {
-                        return Err(Diagnostic::error("expected ']' after index")
-                            .with_span(close_token.span)
-                            .with_help("array indexing must use brackets: arr[index]"));
+                        let close_token = self.peek().clone();
+                        if !matches!(close_token.kind, TokenKind::RBracket) {
+                            return Err(Diagnostic::error("expected ']' after index")
+                                .with_span(close_token.span)
+                                .with_help("array indexing must use brackets: arr[index]"));
+                        }
+                        self.advance(); // consume ]
+
+                        let span = expr.span().to(&close_token.span);
+                        expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
                     }
-                    self.advance(); // consume ]
-
-                    let span = expr.span().to(&close_token.span);
-                    expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
                 }
                 TokenKind::Dot => {
                     self.advance(); // consume .
@@ -410,6 +495,17 @@ impl Parser {
                     ));
                 }
                 TokenKind::LParen => {
+                    // BUG-06: only form a function call if the base expression is callable.
+                    // Literals (string, int, bool, char, float) are never callable — a `(`
+                    // following a literal in `>>` context starts a new parenthesized output
+                    // item, not a function call. Without this guard:
+                    //   >> "label" (expr) ¶  →  FunctionCall("label", [expr])  →  runtime error
+                    // Any non-literal expression may evaluate to a Function at runtime.
+                    let is_literal = matches!(&expr, Expr::Literal(_));
+                    if is_literal {
+                        break;
+                    }
+
                     self.advance(); // consume (
 
                     let mut arguments = Vec::new();
@@ -468,6 +564,9 @@ impl Parser {
                 }
                 TokenKind::DollarTildeTilde => {
                     expr = self.parse_string_replace(expr)?;
+                }
+                TokenKind::DollarSlash => {
+                    expr = self.parse_string_split(expr)?;
                 }
                 TokenKind::DollarTilde => {
                     expr = self.parse_collection_update(expr)?;

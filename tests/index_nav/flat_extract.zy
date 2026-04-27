@@ -1,0 +1,13 @@
+// Flat extraction: arr[[i>j]] and arr[p ; q ; r]
+// Both return a flat array of values
+matriz = [[1,2,3], [4,5,6], [7,8,9]]
+
+// Single path wrapped → [value]
+>> matriz[[2>3]] ¶
+
+// Multiple paths → [v1, v2, v3]
+>> matriz[1>1 ; 2>3 ; 3>2] ¶
+
+// Length check
+tmp = matriz[1>1 ; 2>3 ; 3>2]
+>> tmp$# ¶

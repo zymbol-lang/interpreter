@@ -1,0 +1,13 @@
+// Test: while loop @ condition { }
+n = 1
+@ n <= 100 {
+    n *= 2
+}
+>> n ¶
+
+// While with counter
+count = 0
+@ count < 5 {
+    count++
+}
+>> count ¶

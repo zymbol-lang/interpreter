@@ -1,0 +1,9 @@
+// v0.0.4 review — range endpoints from variables and expressions
+
+m = [[1,2,3,4], [5,6,7,8], [9,10,11,12], [13,14,15,16]]
+inicio = 2
+fin = 4
+mitad = 2
+
+>> m[1>inicio..fin] ¶
+>> m[[1>1..(mitad)] ; [(mitad+1)>1..(mitad)]] ¶

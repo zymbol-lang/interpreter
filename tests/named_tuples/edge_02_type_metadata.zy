@@ -5,8 +5,8 @@ person = (name: "Alice", age: 25)
 
 meta = person#?
 
-type_symbol = meta[0]
-count = meta[1]
+type_symbol = meta[1]
+count = meta[2]
 
 ? type_symbol == "##)" {
     >> "✓ Type symbol for named tuple is ##)" ¶
@@ -20,7 +20,7 @@ count = meta[1]
 pos_tuple = (10, 20)
 pos_meta = pos_tuple#?
 
-? pos_meta[0] == "##)" {
+? pos_meta[1] == "##)" {
     >> "✓ Positional and named tuples have same type symbol" ¶
 }
 

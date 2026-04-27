@@ -1,0 +1,13 @@
+// Module C — imports Module A, completing the cycle: A → B → C → A
+# circ_mod_c {
+    <# ./circ_mod_a <= a
+
+    #> {
+        fun_c
+    }
+
+    fun_c(n) {
+        >> "C::fun_c(" n ")" ¶
+        <~ a::fun_a(n + 1)
+    }
+}

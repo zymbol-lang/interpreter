@@ -9,6 +9,7 @@
 
 mod colors;
 mod line_editor;
+mod raw_writer;
 mod repl;
 
 pub use repl::Repl;

@@ -11,7 +11,7 @@
 [first, *rest] = [1, 2, 3, 4, 5]
 >> first ¶                       // → 1
 >> (rest$#) ¶                    // → 4
->> rest[0] ¶                     // → 2
+>> rest[1] ¶                     // → 2
 >> rest[-1] ¶                    // → 5
 
 // ── Array destructuring with ignore ────────────────────────────────────────

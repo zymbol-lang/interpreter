@@ -1,0 +1,16 @@
+// P6-D: $! IsError — was a stub always returning #0. Now fixed with Value::Error variant.
+// In tree-walker: $! correctly returns #1 for error values, #0 for normal values.
+// In VM: IsError is a stub — always returns #0 regardless of register content.
+// This became a silent wrong result after v0.0.4 introduced error-as-value flow.
+
+safe(arr, idx) {
+    !? { <~ arr[idx] } :! { <~ _err }
+}
+
+arr = [10, 20, 30]
+ok  = safe(arr, 2)   // normal value: 20
+err = safe(arr, 99)  // error value: ##Index(...)
+
+>> ok$! ¶    // #0 — not an error
+>> err$! ¶   // #1 — is an error   (VM returns #0: silent bug)
+>> ok ¶      // 20

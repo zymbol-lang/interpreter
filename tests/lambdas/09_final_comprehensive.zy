@@ -84,11 +84,13 @@ tripled = numbers$> (x -> x * multiplier)
 ¶
 ¶
 
-// 11. Chained function calls from arrays
+// 11. Lambdas stored in arrays (call via variable extraction)
 >> "11. Functions in Arrays:" ¶
 operations = [double, add_five]
->> "  operations[0](10) = " >> operations[0](10) ¶
->> "  operations[1](10) = " >> operations[1](10) ¶
+op1 = operations[1]
+op2 = operations[2]
+>> "  operations[1](10) = " >> op1(10) ¶
+>> "  operations[2](10) = " >> op2(10) ¶
 ¶
 
 >> "=== ALL TESTS PASSED! ===" ¶

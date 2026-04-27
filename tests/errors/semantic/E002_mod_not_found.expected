@@ -1,0 +1,6 @@
+error: E002: Module '/home/rakzo/github/zymbol-lang/interpreter/tests/errors/semantic/i_do_not_exist.zy' not found
+  --> /home/rakzo/github/zymbol-lang/interpreter/tests/errors/semantic/E002_mod_not_found.zy:1:1
+  = help: Check that the module file exists at the specified path
+
+error: E002: Module '/home/rakzo/github/zymbol-lang/interpreter/tests/errors/semantic/i_do_not_exist.zy' not found
+  --> /home/rakzo/github/zymbol-lang/interpreter/tests/errors/semantic/E002_mod_not_found.zy:1:1

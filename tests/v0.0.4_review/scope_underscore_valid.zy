@@ -1,0 +1,11 @@
+// v0.0.4 review — _name variables are scoped strictly to their declaration block
+
+? #1 {
+    _temp = 99
+    >> _temp ¶
+}
+
+? #1 {
+    _temp = 200
+    >> _temp ¶
+}

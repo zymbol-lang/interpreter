@@ -103,6 +103,9 @@ impl<W: Write> Interpreter<W> {
         let right = self.eval_expr(&binary.right)?;
 
         match binary.op {
+            // Juxtaposition concatenation (implicit, no explicit operator)
+            BinaryOp::Concat => self.eval_concat(&left, &right, &binary.span),
+
             // Arithmetic operators
             BinaryOp::Add => self.eval_add(&left, &right, &binary.span),
             BinaryOp::Sub => self.eval_arithmetic(&left, &right, |a, b| a - b, |a, b| a - b, &binary.span),

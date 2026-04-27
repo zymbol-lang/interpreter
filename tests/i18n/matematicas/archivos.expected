@@ -1,0 +1,83 @@
+[1m[31merror[39m[0m: expected field name after '.'
+  [1m[34m-->[39m[0m tests/i18n/matematicas/archivos.zy:57:31
+[1m[34m  57[39m[0m [34m|[39m
+[1m[34m  57[39m[0m [34m|[39m         resultado = <\ find . "-maxdepth" 1 "-name" "*.zy" "-type" f \>
+[34m     |[39m [1m[31m                              ^^^^^^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m member access requires a field name: object.field
+[1m[31merror[39m[0m: unexpected token: Integer(1)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/archivos.zy:57:43
+[1m[34m  57[39m[0m [34m|[39m
+[1m[34m  57[39m[0m [34m|[39m         resultado = <\ find . "-maxdepth" 1 "-name" "*.zy" "-type" f \>
+[34m     |[39m [1m[31m                                          ^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: String("-name")
+  [1m[34m-->[39m[0m tests/i18n/matematicas/archivos.zy:57:45
+[1m[34m  57[39m[0m [34m|[39m
+[1m[34m  57[39m[0m [34m|[39m         resultado = <\ find . "-maxdepth" 1 "-name" "*.zy" "-type" f \>
+[34m     |[39m [1m[31m                                            ^^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: String("*.zy")
+  [1m[34m-->[39m[0m tests/i18n/matematicas/archivos.zy:57:53
+[1m[34m  57[39m[0m [34m|[39m
+[1m[34m  57[39m[0m [34m|[39m         resultado = <\ find . "-maxdepth" 1 "-name" "*.zy" "-type" f \>
+[34m     |[39m [1m[31m                                                    ^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: String("-type")
+  [1m[34m-->[39m[0m tests/i18n/matematicas/archivos.zy:57:60
+[1m[34m  57[39m[0m [34m|[39m
+[1m[34m  57[39m[0m [34m|[39m         resultado = <\ find . "-maxdepth" 1 "-name" "*.zy" "-type" f \>
+[34m     |[39m [1m[31m                                                           ^^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/archivos.zy:57:70
+[1m[34m  57[39m[0m [34m|[39m
+[1m[34m  57[39m[0m [34m|[39m         resultado = <\ find . "-maxdepth" 1 "-name" "*.zy" "-type" f \>
+[34m     |[39m [1m[31m                                                                     ^^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: expected field name after '.'
+  [1m[34m-->[39m[0m tests/i18n/matematicas/archivos.zy:69:31
+[1m[34m  69[39m[0m [34m|[39m
+[1m[34m  69[39m[0m [34m|[39m         resultado = <\ find . "-maxdepth" 2 "-type" d \>
+[34m     |[39m [1m[31m                              ^^^^^^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m member access requires a field name: object.field
+[1m[31merror[39m[0m: unexpected token: Integer(2)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/archivos.zy:69:43
+[1m[34m  69[39m[0m [34m|[39m
+[1m[34m  69[39m[0m [34m|[39m         resultado = <\ find . "-maxdepth" 2 "-type" d \>
+[34m     |[39m [1m[31m                                          ^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: String("-type")
+  [1m[34m-->[39m[0m tests/i18n/matematicas/archivos.zy:69:45
+[1m[34m  69[39m[0m [34m|[39m
+[1m[34m  69[39m[0m [34m|[39m         resultado = <\ find . "-maxdepth" 2 "-type" d \>
+[34m     |[39m [1m[31m                                            ^^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/archivos.zy:69:55
+[1m[34m  69[39m[0m [34m|[39m
+[1m[34m  69[39m[0m [34m|[39m         resultado = <\ find . "-maxdepth" 2 "-type" d \>
+[34m     |[39m [1m[31m                                                      ^^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: expected expression, found Pipe
+  [1m[34m-->[39m[0m tests/i18n/matematicas/archivos.zy:75:33
+[1m[34m  75[39m[0m [34m|[39m
+[1m[34m  75[39m[0m [34m|[39m         resultado = <\ ls "-lt" | head "-n" 6 \>
+[34m     |[39m [1m[31m                                ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/archivos.zy:75:40
+[1m[34m  75[39m[0m [34m|[39m
+[1m[34m  75[39m[0m [34m|[39m         resultado = <\ ls "-lt" | head "-n" 6 \>
+[34m     |[39m [1m[31m                                       ^^^^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: Integer(6)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/archivos.zy:75:45
+[1m[34m  75[39m[0m [34m|[39m
+[1m[34m  75[39m[0m [34m|[39m         resultado = <\ ls "-lt" | head "-n" 6 \>
+[34m     |[39m [1m[31m                                            ^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/matematicas/archivos.zy:75:47
+[1m[34m  75[39m[0m [34m|[39m
+[1m[34m  75[39m[0m [34m|[39m         resultado = <\ ls "-lt" | head "-n" 6 \>
+[34m     |[39m [1m[31m                                              ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)

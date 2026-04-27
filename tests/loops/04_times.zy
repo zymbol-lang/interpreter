@@ -1,0 +1,13 @@
+// Test: times loop @ N { } — repeats body N times
+reps = 5
+x = 0
+@ reps {
+    x++
+}
+>> x ¶
+
+// Times with output
+n = 3
+@ n {
+    >> "tick" ¶
+}

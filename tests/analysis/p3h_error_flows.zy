@@ -1,0 +1,33 @@
+// P3-H: Exception flow vs value flow
+
+// --- Exception flow: !?/:! intercepts at boundary ---
+safe_get(arr, idx) {
+    !? { <~ arr[idx] } :! { <~ -1 }
+}
+
+arr = [10, 20, 30]
+>> safe_get(arr, 2) ¶
+>> safe_get(arr, 99) ¶
+
+// --- Value flow: return error as value via <~ _err ---
+risky(arr, idx) {
+    !? { <~ arr[idx] } :! { <~ _err }
+}
+
+r1 = risky(arr, 2)
+r2 = risky(arr, 99)
+>> r1$! ¶
+>> r2$! ¶
+>> r1 ¶
+
+// --- $!! propagates via return (not exception, so !? won't catch it) ---
+process(arr, idx) {
+    result = risky(arr, idx)
+    ? result$! { result$!! }
+    <~ result * 10
+}
+
+>> process(arr, 2) ¶
+p2 = process(arr, 99)
+>> p2$! ¶
+>> p2 ¶

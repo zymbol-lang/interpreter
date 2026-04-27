@@ -1,0 +1,4 @@
+✓ Array element field access works
+✓ Second element access works
+✓ Loop iteration over named tuples works
+Test 4 PASSED

@@ -35,26 +35,28 @@ impl Lexer {
             let ch = self.current_char();
 
             if ch == '\\' {
-                // Handle escape sequences
-                self.advance();
+                self.advance(); // consume backslash
                 if self.is_at_end() {
                     break;
                 }
-                let escaped = match self.current_char() {
-                    'n' => '\n',
-                    't' => '\t',
-                    'r' => '\r',
-                    '"' => '"',
+
+                let escaped_ch = match self.current_char() {
+                    'n'  => '\n',
+                    't'  => '\t',
+                    'r'  => '\r',
+                    '"'  => '"',
                     '\\' => '\\',
-                    '{' => '{',  // \{ → literal {
-                    '}' => '}',  // \} → literal }
-                    _ => self.current_char(),
+                    // \{ → sentinel \x01 (suppresses interpolation — resolved to { at runtime)
+                    '{'  => '\x01',
+                    // \} → literal }
+                    '}'  => '}',
+                    other => other,
                 };
-                current_text.push(escaped);
+                current_text.push(escaped_ch);
                 self.advance();
             } else if ch == '{' {
-                // Start of interpolation {var}
-                has_interpolation = true;
+                // {varname} — string interpolation
+                self.advance(); // consume {
 
                 // Save current text part if any
                 if !current_text.is_empty() {
@@ -62,39 +64,44 @@ impl Lexer {
                     current_text.clear();
                 }
 
-                self.advance(); // consume {
-
-                // Parse variable name
+                has_interpolation = true;
                 let mut var_name = String::new();
-                while !self.is_at_end() && self.current_char() != '}' {
+
+                loop {
+                    if self.is_at_end() || self.current_char() == '"' {
+                        let span = self.span(start);
+                        self.diagnostics.push(
+                            Diagnostic::error("unterminated string interpolation")
+                                .with_span(span)
+                                .with_help("close the interpolation with }"),
+                        );
+                        return Token::new(TokenKind::Error("unterminated interpolation".to_string()), span);
+                    }
+                    if self.current_char() == '}' {
+                        self.advance(); // consume }
+                        break;
+                    }
                     let var_ch = self.current_char();
                     if var_ch.is_alphanumeric() || var_ch == '_' {
                         var_name.push(var_ch);
                         self.advance();
                     } else {
-                        // Invalid character in interpolation
-                        break;
+                        let span = self.span(start);
+                        self.diagnostics.push(
+                            Diagnostic::error("invalid character in string interpolation")
+                                .with_span(span)
+                                .with_help("interpolation must be {identifier} — use \\{ for a literal brace"),
+                        );
+                        return Token::new(TokenKind::Error("invalid interpolation".to_string()), span);
                     }
                 }
-
-                if self.is_at_end() || self.current_char() != '}' {
-                    let span = self.span(start);
-                    self.diagnostics.push(
-                        Diagnostic::error("unterminated interpolation in string")
-                            .with_span(span)
-                            .with_help("add closing } to end the interpolation"),
-                    );
-                    return Token::new(TokenKind::Error("unterminated interpolation".to_string()), span);
-                }
-
-                self.advance(); // consume }
 
                 if var_name.is_empty() {
                     let span = self.span(start);
                     self.diagnostics.push(
-                        Diagnostic::error("empty interpolation {} in string")
+                        Diagnostic::error("empty string interpolation {}")
                             .with_span(span)
-                            .with_help("provide a variable name inside {}"),
+                            .with_help("provide a variable name: {varname}"),
                     );
                     return Token::new(TokenKind::Error("empty interpolation".to_string()), span);
                 }

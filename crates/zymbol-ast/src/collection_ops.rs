@@ -238,3 +238,4 @@ impl CollectionSortExpr {
         Self { collection, ascending, comparator, span }
     }
 }
+

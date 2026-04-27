@@ -1,0 +1,40 @@
+// Test: $/ string split operator
+// Splits a string by char or substring delimiter — returns Array(String)
+
+// Basic split by char
+parts = "a,b,c,d" $/ ','
+>> parts ¶
+>> (parts$#) ¶
+>> parts[1] ¶
+>> parts[4] ¶
+
+// Split by substring delimiter
+words = "one::two::three" $/ "::"
+>> words ¶
+>> (words$#) ¶
+
+// Split by space
+sentence = "hello world foo bar" $/ ' '
+>> sentence ¶
+>> (sentence$#) ¶
+
+// No match — single-element array containing the original string
+nomatch = "hello" $/ ','
+>> nomatch ¶
+>> (nomatch$#) ¶
+
+// Empty string — empty array
+empty = "" $/ ','
+>> empty ¶
+>> (empty$#) ¶
+
+// Delimiter at start and end — empty strings at boundaries
+edges = ",a,b," $/ ','
+>> edges ¶
+
+// Split result is iterable
+parts2 = "x:y:z" $/ ':'
+@ p:parts2 {
+    >> p " "
+}
+>> ¶

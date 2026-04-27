@@ -1,0 +1,32 @@
+// P0-A: Named functions as first-class values
+// Assign named fn to variable, use in HOF ($>, $|, $<), return from function
+
+double(x) { <~ x * 2 }
+isEven(n) { <~ n % 2 == 0 }
+sum_acc(acc, x) { <~ acc + x }
+
+// Named function assigned to variable and called via alias
+f = double
+>> f(5) ¶
+
+// Named function passed directly to $> (map)
+nums = [1, 2, 3, 4, 5]
+mapped = nums$> double
+>> mapped ¶
+
+// Named function passed directly to $| (filter)
+evens = nums$| isEven
+>> evens ¶
+
+// Named function passed directly to $< (reduce)
+total = nums$< (0, sum_acc)
+>> total ¶
+
+// Function returned from function (closure over arg)
+make_adder(n) { <~ x -> x + n }
+add5 = make_adder(5)
+>> add5(3) ¶
+
+// Named function used in implicit pipe
+r = 7 |> double
+>> r ¶

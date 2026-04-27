@@ -51,6 +51,7 @@ run_file() {
 mapfile -t FILES < <(
     find "$TESTS_DIR" -name "*.zy" \
         ! -path "*/scripts/*" \
+        ! -path "*/stress_v2/*" \
         ! -path "*/matematicas/module.zy" \
         | sort
 )
@@ -63,6 +64,14 @@ echo ""
 
 for file in "${FILES[@]}"; do
     rel="${file#$TESTS_DIR/}"
+
+    # Skip files marked @vm-skip (TW-only features not yet in VM)
+    if head -1 "$file" | grep -q '@vm-skip'; then
+        SKIP=$((SKIP + 1))
+        SKIPPED+=("$rel (vm-skip)")
+        echo -e "  ${YELLOW}SKIP${RESET}  $rel  ${YELLOW}[vm-skip]${RESET}"
+        continue
+    fi
 
     # Run tree-walker
     tree_out="$(run_file "$file" "" | normalize_output)"
@@ -130,7 +139,7 @@ if [[ ${#FAILURES[@]} -gt 0 ]]; then
 fi
 
 if [[ ${#SKIPPED[@]} -gt 0 ]]; then
-    echo -e "${BOLD}Skipped (timeout):${RESET}"
+    echo -e "${BOLD}Skipped:${RESET}"
     for f in "${SKIPPED[@]}"; do
         echo -e "  ${YELLOW}⊘${RESET} $f"
     done
@@ -167,7 +176,7 @@ echo ""
 if [[ $FAIL -eq 0 && $SKIP -eq 0 ]]; then
     echo -e "${GREEN}${BOLD}All $PASS tests produce identical output in tree-walker and VM!${RESET}"
 elif [[ $FAIL -eq 0 ]]; then
-    echo -e "${YELLOW}${BOLD}$PASS passed, $SKIP skipped (timeout). No mismatches.${RESET}"
+    echo -e "${YELLOW}${BOLD}$PASS passed, $SKIP skipped. No mismatches.${RESET}"
 else
     echo -e "${RED}${BOLD}$FAIL/$TOTAL files produce different output between tree-walker and VM.${RESET}"
 fi

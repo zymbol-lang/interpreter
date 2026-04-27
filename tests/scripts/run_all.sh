@@ -6,9 +6,8 @@
 #   ./tests/scripts/run_all.sh                    # build + run once
 #   ./tests/scripts/run_all.sh --runs 10          # run 10 times, show stats
 #   ./tests/scripts/run_all.sh --no-build         # skip cargo build
-#   ./tests/scripts/run_all.sh --python           # also run Python baselines
 #   ./tests/scripts/run_all.sh --vm               # also run VM benchmarks
-#   ./tests/scripts/run_all.sh --runs 10 --python --vm --no-build
+#   ./tests/scripts/run_all.sh --runs 10 --vm --no-build
 # =============================================================================
 
 set -euo pipefail
@@ -18,14 +17,12 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BINARY="$PROJECT_ROOT/target/release/zymbol"
 
 NO_BUILD=0
-RUN_PYTHON=0
 RUN_VM=0
 RUNS=1
 
 for arg in "$@"; do
     case "$arg" in
         --no-build) NO_BUILD=1 ;;
-        --python)   RUN_PYTHON=1 ;;
         --vm)       RUN_VM=1 ;;
         --runs)     ;;   # handled below via paired parsing
     esac
@@ -138,18 +135,6 @@ if [[ $RUN_VM -eq 1 ]]; then
     run_n_times "VM: Strings Modify"       "\"$BINARY\" run --vm \"$SCRIPT_DIR/bench_strings_modify.zy\""
 fi
 
-# -----------------------------------------------------------------------------
-# Optional: Python baselines
-# -----------------------------------------------------------------------------
-if [[ $RUN_PYTHON -eq 1 ]]; then
-    run_n_times "PYTHON: Stress (core)"      "python3 \"$SCRIPT_DIR/stress.py\""
-    run_n_times "PYTHON: Pattern Matching"   "python3 \"$SCRIPT_DIR/bench_match.py\""
-    run_n_times "PYTHON: Recursion"          "python3 \"$SCRIPT_DIR/bench_recursion.py\""
-    run_n_times "PYTHON: Collections"        "python3 \"$SCRIPT_DIR/bench_collections.py\""
-    run_n_times "PYTHON: Strings"            "python3 \"$SCRIPT_DIR/bench_strings.py\""
-    run_n_times "PYTHON: Strings Stress"     "python3 \"$SCRIPT_DIR/bench_strings_stress.py\""
-    run_n_times "PYTHON: Strings Modify"     "python3 \"$SCRIPT_DIR/bench_strings_modify.py\""
-fi
 
 TOTAL_END=$(date +%s%N)
 TOTAL_MS=$(( (TOTAL_END - TOTAL_START) / 1000000 ))

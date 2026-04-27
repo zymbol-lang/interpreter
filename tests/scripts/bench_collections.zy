@@ -13,49 +13,49 @@ t = T::now()
 arr = []
 @ i:0..2999 { arr = arr$+ i }
 arr_len = arr$#
->> "array_build: len = " + arr_len + "  " + T::elapsed(t) ¶
+>> "array_build: len = " arr_len "  " T::elapsed(t) ¶
 
 t = T::now()
 base = []
-@ i:0..499 { base = base$+ i }
+@ i:1..500 { base = base$+ i }
 found = 0
-@ i:0..1999 {
+@ i:1..2000 {
     ? base$? (i % 500) { found = found + 1 }
 }
->> "array_contains: " + found + " hits  " + T::elapsed(t) ¶
+>> "array_contains: " found " hits  " T::elapsed(t) ¶
 
 t = T::now()
 src = []
-@ i:0..99 { src = src$+ i }
+@ i:1..100 { src = src$+ i }
 slice_sum = 0
 @ i:0..999 {
-    sl = src$[0..49]
+    sl = src$[1..50]
     sl_len = sl$#
     slice_sum = slice_sum + sl_len
 }
->> "slice_ops: slice_sum = " + slice_sum + "  " + T::elapsed(t) ¶
+>> "slice_ops: slice_sum = " slice_sum "  " T::elapsed(t) ¶
 
 t = T::now()
 data5k = []
 @ i:0..4999 { data5k = data5k$+ i }
 doubled = data5k$> (x -> x * 2)
 doubled_len = doubled$#
->> "map_hof: output len = " + doubled_len + "  " + T::elapsed(t) ¶
+>> "map_hof: output len = " doubled_len "  " T::elapsed(t) ¶
 
 t = T::now()
 evens = data5k$| (x -> x % 2 == 0)
 evens_len = evens$#
->> "filter_hof: evens = " + evens_len + "  " + T::elapsed(t) ¶
+>> "filter_hof: evens = " evens_len "  " T::elapsed(t) ¶
 
 t = T::now()
 total = data5k$< (0, (acc, x) -> acc + x)
->> "reduce_hof: sum = " + total + "  " + T::elapsed(t) ¶
+>> "reduce_hof: sum = " total "  " T::elapsed(t) ¶
 
 t = T::now()
 rem_arr = []
 @ i:0..499 { rem_arr = rem_arr$+ i }
-@ _i:0..199 { rem_arr = rem_arr$-[0] }
+@ _i:0..199 { rem_arr = rem_arr$-[1] }
 rem_len = rem_arr$#
->> "remove_ops: remaining len = " + rem_len + "  " + T::elapsed(t) ¶
+>> "remove_ops: remaining len = " rem_len "  " T::elapsed(t) ¶
 
->> "=== Done (" + T::total(t_total) + ") ===" ¶
+>> "=== Done (" T::total(t_total) ") ===" ¶

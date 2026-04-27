@@ -1,0 +1,16 @@
+[1m[31merror[39m[0m: cannot access underscore variable '_counter' from inner scope
+  [1m[34m-->[39m[0m tests/v0.0.4_review/scope_underscore_loop_error.zy:6:16
+[1m[34m   6[39m[0m [34m|[39m
+[1m[34m   6[39m[0m [34m|[39m     _counter = _counter + 1
+[34m     |[39m [1m[31m               ^^^^^^^^[39m[0m
+  [1m[34m=[39m[0m '_counter' was declared at 4:1
+  [1m[32mhelp:[39m[0m underscore variables are strictly local to their declaration block
+'_counter' was declared in an outer scope and cannot be accessed from nested blocks
+[1m[31merror[39m[0m: cannot access underscore variable '_counter' from inner scope
+  [1m[34m-->[39m[0m tests/v0.0.4_review/scope_underscore_loop_error.zy:6:5
+[1m[34m   6[39m[0m [34m|[39m
+[1m[34m   6[39m[0m [34m|[39m     _counter = _counter + 1
+[34m     |[39m [1m[31m    ^^^^^^^^^^^^^^^^^^^^^^^[39m[0m
+  [1m[34m=[39m[0m '_counter' was declared at 4:1
+  [1m[32mhelp:[39m[0m underscore variables are strictly local to their declaration block
+'_counter' was declared in an outer scope and cannot be accessed from nested blocks

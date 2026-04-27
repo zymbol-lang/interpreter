@@ -2,18 +2,18 @@
 n1 = #|"42"|
 >> n1 ¶
 t1 = n1#?
->> t1[0] ¶
+>> t1[1] ¶
 
 n2 = #|"3.14"|
 >> n2 ¶
 t2 = n2#?
->> t2[0] ¶
+>> t2[1] ¶
 
 // Fail-safe: non-numeric returns original
 n3 = #|"abc"|
 >> n3 ¶
 t3 = n3#?
->> t3[0] ¶
+>> t3[1] ¶
 
 // Pass-through for numbers
 n4 = #|99|

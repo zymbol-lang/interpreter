@@ -124,7 +124,11 @@ fn run_file(path: PathBuf, args: Vec<String>, use_vm: bool) -> Result<()> {
 
     // Setup source map
     let mut source_map = SourceMap::new();
-    let file_id = source_map.add_file(path.display().to_string(), source.clone());
+    let display_name = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| path.display().to_string());
+    let file_id = source_map.add_file(display_name, source.clone());
 
     // Lex
     let lexer = Lexer::new(&source, file_id);
@@ -152,6 +156,14 @@ fn run_file(path: PathBuf, args: Vec<String>, use_vm: bool) -> Result<()> {
             std::process::exit(1);
         }
     };
+
+    // Module files are not directly executable
+    if program.module_decl.is_some() {
+        let module_name = program.module_decl.as_ref().map(|m| m.name.as_str()).unwrap_or("?");
+        eprintln!("warning: '{}' is a module file and cannot be run directly", path.display());
+        eprintln!("  = help: module '{}' is meant to be imported with <# ./{} <= alias", module_name, path.file_stem().and_then(|s| s.to_str()).unwrap_or("module"));
+        std::process::exit(1);
+    }
 
     // Run semantic analysis before execution
     let mut analyzer = VariableAnalyzer::new();
@@ -219,7 +231,16 @@ fn run_file(path: PathBuf, args: Vec<String>, use_vm: bool) -> Result<()> {
         let compiled = match Compiler::compile_with_dir(&program, path.parent()) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("VM compile error: {}", e);
+                // These errors match the tree-walker "Runtime error:" format
+                if matches!(e,
+                    zymbol_compiler::CompileError::CircularImport(_) |
+                    zymbol_compiler::CompileError::ModuleParse(_) |
+                    zymbol_compiler::CompileError::ModuleNotFound(_)
+                ) {
+                    eprintln!("Runtime error: {}", e);
+                } else {
+                    eprintln!("VM compile error: {}", e);
+                }
                 std::process::exit(1);
             }
         };
@@ -259,7 +280,11 @@ fn build_file(path: PathBuf, output: Option<PathBuf>, release: bool) -> Result<(
 
     // Verify it compiles (early error detection)
     let mut source_map = SourceMap::new();
-    let file_id = source_map.add_file(path.display().to_string(), source.clone());
+    let display_name = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| path.display().to_string());
+    let file_id = source_map.add_file(display_name, source.clone());
 
     let lexer = Lexer::new(&source, file_id);
     let (tokens, lex_diagnostics) = lexer.tokenize();
@@ -369,7 +394,11 @@ fn check_file(path: PathBuf) -> Result<()> {
 
     // Setup source map
     let mut source_map = SourceMap::new();
-    let file_id = source_map.add_file(path.display().to_string(), source.clone());
+    let display_name = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| path.display().to_string());
+    let file_id = source_map.add_file(display_name, source.clone());
 
     // Lex
     let lexer = Lexer::new(&source, file_id);

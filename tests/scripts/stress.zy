@@ -12,26 +12,26 @@ t_total = T::now()
 t = T::now()
 s = 0
 @ i:0..99999 { s = s + i }
->> "arithmetic: sum(0..99999) = " + s + "  " + T::elapsed(t) ¶
+>> "arithmetic: sum(0..99999) = " s "  " T::elapsed(t) ¶
 
 t = T::now()
 count = 0
 @ i:0..499 {
     @ _j:0..499 { count = count + 1 }
 }
->> "nested_loop: " + count + " iterations  " + T::elapsed(t) ¶
+>> "nested_loop: " count " iterations  " T::elapsed(t) ¶
 
 t = T::now()
 str = ""
-@ i:0..2999 { str = str + "a" }
+@ i:0..2999 { str = str "a" }
 str_len = str$#
->> "string_concat: len = " + str_len + "  " + T::elapsed(t) ¶
+>> "string_concat: len = " str_len "  " T::elapsed(t) ¶
 
 t = T::now()
 arr = []
 @ i:0..4999 { arr = arr$+ i }
 arr_len = arr$#
->> "array_push: len = " + arr_len + "  " + T::elapsed(t) ¶
+>> "array_push: len = " arr_len "  " T::elapsed(t) ¶
 
 fib(n) {
     ? n <= 1 { <~ n }
@@ -40,7 +40,7 @@ fib(n) {
 
 t = T::now()
 fib_result = fib(25)
->> "fib(25) = " + fib_result + "  " + T::elapsed(t) ¶
+>> "fib(25) = " fib_result "  " T::elapsed(t) ¶
 
 t = T::now()
 lookup_arr = []
@@ -49,6 +49,6 @@ hits = 0
 @ i:0..999 {
     ? lookup_arr$? i { hits = hits + 1 }
 }
->> "array_contains: " + hits + " hits  " + T::elapsed(t) ¶
+>> "array_contains: " hits " hits  " T::elapsed(t) ¶
 
->> "=== Done (" + T::total(t_total) + ") ===" ¶
+>> "=== Done (" T::total(t_total) ") ===" ¶

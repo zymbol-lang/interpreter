@@ -1,0 +1,8 @@
+# E010_reexport_private {
+    <# ./E010_base <= base
+
+    #> {
+        base::public_fn
+        base::secret_fn
+    }
+}

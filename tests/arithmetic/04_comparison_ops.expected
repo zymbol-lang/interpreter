@@ -1,0 +1,12 @@
+[1m[31merror[39m[0m: '!=' is not a valid Zymbol operator
+  [1m[34m-->[39m[0m tests/arithmetic/04_comparison_ops.zy:5:7
+[1m[34m   5[39m[0m [34m|[39m
+[1m[34m   5[39m[0m [34m|[39m >> (a != 5) ¶
+[34m     |[39m [1m[31m      ^^[39m[0m
+  [1m[32mhelp:[39m[0m use '<>' for not-equal  →  a <> b
+[1m[31merror[39m[0m: '!=' is not a valid Zymbol operator
+  [1m[34m-->[39m[0m tests/arithmetic/04_comparison_ops.zy:12:11
+[1m[34m  12[39m[0m [34m|[39m
+[1m[34m  12[39m[0m [34m|[39m >> ("abc" != "def") ¶
+[34m     |[39m [1m[31m          ^^[39m[0m
+  [1m[32mhelp:[39m[0m use '<>' for not-equal  →  a <> b

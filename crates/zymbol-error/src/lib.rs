@@ -99,8 +99,8 @@ impl Diagnostic {
                     let caret_len = span.end.column.saturating_sub(span.start.column).max(1);
                     let carets = "^".repeat(caret_len as usize);
                     eprintln!(
-                        "     {} {}",
-                        "|".blue(),
+                        "{} {}",
+                        "     |".blue(),
                         format!("{}{}", indent, carets).red().bold()
                     );
                 }

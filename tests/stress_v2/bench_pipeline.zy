@@ -1,0 +1,85 @@
+// ============================================================================
+// STRESS V2 — Data Pipeline (Split + HOF, fused where possible)
+// Optimal Zymbol: (s $/ sep)$> fn  — StrSplitMap, no intermediate array.
+// Comparison: tests/stress_v2/bench_pipeline.py
+//
+// Run: zymbol run --vm tests/stress_v2/bench_pipeline.zy
+// ============================================================================
+
+<# ../scripts/lib_time <= T
+
+>> "=== Zymbol Pipeline v2 ===" ¶
+t_total = T::now()
+
+csv = "alpha,beta,gamma,delta,epsilon,zeta,eta,theta,iota,kappa,lambda,mu"
+
+// P1: split + count (fused StrSplitCount, 5 000 iters)
+t = T::now()
+total = 0
+@ i:0..4999 {
+    total = total + (csv $/ ',')$#
+}
+>> "P1_split_count:     total=" total "  " T::elapsed(t) ¶
+
+// P2: split + map lengths (fused StrSplitMap, 2 000 iters)
+t = T::now()
+total = 0
+@ i:0..1999 {
+    lens = (csv $/ ',')$> (w -> w$#)
+    total = total + lens$#
+}
+>> "P2_split_map:       total=" total "  " T::elapsed(t) ¶
+
+// P3: split + filter long words (fused StrSplitFilter, 2 000 iters)
+t = T::now()
+total = 0
+@ i:0..1999 {
+    long_words = (csv $/ ',')$| (w -> w$# > 4)
+    total = total + long_words$#
+}
+>> "P3_split_filter:    total=" total "  " T::elapsed(t) ¶
+
+// P4: split + reduce total length (fused StrSplitReduce, 2 000 iters)
+t = T::now()
+total = 0
+@ i:0..1999 {
+    char_total = (csv $/ ',')$< (0, (acc, w) -> acc + w$#)
+    total = total + char_total
+}
+>> "P4_split_reduce:    total=" total "  " T::elapsed(t) ¶
+
+// P5: multi-field CSV — split ':' then each record by ','
+t = T::now()
+records = "alice,30,95:bob,25,88:carol,35,92:dave,28,79:eve,32,85:frank,27,91:grace,33,87"
+total_score = 0
+@ i:0..999 {
+    rows = records $/ ':'
+    @ row:rows {
+        fields = row $/ ','
+        score = #|fields[3]|
+        total_score = total_score + score
+    }
+}
+>> "P5_csv_rows:        total_score=" total_score "  " T::elapsed(t) ¶
+
+// P6: word filter — split sentence, count words > 3 chars (2 000 iters)
+t = T::now()
+sentence = "the quick brown fox jumps over the lazy dog and the cat sat on the mat"
+total = 0
+@ i:0..1999 {
+    long_words = (sentence $/ ' ')$| (w -> w$# > 3)
+    total = total + long_words$#
+}
+>> "P6_word_filter:     total=" total "  " T::elapsed(t) ¶
+
+// P7: build + split + aggregate — generate CSV then sum digit counts (500 iters)
+t = T::now()
+total = 0
+@ i:1..500 {
+    row = i "," (i * 2) "," (i * 3)
+    char_total = (row $/ ',')$< (0, (acc, p) -> acc + p$#)
+    total = total + char_total
+}
+>> "P7_build_split_agg: total=" total "  " T::elapsed(t) ¶
+
+>> "=== Done (" T::total(t_total) ") ===" ¶

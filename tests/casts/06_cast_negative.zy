@@ -1,0 +1,21 @@
+// Test: casts on negative numbers
+// ### rounds to nearest (away from zero for .5): ###(-2.9) → -3
+// ##! truncates toward zero:                     ##!(-2.9) → -2
+
+x = -2.9
+
+rounded = ###x
+>> rounded ¶
+
+truncated = ##!x
+>> truncated ¶
+
+// Compare both on same negative value
+nf = -2.7
+>> ###nf ¶
+>> ##!nf ¶
+
+// Positive counterpart for comparison
+pf = 2.7
+>> ###pf ¶
+>> ##!pf ¶

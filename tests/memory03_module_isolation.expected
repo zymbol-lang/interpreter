@@ -1,0 +1,5 @@
+=== Module Isolation Test ===
+Modules should only access their own variables
+and what's passed via parameters
+Main variable set: This should be invisible to module functions
+Test completed - module system prevents global access

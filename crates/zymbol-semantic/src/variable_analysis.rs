@@ -7,7 +7,8 @@
 //! - Invalid access to underscore variables (_variable)
 
 use std::collections::{HashMap, HashSet};
-use zymbol_ast::{Block, DestructureItem, DestructurePattern, Expr, Program, Statement};
+use zymbol_ast::{Block, DestructureItem, DestructurePattern, Expr, ExportItem, Program, Statement};
+use zymbol_common::Literal;
 use zymbol_span::Span;
 use zymbol_error::Diagnostic;
 
@@ -276,6 +277,19 @@ impl VariableAnalyzer {
             self.analyze_statement(statement);
         }
 
+        // Constants and variables listed in #> are "used" — mark them before diagnostics
+        if let Some(module_decl) = &program.module_decl {
+            if let Some(export_block) = &module_decl.export_block {
+                for item in &export_block.items {
+                    if let ExportItem::Own { name, span, .. } = item {
+                        if let Some(var) = self.variables.get_mut(name) {
+                            var.usage_spans.push(*span);
+                        }
+                    }
+                }
+            }
+        }
+
         // Generate diagnostics for unused variables
         self.generate_diagnostics();
 
@@ -493,14 +507,12 @@ impl VariableAnalyzer {
 
                 // Analyze each case
                 for case in &match_stmt.cases {
-                    // Pattern might have variable bindings (we skip pattern analysis for now)
+                    self.analyze_pattern(&case.pattern);
 
-                    // Analyze value expression if present
                     if let Some(value) = &case.value {
                         self.analyze_expr(value);
                     }
 
-                    // Analyze side effect block if present
                     if let Some(block) = &case.block {
                         self.analyze_block(block);
                     }
@@ -585,6 +597,26 @@ impl VariableAnalyzer {
     }
 
     /// Analyze a block of statements
+    fn analyze_pattern(&mut self, pattern: &zymbol_ast::Pattern) {
+        use zymbol_ast::Pattern;
+        match pattern {
+            Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
+            Pattern::Range(lo, hi, _) => {
+                self.analyze_expr(lo);
+                self.analyze_expr(hi);
+            }
+            Pattern::List(patterns, _) => {
+                for p in patterns { self.analyze_pattern(p); }
+            }
+            Pattern::Comparison(_, expr, _) => {
+                self.analyze_expr(expr);
+            }
+            Pattern::Ident(name, span) => {
+                self.use_variable(name, *span);
+            }
+        }
+    }
+
     fn analyze_block(&mut self, block: &Block) {
         self.enter_scope();
 
@@ -647,14 +679,12 @@ impl VariableAnalyzer {
 
                 // Analyze each case
                 for case in &match_expr.cases {
-                    // Pattern might have variable bindings (skip for now)
+                    self.analyze_pattern(&case.pattern);
 
-                    // Analyze value expression if present
                     if let Some(value) = &case.value {
                         self.analyze_expr(value);
                     }
 
-                    // Analyze side effect block if present
                     if let Some(block) = &case.block {
                         self.analyze_block(block);
                     }
@@ -802,6 +832,18 @@ impl VariableAnalyzer {
                 }
             }
 
+            Expr::StringSplit(op) => {
+                self.analyze_expr(&op.string);
+                self.analyze_expr(&op.delimiter);
+            }
+
+            Expr::ConcatBuild(op) => {
+                self.analyze_expr(&op.base);
+                for item in &op.items { self.analyze_expr(item); }
+            }
+
+            Expr::NumericCast(op) => self.analyze_expr(&op.expr),
+
             // Numeric/Type operations
             Expr::NumericEval(op) => {
                 self.analyze_expr(&op.expr);
@@ -830,10 +872,33 @@ impl VariableAnalyzer {
                 self.analyze_expr(&op.expr);
             }
 
-            // Literals don't use variables
-            Expr::Literal(_) => {
-                // Literals are constant values - no variable usage
-                // In the future, we could analyze string interpolation {var} syntax
+            Expr::Literal(lit) => {
+                // Only InterpolatedString can reference variables at runtime.
+                // Literal::String is a plain (never-interpolated) string — scanning it
+                // for {varname} would produce false positives (e.g. "\{foo\}" stores
+                // "{foo}" as a plain string but never resolves 'foo').
+                if let Literal::InterpolatedString(s) = &lit.value {
+                    let mut in_var = false;
+                    let mut var_name = String::new();
+                    for ch in s.chars() {
+                        if ch == '{' && !in_var {
+                            in_var = true;
+                            var_name.clear();
+                        } else if ch == '}' && in_var {
+                            in_var = false;
+                            if !var_name.is_empty() {
+                                self.use_variable(&var_name, lit.span);
+                            }
+                        } else if in_var {
+                            if ch.is_alphanumeric() || ch == '_' {
+                                var_name.push(ch);
+                            } else {
+                                // Non-identifier char inside {…} — not a variable reference
+                                in_var = false;
+                            }
+                        }
+                    }
+                }
             }
 
             Expr::Range(_) => {
@@ -847,8 +912,8 @@ impl VariableAnalyzer {
             }
 
             Expr::BashExec(bash) => {
-                for var_name in &bash.variables {
-                    self.use_variable(var_name, bash.span);
+                for arg in &bash.args {
+                    self.analyze_expr(arg);
                 }
             }
 
@@ -859,6 +924,34 @@ impl VariableAnalyzer {
 
             Expr::ErrorPropagate(prop) => {
                 self.analyze_expr(&prop.expr);
+            }
+
+            Expr::DeepIndex(di) => {
+                self.analyze_expr(&di.array);
+                for step in &di.path.steps {
+                    self.analyze_expr(&step.index);
+                    if let Some(end) = &step.range_end { self.analyze_expr(end); }
+                }
+            }
+            Expr::FlatExtract(fe) => {
+                self.analyze_expr(&fe.array);
+                for path in &fe.paths {
+                    for step in &path.steps {
+                        self.analyze_expr(&step.index);
+                        if let Some(end) = &step.range_end { self.analyze_expr(end); }
+                    }
+                }
+            }
+            Expr::StructuredExtract(se) => {
+                self.analyze_expr(&se.array);
+                for group in &se.groups {
+                    for path in &group.paths {
+                        for step in &path.steps {
+                            self.analyze_expr(&step.index);
+                            if let Some(end) = &step.range_end { self.analyze_expr(end); }
+                        }
+                    }
+                }
             }
         }
     }

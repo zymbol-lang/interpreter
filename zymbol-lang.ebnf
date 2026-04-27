@@ -1,19 +1,43 @@
 (*
   Zymbol-Lang EBNF Grammar
-  Version: 2.0.0
-  Sprint: 5I (feature-complete)
+  Version: 2.3.0
+  Sprint: v0.0.4_1
 
   A minimalist symbolic programming language.
   No keywords — pure symbolic syntax with full Unicode support.
 
-  Implementation: Rust workspace (17 crates)
-  Test coverage:  159/159 vm_compare PASS
+  Implementation: Rust workspace (18 crates)
+  Test coverage:  403/405 interpreter PASS (wt + vm, 2 vm-skip)
   Execution:      Tree-walker (default) | Register VM (--vm)
 
-  IMPLEMENTATION STATUS: Feature-complete as of Sprint 5I.
+  IMPLEMENTATION STATUS: Feature-complete as of v0.0.4_1.
   All rules in this grammar are implemented unless marked [NOT IMPLEMENTED].
 
   Version History:
+    2.3.0 (v0.0.4_1)     — New operators (tree-walker + VM):
+                          $/ (StringSplit): string$/ delimiter → Array(String).
+                          $++ (ConcatBuild): base$++ item1 item2 ... (repurposed from
+                            retired $++[i] insert — new semantics: String base → concat,
+                            Array base → append; variadic same-line items).
+                          ##. / ### / ##! (numeric casts): prefix operators for
+                            Int↔Float conversion (##.=ToFloat, ###=ToIntRound,
+                            ##!=ToIntTrunc). Consistent with #.N / #!N convention.
+                          #|expr| extended to accept all 69 Unicode digit scripts
+                            (Thai, Devanagari, Arabic-Indic, Klingon pIqaD, etc.).
+                          Comma concatenation removed: assignment context no longer
+                            supports `msg = "Hello ", name, "!"` — use juxtaposition
+                            or interpolation instead.
+    2.2.0 (v0.0.4)     — Multi-dimensional indexing: nav_index_suffix with `>` depth
+                          separator, `..` ranges on any step, flat/structured extraction,
+                          computed atoms `(expr)`. 1-based indexing enforced globally.
+                          Both tree-walker and register VM fully support all nav-index forms
+                          including ranges (tree-walker + VM Fase 4D).
+    2.1.5 (v0.0.3)     — Numeral modes: numeral_mode_stmt (`#d0d9#`) with 69+ Unicode
+                          digit scripts (Devanagari, Arabic-Indic, Thai, Math Bold, etc.).
+                          Native-script digits valid as literals anywhere. Bool output
+                          adapts to active script. list_pattern added to match_case
+                          (`[a, b, c]`, `[_, _, _]`). loop_label order corrected:
+                          `@ @@label spec` not `@ spec @@label`.
     2.1.0 (v0.0.2)     — Destructuring assignment (array, positional tuple, named tuple).
                           Negative indices normalized (both tree-walker and VM).
     2.0.0 (Sprint 5I)  — Authoritative clean grammar. Indexed assign, comma concat,
@@ -92,7 +116,7 @@ assignment     = identifier , "=" , expr ;
 (* Indexed assignment — direct element update *)
 indexed_assign = identifier , { "[" , expr , "]" } , "=" , expr ;
 (*
-  arr[0] = 99
+  arr[1] = 99     -- first element (1-based; arr[0] is a runtime error)
   matrix[1][2] = 0
 *)
 
@@ -144,8 +168,10 @@ output_stmt    = ">>" , primary_item , { primary_item } ;
    >> arr$# ¶     ❌ parser error                                             *)
 primary_item   = grouped_expr | literal | identifier | function_call
                | bash_exec_expr | script_exec_expr
-               | numeric_eval_expr | type_metadata_expr | format_expr
+               | numeric_eval_expr | numeric_cast_expr | format_expr
                | base_conv_expr | round_expr | trunc_expr ;
+(* NOTE: type_metadata (#?) is postfix — requires parentheses in >>: >> (42#?) ¶
+   numeric_cast_expr (##. ### ##!) is prefix — valid directly: >> ###3.7 ¶ → 4 *)
 
 (* --- Newline --- *)
 (* ¶ = pilcrow (U+00B6, AltGr+R on Spanish keyboard) or \\ (double backslash) *)
@@ -175,6 +201,7 @@ numeral_nine      = ? the "9" digit of the same block as numeral_zero ? ;
   #०९#   — Devanagari
   #๐๙#   — Thai
   #𞥐𞥙#   — Adlam
+  ##   — Klingon pIqaD (CSUR PUA U+F8F0–U+F8F9; requires pIqaD font)
 *)
 
 (* --- Explicit lifetime end --- *)
@@ -200,27 +227,27 @@ match_stmt     = "??" , expr , "{" , { match_case } , "}" ;
 match_case     = pattern , ":" , ( expr | block ) ;
 
 pattern        = range_pattern                (* 90..100 *)
-               | guard_pattern                (* _? condition *)
-               | list_pattern                 (* [a, b, c] *)
-               | literal_pattern             (* 42, "red", 'A', #1 *)
+               | comparison_pattern           (* < 0, >= 100, == "x" *)
+               | ident_pattern                (* variable name *)
+               | list_pattern                 (* [a, b, c] — structural or containment *)
+               | literal_pattern              (* 42, "red", 'A', #1 *)
                | wildcard_pattern ;           (* _ *)
 
-literal_pattern  = literal ;
-range_pattern    = range_bound , ".." , range_bound ;
-range_bound      = literal | identifier ;
-guard_pattern    = "_?" , expr                (* wildcard guard — _? condition *)
-               | pattern , "?" , expr ;      (* pattern guard — literal/range ? condition *)
-wildcard_pattern = "_" ;
-list_pattern     = "[" , [ pattern , { "," , pattern } ] , "]" ;  (* [] empty list allowed *)
+literal_pattern     = literal ;
+range_pattern       = range_bound , ".." , range_bound ;
+range_bound         = literal | identifier ;
+comparison_pattern  = ( "<" | ">" | "<=" | ">=" | "==" | "<>" ) , expr ;
+ident_pattern       = identifier ;            (* scalar var → equality; array var → containment *)
+wildcard_pattern    = "_" ;
+list_pattern        = "[" , [ pattern , { "," , pattern } ] , "]" ;
 (*
-  ?? val {
-      [1, 2]:    { >> "starts with 1,2" ¶ }
-      [_, _, _]: { >> "exactly 3 elems" ¶ }
-      _:         { >> "other" ¶ }
-  }
+  Scalar scrutinee vs list_pattern → containment: ?? n { [1, 2] : "low"  _ : "other" }
+  Array  scrutinee vs list_pattern → structural:   ?? arr { ["run", _] : "cmd"  _ : "other" }
+  Comparison pattern:                              ?? temp { < 0 : "ice"  >= 100 : "steam"  _ : "water" }
+  Ident pattern (scalar):                          ?? code { expected : "ok"  _ : "fail" }
+  Ident pattern (array var):                       ?? day { weekdays : "work"  _ : "rest" }
 *)
 
-(* [NOT IMPLEMENTED] multi-value arm:  1, 2 : "low"     *)
 (* [NOT IMPLEMENTED] binding pattern:  n : n * 2        *)
 
 (* =========================================================================
@@ -228,19 +255,26 @@ list_pattern     = "[" , [ pattern , { "," , pattern } ] , "]" ;  (* [] empty li
    ========================================================================= *)
 
 (* Universal loop — form inferred from specifier *)
-loop_stmt      = "@" , [ loop_label ] , [ loop_spec ] , block ;
-(* Label comes BEFORE the specifier — parser reads @label then condition/for-each *)
+loop_stmt      = loop_head , [ loop_spec ] , block ;
+(* Label comes BEFORE the specifier — parser reads @:label then condition/for-each *)
 
-loop_label     = "@" , identifier ;
+loop_head      = "@:label"                      (* labeled loop: @:name (v0.0.4) *)
+               | "@" ;                          (* unlabeled loop *)
+(* "label" is any identifier fused after @: — e.g. @:outer, @:inner *)
 
 loop_spec      = identifier , ":" , iterable   (* for-each / range *)
-               | expr ;                         (* while condition *)
-(* "@" alone (no label, no spec) = infinite loop *)
+               | expr ;                         (* times loop (Int literal > 0) or while condition (Bool expr) *)
+(* Form inferred at runtime from the initial value of expr:
+   - Int n > 0  → TIMES loop: body executes exactly n times (condition evaluated once)
+   - otherwise  → WHILE loop: condition re-evaluated before each iteration
+   "@" or "@:name" alone (no spec) = infinite loop *)
 
 iterable       = range_expr | expr ;            (* array, string, or range *)
 
-break_stmt     = "@!" , [ identifier ] ;        (* @! or @! label *)
-continue_stmt  = "@>" , [ identifier ] ;        (* @> or @> label *)
+break_stmt     = "@:label!"                     (* labeled break:    @:name!  (v0.0.4) *)
+               | "@!" ;                         (* unlabeled break: @! *)
+continue_stmt  = "@:label>"                     (* labeled continue: @:name>  (v0.0.4) *)
+               | "@>" ;                         (* unlabeled continue: @> *)
 
 (* =========================================================================
    ERROR HANDLING
@@ -297,38 +331,35 @@ lambda_params  = identifier
 (* =========================================================================
    EXPRESSIONS — OPERATOR PRECEDENCE (lowest to highest)
    =========================================================================
-   1.  , (comma)          — string/value concatenation — assignment context only
-   2.  |> (pipe)          — function composition
-   3.  || (logical or)
-   4.  && (logical and)
-   5.  == <> (equality)
-   6.  < > <= >= (comparison)
-   7.  + - (addition)
-   8.  * / % (multiplication)
-   9.  ^ (exponentiation)  — right-associative
-   10. ! - + (unary)
-   11. . (member access)
-   12. [] () $op #? (postfix)
+   1.  |> (pipe)          — function composition
+   2.  || (logical or)
+   3.  && (logical and)
+   4.  == <> (equality)
+   5.  < > <= >= (comparison)
+   6.  + - (addition)
+   7.  * / % (multiplication)
+   8.  ^ (exponentiation)  — right-associative
+   9.  ! - + (unary)
+   10. . (member access)
+   11. [] () $op #? (postfix)
    ========================================================================= *)
 
 expr           = pipe_expr ;
-(* NOTE: comma concatenation is NOT part of expr. It is handled explicitly
-   only in assignment_stmt and const_decl:
-     msg = "Hello ", name, "!"     ✅ valid (assignment context)
-     TITLE := "Mr. ", name         ✅ valid (const decl context)
-     >> "a" , "b" ¶                ❌ not valid in output / expression context *)
+(* NOTE: comma concatenation was removed in v0.0.4_1. Assignments now use
+   juxtaposition (same-line adjacent primaries) or string interpolation:
+     msg = "Hello " name "!"         ✅ juxtaposition (canonical)
+     msg = "Hello {name}!"           ✅ interpolation (most readable)
+     msg = "Hello ", name, "!"       ❌ removed — comma concat no longer supported *)
 
 base_expr      = pipe_expr ;
 
 (* Pipe — value |> function(_) *)
 pipe_expr      = logic_or , { "|>" , pipe_call } ;
 
-pipe_call      = identifier , "(" , pipe_args , ")"
-               | lambda , "(" , pipe_args , ")" ;
-(* NOTE: identifier here must be a lambda-variable (stored in self.variables).
-   Named functions (stored in self.functions) are NOT first-class and will fail
-   with "undefined variable" when used as pipe callables.
-   Workaround: wrap named function in lambda — add_fn = (a, b) -> add(a, b) *)
+pipe_call      = ( identifier | lambda ) , [ "(" , pipe_args , ")" ] ;
+(* NOTE: omitting ( pipe_args ) is implicit first-position: x |> f  ≡  f(x)  (v0.0.4).
+   When the piped value goes in a non-first position, an explicit "(" pipe_args ")" with
+   at least one "_" placeholder is required. *)
 
 pipe_args      = pipe_arg , { "," , pipe_arg } ;
 pipe_arg       = "_"                            (* placeholder for piped value *)
@@ -350,9 +381,7 @@ unary          = [ "!" | "-" | "+" ] , member_access_expr ;
 member_access_expr = postfix_expr , { "." , identifier } ;
 (*
   person.name     — named tuple field
-  m.CONST         — module constant  [KNOWN ISSUE: parser accepts this syntax but the
-                    interpreter does not resolve module-scoped constants via dot notation.
-                    Workaround: export a zero-argument getter function — m::getConst()]
+  m.CONST         — module constant (fixed v0.0.4: alias.CONST resolves correctly)
 *)
 
 (* Postfix *)
@@ -363,7 +392,8 @@ postfix_expr   = primary_expr ,
                  | error_op_suffix
                  | type_metadata_suffix } ;
 
-index_suffix   = "[" , expr , "]" ;             (* arr[0], matrix[1][2], arr[-1] last element *)
+index_suffix   = "[" , expr , "]"              (* arr[1], arr[-1] — 1-based, plain 1-D *)
+               | nav_index_suffix ;             (* arr[i>j], arr[p;q], arr[[g];[g]] — v0.0.4 *)
 call_suffix    = "(" , [ arg_list ] , ")" ;     (* func()(args) — chained calls *)
 
 arg_list       = arg , { "," , arg } ;
@@ -383,7 +413,7 @@ primary_expr   = literal
                | lambda
                | grouped_expr
                | numeric_eval_expr
-               | type_metadata_expr
+               | numeric_cast_expr
                | format_expr
                | base_conv_expr
                | round_expr
@@ -391,6 +421,8 @@ primary_expr   = literal
                | bash_exec_expr
                | script_exec_expr
                | function_call ;
+(* NOTE: type_metadata (#?) is postfix — handled by postfix_expr → type_metadata_suffix,
+   NOT a primary expression. "42#?" → primary_expr=42, type_metadata_suffix=#? *)
 (* NOTE: range_expr is intentionally excluded from primary_expr.
    Ranges are only valid inside loop specifiers (loop_spec / iterable).
    Using a range in any other context (assignment, output, expression) is
@@ -461,7 +493,109 @@ collection_op_suffix
                | "$|" , lambda                                                  (* filter → new array *)
                | "$<" , "(" , expr , "," , lambda , ")"                        (* reduce → scalar *)
                | "$[" , expr , "]" , "$~" , expr                               (* functional update → new collection *)
-               | "$~~" , "[" , expr , ":" , expr , [ ":" , expr ] , "]" ;     (* string replace [pattern:repl:count?] *)
+               | "$~~" , "[" , expr , ":" , expr , [ ":" , expr ] , "]"       (* string replace [pattern:repl:count?] *)
+               | "$/" , expr                                                   (* string split by char or substring → Array(String) *)
+               | "$++" , { primary_expr } ;                                   (* concat-build: String→concat, Array→append; variadic same-line *)
+(*
+  $/ examples:
+    "a,b,c,d" $/ ','      → ["a", "b", "c", "d"]
+    "x::y::z" $/ "::"     → ["x", "y", "z"]
+
+  $++ examples:
+    "n=" $++ n " ok=" flag    → "n=42 ok=#1"   (String base — values coerced to string)
+    [1, 2, 3] $++ 4 5 6       → [1, 2, 3, 4, 5, 6]  (Array base — elements appended)
+    Items must be on the same source line as the $++ operator.
+    Delimiter between items: none — same juxtaposition rule as >> and assignment.
+*)
+
+(* =========================================================================
+   MULTI-DIMENSIONAL INDEXING  (v0.0.4)
+   =========================================================================
+   Inside a postfix `[...]`, `>` is always a depth separator, never comparison.
+   This context is already distinct from array-literal `[expr, expr]` where `>`
+   IS comparison, so no ambiguity arises.
+
+   Disambiguation rule used by the parser (via `is_nav_index` lookahead):
+     arr[n]          — plain integer/variable, no `>` follows → Expr::Index (1-D compat)
+     arr[n>...]      — integer/variable followed by `>` → nav_index_suffix
+     arr[-n>...]     — Minus Integer Gt → nav_index_suffix (negative atom)
+     arr[(expr)>...] — LParen, scan for `>` after closing `)` at depth 0 → nav_index_suffix
+     arr[[...]]      — LBracket after `[` → nav_index_suffix
+   ========================================================================= *)
+
+nav_index_suffix
+               = "[" , nav_single_bracket , "]"   (* scalar / flat extract / FlatExtract-range *)
+               | "[" , nav_double_bracket , "]" ; (* FlatExtract wrapped / StructuredExtract   *)
+
+(* Single-bracket forms:
+     arr[i>j>k]        — DeepIndex (all steps plain, no range)
+     arr[p ; q ; r]    — FlatExtract (semicolon-separated paths)
+     arr[i>r1..r2>k]   — FlatExtract (any step has range) *)
+nav_single_bracket
+               = nav_path , { ";" , nav_path } ;
+
+(* Double-bracket forms:
+     arr[[p]]          — FlatExtract, single path wrapped  →  [value...]
+     arr[[g] ; [g]]    — StructuredExtract                 →  [[...], [...]] *)
+nav_double_bracket
+               = struct_group                              (* arr[[p]] or arr[[p,q]] — FlatExtract if no `;` follows *)
+               | struct_group , { ";" , struct_group } ;  (* arr[[g];[g]] — StructuredExtract *)
+
+(* A group: one or more comma-separated paths inside `[...]` *)
+struct_group   = "[" , nav_path , { "," , nav_path } , "]" ;
+
+(* A navigation path: one or more steps separated by `>` *)
+nav_path       = nav_step , { ">" , nav_step } ;
+
+(* A navigation step: an atom with an optional inclusive range end *)
+nav_step       = nav_atom , [ ".." , nav_atom ] ;
+(*
+  Examples:
+    2          → step at index 2
+    2..4       → range from index 2 to index 4 (inclusive)
+    If on an intermediate step → fan-out: remaining path applied to each element in range
+    If on the last step        → collect all values in range
+*)
+
+(* A nav atom: literal integer, negative integer, variable, or full expression in `()` *)
+nav_atom       = integer                         (* 1, 2, 3 … positive literal *)
+               | "-" , integer                  (* -1, -2 … negative literal (last, second-to-last) *)
+               | identifier                      (* variable holding an Int *)
+               | "(" , expr , ")" ;             (* computed index — full expression *)
+
+(*
+  DISAMBIGUATION NOTES:
+    arr[a>b]      — nav-index (a and b are Int variables used as row/col indices)
+    arr[(a)>(b)]  — nav-index (same, explicit grouping — equivalent to arr[a>b])
+    arr[(a>b)]    — 1-D plain index where (a>b) is a Bool comparison expression
+                    → runtime error: array index must be Int, got Bool
+    arr[(a+1)>b]  — nav-index: computed first step (a+1), plain second step b
+
+  KEY RULES:
+    1. `>` inside `[...]` after a nav_atom is ALWAYS a depth separator.
+    2. Expressions with operators (a+1, n*2) require `(expr)` wrapping to be nav atoms.
+    3. Plain identifiers and integers do NOT require wrapping.
+    4. Negative atoms: `-1`, `-2` etc. use the same 1-based counting from the end.
+*)
+
+(*
+  RESULT TYPES:
+    arr[i>j>k]              → Value          (scalar, DeepIndexExpr)
+    arr[p ; q ; r]          → [v1, v2, v3]   (flat Array, FlatExtractExpr)
+    arr[[p]]                → [value]         (flat Array, FlatExtractExpr)
+    arr[[p,q] ; [r,s]]      → [[...], [...]] (Array of Arrays, StructuredExtractExpr)
+    arr[path with range]    → [v…]           (flat Array, FlatExtractExpr)
+    arr[[g with range]]     → [[v…],…]       (Array of Arrays, StructuredExtractExpr)
+
+  EXAMPLES:
+    m = [[1,2,3], [4,5,6], [7,8,9]]
+    >> m[2>3] ¶                           → 6
+    >> m[2>3 ; 3>2] ¶                     → [6, 8]
+    >> m[[1>1, 1>3] ; [3>1, 3>3]] ¶      → [[1, 3], [7, 9]]
+    >> m[[1>2..3]] ¶                      → [5, 6]
+    >> m[[1..2>3]] ¶                      → [[3, 6]]
+    >> m[(n)>(n)] ¶                       → m[n][n]  (n is a variable)
+*)
 
 (* Error check operators — postfix *)
 error_op_suffix
@@ -477,12 +611,38 @@ error_op_suffix
    ========================================================================= *)
 
 (* Numeric evaluation — fail-safe string-to-number *)
+(* Accepts ASCII digits and all 69 Unicode digit scripts supported by the lexer
+   (Thai ๐..๙, Devanagari ०..९, Arabic-Indic ٠..٩, Klingon pIqaD , etc.).
+   Uses the same digit normalization as the lexer (digit_blocks.rs). *)
 numeric_eval_expr = "#|" , expr , "|" ;
 (*
-  #|"42"|    → 42     (Int)
-  #|"3.14"|  → 3.14   (Float)
-  #|"abc"|   → "abc"  (unchanged — no error)
-  #|99|      → 99     (pass-through)
+  #|"42"|      → 42     (Int)
+  #|"3.14"|    → 3.14   (Float)
+  #|"abc"|     → "abc"  (unchanged — fail-safe, no error)
+  #|99|        → 99     (pass-through if already a number)
+  #|"๔๒"|    → 42     (Thai digits — same as #|"42"|)
+  #|"४२"|    → 42     (Devanagari digits)
+  #|"٣.١٤"|  → 3.14   (Arabic-Indic float)
+*)
+
+(* Numeric cast operators — prefix; convert between Int and Float *)
+(* Convention: ##. mirrors #.N (decimal/round), ##! mirrors #!N (truncate).
+               ### is a rounding cast with no precision argument.             *)
+numeric_cast_expr = "##." , primary_expr    (* ToFloat:    Int or Float → Float           *)
+                  | "###" , primary_expr    (* ToIntRound: Float → Int, half away from zero (Rust f64::round) *)
+                  | "##!" , primary_expr ;  (* ToIntTrunc: Float → Int, truncating toward zero *)
+(*
+  ##.42        → 42    (Float type — displayed without .0 when integer-valued)
+  ##.3.7       → 3.7   (pass-through if already Float)
+  ###3.7       → 4     (rounds)
+  ###3.2       → 3     (rounds)
+  ##!3.7       → 3     (truncates toward zero)
+  ##!(-2.9)    → -2    (truncates toward zero — compare ###(-2.9) → -3)
+
+  Works on any primary expression:
+    ##.(7 / 2)       → 3     (integer division result cast to Float — no .0 when integer-valued)
+    ###(7 / 2.0)     → 4     (3.5 rounds to 4)
+    ##!(7 / 2.0)     → 3     (3.5 truncates to 3)
 *)
 
 (* Type metadata — returns (type_symbol, digits, value) *)
@@ -529,8 +689,8 @@ precision      = digit , { digit } ;
 (*
   #.2|3.14159|  → 3.14   (rounds)
   #!2|3.14159|  → 3.14   (truncates)
-  #.0|19.9|     → 20.0   (rounds to integer, returns Float)
-  #!0|19.9|     → 19.0   (truncates to integer, returns Float)
+  #.0|19.9|     → 20     (rounds to integer — Float type, displayed without .0)
+  #!0|19.9|     → 19     (truncates to integer — Float type, displayed without .0)
 *)
 
 (* Base conversion — tridirectional *)
@@ -621,7 +781,7 @@ escape_sequence = "\\n"                          (* newline *)
                 | "\\\\"                         (* backslash *)
                 | "\\{"                          (* literal { *)
                 | "\\}"                          (* literal } *)
-                | "\\u{" , hex_digit , { hex_digit } , "}" ; (* Unicode codepoint *)
+                ; (* NOTE: \u{XXXX} Unicode escape is NOT implemented — see GUIDE.md §1b *)
 
 (* Character — single Unicode codepoint *)
 char_literal   = "'" , ( char_content | escape_sequence ) , "'" ;
@@ -695,10 +855,16 @@ whitespace     = " " | "\t" | "\r" | "\n" ;
    RETIRED OPERATORS  (recognized by lexer, rejected by parser with migration message)
    ========================================================================= *)
 
-(* [RETIRED v0.0.2] $++ — insert string/value at position:
+(* [RETIRED v0.0.2] $++[i] — insert string/value at position (bracket form):
    Old syntax:  s$++[i] val
    Replacement: s$+[i] val
    Parser emits: "v0.0.2: use $+[ instead of $++"
+
+   NOTE: The bare $++ token (without bracket) was REPURPOSED in v0.0.4_1 as ConcatBuild.
+   New semantics: base$++ item1 item2 ...
+     String base → concatenate all items (coercing non-strings to string representation)
+     Array base  → append all items to the array
+   See collection_op_suffix for the current $++ rule.
 *)
 
 (* [RETIRED v0.0.2] $--[pos:count] — remove by position + count:

@@ -6,9 +6,10 @@
 //! - Newline: write newline to output
 
 use std::io::Write;
-use zymbol_ast::{Input, InputPrompt, Newline, Output};
+use zymbol_ast::{Input, InputCast, InputPrompt, Newline, Output};
 use zymbol_lexer::StringPart;
 use crate::numeral_mode::{to_numeral_int, to_numeral_float, to_numeral_bool};
+use crate::data_ops::parse_numeric_string;
 use crate::{Interpreter, Result, RuntimeError, Value};
 
 impl<W: Write> Interpreter<W> {
@@ -40,18 +41,16 @@ impl<W: Write> Interpreter<W> {
 
     /// Execute input statement: << variable (with optional prompt)
     pub(crate) fn execute_input(&mut self, input: &Input) -> Result<()> {
-        // Display prompt if present (handle both simple and interpolated)
+        // Display prompt through the interpreter's writer (handles raw mode via RawModeWriter)
         if let Some(prompt) = &input.prompt {
             let prompt_text = match prompt {
                 InputPrompt::Simple(s) => s.clone(),
                 InputPrompt::Interpolated(parts) => {
-                    // Build the interpolated string by evaluating each part
                     let mut result = String::new();
                     for part in parts {
                         match part {
                             StringPart::Text(text) => result.push_str(text),
                             StringPart::Variable(var_name) => {
-                                // Look up the variable and append its value
                                 if let Some(value) = self.get_variable(var_name) {
                                     result.push_str(&value.to_display_string());
                                 } else {
@@ -69,18 +68,24 @@ impl<W: Write> Interpreter<W> {
                     result
                 }
             };
-
-            print!("{}", prompt_text);
-            std::io::stdout().flush()?;
+            write!(self.output, "{}", prompt_text)?;
+            self.output.flush()?;
         }
 
-        // Read from stdin
-        let mut buffer = String::new();
-        std::io::stdin().read_line(&mut buffer)?;
+        // Delegate reading to the injected input function.
+        // In normal execution this reads from stdin; in the REPL it temporarily
+        // disables raw mode so the user can type with echo and press Enter normally.
+        let line = (self.input_fn)()
+            .map_err(|e| RuntimeError::Generic {
+                message: format!("input read error: {}", e),
+                span: input.span,
+            })?;
 
-        // Trim newline and store as string
-        let value = buffer.trim().to_string();
-        self.set_variable(&input.variable, Value::String(value));
+        let value = match input.cast {
+            InputCast::String  => Value::String(line.trim().to_string()),
+            InputCast::Numeric => parse_numeric_string(line.trim().to_string()),
+        };
+        self.set_variable(&input.variable, value);
         Ok(())
     }
 }

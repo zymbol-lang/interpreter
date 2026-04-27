@@ -1,0 +1,19 @@
+// G9: alias.CONST — dot access to module constants works
+// Before fix: TypeChecker emitted a fatal "undefined variable 'alias'"
+// error for MemberAccess nodes, blocking execution entirely.
+
+<# ./g09_config_mod <= cfg
+
+// Direct constant access via dot
+url = cfg.BASE_URL
+ver = cfg.VERSION
+>> url ¶
+>> ver ¶
+
+// Function call still works alongside constant access
+url2 = cfg::get_url()
+>> url2 ¶
+
+// Constant in expression
+full = cfg.VERSION $++ " — " $++ cfg.BASE_URL
+>> full ¶

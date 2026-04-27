@@ -1,0 +1,22 @@
+// G7: BashExec auto-trims the trailing \n from command output
+// Before fix: every <\ cmd \> result ended with \n — comparisons and
+// string operations subtly failed (e.g. result == "200" was false)
+
+// echo always appends \n — auto-trim means we get the clean value
+raw = <\ "echo hello" \>
+>> raw ¶
+
+// Length should be 5 ("hello"), not 6 ("hello\n")
+len = raw$#
+>> len ¶
+
+// Can use directly in comparison without $~~["\n":""]
+? (raw == "hello") {
+    >> "match" ¶
+} _ {
+    >> "no match" ¶
+}
+
+// Multi-word echo: trailing \n removed, internal spaces preserved
+phrase = <\ "echo 'foo bar'" \>
+>> phrase ¶

@@ -1,0 +1,14 @@
+// Test: write-only variable warning — accumulator assigned in loop but never read
+// The analyzer should warn about write-only variables
+
+total = 0
+@ i:1..5 {
+    total = total + i
+}
+>> total ¶
+
+// Write-only accumulator (only assigned, never read after loop — should warn)
+unused_acc = 0
+@ i:1..3 {
+    unused_acc = unused_acc + i
+}

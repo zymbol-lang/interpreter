@@ -1,22 +1,22 @@
-// Test: $-[start..end] remove range (v0.0.2)
+// Test: $-[start..end] remove range (v0.0.2) — 1-based indexing, inclusive
 arr = [1, 2, 3, 4, 5]
-rem1 = arr$-[1..3]
+rem1 = arr$-[2..3]    // removes 1-based positions 2,3 → [1, 4, 5]
 >> rem1 ¶
 
-rem2 = arr$-[0..2]
+rem2 = arr$-[1..2]    // removes 1-based positions 1,2 → [3, 4, 5]
 >> rem2 ¶
 
-rem3 = arr$-[3..5]
+rem3 = arr$-[4..5]    // removes 1-based positions 4,5 → [1, 2, 3]
 >> rem3 ¶
 
-// Open-start range
-rem4 = arr$-[..2]
+// Open-start range (default start = beginning)
+rem4 = arr$-[..2]     // removes 1-based positions 1,2 → [3, 4, 5]
 >> rem4 ¶
 
 // Open-end range
-rem5 = arr$-[3..]
+rem5 = arr$-[4..]     // removes from 1-based position 4 to end → [1, 2, 3]
 >> rem5 ¶
 
-// Equal indices — no-op
-rem6 = arr$-[2..2]
+// start normalizes equal to end → no-op
+rem6 = arr$-[3..2]
 >> rem6 ¶

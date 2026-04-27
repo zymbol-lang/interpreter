@@ -1,0 +1,11 @@
+// Module used by g09_module_const_access.zy
+// G9: module constants declared with := are accessible via alias.CONST
+
+# g09_config_mod {
+    #> { get_url, BASE_URL, VERSION }
+
+    BASE_URL := "https://api.example.com"
+    VERSION  := "2.0"
+
+    get_url() { <~ BASE_URL }
+}

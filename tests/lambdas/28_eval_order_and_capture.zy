@@ -1,0 +1,33 @@
+// Test: §10b — Evaluation Order and Capture Semantics
+
+// ── 1. Argument evaluation order: left-to-right ──────────────────────────
+log = ""
+tag = (s -> { log = "{log}{s}"  <~ s })
+concat(a, b) { <~ "{a}{b}" }
+result = concat(tag("A"), tag("B"))
+>> result ¶
+
+// ── 2. Capture by value at creation time ─────────────────────────────────
+a = 5
+getA = (dummy -> a)
+a = 99
+>> getA(0) ¶
+
+// ── 3. Loop closures — each iteration captures its own snapshot ──────────
+fns = []
+@ i:1..3 {
+    f = (x -> x + i)
+    fns = fns$+ f
+}
+f1 = fns[1]
+f2 = fns[2]
+f3 = fns[3]
+>> f1(10) ¶
+>> f2(10) ¶
+>> f3(10) ¶
+
+// ── 4. Writes to captured variables stay in local copy ───────────────────
+counter = 0
+bump = (dummy -> { counter = counter + 1  <~ counter })
+>> bump(0) ¶
+>> counter ¶

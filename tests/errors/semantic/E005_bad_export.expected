@@ -1,0 +1,2 @@
+error: E005: Item 'ghost_fn' not found in module
+  --> /home/rakzo/github/zymbol-lang/interpreter/tests/errors/semantic/E005_bad_export.zy:2:19

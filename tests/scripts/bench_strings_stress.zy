@@ -14,39 +14,35 @@
 t_total = T::now()
 
 // ── S1: Heavy concat accumulation ────────────────────────────────────────────
-// 8 000 single-char appends — exercises ConcatStr + Rc alloc per op
 t = T::now()
 s = ""
-@ i:0..7999 { s = s + "x" }
+@ i:0..7999 { s = s "x" }
 s1_len = s$#
->> "S1_heavy_concat:    len=" + s1_len + "  " + T::elapsed(t) ¶
+>> "S1_heavy_concat:    len=" s1_len "  " T::elapsed(t) ¶
 
 // ── S2: Repeated tokenization ─────────────────────────────────────────────────
-// 2 000 splits of a 13-token CSV — exercises StrSplit + Vec<Rc> alloc
 t = T::now()
 csv = "alpha,beta,gamma,delta,epsilon,zeta,eta,theta,iota,kappa,lambda,mu,nu"
 total_tokens = 0
 @ i:0..1999 {
-    parts = csv / ','
+    parts = csv $/ ','
     total_tokens = total_tokens + parts$#
 }
->> "S2_tokenize:        total=" + total_tokens + "  " + T::elapsed(t) ¶
+>> "S2_tokenize:        total=" total_tokens "  " T::elapsed(t) ¶
 
 // ── S3: Sliding-window slices ─────────────────────────────────────────────────
-// 4 000 overlapping 10-char windows over a 63-char string — exercises StrSlice
 t = T::now()
 text = "the quick brown fox jumps over the lazy dog near the river bank"
 slice_total = 0
 @ i:0..3999 {
-    start = i % 53
-    end = start + 10
+    start = i % 53 + 1
+    end = start + 9
     sl = text$[start..end]
     slice_total = slice_total + sl$#
 }
->> "S3_sliding_slices:  chars=" + slice_total + "  " + T::elapsed(t) ¶
+>> "S3_sliding_slices:  chars=" slice_total "  " T::elapsed(t) ¶
 
 // ── S4: Char frequency count ──────────────────────────────────────────────────
-// 400 full iterations over a 43-char sentence — exercises ArrayGet on String
 t = T::now()
 corpus = "the quick brown fox jumps over the lazy dog"
 vowels = 0
@@ -59,85 +55,79 @@ consonants = 0
         ? !is_vowel && !is_space { consonants = consonants + 1 }
     }
 }
->> "S4_char_freq:       vowels=" + vowels + " consonants=" + consonants + "  " + T::elapsed(t) ¶
+>> "S4_char_freq:       vowels=" vowels " consonants=" consonants "  " T::elapsed(t) ¶
 
 // ── S5: Multi-pattern substring search ───────────────────────────────────────
-// 3 000 contains checks cycling through 5 string patterns — exercises StrContains
 t = T::now()
 haystack = "artificial intelligence natural language processing machine learning neural network deep"
 patterns = ["intel", "lang", "learn", "neural", "deep"]
 hits = 0
-@ i:0..2999 {
-    p = patterns[i % 5]
+@ i:1..3000 {
+    p = patterns[(i - 1) % 5 + 1]
     ? haystack$? p { hits = hits + 1 }
 }
->> "S5_multi_search:    hits=" + hits + "  " + T::elapsed(t) ¶
+>> "S5_multi_search:    hits=" hits "  " T::elapsed(t) ¶
 
 // ── S6: Template / markup building ───────────────────────────────────────────
-// 4 000 multi-part string assemblies — exercises ConcatStr chains + int→string
 t = T::now()
 template_total = 0
 @ i:0..3999 {
     sq = i * i
-    line = "row:" + i + " sq:" + sq + " tag:item-" + i + "-end"
+    line = "row:" i " sq:" sq " tag:item-" i "-end"
     template_total = template_total + line$#
 }
->> "S6_template_build:  chars=" + template_total + "  " + T::elapsed(t) ¶
+>> "S6_template_build:  chars=" template_total "  " T::elapsed(t) ¶
 
 // ── S7: Word-level analysis ───────────────────────────────────────────────────
-// 1 000 sentence splits → iterate words → accumulate lengths + count long words
 t = T::now()
 sentence = "the quick brown fox jumps over the lazy dog"
 word_chars = 0
 long_words = 0
 @ _iter:0..999 {
-    words = sentence / ' '
+    words = sentence $/ ' '
     @ w:words {
         wlen = w$#
         word_chars = word_chars + wlen
         ? wlen > 4 { long_words = long_words + 1 }
     }
 }
->> "S7_word_analysis:   total=" + word_chars + " long=" + long_words + "  " + T::elapsed(t) ¶
+>> "S7_word_analysis:   total=" word_chars " long=" long_words "  " T::elapsed(t) ¶
 
 // ── S8: Fixed-size chunk extraction ──────────────────────────────────────────
-// 5 000 5-char windows from a 62-char alphabet — exercises StrSlice + StrLen
 t = T::now()
 data = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 chunk_total = 0
 @ i:0..4999 {
-    pos = (i * 7) % 57
-    pend = pos + 5
+    pos = (i * 7) % 57 + 1
+    pend = pos + 4
     chunk = data$[pos..pend]
     chunk_total = chunk_total + chunk$#
 }
->> "S8_chunk_extract:   total=" + chunk_total + "  " + T::elapsed(t) ¶
+>> "S8_chunk_extract:   total=" chunk_total "  " T::elapsed(t) ¶
 
 // ── S9: Simulated join (accumulate with separator) ────────────────────────────
-// 400 manual joins of a 10-element word list — exercises repeated concat in loop
 t = T::now()
 wlist = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
 join_total = 0
 @ _iter:0..399 {
     joined = ""
-    @ j:0..9 {
-        ? j > 0 { joined = joined + "," }
-        joined = joined + wlist[j]
+    @ j:1..10 {
+        ? j > 1 { joined = joined "," }
+        joined = joined wlist[j]
     }
     join_total = join_total + joined$#
 }
->> "S9_join_sim:        total=" + join_total + "  " + T::elapsed(t) ¶
+>> "S9_join_sim:        total=" join_total "  " T::elapsed(t) ¶
 
 // ── S10: Numeric-string formatting ───────────────────────────────────────────
-// 6 000 formatted records mixing integers and strings — exercises int→str coercion
 t = T::now()
 fmt_total = 0
 @ i:0..5999 {
     diff = i - 3000
     score = i * 37 % 1000
-    record = "id=" + i + " diff=" + diff + " score=" + score
+    record = "id=" i " diff=" diff " score=" score
     fmt_total = fmt_total + record$#
 }
->> "S10_num_format:     chars=" + fmt_total + "  " + T::elapsed(t) ¶
+>> "S10_num_format:     chars=" fmt_total "  " T::elapsed(t) ¶
 
->> "=== Done (" + T::total(t_total) + ") ===" ¶
+>> "=== Done (" T::total(t_total) ") ===" ¶

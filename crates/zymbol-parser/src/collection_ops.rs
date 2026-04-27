@@ -42,7 +42,7 @@ impl Parser {
         let start_span = collection.span();
         self.advance(); // consume $+
 
-        let element = self.parse_postfix()?; // Parse the element to append
+        let element = self.parse_postfix_structural()?; // Stop before next $+ to allow chaining
         let span = start_span.to(&element.span());
 
         Ok(Expr::CollectionAppend(CollectionAppendExpr::new(
@@ -316,7 +316,7 @@ impl Parser {
         let start_span = collection.span();
         self.advance(); // consume $>
 
-        let lambda = self.parse_lambda()?; // Parse the lambda function
+        let lambda = self.parse_lambda_or_ident()?; // Parse lambda or function reference
         let span = start_span.to(&lambda.span());
 
         Ok(Expr::CollectionMap(zymbol_ast::CollectionMapExpr {
@@ -331,7 +331,7 @@ impl Parser {
         let start_span = collection.span();
         self.advance(); // consume $|
 
-        let lambda = self.parse_lambda()?; // Parse the lambda function
+        let lambda = self.parse_lambda_or_ident()?; // Parse lambda or function reference
         let span = start_span.to(&lambda.span());
 
         Ok(Expr::CollectionFilter(zymbol_ast::CollectionFilterExpr {
@@ -366,7 +366,7 @@ impl Parser {
         }
         self.advance(); // consume ,
 
-        let lambda = self.parse_lambda()?; // Parse the lambda function
+        let lambda = self.parse_lambda_or_ident()?; // Parse lambda or function reference
 
         // Expect )
         let close_token = self.peek().clone();
@@ -391,8 +391,8 @@ impl Parser {
     /// No comparator — direction is encoded in the token.
     pub(crate) fn parse_collection_sort(&mut self, collection: Expr, ascending: bool) -> Result<Expr, Diagnostic> {
         let start_span = collection.span();
-        self.advance(); // consume $^+ or $^-
-        let span = start_span.to(&self.peek().span);
+        let op_token = self.advance(); // consume $^+ or $^-
+        let span = start_span.to(&op_token.span);
         let sort_expr = CollectionSortExpr::new(Box::new(collection), ascending, None, span);
         if ascending {
             Ok(Expr::CollectionSortAsc(sort_expr))
@@ -413,7 +413,7 @@ impl Parser {
                 .with_span(self.peek().span));
         }
         let lambda = self.parse_lambda()?;
-        let span = start_span.to(&self.peek().span);
+        let span = start_span.to(&lambda.span());
         let sort_expr = CollectionSortExpr::new(
             Box::new(collection),
             true, // ascending field unused for custom sort

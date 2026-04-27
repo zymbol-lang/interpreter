@@ -1,0 +1,18 @@
+// BUG-NEW-02 (v0.0.4): Bool as array index is NOT caught by !? ... :!
+//
+// Root cause: the type check "array index must be Int, got Bool" bypasses
+// the RuntimeError machinery and terminates the process directly.
+//
+// Expected (correct behavior): !? should catch the error and print "caught".
+// Actual behavior: program exits with code 1; :! block never executes.
+//
+// Contrast: arr[0], arr[99], 1/0 ARE all correctly caught by !?.
+// See also: tests/v0.0.4_review/runtime_errors_catchable.zy
+
+arr = [1,2,3]
+!? {
+    x = arr[#1]
+    >> x ¶
+} :! {
+    >> "caught bool index" ¶
+}

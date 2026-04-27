@@ -1,0 +1,12 @@
+[1m[31merror[39m[0m: undefined variable 'inner'
+  [1m[34m-->[39m[0m tests/scope02_nested_blocks.zy:22:42
+[1m[34m  22[39m[0m [34m|[39m
+[1m[34m  22[39m[0m [34m|[39m     >> "Middle trying to access inner: " inner ¶
+[34m     |[39m [1m[31m                                         ^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m variables must be defined before use
+[1m[31merror[39m[0m: undefined variable 'middle'
+  [1m[34m-->[39m[0m tests/scope02_nested_blocks.zy:26:38
+[1m[34m  26[39m[0m [34m|[39m
+[1m[34m  26[39m[0m [34m|[39m >> "Outer trying to access middle: " middle ¶
+[34m     |[39m [1m[31m                                     ^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m variables must be defined before use

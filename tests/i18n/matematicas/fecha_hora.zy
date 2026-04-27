@@ -1,64 +1,64 @@
-# fecha_hora
+# fecha_hora {
+    // Módulo para manejo de fechas y horas usando comandos del sistema
+    // Construido sobre la funcionalidad <\ \> de Zymbol
+    // Usa strings entrecomillados para evitar problemas de tokenización
 
-// Módulo para manejo de fechas y horas usando comandos del sistema
-// Construido sobre la funcionalidad <\ \> de Zymbol
-// Usa strings entrecomillados para evitar problemas de tokenización
+    #> {
+        fecha_actual
+        hora_actual
+        fecha_hora_completa
+        timestamp
+        dia_semana
+        mes
+        año
+        formato_iso
+    }
 
-#> {
-    fecha_actual
-    hora_actual
-    fecha_hora_completa
-    timestamp
-    dia_semana
-    mes
-    año
-    formato_iso
-}
+    // Obtener la fecha actual (formato: YYYY-MM-DD)
+    fecha_actual() {
+        resultado = <\ date "+%Y-%m-%d" \>
+        <~ resultado
+    }
 
-// Obtener la fecha actual (formato: YYYY-MM-DD)
-fecha_actual() {
-    resultado = <\ date "+%Y-%m-%d" \>
-    <~ resultado
-}
+    // Obtener la hora actual (formato: HH:MM:SS)
+    hora_actual() {
+        resultado = <\ date "+%H:%M:%S" \>
+        <~ resultado
+    }
 
-// Obtener la hora actual (formato: HH:MM:SS)
-hora_actual() {
-    resultado = <\ date "+%H:%M:%S" \>
-    <~ resultado
-}
+    // Obtener fecha y hora completa
+    fecha_hora_completa() {
+        resultado = <\ date \>
+        <~ resultado
+    }
 
-// Obtener fecha y hora completa
-fecha_hora_completa() {
-    resultado = <\ date \>
-    <~ resultado
-}
+    // Obtener timestamp Unix (segundos desde epoch)
+    timestamp() {
+        resultado = <\ date "+%s" \>
+        <~ resultado
+    }
 
-// Obtener timestamp Unix (segundos desde epoch)
-timestamp() {
-    resultado = <\ date "+%s" \>
-    <~ resultado
-}
+    // Obtener día de la semana (Monday, Tuesday, etc.)
+    dia_semana() {
+        resultado = <\ date "+%A" \>
+        <~ resultado
+    }
 
-// Obtener día de la semana (Monday, Tuesday, etc.)
-dia_semana() {
-    resultado = <\ date "+%A" \>
-    <~ resultado
-}
+    // Obtener el mes actual (nombre completo)
+    mes() {
+        resultado = <\ date "+%B" \>
+        <~ resultado
+    }
 
-// Obtener el mes actual (nombre completo)
-mes() {
-    resultado = <\ date "+%B" \>
-    <~ resultado
-}
+    // Obtener el año actual
+    año() {
+        resultado = <\ date "+%Y" \>
+        <~ resultado
+    }
 
-// Obtener el año actual
-año() {
-    resultado = <\ date "+%Y" \>
-    <~ resultado
-}
-
-// Obtener fecha en formato ISO 8601
-formato_iso() {
-    resultado = <\ date "+%Y-%m-%d" \>
-    <~ resultado
+    // Obtener fecha en formato ISO 8601
+    formato_iso() {
+        resultado = <\ date "+%Y-%m-%d" \>
+        <~ resultado
+    }
 }

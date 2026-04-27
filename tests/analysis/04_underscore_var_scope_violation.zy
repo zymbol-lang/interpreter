@@ -1,0 +1,9 @@
+// Test: underscore variables are block-scoped — access from inner block is a semantic error
+// _name variables exist ONLY within their declaring block
+
+? #1 {
+    _outer = 42
+    ? #1 {
+        >> _outer ¶
+    }
+}

@@ -1,0 +1,19 @@
+double = (x -> x * 2)
+add1 = (x -> x + 1)
+isEven = (x -> x % 2 == 0)
+square = (x -> x ^ 2)
+
+r1 = 5 |> double
+>> r1 ¶
+
+r2 = 5 |> double |> add1
+>> r2 ¶
+
+r3 = 10 |> isEven
+>> r3 ¶
+
+r4 = 3 |> square
+>> r4 ¶
+
+r5 = 5 |> double |> add1(_)
+>> r5 ¶

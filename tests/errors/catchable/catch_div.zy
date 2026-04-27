@@ -1,0 +1,7 @@
+!? {
+    x = 1 / 0
+    >> x ¶
+} :! ##Div {
+    >> "caught: Div" ¶
+}
+>> "continues" ¶

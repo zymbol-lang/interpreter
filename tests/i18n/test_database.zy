@@ -1,4 +1,3 @@
-# test_database
 
 // Test de interacción con base de datos SQLite
 // Demuestra CRUD completo usando interpolación de variables

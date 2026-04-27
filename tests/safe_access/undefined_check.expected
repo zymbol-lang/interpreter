@@ -1,0 +1,11 @@
+=== Test 1: Check undefined variable ===
+Type symbol: ##_
+Count: 0
+✅ Variable is undefined (as expected)
+=== Test 2: Check variable destroyed by scope ===
+✅ Variable was auto-destroyed (as expected)
+=== Test 3: Check existing variable ===
+Type: ###
+Value: 42
+✅ Existing variable detected correctly
+=== All tests completed ===

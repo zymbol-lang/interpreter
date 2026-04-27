@@ -1,0 +1,6 @@
+[1m[31merror[39m[0m: undefined variable 'first'
+  [1m[34m-->[39m[0m tests/memory_correct_01_lambdas.zy:44:13
+[1m[34m  44[39m[0m [34m|[39m
+[1m[34m  44[39m[0m [34m|[39m     <~ func(first)
+[34m     |[39m [1m[31m            ^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m variables must be defined before use

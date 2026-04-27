@@ -1,0 +1,6 @@
+error: E002: Module '/home/rakzo/github/zymbol-lang/interpreter/escape.zy' not found
+  --> /home/rakzo/github/zymbol-lang/interpreter/tests/errors/semantic/E003_bad_path.zy:1:1
+  = help: Check that the module file exists at the specified path
+
+error: E002: Module '/home/rakzo/github/zymbol-lang/interpreter/escape.zy' not found
+  --> /home/rakzo/github/zymbol-lang/interpreter/tests/errors/semantic/E003_bad_path.zy:1:1

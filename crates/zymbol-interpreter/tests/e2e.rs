@@ -365,8 +365,8 @@ has99 = arr$? 99
 fn test_array_indexing() {
     let out = run(r#"
 arr = [10, 20, 30]
->> arr[0] ¶
->> arr[2] ¶
+>> arr[1] ¶
+>> arr[3] ¶
 "#);
     assert_eq!(out, "10\n30\n");
 }
@@ -375,10 +375,10 @@ arr = [10, 20, 30]
 fn test_array_slice() {
     let out = run(r#"
 arr = [1, 2, 3, 4, 5]
-slice = arr$[1..3]
+slice = arr$[2..4]
 >> slice ¶
 "#);
-    assert_eq!(out, "[2, 3]\n");
+    assert_eq!(out, "[2, 3, 4]\n");
 }
 
 #[test]
@@ -395,8 +395,8 @@ person = (name: "Alice", age: 25)
 fn test_tuple_basic() {
     let out = run(r#"
 pair = (1, "hello")
->> pair[0] ¶
 >> pair[1] ¶
+>> pair[2] ¶
 "#);
     assert_eq!(out, "1\nhello\n");
 }
@@ -406,7 +406,7 @@ pair = (1, "hello")
 #[test]
 fn test_string_concatenation() {
     let out = run(r#"
->> "Hello" + " " + "World" ¶
+>> "Hello" " " "World" ¶
 "#);
     assert_eq!(out, "Hello World\n");
 }
@@ -414,7 +414,7 @@ fn test_string_concatenation() {
 #[test]
 fn test_string_auto_convert_concat() {
     let out = run(r#"
->> "Score: " + 95 ¶
+>> "Score: " 95 ¶
 "#);
     assert_eq!(out, "Score: 95\n");
 }
@@ -422,7 +422,7 @@ fn test_string_auto_convert_concat() {
 #[test]
 fn test_string_split() {
     let out = run(r#"
-parts = "a,b,c" / ','
+parts = "a,b,c" $/ ','
 len = parts$#
 >> parts ¶
 >> len ¶
@@ -912,8 +912,8 @@ has99 = arr$? 99
 fn test_array_indexing_vm() {
     let src = r#"
 arr = [10, 20, 30]
->> arr[0] ¶
->> arr[2] ¶
+>> arr[1] ¶
+>> arr[3] ¶
 "#;
     assert_eq!(run_vm(src).expect("VM"), run(src));
 }
@@ -922,7 +922,7 @@ arr = [10, 20, 30]
 fn test_array_slice_vm() {
     let src = r#"
 arr = [1, 2, 3, 4, 5]
-slice = arr$[1..3]
+slice = arr$[2..4]
 >> slice ¶
 "#;
     assert_eq!(run_vm(src).expect("VM"), run(src));
@@ -942,8 +942,8 @@ person = (name: "Alice", age: 25)
 fn test_tuple_basic_vm() {
     let src = r#"
 pair = (1, "hello")
->> pair[0] ¶
 >> pair[1] ¶
+>> pair[2] ¶
 "#;
     assert_eq!(run_vm(src).expect("VM"), run(src));
 }
@@ -951,7 +951,7 @@ pair = (1, "hello")
 #[test]
 fn test_string_concatenation_vm() {
     let src = r#"
->> "Hello" + " " + "World" ¶
+>> "Hello" " " "World" ¶
 "#;
     assert_eq!(run_vm(src).expect("VM"), run(src));
 }
@@ -959,7 +959,7 @@ fn test_string_concatenation_vm() {
 #[test]
 fn test_string_auto_convert_concat_vm() {
     let src = r#"
->> "Score: " + 95 ¶
+>> "Score: " 95 ¶
 "#;
     assert_eq!(run_vm(src).expect("VM"), run(src));
 }
@@ -967,7 +967,7 @@ fn test_string_auto_convert_concat_vm() {
 #[test]
 fn test_string_split_vm() {
     let src = r#"
-parts = "a,b,c" / ','
+parts = "a,b,c" $/ ','
 len = parts$#
 >> parts ¶
 >> len ¶
@@ -1320,4 +1320,232 @@ fn test_i18n_mode_change_mid_program_vm() {
 fn test_i18n_devanagari_bool_output_vm() {
     let src = "#०९#\n>> #1 ¶\n>> #0 ¶\n";
     assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
+// ── Multi-dimensional indexing (index_nav) ────────────────────────────────
+
+#[test]
+fn test_deep_index_2d() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[2>3] ¶\n";
+    assert_eq!(run(src), "6\n");
+}
+
+#[test]
+fn test_deep_index_3d() {
+    let src = "cubo = [[[1,2],[3,4]], [[5,6],[7,8]]]\n>> cubo[1>2>1] ¶\n";
+    assert_eq!(run(src), "3\n");
+}
+
+#[test]
+fn test_deep_index_computed() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\na = 2\nb = 3\n>> matriz[(a)>(b)] ¶\n";
+    assert_eq!(run(src), "6\n");
+}
+
+#[test]
+fn test_flat_extract_single_wrapped() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[[2>3]] ¶\n";
+    assert_eq!(run(src), "[6]\n");
+}
+
+#[test]
+fn test_flat_extract_multiple_paths() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[1>1 ; 2>3 ; 3>2] ¶\n";
+    assert_eq!(run(src), "[1, 6, 8]\n");
+}
+
+#[test]
+fn test_structured_extract_single_paths() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[[1>1] ; [2>3] ; [3>2]] ¶\n";
+    assert_eq!(run(src), "[[1], [6], [8]]\n");
+}
+
+#[test]
+fn test_structured_extract_multi_per_group() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[[1>1, 1>3] ; [3>1, 3>3]] ¶\n";
+    assert_eq!(run(src), "[[1, 3], [7, 9]]\n");
+}
+
+#[test]
+fn test_range_col_last_step() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[[1>2..3] ; [2>2..3]] ¶\n";
+    assert_eq!(run(src), "[[2, 3], [5, 6]]\n");
+}
+
+#[test]
+fn test_range_row_intermediate_step() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[[1..2>2] ; [2..3>3]] ¶\n";
+    assert_eq!(run(src), "[[2, 5], [6, 9]]\n");
+}
+
+#[test]
+fn test_matrix_reconstruct() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[[1>1..3] ; [2>1..3] ; [3>1..3]] ¶\n";
+    assert_eq!(run(src), "[[1, 2, 3], [4, 5, 6], [7, 8, 9]]\n");
+}
+
+#[test]
+fn test_deep_index_negative() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[-1>-1] ¶\n";
+    assert_eq!(run(src), "9\n");
+}
+
+#[test]
+fn test_backward_compat_1d_unchanged() {
+    // Single-index form must still work as before
+    let src = "arr = [10, 20, 30]\n>> arr[2] ¶\n";
+    assert_eq!(run(src), "20\n");
+}
+
+// ── VM variants for scalar nav-index ─────────────────────────────────────────
+
+#[test]
+fn test_deep_index_2d_vm() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[2>3] ¶\n";
+    assert_eq!(run_vm(src).unwrap(), "6\n");
+}
+
+#[test]
+fn test_deep_index_3d_vm() {
+    let src = "cubo = [[[1,2],[3,4]], [[5,6],[7,8]]]\n>> cubo[1>2>1] ¶\n";
+    assert_eq!(run_vm(src).unwrap(), "3\n");
+}
+
+#[test]
+fn test_deep_index_computed_vm() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\na = 2\nb = 3\n>> matriz[(a)>(b)] ¶\n";
+    assert_eq!(run_vm(src).unwrap(), "6\n");
+}
+
+#[test]
+fn test_flat_extract_multiple_paths_vm() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[1>1 ; 2>3 ; 3>2] ¶\n";
+    assert_eq!(run_vm(src).unwrap(), "[1, 6, 8]\n");
+}
+
+#[test]
+fn test_structured_extract_multi_per_group_vm() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[[1>1, 1>3] ; [3>1, 3>3]] ¶\n";
+    assert_eq!(run_vm(src).unwrap(), "[[1, 3], [7, 9]]\n");
+}
+
+#[test]
+fn test_deep_index_negative_vm() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[-1>-1] ¶\n";
+    assert_eq!(run_vm(src).unwrap(), "9\n");
+}
+
+#[test]
+fn test_range_col_vm() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[[1>2..3] ; [2>2..3]] ¶\n";
+    assert_eq!(run_vm(src).unwrap(), "[[2, 3], [5, 6]]\n");
+}
+
+#[test]
+fn test_range_row_vm() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[[1..2>2] ; [2..3>3]] ¶\n";
+    assert_eq!(run_vm(src).unwrap(), "[[2, 5], [6, 9]]\n");
+}
+
+#[test]
+fn test_matrix_reconstruct_vm() {
+    let src = "matriz = [[1,2,3], [4,5,6], [7,8,9]]\n>> matriz[[1>1..3] ; [2>1..3] ; [3>1..3]] ¶\n";
+    assert_eq!(run_vm(src).unwrap(), "[[1, 2, 3], [4, 5, 6], [7, 8, 9]]\n");
+}
+
+// ── Complex data tests ────────────────────────────────────────────────────────
+
+const CUBO3: &str = "cubo = [[[1,2,3],[4,5,6],[7,8,9]],[[10,11,12],[13,14,15],[16,17,18]],[[19,20,21],[22,23,24],[25,26,27]]]\n";
+const CUBO2: &str = "cubo = [[[1,2,3],[4,5,6],[7,8,9]],[[10,11,12],[13,14,15],[16,17,18]]]\n";
+
+#[test]
+fn test_3d_scalar() {
+    assert_eq!(run(&format!("{CUBO3}>> cubo[2>3>1] ¶\n")), "16\n");
+}
+#[test]
+fn test_3d_flat_diagonal() {
+    assert_eq!(run(&format!("{CUBO3}>> cubo[1>1>1 ; 2>2>2 ; 3>3>3] ¶\n")), "[1, 14, 27]\n");
+}
+#[test]
+fn test_3d_range_last_step() {
+    assert_eq!(run(&format!("{CUBO3}>> cubo[[1>2>1..3]] ¶\n")), "[4, 5, 6]\n");
+}
+#[test]
+fn test_3d_range_middle_step() {
+    assert_eq!(run(&format!("{CUBO3}>> cubo[1>1..3>2] ¶\n")), "[2, 5, 8]\n");
+}
+#[test]
+fn test_3d_structured_groups() {
+    assert_eq!(run(&format!("{CUBO3}>> cubo[[1>1>1..3] ; [3>3>1..3]] ¶\n")), "[[1, 2, 3], [25, 26, 27]]\n");
+}
+#[test]
+fn test_3d_column_across_rows() {
+    assert_eq!(run(&format!("{CUBO3}>> cubo[2>1..3>1] ¶\n")), "[10, 13, 16]\n");
+}
+#[test]
+fn test_nested_double_range() {
+    assert_eq!(run(&format!("{CUBO2}>> cubo[1..2>1..2] ¶\n")), "[[1, 2, 3], [4, 5, 6], [10, 11, 12], [13, 14, 15]]\n");
+}
+#[test]
+fn test_nested_range_rows_as_values() {
+    assert_eq!(run(&format!("{CUBO2}>> cubo[[1>2..3] ; [2>2..3]] ¶\n")), "[[[4, 5, 6], [7, 8, 9]], [[13, 14, 15], [16, 17, 18]]]\n");
+}
+#[test]
+fn test_depth4_scalar() {
+    let src = "tensor=[[ [[1,2],[3,4]],[[5,6],[7,8]] ],[[ [9,10],[11,12]],[[13,14],[15,16]]]]\n>> tensor[2>1>2>1] ¶\n";
+    assert_eq!(run(src), "11\n");
+}
+#[test]
+fn test_depth4_range_last() {
+    let src = "tensor=[[ [[1,2],[3,4]],[[5,6],[7,8]] ],[[ [9,10],[11,12]],[[13,14],[15,16]]]]\n>> tensor[1>2>1>1..2] ¶\n";
+    assert_eq!(run(src), "[5, 6]\n");
+}
+#[test]
+fn test_jagged_scalar() {
+    let src = "datos = [[10], [20, 21], [30, 31, 32]]\n>> datos[2>2] ¶\n";
+    assert_eq!(run(src), "21\n");
+}
+#[test]
+fn test_jagged_flat_first_of_each_row() {
+    let src = "datos = [[10], [20, 21], [30, 31, 32]]\n>> datos[1>1 ; 2>1 ; 3>1] ¶\n";
+    assert_eq!(run(src), "[10, 20, 30]\n");
+}
+#[test]
+fn test_computed_range_var_bounds() {
+    let src = "m = [[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16]]\ninicio=2\nfin=4\n>> m[1>inicio..fin] ¶\n";
+    assert_eq!(run(src), "[2, 3, 4]\n");
+}
+#[test]
+fn test_computed_structured_expr() {
+    let src = "m = [[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16]]\nmitad=2\n>> m[[1>1..(mitad)] ; [(mitad+1)>1..(mitad)]] ¶\n";
+    assert_eq!(run(src), "[[1, 2], [9, 10]]\n");
+}
+
+// ── VM variants of complex tests ──────────────────────────────────────────────
+
+#[test]
+fn test_3d_scalar_vm() {
+    assert_eq!(run_vm(&format!("{CUBO3}>> cubo[2>3>1] ¶\n")).unwrap(), "16\n");
+}
+#[test]
+fn test_3d_range_middle_step_vm() {
+    assert_eq!(run_vm(&format!("{CUBO3}>> cubo[1>1..3>2] ¶\n")).unwrap(), "[2, 5, 8]\n");
+}
+#[test]
+fn test_3d_structured_groups_vm() {
+    assert_eq!(run_vm(&format!("{CUBO3}>> cubo[[1>1>1..3] ; [3>3>1..3]] ¶\n")).unwrap(), "[[1, 2, 3], [25, 26, 27]]\n");
+}
+#[test]
+fn test_nested_double_range_vm() {
+    assert_eq!(run_vm(&format!("{CUBO2}>> cubo[1..2>1..2] ¶\n")).unwrap(), "[[1, 2, 3], [4, 5, 6], [10, 11, 12], [13, 14, 15]]\n");
+}
+#[test]
+fn test_depth4_range_last_vm() {
+    let src = "tensor=[[ [[1,2],[3,4]],[[5,6],[7,8]] ],[[ [9,10],[11,12]],[[13,14],[15,16]]]]\n>> tensor[1>2>1>1..2] ¶\n";
+    assert_eq!(run_vm(src).unwrap(), "[5, 6]\n");
+}
+#[test]
+fn test_computed_range_var_bounds_vm() {
+    let src = "m = [[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16]]\ninicio=2\nfin=4\n>> m[1>inicio..fin] ¶\n";
+    assert_eq!(run_vm(src).unwrap(), "[2, 3, 4]\n");
 }

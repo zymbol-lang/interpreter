@@ -90,15 +90,19 @@ echo ""
 # ---------------------------------------------------------------------------
 # Step 1 — Clean dist/ (Linux packages only, keep Windows)
 # ---------------------------------------------------------------------------
-info "Step 1: Cleaning Linux packages from dist/..."
 mkdir -p "${OUT_DIR}"
-rm -f "${OUT_DIR}"/*.deb \
-      "${OUT_DIR}"/*.rpm \
-      "${OUT_DIR}"/*.pkg.tar.zst \
-      "${OUT_DIR}"/*_linux \
-      "${OUT_DIR}"/SHA256SUMS \
-      "${OUT_DIR}"/SHA512SUMS
-success "dist/ cleaned (Windows .msi / .exe untouched)"
+if [[ "${SKIP_REBUILD}" == false ]]; then
+    info "Step 1: Cleaning Linux packages from dist/..."
+    rm -f "${OUT_DIR}"/*.deb \
+          "${OUT_DIR}"/*.rpm \
+          "${OUT_DIR}"/*.pkg.tar.zst \
+          "${OUT_DIR}"/*_linux \
+          "${OUT_DIR}"/SHA256SUMS \
+          "${OUT_DIR}"/SHA512SUMS
+    success "dist/ cleaned (Windows .msi / .exe untouched)"
+else
+    info "Step 1: Skipping clean (--no-rebuild set)."
+fi
 
 # ---------------------------------------------------------------------------
 # Step 2 — Build Linux packages
@@ -111,7 +115,7 @@ if [[ "${SKIP_REBUILD}" == false ]]; then
     bash "${BUILD_SCRIPT}" \
         --version "${VERSION}" \
         --arch x86_64 \
-        --formats deb,rpm,arch,appimage \
+        --formats deb,rpm,arch \
         --no-hashes
 
     # aarch64 (optional — skip gracefully if cross-compiler absent)
@@ -121,7 +125,7 @@ if [[ "${SKIP_REBUILD}" == false ]]; then
             bash "${BUILD_SCRIPT}" \
                 --version "${VERSION}" \
                 --arch aarch64 \
-                --formats deb,rpm,arch,appimage \
+                --formats deb,rpm,arch \
                 --no-hashes
         else
             warn "aarch64-linux-gnu-gcc not found — skipping aarch64 build."
@@ -150,7 +154,7 @@ for f in "${OUT_DIR}"/zymbol_lang_v*.deb \
 
     # Match: zymbol_lang_v{VER}_{ARCH}_{TIMESTAMP}.ext  or  …_{TIMESTAMP}_linux
     # Target: zymbol_lang_v{VER}_{ARCH}.ext  or  …_{ARCH}_linux
-    canonical="$(echo "${base}" | sed -E 's/_[0-9]{8}T[0-9]{4}(\.[^.]+(\.[^.]+)?|_linux)$/\1/')"
+    canonical="$(echo "${base}" | sed -E 's/_[0-9]{8}T[0-9]{4}(\.[^.]+(\.[^.]+(\.[^.]+)?)?|_linux)$/\1/')"
 
     if [[ "${base}" != "${canonical}" ]]; then
         mv -f "${f}" "${OUT_DIR}/${canonical}"

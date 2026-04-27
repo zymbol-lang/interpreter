@@ -1,15 +1,15 @@
-// Test: Positional tuples
+// Test: Positional tuples (1-based indexing)
 p = (10, 20)
->> p[0] ¶
 >> p[1] ¶
+>> p[2] ¶
 
 // Tuple in array
 points = [(1, 2), (3, 4), (5, 6)]
->> points[0][0] ¶
 >> points[1][1] ¶
+>> points[2][2] ¶
 
 // Function returning tuple
 make_pair(a, b) { <~ (a, b) }
 pair = make_pair(7, 8)
->> pair[0] ¶
 >> pair[1] ¶
+>> pair[2] ¶

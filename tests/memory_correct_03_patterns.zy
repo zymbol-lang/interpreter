@@ -82,13 +82,13 @@ operations = [
 ]
 
 value = 10
-result1 = operations[0](value)  // Add 10
-result2 = operations[1](value)  // Multiply by 2
-result3 = operations[2](value)  // Subtract 5
+result1 = operations[1](value)  // Add 10
+result2 = operations[2](value)  // Multiply by 2
+result3 = operations[3](value)  // Subtract 5
 
->> "operations[0](10) = " result1 ¶
->> "operations[1](10) = " result2 ¶
->> "operations[2](10) = " result3 ¶
+>> "operations[1](10) = " result1 ¶
+>> "operations[2](10) = " result2 ¶
+>> "operations[3](10) = " result3 ¶
 >> "Expected: 20, 20, 5" ¶
 ¶
 

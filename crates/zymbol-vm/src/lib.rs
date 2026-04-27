@@ -3,11 +3,18 @@
 //! Sprint 4: replaces tree-walker for hot paths.
 //! Sprint 5C: flat register stack — all frames share one Vec<Value>.
 //! Sprint 5D: Value uses Rc<T> for heap payloads → sizeof(Value) = 16 bytes.
+//! Sprint 5G: ZyStr tagged-pointer SSO — strings ≤ 7 bytes stored inline.
+//! Sprint 6A: fused split+HOF instructions (StrSplitMap/Filter/Reduce/Count).
 //! Design goals:
 //! - registers[idx] O(1) vs HashMap lookup
 //! - Flat value_stack: no per-call heap alloc, better cache locality
 //! - mem::replace for Return → O(1) move of String/Array
 //! - Rc<T> payloads: 2.5x cheaper memset/memcpy on flat stack
+
+mod zy_str;
+pub use zy_str::ZyStr;
+
+use zymbol_intrinsics as intrinsics;
 
 use std::fmt;
 use std::io::Write;
@@ -16,6 +23,7 @@ use std::rc::Rc;
 
 use thiserror::Error;
 use zymbol_bytecode::{BuildPart, Chunk, CompiledProgram, FuncIdx, Instruction, Reg};
+use zymbol_lexer::digit_blocks::digit_value;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Numeral-mode helpers (mirrors zymbol-interpreter::numeral_mode)
@@ -56,16 +64,20 @@ pub enum Value {
     Bool(bool),
     Char(char),
     Unit,
-    /// Function/lambda reference stored as index into program.functions
-    Function(FuncIdx),
-    String(Rc<String>),
+    /// Named function reference (type ##(), display <funct/N>)
+    Function(FuncIdx, u8),
+    /// Sprint 5G: ZyStr (8 bytes) — inline for ≤ 7 bytes, heap Rc<String> otherwise.
+    String(ZyStr),
     Array(Rc<Vec<Value>>),
     /// Positional tuple: (v1, v2, v3)
     Tuple(Rc<Vec<Value>>),
     /// Named tuple: Vec of (field_name, value) pairs
     NamedTuple(Rc<Vec<(String, Value)>>),
-    /// Closure: function + captured upvalues from the enclosing scope
-    Closure(FuncIdx, Rc<Vec<Value>>),
+    /// Lambda (with or without captures): function + arity + upvalues (type ##->, display <lambd/N>)
+    Closure(FuncIdx, u8, Rc<Vec<Value>>),
+    /// Error value (error-as-value flow: <~ _err inside :! block)
+    /// Inner string is the formatted error: "##Kind(message)"
+    Error(ZyStr),
 }
 
 impl fmt::Display for Value {
@@ -102,9 +114,10 @@ impl fmt::Display for Value {
                 }
                 write!(f, ")")
             }
-            Value::Function(_) => write!(f, "<lambda>"),
-            Value::Closure(_, _) => write!(f, "<lambda>"),
+            Value::Function(_, arity) => write!(f, "<funct/{}>", arity),
+            Value::Closure(_, arity, _) => write!(f, "<lambd/{}>", arity),
             Value::Unit => write!(f, "()"),
+            Value::Error(s) => write!(f, "{}", s.as_ref()),
         }
     }
 }
@@ -122,7 +135,7 @@ impl Value {
 
     fn to_string_repr(&self) -> String {
         match self {
-            Value::String(s) => s.as_ref().clone(),
+            Value::String(s) => s.to_string(),
             other => other.to_string(),
         }
     }
@@ -137,9 +150,10 @@ impl Value {
             Value::Array(_) => "Array",
             Value::Tuple(_) => "Tuple",
             Value::NamedTuple(_) => "Tuple",
-            Value::Function(_) => "Function",
-            Value::Closure(_, _) => "Function",
+            Value::Function(_, _) => "Function",
+            Value::Closure(_, _, _) => "Function",
             Value::Unit => "Unit",
+            Value::Error(_) => "Error",
         }
     }
 
@@ -199,10 +213,14 @@ struct FrameInfo {
 pub enum VmError {
     #[error("type error: expected {expected}, got {got}")]
     TypeError { expected: &'static str, got: String },
+    #[error("{op} requires a numeric value, got {got}")]
+    CastError { op: &'static str, got: String },
     #[error("division by zero")]
     DivisionByZero,
-    #[error("index out of bounds: index {index}, length {length}")]
+    #[error("array index out of bounds: index {index} for array of length {length}")]
     IndexOutOfBounds { index: i64, length: usize },
+    #[error("index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)")]
+    IndexZero,
     #[error("undefined function index {0}")]
     UndefinedFunction(FuncIdx),
     #[error("register {0} out of range")]
@@ -296,11 +314,34 @@ fn cmp_direct(va: &Value, vb: &Value) -> i32 {
         (Value::Float(x), Value::Float(y)) => ord(x.partial_cmp(y).unwrap_or(Ordering::Equal)),
         (Value::Int(x), Value::Float(y))   => ord((*x as f64).partial_cmp(y).unwrap_or(Ordering::Equal)),
         (Value::Float(x), Value::Int(y))   => ord(x.partial_cmp(&(*y as f64)).unwrap_or(Ordering::Equal)),
-        (Value::String(x), Value::String(y)) => ord(x.as_ref().as_str().cmp(y.as_ref().as_str())),
+        (Value::String(x), Value::String(y)) => ord(x.as_str().cmp(y.as_str())),
         (Value::Char(x), Value::Char(y))   => ord(x.cmp(y)),
         (Value::Bool(x), Value::Bool(y))   => ord(x.cmp(y)),
         _ => 1,
     }
+}
+
+fn normalize_unicode_digits(s: &str) -> Option<String> {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    if chars.peek() == Some(&'-') {
+        result.push('-');
+        chars.next();
+    }
+    let mut has_digit = false;
+    let mut has_dot = false;
+    for ch in chars {
+        if let Some(dv) = digit_value(ch) {
+            result.push(char::from_digit(dv as u32, 10).unwrap());
+            has_digit = true;
+        } else if ch == '.' && !has_dot {
+            result.push('.');
+            has_dot = true;
+        } else {
+            return None;
+        }
+    }
+    if has_digit { Some(result) } else { None }
 }
 
 #[inline(always)]
@@ -327,10 +368,12 @@ pub struct VM<W: Write> {
     tco_buf: Vec<Value>,
     /// Pending output param writeback set by SetupOutputWriteback, consumed by Call
     pending_output_writeback: Vec<(usize, Reg)>,
-    /// Interned string pool — Rc<String> for each entry, shared across LoadStr calls
-    string_rcs: Vec<Rc<String>>,
+    /// Interned string pool — ZyStr for each entry, shared across LoadStr calls
+    string_rcs: Vec<ZyStr>,
     /// Active numeral mode: block base codepoint (0x0030 = ASCII default).
     numeral_mode: u32,
+    /// Module-level global variables (mutable, shared across all calls)
+    global_vars: Vec<Value>,
     output: W,
 }
 
@@ -343,6 +386,7 @@ impl<W: Write> VM<W> {
             pending_output_writeback: Vec::new(),
             string_rcs: Vec::new(),
             numeral_mode: 0x0030, // ASCII_BASE default
+            global_vars: Vec::new(),
             output,
         }
     }
@@ -351,9 +395,27 @@ impl<W: Write> VM<W> {
         // Reset flat stack for this execution
         self.value_stack.clear();
         self.frame_stack.clear();
+        // Pre-allocate to avoid Vec reallocation during deep recursion.
+        // 128K Value slots (~2MB) covers fib(30)'s 2.7M-call stack depth of ≤30.
+        if self.value_stack.capacity() < (1 << 17) {
+            self.value_stack.reserve((1 << 17) - self.value_stack.capacity());
+        }
+        if self.frame_stack.capacity() < 1024 {
+            self.frame_stack.reserve(1024 - self.frame_stack.capacity());
+        }
 
         // Pre-intern string pool: O(n) once, then LoadStr is O(1) Rc clone
-        self.string_rcs = program.string_pool.iter().map(|s| Rc::new(s.clone())).collect();
+        self.string_rcs = program.string_pool.iter().map(|s| ZyStr::from_str_ref(s)).collect();
+
+        // Initialize global variables from program inits
+        self.global_vars = program.global_var_inits.iter().map(|init| match init {
+            zymbol_bytecode::GlobalInit::Int(n) => Value::Int(*n),
+            zymbol_bytecode::GlobalInit::Float(f) => Value::Float(*f),
+            zymbol_bytecode::GlobalInit::Bool(b) => Value::Bool(*b),
+            zymbol_bytecode::GlobalInit::Char(c) => Value::Char(*c),
+            zymbol_bytecode::GlobalInit::Str(s) => Value::String(ZyStr::new(s.clone())),
+            zymbol_bytecode::GlobalInit::Unit => Value::Unit,
+        }).collect();
 
         // Push initial frame for main chunk
         let num_regs = program.main.num_registers as usize;
@@ -412,16 +474,16 @@ impl<W: Write> VM<W> {
                         let catch = frame.catch_ip;
                         frame.catch_ip = u32::MAX;
                         let kind = match &_err {
-                            VmError::TypeError { .. } => "Type",
+                            VmError::TypeError { .. } | VmError::CastError { .. } => "Type",
                             VmError::DivisionByZero => "Div",
-                            VmError::IndexOutOfBounds { .. } => "Index",
+                            VmError::IndexOutOfBounds { .. } | VmError::IndexZero => "Index",
                             VmError::Io(_) => "IO",
                             _ => "_",
                         };
                         frame.try_depth = 0;
                         let err_data = frame.error.get_or_insert_with(|| Box::new(FrameError { error_val: None, error_kind: String::new() }));
                         err_data.error_kind = kind.to_string();
-                        err_data.error_val = Some(Value::String(Rc::new(format!("{}", _err))));
+                        err_data.error_val = Some(Value::Error(ZyStr::new(format!("##{}({})", kind, _err))));
                         ip = catch as usize;
                         continue;
                     }
@@ -548,53 +610,129 @@ impl<W: Write> VM<W> {
                 &Instruction::NegFloat(dst, src)  => { let v = rf!(src); wreg!(dst, Value::Float(-v)); }
 
                 // ── Type conversion ─────────────────────────────────────────
-                &Instruction::IntToFloat(dst, src) => { let v = ri!(src); wreg!(dst, Value::Float(v as f64)); }
+                &Instruction::IntToFloat(dst, src) => {
+                    let v = match rreg!(src) {
+                        Value::Int(n)   => *n as f64,
+                        Value::Float(f) => *f,
+                        other => raise!(VmError::CastError { op: "##.", got: other.type_name().to_string() }),
+                    };
+                    wreg!(dst, Value::Float(v));
+                }
+                &Instruction::FloatToIntRound(dst, src) => {
+                    let v = match rreg!(src) {
+                        Value::Float(f) => f.round() as i64,
+                        Value::Int(n)   => *n,
+                        other => raise!(VmError::CastError { op: "###", got: other.type_name().to_string() }),
+                    };
+                    wreg!(dst, Value::Int(v));
+                }
+                &Instruction::FloatToIntTrunc(dst, src) => {
+                    let v = match rreg!(src) {
+                        Value::Float(f) => f.trunc() as i64,
+                        Value::Int(n)   => *n,
+                        other => raise!(VmError::CastError { op: "##!", got: other.type_name().to_string() }),
+                    };
+                    wreg!(dst, Value::Int(v));
+                }
 
                 // ── String ops ──────────────────────────────────────────────
                 &Instruction::ConcatStr(dst, a, b) => {
-                    let result = match (rreg!(a), rreg!(b)) {
-                        // Fast path: String ++ String — one alloc with known capacity
-                        (Value::String(l), Value::String(r)) => {
-                            let mut s = String::with_capacity(l.len() + r.len());
-                            s.push_str(l.as_ref());
-                            s.push_str(r.as_ref());
-                            s
+                    use std::fmt::Write as _;
+                    // In-place buffer reuse: only valid when dst == a, so the left
+                    // register is overwritten anyway. try_into_string reuses the heap
+                    // buffer when Rc::strong_count == 1, avoiding O(N) allocs in loops.
+                    let can_reuse = dst == a && a != b;
+                    let result = if can_reuse {
+                        let left = std::mem::replace(
+                            unsafe { self.value_stack.get_unchecked_mut(base + a as usize) },
+                            Value::Unit,
+                        );
+                        match (left, unsafe { self.value_stack.get_unchecked(base + b as usize) }) {
+                            (Value::String(l), Value::String(r)) => {
+                                let r_str = r.as_str().to_string();
+                                let mut s = l.try_into_string();
+                                s.push_str(&r_str);
+                                s
+                            }
+                            (Value::String(l), Value::Int(n)) => {
+                                let n = *n;
+                                let mut s = l.try_into_string();
+                                let _ = write!(s, "{}", n);
+                                s
+                            }
+                            (Value::String(l), Value::Float(f)) => {
+                                let f = *f;
+                                let mut s = l.try_into_string();
+                                let _ = write!(s, "{}", f);
+                                s
+                            }
+                            (l, r) => {
+                                let ls = l.to_string_repr();
+                                let rs = r.to_string_repr();
+                                let mut s = String::with_capacity(ls.len() + rs.len());
+                                s.push_str(&ls);
+                                s.push_str(&rs);
+                                s
+                            }
                         }
-                        // Fast path: String ++ Int — avoid intermediate to_string alloc
-                        (Value::String(l), Value::Int(n)) => {
-                            let mut s = String::with_capacity(l.len() + 20);
-                            s.push_str(l.as_ref());
-                            use std::fmt::Write as _;
-                            let _ = write!(s, "{}", n);
-                            s
-                        }
-                        // Fast path: Int ++ String — avoid intermediate to_string alloc
-                        (Value::Int(n), Value::String(r)) => {
-                            let mut s = String::with_capacity(20 + r.len());
-                            use std::fmt::Write as _;
-                            let _ = write!(s, "{}", n);
-                            s.push_str(r.as_ref());
-                            s
-                        }
-                        // Fast path: String ++ Float
-                        (Value::String(l), Value::Float(f)) => {
-                            let mut s = String::with_capacity(l.len() + 24);
-                            s.push_str(l.as_ref());
-                            use std::fmt::Write as _;
-                            let _ = write!(s, "{}", f);
-                            s
-                        }
-                        // Slow path: anything else — convert both sides
-                        (l, r) => {
-                            let ls = l.to_string_repr();
-                            let rs = r.to_string_repr();
-                            let mut s = String::with_capacity(ls.len() + rs.len());
-                            s.push_str(&ls);
-                            s.push_str(&rs);
-                            s
+                    } else {
+                        match (rreg!(a), rreg!(b)) {
+                            (Value::String(l), Value::String(r)) => {
+                                let mut s = String::with_capacity(l.len() + r.len());
+                                s.push_str(l.as_ref());
+                                s.push_str(r.as_ref());
+                                s
+                            }
+                            (Value::String(l), Value::Int(n)) => {
+                                let mut s = String::with_capacity(l.len() + 20);
+                                s.push_str(l.as_ref());
+                                let _ = write!(s, "{}", n);
+                                s
+                            }
+                            (Value::Int(n), Value::String(r)) => {
+                                let mut s = String::with_capacity(20 + r.len());
+                                let _ = write!(s, "{}", n);
+                                s.push_str(r.as_ref());
+                                s
+                            }
+                            (Value::String(l), Value::Float(f)) => {
+                                let mut s = String::with_capacity(l.len() + 24);
+                                s.push_str(l.as_ref());
+                                let _ = write!(s, "{}", f);
+                                s
+                            }
+                            (l, r) => {
+                                let ls = l.to_string_repr();
+                                let rs = r.to_string_repr();
+                                let mut s = String::with_capacity(ls.len() + rs.len());
+                                s.push_str(&ls);
+                                s.push_str(&rs);
+                                s
+                            }
                         }
                     };
-                    wreg!(dst, Value::String(Rc::new(result)));
+                    wreg!(dst, Value::String(ZyStr::new(result)));
+                }
+                Instruction::ConcatBuild(dst, base_reg, item_regs) => {
+                    let (dst, base_reg) = (*dst, *base_reg);
+                    let base_val = rreg!(base_reg).clone();
+                    let result = match base_val {
+                        Value::Array(arr) => {
+                            let mut new_arr = arr.as_ref().clone();
+                            for &ir in item_regs {
+                                new_arr.push(rreg!(ir).clone());
+                            }
+                            Value::Array(Rc::new(new_arr))
+                        }
+                        other => {
+                            let mut s = other.to_string_repr();
+                            for &ir in item_regs {
+                                s.push_str(&rreg!(ir).to_string_repr());
+                            }
+                            Value::String(ZyStr::new(s))
+                        }
+                    };
+                    wreg!(dst, result);
                 }
                 &Instruction::StrLen(dst, src) => {
                     let n = match rreg!(src) {
@@ -630,14 +768,15 @@ impl<W: Write> VM<W> {
                         raise!(VmError::UndefinedFunction(func_idx));
                     }
                     let num_regs = program.functions[func_idx as usize].num_registers as usize;
-                    let num_args = arg_regs.len();
+                    let _num_args = arg_regs.len();
 
                     // Save current IP to caller frame before pushing callee
                     self.frame_stack.last_mut().unwrap().ip = ip as u32;
 
                     let new_base = self.value_stack.len();
-                    // Extend flat stack: initialize only non-arg slots to Unit;
-                    // arg slots are written immediately after, avoiding double-write.
+                    // Extend flat stack with Unit (single vectorizable loop), then
+                    // overwrite the arg slots with the actual arg values via unsafe
+                    // indexed write (no bounds check, no double capacity check).
                     self.value_stack.resize(new_base + num_regs, Value::Unit);
 
                     // Copy args from caller into callee arg registers
@@ -645,7 +784,6 @@ impl<W: Write> VM<W> {
                         let val = unsafe { self.value_stack.get_unchecked(base + reg as usize).clone() };
                         unsafe { *self.value_stack.get_unchecked_mut(new_base + i) = val; }
                     }
-                    let _ = num_args; // used above
 
                     let wb = mem::take(&mut self.pending_output_writeback);
                     self.frame_stack.push(FrameInfo {
@@ -779,28 +917,35 @@ impl<W: Write> VM<W> {
                     let val = unsafe { self.value_stack.get_unchecked(base + val_reg as usize).clone() };
                     match unsafe { self.value_stack.get_unchecked_mut(base + arr_reg as usize) } {
                         Value::Array(rc_arr) => Rc::make_mut(rc_arr).push(val),
+                        Value::Tuple(rc_tup) => Rc::make_mut(rc_tup).push(val),
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
                     }
                 }
                 &Instruction::ArrayGet(dst, arr_reg, idx_reg) => {
-                    let idx = self.as_int(idx_reg)?;
+                    let idx = match self.as_int(idx_reg) {
+                        Ok(n) => n,
+                        Err(e) => raise!(e),
+                    };
                     let val = match &self.value_stack[base + arr_reg as usize] {
                         Value::Array(arr) => {
-                            let i = if idx < 0 { arr.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
+                            } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
                             }
                             arr[i as usize].clone()
                         }
                         Value::Tuple(items) => {
-                            let i = if idx < 0 { items.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
+                            } else if idx < 0 { items.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= items.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: items.len() });
                             }
                             items[i as usize].clone()
                         }
                         Value::NamedTuple(fields) => {
-                            let i = if idx < 0 { fields.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
+                            } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= fields.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
                             }
@@ -809,7 +954,8 @@ impl<W: Write> VM<W> {
                         Value::String(s) => {
                             // Single-pass: find the i-th char without collecting Vec<char>
                             let char_count = s.chars().count();
-                            let i = if idx < 0 { char_count as i64 + idx } else { idx };
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
+                            } else if idx < 0 { char_count as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= char_count {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: char_count });
                             }
@@ -826,7 +972,8 @@ impl<W: Write> VM<W> {
                     match &mut self.value_stack[base + arr_reg as usize] {
                         Value::Array(rc_arr) => {
                             let arr = Rc::make_mut(rc_arr);
-                            let i = if idx < 0 { arr.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
+                            } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
                             }
@@ -847,19 +994,21 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::ArrayRemove(arr_reg, idx_reg) => {
                     let idx = self.as_int(idx_reg)?;
-                    let result = match self.value_stack[base + arr_reg as usize].clone() {
-                        Value::Array(rc_arr) => {
-                            let mut arr = rc_arr.as_ref().clone();
-                            let i = if idx < 0 { arr.len() as i64 + idx } else { idx };
+                    let result = match std::mem::replace(&mut self.value_stack[base + arr_reg as usize], Value::Unit) {
+                        Value::Array(mut rc_arr) => {
+                            let arr = Rc::make_mut(&mut rc_arr);
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
+                            } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
                             }
                             arr.remove(i as usize);
-                            Value::Array(Rc::new(arr))
+                            Value::Array(rc_arr)
                         }
                         Value::Tuple(rc_tup) => {
                             let mut tup = rc_tup.as_ref().clone();
-                            let i = if idx < 0 { tup.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
+                            } else if idx < 0 { tup.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= tup.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() });
                             }
@@ -868,7 +1017,8 @@ impl<W: Write> VM<W> {
                         }
                         Value::NamedTuple(rc_fields) => {
                             let mut fields = rc_fields.as_ref().clone();
-                            let i = if idx < 0 { fields.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
+                            } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= fields.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
                             }
@@ -877,12 +1027,13 @@ impl<W: Write> VM<W> {
                         }
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
-                            let i = if idx < 0 { chars.len() as i64 + idx } else { idx };
+                            let i = if idx == 0 { raise!(VmError::IndexZero);
+                            } else if idx < 0 { chars.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= chars.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() });
                             }
                             chars.remove(i as usize);
-                            Value::String(Rc::new(chars.iter().collect()))
+                            Value::String(ZyStr::new(chars.iter().collect()))
                         }
                         other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
                     };
@@ -905,10 +1056,10 @@ impl<W: Write> VM<W> {
                                     let chars: Vec<char> = rc_s.chars().collect();
                                     if let Some(pos) = chars.iter().position(|ch| ch == c) {
                                         let mut out = chars; out.remove(pos); out.iter().collect()
-                                    } else { rc_s.as_ref().clone() }
+                                    } else { rc_s.to_string() }
                                 }
                                 Value::String(p) => {
-                                    let s = rc_s.as_ref();
+                                    let s = rc_s.as_str();
                                     let pc: Vec<char> = p.chars().collect();
                                     let sc: Vec<char> = s.chars().collect();
                                     if pc.is_empty() { s.to_string() } else {
@@ -924,7 +1075,7 @@ impl<W: Write> VM<W> {
                                 }
                                 _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
                             };
-                            self.value_stack[base + arr_reg as usize] = Value::String(Rc::new(result));
+                            self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(result));
                         }
                         other => raise!(VmError::TypeError { expected: "Array or String", got: other.type_name().to_string() }),
                     }
@@ -945,12 +1096,12 @@ impl<W: Write> VM<W> {
                             let result = match &val {
                                 Value::Char(c) => rc_s.chars().filter(|ch| ch != c).collect(),
                                 Value::String(p) => {
-                                    if p.is_empty() { rc_s.as_ref().clone() }
+                                    if p.is_empty() { rc_s.to_string() }
                                     else { rc_s.replace(p.as_str(), "") }
                                 }
                                 _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
                             };
-                            self.value_stack[base + arr_reg as usize] = Value::String(Rc::new(result));
+                            self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(result));
                         }
                         other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
                     }
@@ -962,26 +1113,26 @@ impl<W: Write> VM<W> {
                     match self.value_stack[base + arr_reg as usize].clone() {
                         Value::Array(rc_arr) => {
                             let mut arr = rc_arr.as_ref().clone();
-                            if idx < 0 || idx as usize > arr.len() {
+                            if idx <= 0 || (idx - 1) as usize > arr.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
                             }
-                            arr.insert(idx as usize, val);
+                            arr.insert((idx - 1) as usize, val);
                             self.value_stack[base + arr_reg as usize] = Value::Array(Rc::new(arr));
                         }
                         Value::Tuple(rc_tup) => {
                             let mut tup = rc_tup.as_ref().clone();
-                            if idx < 0 || idx as usize > tup.len() {
+                            if idx <= 0 || (idx - 1) as usize > tup.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() });
                             }
-                            tup.insert(idx as usize, val);
+                            tup.insert((idx - 1) as usize, val);
                             self.value_stack[base + arr_reg as usize] = Value::Tuple(Rc::new(tup));
                         }
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
-                            let i = idx as usize;
-                            if idx < 0 || i > chars.len() {
+                            if idx <= 0 || (idx - 1) as usize > chars.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() });
                             }
+                            let i = (idx - 1) as usize;
                             match val {
                                 Value::Char(c) => { chars.insert(i, c); }
                                 Value::String(ref ins) => {
@@ -989,7 +1140,7 @@ impl<W: Write> VM<W> {
                                 }
                                 _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
                             }
-                            self.value_stack[base + arr_reg as usize] = Value::String(Rc::new(chars.iter().collect()));
+                            self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(chars.iter().collect()));
                         }
                         other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
                     }
@@ -997,8 +1148,12 @@ impl<W: Write> VM<W> {
 
                 &Instruction::ArrayRemoveRange(arr_reg, lo_reg) => {
                     // hi_reg = lo_reg + 1 by compiler convention
-                    let lo = self.as_int(lo_reg)? as usize;
-                    let hi = self.as_int(lo_reg + 1)? as usize;
+                    let lo_raw = self.as_int(lo_reg)?;
+                    let hi_raw = self.as_int(lo_reg + 1)?;
+                    // lo: 0=default start (1-based 1 = internal 0), positive=1-based (subtract 1), negative=not supported
+                    let lo = (if lo_raw == 0 { 0i64 } else { lo_raw - 1 }).max(0) as usize;
+                    // hi: positive=1-based inclusive (stays same as 0-based exclusive)
+                    let hi = hi_raw.max(0) as usize;
                     match self.value_stack[base + arr_reg as usize].clone() {
                         Value::Array(rc_arr) => {
                             let mut arr = rc_arr.as_ref().clone();
@@ -1026,7 +1181,7 @@ impl<W: Write> VM<W> {
                             if lo <= hi && hi <= chars.len() {
                                 chars.drain(lo..hi);
                             }
-                            self.value_stack[base + arr_reg as usize] = Value::String(Rc::new(chars.iter().collect()));
+                            self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(chars.iter().collect()));
                         }
                         other => raise!(VmError::TypeError { expected: "Array, Tuple, NamedTuple, or String", got: other.type_name().to_string() }),
                     }
@@ -1055,14 +1210,23 @@ impl<W: Write> VM<W> {
 
                 // ── Function refs / closures ─────────────────────────────────
                 &Instruction::MakeFunc(dst, func_idx) => {
-                    self.reg_set(dst, Value::Function(func_idx));
+                    let arity = program.functions.get(func_idx as usize)
+                        .map(|c| c.num_params as u8).unwrap_or(0);
+                    self.reg_set(dst, Value::Function(func_idx, arity));
+                }
+                &Instruction::MakeLambda(dst, func_idx) => {
+                    let arity = program.functions.get(func_idx as usize)
+                        .map(|c| c.num_params as u8).unwrap_or(0);
+                    self.reg_set(dst, Value::Closure(func_idx, arity, Rc::new(vec![])));
                 }
                 Instruction::MakeClosure(dst, func_idx, captured_regs) => {
                     let (dst, func_idx) = (*dst, *func_idx);
+                    let arity = program.functions.get(func_idx as usize)
+                        .map(|c| c.num_params as u8).unwrap_or(0);
                     let upvalues: Vec<Value> = captured_regs.iter()
                         .map(|&r| self.reg_get(r).clone())
                         .collect();
-                    self.reg_set(dst, Value::Closure(func_idx, Rc::new(upvalues)));
+                    self.reg_set(dst, Value::Closure(func_idx, arity, Rc::new(upvalues)));
                 }
 
                 // ── String ops ──────────────────────────────────────────────
@@ -1074,17 +1238,129 @@ impl<W: Write> VM<W> {
                         match (s_val, sep_val) {
                             (Value::String(s), Value::Char(c)) => {
                                 let c = *c;
-                                s.split(c).map(|p| Value::String(Rc::new(p.to_string()))).collect()
+                                s.split(c).map(|p| Value::String(ZyStr::from_str_ref(p))).collect()
                             }
                             (Value::String(s), Value::String(sep)) => {
-                                let sep = sep.clone(); // Rc clone only
-                                s.split(sep.as_str()).map(|p| Value::String(Rc::new(p.to_string()))).collect()
+                                let sep = sep.clone();
+                                s.split(sep.as_str()).map(|p| Value::String(ZyStr::from_str_ref(p))).collect()
                             }
                             (Value::String(_), other) => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
                             (other, _) => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
                         }
                     };
                     self.reg_set(dst, Value::Array(Rc::new(parts)));
+                }
+                // ── Fused split instructions (via zymbol-intrinsics) ────────
+                &Instruction::StrSplitCount(dst, str_reg, sep_reg) => {
+                    let count = {
+                        let s_v   = &self.value_stack[base + str_reg  as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(c))   => intrinsics::split::count(s.as_str(), *c),
+                            (Value::String(s), Value::String(sep)) => intrinsics::split::count_str(s.as_str(), sep.as_str()),
+                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    self.reg_set(dst, Value::Int(count));
+                }
+                &Instruction::StrSplitMap(dst, str_reg, sep_reg, func_reg) => {
+                    let callable = self.reg_get(func_reg).clone();
+                    let (s_owned, sep_owned) = {
+                        let s_v   = &self.value_stack[base + str_reg as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
+                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    let mut results = Vec::new();
+                    match &sep_owned {
+                        Value::Char(c) => {
+                            let c = *c;
+                            for part in s_owned.split(c) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                results.push(self.call_callable(callable.clone(), vec![v], program, ip, chunk_idx)?);
+                            }
+                        }
+                        Value::String(sep_s) => {
+                            let sep_str = sep_s.to_string();
+                            for part in s_owned.split(sep_str.as_str()) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                results.push(self.call_callable(callable.clone(), vec![v], program, ip, chunk_idx)?);
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    self.reg_set(dst, Value::Array(Rc::new(results)));
+                }
+                &Instruction::StrSplitFilter(dst, str_reg, sep_reg, func_reg) => {
+                    let callable = self.reg_get(func_reg).clone();
+                    let (s_owned, sep_owned) = {
+                        let s_v   = &self.value_stack[base + str_reg as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
+                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    let mut results = Vec::new();
+                    match &sep_owned {
+                        Value::Char(c) => {
+                            let c = *c;
+                            for part in s_owned.split(c) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, ip, chunk_idx)?;
+                                if keep.is_truthy() { results.push(v); }
+                            }
+                        }
+                        Value::String(sep_s) => {
+                            let sep_str = sep_s.to_string();
+                            for part in s_owned.split(sep_str.as_str()) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, ip, chunk_idx)?;
+                                if keep.is_truthy() { results.push(v); }
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    self.reg_set(dst, Value::Array(Rc::new(results)));
+                }
+                &Instruction::StrSplitReduce(dst, str_reg, sep_reg, init_reg, func_reg) => {
+                    let callable = self.reg_get(func_reg).clone();
+                    let mut acc = self.reg_get(init_reg).clone();
+                    let (s_owned, sep_owned) = {
+                        let s_v   = &self.value_stack[base + str_reg as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
+                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    match &sep_owned {
+                        Value::Char(c) => {
+                            let c = *c;
+                            for part in s_owned.split(c) {
+                                let elem = Value::String(ZyStr::from_str_ref(part));
+                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, ip, chunk_idx)?;
+                            }
+                        }
+                        Value::String(sep_s) => {
+                            let sep_str = sep_s.to_string();
+                            for part in s_owned.split(sep_str.as_str()) {
+                                let elem = Value::String(ZyStr::from_str_ref(part));
+                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, ip, chunk_idx)?;
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    self.reg_set(dst, acc);
                 }
                 &Instruction::StrContains(dst, str_reg, elem_reg) => {
                     let result = {
@@ -1107,14 +1383,16 @@ impl<W: Write> VM<W> {
                             if s.is_ascii() {
                                 // Fast path: byte indices == char indices
                                 let len = s.len() as i64;
-                                let lo = (if lo_val < 0 { len + lo_val } else { lo_val }).max(0).min(len) as usize;
-                                let hi = (if hi_val < 0 { len + hi_val } else { hi_val }).max(0).min(len) as usize;
+                                let lo = (if lo_val == 0 { 0i64 } else if lo_val < 0 { len + lo_val } else { lo_val - 1 }).max(0).min(len) as usize;
+                                let hi = (if hi_val < 0 { len + hi_val + 1 } else { hi_val }).max(0).min(len) as usize;
+                                let hi = hi.max(lo);
                                 s[lo..hi].to_string()
                             } else {
                                 // Unicode: single-pass via char_indices to find byte offsets
                                 let char_len = s.chars().count() as i64;
-                                let lo = (if lo_val < 0 { char_len + lo_val } else { lo_val }).max(0).min(char_len) as usize;
-                                let hi = (if hi_val < 0 { char_len + hi_val } else { hi_val }).max(0).min(char_len) as usize;
+                                let lo = (if lo_val == 0 { 0i64 } else if lo_val < 0 { char_len + lo_val } else { lo_val - 1 }).max(0).min(char_len) as usize;
+                                let hi = (if hi_val < 0 { char_len + hi_val + 1 } else { hi_val }).max(0).min(char_len) as usize;
+                                let hi = hi.max(lo);
                                 let mut byte_lo = s.len();
                                 let mut byte_hi = s.len();
                                 for (ci, (bi, _)) in s.char_indices().enumerate() {
@@ -1126,7 +1404,7 @@ impl<W: Write> VM<W> {
                         }
                         other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
                     };
-                    self.reg_set(dst, Value::String(Rc::new(result)));
+                    self.reg_set(dst, Value::String(ZyStr::new(result)));
                 }
                 &Instruction::StrChars(dst, src) => {
                     // String → Array<Char> (O(N) once per loop start).
@@ -1146,6 +1424,26 @@ impl<W: Write> VM<W> {
                     };
                     wreg!(dst, val);
                 }
+                &Instruction::StrCharAt(dst, str_reg, idx_reg) => {
+                    let ch = match (&self.value_stack[base + str_reg as usize],
+                                    &self.value_stack[base + idx_reg as usize]) {
+                        (Value::String(s), Value::Int(i)) => {
+                            let i = *i as usize;
+                            if s.is_ascii() {
+                                // O(1) ASCII fast path
+                                s.as_bytes().get(i).map(|&b| b as char)
+                                    .unwrap_or('\0')
+                            } else {
+                                s.chars().nth(i).unwrap_or('\0')
+                            }
+                        }
+                        (o, _) => raise!(VmError::TypeError {
+                            expected: "String",
+                            got: o.type_name().to_string(),
+                        }),
+                    };
+                    wreg!(dst, Value::Char(ch));
+                }
                 // ── String modification operators ─────────────────────────────
                 &Instruction::StrFindPos(dst, str_reg, pat_reg) => {
                     let positions: Vec<Value> = {
@@ -1158,13 +1456,13 @@ impl<W: Write> VM<W> {
                                     // ASCII fast path: byte_offset == char_offset
                                     s.bytes().enumerate()
                                         .filter(|(_, b)| *b == c as u8)
-                                        .map(|(i, _)| Value::Int(i as i64))
+                                        .map(|(i, _)| Value::Int((i + 1) as i64))
                                         .collect()
                                 } else {
                                     s.char_indices()
                                         .filter(|(_, ch)| *ch == c)
                                         .enumerate()
-                                        .map(|(ci, _)| Value::Int(ci as i64))
+                                        .map(|(ci, _)| Value::Int((ci + 1) as i64))
                                         .collect()
                                 }
                             }
@@ -1173,14 +1471,14 @@ impl<W: Write> VM<W> {
                                 if s.is_ascii() {
                                     // ASCII fast path: byte_offset == char_offset
                                     s.match_indices(pat.as_str())
-                                        .map(|(bi, _)| Value::Int(bi as i64))
+                                        .map(|(bi, _)| Value::Int((bi + 1) as i64))
                                         .collect()
                                 } else {
                                     // Unicode: build char-index map: byte_offset → char_index
                                     let char_idx: std::collections::HashMap<usize, usize> =
                                         s.char_indices().enumerate().map(|(ci, (bi, _))| (bi, ci)).collect();
                                     s.match_indices(pat.as_str())
-                                        .filter_map(|(bi, _)| char_idx.get(&bi).map(|&ci| Value::Int(ci as i64)))
+                                        .filter_map(|(bi, _)| char_idx.get(&bi).map(|&ci| Value::Int((ci + 1) as i64)))
                                         .collect()
                                 }
                             }
@@ -1188,14 +1486,14 @@ impl<W: Write> VM<W> {
                                 let needle = needle.clone();
                                 arr.iter().enumerate()
                                     .filter(|(_, v)| v.equals(&needle))
-                                    .map(|(i, _)| Value::Int(i as i64))
+                                    .map(|(i, _)| Value::Int((i + 1) as i64))
                                     .collect()
                             }
                             (Value::Tuple(tup), needle) => {
                                 let needle = needle.clone();
                                 tup.iter().enumerate()
                                     .filter(|(_, v)| v.equals(&needle))
-                                    .map(|(i, _)| Value::Int(i as i64))
+                                    .map(|(i, _)| Value::Int((i + 1) as i64))
                                     .collect()
                             }
                             (Value::String(_), other) => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
@@ -1215,8 +1513,10 @@ impl<W: Write> VM<W> {
                             Value::String(t) => t.clone(),
                             other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
                         };
+                        // 1-based: pos=1 inserts at beginning; pos=N+1 appends at end
+                        let pos_0based = if pos <= 0 { 0i64 } else { pos - 1 };
                         if s.is_ascii() {
-                            let p = (pos.max(0) as usize).min(s.len());
+                            let p = (pos_0based.max(0) as usize).min(s.len());
                             let mut r = String::with_capacity(s.len() + text.len());
                             r.push_str(&s[..p]);
                             r.push_str(&text);
@@ -1224,7 +1524,7 @@ impl<W: Write> VM<W> {
                             r
                         } else {
                             let char_len = s.chars().count() as i64;
-                            let p = (pos.max(0).min(char_len)) as usize;
+                            let p = (pos_0based.max(0).min(char_len)) as usize;
                             let byte_pos = s.char_indices().nth(p).map(|(bi, _)| bi).unwrap_or(s.len());
                             let mut r = String::with_capacity(s.len() + text.len());
                             r.push_str(&s[..byte_pos]);
@@ -1233,7 +1533,7 @@ impl<W: Write> VM<W> {
                             r
                         }
                     };
-                    wreg!(dst, Value::String(Rc::new(result)));
+                    wreg!(dst, Value::String(ZyStr::new(result)));
                 }
                 &Instruction::StrRemove(dst, str_reg, pos_reg, count_reg) => {
                     let result = {
@@ -1241,7 +1541,8 @@ impl<W: Write> VM<W> {
                             Value::String(s) => s.clone(),
                             other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
                         };
-                        let pos   = ri!(pos_reg).max(0) as usize;
+                        let pos_raw = ri!(pos_reg);
+                        let pos = if pos_raw <= 0 { 0usize } else { (pos_raw - 1) as usize };
                         let count = ri!(count_reg).max(0) as usize;
                         if s.is_ascii() {
                             let lo = pos.min(s.len());
@@ -1271,7 +1572,7 @@ impl<W: Write> VM<W> {
                             r
                         }
                     };
-                    wreg!(dst, Value::String(Rc::new(result)));
+                    wreg!(dst, Value::String(ZyStr::new(result)));
                 }
                 &Instruction::StrReplace(dst, str_reg, pat_reg, rep_reg) => {
                     let result = {
@@ -1285,15 +1586,11 @@ impl<W: Write> VM<W> {
                         };
                         match &self.value_stack[base + pat_reg as usize] {
                             Value::String(pat) => s.replace(pat.as_str(), rep.as_str()),
-                            Value::Char(c) => {
-                                let mut ps = String::with_capacity(4);
-                                ps.push(*c);
-                                s.replace(ps.as_str(), rep.as_str())
-                            }
+                            Value::Char(c) => s.replace(*c, rep.as_str()),
                             other => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
                         }
                     };
-                    wreg!(dst, Value::String(Rc::new(result)));
+                    wreg!(dst, Value::String(ZyStr::new(result)));
                 }
                 &Instruction::StrReplaceN(dst, str_reg, pat_reg, rep_reg, n_reg) => {
                     let result = {
@@ -1306,22 +1603,32 @@ impl<W: Write> VM<W> {
                             other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
                         };
                         let max = ri!(n_reg).max(0) as usize;
-                        let pat_str = match &self.value_stack[base + pat_reg as usize] {
-                            Value::String(p) => p.to_string(),
-                            Value::Char(c) => c.to_string(),
+                        // Avoid heap-allocating a String for char patterns: use char directly.
+                        #[derive(Copy, Clone)]
+                        enum Pat<'a> { Ch(char), Str(&'a str) }
+                        let pat = match &self.value_stack[base + pat_reg as usize] {
+                            Value::String(p) => Pat::Str(p.as_str()),
+                            Value::Char(c) => Pat::Ch(*c),
                             other => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
                         };
                         if max == 0 {
-                            s.replace(pat_str.as_str(), rep.as_str())
+                            match pat {
+                                Pat::Str(p) => s.replace(p, rep.as_str()),
+                                Pat::Ch(c)  => s.replace(c, rep.as_str()),
+                            }
                         } else {
                             let mut out = String::with_capacity(s.len());
                             let mut remaining = s.as_str();
                             let mut count = 0;
                             while count < max {
-                                if let Some(pos) = remaining.find(pat_str.as_str()) {
+                                let found = match pat {
+                                    Pat::Str(p) => remaining.find(p).map(|pos| (pos, p.len())),
+                                    Pat::Ch(c)  => remaining.find(c).map(|pos| (pos, c.len_utf8())),
+                                };
+                                if let Some((pos, pat_len)) = found {
                                     out.push_str(&remaining[..pos]);
                                     out.push_str(&rep);
-                                    remaining = &remaining[pos + pat_str.len()..];
+                                    remaining = &remaining[pos + pat_len..];
                                     count += 1;
                                 } else {
                                     break;
@@ -1331,19 +1638,23 @@ impl<W: Write> VM<W> {
                             out
                         }
                     };
-                    wreg!(dst, Value::String(Rc::new(result)));
+                    wreg!(dst, Value::String(ZyStr::new(result)));
                 }
 
                 Instruction::BuildStr(dst, parts) => {
                     let dst = *dst;
-                    let mut result = String::new();
+                    let cap: usize = parts.iter().map(|p| match p {
+                        BuildPart::Lit(idx) => program.string_pool[*idx as usize].len(),
+                        BuildPart::Reg(_) => 4,
+                    }).sum();
+                    let mut result = String::with_capacity(cap);
                     for part in parts {
                         match part {
                             BuildPart::Lit(idx) => result.push_str(&program.string_pool[*idx as usize]),
                             BuildPart::Reg(r) => result.push_str(&self.reg_get(*r).to_string_repr()),
                         }
                     }
-                    self.reg_set(dst, Value::String(Rc::new(result)));
+                    self.reg_set(dst, Value::String(ZyStr::new(result)));
                 }
 
                 // ── Dynamic call (lambdas / closures stored in variables) ────
@@ -1352,8 +1663,8 @@ impl<W: Write> VM<W> {
                     let callable = unsafe { self.value_stack.get_unchecked(base + callee_reg as usize).clone() };
 
                     let (func_idx, upvalues): (FuncIdx, Vec<Value>) = match callable {
-                        Value::Function(idx) => (idx, Vec::new()),
-                        Value::Closure(idx, uvs) => (idx, uvs.as_ref().clone()),
+                        Value::Function(idx, _) => (idx, Vec::new()),
+                        Value::Closure(idx, _, uvs) => (idx, uvs.as_ref().clone()),
                         other => raise!(VmError::TypeError { expected: "Function", got: other.type_name().to_string() }),
                     };
 
@@ -1423,29 +1734,31 @@ impl<W: Write> VM<W> {
                         Value::Array(arr) => {
                             let arr = arr.as_ref();
                             let len = arr.len() as i64;
-                            let lo = (if lo < 0 { len + lo } else { lo }).max(0) as usize;
-                            let hi = (if hi < 0 { len + hi } else { hi }).min(len) as usize;
-                            let lo = lo.min(arr.len());
-                            let hi = hi.min(arr.len());
-                            Value::Array(Rc::new(arr[lo..hi].to_vec()))
+                            // lo: 0=default start (internal 0), positive=1-based (subtract 1), negative=from end
+                            let lo_norm = (if lo == 0 { 0i64 } else if lo < 0 { len + lo } else { lo - 1 }).max(0).min(len) as usize;
+                            // hi: positive=1-based inclusive = 0-based exclusive (no change); negative=len+hi+1
+                            let hi_norm = (if hi < 0 { len + hi + 1 } else { hi }).max(0).min(len) as usize;
+                            let lo_norm = lo_norm.min(arr.len());
+                            let hi_norm = hi_norm.min(arr.len()).max(lo_norm);
+                            Value::Array(Rc::new(arr[lo_norm..hi_norm].to_vec()))
                         }
                         Value::Tuple(tup) => {
                             let tup = tup.as_ref();
                             let len = tup.len() as i64;
-                            let lo = (if lo < 0 { len + lo } else { lo }).max(0) as usize;
-                            let hi = (if hi < 0 { len + hi } else { hi }).min(len) as usize;
-                            let lo = lo.min(tup.len());
-                            let hi = hi.min(tup.len());
-                            Value::Tuple(Rc::new(tup[lo..hi].to_vec()))
+                            let lo_norm = (if lo == 0 { 0i64 } else if lo < 0 { len + lo } else { lo - 1 }).max(0).min(len) as usize;
+                            let hi_norm = (if hi < 0 { len + hi + 1 } else { hi }).max(0).min(len) as usize;
+                            let lo_norm = lo_norm.min(tup.len());
+                            let hi_norm = hi_norm.min(tup.len()).max(lo_norm);
+                            Value::Tuple(Rc::new(tup[lo_norm..hi_norm].to_vec()))
                         }
                         Value::NamedTuple(fields) => {
                             let fields = fields.as_ref();
                             let len = fields.len() as i64;
-                            let lo = (if lo < 0 { len + lo } else { lo }).max(0) as usize;
-                            let hi = (if hi < 0 { len + hi } else { hi }).min(len) as usize;
-                            let lo = lo.min(fields.len());
-                            let hi = hi.min(fields.len());
-                            Value::NamedTuple(Rc::new(fields[lo..hi].to_vec()))
+                            let lo_norm = (if lo == 0 { 0i64 } else if lo < 0 { len + lo } else { lo - 1 }).max(0).min(len) as usize;
+                            let hi_norm = (if hi < 0 { len + hi + 1 } else { hi }).max(0).min(len) as usize;
+                            let lo_norm = lo_norm.min(fields.len());
+                            let hi_norm = hi_norm.min(fields.len()).max(lo_norm);
+                            Value::NamedTuple(Rc::new(fields[lo_norm..hi_norm].to_vec()))
                         }
                         other => raise!(VmError::TypeError { expected: "Array, Tuple, or NamedTuple", got: other.type_name().to_string() }),
                     };
@@ -1546,13 +1859,16 @@ impl<W: Write> VM<W> {
                     let result = match self.reg_get(tuple_reg) {
                         Value::NamedTuple(fields) => {
                             let field_name = field_name.clone();
-                            let available: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
-                            fields.iter().find(|(n, _)| *n == field_name)
-                                .map(|(_, v)| v.clone())
-                                .ok_or_else(|| VmError::Generic(format!(
-                                    "runtime error: Named tuple has no field '{}'. Available fields: {}",
-                                    field_name, available.join(", ")
-                                )))?
+                            match fields.iter().find(|(n, _)| *n == field_name).map(|(_, v)| v.clone()) {
+                                Some(v) => v,
+                                None => {
+                                    let available: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
+                                    raise!(VmError::Generic(format!(
+                                        "Named tuple has no field '{}'. Available fields: {}",
+                                        field_name, available.join(", ")
+                                    )));
+                                }
+                            }
                         }
                         // positional index on array (tuple[0])
                         Value::Array(arr) => {
@@ -1565,7 +1881,7 @@ impl<W: Write> VM<W> {
                         Value::Tuple(_) => {
                             let field_name = field_name.clone();
                             raise!(VmError::Generic(format!(
-                                "runtime error: Cannot access field '{}' on positional tuple. Use positional indexing like tuple[0]",
+                                "Cannot access field '{}' on positional tuple. Use positional indexing like tuple[1]",
                                 field_name
                             )));
                         }
@@ -1579,11 +1895,19 @@ impl<W: Write> VM<W> {
                     let result = match self.reg_get(src) {
                         Value::String(s) => {
                             let s_rc = s.clone();
-                            let s_str = s_rc.as_ref().trim();
-                            if let Ok(i) = s_str.parse::<i64>() {
+                            let trimmed = s_rc.as_ref().trim();
+                            if let Ok(i) = trimmed.parse::<i64>() {
                                 Value::Int(i)
-                            } else if let Ok(f) = s_str.parse::<f64>() {
+                            } else if let Ok(f) = trimmed.parse::<f64>() {
                                 Value::Float(f)
+                            } else if let Some(normalized) = normalize_unicode_digits(trimmed) {
+                                if let Ok(i) = normalized.parse::<i64>() {
+                                    Value::Int(i)
+                                } else if let Ok(f) = normalized.parse::<f64>() {
+                                    Value::Float(f)
+                                } else {
+                                    Value::String(s_rc)
+                                }
                             } else {
                                 Value::String(s_rc)
                             }
@@ -1593,6 +1917,10 @@ impl<W: Write> VM<W> {
                         other => other.clone(),
                     };
                     self.reg_set(dst, result);
+                }
+                &Instruction::IsArray(dst, src) => {
+                    let is_arr = matches!(self.reg_get(src), Value::Array(_));
+                    self.reg_set(dst, Value::Bool(is_arr));
                 }
                 &Instruction::TypeOf(dst, src) => {
                     let val = self.reg_get(src).clone();
@@ -1605,11 +1933,13 @@ impl<W: Write> VM<W> {
                         Value::Array(a) => ("##]", a.as_ref().len() as i64),
                         Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
                         Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
-                        Value::Function(_) | Value::Closure(_, _) => ("##>", 0),
+                        Value::Function(_, arity) => ("##()", *arity as i64),
+                        Value::Closure(_, arity, _) => ("##->", *arity as i64),
                         Value::Unit => ("##_", 0),
+                        Value::Error(_) => ("##_", 0),
                     };
                     let tuple_val = Value::Tuple(Rc::new(vec![
-                        Value::String(Rc::new(type_sym.to_string())),
+                        Value::String(ZyStr::new(type_sym.to_string())),
                         Value::Int(len),
                         val,
                     ]));
@@ -1628,7 +1958,7 @@ impl<W: Write> VM<W> {
                                 10 => format!("0d{:04}", code),
                                 _  => format!("0x{:04X}", code),
                             };
-                            Value::String(Rc::new(s))
+                            Value::String(ZyStr::new(s))
                         }
                         // Int → String (format integer in specified base)
                         Value::Int(n) => {
@@ -1638,7 +1968,7 @@ impl<W: Write> VM<W> {
                                 10 => format!("0d{:04}", n),
                                 _  => format!("0x{:04X}", n),
                             };
-                            Value::String(Rc::new(s))
+                            Value::String(ZyStr::new(s))
                         }
                         // String → Char (parse in given base, then create char)
                         Value::String(s) => {
@@ -1693,7 +2023,7 @@ impl<W: Write> VM<W> {
                     let err = self.frame_stack.last_mut().unwrap()
                         .error.as_mut()
                         .and_then(|e| e.error_val.take())
-                        .unwrap_or_else(|| Value::String(Rc::new("unknown error".to_string())));
+                        .unwrap_or_else(|| Value::String(ZyStr::new("unknown error".to_string())));
                     unsafe { *self.value_stack.get_unchecked_mut(base + err_reg as usize) = err; }
                 }
 
@@ -1722,7 +2052,9 @@ impl<W: Write> VM<W> {
                             result.push_str(&stderr_str);
                         }
                     }
-                    self.reg_set(dst, Value::String(Rc::new(result)));
+                    // Strip trailing newline (consistent with shell $(...) behavior)
+                    let result = result.trim_end_matches('\n').to_string();
+                    self.reg_set(dst, Value::String(ZyStr::new(result)));
                 }
 
                 // ── Execute expression </ path /> ─────────────────────────────
@@ -1746,10 +2078,10 @@ impl<W: Write> VM<W> {
                             msg = String::from_utf8_lossy(&out.stdout).into_owned();
                         }
                         let msg = msg.trim_end().to_string();
-                        return Err(VmError::Generic(format!("runtime error: {}", msg)));
+                        return Err(VmError::Generic(msg));
                     }
                     let result = String::from_utf8_lossy(&out.stdout).into_owned();
-                    self.reg_set(dst, Value::String(Rc::new(result)));
+                    self.reg_set(dst, Value::String(ZyStr::new(result)));
                 }
 
                 // ── Format ops ────────────────────────────────────────────────
@@ -1760,7 +2092,7 @@ impl<W: Write> VM<W> {
                         other => other.to_string().parse::<f64>().unwrap_or(0.0),
                     };
                     let s = vm_fmt_thousands(f, prec_kind, prec_n);
-                    self.reg_set(dst, Value::String(Rc::new(s)));
+                    self.reg_set(dst, Value::String(ZyStr::new(s)));
                 }
                 &Instruction::FmtScientific(dst, src, prec_kind, prec_n) => {
                     let f = match self.reg_get(src) {
@@ -1769,7 +2101,7 @@ impl<W: Write> VM<W> {
                         other => other.to_string().parse::<f64>().unwrap_or(0.0),
                     };
                     let s = vm_fmt_scientific(f, prec_kind, prec_n);
-                    self.reg_set(dst, Value::String(Rc::new(s)));
+                    self.reg_set(dst, Value::String(ZyStr::new(s)));
                 }
 
                 // ── Precision ops ─────────────────────────────────────────────
@@ -1795,18 +2127,16 @@ impl<W: Write> VM<W> {
                 }
 
                 // ── Error check ───────────────────────────────────────────────
-                &Instruction::IsError(dst, _src) => {
-                    // In the VM, error values never exist in registers (errors are caught by
-                    // try/catch and stored in _err as String). So $! always returns #0 for
-                    // any value that can appear in a register.
-                    self.reg_set(dst, Value::Bool(false));
+                &Instruction::IsError(dst, src) => {
+                    let is_err = matches!(self.reg_get(src), Value::Error(_));
+                    self.reg_set(dst, Value::Bool(is_err));
                 }
                 &Instruction::LoadErrorKind(dst) => {
                     let kind = self.frame_stack.last()
                         .and_then(|f| f.error.as_ref())
                         .map(|e| e.error_kind.clone())
                         .unwrap_or_default();
-                    unsafe { *self.value_stack.get_unchecked_mut(base + dst as usize) = Value::String(Rc::new(kind)); }
+                    unsafe { *self.value_stack.get_unchecked_mut(base + dst as usize) = Value::String(ZyStr::new(kind)); }
                 }
 
                 // ── Output param writeback setup ──────────────────────────────
@@ -1819,6 +2149,21 @@ impl<W: Write> VM<W> {
                 &Instruction::RaiseError(msg_idx) => {
                     let msg = program.string_pool[msg_idx as usize].clone();
                     raise!(VmError::Generic(msg));
+                }
+
+                &Instruction::LoadGlobal(dst, gvar_idx) => {
+                    let val = self.global_vars
+                        .get(gvar_idx as usize)
+                        .cloned()
+                        .unwrap_or(Value::Unit);
+                    wreg!(dst, val);
+                }
+
+                &Instruction::StoreGlobal(gvar_idx, src) => {
+                    let val = rreg!(src).clone();
+                    if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
+                        *slot = val;
+                    }
                 }
 
                 Instruction::Halt => return Ok(()),
@@ -1862,8 +2207,8 @@ impl<W: Write> VM<W> {
         caller_chunk: usize,
     ) -> Result<Value, VmError> {
         match callable {
-            Value::Function(idx) => self.call_function(idx, args, &[], program, caller_ip, caller_chunk),
-            Value::Closure(idx, upvalues) => self.call_function(idx, args, upvalues.as_ref(), program, caller_ip, caller_chunk),
+            Value::Function(idx, _) => self.call_function(idx, args, &[], program, caller_ip, caller_chunk),
+            Value::Closure(idx, _, upvalues) => self.call_function(idx, args, upvalues.as_ref(), program, caller_ip, caller_chunk),
             other => Err(VmError::TypeError { expected: "Function", got: other.type_name().to_string() }),
         }
     }
@@ -1991,33 +2336,86 @@ impl<W: Write> VM<W> {
                 &Instruction::JumpIf(cond, label) => { if r!(cond).is_truthy() { ip = label as usize; } }
                 &Instruction::JumpIfNot(cond, label) => { if !r!(cond).is_truthy() { ip = label as usize; } }
                 &Instruction::ConcatStr(dst, a, b) => {
-                    let result = match (r!(a), r!(b)) {
-                        (Value::String(l), Value::String(r)) => {
-                            let mut s = String::with_capacity(l.len() + r.len());
-                            s.push_str(l.as_ref());
-                            s.push_str(r.as_ref());
-                            s
+                    let result = if dst == a && a != b {
+                        let left = std::mem::replace(
+                            &mut self.value_stack[base + a as usize],
+                            Value::Unit,
+                        );
+                        match (left, &self.value_stack[base + b as usize]) {
+                            (Value::String(l), Value::String(r)) => {
+                                let r_str = r.as_str().to_string();
+                                let mut s = l.try_into_string();
+                                s.push_str(&r_str);
+                                s
+                            }
+                            (l, r) => {
+                                let ls = l.to_string_repr();
+                                let rs = r.to_string_repr();
+                                let mut s = String::with_capacity(ls.len() + rs.len());
+                                s.push_str(&ls);
+                                s.push_str(&rs);
+                                s
+                            }
                         }
-                        (l, r) => {
-                            let ls = l.to_string_repr();
-                            let rs = r.to_string_repr();
-                            let mut s = String::with_capacity(ls.len() + rs.len());
-                            s.push_str(&ls);
-                            s.push_str(&rs);
-                            s
+                    } else {
+                        match (r!(a), r!(b)) {
+                            (Value::String(l), Value::String(r)) => {
+                                let mut s = String::with_capacity(l.len() + r.len());
+                                s.push_str(l.as_ref());
+                                s.push_str(r.as_ref());
+                                s
+                            }
+                            (l, r) => {
+                                let ls = l.to_string_repr();
+                                let rs = r.to_string_repr();
+                                let mut s = String::with_capacity(ls.len() + rs.len());
+                                s.push_str(&ls);
+                                s.push_str(&rs);
+                                s
+                            }
                         }
                     };
-                    w!(dst, Value::String(Rc::new(result)));
+                    w!(dst, Value::String(ZyStr::new(result)));
+                }
+                Instruction::ConcatBuild(dst, base_reg, item_regs) => {
+                    let (dst, base_reg) = (*dst, *base_reg);
+                    let base_val = r!(base_reg).clone();
+                    let result = match base_val {
+                        Value::Array(arr) => {
+                            let mut new_arr = arr.as_ref().clone();
+                            for &ir in item_regs {
+                                new_arr.push(r!(ir).clone());
+                            }
+                            Value::Array(Rc::new(new_arr))
+                        }
+                        other => {
+                            let mut s = other.to_string_repr();
+                            for &ir in item_regs {
+                                s.push_str(&r!(ir).to_string_repr());
+                            }
+                            Value::String(ZyStr::new(s))
+                        }
+                    };
+                    w!(dst, result);
                 }
                 &Instruction::MakeFunc(dst, func_idx) => {
-                    w!(dst, Value::Function(func_idx));
+                    let arity = program.functions.get(func_idx as usize)
+                        .map(|c| c.num_params as u8).unwrap_or(0);
+                    w!(dst, Value::Function(func_idx, arity));
+                }
+                &Instruction::MakeLambda(dst, func_idx) => {
+                    let arity = program.functions.get(func_idx as usize)
+                        .map(|c| c.num_params as u8).unwrap_or(0);
+                    w!(dst, Value::Closure(func_idx, arity, Rc::new(vec![])));
                 }
                 Instruction::MakeClosure(dst, func_idx, captured_regs) => {
                     let (dst, func_idx) = (*dst, *func_idx);
+                    let arity = program.functions.get(func_idx as usize)
+                        .map(|c| c.num_params as u8).unwrap_or(0);
                     let upvalues: Vec<Value> = captured_regs.iter()
                         .map(|&cr| self.value_stack[base + cr as usize].clone())
                         .collect();
-                    self.value_stack[base + dst as usize] = Value::Closure(func_idx, Rc::new(upvalues));
+                    self.value_stack[base + dst as usize] = Value::Closure(func_idx, arity, Rc::new(upvalues));
                 }
                 Instruction::Call(dst, func_idx, arg_regs) => {
                     let (dst, func_idx) = (*dst, *func_idx);
@@ -2092,6 +2490,499 @@ impl<W: Write> VM<W> {
                     };
                     self.value_stack[base + dst as usize] = result;
                 }
+
+                // ── Array/Tuple indexing ──────────────────────────────────────
+                &Instruction::ArrayGet(dst, arr_reg, idx_reg) => {
+                    let idx = match r!(idx_reg) { Value::Int(n) => *n, _ => 0 };
+                    let val = match r!(arr_reg).clone() {
+                        Value::Array(arr) => {
+                            let i = if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
+                            if i >= 0 && (i as usize) < arr.len() { arr[i as usize].clone() } else {
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                            }
+                        }
+                        Value::Tuple(items) => {
+                            let i = if idx < 0 { items.len() as i64 + idx } else { idx - 1 };
+                            if i >= 0 && (i as usize) < items.len() { items[i as usize].clone() } else {
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: items.len() });
+                            }
+                        }
+                        Value::NamedTuple(fields) => {
+                            let i = if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
+                            if i >= 0 && (i as usize) < fields.len() { fields[i as usize].1.clone() } else {
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
+                            }
+                        }
+                        Value::String(s) => {
+                            let char_count = s.chars().count();
+                            let i = if idx < 0 { char_count as i64 + idx } else { idx - 1 };
+                            if i >= 0 && (i as usize) < char_count {
+                                Value::Char(s.chars().nth(i as usize).unwrap())
+                            } else {
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: char_count });
+                            }
+                        }
+                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    w!(dst, val);
+                }
+                &Instruction::ArrayLen(dst, src) => {
+                    let n = match r!(src) {
+                        Value::Array(arr) => arr.len() as i64,
+                        Value::String(s)  => if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 },
+                        _ => 0,
+                    };
+                    w!(dst, Value::Int(n));
+                }
+                &Instruction::NewArray(dst) => { w!(dst, Value::Array(Rc::new(Vec::new()))); }
+                &Instruction::ArrayPush(arr_reg, val_reg) => {
+                    let val = r!(val_reg).clone();
+                    match &mut self.value_stack[base + arr_reg as usize] {
+                        Value::Array(rc) => Rc::make_mut(rc).push(val),
+                        Value::Tuple(rc) => Rc::make_mut(rc).push(val),
+                        _ => {}
+                    }
+                }
+                &Instruction::ArrayContains(dst, arr_reg, elem_reg) => {
+                    let elem = r!(elem_reg).clone();
+                    let found = match r!(arr_reg) {
+                        Value::Array(arr) => arr.iter().any(|v| v.equals(&elem)),
+                        _ => false,
+                    };
+                    w!(dst, Value::Bool(found));
+                }
+
+                // ── Integer arithmetic (missing from secondary loop) ──────────
+                &Instruction::DivInt(dst, a, b) => {
+                    if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
+                        if *vb == 0 { return Err(VmError::DivisionByZero); }
+                        w!(dst, Value::Int(va / vb));
+                    }
+                }
+                &Instruction::PowInt(dst, a, b) => {
+                    if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
+                        w!(dst, Value::Int(va.wrapping_pow(*vb as u32)));
+                    }
+                }
+                &Instruction::NegInt(dst, src) => {
+                    if let Value::Int(v) = r!(src) { w!(dst, Value::Int(-v)); }
+                }
+
+                // ── Float arithmetic ─────────────────────────────────────────
+                &Instruction::AddFloat(dst, a, b) => {
+                    let (va, vb) = match (r!(a), r!(b)) {
+                        (Value::Float(x), Value::Float(y)) => (*x, *y),
+                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
+                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
+                        _ => return Ok(Value::Unit),
+                    };
+                    w!(dst, Value::Float(va + vb));
+                }
+                &Instruction::SubFloat(dst, a, b) => {
+                    let (va, vb) = match (r!(a), r!(b)) {
+                        (Value::Float(x), Value::Float(y)) => (*x, *y),
+                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
+                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
+                        _ => return Ok(Value::Unit),
+                    };
+                    w!(dst, Value::Float(va - vb));
+                }
+                &Instruction::MulFloat(dst, a, b) => {
+                    let (va, vb) = match (r!(a), r!(b)) {
+                        (Value::Float(x), Value::Float(y)) => (*x, *y),
+                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
+                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
+                        _ => return Ok(Value::Unit),
+                    };
+                    w!(dst, Value::Float(va * vb));
+                }
+                &Instruction::DivFloat(dst, a, b) => {
+                    let (va, vb) = match (r!(a), r!(b)) {
+                        (Value::Float(x), Value::Float(y)) => (*x, *y),
+                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
+                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
+                        _ => return Ok(Value::Unit),
+                    };
+                    w!(dst, Value::Float(va / vb));
+                }
+                &Instruction::PowFloat(dst, a, b) => {
+                    let (va, vb) = match (r!(a), r!(b)) {
+                        (Value::Float(x), Value::Float(y)) => (*x, *y),
+                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
+                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
+                        _ => return Ok(Value::Unit),
+                    };
+                    w!(dst, Value::Float(va.powf(vb)));
+                }
+                &Instruction::NegFloat(dst, src) => {
+                    match r!(src) {
+                        Value::Float(f) => { let v = -f; w!(dst, Value::Float(v)); }
+                        Value::Int(n)   => { let v = *n as f64; w!(dst, Value::Float(-v)); }
+                        _ => {}
+                    }
+                }
+                &Instruction::IntToFloat(dst, src) => {
+                    match r!(src) {
+                        Value::Int(n)   => { let v = *n as f64; w!(dst, Value::Float(v)); }
+                        Value::Float(f) => { let v = *f; w!(dst, Value::Float(v)); }
+                        _ => {}
+                    }
+                }
+                &Instruction::FloatToIntRound(dst, src) => {
+                    match r!(src) {
+                        Value::Float(f) => { let v = f.round() as i64; w!(dst, Value::Int(v)); }
+                        Value::Int(n)   => { let v = *n; w!(dst, Value::Int(v)); }
+                        _ => {}
+                    }
+                }
+                &Instruction::FloatToIntTrunc(dst, src) => {
+                    match r!(src) {
+                        Value::Float(f) => { let v = f.trunc() as i64; w!(dst, Value::Int(v)); }
+                        Value::Int(n)   => { let v = *n; w!(dst, Value::Int(v)); }
+                        _ => {}
+                    }
+                }
+
+                // ── Logical ──────────────────────────────────────────────────
+                &Instruction::And(dst, a, b) => {
+                    let res = r!(a).is_truthy() && r!(b).is_truthy();
+                    w!(dst, Value::Bool(res));
+                }
+                &Instruction::Or(dst, a, b) => {
+                    let res = r!(a).is_truthy() || r!(b).is_truthy();
+                    w!(dst, Value::Bool(res));
+                }
+
+                // ── Tuples ───────────────────────────────────────────────────
+                Instruction::MakeTuple(dst, regs) => {
+                    let dst = *dst;
+                    let items: Vec<Value> = regs.iter().map(|&r| self.value_stack[base + r as usize].clone()).collect();
+                    w!(dst, Value::Tuple(Rc::new(items)));
+                }
+                Instruction::MakeNamedTuple(dst, field_names, field_regs) => {
+                    let dst = *dst;
+                    let fields: Vec<(String, Value)> = field_names.iter().zip(field_regs.iter())
+                        .map(|(&ni, &ri)| (program.string_pool[ni as usize].clone(), self.value_stack[base + ri as usize].clone()))
+                        .collect();
+                    w!(dst, Value::NamedTuple(Rc::new(fields)));
+                }
+
+                // ── String ops ───────────────────────────────────────────────
+                &Instruction::StrLen(dst, src) => {
+                    let n = match r!(src) {
+                        Value::String(s) => if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 },
+                        Value::Array(a)  => a.len() as i64,
+                        _ => 0,
+                    };
+                    w!(dst, Value::Int(n));
+                }
+                &Instruction::StrCharAt(dst, str_reg, idx_reg) => {
+                    let ch = match (r!(str_reg), r!(idx_reg)) {
+                        (Value::String(s), Value::Int(i)) => {
+                            let i = *i as usize;
+                            if s.is_ascii() {
+                                s.as_bytes().get(i).map(|&b| b as char).unwrap_or('\0')
+                            } else {
+                                s.chars().nth(i).unwrap_or('\0')
+                            }
+                        }
+                        _ => return Err(VmError::TypeError {
+                            expected: "String",
+                            got: "non-String".to_string(),
+                        }),
+                    };
+                    w!(dst, Value::Char(ch));
+                }
+                &Instruction::StrContains(dst, str_reg, elem_reg) => {
+                    let found = match (r!(str_reg), r!(elem_reg)) {
+                        (Value::String(s), Value::String(p)) => s.contains(p.as_ref()),
+                        (Value::String(s), Value::Char(c))   => s.contains(*c),
+                        _ => false,
+                    };
+                    w!(dst, Value::Bool(found));
+                }
+                Instruction::BuildStr(dst, parts) => {
+                    let dst = *dst;
+                    let cap: usize = parts.iter().map(|p| match p {
+                        zymbol_bytecode::BuildPart::Lit(idx) => program.string_pool[*idx as usize].len(),
+                        zymbol_bytecode::BuildPart::Reg(_) => 4,
+                    }).sum();
+                    let mut result = String::with_capacity(cap);
+                    for part in parts {
+                        match part {
+                            zymbol_bytecode::BuildPart::Lit(idx) => result.push_str(&program.string_pool[*idx as usize]),
+                            zymbol_bytecode::BuildPart::Reg(reg) => result.push_str(&self.value_stack[base + *reg as usize].to_string_repr()),
+                        }
+                    }
+                    w!(dst, Value::String(ZyStr::new(result)));
+                }
+
+                // ── Output ───────────────────────────────────────────────────
+                &Instruction::Print(src) => {
+                    let mode = self.numeral_mode;
+                    match r!(src) {
+                        Value::String(s)  => { let _ = write!(self.output, "{}", s); }
+                        Value::Int(n)     => { let _ = write!(self.output, "{}", numeral_int(*n, mode)); }
+                        Value::Float(f)   => { let _ = write!(self.output, "{}", numeral_float(*f, mode)); }
+                        Value::Bool(b)    => { let _ = write!(self.output, "{}", numeral_bool(*b, mode)); }
+                        Value::Char(c)    => { let _ = write!(self.output, "{}", c); }
+                        Value::Unit       => {}
+                        other             => { let _ = write!(self.output, "{}", other); }
+                    }
+                }
+                &Instruction::PrintNewline => { let _ = writeln!(self.output); }
+
+                // ── HOF (nested) ──────────────────────────────────────────────
+                &Instruction::ArrayMap(dst, arr_reg, func_reg) => {
+                    let callable = self.value_stack[base + func_reg as usize].clone();
+                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
+                        Value::Array(a) => a.as_ref().clone(),
+                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    let mut results = Vec::with_capacity(arr.len());
+                    for elem in arr {
+                        let result = self.call_callable(callable.clone(), vec![elem], program, 0, chunk_idx)?;
+                        results.push(result);
+                    }
+                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
+                }
+                &Instruction::ArrayFilter(dst, arr_reg, func_reg) => {
+                    let callable = self.value_stack[base + func_reg as usize].clone();
+                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
+                        Value::Array(a) => a.as_ref().clone(),
+                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    let mut results = Vec::new();
+                    for elem in arr {
+                        let keep = self.call_callable(callable.clone(), vec![elem.clone()], program, 0, chunk_idx)?;
+                        if keep.is_truthy() { results.push(elem); }
+                    }
+                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
+                }
+                &Instruction::ArrayReduce(dst, arr_reg, init_reg, func_reg) => {
+                    let callable = self.value_stack[base + func_reg as usize].clone();
+                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
+                        Value::Array(a) => a.as_ref().clone(),
+                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    let mut acc = self.value_stack[base + init_reg as usize].clone();
+                    for elem in arr {
+                        acc = self.call_callable(callable.clone(), vec![acc, elem], program, 0, chunk_idx)?;
+                    }
+                    self.value_stack[base + dst as usize] = acc;
+                }
+                &Instruction::StrSplitCount(dst, str_reg, sep_reg) => {
+                    let count = {
+                        let s_v   = &self.value_stack[base + str_reg  as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(c))   => intrinsics::split::count(s.as_str(), *c),
+                            (Value::String(s), Value::String(sep)) => intrinsics::split::count_str(s.as_str(), sep.as_str()),
+                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    self.value_stack[base + dst as usize] = Value::Int(count);
+                }
+                &Instruction::StrSplitMap(dst, str_reg, sep_reg, func_reg) => {
+                    let callable = self.value_stack[base + func_reg as usize].clone();
+                    let (s_owned, sep_owned) = {
+                        let s_v   = &self.value_stack[base + str_reg as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
+                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    let mut results = Vec::new();
+                    match &sep_owned {
+                        Value::Char(c) => {
+                            let c = *c;
+                            for part in s_owned.split(c) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                results.push(self.call_callable(callable.clone(), vec![v], program, 0, chunk_idx)?);
+                            }
+                        }
+                        Value::String(sep_s) => {
+                            let sep_str = sep_s.to_string();
+                            for part in s_owned.split(sep_str.as_str()) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                results.push(self.call_callable(callable.clone(), vec![v], program, 0, chunk_idx)?);
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
+                }
+                &Instruction::StrSplitFilter(dst, str_reg, sep_reg, func_reg) => {
+                    let callable = self.value_stack[base + func_reg as usize].clone();
+                    let (s_owned, sep_owned) = {
+                        let s_v   = &self.value_stack[base + str_reg as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
+                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    let mut results = Vec::new();
+                    match &sep_owned {
+                        Value::Char(c) => {
+                            let c = *c;
+                            for part in s_owned.split(c) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, 0, chunk_idx)?;
+                                if keep.is_truthy() { results.push(v); }
+                            }
+                        }
+                        Value::String(sep_s) => {
+                            let sep_str = sep_s.to_string();
+                            for part in s_owned.split(sep_str.as_str()) {
+                                let v = Value::String(ZyStr::from_str_ref(part));
+                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, 0, chunk_idx)?;
+                                if keep.is_truthy() { results.push(v); }
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
+                }
+                &Instruction::StrSplitReduce(dst, str_reg, sep_reg, init_reg, func_reg) => {
+                    let callable = self.value_stack[base + func_reg as usize].clone();
+                    let mut acc = self.value_stack[base + init_reg as usize].clone();
+                    let (s_owned, sep_owned) = {
+                        let s_v   = &self.value_stack[base + str_reg as usize];
+                        let sep_v = &self.value_stack[base + sep_reg as usize];
+                        match (s_v, sep_v) {
+                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
+                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
+                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                        }
+                    };
+                    match &sep_owned {
+                        Value::Char(c) => {
+                            let c = *c;
+                            for part in s_owned.split(c) {
+                                let elem = Value::String(ZyStr::from_str_ref(part));
+                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, 0, chunk_idx)?;
+                            }
+                        }
+                        Value::String(sep_s) => {
+                            let sep_str = sep_s.to_string();
+                            for part in s_owned.split(sep_str.as_str()) {
+                                let elem = Value::String(ZyStr::from_str_ref(part));
+                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, 0, chunk_idx)?;
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    self.value_stack[base + dst as usize] = acc;
+                }
+                &Instruction::ArraySort(dst, arr_reg, ascending, func_reg) => {
+                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
+                        Value::Array(a) => a.as_ref().clone(),
+                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    let mut items = arr;
+                    if func_reg == u16::MAX {
+                        items.sort_by(|a, b| vm_natural_cmp(a, b));
+                        if !ascending { items.reverse(); }
+                    } else {
+                        let callable = self.value_stack[base + func_reg as usize].clone();
+                        let n = items.len();
+                        for i in 0..n {
+                            for j in 0..n.saturating_sub(i + 1) {
+                                let keep = self.call_callable(callable.clone(), vec![items[j].clone(), items[j+1].clone()], program, 0, chunk_idx)?;
+                                if !keep.is_truthy() { items.swap(j, j+1); }
+                            }
+                        }
+                    }
+                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(items));
+                }
+
+                // ── Data ops ────────────────────────────────────────────────
+                &Instruction::NumericEval(dst, src) => {
+                    let result = match r!(src) {
+                        Value::String(s) => {
+                            let s_rc = s.clone();
+                            let trimmed = s_rc.as_ref().trim();
+                            if let Ok(i) = trimmed.parse::<i64>() { Value::Int(i) }
+                            else if let Ok(f) = trimmed.parse::<f64>() { Value::Float(f) }
+                            else if let Some(norm) = normalize_unicode_digits(trimmed) {
+                                if let Ok(i) = norm.parse::<i64>() { Value::Int(i) }
+                                else if let Ok(f) = norm.parse::<f64>() { Value::Float(f) }
+                                else { Value::String(s_rc) }
+                            } else { Value::String(s_rc) }
+                        }
+                        Value::Int(n) => Value::Int(*n),
+                        Value::Float(f) => Value::Float(*f),
+                        other => other.clone(),
+                    };
+                    w!(dst, result);
+                }
+                &Instruction::IsArray(dst, src) => {
+                    let is_arr = matches!(r!(src), Value::Array(_));
+                    w!(dst, Value::Bool(is_arr));
+                }
+                &Instruction::TypeOf(dst, src) => {
+                    let val = r!(src).clone();
+                    let (type_sym, len) = match &val {
+                        Value::Int(n) => ("###", n.to_string().len() as i64),
+                        Value::Float(fl) => ("##.", fl.to_string().len() as i64),
+                        Value::String(s) => ("##\"", s.as_ref().chars().count() as i64),
+                        Value::Char(_) => ("##'", 1),
+                        Value::Bool(_) => ("##?", 1),
+                        Value::Array(a) => ("##]", a.as_ref().len() as i64),
+                        Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
+                        Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
+                        Value::Function(_, arity) => ("##()", *arity as i64),
+                        Value::Closure(_, arity, _) => ("##->", *arity as i64),
+                        _ => ("##_", 0),
+                    };
+                    w!(dst, Value::Tuple(Rc::new(vec![val.clone(), Value::String(ZyStr::new(type_sym.to_string())), Value::Int(len)])));
+                }
+
+                // ── Precision ops ────────────────────────────────────────────
+                &Instruction::RoundFloat(dst, src, prec) => {
+                    match r!(src) {
+                        Value::Float(f) => {
+                            let factor = 10f64.powi(prec as i32);
+                            w!(dst, Value::Float((f * factor).round() / factor));
+                        }
+                        Value::Int(n) => { w!(dst, Value::Int(*n)); }
+                        _ => {}
+                    }
+                }
+                &Instruction::TruncFloat(dst, src, prec) => {
+                    match r!(src) {
+                        Value::Float(f) => {
+                            let factor = 10f64.powi(prec as i32);
+                            w!(dst, Value::Float((f * factor).trunc() / factor));
+                        }
+                        Value::Int(n) => { w!(dst, Value::Int(*n)); }
+                        _ => {}
+                    }
+                }
+
+                &Instruction::LoadGlobal(dst, gvar_idx) => {
+                    let val = self.global_vars
+                        .get(gvar_idx as usize)
+                        .cloned()
+                        .unwrap_or(Value::Unit);
+                    w!(dst, val);
+                }
+
+                &Instruction::StoreGlobal(gvar_idx, src) => {
+                    let val = r!(src).clone();
+                    if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
+                        *slot = val;
+                    }
+                }
+
                 _ => {
                     // For unsupported instructions in HOF mini-VM, skip
                 }

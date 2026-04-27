@@ -1,0 +1,11 @@
+// Test: range loop @ i:start..end { } — inclusive on both ends
+@ i:1..5 { >> i " " }
+>> ¶
+
+// Range starting at 0
+@ i:0..4 { >> i " " }
+>> ¶
+
+// Single element range
+@ i:3..3 { >> i " " }
+>> ¶

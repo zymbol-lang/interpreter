@@ -59,11 +59,13 @@ pub struct ImportStmt {
     pub span: Span,
 }
 
-/// Module path: ./dir/module, ../module, etc.
+/// Module path: ./dir/module, ../module, /absolute/path, ~/home/path
 #[derive(Debug, Clone)]
 pub struct ModulePath {
     pub components: Vec<String>,
     pub is_relative: bool,
+    pub is_absolute: bool,   // true for /absolute and ~/home paths
+    pub home_relative: bool, // true for ~/home paths (subset of is_absolute)
     pub parent_levels: usize, // 0 for ./, 1 for ../, 2 for ../../
     pub span: Span,
 }
@@ -122,7 +124,20 @@ impl ModulePath {
         Self {
             components,
             is_relative,
+            is_absolute: false,
+            home_relative: false,
             parent_levels,
+            span,
+        }
+    }
+
+    pub fn new_absolute(components: Vec<String>, home_relative: bool, span: Span) -> Self {
+        Self {
+            components,
+            is_relative: false,
+            is_absolute: true,
+            home_relative,
+            parent_levels: 0,
             span,
         }
     }

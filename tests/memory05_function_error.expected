@@ -1,0 +1,4 @@
+=== Testing function access to external variable ===
+Calling function that tries to access external_var...
+Runtime error: runtime error: undefined variable: 'external_var'
+Trying to access: 

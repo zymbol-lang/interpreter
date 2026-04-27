@@ -19,6 +19,7 @@ VERSION=""        # auto-detected below
 DO_BUILD=true
 USE_CROSS=false
 DO_HASHES=true
+USE_TIMESTAMP=true
 
 # ---------------------------------------------------------------------------
 # Colours
@@ -40,9 +41,12 @@ Options:
   --version  X.Y.Z       Override version (default: read from interpreter/Cargo.toml)
   --arch     ARCH        x86_64 | aarch64  (default: host arch via uname -m)
   --formats  LIST        Comma-separated subset: deb,rpm,arch,static,win,winmsi  (default: all)
+                         Note: win/winmsi are for local testing only — release Windows builds
+                         run on GitHub Actions (release-windows.yml) using MSVC.
   --cross                Cross-compile with 'cross' (required for aarch64 on x86_64 host)
   --no-build             Skip cargo/cross build; use existing binary
   --no-hashes            Skip SHA256SUMS / SHA512SUMS generation
+  --no-timestamp         Use canonical names without timestamp (for release builds)
   --out-dir  PATH        Output directory (default: packaging/dist/)
   -h, --help             Show this help
 
@@ -58,10 +62,11 @@ while [[ $# -gt 0 ]]; do
         --version)  VERSION="$2";  shift 2 ;;
         --arch)     ARCH="$2";     shift 2 ;;
         --formats)  FORMATS="$2";  shift 2 ;;
-        --cross)      USE_CROSS=true;  shift ;;
-        --no-build)   DO_BUILD=false;  shift ;;
-        --no-hashes)  DO_HASHES=false; shift ;;
-        --out-dir)    OUT_DIR="$2";    shift 2 ;;
+        --cross)        USE_CROSS=true;    shift ;;
+        --no-build)     DO_BUILD=false;    shift ;;
+        --no-hashes)    DO_HASHES=false;   shift ;;
+        --no-timestamp) USE_TIMESTAMP=false; shift ;;
+        --out-dir)      OUT_DIR="$2";      shift 2 ;;
         -h|--help)  usage; exit 0 ;;
         *) error "Unknown option: $1" ;;
     esac
@@ -133,7 +138,11 @@ done
 # Timestamp and base name
 # ---------------------------------------------------------------------------
 TIMESTAMP="$(date -u +%Y%m%dT%H%M)"
-BASE_NAME="zymbol_lang_v${VERSION}_${ARCH}_${TIMESTAMP}"
+if [[ "${USE_TIMESTAMP}" == true ]]; then
+    BASE_NAME="zymbol_lang_v${VERSION}_${ARCH}_${TIMESTAMP}"
+else
+    BASE_NAME="zymbol_lang_v${VERSION}_${ARCH}"
+fi
 info "Package base name: ${BASE_NAME}"
 
 # ---------------------------------------------------------------------------
@@ -478,9 +487,11 @@ Run: rustup target add x86_64-pc-windows-gnu"
 
     # Generate the .nsi from template — strip icon directives if no valid .ico
     local nsi="${staging}/zymbol-setup.nsi"
+    local win_filesuffix="${TIMESTAMP}"
+    [[ "${USE_TIMESTAMP}" == false ]] && win_filesuffix="windows"
     sed \
         -e "s/{{VERSION}}/${VERSION}/g" \
-        -e "s/{{TIMESTAMP}}/${TIMESTAMP}/g" \
+        -e "s/{{TIMESTAMP}}/${win_filesuffix}/g" \
         "${TEMPLATES_DIR}/zymbol-setup.nsi.in" > "${nsi}"
 
     # Remove MUI_ICON / MUI_UNICON lines if no valid icon was produced
@@ -490,14 +501,15 @@ Run: rustup target add x86_64-pc-windows-gnu"
     fi
 
     # Run makensis from the staging dir so File paths resolve correctly
-    local out_name="zymbol_lang_v${VERSION}_x86_64_${TIMESTAMP}_setup.exe"
+    local out_name="zymbol_lang_v${VERSION}_x86_64_${win_filesuffix}_setup.exe"
+    local final_name; [[ "${USE_TIMESTAMP}" == false ]] && final_name="zymbol_lang_v${VERSION}_x86_64_windows.exe" || final_name="${out_name}"
     (cd "${staging}" && makensis -V2 "${nsi}")
 
     local built="${staging}/${out_name}"
     [[ -f "${built}" ]] || error "makensis did not produce ${out_name}"
 
-    mv "${built}" "${OUT_DIR}/${out_name}"
-    success ".exe → ${OUT_DIR}/${out_name}"
+    mv "${built}" "${OUT_DIR}/${final_name}"
+    success ".exe → ${OUT_DIR}/${final_name}"
 }
 
 # ---------------------------------------------------------------------------
@@ -542,7 +554,9 @@ Build it first with --formats win, or run without --no-build."
         -e "s/{{GUID_UPGRADE}}/${guid_upgrade}/g" \
         "${TEMPLATES_DIR}/zymbol.wxs.in" > "${wxs}"
 
-    local out_name="zymbol_lang_v${VERSION}_x86_64_${TIMESTAMP}.msi"
+    local msi_suffix="${TIMESTAMP}"
+    [[ "${USE_TIMESTAMP}" == false ]] && msi_suffix="windows"
+    local out_name="zymbol_lang_v${VERSION}_x86_64_${msi_suffix}.msi"
     local out="${OUT_DIR}/${out_name}"
 
     (cd "${staging}" && wixl -a x64 -o "${out}" "${wxs}")

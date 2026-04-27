@@ -1,78 +1,78 @@
-# archivos
+# archivos {
+    // Módulo para consulta y manipulación de archivos y carpetas
+    // Construido sobre la funcionalidad <\ \> de Zymbol
+    // IMPORTANTE: Usa strings entrecomillados para rutas y opciones
 
-// Módulo para consulta y manipulación de archivos y carpetas
-// Construido sobre la funcionalidad <\ \> de Zymbol
-// IMPORTANTE: Usa strings entrecomillados para rutas y opciones
+    #> {
+        leer_readme
+        crear_archivo_vacio
+        crear_directorio
+        eliminar_temporal
+        existe_archivo
+        existe_directorio
+        buscar_zy
+        info_archivo
+        estructura_directorios
+        archivos_recientes
+    }
 
-#> {
-    leer_readme
-    crear_archivo_vacio
-    crear_directorio
-    eliminar_temporal
-    existe_archivo
-    existe_directorio
-    buscar_zy
-    info_archivo
-    estructura_directorios
-    archivos_recientes
-}
+    // Leer contenido de README.md
+    leer_readme() {
+        resultado = <\ cat "README.md" \>
+        <~ resultado
+    }
 
-// Leer contenido de README.md
-leer_readme() {
-    resultado = <\ cat "README.md" \>
-    <~ resultado
-}
+    // Crear un archivo vacío
+    crear_archivo_vacio() {
+        resultado = <\ touch "ejemplo_temporal.txt" && echo "Archivo creado" \>
+        <~ resultado
+    }
 
-// Crear un archivo vacío
-crear_archivo_vacio() {
-    resultado = <\ touch "ejemplo_temporal.txt" && echo "Archivo creado" \>
-    <~ resultado
-}
+    // Crear un directorio
+    crear_directorio() {
+        resultado = <\ mkdir "-p" "temp_dir" && echo "Directorio creado" \>
+        <~ resultado
+    }
 
-// Crear un directorio
-crear_directorio() {
-    resultado = <\ mkdir "-p" "temp_dir" && echo "Directorio creado" \>
-    <~ resultado
-}
+    // Eliminar archivo temporal
+    eliminar_temporal() {
+        resultado = <\ rm "-f" "ejemplo_temporal.txt" && echo "Archivo eliminado" \>
+        <~ resultado
+    }
 
-// Eliminar archivo temporal
-eliminar_temporal() {
-    resultado = <\ rm "-f" "ejemplo_temporal.txt" && echo "Archivo eliminado" \>
-    <~ resultado
-}
+    // Verificar si calculator.zy existe
+    existe_archivo() {
+        resultado = <\ test "-f" "calculator.zy" && echo "si" || echo "no" \>
+        <~ resultado
+    }
 
-// Verificar si calculator.zy existe
-existe_archivo() {
-    resultado = <\ test "-f" "calculator.zy" && echo "si" || echo "no" \>
-    <~ resultado
-}
+    // Verificar si directorio matematicas existe
+    existe_directorio() {
+        resultado = <\ test "-d" "matematicas" && echo "si" || echo "no" \>
+        <~ resultado
+    }
 
-// Verificar si directorio matematicas existe
-existe_directorio() {
-    resultado = <\ test "-d" "matematicas" && echo "si" || echo "no" \>
-    <~ resultado
-}
+    // Buscar archivos .zy
+    buscar_zy() {
+        resultado = <\ find . "-maxdepth" 1 "-name" "*.zy" "-type" f \>
+        <~ resultado
+    }
 
-// Buscar archivos .zy
-buscar_zy() {
-    resultado = <\ find . "-maxdepth" 1 "-name" "*.zy" "-type" f \>
-    <~ resultado
-}
+    // Información de calculator.zy
+    info_archivo() {
+        resultado = <\ ls "-lh" "calculator.zy" \>
+        <~ resultado
+    }
 
-// Información de calculator.zy
-info_archivo() {
-    resultado = <\ ls "-lh" "calculator.zy" \>
-    <~ resultado
-}
+    // Ver estructura de directorios
+    estructura_directorios() {
+        resultado = <\ find . "-maxdepth" 2 "-type" d \>
+        <~ resultado
+    }
 
-// Ver estructura de directorios
-estructura_directorios() {
-    resultado = <\ find . "-maxdepth" 2 "-type" d \>
-    <~ resultado
-}
-
-// Listar archivos modificados recientemente
-archivos_recientes() {
-    resultado = <\ ls "-lt" | head "-n" 6 \>
-    <~ resultado
+    // Listar archivos modificados recientemente
+    archivos_recientes() {
+        resultado = <\ ls "-lt" | head "-n" 6 \>
+        <~ resultado
+    }
 }

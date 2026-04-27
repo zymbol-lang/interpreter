@@ -123,6 +123,11 @@ impl Lexer {
                     self.advance(); // consume ^
                     return Some(Token::new(TokenKind::DollarCaret, self.span(start)));
                 }
+                '/' => {
+                    self.advance(); // consume $
+                    self.advance(); // consume /
+                    return Some(Token::new(TokenKind::DollarSlash, self.span(start)));
+                }
                 '[' => {
                     self.advance(); // consume $
                     self.advance(); // consume [

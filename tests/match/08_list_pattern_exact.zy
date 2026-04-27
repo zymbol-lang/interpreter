@@ -1,0 +1,23 @@
+// Test: list patterns — exact match on array contents
+arr1 = [1, 2, 3]
+result1 = ?? arr1 {
+    [1, 2, 3] : "exact match"
+    _         : "other"
+}
+>> result1 ¶
+
+// Empty array match
+arr2 = []
+result2 = ?? arr2 {
+    [] : "empty"
+    _  : "not empty"
+}
+>> result2 ¶
+
+// Non-matching exact pattern falls through to wildcard
+arr3 = [1, 2, 4]
+result3 = ?? arr3 {
+    [1, 2, 3] : "exact 1-2-3"
+    _         : "no match"
+}
+>> result3 ¶

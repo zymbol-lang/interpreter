@@ -1,0 +1,22 @@
+=== EDGE CASES TEST ===
+Empty array length: 0 (expected: 0)
+Map on empty: 0 (expected: 0)
+Filter on empty: 0 (expected: 0)
+Single element array: 1 (expected: 1)
+Mapped single: 84 (expected: 84)
+Reduce single: 42 (expected: 42)
+Constant lambda: 100 (expected: 100)
+Parameter shadowing: 20
+Expected: 10 + 5*2 = 20
+Chain of identity: 99 (expected: 99)
+Filter keeps none: 0 (expected: 0)
+Filter keeps all: 5 (expected: 5)
+Reduce from 0: 15 (expected: 15)
+Reduce from 100: 115 (expected: 115)
+Large chain result: 72
+Expected: sum of ((x+1)*2-5) for x where (x+1)*2 > 10
+Multi-variable closure: 65
+Expected: 10+20+30+5 = 65
+Filter true values: 3 (expected: 3)
+Filter false values: 2 (expected: 2)
+=== TEST PASSED ===

@@ -1,0 +1,9 @@
+=== Zymbol Pipeline v2 ===
+P1_split_count:     total=60000  (****)
+P2_split_map:       total=24000  (****)
+P3_split_filter:    total=14000  (****)
+P4_split_reduce:    total=110000  (****)
+P5_csv_rows:        total_score=617000  (****)
+P6_word_filter:     total=10000  (****)
+P7_build_split_agg: total=4471  (****)
+=== Done (****) ===

@@ -1,0 +1,40 @@
+[1m[31merror[39m[0m: expected expression, found Pipe
+  [1m[34m-->[39m[0m tests/i18n/matematicas/sistema.zy:55:27
+[1m[34m  55[39m[0m [34m|[39m
+[1m[34m  55[39m[0m [34m|[39m         resultado = <\ ls | wc "-l" \>
+[34m     |[39m [1m[31m                          ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/sistema.zy:55:32
+[1m[34m  55[39m[0m [34m|[39m
+[1m[34m  55[39m[0m [34m|[39m         resultado = <\ ls | wc "-l" \>
+[34m     |[39m [1m[31m                               ^^^^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/matematicas/sistema.zy:55:37
+[1m[34m  55[39m[0m [34m|[39m
+[1m[34m  55[39m[0m [34m|[39m         resultado = <\ ls | wc "-l" \>
+[34m     |[39m [1m[31m                                    ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected field name after '.'
+  [1m[34m-->[39m[0m tests/i18n/matematicas/sistema.zy:61:34
+[1m[34m  61[39m[0m [34m|[39m
+[1m[34m  61[39m[0m [34m|[39m         resultado = <\ df "-h" . \>
+[34m     |[39m [1m[31m                                 ^^[39m[0m
+  [1m[32mhelp:[39m[0m member access requires a field name: object.field
+[1m[31merror[39m[0m: expected expression, found Pipe
+  [1m[34m-->[39m[0m tests/i18n/matematicas/sistema.zy:67:31
+[1m[34m  67[39m[0m [34m|[39m
+[1m[34m  67[39m[0m [34m|[39m         resultado = <\ ps aux | wc "-l" \>
+[34m     |[39m [1m[31m                              ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/sistema.zy:67:36
+[1m[34m  67[39m[0m [34m|[39m
+[1m[34m  67[39m[0m [34m|[39m         resultado = <\ ps aux | wc "-l" \>
+[34m     |[39m [1m[31m                                   ^^^^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/matematicas/sistema.zy:67:41
+[1m[34m  67[39m[0m [34m|[39m
+[1m[34m  67[39m[0m [34m|[39m         resultado = <\ ps aux | wc "-l" \>
+[34m     |[39m [1m[31m                                        ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)

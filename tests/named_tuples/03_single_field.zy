@@ -7,7 +7,7 @@ wrapper = (value: 42)
     >> "✓ Single-field named tuple works" ¶
 }
 
-? wrapper[0] == 42 {
+? wrapper[1] == 42 {
     >> "✓ Single-field positional access works" ¶
 }
 

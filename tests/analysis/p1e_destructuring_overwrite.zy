@@ -1,0 +1,19 @@
+// P1-E: Destructuring overwrites existing variables in scope
+
+// Mutable variable is overwritten
+a = 10
+b = 20
+[a, b] = [99, 88]
+>> a ¶
+>> b ¶
+
+// _ position is skipped (left intact)
+x = 42
+[x, _] = [77, 999]
+>> x ¶
+
+// L14: destructuring silently overwrites :=  (known implementation gap)
+limit := 100
+[limit, extra] = [200, 300]
+>> limit ¶
+>> extra ¶

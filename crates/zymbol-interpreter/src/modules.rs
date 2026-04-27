@@ -22,8 +22,10 @@ pub(crate) struct LoadedModule {
     /// Module name
     #[allow(dead_code)]
     pub(crate) name: String,
-    /// Exported functions
+    /// Exported functions only (for external callers via alias::fn)
     pub(crate) functions: HashMap<String, Rc<FunctionDef>>,
+    /// ALL module functions: exported + private (for intra-module calls — BUG-01)
+    pub(crate) all_functions: HashMap<String, Rc<FunctionDef>>,
     /// Exported constants/variables (for external access via module.CONSTANT)
     pub(crate) constants: HashMap<String, Value>,
     /// All module variables (for function execution context - includes private variables)
@@ -41,9 +43,22 @@ impl<W: Write> Interpreter<W> {
         // Resolve the module path
         let module_path = self.resolve_module_path(&import.path)?;
 
+        // Circular import detection: if the module is currently being loaded, there is a cycle
+        if self.loading_modules.contains(&module_path) {
+            let cycle_name = module_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("?")
+                .to_string();
+            return Err(RuntimeError::CircularImport { module: cycle_name });
+        }
+
         // Load the module if not already loaded
         if !self.loaded_modules.contains_key(&module_path) {
-            self.load_module(&module_path)?;
+            self.loading_modules.insert(module_path.clone());
+            let result = self.load_module(&module_path);
+            self.loading_modules.remove(&module_path);
+            result?;
         }
 
         // Register the import alias
@@ -55,24 +70,31 @@ impl<W: Write> Interpreter<W> {
 
     /// Resolve a module path to an absolute file path
     pub(crate) fn resolve_module_path(&self, module_path: &zymbol_ast::ModulePath) -> Result<PathBuf> {
-        let current_dir = self
-            .current_file
-            .as_ref()
-            .and_then(|p| p.parent())
-            .unwrap_or(&self.base_dir);
-
-        let mut resolved = current_dir.to_path_buf();
-
-        // Handle parent directory navigation
-        if module_path.is_relative {
+        let mut resolved = if module_path.is_absolute {
+            // Absolute path: /foo/bar or ~/foo/bar
+            if module_path.home_relative {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+                PathBuf::from(home)
+            } else {
+                PathBuf::from("/")
+            }
+        } else {
+            // Relative path: ./foo or ../foo — start from current file's directory
+            let current_dir = self
+                .current_file
+                .as_ref()
+                .and_then(|p| p.parent())
+                .unwrap_or(&self.base_dir);
+            let mut base = current_dir.to_path_buf();
             for _ in 0..module_path.parent_levels {
-                if !resolved.pop() {
+                if !base.pop() {
                     return Err(RuntimeError::ModuleNotFound {
                         path: format!("{:?}", module_path.components),
                     });
                 }
             }
-        }
+            base
+        };
 
         // Add path components
         for component in &module_path.components {
@@ -102,21 +124,41 @@ impl<W: Write> Interpreter<W> {
         let (tokens, lex_diagnostics) = lexer.tokenize();
 
         if !lex_diagnostics.is_empty() {
+            let detail: Vec<String> = lex_diagnostics.iter().map(|d| {
+                let loc = d.span
+                    .map(|s| format!("{}:{}:{}", file_path.display(), s.start.line, s.start.column))
+                    .unwrap_or_else(|| file_path.display().to_string());
+                let mut msg = format!("  {}: {}", loc, d.message);
+                if let Some(help) = &d.help {
+                    msg.push_str(&format!("\n    help: {}", help));
+                }
+                msg
+            }).collect();
             return Err(RuntimeError::ParseError(format!(
-                "{} lexer errors in module",
-                lex_diagnostics.len()
+                "{} lexer error(s) in '{}'\n{}",
+                lex_diagnostics.len(),
+                file_path.display(),
+                detail.join("\n")
             )));
         }
 
         let parser = Parser::new(tokens);
         let program = parser.parse().map_err(|errors| {
-            let error_msgs: Vec<String> = errors.iter()
-                .map(|e| format!("{:?}", e))
-                .collect();
+            let detail: Vec<String> = errors.iter().map(|d| {
+                let loc = d.span
+                    .map(|s| format!("{}:{}:{}", file_path.display(), s.start.line, s.start.column))
+                    .unwrap_or_else(|| file_path.display().to_string());
+                let mut msg = format!("  {}: {}", loc, d.message);
+                if let Some(help) = &d.help {
+                    msg.push_str(&format!("\n    help: {}", help));
+                }
+                msg
+            }).collect();
             RuntimeError::ParseError(format!(
-                "{} parser errors in module:\n{}",
+                "{} parse error(s) in '{}'\n{}",
                 errors.len(),
-                error_msgs.join("\n")
+                file_path.display(),
+                detail.join("\n")
             ))
         })?;
 
@@ -124,6 +166,8 @@ impl<W: Write> Interpreter<W> {
         let mut module_interp = Interpreter::with_output(Vec::new());
         module_interp.set_current_file(file_path);
         module_interp.set_base_dir(&self.base_dir);
+        // Propagate the in-flight loading set so nested modules inherit cycle detection state
+        module_interp.loading_modules = self.loading_modules.clone();
 
         // Execute the module (this will process its imports and statements)
         module_interp.execute(&program)?;
@@ -137,6 +181,9 @@ impl<W: Write> Interpreter<W> {
             .collect();
 
         // Extract exported items based on export block
+        // Capture all functions before module_interp is consumed (for BUG-01 intra-module calls)
+        let all_module_functions = module_interp.functions.clone();
+
         let mut loaded_module = LoadedModule {
             name: program
                 .module_decl
@@ -150,6 +197,7 @@ impl<W: Write> Interpreter<W> {
                         .to_string()
                 }),
             functions: HashMap::new(),
+            all_functions: all_module_functions,
             constants: HashMap::new(),
             all_variables: all_module_variables,
             import_aliases: module_import_aliases,
@@ -163,12 +211,18 @@ impl<W: Write> Interpreter<W> {
                     match export_item {
                         zymbol_ast::ExportItem::Own { name, rename, .. } => {
                             let public_name = rename.as_ref().unwrap_or(name).clone();
-                            // Export own function or constant under public name
+                            // Export own function or := constant under public name.
+                            // Mutable module variables (declared with `=`) are private — they
+                            // cannot be exported directly and are silently skipped here.
+                            // They remain accessible only via exported getter/setter functions.
                             if let Some(func) = module_interp.functions.get(name) {
                                 loaded_module.functions.insert(public_name, func.clone());
-                            } else if let Some(val) = module_interp.get_variable(name) {
-                                loaded_module.constants.insert(public_name, val.clone());
+                            } else if module_interp.is_const(name) {
+                                if let Some(val) = module_interp.get_variable(name) {
+                                    loaded_module.constants.insert(public_name, val.clone());
+                                }
                             }
+                            // else: mutable variable — silently excluded from exports
                         }
                         zymbol_ast::ExportItem::ReExport {
                             module_alias,

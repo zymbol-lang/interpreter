@@ -1,0 +1,37 @@
+// Test: list patterns — wildcard elements in array patterns
+cmd1 = ["run", "main.zy"]
+result1 = ?? cmd1 {
+    ["run", _]    : "run command"
+    ["build", _]  : "build command"
+    []            : "empty"
+    _             : "unknown"
+}
+>> result1 ¶
+
+// Build command
+cmd2 = ["build", "out"]
+result2 = ?? cmd2 {
+    ["run", _]    : "run command"
+    ["build", _]  : "build command"
+    _             : "unknown"
+}
+>> result2 ¶
+
+// Three-element pattern with wildcards
+triple = [10, 20, 30]
+result3 = ?? triple {
+    [_, _, _] : "three elements"
+    [_, _]    : "two elements"
+    [_]       : "one element"
+    _         : "other"
+}
+>> result3 ¶
+
+// Wildcard at first position
+data = [99, 2]
+result4 = ?? data {
+    [_, 1] : "ends with 1"
+    [_, 2] : "ends with 2"
+    _      : "other"
+}
+>> result4 ¶

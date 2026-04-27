@@ -1,0 +1,5 @@
+i=0: i=0: error
+i=1: 10
+i=2: 20
+i=3: i=3: error
+done

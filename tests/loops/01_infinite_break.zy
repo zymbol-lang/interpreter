@@ -1,0 +1,8 @@
+// Test: infinite loop @ { } with @! break
+i = 0
+@ {
+    i++
+    ? i >= 5 { @! }
+    >> i " "
+}
+>> ¶

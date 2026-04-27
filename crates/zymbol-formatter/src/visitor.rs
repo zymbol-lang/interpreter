@@ -13,11 +13,13 @@ use zymbol_ast::{
     ExportBlock, ExportItem, Expr, ExprStatement, FinallyClause, FormatExpr, FormatKind, PrecisionOp,
     FunctionCallExpr, FunctionDecl, IdentifierExpr, IfStmt, ImportStmt, IndexExpr, Input,
     InputPrompt, ItemType, LambdaBody, LambdaExpr, LifetimeEnd, LiteralExpr, Loop, MatchCase,
-    MatchExpr, MemberAccessExpr, ModuleDecl, NamedTupleExpr, NumericEvalExpr, Output,
+    MatchExpr, MemberAccessExpr, NamedTupleExpr, NumericEvalExpr, Output,
     Parameter, ParameterKind, Pattern, Program, RangeExpr, ReturnStmt, RoundExpr, Statement,
     StringReplaceExpr, TruncExpr,
     TryStmt, TupleExpr, TypeMetadataExpr, UnaryExpr,
     ExecuteExpr, BashExecExpr, CliArgsCaptureStmt,
+    DeepIndexExpr, FlatExtractExpr, StructuredExtractExpr,
+    NavStep, NavPath, ExtractGroup,
 };
 use zymbol_ast::PipeExpr;
 use zymbol_common::{BinaryOp, Literal, UnaryOp};
@@ -38,27 +40,45 @@ impl<'a> FormatVisitor<'a> {
 
     /// Format an entire program
     pub fn format_program(&mut self, program: &Program) {
-        // Format module declaration if present
+        let in_module = program.module_decl.is_some();
+
         if let Some(ref module_decl) = program.module_decl {
-            self.format_module_decl(module_decl);
+            self.output.write("# ");
+            self.output.write(&module_decl.name);
+            self.output.open_brace();
             self.output.newline();
+            self.output.indent();
+
+            // Imports first (as they appear in source), then export block
+            for import in &program.imports {
+                self.format_import(import);
+                self.output.newline();
+            }
+
+            if let Some(ref export_block) = module_decl.export_block {
+                if !program.imports.is_empty() {
+                    self.output.newline();
+                }
+                self.format_export_block(export_block);
+                self.output.newline();
+            }
+        } else {
+            // Non-module file: imports at top level
+            for import in &program.imports {
+                self.format_import(import);
+                self.output.newline();
+            }
         }
 
-        // Format imports
-        for import in &program.imports {
-            self.format_import(import);
-            self.output.newline();
-        }
-
-        // Add blank line after imports if there are any
-        if !program.imports.is_empty() && !program.statements.is_empty() {
+        // Add blank line after imports (non-module) or after export block (module)
+        if !in_module && !program.imports.is_empty() && !program.statements.is_empty() {
             self.output.newline();
         }
 
         // Format statements
         let mut prev_was_function = false;
+        let mut prev_was_newline = false;
         for (i, stmt) in program.statements.iter().enumerate() {
-            // Add blank line before function declarations (except first statement)
             let is_function = matches!(stmt, Statement::FunctionDecl(_));
             let is_newline = matches!(stmt, Statement::Newline(_));
 
@@ -66,9 +86,8 @@ impl<'a> FormatVisitor<'a> {
                 self.output.newline();
             }
 
-            // Newline statements (¶) should be on the same line as previous statement
-            if is_newline && i > 0 {
-                // Remove the previous newline and add space + ¶
+            // Join ¶ onto the previous line only when prev wasn't already a ¶
+            if is_newline && i > 0 && !prev_was_newline {
                 self.output.backspace_newline();
                 self.output.space();
             }
@@ -77,18 +96,13 @@ impl<'a> FormatVisitor<'a> {
             self.output.newline();
 
             prev_was_function = is_function;
+            prev_was_newline = is_newline;
         }
-    }
 
-    /// Format a module declaration
-    fn format_module_decl(&mut self, decl: &ModuleDecl) {
-        self.output.write("# ");
-        self.output.write(&decl.name);
-
-        if let Some(ref export_block) = decl.export_block {
+        if in_module {
+            self.output.dedent();
+            self.output.close_brace();
             self.output.newline();
-            self.output.newline();
-            self.format_export_block(export_block);
         }
     }
 
@@ -99,11 +113,8 @@ impl<'a> FormatVisitor<'a> {
         self.output.newline();
         self.output.indent();
 
-        for (i, item) in block.items.iter().enumerate() {
+        for item in &block.items {
             self.format_export_item(item);
-            if i < block.items.len() - 1 {
-                self.output.write(",");
-            }
             self.output.newline();
         }
 
@@ -198,7 +209,12 @@ impl<'a> FormatVisitor<'a> {
         self.output.write(">>");
         for expr in &output.exprs {
             self.output.space();
+            // Binary expressions in output need parens to avoid ambiguity
+            // e.g. >> (#1 && #0) must stay as >> (#1 && #0), not >> #1 && #0
+            let needs_parens = matches!(expr, Expr::Binary(_));
+            if needs_parens { self.output.write("("); }
             self.format_expr(expr);
+            if needs_parens { self.output.write(")"); }
         }
     }
 
@@ -301,22 +317,21 @@ impl<'a> FormatVisitor<'a> {
         self.output.write("?");
         self.output.space();
         self.format_expr(&if_stmt.condition);
+
         self.format_block(&if_stmt.then_block);
 
         // Format else-if branches
         for branch in &if_stmt.else_if_branches {
-            self.output.newline();
-            self.output.write("_?");
+            self.output.write(" _?");
             self.output.space();
             self.format_expr(&branch.condition);
             self.format_block(&branch.block);
         }
 
-        // Format else block (no space between _ and {)
+        // Format else block — always continue on same line as closing }
         if let Some(ref else_block) = if_stmt.else_block {
-            self.output.newline();
-            self.output.write("_");
-            self.format_block_no_leading_space(else_block);
+            self.output.write(" _");
+            self.format_block(else_block);
         }
     }
 
@@ -324,10 +339,9 @@ impl<'a> FormatVisitor<'a> {
     fn format_loop(&mut self, loop_stmt: &Loop) {
         self.output.write("@");
 
-        // Handle labeled loop
+        // Labeled loop: @:label
         if let Some(ref label) = loop_stmt.label {
-            self.output.space();
-            self.output.write("@");
+            self.output.write(":");
             self.output.write(label);
         }
 
@@ -351,19 +365,23 @@ impl<'a> FormatVisitor<'a> {
 
     /// Format a break statement
     fn format_break(&mut self, brk: &Break) {
-        self.output.write("@!");
         if let Some(ref label) = brk.label {
-            self.output.space();
+            self.output.write("@:");
             self.output.write(label);
+            self.output.write("!");
+        } else {
+            self.output.write("@!");
         }
     }
 
     /// Format a continue statement
     fn format_continue(&mut self, cont: &Continue) {
-        self.output.write("@>");
         if let Some(ref label) = cont.label {
-            self.output.space();
+            self.output.write("@:");
             self.output.write(label);
+            self.output.write(">");
+        } else {
+            self.output.write("@>");
         }
     }
 
@@ -424,11 +442,18 @@ impl<'a> FormatVisitor<'a> {
     /// Format a function parameter
     fn format_parameter(&mut self, param: &Parameter) {
         match param.kind {
-            ParameterKind::Normal => {}
-            ParameterKind::Mutable => self.output.write("~"),
-            ParameterKind::Output => self.output.write("<~"),
+            ParameterKind::Normal => {
+                self.output.write(&param.name);
+            }
+            ParameterKind::Mutable => {
+                self.output.write("~");
+                self.output.write(&param.name);
+            }
+            ParameterKind::Output => {
+                self.output.write(&param.name);
+                self.output.write("<~");
+            }
         }
-        self.output.write(&param.name);
     }
 
     /// Format a return statement
@@ -451,44 +476,33 @@ impl<'a> FormatVisitor<'a> {
         self.output.write(&capture.variable_name);
     }
 
-    /// Format a block
     fn format_block(&mut self, block: &Block) {
-        self.format_block_internal(block, true)
-    }
-
-    /// Format a block without leading space (for else blocks)
-    fn format_block_no_leading_space(&mut self, block: &Block) {
-        self.format_block_internal(block, false)
-    }
-
-    /// Internal block formatting with configurable leading space
-    fn format_block_internal(&mut self, block: &Block, leading_space: bool) {
         let config = self.output.config().clone();
         let single_stmt = block.statements.len() == 1;
         let is_simple = single_stmt && self.is_simple_statement(&block.statements[0]);
 
         if config.inline_single_statement && is_simple {
-            // Inline single statement
-            if leading_space {
-                self.output.write(" { ");
-            } else {
-                self.output.write("{ ");
-            }
+            self.output.write(" { ");
             self.format_statement(&block.statements[0]);
             self.output.write(" }");
         } else {
-            // Multi-line block
-            if leading_space {
-                self.output.open_brace();
-            } else {
-                self.output.write("{");
-            }
+            self.output.open_brace();
             self.output.newline();
             self.output.indent();
 
-            for stmt in &block.statements {
-                self.format_statement(stmt);
+            let stmts = &block.statements;
+            let mut i = 0;
+            let mut prev_was_newline = false;
+            while i < stmts.len() {
+                let is_newline = matches!(stmts[i], Statement::Newline(_));
+                if is_newline && i > 0 && !prev_was_newline {
+                    self.output.backspace_newline();
+                    self.output.space();
+                }
+                self.format_statement(&stmts[i]);
                 self.output.newline();
+                prev_was_newline = is_newline;
+                i += 1;
             }
 
             self.output.dedent();
@@ -538,6 +552,31 @@ impl<'a> FormatVisitor<'a> {
             Expr::CollectionUpdate(op) => self.format_collection_update(op),
             Expr::CollectionSlice(op) => self.format_collection_slice(op),
             Expr::StringReplace(op) => self.format_string_replace(op),
+            Expr::StringSplit(op) => {
+                self.format_expr(&op.string);
+                self.output.write("$/ ");
+                self.format_expr(&op.delimiter);
+            }
+            Expr::ConcatBuild(op) => {
+                self.format_expr(&op.base);
+                self.output.write(" $++");
+                for item in &op.items {
+                    self.output.write(" ");
+                    self.format_expr(item);
+                }
+            }
+            Expr::NumericCast(op) => {
+                let prefix = match op.kind {
+                    zymbol_ast::CastKind::ToFloat    => "##.",
+                    zymbol_ast::CastKind::ToIntRound => "###",
+                    zymbol_ast::CastKind::ToIntTrunc => "##!",
+                };
+                self.output.write(prefix);
+                let needs_parens = matches!(op.expr.as_ref(), Expr::Binary(_));
+                if needs_parens { self.output.write("("); }
+                self.format_expr(&op.expr);
+                if needs_parens { self.output.write(")"); }
+            }
             Expr::NumericEval(op) => self.format_numeric_eval(op),
             Expr::TypeMetadata(op) => self.format_type_metadata(op),
             Expr::Format(op) => self.format_format_expr(op),
@@ -546,9 +585,9 @@ impl<'a> FormatVisitor<'a> {
             Expr::CollectionMap(op) => self.format_collection_map(op),
             Expr::CollectionFilter(op) => self.format_collection_filter(op),
             Expr::CollectionReduce(op) => self.format_collection_reduce(op),
-            Expr::CollectionSortAsc(op) => self.format_collection_sort(op),
-            Expr::CollectionSortDesc(op) => self.format_collection_sort(op),
-            Expr::CollectionSortCustom(op) => self.format_collection_sort(op),
+            Expr::CollectionSortAsc(op) => self.format_collection_sort(op, "$^+"),
+            Expr::CollectionSortDesc(op) => self.format_collection_sort(op, "$^-"),
+            Expr::CollectionSortCustom(op) => self.format_collection_sort(op, "$^"),
             Expr::Pipe(pipe) => self.format_pipe(pipe),
             Expr::Execute(exec) => self.format_execute(exec),
             Expr::BashExec(bash) => self.format_bash_exec(bash),
@@ -556,6 +595,9 @@ impl<'a> FormatVisitor<'a> {
             Expr::Trunc(trunc) => self.format_trunc(trunc),
             Expr::ErrorCheck(check) => self.format_error_check(check),
             Expr::ErrorPropagate(prop) => self.format_error_propagate(prop),
+            Expr::DeepIndex(di) => self.format_deep_index(di),
+            Expr::FlatExtract(fe) => self.format_flat_extract(fe),
+            Expr::StructuredExtract(se) => self.format_structured_extract(se),
         }
     }
 
@@ -564,7 +606,7 @@ impl<'a> FormatVisitor<'a> {
         match &lit.value {
             Literal::Int(n) => self.output.write(&n.to_string()),
             Literal::Float(f) => self.output.write(&format_float(*f)),
-            Literal::String(s) => {
+            Literal::String(s) | Literal::InterpolatedString(s) => {
                 self.output.write("\"");
                 self.output.write(&escape_string(s));
                 self.output.write("\"");
@@ -612,6 +654,10 @@ impl<'a> FormatVisitor<'a> {
             BinaryOp::Range => {
                 // No spaces around ..
                 self.output.write("..");
+            }
+            BinaryOp::Concat => {
+                // Juxtaposition: no explicit operator, just a space separator
+                self.output.write(" ");
             }
             _ => {
                 if should_break {
@@ -696,6 +742,7 @@ impl<'a> FormatVisitor<'a> {
             BinaryOp::Pipe => 0,
             BinaryOp::Comma => 0,
             BinaryOp::Range => 8,
+            BinaryOp::Concat => 9, // tightest: juxtaposition binds tighter than arithmetic
         }
     }
 
@@ -732,8 +779,7 @@ impl<'a> FormatVisitor<'a> {
     /// Format an array literal
     fn format_array_literal(&mut self, arr: &ArrayLiteralExpr) {
         let config = self.output.config().clone();
-        let should_inline = arr.elements.len() <= config.max_inline_array_elements
-            && self.estimate_array_length(arr) <= config.max_inline_array_length;
+        let should_inline = self.estimate_array_length(arr) <= config.max_inline_array_length;
 
         if should_inline || arr.elements.is_empty() {
             // Inline format
@@ -782,11 +828,12 @@ impl<'a> FormatVisitor<'a> {
             Expr::Literal(lit) => match &lit.value {
                 Literal::Int(n) => n.to_string().len(),
                 Literal::Float(f) => format_float(*f).len(),
-                Literal::String(s) => s.len() + 2,
+                Literal::String(s) | Literal::InterpolatedString(s) => s.len() + 2,
                 Literal::Char(_) => 3,
                 Literal::Bool(_) => 2,
             },
             Expr::Identifier(ident) => ident.name.len(),
+            Expr::ArrayLiteral(arr) => self.estimate_array_length(arr),
             _ => 20, // Conservative estimate for complex expressions
         }
     }
@@ -866,21 +913,138 @@ impl<'a> FormatVisitor<'a> {
     /// Format a member access expression
     fn format_member_access(&mut self, member: &MemberAccessExpr) {
         self.format_expr(&member.object);
-        self.output.write(".");
+        if member.is_module_access {
+            self.output.write("::");
+        } else {
+            self.output.write(".");
+        }
         self.output.write(&member.field);
     }
 
     /// Format an index expression
     fn format_index(&mut self, index: &IndexExpr) {
+        // TypeMetadata (#?) followed by [i] requires parens: (expr#?)[i]
+        // Without parens the parser sees `expr#?` as complete statement then `[i]` at stmt level.
+        let needs_parens = matches!(index.array.as_ref(), Expr::TypeMetadata(_))
+            || Self::expr_needs_postfix_parens(&index.array);
+        if needs_parens { self.output.write("("); }
         self.format_expr(&index.array);
+        if needs_parens { self.output.write(")"); }
         self.output.write("[");
         self.format_expr(&index.index);
         self.output.write("]");
     }
 
+    fn nav_step_index_needs_parens(expr: &Expr, in_multi_step: bool) -> bool {
+        // In multi-step paths, `>` is ambiguous with comparison:
+        // `a+1>b` parses as `a + (1>b)`, not as `(a+1) > b`
+        // So any non-atomic index in a multi-step path needs parens.
+        if !in_multi_step {
+            return false;
+        }
+        matches!(expr, Expr::Binary(_) | Expr::Unary(_) | Expr::FunctionCall(_))
+    }
+
+    fn format_nav_step(&mut self, step: &NavStep, in_multi_step: bool) {
+        let needs_parens = Self::nav_step_index_needs_parens(&step.index, in_multi_step);
+        if needs_parens { self.output.write("("); }
+        self.format_expr(&step.index);
+        if needs_parens { self.output.write(")"); }
+        if let Some(ref end) = step.range_end {
+            self.output.write("..");
+            self.format_expr(end);
+        }
+    }
+
+    fn format_nav_path(&mut self, path: &NavPath) {
+        let multi = path.steps.len() > 1;
+        for (i, step) in path.steps.iter().enumerate() {
+            if i > 0 { self.output.write(">"); }
+            self.format_nav_step(step, multi);
+        }
+    }
+
+    /// Returns true when a collection expression needs outer parens
+    /// to prevent a following postfix operator from binding to the wrong sub-expression.
+    fn expr_needs_postfix_parens(expr: &Expr) -> bool {
+        matches!(expr,
+            Expr::CollectionSortCustom(_)
+            | Expr::CollectionSortAsc(_)
+            | Expr::CollectionSortDesc(_)
+            | Expr::CollectionMap(_)
+            | Expr::CollectionFilter(_)
+            | Expr::CollectionReduce(_)
+            | Expr::CollectionAppend(_)
+            | Expr::CollectionInsert(_)
+            | Expr::CollectionRemoveAt(_)
+            | Expr::CollectionRemoveAll(_)
+            | Expr::CollectionUpdate(_)
+        )
+    }
+
+    fn format_deep_index(&mut self, di: &DeepIndexExpr) {
+        let needs_parens = Self::expr_needs_postfix_parens(&di.array);
+        if needs_parens { self.output.write("("); }
+        self.format_expr(&di.array);
+        if needs_parens { self.output.write(")"); }
+        self.output.write("[");
+        self.format_nav_path(&di.path);
+        self.output.write("]");
+    }
+
+    fn path_has_ranges(path: &NavPath) -> bool {
+        path.steps.iter().any(|s| s.range_end.is_some())
+    }
+
+    fn format_flat_extract(&mut self, fe: &FlatExtractExpr) {
+        self.format_expr(&fe.array);
+        if fe.paths.len() == 1 && Self::path_has_ranges(&fe.paths[0]) {
+            // Range-based extract uses single brackets: arr[i>a..b]
+            self.output.write("[");
+            self.format_nav_path(&fe.paths[0]);
+            self.output.write("]");
+        } else if fe.paths.len() == 1 {
+            // Explicit double-bracket extract: arr[[path]]
+            self.output.write("[[");
+            self.format_nav_path(&fe.paths[0]);
+            self.output.write("]]");
+        } else {
+            // Multi-path flat extract: arr[p1 ; p2 ; p3]
+            self.output.write("[");
+            for (i, path) in fe.paths.iter().enumerate() {
+                if i > 0 { self.output.write(" ; "); }
+                self.format_nav_path(path);
+            }
+            self.output.write("]");
+        }
+    }
+
+    fn format_structured_extract(&mut self, se: &StructuredExtractExpr) {
+        self.format_expr(&se.array);
+        self.output.write("[");
+        for (i, group) in se.groups.iter().enumerate() {
+            if i > 0 { self.output.write(" ; "); }
+            self.format_extract_group(group);
+        }
+        self.output.write("]");
+    }
+
+    fn format_extract_group(&mut self, group: &ExtractGroup) {
+        self.output.write("[");
+        for (i, path) in group.paths.iter().enumerate() {
+            if i > 0 { self.output.write(", "); }
+            self.format_nav_path(path);
+        }
+        self.output.write("]");
+    }
+
     /// Format a function call expression
     fn format_function_call(&mut self, call: &FunctionCallExpr) {
+        // Lambda callables need parens: (x -> x*2)(arg)
+        let needs_parens = matches!(call.callable.as_ref(), Expr::Lambda(_));
+        if needs_parens { self.output.write("("); }
         self.format_expr(&call.callable);
+        if needs_parens { self.output.write(")"); }
         self.output.write("(");
 
         let estimated_len = self.estimate_args_length(&call.arguments);
@@ -933,16 +1097,8 @@ impl<'a> FormatVisitor<'a> {
         self.output.newline();
         self.output.indent();
 
-        // Find max pattern width for alignment
-        let max_pattern_width = match_expr
-            .cases
-            .iter()
-            .map(|c| self.estimate_pattern_length(&c.pattern))
-            .max()
-            .unwrap_or(0);
-
         for case in &match_expr.cases {
-            self.format_match_case(case, max_pattern_width);
+            self.format_match_case(case);
             self.output.newline();
         }
 
@@ -951,19 +1107,12 @@ impl<'a> FormatVisitor<'a> {
     }
 
     /// Format a match case
-    fn format_match_case(&mut self, case: &MatchCase, align_width: usize) {
-        let pattern_len = self.estimate_pattern_length(&case.pattern);
+    fn format_match_case(&mut self, case: &MatchCase) {
         self.format_pattern(&case.pattern);
-
-        // Align colons
-        let padding = align_width.saturating_sub(pattern_len);
-        for _ in 0..padding {
-            self.output.space();
-        }
-
-        self.output.write(" : ");
+        self.output.write(" :");
 
         if let Some(ref value) = case.value {
+            self.output.space();
             self.format_expr(value);
         }
 
@@ -996,42 +1145,34 @@ impl<'a> FormatVisitor<'a> {
             Pattern::Wildcard(_) => {
                 self.output.write("_");
             }
-            Pattern::Guard(inner, condition, _) => {
-                self.format_pattern(inner);
-                self.output.write(" ? ");
-                self.format_expr(condition);
+            Pattern::Comparison(op, expr, _) => {
+                self.output.write(&op.to_string());
+                self.output.write(" ");
+                self.format_expr(expr);
+            }
+            Pattern::Ident(name, _) => {
+                self.output.write(name);
             }
         }
     }
 
-    /// Estimate the length of a pattern
-    fn estimate_pattern_length(&self, pattern: &Pattern) -> usize {
-        Self::estimate_pattern_length_static(pattern)
-    }
-
-    fn estimate_pattern_length_static(pattern: &Pattern) -> usize {
-        match pattern {
-            Pattern::Literal(lit, _) => lit.to_string().len(),
-            Pattern::Range(_, _, _) => 7, // Rough estimate
-            Pattern::List(patterns, _) => {
-                2 + patterns.iter().map(|p| Self::estimate_pattern_length_static(p) + 2).sum::<usize>()
-            }
-            Pattern::Wildcard(_) => 1,
-            Pattern::Guard(inner, _, _) => Self::estimate_pattern_length_static(inner) + 10,
-        }
-    }
-
-    /// Format collection length operation
+        /// Format collection length operation
     fn format_collection_length(&mut self, op: &CollectionLengthExpr) {
+        let needs_parens = Self::expr_needs_postfix_parens(&op.collection);
+        if needs_parens { self.output.write("("); }
         self.format_expr(&op.collection);
+        if needs_parens { self.output.write(")"); }
         self.output.write("$#");
     }
 
     /// Format collection append operation
     fn format_collection_append(&mut self, op: &CollectionAppendExpr) {
         self.format_expr(&op.collection);
-        self.output.write("$+ ");
+        self.output.write(" $+ ");
+        let needs_parens = matches!(op.element.as_ref(), Expr::Binary(_));
+        if needs_parens { self.output.write("("); }
         self.format_expr(&op.element);
+        if needs_parens { self.output.write(")"); }
     }
 
     /// Format collection insert operation: collection$+[index] element
@@ -1211,28 +1352,24 @@ impl<'a> FormatVisitor<'a> {
     /// Format collection map operation
     fn format_collection_map(&mut self, op: &CollectionMapExpr) {
         self.format_expr(&op.collection);
-        self.output.write("$> (");
+        self.output.write("$> ");
         self.format_expr(&op.lambda);
-        self.output.write(")");
     }
 
     /// Format collection filter operation
     fn format_collection_filter(&mut self, op: &CollectionFilterExpr) {
         self.format_expr(&op.collection);
-        self.output.write("$| (");
+        self.output.write("$| ");
         self.format_expr(&op.lambda);
-        self.output.write(")");
     }
 
     /// Format collection sort operation
-    fn format_collection_sort(&mut self, op: &CollectionSortExpr) {
+    fn format_collection_sort(&mut self, op: &CollectionSortExpr, sym: &str) {
         self.format_expr(&op.collection);
-        let sym = if op.ascending { "$^+" } else { "$^-" };
         self.output.write(sym);
         if let Some(ref cmp) = op.comparator {
-            self.output.write(" (");
+            self.output.write(" ");
             self.format_expr(cmp);
-            self.output.write(")");
         }
     }
 
@@ -1250,7 +1387,10 @@ impl<'a> FormatVisitor<'a> {
     fn format_pipe(&mut self, pipe: &PipeExpr) {
         self.format_expr(&pipe.left);
         self.output.write(" |> ");
+        let needs_parens = matches!(pipe.callable.as_ref(), Expr::Lambda(_));
+        if needs_parens { self.output.write("("); }
         self.format_expr(&pipe.callable);
+        if needs_parens { self.output.write(")"); }
         self.output.write("(");
         for (i, arg) in pipe.arguments.iter().enumerate() {
             match arg {
@@ -1273,17 +1413,14 @@ impl<'a> FormatVisitor<'a> {
 
     /// Format bash execute expression
     fn format_bash_exec(&mut self, bash: &BashExecExpr) {
-        self.output.write("<\\");
-        // Reconstruct the command with interpolated variables
-        for (i, part) in bash.parts.iter().enumerate() {
-            self.output.write(part);
-            if i < bash.variables.len() {
-                self.output.write("{");
-                self.output.write(&bash.variables[i]);
-                self.output.write("}");
+        self.output.write("<\\ ");
+        for (i, arg) in bash.args.iter().enumerate() {
+            if i > 0 {
+                self.output.write(" ");
             }
+            self.format_expr(arg);
         }
-        self.output.write("\\>");
+        self.output.write(" \\>");
     }
 
     /// Format round expression
@@ -1340,13 +1477,15 @@ fn escape_string(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for ch in s.chars() {
         match ch {
-            '\n' => result.push_str("\\n"),
-            '\r' => result.push_str("\\r"),
-            '\t' => result.push_str("\\t"),
-            '\\' => result.push_str("\\\\"),
-            '"' => result.push_str("\\\""),
-            '{' => result.push_str("\\{"),
-            '}' => result.push_str("\\}"),
+            '\n'   => result.push_str("\\n"),
+            '\r'   => result.push_str("\\r"),
+            '\t'   => result.push_str("\\t"),
+            '\\'   => result.push_str("\\\\"),
+            '"'    => result.push_str("\\\""),
+            // \x01 is the sentinel for \{ (escaped brace) — restore to source form
+            '\x01' => result.push_str("\\{"),
+            // { and } are NOT escaped: plain strings have no real {, interpolated strings
+            // need { as-is for variable interpolation markers
             _ => result.push(ch),
         }
     }

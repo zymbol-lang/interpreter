@@ -1,0 +1,6 @@
+error: E009: Duplicate export of item 'add'
+  --> /home/rakzo/github/zymbol-lang/interpreter/tests/errors/semantic/E009_dup_export.zy:2:15
+  = help: Each item can only be exported once
+
+error: E009: Duplicate export of item 'add'
+  --> /home/rakzo/github/zymbol-lang/interpreter/tests/errors/semantic/E009_dup_export.zy:2:15

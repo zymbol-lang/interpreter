@@ -1,0 +1,6 @@
+error: E001: Module name 'totally_wrong_name' does not match file name 'E001_mismatch_mod'
+  --> /home/rakzo/github/zymbol-lang/interpreter/tests/errors/semantic/E001_mismatch_mod.zy:1:1
+  = help: The module name must match the filename (without .zy extension)
+
+error: E001: Module name 'totally_wrong_name' does not match file name 'E001_mismatch_mod'
+  --> /home/rakzo/github/zymbol-lang/interpreter/tests/errors/semantic/E001_mismatch_mod.zy:1:1

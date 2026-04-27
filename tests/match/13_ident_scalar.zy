@@ -1,0 +1,25 @@
+// Test: ident patterns — scalar variable equality
+umbral = 500
+codigo = 500
+result = ?? codigo {
+    umbral : "match"
+    _      : "no match"
+}
+>> result ¶
+
+// Different value
+umbral2 = 404
+resultado2 = ?? codigo {
+    umbral2 : "match"
+    _       : "no match"
+}
+>> resultado2 ¶
+
+// String ident
+estado_ok = "activo"
+estado = "activo"
+label = ?? estado {
+    estado_ok : "OK"
+    _         : "KO"
+}
+>> label ¶

@@ -1,0 +1,8 @@
+{foo}
+prefix {foo} suffix
+{foo} {foo}
+bar
+result: bar!
+${foo}
+${foo/_/ }
+$bar

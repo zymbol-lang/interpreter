@@ -1,0 +1,30 @@
+// Test: list pattern against scalar — containment check
+codigo = 404
+result = ?? codigo {
+    [200, 201, 202] : "success"
+    [400, 422]      : "bad request"
+    [401, 403]      : "unauthorized"
+    [404]           : "not found"
+    _               : "other"
+}
+>> result ¶
+
+// Multiple scalar values
+n = 3
+category = ?? n {
+    [1, 2] : "low"
+    [3, 4] : "mid"
+    [5, 6] : "high"
+    _      : "other"
+}
+>> category ¶
+
+// String containment
+command = "open"
+action = ?? command {
+    ["open", "read", "view"] : "read"
+    ["write", "create"]      : "write"
+    ["delete", "remove"]     : "delete"
+    _                        : "unknown"
+}
+>> action ¶

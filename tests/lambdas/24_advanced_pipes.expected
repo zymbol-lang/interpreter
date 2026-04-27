@@ -1,0 +1,15 @@
+=== ADVANCED PIPE OPERATIONS TEST ===
+Pipeline: 3 -> scale(*10) -> translate(+5) -> square
+Result: 1225 (expected: (3*10+5)^2 = 1225)
+Combine(2, 5, 10): 20 (expected: 2*5+10 = 20)
+Combine(7, 3, 5): 26 (expected: 7*3+5 = 26)
+Filter evens -> square -> sum: 220
+Expected: 2^2 + 4^2 + 6^2 + 8^2 + 10^2 = 220
+10 -> *3 -> *5: 150 (expected: 150)
+Accumulator starting at 100, add 25: 125
+Expected: 125
+Weighted sum with placeholder in middle: 40
+Expected: 2*5 + 3*10 = 40
+Nested pipes: (5+10)*2-5 = 25
+Expected: 25
+=== TEST PASSED ===

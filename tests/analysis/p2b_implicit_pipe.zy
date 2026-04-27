@@ -1,0 +1,23 @@
+// P2-B: Implicit pipe — x |> f is equivalent to f(x) when no _ placeholder
+// Named functions and lambdas both work without explicit _ argument
+
+double(x) { <~ x * 2 }
+add1(x) { <~ x + 1 }
+isEven(x) { <~ x % 2 == 0 }
+
+// Basic implicit pipe with named function
+r1 = 5 |> double
+>> r1 ¶
+
+// Chained implicit pipes with named functions
+r2 = 5 |> double |> add1
+>> r2 ¶
+
+// Named predicate function in pipe
+r3 = 4 |> isEven
+>> r3 ¶
+
+// Lambda in implicit pipe
+square = x -> x * x
+r4 = 3 |> square
+>> r4 ¶

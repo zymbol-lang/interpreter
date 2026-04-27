@@ -1,0 +1,12 @@
+// v0.0.4 review — ##. on Float is a pass-through; type stays Float
+// Also covers: cast on literal integers, edge rounding
+
+f = 3.14
+ff = ##.f
+>> ff ¶
+meta = ff#?
+>> meta ¶
+
+>> ##.10 ¶
+>> ###3.9 ¶
+>> ##!3.9 ¶

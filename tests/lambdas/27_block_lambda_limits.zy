@@ -1,0 +1,36 @@
+// Test: block lambda known limitation — local vars not visible to <~
+// Variables declared inside a block lambda body CANNOT be used in <~.
+// The type-checker reports them as "undefined variable".
+//
+// Workaround A: use an inline expression (no block needed)
+// Workaround B: extract logic to a named function
+//
+// This test verifies both workarounds produce correct output.
+
+// --- LIMITATION (would cause error — kept as comment) ---
+// broken = x -> {
+//     result = x * 2    // 'result' declared in block scope
+//     <~ result         // ERROR: undefined variable 'result'
+// }
+
+// --- WORKAROUND A: inline expression ---
+double = x -> x * 2
+>> double(5) ¶
+
+// --- WORKAROUND B: named function ---
+square_fn(x) {
+    result = x * x
+    <~ result
+}
+square = x -> square_fn(x)
+>> square(4) ¶
+
+// Lambdas WITH parameters can use <~ on expressions involving those params
+describe = x -> {
+    ? x > 0 { <~ "positive" }
+    _? x < 0 { <~ "negative" }
+    <~ "zero"
+}
+>> describe(5) ¶
+>> describe(-3) ¶
+>> describe(0) ¶

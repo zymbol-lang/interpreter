@@ -4,9 +4,9 @@
 //! Phase 1: Parses assignments and identifiers
 
 use zymbol_ast::{
-    BasePrefix, Block, CollectionLengthExpr, Expr, FormatKind,
+    BasePrefix, Block, CastKind, CollectionLengthExpr, Expr, ExprStatement, FormatKind,
     FunctionCallExpr, IdentifierExpr, IndexExpr, LiteralExpr,
-    Program, RangeExpr, Statement, TypeMetadataExpr,
+    NumericCastExpr, Program, RangeExpr, Statement, TypeMetadataExpr,
 };
 use zymbol_common::Literal;
 use zymbol_error::Diagnostic;
@@ -27,6 +27,7 @@ mod data_ops;
 mod script_exec;
 mod modules;
 mod error_handling;
+mod index_nav;
 
 /// Parser for Zymbol source code
 pub struct Parser {
@@ -46,46 +47,55 @@ impl Parser {
 
     /// Parse the token stream into an AST
     pub fn parse(mut self) -> Result<Program, Vec<Diagnostic>> {
-        // Parse optional module declaration (must be first)
-        let module_decl = if matches!(self.peek().kind, TokenKind::Hash) {
-            match self.parse_module_declaration() {
-                Ok(decl) => Some(decl),
+        let mut module_decl = None;
+        let mut imports = Vec::new();
+        let mut statements = Vec::new();
+
+        if matches!(self.peek().kind, TokenKind::Hash) {
+            // Module file: parse the closed block # name { ... }
+            match self.parse_module_block() {
+                Ok((decl, mod_imports, mod_stmts)) => {
+                    module_decl = Some(decl);
+                    imports = mod_imports;
+                    statements = mod_stmts;
+                }
                 Err(diag) => {
                     self.diagnostics.push(diag);
-                    None
                 }
+            }
+            // Nothing is allowed after the closing }
+            if !self.is_at_end() && self.diagnostics.is_empty() {
+                let span = self.peek().span;
+                self.diagnostics.push(
+                    Diagnostic::error("unexpected token after module block")
+                        .with_span(span)
+                        .with_help("a module file must contain only: # name { ... }"),
+                );
             }
         } else {
-            None
-        };
-
-        // Parse imports (must come before other statements)
-        let mut imports = Vec::new();
-        while matches!(self.peek().kind, TokenKind::ModuleImport) {
-            match self.parse_import_statement() {
-                Ok(import) => imports.push(import),
-                Err(diag) => {
-                    self.diagnostics.push(diag);
-                    self.advance(); // Skip to next token
-                }
-            }
-        }
-
-        // Parse regular statements
-        let mut statements = Vec::new();
-        while !self.is_at_end() {
-            match self.parse_statement() {
-                Ok(stmt) => {
-                    statements.push(stmt);
-                    // Consume optional semicolon after statement
-                    if matches!(self.peek().kind, TokenKind::Semicolon) {
+            // Executable program: imports first, then statements
+            while matches!(self.peek().kind, TokenKind::ModuleImport) {
+                match self.parse_import_statement() {
+                    Ok(import) => imports.push(import),
+                    Err(diag) => {
+                        self.diagnostics.push(diag);
                         self.advance();
                     }
                 }
-                Err(diag) => {
-                    self.diagnostics.push(diag);
-                    // Try to synchronize to next statement
-                    self.advance();
+            }
+
+            while !self.is_at_end() {
+                match self.parse_statement() {
+                    Ok(stmt) => {
+                        statements.push(stmt);
+                        if matches!(self.peek().kind, TokenKind::Semicolon) {
+                            self.advance();
+                        }
+                    }
+                    Err(diag) => {
+                        self.diagnostics.push(diag);
+                        self.advance();
+                    }
                 }
             }
         }
@@ -113,9 +123,9 @@ impl Parser {
             TokenKind::CliArgsCapture => self.parse_cli_args_capture(),
             TokenKind::Question => self.parse_if(),
             TokenKind::DoubleQuestion => self.parse_match_statement(),
-            TokenKind::At => self.parse_loop(),
-            TokenKind::AtBreak => self.parse_break(),
-            TokenKind::AtContinue => self.parse_continue(),
+            TokenKind::At | TokenKind::AtLabel(_) | TokenKind::AtColonLabel(_) => self.parse_loop(),
+            TokenKind::AtBreak | TokenKind::AtColonLabelBreak(_) => self.parse_break(),
+            TokenKind::AtContinue | TokenKind::AtColonLabelContinue(_) => self.parse_continue(),
             TokenKind::TryBlock => self.parse_try_statement(),
             TokenKind::Newline | TokenKind::Backslash2 => self.parse_newline(),
             TokenKind::Backslash => self.parse_lifetime_end(),
@@ -130,6 +140,11 @@ impl Parser {
                 // Check for const declaration first (:=)
                 if self.peek_ahead(1).map(|t| matches!(t.kind, TokenKind::ConstAssign)).unwrap_or(false) {
                     return self.parse_const_decl();
+                }
+
+                // Check for module void call: alias::fn(...) — GAP G11
+                if self.peek_ahead(1).map(|t| matches!(t.kind, TokenKind::ScopeResolution)).unwrap_or(false) {
+                    return self.parse_function_call_statement();
                 }
 
                 if self.peek_ahead(1).map(|t| matches!(t.kind, TokenKind::LParen)).unwrap_or(false) {
@@ -168,7 +183,31 @@ impl Parser {
                         self.parse_function_call_statement()
                     }
                 } else {
-                    self.parse_assignment()
+                    // If next token is an assignment operator, route to parse_assignment.
+                    // A bare identifier (or expression starting with one) gets parsed as
+                    // an expression statement — this makes REPL inspection work naturally.
+                    let is_assignment_op = self.peek_ahead(1)
+                        .map(|t| matches!(t.kind,
+                            TokenKind::Assign
+                            | TokenKind::PlusAssign
+                            | TokenKind::MinusAssign
+                            | TokenKind::StarAssign
+                            | TokenKind::SlashAssign
+                            | TokenKind::PercentAssign
+                            | TokenKind::CaretAssign
+                            | TokenKind::PlusPlus
+                            | TokenKind::MinusMinus
+                            | TokenKind::LBracket
+                            | TokenKind::DollarExclaimExclaim
+                        ))
+                        .unwrap_or(false);
+                    if is_assignment_op {
+                        self.parse_assignment()
+                    } else {
+                        let expr = self.parse_expr()?;
+                        let span = expr.span();
+                        Ok(Statement::Expr(ExprStatement::new(expr, span)))
+                    }
                 }
             }
             TokenKind::LBracket => {
@@ -193,6 +232,12 @@ impl Parser {
                         .with_span(span)
                         .with_help("use '(a, b) = expr' for tuple destructuring"))
                 }
+            }
+            TokenKind::BashOpen => {
+                // BashExec as void statement: <\ expr... \> (side-effect only, result discarded)
+                let expr = self.parse_expr()?;
+                let span = expr.span();
+                Ok(Statement::Expr(ExprStatement::new(expr, span)))
             }
             TokenKind::Eof => Err(Diagnostic::error("unexpected end of file")
                 .with_span(token.span)),
@@ -291,6 +336,78 @@ impl Parser {
         }
     }
 
+    /// Parse unary + structural postfix only: `[]`, `.`, `()`.
+    /// Stops before any `$X` collection operator.
+    /// Used as the argument parser for binary collection ops so that
+    /// `arr$+ 4$+ 5` chains as `(arr$+ 4)$+ 5` instead of `arr$+(4$+5)`.
+    pub(crate) fn parse_postfix_structural(&mut self) -> Result<Expr, Diagnostic> {
+        let mut expr = self.parse_unary()?;
+        loop {
+            match self.peek().kind {
+                TokenKind::LBracket => {
+                    if self.peek().span.start.line != expr.span().end.line { break; }
+                    if self.is_nav_index() {
+                        expr = self.parse_nav_index(expr)?;
+                    } else {
+                        self.advance();
+                        let index = self.parse_expr()?;
+                        let close = self.peek().clone();
+                        if !matches!(close.kind, TokenKind::RBracket) {
+                            return Err(Diagnostic::error("expected ']' after index")
+                                .with_span(close.span));
+                        }
+                        self.advance();
+                        let span = expr.span().to(&close.span);
+                        expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
+                    }
+                }
+                TokenKind::Dot => {
+                    self.advance();
+                    let field_token = self.peek().clone();
+                    let field_name = if let TokenKind::Ident(ref name) = field_token.kind {
+                        name.clone()
+                    } else {
+                        return Err(Diagnostic::error("expected field name after '.'")
+                            .with_span(field_token.span));
+                    };
+                    self.advance();
+                    let span = expr.span().to(&field_token.span);
+                    expr = Expr::MemberAccess(zymbol_ast::MemberAccessExpr::new(
+                        Box::new(expr), field_name, span,
+                    ));
+                }
+                TokenKind::LParen => {
+                    if matches!(expr, Expr::Literal(_)) { break; }
+                    if self.peek().span.start.line != expr.span().end.line { break; }
+                    self.advance();
+                    let mut arguments = Vec::new();
+                    if !matches!(self.peek().kind, TokenKind::RParen) {
+                        loop {
+                            arguments.push(self.parse_expr()?);
+                            if matches!(self.peek().kind, TokenKind::Comma) {
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    let rparen = self.peek().clone();
+                    if !matches!(rparen.kind, TokenKind::RParen) {
+                        return Err(Diagnostic::error("expected ')' after arguments")
+                            .with_span(rparen.span));
+                    }
+                    self.advance();
+                    let span = expr.span().to(&rparen.span);
+                    expr = Expr::FunctionCall(FunctionCallExpr::new(
+                        Box::new(expr), arguments, span,
+                    ));
+                }
+                _ => break,
+            }
+        }
+        Ok(expr)
+    }
+
     /// Parse postfix expressions (indexing, member access, function calls)
     /// Also handles unary operators (-x, !x, +x)
     pub(crate) fn parse_postfix(&mut self) -> Result<Expr, Diagnostic> {
@@ -305,20 +422,24 @@ impl Parser {
                     if self.peek().span.start.line != expr.span().end.line {
                         break;
                     }
-                    self.advance(); // consume [
+                    if self.is_nav_index() {
+                        expr = self.parse_nav_index(expr)?;
+                    } else {
+                        self.advance(); // consume [
 
-                    let index = self.parse_expr()?;
+                        let index = self.parse_expr()?;
 
-                    let close_token = self.peek().clone();
-                    if !matches!(close_token.kind, TokenKind::RBracket) {
-                        return Err(Diagnostic::error("expected ']' after index")
-                            .with_span(close_token.span)
-                            .with_help("array indexing must use brackets: arr[index]"));
+                        let close_token = self.peek().clone();
+                        if !matches!(close_token.kind, TokenKind::RBracket) {
+                            return Err(Diagnostic::error("expected ']' after index")
+                                .with_span(close_token.span)
+                                .with_help("array indexing must use brackets: arr[index]"));
+                        }
+                        self.advance(); // consume ]
+
+                        let span = expr.span().to(&close_token.span);
+                        expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
                     }
-                    self.advance(); // consume ]
-
-                    let span = expr.span().to(&close_token.span);
-                    expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
                 }
                 TokenKind::Dot => {
                     self.advance(); // consume .
@@ -345,6 +466,10 @@ impl Parser {
                     // Chained function call: expr(args) — only if on the same line.
                     // A '(' on a new line starts a new statement (e.g. destructure pattern),
                     // not a chained call.
+                    // Literals (strings, numbers, bools, chars) are never callable.
+                    if matches!(expr, Expr::Literal(_)) {
+                        break;
+                    }
                     if self.peek().span.start.line != expr.span().end.line {
                         break;
                     }
@@ -419,6 +544,9 @@ impl Parser {
                 }
                 TokenKind::DollarTildeTilde => {
                     expr = self.parse_string_replace(expr)?;
+                }
+                TokenKind::DollarSlash => {
+                    expr = self.parse_string_split(expr)?;
                 }
                 TokenKind::DollarTilde => {
                     expr = self.parse_collection_update(expr)?;
@@ -526,20 +654,24 @@ impl Parser {
                     if self.peek().span.start.line != expr.span().end.line {
                         break;
                     }
-                    self.advance(); // consume [
+                    if self.is_nav_index() {
+                        expr = self.parse_nav_index(expr)?;
+                    } else {
+                        self.advance(); // consume [
 
-                    let index = self.parse_expr()?;
+                        let index = self.parse_expr()?;
 
-                    let close_token = self.peek().clone();
-                    if !matches!(close_token.kind, TokenKind::RBracket) {
-                        return Err(Diagnostic::error("expected ']' after index")
-                            .with_span(close_token.span)
-                            .with_help("array indexing must use brackets: arr[index]"));
+                        let close_token = self.peek().clone();
+                        if !matches!(close_token.kind, TokenKind::RBracket) {
+                            return Err(Diagnostic::error("expected ']' after index")
+                                .with_span(close_token.span)
+                                .with_help("array indexing must use brackets: arr[index]"));
+                        }
+                        self.advance(); // consume ]
+
+                        let span = expr.span().to(&close_token.span);
+                        expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
                     }
-                    self.advance(); // consume ]
-
-                    let span = expr.span().to(&close_token.span);
-                    expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
                 }
                 TokenKind::Dot => {
                     self.advance(); // consume .
@@ -594,6 +726,9 @@ impl Parser {
                 TokenKind::DollarTildeTilde => {
                     expr = self.parse_string_replace(expr)?;
                 }
+                TokenKind::DollarSlash => {
+                    expr = self.parse_string_split(expr)?;
+                }
                 TokenKind::DollarLBracket => {
                     expr = self.parse_collection_slice(expr)?;
                 }
@@ -647,7 +782,8 @@ impl Parser {
                 )))
             }
             TokenKind::StringInterpolated(parts) => {
-                // Reconstruct "{var}" form so the compiler's interpolation path handles it
+                // Reconstruct "{var}" form — stored as InterpolatedString so the
+                // interpreter resolves variables at runtime without touching plain strings
                 let mut reconstructed = String::new();
                 for part in parts {
                     match part {
@@ -661,7 +797,7 @@ impl Parser {
                 }
                 self.advance(); // consume interpolated string token
                 Ok(Expr::Literal(LiteralExpr::new(
-                    Literal::String(reconstructed),
+                    Literal::InterpolatedString(reconstructed),
                     token.span,
                 )))
             }
@@ -753,9 +889,9 @@ impl Parser {
 
                     let span = span_start.to(&rparen_token.span);
 
-                    // Create a module member access as the callable: module.func
+                    // Create a module member access as the callable: module::func
                     let module_ident = Expr::Identifier(IdentifierExpr::new(name, span_start));
-                    let member_access = Expr::MemberAccess(zymbol_ast::MemberAccessExpr::new(
+                    let member_access = Expr::MemberAccess(zymbol_ast::MemberAccessExpr::new_module(
                         Box::new(module_ident),
                         func_name,
                         span_start.to(&self.tokens[self.current - 2].span), // Up to func_name
@@ -839,6 +975,30 @@ impl Parser {
                 // Parse numeric evaluation: #|expr|
                 self.parse_numeric_eval()
             }
+            TokenKind::HashHashDot => {
+                // Cast to Float: ##.expr
+                let start = self.peek().span;
+                self.advance(); // consume ##.
+                let expr = self.parse_postfix()?;
+                let span = start.to(&expr.span());
+                Ok(Expr::NumericCast(NumericCastExpr::new(CastKind::ToFloat, Box::new(expr), span)))
+            }
+            TokenKind::HashHashHash => {
+                // Cast to Int rounding: ###expr
+                let start = self.peek().span;
+                self.advance(); // consume ###
+                let expr = self.parse_postfix()?;
+                let span = start.to(&expr.span());
+                Ok(Expr::NumericCast(NumericCastExpr::new(CastKind::ToIntRound, Box::new(expr), span)))
+            }
+            TokenKind::HashHashBang => {
+                // Cast to Int truncating: ##!expr
+                let start = self.peek().span;
+                self.advance(); // consume ##!
+                let expr = self.parse_postfix()?;
+                let span = start.to(&expr.span());
+                Ok(Expr::NumericCast(NumericCastExpr::new(CastKind::ToIntTrunc, Box::new(expr), span)))
+            }
             TokenKind::HashDot => {
                 // Parse round expression: #.N|expr|
                 self.parse_round_expr()
@@ -875,8 +1035,8 @@ impl Parser {
                 // Parse execute expression: </ file.zy />
                 self.parse_execute_expr()
             }
-            TokenKind::BashCommand(_) => {
-                // Parse bash execute expression: <\ command \>
+            TokenKind::BashOpen => {
+                // Parse bash execute expression: <\ expr... \>
                 self.parse_bash_exec_expr()
             }
             TokenKind::Eof => Err(Diagnostic::error("expected expression, found end of file")

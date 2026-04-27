@@ -1,0 +1,9 @@
+// v0.0.4 review — accessing _name from inner block is a semantic error
+// Expected: semantic analysis rejects this program before execution
+
+? #1 {
+    _outer = 42
+    ? #1 {
+        >> _outer ¶
+    }
+}

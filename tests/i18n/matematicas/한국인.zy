@@ -1,11 +1,12 @@
-# .matematicas_한국인
-#> {
-    mat::sumar <= 더하다
-    mat::restar <= 빼다
-    mat::multiplicar <= 곱하다
-    mat::dividir <= 나누다
-    mat.PI <= 파이
-    mat.E <= 이
-}
+# .한국인 {
+    <# ./module <= mat
 
-<# ./module <= mat
+    #> {
+        mat::sumar <= 더하다
+        mat::restar <= 빼다
+        mat::multiplicar <= 곱하다
+        mat::dividir <= 나누다
+        mat.PI <= 파이
+        mat.E <= 이
+    }
+}

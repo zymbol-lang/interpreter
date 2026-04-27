@@ -1,0 +1,161 @@
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:10:20
+[1m[34m  10[39m[0m [34m|[39m
+[1m[34m  10[39m[0m [34m|[39m contenido = <\ cat {archivo} \>
+[34m     |[39m [1m[31m                   ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:10:28
+[1m[34m  10[39m[0m [34m|[39m
+[1m[34m  10[39m[0m [34m|[39m contenido = <\ cat {archivo} \>
+[34m     |[39m [1m[31m                           ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:10:30
+[1m[34m  10[39m[0m [34m|[39m
+[1m[34m  10[39m[0m [34m|[39m contenido = <\ cat {archivo} \>
+[34m     |[39m [1m[31m                             ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:19:26
+[1m[34m  19[39m[0m [34m|[39m
+[1m[34m  19[39m[0m [34m|[39m resultado = <\ head "-n" {lineas} {archivo2} \>
+[34m     |[39m [1m[31m                         ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:19:33
+[1m[34m  19[39m[0m [34m|[39m
+[1m[34m  19[39m[0m [34m|[39m resultado = <\ head "-n" {lineas} {archivo2} \>
+[34m     |[39m [1m[31m                                ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: LBrace
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:19:35
+[1m[34m  19[39m[0m [34m|[39m
+[1m[34m  19[39m[0m [34m|[39m resultado = <\ head "-n" {lineas} {archivo2} \>
+[34m     |[39m [1m[31m                                  ^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:19:44
+[1m[34m  19[39m[0m [34m|[39m
+[1m[34m  19[39m[0m [34m|[39m resultado = <\ head "-n" {lineas} {archivo2} \>
+[34m     |[39m [1m[31m                                           ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:19:46
+[1m[34m  19[39m[0m [34m|[39m
+[1m[34m  19[39m[0m [34m|[39m resultado = <\ head "-n" {lineas} {archivo2} \>
+[34m     |[39m [1m[31m                                             ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:27:17
+[1m[34m  27[39m[0m [34m|[39m
+[1m[34m  27[39m[0m [34m|[39m listado = <\ ls {opcion} \>
+[34m     |[39m [1m[31m                ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:27:24
+[1m[34m  27[39m[0m [34m|[39m
+[1m[34m  27[39m[0m [34m|[39m listado = <\ ls {opcion} \>
+[34m     |[39m [1m[31m                       ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:27:26
+[1m[34m  27[39m[0m [34m|[39m
+[1m[34m  27[39m[0m [34m|[39m listado = <\ ls {opcion} \>
+[34m     |[39m [1m[31m                         ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found Pipe
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:35:18
+[1m[34m  35[39m[0m [34m|[39m
+[1m[34m  35[39m[0m [34m|[39m primeras = <\ ls | head "-n" {num} \>
+[34m     |[39m [1m[31m                 ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:35:25
+[1m[34m  35[39m[0m [34m|[39m
+[1m[34m  35[39m[0m [34m|[39m primeras = <\ ls | head "-n" {num} \>
+[34m     |[39m [1m[31m                        ^^^^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: LBrace
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:35:30
+[1m[34m  35[39m[0m [34m|[39m
+[1m[34m  35[39m[0m [34m|[39m primeras = <\ ls | head "-n" {num} \>
+[34m     |[39m [1m[31m                             ^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:35:34
+[1m[34m  35[39m[0m [34m|[39m
+[1m[34m  35[39m[0m [34m|[39m primeras = <\ ls | head "-n" {num} \>
+[34m     |[39m [1m[31m                                 ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:35:36
+[1m[34m  35[39m[0m [34m|[39m
+[1m[34m  35[39m[0m [34m|[39m primeras = <\ ls | head "-n" {num} \>
+[34m     |[39m [1m[31m                                   ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:44:21
+[1m[34m  44[39m[0m [34m|[39m
+[1m[34m  44[39m[0m [34m|[39m crear_cmd = <\ echo {texto} > {nombre} \>
+[34m     |[39m [1m[31m                    ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:44:27
+[1m[34m  44[39m[0m [34m|[39m
+[1m[34m  44[39m[0m [34m|[39m crear_cmd = <\ echo {texto} > {nombre} \>
+[34m     |[39m [1m[31m                          ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: Gt
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:44:29
+[1m[34m  44[39m[0m [34m|[39m
+[1m[34m  44[39m[0m [34m|[39m crear_cmd = <\ echo {texto} > {nombre} \>
+[34m     |[39m [1m[31m                            ^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: LBrace
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:44:31
+[1m[34m  44[39m[0m [34m|[39m
+[1m[34m  44[39m[0m [34m|[39m crear_cmd = <\ echo {texto} > {nombre} \>
+[34m     |[39m [1m[31m                              ^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:44:38
+[1m[34m  44[39m[0m [34m|[39m
+[1m[34m  44[39m[0m [34m|[39m crear_cmd = <\ echo {texto} > {nombre} \>
+[34m     |[39m [1m[31m                                     ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:44:40
+[1m[34m  44[39m[0m [34m|[39m
+[1m[34m  44[39m[0m [34m|[39m crear_cmd = <\ echo {texto} > {nombre} \>
+[34m     |[39m [1m[31m                                       ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:45:15
+[1m[34m  45[39m[0m [34m|[39m
+[1m[34m  45[39m[0m [34m|[39m leer = <\ cat {nombre} \>
+[34m     |[39m [1m[31m              ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:45:22
+[1m[34m  45[39m[0m [34m|[39m
+[1m[34m  45[39m[0m [34m|[39m leer = <\ cat {nombre} \>
+[34m     |[39m [1m[31m                     ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:45:24
+[1m[34m  45[39m[0m [34m|[39m
+[1m[34m  45[39m[0m [34m|[39m leer = <\ cat {nombre} \>
+[34m     |[39m [1m[31m                       ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:48:25
+[1m[34m  48[39m[0m [34m|[39m
+[1m[34m  48[39m[0m [34m|[39m borrar_cmd = <\ rm "-f" {nombre} \>
+[34m     |[39m [1m[31m                        ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:48:32
+[1m[34m  48[39m[0m [34m|[39m
+[1m[34m  48[39m[0m [34m|[39m borrar_cmd = <\ rm "-f" {nombre} \>
+[34m     |[39m [1m[31m                               ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/test_interpolacion_simple.zy:48:34
+[1m[34m  48[39m[0m [34m|[39m
+[1m[34m  48[39m[0m [34m|[39m borrar_cmd = <\ rm "-f" {nombre} \>
+[34m     |[39m [1m[31m                                 ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)

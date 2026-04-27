@@ -1,0 +1,190 @@
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:18:32
+[1m[34m  18[39m[0m [34m|[39m
+[1m[34m  18[39m[0m [34m|[39m         resultado = <\ sqlite3 {nombre_db} "SELECT 1;" \>
+[34m     |[39m [1m[31m                               ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:18:42
+[1m[34m  18[39m[0m [34m|[39m
+[1m[34m  18[39m[0m [34m|[39m         resultado = <\ sqlite3 {nombre_db} "SELECT 1;" \>
+[34m     |[39m [1m[31m                                         ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: String("SELECT 1;")
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:18:44
+[1m[34m  18[39m[0m [34m|[39m
+[1m[34m  18[39m[0m [34m|[39m         resultado = <\ sqlite3 {nombre_db} "SELECT 1;" \>
+[34m     |[39m [1m[31m                                           ^^^^^^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:18:56
+[1m[34m  18[39m[0m [34m|[39m
+[1m[34m  18[39m[0m [34m|[39m         resultado = <\ sqlite3 {nombre_db} "SELECT 1;" \>
+[34m     |[39m [1m[31m                                                       ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:24:32
+[1m[34m  24[39m[0m [34m|[39m
+[1m[34m  24[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY, nombre TEXT, email TEXT, edad INTEGER);" \>
+[34m     |[39m [1m[31m                               ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:24:35
+[1m[34m  24[39m[0m [34m|[39m
+[1m[34m  24[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY, nombre TEXT, email TEXT, edad INTEGER);" \>
+[34m     |[39m [1m[31m                                  ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: String("CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY, nombre TEXT, email TEXT, edad INTEGER);")
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:24:37
+[1m[34m  24[39m[0m [34m|[39m
+[1m[34m  24[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY, nombre TEXT, email TEXT, edad INTEGER);" \>
+[34m     |[39m [1m[31m                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:24:140
+[1m[34m  24[39m[0m [34m|[39m
+[1m[34m  24[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY, nombre TEXT, email TEXT, edad INTEGER);" \>
+[34m     |[39m [1m[31m                                                                                                                                           ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:30:32
+[1m[34m  30[39m[0m [34m|[39m
+[1m[34m  30[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "INSERT INTO usuarios (nombre, email, edad) VALUES ('Juan Perez', 'juan@example.com', 30);" \>
+[34m     |[39m [1m[31m                               ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:30:35
+[1m[34m  30[39m[0m [34m|[39m
+[1m[34m  30[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "INSERT INTO usuarios (nombre, email, edad) VALUES ('Juan Perez', 'juan@example.com', 30);" \>
+[34m     |[39m [1m[31m                                  ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: String("INSERT INTO usuarios (nombre, email, edad) VALUES ('Juan Perez', 'juan@example.com', 30);")
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:30:37
+[1m[34m  30[39m[0m [34m|[39m
+[1m[34m  30[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "INSERT INTO usuarios (nombre, email, edad) VALUES ('Juan Perez', 'juan@example.com', 30);" \>
+[34m     |[39m [1m[31m                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:30:129
+[1m[34m  30[39m[0m [34m|[39m
+[1m[34m  30[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "INSERT INTO usuarios (nombre, email, edad) VALUES ('Juan Perez', 'juan@example.com', 30);" \>
+[34m     |[39m [1m[31m                                                                                                                                ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:36:32
+[1m[34m  36[39m[0m [34m|[39m
+[1m[34m  36[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "SELECT * FROM usuarios;" \>
+[34m     |[39m [1m[31m                               ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:36:35
+[1m[34m  36[39m[0m [34m|[39m
+[1m[34m  36[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "SELECT * FROM usuarios;" \>
+[34m     |[39m [1m[31m                                  ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: String("SELECT * FROM usuarios;")
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:36:37
+[1m[34m  36[39m[0m [34m|[39m
+[1m[34m  36[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "SELECT * FROM usuarios;" \>
+[34m     |[39m [1m[31m                                    ^^^^^^^^^^^^^^^^^^^^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:36:63
+[1m[34m  36[39m[0m [34m|[39m
+[1m[34m  36[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "SELECT * FROM usuarios;" \>
+[34m     |[39m [1m[31m                                                              ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:42:32
+[1m[34m  42[39m[0m [34m|[39m
+[1m[34m  42[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "SELECT * FROM usuarios WHERE id=1;" \>
+[34m     |[39m [1m[31m                               ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:42:35
+[1m[34m  42[39m[0m [34m|[39m
+[1m[34m  42[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "SELECT * FROM usuarios WHERE id=1;" \>
+[34m     |[39m [1m[31m                                  ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: String("SELECT * FROM usuarios WHERE id=1;")
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:42:37
+[1m[34m  42[39m[0m [34m|[39m
+[1m[34m  42[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "SELECT * FROM usuarios WHERE id=1;" \>
+[34m     |[39m [1m[31m                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:42:74
+[1m[34m  42[39m[0m [34m|[39m
+[1m[34m  42[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "SELECT * FROM usuarios WHERE id=1;" \>
+[34m     |[39m [1m[31m                                                                         ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:48:32
+[1m[34m  48[39m[0m [34m|[39m
+[1m[34m  48[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "UPDATE usuarios SET edad=31 WHERE id=1;" \>
+[34m     |[39m [1m[31m                               ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:48:35
+[1m[34m  48[39m[0m [34m|[39m
+[1m[34m  48[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "UPDATE usuarios SET edad=31 WHERE id=1;" \>
+[34m     |[39m [1m[31m                                  ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: String("UPDATE usuarios SET edad=31 WHERE id=1;")
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:48:37
+[1m[34m  48[39m[0m [34m|[39m
+[1m[34m  48[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "UPDATE usuarios SET edad=31 WHERE id=1;" \>
+[34m     |[39m [1m[31m                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:48:79
+[1m[34m  48[39m[0m [34m|[39m
+[1m[34m  48[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "UPDATE usuarios SET edad=31 WHERE id=1;" \>
+[34m     |[39m [1m[31m                                                                              ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:54:32
+[1m[34m  54[39m[0m [34m|[39m
+[1m[34m  54[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "DELETE FROM usuarios WHERE id=1;" \>
+[34m     |[39m [1m[31m                               ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:54:35
+[1m[34m  54[39m[0m [34m|[39m
+[1m[34m  54[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "DELETE FROM usuarios WHERE id=1;" \>
+[34m     |[39m [1m[31m                                  ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: String("DELETE FROM usuarios WHERE id=1;")
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:54:37
+[1m[34m  54[39m[0m [34m|[39m
+[1m[34m  54[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "DELETE FROM usuarios WHERE id=1;" \>
+[34m     |[39m [1m[31m                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:54:72
+[1m[34m  54[39m[0m [34m|[39m
+[1m[34m  54[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} "DELETE FROM usuarios WHERE id=1;" \>
+[34m     |[39m [1m[31m                                                                       ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected expression, found LBrace
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:60:32
+[1m[34m  60[39m[0m [34m|[39m
+[1m[34m  60[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} {sql} \>
+[34m     |[39m [1m[31m                               ^[39m[0m
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:60:35
+[1m[34m  60[39m[0m [34m|[39m
+[1m[34m  60[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} {sql} \>
+[34m     |[39m [1m[31m                                  ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: LBrace
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:60:37
+[1m[34m  60[39m[0m [34m|[39m
+[1m[34m  60[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} {sql} \>
+[34m     |[39m [1m[31m                                    ^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:60:41
+[1m[34m  60[39m[0m [34m|[39m
+[1m[34m  60[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} {sql} \>
+[34m     |[39m [1m[31m                                        ^[39m[0m
+  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+[1m[31merror[39m[0m: unexpected token: BashClose
+  [1m[34m-->[39m[0m tests/i18n/matematicas/db.zy:60:43
+[1m[34m  60[39m[0m [34m|[39m
+[1m[34m  60[39m[0m [34m|[39m         resultado = <\ sqlite3 {db} {sql} \>
+[34m     |[39m [1m[31m                                          ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)

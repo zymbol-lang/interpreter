@@ -1,0 +1,50 @@
+=== SECTION 1: Basic Rounding ===
+[PASS] 1.1 Round up 19.876 to 2 decimals
+[PASS] 1.2 Round down 19.874 to 2 decimals
+[PASS] 1.3 Round 19.875 (exactly .5) to 2 decimals
+[PASS] 1.4 Round 19.5 to 0 decimals
+[PASS] 1.5 Round PI to 3 decimals
+=== SECTION 2: Basic Truncation ===
+[PASS] 2.1 Truncate 19.879 to 2 decimals
+[PASS] 2.2 Truncate 19.999 to 0 decimals
+[PASS] 2.3 Truncate PI to 3 decimals
+=== SECTION 3: Round vs Truncate Comparison ===
+[PASS] 3.1 Round vs Truncate on 19.999
+[PASS] 3.2 Round vs Truncate on 19.001
+=== SECTION 4: Integer Input ===
+[PASS] 4.1 Round integer 42
+[PASS] 4.2 Truncate integer 42
+=== SECTION 5: String Auto-Conversion ===
+[PASS] 5.1 Round from float string
+[PASS] 5.2 Truncate from float string
+[PASS] 5.3 Round from integer string
+[PASS] 5.4 Truncate from integer string
+=== SECTION 6: Expressions ===
+[PASS] 6.1 Round multiplication result
+[PASS] 6.2 Truncate multiplication result
+[PASS] 6.3 Round addition result
+[PASS] 6.4 Round division result
+=== SECTION 7: Precision Levels ===
+[PASS] 7.1 PI to 1 decimal
+[PASS] 7.2 PI to 2 decimals
+[PASS] 7.3 PI to 3 decimals
+[PASS] 7.4 PI to 4 decimals
+[PASS] 7.5 PI to 5 decimals
+=== SECTION 8: Negative Numbers ===
+[PASS] 8.1 Round negative number
+[PASS] 8.2 Truncate negative number
+=== SECTION 9: Edge Cases ===
+[PASS] 9.1 Round very small number
+[PASS] 9.2 Round zero
+[PASS] 9.3 Round large number
+=== SECTION 10: Financial Calculations ===
+[PASS] 10.1 Tax calculation
+[PASS] 10.2 Total with tax
+[PASS] 10.3 Discount calculation
+============================================
+TEST SUMMARY
+============================================
+Passed: 33
+Failed: 0
+Total:  33
+ALL TESTS PASSED!
