@@ -1,7 +1,7 @@
 # Zymbol-Lang — Stress Optimization Tracking
 
 Granular results per optimization applied.
-Update with: `./tests/scripts/run_all.sh --no-build --runs 10 --python`
+Update with: `./tests/scripts/run_all.sh --no-build --runs 10`
 
 ---
 
@@ -24,7 +24,7 @@ Update with: `./tests/scripts/run_all.sh --no-build --runs 10 --python`
 - `bench_collections`: **6879ms → 645ms** (10.7x) — HOF lambda calls (map/filter/reduce) benefited massively from B1+B2
 - `bench_recursion`: **6624ms → 3447ms** (1.9x) — fib(30) and ackermann improved; ackermann(3,6) dominates runtime
 - `bench_match`: **437ms → 311ms** (1.4x) — function call overhead reduced
-- `bench_strings`: unchanged (already at Python parity)
+- `bench_strings`: unchanged (already fast)
 
 ### Stress test note
 Current `stress.zy` (2026-03-11 version) includes 5k O(n²) array appends (`arr = arr$+ i` for i in 0..4999).
@@ -33,22 +33,10 @@ The plan's baseline of 1006ms was measured against a lighter version of stress.z
 
 ---
 
-## Python baseline
-
-| Benchmark   | Python avg |
-|-------------|------------|
-| stress      | ~74ms      |
-| match       | 57ms       |
-| recursion   | 210ms      |
-| collections | 43ms       |
-| strings     | 24ms       |
-
----
-
 ## How to update
 
 ```bash
-./tests/scripts/run_all.sh --no-build --runs 10 --python
+./tests/scripts/run_all.sh --no-build --runs 10
 ```
 
 Replace values in the table above with measured results.
@@ -78,7 +66,7 @@ Replace values in the table above with measured results.
 - `stress`: **1433ms → 628ms** (2.3x) — B3 eliminates 974ms from 5k O(n²) array appends
 - `bench_recursion`: ~4.4s isolated (B4+B9 reduce per-call overhead; ackermann dominates)
 - `bench_match`: regressed slightly (sequential system load artifact in run_all.sh)
-- `bench_strings`: at Python parity, small variance
+- `bench_strings`: stable, small variance
 
 ### Note on run_all.sh sequential load
 Benchmarks run consecutively inflate later results (especially recursion after stress+match).

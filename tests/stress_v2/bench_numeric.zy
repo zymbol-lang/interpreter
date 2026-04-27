@@ -1,8 +1,5 @@
 // ============================================================================
 // STRESS V2 — Numeric Algorithms (loop-based, no recursion)
-// Shows integer arithmetic and loop throughput vs Python.
-// Comparison: tests/stress_v2/bench_numeric.py
-//
 // Run: zymbol run --vm tests/stress_v2/bench_numeric.zy
 // ============================================================================
 

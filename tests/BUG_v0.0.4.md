@@ -33,10 +33,10 @@ lib_time.zy:38:5: expected assignment operator
 
 ### Impact
 
-All 7 Python comparison benchmarks fail immediately:
+All 7 benchmark scripts fail immediately:
 
 ```bash
-bash tests/scripts/run_all.sh --python   # exits with code 1 at STRESS TEST
+bash tests/scripts/run_all.sh   # exits with code 1 at STRESS TEST
 ```
 
 Affected scripts: `stress.zy`, `bench_match.zy`, `bench_recursion.zy`,
