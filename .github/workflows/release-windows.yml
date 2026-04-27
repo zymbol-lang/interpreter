@@ -69,12 +69,16 @@ jobs:
 
           echo "MSI_ASSET=$MSI_ASSET" >> "$GITHUB_ENV"
 
+      - name: Rename MSI to fixed name for signing
+        shell: bash
+        run: cp "${MSI_ASSET}" zymbol-lang.msi
+
       - name: Upload unsigned MSI as artifact
         id: upload-unsigned-msi
         uses: actions/upload-artifact@v4
         with:
           name: windows-msi-unsigned
-          path: "*.msi"
+          path: zymbol-lang.msi
           if-no-files-found: error
 
       - name: Sign MSI via SignPath
@@ -91,6 +95,13 @@ jobs:
           wait-for-completion:          true
           output-artifact-directory:    signed
 
+      - name: Rename signed MSI back to versioned name
+        if: steps.sign-msi.outcome == 'success'
+        shell: bash
+        run: |
+          cp signed/zymbol-lang.msi "${MSI_ASSET}"
+          sha256sum "${MSI_ASSET}" | tee SHA256_x86_64_windows_msi.txt
+
       - name: Upload to release (signed MSI)
         if: steps.sign-msi.outcome == 'success'
         env:
@@ -98,8 +109,13 @@ jobs:
         shell: bash
         run: |
           TAG="${{ github.event.release.tag_name || inputs.tag }}"
-          SIGNED_MSI="signed/${MSI_ASSET}"
-          gh release upload "$TAG" "$ASSET" SHA256_x86_64_windows.txt "$SIGNED_MSI" --clobber
+          gh release upload "$TAG" "$ASSET" "${MSI_ASSET}" \
+            SHA256_x86_64_windows.txt SHA256_x86_64_windows_msi.txt --clobber
+
+      - name: Compute unsigned MSI hash (fallback)
+        if: steps.sign-msi.outcome != 'success'
+        shell: bash
+        run: sha256sum "${MSI_ASSET}" | tee SHA256_x86_64_windows_msi.txt
 
       - name: Upload to release (unsigned MSI fallback)
         if: steps.sign-msi.outcome != 'success'
@@ -108,4 +124,5 @@ jobs:
         shell: bash
         run: |
           TAG="${{ github.event.release.tag_name || inputs.tag }}"
-          gh release upload "$TAG" "$ASSET" SHA256_x86_64_windows.txt "${MSI_ASSET}" --clobber
+          gh release upload "$TAG" "$ASSET" "${MSI_ASSET}" \
+            SHA256_x86_64_windows.txt SHA256_x86_64_windows_msi.txt --clobber
