@@ -417,11 +417,13 @@ See `crates/zymbol-lexer/src/digit_blocks.rs` for the full registry.
 ### Modules
 
 ```zymbol
-// lib/math.zy
-# math
-PI := 3.14159
-sqrt(x) { <~ x ^ 0.5 }
-#> { sqrt, PI }
+// lib/math.zy  (block syntax — all content inside braces)
+# math {
+    #> { sqrt, PI }
+
+    PI := 3.14159
+    sqrt(x) { <~ x ^ 0.5 }
+}
 
 // main.zy
 <# ./lib/math <= m
@@ -500,7 +502,7 @@ VM parity: **403/405 PASS** (2 vm-skip for TW-only analysis tests, 0 failures).
 
 ```
 interpreter/
-├── Cargo.toml           # Workspace (17 crates)
+├── Cargo.toml           # Workspace (18 crates)
 ├── zymbol-lang.ebnf     # Formal grammar (EBNF, v2.3.0)
 ├── install-zymbol.sh    # Install script
 ├── crates/              # Rust source crates

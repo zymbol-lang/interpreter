@@ -10,6 +10,22 @@ use zymbol_common::BinaryOp;
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
 
+/// Infer the hot-definition neutral value from the assignment's RHS expression.
+fn hot_neutral_from_value(value: &Expr, name: &str) -> Value {
+    match value {
+        Expr::CollectionAppend(op) => {
+            if let Expr::Identifier(ident) = op.collection.as_ref() {
+                if ident.name == name {
+                    return Value::Array(Vec::new());
+                }
+            }
+            Value::Int(0)
+        }
+        Expr::Binary(bin) if bin.op == BinaryOp::Concat => Value::String(String::new()),
+        _ => Value::Int(0),
+    }
+}
+
 impl<W: Write> Interpreter<W> {
     /// Execute assignment statement: name = expr
     pub(crate) fn execute_assignment(&mut self, assign: &Assignment) -> Result<()> {
@@ -22,6 +38,12 @@ impl<W: Write> Interpreter<W> {
                 ),
                 span: assign.span,
             });
+        }
+
+        // Hot LHS: auto-initialize variable to neutral on first use
+        if assign.hot && self.get_variable(&assign.name).is_none() {
+            let neutral = hot_neutral_from_value(&assign.value, &assign.name);
+            self.set_variable(&assign.name, neutral);
         }
 
         // B3: fast path for self-assign collection mutation (e.g. arr = arr$+ elem)
@@ -59,11 +81,29 @@ impl<W: Write> Interpreter<W> {
                 if let Expr::Identifier(ident) = op.collection.as_ref() {
                     if ident.name == assign.name {
                         let element = self.eval_expr(&op.element)?;
+                        // Hot RHS: auto-init on first use.
+                        // Char element → init to "" (String); anything else → init to [] (Array)
+                        if ident.hot && self.get_variable(&assign.name).is_none() {
+                            let neutral = if matches!(element, Value::Char(_)) {
+                                Value::String(String::new())
+                            } else {
+                                Value::Array(Vec::new())
+                            };
+                            self.set_variable(&assign.name, neutral);
+                        }
+                        // Array $+ Value
                         if let Some(Value::Array(arr)) = self.get_variable_mut(&assign.name) {
                             arr.push(element);
                             return Ok(());
                         }
-                        // fallthrough: not an Array — eval_expr will produce the correct error
+                        // String $+ Char
+                        if let Value::Char(c) = element {
+                            if let Some(Value::String(s)) = self.get_variable_mut(&assign.name) {
+                                s.push(c);
+                                return Ok(());
+                            }
+                        }
+                        // fallthrough: incompatible types — normal eval will produce the error
                     }
                 }
             }

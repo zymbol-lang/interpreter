@@ -1,0 +1,13 @@
+// BUG-001: module-level variables invisible through re-export adapters
+// Direct call works; call through adapter fails with "undefined variable".
+
+<# ./bug001_servidor  <= srv
+<# ./bug001_adaptador <= es
+
+// Direct call — should work
+>> "directo: " (srv::obtener_host()) ¶
+>> "directo: " (srv::obtener_version()) ¶
+
+// Through re-export adapter — triggers BUG-001
+>> "adaptador: " (es::conseguir_host()) ¶
+>> "adaptador: " (es::conseguir_version()) ¶

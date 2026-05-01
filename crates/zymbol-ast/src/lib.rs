@@ -250,6 +250,7 @@ pub enum Expr {
 pub struct IdentifierExpr {
     pub name: String,
     pub span: Span,
+    pub hot: bool,
 }
 
 
@@ -291,7 +292,11 @@ pub struct FunctionCallExpr {
 
 impl IdentifierExpr {
     pub fn new(name: String, span: Span) -> Self {
-        Self { name, span }
+        Self { name, span, hot: false }
+    }
+
+    pub fn new_hot(name: String, span: Span) -> Self {
+        Self { name, span, hot: true }
     }
 }
 

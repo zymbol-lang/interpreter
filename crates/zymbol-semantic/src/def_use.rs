@@ -534,18 +534,25 @@ impl DefUseAnalyzer {
                 // We mark them as ambiguous by setting is_underscore=true so they're
                 // excluded from destruction schedules.
                 if let Some(ref iter_var) = loop_stmt.iterator_var {
+                    // Suppress ambiguous-lifetime warning in two cases:
+                    // 1. _ prefix: programmer explicitly signals "I know this is loop-scoped"
+                    // 2. Variable already defined before the loop: deliberate reuse, not ambiguous
+                    let already_defined = self.chains.contains_key(iter_var);
+                    let suppress = iter_var.starts_with('_') || already_defined;
+
                     let chain = self.chains.entry(iter_var.clone()).or_insert_with(|| {
                         DefUseChain::new(iter_var.clone())
                     });
 
-                    // Mark as ambiguous (loop variant)
-                    chain.is_ambiguous = true;
-                    chain.ambiguity = Some(AmbiguousLifetime {
-                        variable: iter_var.clone(),
-                        reason: AmbiguityReason::LoopVariant,
-                        nodes: HashSet::new(),
-                        suggested_span: loop_stmt.body.span,
-                    });
+                    if !suppress {
+                        chain.is_ambiguous = true;
+                        chain.ambiguity = Some(AmbiguousLifetime {
+                            variable: iter_var.clone(),
+                            reason: AmbiguityReason::LoopVariant,
+                            nodes: HashSet::new(),
+                            suggested_span: loop_stmt.body.span,
+                        });
+                    }
                 }
 
                 // Analyze loop body

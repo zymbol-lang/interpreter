@@ -369,10 +369,66 @@ impl TypeChecker {
         !self.errors.is_empty()
     }
 
+    /// Returns true if `expr` contains a hot self-reference to `name`
+    /// (e.g. `arr°$+ i` or `s° + ch` where the hot identifier matches the LHS).
+    fn rhs_has_hot_self_ref(expr: &Expr, name: &str) -> bool {
+        match expr {
+            Expr::CollectionAppend(op) => {
+                if let Expr::Identifier(id) = op.collection.as_ref() {
+                    id.hot && id.name == name
+                } else {
+                    false
+                }
+            }
+            Expr::Binary(bin) => {
+                if let Expr::Identifier(id) = bin.left.as_ref() {
+                    id.hot && id.name == name
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// Check a statement
     fn check_statement(&mut self, stmt: &Statement) {
         match stmt {
             Statement::Assignment(assign) => {
+                // Hot LHS: pre-declare variable before inferring RHS so self-references don't error
+                if assign.hot && self.env.lookup_var(&assign.name).is_none() {
+                    self.env.define_var(&assign.name, ZymbolType::Any);
+                    // Warn for operators that are always trivial when hot-initialized to 0
+                    if let Expr::Binary(bin) = &assign.value {
+                        if let Expr::Identifier(lhs) = bin.left.as_ref() {
+                            if lhs.name == assign.name {
+                                match bin.op {
+                                    BinaryOp::Mul | BinaryOp::Pow => {
+                                        self.warnings.push(
+                                            Diagnostic::warning(format!(
+                                                "'{}°' hot-initialized to 0 — '{}' will always produce 0",
+                                                assign.name,
+                                                if bin.op == BinaryOp::Mul { "*" } else { "^" }
+                                            ))
+                                            .with_span(assign.span)
+                                        );
+                                    }
+                                    BinaryOp::Div => {
+                                        self.warnings.push(
+                                            Diagnostic::warning(format!(
+                                                "'{}°' hot-initialized to 0 — division by zero on first use",
+                                                assign.name
+                                            ))
+                                            .with_span(assign.span)
+                                        );
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let value_type = self.infer_expr(&assign.value);
 
                 // Check if reassigning a constant - this is an ERROR
@@ -415,6 +471,11 @@ impl TypeChecker {
             Statement::Input(input) => {
                 // Input always produces a string
                 self.env.define_var(&input.variable, ZymbolType::String);
+            }
+
+            Statement::CliArgsCapture(capture) => {
+                // >< identifier — declares identifier as Array in the current scope
+                self.env.define_var(&capture.variable_name, ZymbolType::Array(Box::new(ZymbolType::String)));
             }
 
             Statement::If(if_stmt) => {
@@ -483,6 +544,19 @@ impl TypeChecker {
                             ))
                             .with_span(condition.span())
                         );
+                    }
+                }
+
+                // Pre-declare hot-assignment variables in outer scope so they're visible after the loop.
+                // Covers both LHS-hot (`a° += 8`) and RHS self-reference hot patterns
+                // (`arr = arr°$+ i`, `s = s° + ch`) where assign.hot is false but the RHS
+                // contains a hot identifier that matches the LHS name.
+                for stmt in &loop_stmt.body.statements {
+                    if let Statement::Assignment(a) = stmt {
+                        let is_hot = a.hot || Self::rhs_has_hot_self_ref(&a.value, &a.name);
+                        if is_hot && self.env.lookup_var(&a.name).is_none() {
+                            self.env.define_var(&a.name, ZymbolType::Any);
+                        }
                     }
                 }
 
@@ -1181,6 +1255,9 @@ impl TypeChecker {
                 } else if self.module_aliases.contains(&ident.name) {
                     // It's a module alias (e.g. `u` from `<# ./utils <= u`)
                     // Valid as the object of a member access (u.CONST) — not an undefined variable
+                    ZymbolType::Any
+                } else if ident.hot {
+                    // Hot identifier: auto-initializes at runtime — not an undefined variable error
                     ZymbolType::Any
                 } else {
                     // Variable not defined - emit error

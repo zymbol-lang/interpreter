@@ -1,0 +1,17 @@
+// GAP-002: $++ should accept parenthesized expressions (expr) as items.
+// Before fix: parse error when a $++ item started with '('.
+
+nums = [10, 20, 30]
+n    = 3
+
+// Parenthesized arithmetic expression as $++ item
+msg = "count: " $++ (n * 2)
+>> msg ¶
+
+// Parenthesized collection operation as $++ item
+msg2 = "size: " $++ (nums$#)
+>> msg2 ¶
+
+// Multiple paren items on the same $++
+msg3 = "result: " $++ (n + 1) " of " (nums$#)
+>> msg3 ¶

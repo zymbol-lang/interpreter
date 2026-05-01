@@ -282,8 +282,13 @@ impl<W: Write> Interpreter<W> {
         // G17 fix: for script-level functions (module_info = None), restore the caller's
         // import_aliases so that module calls (ollama::fn, ui::fn, etc.) resolve correctly.
         // take_call_state() clears import_aliases — without this, alias lookups fail silently.
+        // BUG-001 fix: if the function was defined in a different module than the one being
+        // called through (re-export adapter), load context from the origin module instead.
         let saved_functions = if let Some((_, module_path)) = &module_info {
-            if let Some(module) = self.loaded_modules.get(module_path).cloned() {
+            let effective_path: &std::path::PathBuf = func_def.origin_module_path
+                .as_ref()
+                .unwrap_or(module_path);
+            if let Some(module) = self.loaded_modules.get(effective_path).cloned() {
                 for (name, value) in &module.all_variables {
                     self.set_variable(name, value.clone());
                 }

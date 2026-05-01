@@ -1,0 +1,26 @@
+// GAP-001: arithmetic expressions as slice bounds $[start..end]
+// Before fix: parse error on any +/- inside slice bounds.
+
+s = "hola:mundo"
+
+// Find separator position (1-based index from $??)
+p = s$?? ":"
+pos = p[1]
+
+// Arithmetic bounds — triggered GAP-001 before fix
+antes   = s$[1..pos-1]
+despues = s$[pos+1..-1]
+
+>> antes ¶
+>> despues ¶
+
+// Both bounds with arithmetic
+nums  = [10, 20, 30, 40, 50]
+desde = 2
+hasta = 4
+trozo = nums$[desde..hasta-1]
+>> trozo ¶
+
+// Negative literal in bound (must stay working)
+final2 = s$[1..-2]
+>> final2 ¶

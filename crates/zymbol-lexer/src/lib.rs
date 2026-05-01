@@ -49,6 +49,8 @@ pub enum TokenKind {
     // Identifiers
     /// Identifier (variable name)
     Ident(String),
+    /// Identifier with hot-definition marker ° — auto-initialize on first use
+    HotIdent(String),
 
     // Operators
     /// = (assignment operator)
@@ -855,6 +857,14 @@ impl Lexer {
             }
         }
 
+        // Strip ° suffix → emit HotIdent (auto-initialize on first use)
+        if ident.ends_with('°') {
+            let stripped = &ident[..ident.len() - '°'.len_utf8()];
+            if !stripped.is_empty() {
+                return Token::new(TokenKind::HotIdent(stripped.to_string()), self.span(start));
+            }
+        }
+
         Token::new(TokenKind::Ident(ident), self.span(start))
     }
 
@@ -1443,7 +1453,7 @@ mod tests {
 
         match &tokens[0] {
             TokenKind::String(s) => {
-                assert_eq!(s, "Use \x01curly} braces literally");
+                assert_eq!(s, "Use \x01curly\x02 braces literally");
             }
             _ => panic!("Expected plain String with literal braces"),
         }

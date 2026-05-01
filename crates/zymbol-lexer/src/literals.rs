@@ -48,8 +48,9 @@ impl Lexer {
                     '\\' => '\\',
                     // \{ → sentinel \x01 (suppresses interpolation — resolved to { at runtime)
                     '{'  => '\x01',
-                    // \} → literal }
-                    '}'  => '}',
+                    // \} → sentinel \x02 (symmetric to \x01 — resolved to } at runtime,
+                    // preserves source form so the formatter can reconstruct \})
+                    '}'  => '\x02',
                     other => other,
                 };
                 current_text.push(escaped_ch);

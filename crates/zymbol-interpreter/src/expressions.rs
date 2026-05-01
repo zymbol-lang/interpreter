@@ -98,6 +98,23 @@ impl<W: Write> Interpreter<W> {
                 }
             }
         }
+        // Hot RHS: c = c° + a — eval right first to infer neutral type, then init left
+        if binary.op == BinaryOp::Add {
+            if let Expr::Identifier(ident) = binary.left.as_ref() {
+                if ident.hot && self.get_variable(&ident.name).is_none() {
+                    let right_val = self.eval_expr(&binary.right)?;
+                    let neutral = match &right_val {
+                        Value::String(_) => Value::String(String::new()),
+                        Value::Float(_)  => Value::Float(0.0),
+                        _                => Value::Int(0),
+                    };
+                    self.set_variable(&ident.name, neutral);
+                    let left_val = self.eval_expr(&binary.left)?;
+                    return self.eval_add(&left_val, &right_val, &binary.span);
+                }
+            }
+        }
+
         // Slow path: full eval
         let left = self.eval_expr(&binary.left)?;
         let right = self.eval_expr(&binary.right)?;

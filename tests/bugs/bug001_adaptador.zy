@@ -1,0 +1,11 @@
+// Re-export adapter — simulates the i18n layer from I18N.md pattern 3
+// BUG-001: functions re-exported here lose their origin module scope
+
+# bug001_adaptador {
+    <# ./bug001_servidor <= srv
+
+    #> {
+        srv::obtener_host    <= conseguir_host
+        srv::obtener_version <= conseguir_version
+    }
+}

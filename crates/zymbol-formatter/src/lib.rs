@@ -201,8 +201,12 @@ fn merge_comments(
     comments: &HashMap<u32, Vec<Comment>>,
     original_lines: &[&str],
 ) -> String {
-    // If no comments and no blank lines to preserve, return formatted as-is
-    if comments.is_empty() && !original.contains("\n\n") && !has_standalone_comments(original_lines) {
+    // Fast path: if no comments, no blank lines, and no desugar-sensitive ops, return as-is
+    if comments.is_empty()
+        && !original.contains("\n\n")
+        && !has_standalone_comments(original_lines)
+        && !has_desugar_ops(original)
+    {
         return formatted.to_string();
     }
 
@@ -217,6 +221,10 @@ fn merge_comments(
 
     let mut orig_idx = 0;
     let mut in_block_comment = false;
+    // Indentation width of the opening /* line in the original source.
+    // Used to strip that prefix from continuation lines so all lines of the
+    // comment move together when re-indented (spec §9.3).
+    let mut block_comment_orig_indent = 0usize;
     while orig_idx < original_lines.len() {
         let orig_line = original_lines[orig_idx];
         let line_num = (orig_idx + 1) as u32;
@@ -227,12 +235,29 @@ fn merge_comments(
             // Check if the block comment also closes on the same line
             let after_open = trimmed.find("/*").map(|i| &trimmed[i+2..]).unwrap_or("");
             if !after_open.contains("*/") {
+                // Opening line of a multi-line block comment: re-indent to current block
+                // level and record original indentation so continuation lines move with it.
                 in_block_comment = true;
+                block_comment_orig_indent = orig_line.len() - orig_line.trim_start().len();
+                result.push_str(&current_indent);
+                result.push_str(trimmed);
+                result.push('\n');
+                orig_idx += 1;
+                continue;
             }
+            // Single-line block comment (/* ... */ on one line) — fall through to normal processing
         } else if in_block_comment {
-            // Emit the line as-is (it's inside a block comment)
+            // Continuation/closing line: strip the original opening indent and apply
+            // current_indent so all lines of the block comment move together (spec §9.3).
+            let stripped = if orig_line.len() >= block_comment_orig_indent
+                && orig_line[..block_comment_orig_indent].trim().is_empty()
+            {
+                &orig_line[block_comment_orig_indent..]
+            } else {
+                orig_line.trim_start()
+            };
             result.push_str(&current_indent);
-            result.push_str(trimmed);
+            result.push_str(stripped);
             result.push('\n');
             if trimmed.contains("*/") {
                 in_block_comment = false;
@@ -241,17 +266,26 @@ fn merge_comments(
             continue;
         }
 
-        // Case 1: Blank line - preserve it
+        // Case 1: Blank line — preserve, but collapse multiple consecutive ones to one
         if trimmed.is_empty() {
-            result.push('\n');
+            if !result.ends_with("\n\n") {
+                result.push('\n');
+            }
             orig_idx += 1;
             continue;
         }
 
-        // Case 2: Comment-only line — re-indent to match the surrounding formatted context
+        // Case 2: Comment-only line — re-indent using the NEXT upcoming formatted code line.
+        // Using the last-matched line's indent (current_indent) is wrong when a comment
+        // appears after a closing } — the indent would still reflect the block interior.
         let code_part = extract_code_part(orig_line);
         if code_part.trim().is_empty() {
-            result.push_str(&current_indent);
+            let upcoming_indent = formatted_lines[fmt_idx..]
+                .iter()
+                .find(|l| !l.trim().is_empty())
+                .map(|l| &l[..l.len() - l.trim_start().len()])
+                .unwrap_or("");
+            result.push_str(upcoming_indent);
             result.push_str(trimmed);
             result.push('\n');
             orig_idx += 1;
@@ -292,15 +326,14 @@ fn merge_comments(
                 continue;
             }
 
-            let (matched, paren_stripped) = code_contains(&normalized_orig, &normalized_fmt);
+            let (matched, paren_stripped, is_desugar) = code_contains(&normalized_orig, &normalized_fmt);
 
             if matched {
-                // Track indentation for upcoming comments.
+                // Track indentation from the formatted line regardless of desugar.
                 // If this line opens a block (ends with `{`), peek ahead so comments
                 // inside the block get the inner indentation, not the opener's indent.
                 let trimmed_fmt = fmt_line.trim_end();
                 let indent_source = if trimmed_fmt.ends_with('{') {
-                    // Find the next non-empty formatted line and use its indent
                     formatted_lines[fmt_idx + 1..].iter()
                         .find(|l| !l.trim().is_empty())
                         .copied()
@@ -311,9 +344,15 @@ fn merge_comments(
                 let leading = indent_source.len() - indent_source.trim_start().len();
                 current_indent = " ".repeat(leading);
 
-                result.push_str(fmt_line);
+                if is_desugar {
+                    // Preserve original syntax (p++, x+=5, etc.) — spec §10
+                    result.push_str(&current_indent);
+                    result.push_str(code_part.trim());
+                } else {
+                    result.push_str(fmt_line);
+                }
 
-                let remaining = if paren_stripped {
+                let remaining = if paren_stripped || is_desugar {
                     String::new()
                 } else {
                     normalized_orig.replacen(&normalized_fmt, "", 1)
@@ -342,9 +381,11 @@ fn merge_comments(
             // We still preserve any trailing comment that was on this line.
             let has_trailing_comment = comments.contains_key(&line_num);
             if has_trailing_comment {
-                // We have no formatted line to attach the comment to; keep the original line
-                // with its comment so the comment isn't silently lost.
-                result.push_str(trimmed);
+                // Emit the original code (without its embedded comment) so the comment
+                // can be re-attached exactly once via append_comments.
+                // Using `trimmed` here would include the comment text already, causing
+                // append_comments to duplicate it.
+                result.push_str(code_part.trim());
                 append_comments(&mut result, comments, line_num);
                 result.push('\n');
             }
@@ -424,7 +465,7 @@ fn find_resync_point(
             continue;
         }
         for orig_tok in &orig_tokens {
-            let (matched, _) = code_contains(orig_tok, &normalized_fmt);
+            let (matched, _, _) = code_contains(orig_tok, &normalized_fmt);
             if matched {
                 return Some(fmt_idx);
             }
@@ -442,6 +483,14 @@ fn has_standalone_comments(lines: &[&str]) -> bool {
     })
 }
 
+/// Returns true if source contains any operator that the parser desugarizes (p++, x+=5, etc.)
+fn has_desugar_ops(source: &str) -> bool {
+    source.contains("++") || source.contains("--")
+        || source.contains("+=") || source.contains("-=")
+        || source.contains("*=") || source.contains("/=")
+        || source.contains("%=") || source.contains("^=")
+}
+
 /// Normalize code for matching (remove all whitespace)
 fn normalize_code(line: &str) -> String {
     line.chars().filter(|c| !c.is_whitespace()).collect()
@@ -455,16 +504,64 @@ fn strip_parens(s: &str) -> String {
 }
 
 /// Check whether a normalized formatted line matches within a normalized original line.
-/// Returns (matched, is_paren_stripped_match).
-fn code_contains(orig: &str, fmt: &str) -> (bool, bool) {
+/// Returns (matched, is_paren_stripped_match, is_desugar_match).
+/// A desugar match means fmt is the parser-expanded form of orig (e.g. `p++` → `p=p+1`),
+/// so the caller should emit the ORIGINAL line to preserve the user's syntax.
+fn code_contains(orig: &str, fmt: &str) -> (bool, bool, bool) {
     if orig.contains(fmt) {
-        return (true, false);
+        return (true, false, false);
     }
     // Fallback: strip parens to handle formatter removing redundant outer parens
-    // e.g., `?(expr){@!}` (orig) vs `?expr{@!}` (formatted)
     let orig_s = strip_parens(orig);
     let fmt_s = strip_parens(fmt);
-    (!fmt_s.is_empty() && orig_s.contains(&fmt_s), true)
+    if !fmt_s.is_empty() && orig_s.contains(&fmt_s) {
+        return (true, true, false);
+    }
+    // Desugar check: p++ → p=p+1, x+=5 → x=x+5 (parser expands these before AST)
+    if is_desugar_of(orig, fmt) {
+        return (true, false, true);
+    }
+    // Forward-merge: orig ends with `}` and fmt starts with orig.
+    // Handles the formatter joining `!? { body }` + `:! { ... }` (or `:> { ... }`) onto
+    // one line when the user wrote them on separate lines, and similarly for `} _ {` else
+    // or any other construct where the formatter appends more after a closing `}`.
+    // paren_stripped=true signals the caller to treat remaining as empty so the next
+    // original line (the `:!`/`:>`/`_` part) is silently consumed as already covered.
+    if !orig.is_empty() && orig.ends_with('}') && fmt.starts_with(orig) {
+        return (true, true, false);
+    }
+    (false, false, false)
+}
+
+/// Returns true when `fmt` is the AST-desugared form of `orig`.
+/// Covers: p++ → p=p+1, p-- → p=p-1, x+=rhs → x=x+rhs, etc.
+fn is_desugar_of(orig: &str, fmt: &str) -> bool {
+    // p++ → p=p+1
+    if let Some(name) = orig.strip_suffix("++") {
+        if !name.is_empty() {
+            return fmt == format!("{}={}+1", name, name);
+        }
+    }
+    // p-- → p=p-1
+    if let Some(name) = orig.strip_suffix("--") {
+        if !name.is_empty() {
+            return fmt == format!("{0}={0}-1", name);
+        }
+    }
+    // x+=rhs → x=x+rhs  (and -, *, /, %, ^)
+    for (op_sym, op_ch) in &[("+=", "+"), ("-=", "-"), ("*=", "*"), ("/=", "/"), ("%=", "%"), ("^=", "^")] {
+        if let Some(pos) = orig.find(op_sym) {
+            let name = &orig[..pos];
+            let rhs  = &orig[pos + op_sym.len()..];
+            if !name.is_empty() && !rhs.is_empty() {
+                let expected = format!("{0}={0}{1}{2}", name, op_ch, rhs);
+                if fmt == expected {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Check if remaining code exists in subsequent formatted lines
@@ -701,9 +798,26 @@ mod tests {
 
     #[test]
     fn test_format_try_catch() {
-        let result = format("!?{x=risky()}:!{>>\"error\"}").unwrap();
-        assert!(result.contains("!?"));
-        assert!(result.contains(":!"));
+        // :! must appear on the same line as }, like }} _ {{ (else) — §5.2 spirit
+        let result = format("!?{x=risky()}:!{>>\"error\" ¶}").unwrap();
+        assert!(result.contains("} :! {"),
+            ":! must be on same line as closing }}. Result:\n{}", result);
+    }
+
+    #[test]
+    fn test_format_try_catch_finally() {
+        let result = format("!?{x=1}:!{>>\"err\" ¶}:>{>>\"fin\" ¶}").unwrap();
+        assert!(result.contains("} :! {"),  ":! must follow }} on same line. Result:\n{}", result);
+        assert!(result.contains("} :> {"),  ":> must follow }} on same line. Result:\n{}", result);
+    }
+
+    #[test]
+    fn test_format_try_typed_catch() {
+        let result = format("!?{x=1}:! ##Div{>>\"div\" ¶}:!{>>\"other\" ¶}").unwrap();
+        assert!(result.contains("} :! ##Div {"),
+            "typed catch must follow }} on same line. Result:\n{}", result);
+        assert!(result.contains("} :! {"),
+            "generic catch must follow typed catch }} on same line. Result:\n{}", result);
     }
 
     #[test]
@@ -807,11 +921,13 @@ mod tests {
     }
 
     #[test]
-    fn test_long_array_breaks() {
+    fn test_array_stays_inline_when_fits() {
+        // max_line_length does not govern array layout; max_inline_array_length (60) does.
+        // This array is ~30 chars, well under 60, so it must stay inline (spec §10).
         let config = FormatterConfig::new().with_max_line_length(20);
         let result = format_with_config("arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]", config).unwrap();
-        // Should have multiple lines due to max_inline_array_elements
-        assert!(result.lines().count() > 1, "Long array should break: {}", result);
+        assert_eq!(result, "arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\n",
+            "Array fitting within max_inline_array_length should stay inline: {}", result);
     }
 
     #[test]
@@ -820,5 +936,151 @@ mod tests {
         let result = format_with_config("p = (name: \"Alice Smith\", age: 25, city: \"New York\")", config).unwrap();
         // Should break due to length
         assert!(result.contains('\n'), "Long named tuple should break: {}", result);
+    }
+
+    // ── Regression tests for hallasgos_fmt.md ─────────────────────────────────
+
+    // BUG-1: format_output must only add parens to && / || (§11)
+    #[test]
+    fn test_output_arithmetic_no_parens() {
+        let result = format(">> a + b ¶").unwrap();
+        assert!(!result.contains("(a + b)"),
+            "arithmetic in >> must not get extra parens: {}", result);
+        assert!(result.contains(">> a + b"), "Result: {}", result);
+    }
+
+    #[test]
+    fn test_output_logical_keeps_parens() {
+        let result = format(">> (#1 && #0) ¶").unwrap();
+        assert!(result.contains("(#1 && #0)"),
+            "&& in >> must stay parenthesised: {}", result);
+    }
+
+    #[test]
+    fn test_output_logical_or_keeps_parens() {
+        let result = format(">> (a || b) ¶").unwrap();
+        assert!(result.contains("(a || b)"),
+            "|| in >> must stay parenthesised: {}", result);
+    }
+
+    // BUG-2: implicit pipe |> f must not become |> f(_) (§2.1)
+    #[test]
+    fn test_pipe_implicit_no_args_emitted() {
+        let result = format("r = x |> double").unwrap();
+        assert!(!result.contains("(_)"),
+            "implicit pipe must not emit (_): {}", result);
+        assert!(result.contains("|> double"), "Result: {}", result);
+    }
+
+    #[test]
+    fn test_pipe_explicit_placeholder_preserved() {
+        let result = format("r = x |> double(_)").unwrap();
+        assert!(result.contains("|> double(_)"),
+            "explicit |> f(_) must keep the placeholder: {}", result);
+    }
+
+    #[test]
+    fn test_pipe_explicit_extra_args_preserved() {
+        let result = format("r = x |> add(_, 1)").unwrap();
+        assert!(result.contains("|> add(_, 1)"),
+            "extra explicit args must be preserved: {}", result);
+    }
+
+    // BUG-3: multi-line block comment re-indentation must be consistent (§9.3)
+    // All lines move together: relative offsets inside the comment are preserved.
+    #[test]
+    fn test_block_comment_multiline_indented_consistently() {
+        // Original: /* at col 0, " * note" at col 1 (1 space relative offset).
+        // After formatting inside an if block (indent=4):
+        //   /*      → 4 spaces  (current_indent)
+        //    * note → 5 spaces  (current_indent + 1 relative offset from original)
+        let src = "? x > 0 {\n/*\n * note\n */\n>> x ¶\n}";
+        let result = format(src).unwrap();
+        let lines: Vec<&str> = result.lines().collect();
+
+        let open_indent = lines.iter()
+            .find(|l| l.trim_start().starts_with("/*"))
+            .map(|l| l.len() - l.trim_start().len())
+            .expect("/* line missing");
+        let cont_indent = lines.iter()
+            .find(|l| l.trim_start().starts_with("* note"))
+            .map(|l| l.len() - l.trim_start().len())
+            .expect("* note line missing");
+        let close_indent = lines.iter()
+            .find(|l| l.trim_start().starts_with("*/"))
+            .map(|l| l.len() - l.trim_start().len())
+            .expect("*/ line missing");
+
+        // Opening must be at current block indent (4 spaces).
+        assert_eq!(open_indent, 4,
+            "/* must be at block indent level.\nFormatted:\n{}", result);
+        // Continuation and closing lines must preserve their +1 offset from the opening.
+        assert_eq!(cont_indent, open_indent + 1,
+            "continuation must keep relative offset from /*.\nFormatted:\n{}", result);
+        assert_eq!(close_indent, open_indent + 1,
+            "closing */ must keep relative offset from /*.\nFormatted:\n{}", result);
+    }
+
+    #[test]
+    fn test_block_comment_toplevel_preserved() {
+        // A top-level block comment (col 0) must stay at col 0.
+        let src = "x = 1\n/*\n * doc\n */\ny = 2\n";
+        let result = format(src).unwrap();
+        let open_indent = result.lines()
+            .find(|l| l.trim_start().starts_with("/*"))
+            .map(|l| l.len() - l.trim_start().len())
+            .expect("/* line missing");
+        assert_eq!(open_indent, 0, "top-level /* must stay at col 0.\nFormatted:\n{}", result);
+    }
+
+    // DEAD-1/2/LATENT-1: removed config fields must not exist on FormatterConfig
+    #[test]
+    fn test_config_has_no_dead_fields() {
+        let cfg = FormatterConfig::default();
+        // These fields must compile without trailing_commas / continuation_indent /
+        // max_inline_array_elements — the test body just ensures the struct is
+        // constructed without panic and has the fields we expect.
+        let _ = cfg.indent_size;
+        let _ = cfg.max_line_length;
+        let _ = cfg.use_spaces;
+        let _ = cfg.max_inline_array_length;
+        let _ = cfg.brace_same_line;
+        let _ = cfg.inline_single_statement;
+    }
+
+    // MINOR-1: a block with only ¶ must NOT be inlined (Newline is not simple)
+    #[test]
+    fn test_newline_only_block_not_inlined() {
+        // ? x > 0 { ¶ } — the single statement is a Newline, should expand
+        let src = "? x > 0 {\n¶\n}";
+        let result = format(src).unwrap();
+        // Must be multi-line (the ¶ should not be squeezed into one line alone)
+        assert!(result.contains('\n'), "block with only ¶ should not be inlined: {}", result);
+    }
+
+    // MINOR-2: multiple consecutive blank lines must collapse to one (§2.2)
+    #[test]
+    fn test_consecutive_blank_lines_collapsed() {
+        let src = "x = 1\n\n\n\ny = 2\n";
+        let result = format(src).unwrap();
+        assert!(!result.contains("\n\n\n"),
+            "three consecutive blank lines must collapse to one: {}", result);
+        assert!(result.contains("\n\n"),
+            "one blank line must still be present: {}", result);
+    }
+
+    // Idempotency over the fixed cases
+    #[test]
+    fn test_idempotency_pipe_implicit() {
+        let src = "r = x |> double\n";
+        let second = format(src).unwrap();
+        assert_eq!(src, second, "already-formatted implicit pipe must be stable");
+    }
+
+    #[test]
+    fn test_idempotency_output_arithmetic() {
+        let src = ">> a + b ¶\n";
+        let second = format(src).unwrap();
+        assert_eq!(src, second, "already-formatted arithmetic output must be stable");
     }
 }

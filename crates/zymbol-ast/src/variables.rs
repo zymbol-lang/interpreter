@@ -14,6 +14,7 @@ pub struct Assignment {
     pub name: String,
     pub value: Expr,
     pub span: Span,
+    pub hot: bool,
 }
 
 /// Constant declaration: name := expr (immutable)
@@ -33,7 +34,11 @@ pub struct LifetimeEnd {
 
 impl Assignment {
     pub fn new(name: String, value: Expr, span: Span) -> Self {
-        Self { name, value, span }
+        Self { name, value, span, hot: false }
+    }
+
+    pub fn new_hot(name: String, value: Expr, span: Span) -> Self {
+        Self { name, value, span, hot: true }
     }
 }
 

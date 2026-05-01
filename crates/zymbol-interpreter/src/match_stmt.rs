@@ -15,7 +15,7 @@ use std::io::Write;
 #[inline(always)]
 fn literal_to_value(lit: &Literal) -> Value {
     match lit {
-        Literal::String(s) | Literal::InterpolatedString(s) => Value::String(s.replace('\x01', "{")),
+        Literal::String(s) | Literal::InterpolatedString(s) => Value::String(s.replace('\x01', "{").replace('\x02', "}")),
         Literal::Int(n)    => Value::Int(*n),
         Literal::Float(f)  => Value::Float(*f),
         Literal::Char(c)   => Value::Char(*c),
@@ -87,7 +87,7 @@ impl<W: Write> Interpreter<W> {
             Pattern::Literal(lit, _) => {
                 // Check if literal equals value
                 let pattern_value = match lit {
-                    Literal::String(s) | Literal::InterpolatedString(s) => Value::String(s.replace('\x01', "{")),
+                    Literal::String(s) | Literal::InterpolatedString(s) => Value::String(s.replace('\x01', "{").replace('\x02', "}")),
                     Literal::Int(n) => Value::Int(*n),
                     Literal::Float(f) => Value::Float(*f),
                     Literal::Char(c) => Value::Char(*c),

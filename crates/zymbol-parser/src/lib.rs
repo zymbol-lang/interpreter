@@ -210,6 +210,31 @@ impl Parser {
                     }
                 }
             }
+            TokenKind::HotIdent(_) => {
+                // Hot identifier: only valid for assignments (LHS hot) or expression statements
+                let is_assignment_op = self.peek_ahead(1)
+                    .map(|t| matches!(t.kind,
+                        TokenKind::Assign
+                        | TokenKind::PlusAssign
+                        | TokenKind::MinusAssign
+                        | TokenKind::StarAssign
+                        | TokenKind::SlashAssign
+                        | TokenKind::PercentAssign
+                        | TokenKind::CaretAssign
+                        | TokenKind::PlusPlus
+                        | TokenKind::MinusMinus
+                        | TokenKind::LBracket
+                        | TokenKind::DollarExclaimExclaim
+                    ))
+                    .unwrap_or(false);
+                if is_assignment_op {
+                    self.parse_assignment()
+                } else {
+                    let expr = self.parse_expr()?;
+                    let span = expr.span();
+                    Ok(Statement::Expr(ExprStatement::new(expr, span)))
+                }
+            }
             TokenKind::LBracket => {
                 // Could be array destructure: [a, b] = expr
                 // is_array_destructure() saves/restores state, so peek() still returns '[' after
@@ -950,6 +975,12 @@ impl Parser {
                     // Just an identifier
                     Ok(Expr::Identifier(IdentifierExpr::new(name, span_start)))
                 }
+            }
+            TokenKind::HotIdent(name) => {
+                // Hot identifier in expression context: strips ° and marks hot for auto-init
+                let name = name.clone();
+                self.advance();
+                Ok(Expr::Identifier(IdentifierExpr::new_hot(name, token.span)))
             }
             TokenKind::LParen => {
                 // Parse grouped expression (expr), tuple (expr, expr, ...), named tuple (name: expr, ...), or lambda (a, b) -> expr

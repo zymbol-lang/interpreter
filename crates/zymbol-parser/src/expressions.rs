@@ -43,6 +43,7 @@ impl Parser {
                     left: Box::new(left),
                     callable: Box::new(callable),
                     arguments: vec![zymbol_ast::PipeArg::Placeholder],
+                    implicit: true,
                     span,
                 });
                 continue;
@@ -88,6 +89,7 @@ impl Parser {
                 left: Box::new(left),
                 callable: Box::new(callable),
                 arguments,
+                implicit: false,
                 span,
             });
         }
@@ -115,6 +117,7 @@ impl Parser {
                     left: Box::new(left),
                     callable: Box::new(callable),
                     arguments: vec![zymbol_ast::PipeArg::Placeholder],
+                    implicit: true,
                     span,
                 });
                 continue;
@@ -141,6 +144,7 @@ impl Parser {
                 left: Box::new(left),
                 callable: Box::new(callable),
                 arguments,
+                implicit: false,
                 span,
             });
         }

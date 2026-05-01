@@ -209,9 +209,12 @@ impl<'a> FormatVisitor<'a> {
         self.output.write(">>");
         for expr in &output.exprs {
             self.output.space();
-            // Binary expressions in output need parens to avoid ambiguity
-            // e.g. >> (#1 && #0) must stay as >> (#1 && #0), not >> #1 && #0
-            let needs_parens = matches!(expr, Expr::Binary(_));
+            // Only && and || cause a parse error in >> (parser sees two items).
+            // Arithmetic binaries parse fine without parens — do not add them (§11).
+            let needs_parens = matches!(
+                expr,
+                Expr::Binary(b) if matches!(b.op, BinaryOp::And | BinaryOp::Or)
+            );
             if needs_parens { self.output.write("("); }
             self.format_expr(expr);
             if needs_parens { self.output.write(")"); }
@@ -390,13 +393,14 @@ impl<'a> FormatVisitor<'a> {
         self.output.write("!?");
         self.format_block(&try_stmt.try_block);
 
+        // :! and :> appear on the same line as the preceding }, like } _ { (else) in §5.2
         for catch_clause in &try_stmt.catch_clauses {
-            self.output.newline();
+            self.output.write(" ");
             self.format_catch_clause(catch_clause);
         }
 
         if let Some(ref finally_clause) = try_stmt.finally_clause {
-            self.output.newline();
+            self.output.write(" ");
             self.format_finally_clause(finally_clause);
         }
     }
@@ -520,7 +524,6 @@ impl<'a> FormatVisitor<'a> {
             | Statement::Break(_)
             | Statement::Continue(_)
             | Statement::Return(_)
-            | Statement::Newline(_)
             | Statement::Expr(_)
         )
     }
@@ -562,7 +565,13 @@ impl<'a> FormatVisitor<'a> {
                 self.output.write(" $++");
                 for item in &op.items {
                     self.output.write(" ");
+                    // Binary expressions (e.g. n + 1) need parens so the $++ parser
+                    // reads them as a single item — without parens the parser stops at
+                    // the identifier before the operator, restructuring the AST.
+                    let needs_parens = matches!(item, Expr::Binary(_));
+                    if needs_parens { self.output.write("("); }
                     self.format_expr(item);
+                    if needs_parens { self.output.write(")"); }
                 }
             }
             Expr::NumericCast(op) => {
@@ -799,7 +808,7 @@ impl<'a> FormatVisitor<'a> {
 
             for (i, elem) in arr.elements.iter().enumerate() {
                 self.format_expr(elem);
-                if i < arr.elements.len() - 1 || config.trailing_commas {
+                if i < arr.elements.len() - 1 {
                     self.output.write(",");
                 }
                 self.output.newline();
@@ -1391,17 +1400,20 @@ impl<'a> FormatVisitor<'a> {
         if needs_parens { self.output.write("("); }
         self.format_expr(&pipe.callable);
         if needs_parens { self.output.write(")"); }
-        self.output.write("(");
-        for (i, arg) in pipe.arguments.iter().enumerate() {
-            match arg {
-                zymbol_ast::PipeArg::Placeholder => self.output.write("_"),
-                zymbol_ast::PipeArg::Expr(expr) => self.format_expr(expr),
+        // Implicit pipe (user wrote `|> f` with no arg list): do not emit `(_)` (§2.1)
+        if !pipe.implicit {
+            self.output.write("(");
+            for (i, arg) in pipe.arguments.iter().enumerate() {
+                match arg {
+                    zymbol_ast::PipeArg::Placeholder => self.output.write("_"),
+                    zymbol_ast::PipeArg::Expr(expr) => self.format_expr(expr),
+                }
+                if i < pipe.arguments.len() - 1 {
+                    self.output.write(", ");
+                }
             }
-            if i < pipe.arguments.len() - 1 {
-                self.output.write(", ");
-            }
+            self.output.write(")");
         }
-        self.output.write(")");
     }
 
     /// Format execute expression
@@ -1482,8 +1494,9 @@ fn escape_string(s: &str) -> String {
             '\t'   => result.push_str("\\t"),
             '\\'   => result.push_str("\\\\"),
             '"'    => result.push_str("\\\""),
-            // \x01 is the sentinel for \{ (escaped brace) — restore to source form
+            // \x01/\x02 are sentinels for \{ and \} — restore to source form
             '\x01' => result.push_str("\\{"),
+            '\x02' => result.push_str("\\}"),
             // { and } are NOT escaped: plain strings have no real {, interpolated strings
             // need { as-is for variable interpolation markers
             _ => result.push(ch),
@@ -1529,6 +1542,7 @@ mod tests {
         assert_eq!(escape_string("hello"), "hello");
         assert_eq!(escape_string("hello\nworld"), "hello\\nworld");
         assert_eq!(escape_string("say \"hi\""), "say \\\"hi\\\"");
+        assert_eq!(escape_string("\x01name\x02"), "\\{name\\}");
     }
 
     #[test]

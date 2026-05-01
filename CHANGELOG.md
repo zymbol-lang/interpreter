@@ -11,6 +11,90 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
+## [0.0.5] — 2026-04-29
+
+### Added
+
+**Hot Definition operator `°` (U+00B0)**
+- New postfix operator on identifiers: `x° += 1` auto-initializes `x` to the neutral
+  value of the inferred context on first use, then applies the operation.
+- Neutral values: numeric context → `0` / `0.0`; string context → `""`;
+  array context → `[]`.
+- Valid in both LHS (`x° += n`) and RHS (`p = p° + c`).
+- Warnings emitted on semantically vacuous hot-defs:
+  `x° *= 5` → always 0; `x° /= 2` → division of 0; `x° ^= 2` → always 0.
+- Undefined variable error now includes hint: `'x' is undefined — did you mean 'x°' (hot definition)?`
+- Implemented across: lexer (`HotIdent` token), parser (`hot: bool` field on `Assignment`),
+  interpreter (neutral inference in `loops.rs`), semantic type-checker (`type_check.rs`).
+
+### Fixed
+
+**BUG-001 — Re-exported functions lose origin module scope**
+- Functions accessed through an i18n re-export adapter (`alias::fn <= newname`) raised
+  `undefined variable` for any module-level variable the function read.
+- Root cause: `eval_traditional_function_call` loaded context from the adapter module path,
+  which carries no variables.
+- Fix: `FunctionDef` now carries `origin_module_path: Option<PathBuf>`. The call site
+  derives `effective_path` from that field, falling back to the caller's module only when
+  the function has no recorded origin.
+- New test: `tests/bugs/bug001_scope_reexport.zy` (3-file i18n fixture).
+
+**BUG-002 — `><` CLI args capture not registered in semantic scope**
+- `zymbol check` and the LSP reported `undefined variable` for any use of the captured
+  identifier inside blocks (`? {}`, `@ {}`, etc.) after `>< args`.
+- Root cause: `Statement::CliArgsCapture` had no handler in `type_check.rs`.
+- Fix: added handler that calls `env.define_var(name, Array(String))`.
+- New test: `tests/bugs/bug002_cli_args_scope.zy`.
+
+**BUG-003 — LSP percent-decodes Unicode directory names in file URIs**
+- VS Code sends `file:///home/user/%E6%BA%90%E7%A0%81/mod.zy` for paths inside directories
+  with Unicode names (e.g. `源码/`). The LSP resolver built a path with the literal
+  percent-encoded segment, which does not exist on the filesystem → `module-not-found` for
+  every import inside those directories. CLI was unaffected.
+- Fix: `uri_to_path` in `workspace.rs` now calls `percent_decode` before constructing the
+  `PathBuf`. Multi-byte UTF-8 sequences (e.g. `源` = 3 bytes) are collected as raw bytes
+  before UTF-8 reconstruction. No new dependencies.
+- Four new unit tests in `workspace.rs`: encoded Unicode, plain Unicode, `%2F`, no-op.
+
+**GAP-001 — Arithmetic expressions as slice bounds `$[start..end]`**
+- `$[pos-1..end]` or `$[start..pos+1]` caused a parse error; only literals and plain
+  identifiers were accepted as bounds.
+- Root cause: `parse_collection_slice` called `parse_postfix` for bounds, which stops
+  before `+`/`-` and cannot consume `..` without ambiguity.
+- Fix: new `parse_slice_bound()` method in `collection_ops.rs` wraps `parse_postfix` with
+  a `+`/`-` loop, stopping before `..`. Replaces all three bound call-sites in
+  `parse_collection_slice`.
+- New test: `tests/gaps/gap001_slice_arith_bounds.zy`.
+
+**GAP-002 — Parenthesized expressions not accepted as `$++` items**
+- `"prefix" $++ (expr)` failed with a parse error; `>>` accepted the same form correctly.
+- Root cause: `parse_string_insert` gated item collection with `can_juxtapose()`, which
+  intentionally excludes `LParen` to avoid lambda-comparator ambiguity in `$^+`.
+- Fix: local `can_start` flag in `parse_string_insert` adds `TokenKind::LParen` without
+  modifying `can_juxtapose` globally. `$^+` and juxtaposition chains are unaffected.
+- New test: `tests/gaps/gap002_concat_paren_items.zy`.
+
+**GAP-003 — `ambiguous lifetime` warning on every loop iterator variable**
+- `@ elem:arr { }` always emitted `warning: ambiguous lifetime for 'elem'` regardless of
+  whether the programmer had signalled intent.
+- Fix in `def_use.rs` — two suppression rules, no new syntax:
+  1. `_` prefix (`@ _elem:arr`): existing "intentionally ignored" convention now also
+     suppresses the lifetime warning, consistent with unused-variable suppression.
+  2. Pre-defined variable (`x = 0` then `@ x:arr`): if the variable already has a
+     definition before the loop, the reuse is deliberate and no warning is emitted.
+  Normal unnamed iterator variables still warn as before.
+- New test: `tests/gaps/gap003_loop_iter_lifetime_warning.zy`.
+
+### Test suite — v0.0.5
+
+| Suite | Result |
+|-------|--------|
+| `cargo test` (all crates) | all pass |
+| `expected_compare.sh gaps` | **15 / 15 pass** |
+| `expected_compare.sh bugs` | **8 / 8 pass** |
+
+---
+
 ## [0.0.4] — 2026-04-16
 
 ### Breaking Changes
@@ -544,7 +628,8 @@ Initial release — Zymbol-Lang interpreter v5I.
 
 ---
 
-[Unreleased]: https://github.com/zymbol-lang/zymbol/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/zymbol-lang/zymbol/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/zymbol-lang/zymbol/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/zymbol-lang/zymbol/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/zymbol-lang/zymbol/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/zymbol-lang/zymbol/compare/v0.0.1...v0.0.2

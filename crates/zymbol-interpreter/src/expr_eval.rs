@@ -119,7 +119,10 @@ impl<W: Write> Interpreter<W> {
         }
 
         Err(RuntimeError::Generic {
-            message: format!("undefined variable: '{}'", ident.name),
+            message: format!(
+                "'{}' is undefined — did you mean '{}°' (hot definition)?",
+                ident.name, ident.name
+            ),
             span: ident.span,
         })
     }

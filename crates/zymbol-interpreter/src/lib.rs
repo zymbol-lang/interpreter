@@ -84,6 +84,9 @@ enum ControlFlow {
 struct FunctionDef {
     parameters: Vec<zymbol_ast::Parameter>,
     body: zymbol_ast::Block,
+    /// Path of the module where this function was defined.
+    /// Used to restore the correct scope when a function is called through a re-export adapter.
+    origin_module_path: Option<PathBuf>,
 }
 
 
@@ -925,6 +928,7 @@ impl<W: Write> Interpreter<W> {
                 let func_def = FunctionDef {
                     parameters: func_decl.parameters.clone(),
                     body: func_decl.body.clone(),
+                    origin_module_path: self.current_file.clone(),
                 };
                 self.functions.insert(func_decl.name.clone(), Rc::new(func_def));
                 Ok(())

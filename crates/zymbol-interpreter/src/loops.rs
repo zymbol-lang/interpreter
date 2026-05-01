@@ -10,13 +10,35 @@ use std::io::Write;
 use zymbol_ast::{Break, Continue, Expr, Loop};
 use crate::{ControlFlow, Interpreter, Result, RuntimeError, Value};
 
+/// Returns true if an assignment's RHS contains a hot self-reference to the same variable.
+/// Covers `arr = arr°$+ i` (CollectionAppend) and `s = s° + ch` (Binary Add).
+fn rhs_has_hot_self_ref(expr: &zymbol_ast::Expr, name: &str) -> bool {
+    use zymbol_ast::Expr;
+    match expr {
+        Expr::CollectionAppend(op) => {
+            if let Expr::Identifier(id) = op.collection.as_ref() {
+                id.hot && id.name == name
+            } else { false }
+        }
+        Expr::Binary(bin) => {
+            if let Expr::Identifier(id) = bin.left.as_ref() {
+                id.hot && id.name == name
+            } else { false }
+        }
+        _ => false,
+    }
+}
+
 /// QW16: Returns true if the block introduces any variable NOT already in scope.
 /// If false, execute_block_no_scope is safe — no new scope is needed.
 /// Checked ONCE before the loop starts (not per iteration).
 fn body_needs_own_scope<W: std::io::Write>(block: &zymbol_ast::Block, interp: &Interpreter<W>) -> bool {
     use zymbol_ast::Statement;
     block.statements.iter().any(|s| match s {
-        Statement::Assignment(a) => interp.get_variable(&a.name).is_none(),
+        Statement::Assignment(a) => {
+            let is_hot = a.hot || rhs_has_hot_self_ref(&a.value, &a.name);
+            !is_hot && interp.get_variable(&a.name).is_none()
+        }
         Statement::ConstDecl(_) => true,
         Statement::DestructureAssign(_) => true,
         _ => false,

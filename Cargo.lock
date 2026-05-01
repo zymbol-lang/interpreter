@@ -1899,7 +1899,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-analyzer"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "dashmap 6.1.0",
  "lsp-types 0.94.1",
@@ -1917,7 +1917,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-ast"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "zymbol-common",
  "zymbol-lexer",
@@ -1926,11 +1926,11 @@ dependencies = [
 
 [[package]]
 name = "zymbol-bytecode"
-version = "0.0.4"
+version = "0.0.5"
 
 [[package]]
 name = "zymbol-cli"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1954,14 +1954,14 @@ dependencies = [
 
 [[package]]
 name = "zymbol-common"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "indexmap",
 ]
 
 [[package]]
 name = "zymbol-compiler"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "thiserror 1.0.69",
  "zymbol-ast",
@@ -1974,7 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-error"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "owo-colors",
  "thiserror 1.0.69",
@@ -1983,7 +1983,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-formatter"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "thiserror 1.0.69",
  "zymbol-ast",
@@ -1996,7 +1996,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-interpreter"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "thiserror 1.0.69",
  "zymbol-ast",
@@ -2012,11 +2012,11 @@ dependencies = [
 
 [[package]]
 name = "zymbol-intrinsics"
-version = "0.0.4"
+version = "0.0.5"
 
 [[package]]
 name = "zymbol-lexer"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "zymbol-common",
  "zymbol-error",
@@ -2025,7 +2025,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-lsp"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "dashmap 6.1.0",
  "lsp-types 0.97.0",
@@ -2041,7 +2041,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-parser"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "zymbol-ast",
  "zymbol-common",
@@ -2052,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-repl"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "arboard",
  "crossterm",
@@ -2065,7 +2065,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-semantic"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "thiserror 2.0.17",
  "zymbol-ast",
@@ -2078,14 +2078,14 @@ dependencies = [
 
 [[package]]
 name = "zymbol-span"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "unicode-segmentation",
 ]
 
 [[package]]
 name = "zymbol-standalone"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "tempfile",
@@ -2094,7 +2094,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-vm"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "thiserror 1.0.69",
  "zymbol-bytecode",

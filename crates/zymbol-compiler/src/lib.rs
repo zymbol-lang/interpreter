@@ -1592,7 +1592,7 @@ impl Compiler {
             }
             Literal::String(s) => {
                 // resolve \x01 sentinel (from \{ escape) to literal {
-                let resolved = s.replace('\x01', "{");
+                let resolved = s.replace('\x01', "{").replace('\x02', "}");
                 let idx = self.intern_string(&resolved);
                 ctx.emit(Instruction::LoadStr(dst, idx));
                 ctx.set_reg_type(dst, StaticType::String);
@@ -1603,7 +1603,7 @@ impl Compiler {
                     return self.compile_interpolated_string(s, ctx);
                 }
                 // No real {var} — just sentinel resolution
-                let resolved = s.replace('\x01', "{");
+                let resolved = s.replace('\x01', "{").replace('\x02', "}");
                 let idx = self.intern_string(&resolved);
                 ctx.emit(Instruction::LoadStr(dst, idx));
                 ctx.set_reg_type(dst, StaticType::String);
@@ -1899,7 +1899,7 @@ impl Compiler {
             Expr::Literal(lit) => match &lit.value {
                 Literal::Int(n) => Some(ModuleConst::Int(*n as i64)),
                 Literal::Float(f) => Some(ModuleConst::Float(*f)),
-                Literal::String(s) | Literal::InterpolatedString(s) => Some(ModuleConst::String(s.replace('\x01', "{"))),
+                Literal::String(s) | Literal::InterpolatedString(s) => Some(ModuleConst::String(s.replace('\x01', "{").replace('\x02', "}"))),
                 Literal::Bool(b) => Some(ModuleConst::Bool(*b)),
                 Literal::Char(c) => Some(ModuleConst::Char(*c)),
             },
@@ -2054,7 +2054,7 @@ impl Compiler {
                             ctx.emit_jump_if_not_placeholder(r_cmp)
                         }
                         zymbol_common::Literal::String(s) | zymbol_common::Literal::InterpolatedString(s) => {
-                            let resolved = s.replace('\x01', "{");
+                            let resolved = s.replace('\x01', "{").replace('\x02', "}");
                             let idx = self.intern_string(&resolved);
                             let body_label = ctx.current_label() + 2; // skip to MatchStr body
                             let _ms_pos = ctx.emit(Instruction::MatchStr(r_sub, idx, body_label as Label));
@@ -2220,7 +2220,7 @@ impl Compiler {
                                         struct_skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                                     }
                                     zymbol_common::Literal::String(s) | zymbol_common::Literal::InterpolatedString(s) => {
-                                        let resolved = s.replace('\x01', "{");
+                                        let resolved = s.replace('\x01', "{").replace('\x02', "}");
                                         let idx = self.intern_string(&resolved);
                                         let body_lbl = (ctx.current_label() + 2) as Label;
                                         ctx.emit(Instruction::MatchStr(r_elem, idx, body_lbl));
@@ -2268,7 +2268,7 @@ impl Compiler {
                                         jump_to_body_patches.push(ctx.emit(Instruction::JumpIf(r_cmp, 0)));
                                     }
                                     zymbol_common::Literal::String(s) | zymbol_common::Literal::InterpolatedString(s) => {
-                                        let resolved = s.replace('\x01', "{");
+                                        let resolved = s.replace('\x01', "{").replace('\x02', "}");
                                         let idx = self.intern_string(&resolved);
                                         jump_to_body_patches.push(ctx.emit(Instruction::MatchStr(r_sub, idx, 0)));
                                     }
@@ -2721,7 +2721,7 @@ impl Compiler {
                     }
                     if !current_lit.is_empty() {
                         // Resolve \x01 sentinel (from \{ escape) to literal {
-                        let resolved = current_lit.replace('\x01', "{");
+                        let resolved = current_lit.replace('\x01', "{").replace('\x02', "}");
                         let idx = self.intern_string(&resolved);
                         parts.push(BuildPart::Lit(idx));
                         current_lit.clear();
@@ -2745,7 +2745,7 @@ impl Compiler {
         }
         if !current_lit.is_empty() {
             // Resolve \x01 sentinel (from \{ escape) to literal {
-            let resolved = current_lit.replace('\x01', "{");
+            let resolved = current_lit.replace('\x01', "{").replace('\x02', "}");
             let idx = self.intern_string(&resolved);
             parts.push(BuildPart::Lit(idx));
         }

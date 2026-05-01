@@ -317,10 +317,7 @@ impl Parser {
             TokenKind::Ident(name) => {
                 let name = name.clone();
                 self.advance();
-                Ok(Box::new(Expr::Identifier(IdentifierExpr {
-                    name,
-                    span: token.span,
-                })))
+                Ok(Box::new(Expr::Identifier(IdentifierExpr::new(name, token.span))))
             }
             TokenKind::LParen => {
                 self.advance(); // consume `(`
