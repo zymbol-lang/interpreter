@@ -11,13 +11,13 @@ mod literals;
 pub use literals::LiteralExpr;
 
 mod io;
-pub use io::{Input, InputCast, InputPrompt, Newline, Output};
+pub use io::{ClearScreen, Input, InputCast, InputPrompt, KeyInput, Newline, Output, OutputPos, TuiBlock};
 
 mod if_stmt;
 pub use if_stmt::{ElseIfBranch, IfStmt};
 
 mod loops;
-pub use loops::{Break, Continue, Loop};
+pub use loops::{Break, Continue, Loop, Sleep};
 
 mod match_stmt;
 pub use match_stmt::{MatchCase, MatchExpr, Pattern};
@@ -54,7 +54,7 @@ pub use data_ops::{
 };
 
 mod expressions;
-pub use expressions::{BinaryExpr, UnaryExpr, PipeExpr, PipeArg};
+pub use expressions::{BinaryExpr, UnaryExpr, PipeExpr, PipeArg, TerminalSizeExpr};
 
 mod script_exec;
 pub use script_exec::{ExecuteExpr, BashExecExpr};
@@ -123,6 +123,16 @@ pub enum Statement {
     /// Sets the active output numeral system for all subsequent >> outputs.
     /// `base` is the block base codepoint of the chosen script.
     SetNumeralMode { base: u32, span: Span },
+    /// Sleep statement: @~ N (milliseconds, only valid inside @ block)
+    Sleep(Sleep),
+    /// Key input: <<| var (blocking) or <<|? var (non-blocking)
+    KeyInput(KeyInput),
+    /// Clear screen: >>!
+    ClearScreen(ClearScreen),
+    /// Positioned output: >>~ (row, col [, fg [, bg]]) > items
+    OutputPos(OutputPos),
+    /// TUI block: >>| { } — alternate screen + raw mode scope
+    TuiBlock(TuiBlock),
 }
 
 /// Expression statement: expr (evaluated for side effects, result discarded)
@@ -241,6 +251,8 @@ pub enum Expr {
     FlatExtract(FlatExtractExpr),
     /// Structured extraction: arr[[g] ; [g]] — returns Array of Arrays
     StructuredExtract(StructuredExtractExpr),
+    /// Terminal size query: >>? — returns (rows, cols) tuple
+    TerminalSize(TerminalSizeExpr),
 }
 
 
@@ -407,6 +419,7 @@ impl Expr {
             Expr::DeepIndex(di) => di.span,
             Expr::FlatExtract(fe) => fe.span,
             Expr::StructuredExtract(se) => se.span,
+            Expr::TerminalSize(t) => t.span,
         }
     }
 }

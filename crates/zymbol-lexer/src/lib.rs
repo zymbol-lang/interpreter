@@ -25,8 +25,20 @@ pub enum TokenKind {
     // I/O operators
     /// >> (output operator)
     Output,
+    /// >>! (clear screen)
+    OutputClear,
+    /// >>? (query terminal size)
+    OutputQuery,
+    /// >>| (TUI block gate)
+    OutputGate,
+    /// >>~ (positioned output)
+    OutputPos,
     /// << (input operator)
     Input,
+    /// <<| (blocking key read)
+    KeyBlock,
+    /// <<|? (non-blocking key read)
+    KeyNonBlock,
 
     // Literals
     /// String literal (simple)
@@ -197,6 +209,8 @@ pub enum TokenKind {
     AtBreak,
     /// @> (continue)
     AtContinue,
+    /// @~ (sleep — only valid inside @ block)
+    AtTilde,
     /// @label (labeled loop declaration, legacy — fused without colon)
     AtLabel(String),
     /// @:label (labeled loop declaration: @:outer i:1..5 { })

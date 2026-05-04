@@ -14,10 +14,30 @@ impl Lexer {
     /// Try to parse IO-related tokens
     /// Returns Some(token) if an IO token is recognized, None otherwise
     pub(crate) fn try_parse_io_token(&mut self, ch: char, start: Position) -> Option<Token> {
-        // Check for >> (output)
+        // Check for >> and >>! >>? >>| >>~ (output family).
+        // ch = source[current] (first '>'), peek() = source[current+1], peek_ahead(2) = source[current+2].
+        // Each advance() moves current forward by 1.
         if ch == '>' && self.peek() == Some('>') {
-            self.advance();
-            self.advance();
+            match self.peek_ahead(2) {
+                Some('!') => {
+                    self.advance(); self.advance(); self.advance(); // consume > > !
+                    return Some(Token::new(TokenKind::OutputClear, self.span(start)));
+                }
+                Some('?') => {
+                    self.advance(); self.advance(); self.advance(); // consume > > ?
+                    return Some(Token::new(TokenKind::OutputQuery, self.span(start)));
+                }
+                Some('|') => {
+                    self.advance(); self.advance(); self.advance(); // consume > > |
+                    return Some(Token::new(TokenKind::OutputGate,  self.span(start)));
+                }
+                Some('~') => {
+                    self.advance(); self.advance(); self.advance(); // consume > > ~
+                    return Some(Token::new(TokenKind::OutputPos,   self.span(start)));
+                }
+                _ => {}
+            }
+            self.advance(); self.advance(); // consume > >
             return Some(Token::new(TokenKind::Output, self.span(start)));
         }
 
@@ -28,10 +48,18 @@ impl Lexer {
             return Some(Token::new(TokenKind::CliArgsCapture, self.span(start)));
         }
 
-        // Check for << (input)
+        // Check for << and <<| <<|? (input family).
+        // ch = source[current] (first '<'), peek_ahead(2) = third char, peek_ahead(3) = fourth char.
         if ch == '<' && self.peek() == Some('<') {
-            self.advance();
-            self.advance();
+            if self.peek_ahead(2) == Some('|') {
+                if self.peek_ahead(3) == Some('?') {
+                    self.advance(); self.advance(); self.advance(); self.advance(); // < < | ?
+                    return Some(Token::new(TokenKind::KeyNonBlock, self.span(start)));
+                }
+                self.advance(); self.advance(); self.advance(); // < < |
+                return Some(Token::new(TokenKind::KeyBlock, self.span(start)));
+            }
+            self.advance(); self.advance(); // < <
             return Some(Token::new(TokenKind::Input, self.span(start)));
         }
 

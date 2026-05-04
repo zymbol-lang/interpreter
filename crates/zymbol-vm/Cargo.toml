@@ -10,3 +10,4 @@ zymbol-bytecode.workspace = true
 zymbol-lexer.workspace = true
 zymbol-intrinsics.workspace = true
 thiserror.workspace = true
+crossterm = { workspace = true }

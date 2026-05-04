@@ -2166,6 +2166,89 @@ impl<W: Write> VM<W> {
                     }
                 }
 
+                // ── TUI primitives ──────────────────────────────────────────────
+                &Instruction::Sleep(reg) => {
+                    let ms = match rreg!(reg) {
+                        Value::Int(n) if *n >= 0 => *n as u64,
+                        Value::Int(n) => raise!(VmError::Generic(format!(
+                            "@~ requires non-negative ms, got {}", n))),
+                        other => raise!(VmError::TypeError {
+                            expected: "Int", got: other.type_name().to_string() }),
+                    };
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                }
+
+                Instruction::ClearScreen => {
+                    crossterm::execute!(std::io::stdout(),
+                        crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+                        crossterm::cursor::MoveTo(0, 0)).ok();
+                }
+
+                &Instruction::QueryTerminalSize(dst) => {
+                    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+                    wreg!(dst, Value::Tuple(std::rc::Rc::new(vec![Value::Int(rows as i64), Value::Int(cols as i64)])));
+                }
+
+                &Instruction::ReadKey(dst, blocking) => {
+                    use crossterm::event::{self, Event, KeyEvent};
+                    let ch = if blocking {
+                        loop {
+                            match event::read().unwrap_or(Event::FocusLost) {
+                                Event::Key(KeyEvent { code, .. }) => break vm_map_key_code(code),
+                                _ => continue,
+                            }
+                        }
+                    } else if event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+                        match event::read().unwrap_or(Event::FocusLost) {
+                            Event::Key(KeyEvent { code, .. }) => vm_map_key_code(code),
+                            _ => '\0',
+                        }
+                    } else {
+                        '\0'
+                    };
+                    wreg!(dst, Value::Char(ch));
+                }
+
+                Instruction::PrintAt(r_pos, item_regs) => {
+                    let pos_val = rreg!(*r_pos).clone();
+                    let (row, col, fg, bg) = vm_extract_pos(pos_val);
+                    crossterm::execute!(std::io::stdout(),
+                        crossterm::cursor::MoveTo(col - 1, row - 1)).ok();
+                    if fg > 0 {
+                        crossterm::execute!(std::io::stdout(),
+                            crossterm::style::SetForegroundColor(
+                                crossterm::style::Color::AnsiValue(fg as u8))).ok();
+                    }
+                    if bg > 0 {
+                        crossterm::execute!(std::io::stdout(),
+                            crossterm::style::SetBackgroundColor(
+                                crossterm::style::Color::AnsiValue(bg as u8))).ok();
+                    }
+                    for &r in item_regs {
+                        print!("{}", rreg!(r));
+                    }
+                    if fg > 0 || bg > 0 {
+                        crossterm::execute!(std::io::stdout(),
+                            crossterm::style::ResetColor).ok();
+                    }
+                    std::io::stdout().flush().ok();
+                }
+
+                Instruction::EnterTui => {
+                    crossterm::terminal::enable_raw_mode().ok();
+                    crossterm::execute!(std::io::stdout(),
+                        crossterm::terminal::EnterAlternateScreen,
+                        crossterm::cursor::Hide).ok();
+                }
+
+                Instruction::ExitTui => {
+                    // TODO: TuiBlock cleanup on break — if @! escapes, ExitTui won't run
+                    let _ = crossterm::execute!(std::io::stdout(),
+                        crossterm::terminal::LeaveAlternateScreen,
+                        crossterm::cursor::Show);
+                    let _ = crossterm::terminal::disable_raw_mode();
+                }
+
                 Instruction::Halt => return Ok(()),
             }
         }
@@ -2991,6 +3074,33 @@ impl<W: Write> VM<W> {
         self.value_stack.truncate(base);
         Ok(Value::Unit)
     }
+}
+
+fn vm_map_key_code(code: crossterm::event::KeyCode) -> char {
+    use crossterm::event::KeyCode::*;
+    match code {
+        Char(c) => c,
+        Up      => '↑',
+        Down    => '↓',
+        Left    => '←',
+        Right   => '→',
+        Enter   => '\n',
+        Esc     => '\x1B',
+        _       => '\0',
+    }
+}
+
+fn vm_extract_pos(val: Value) -> (u16, u16, i64, i64) {
+    let items = match val {
+        Value::Tuple(v) => (*v).clone(),
+        _ => return (1, 1, 0, 0),
+    };
+    let to_u16 = |v: &Value| match v { Value::Int(n) if *n >= 1 => *n as u16, _ => 1 };
+    let row = items.get(0).map(to_u16).unwrap_or(1);
+    let col = items.get(1).map(to_u16).unwrap_or(1);
+    let fg  = if items.len() > 2 { match &items[2] { Value::Int(n) => *n, _ => 0 } } else { 0 };
+    let bg  = if items.len() > 3 { match &items[3] { Value::Int(n) => *n, _ => 0 } } else { 0 };
+    (row, col, fg, bg)
 }
 
 fn vm_natural_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {

@@ -201,6 +201,31 @@ impl<'a> FormatVisitor<'a> {
                 let d9 = char::from_u32(base + 9).unwrap_or('9');
                 self.output.write(&format!("#{}{}\u{23}", d0, d9));
             }
+            Statement::Sleep(s) => {
+                self.output.write("@~ ");
+                self.format_expr(&s.duration);
+            }
+            Statement::ClearScreen(_) => self.output.write(">>!"),
+            Statement::KeyInput(ki) => {
+                if ki.blocking {
+                    self.output.write(&format!("<<| {}", ki.variable));
+                } else {
+                    self.output.write(&format!("<<|? {}", ki.variable));
+                }
+            }
+            Statement::OutputPos(op) => {
+                self.output.write(">>~ ");
+                self.format_expr(&op.pos);
+                self.output.write(" >");
+                for item in &op.items {
+                    self.output.write(" ");
+                    self.format_expr(item);
+                }
+            }
+            Statement::TuiBlock(tb) => {
+                self.output.write(">>| ");
+                self.format_block(&tb.body);
+            }
         }
     }
 
@@ -607,6 +632,7 @@ impl<'a> FormatVisitor<'a> {
             Expr::DeepIndex(di) => self.format_deep_index(di),
             Expr::FlatExtract(fe) => self.format_flat_extract(fe),
             Expr::StructuredExtract(se) => self.format_structured_extract(se),
+            Expr::TerminalSize(_) => self.output.write(">>?"),
         }
     }
 

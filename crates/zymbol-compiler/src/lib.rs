@@ -683,6 +683,41 @@ impl Compiler {
                 ctx.emit(Instruction::SetNumeralMode(*base));
                 Ok(())
             }
+            Statement::Sleep(s) => {
+                let r_ms = self.compile_expr(&s.duration, ctx)?;
+                ctx.emit(Instruction::Sleep(r_ms));
+                Ok(())
+            }
+            Statement::ClearScreen(_) => {
+                ctx.emit(Instruction::ClearScreen);
+                Ok(())
+            }
+            Statement::KeyInput(ki) => {
+                let dst = if let Ok(r) = ctx.get_reg(&ki.variable) {
+                    r
+                } else {
+                    let r = ctx.alloc_temp()?;
+                    ctx.register_map.insert(ki.variable.clone(), r);
+                    r
+                };
+                ctx.emit(Instruction::ReadKey(dst, ki.blocking));
+                Ok(())
+            }
+            Statement::OutputPos(op) => {
+                let r_pos = self.compile_expr(&op.pos, ctx)?;
+                let mut regs = Vec::new();
+                for item in &op.items {
+                    regs.push(self.compile_expr(item, ctx)?);
+                }
+                ctx.emit(Instruction::PrintAt(r_pos, regs));
+                Ok(())
+            }
+            Statement::TuiBlock(tb) => {
+                ctx.emit(Instruction::EnterTui);
+                self.compile_block(&tb.body, ctx)?;
+                ctx.emit(Instruction::ExitTui);
+                Ok(())
+            }
         }
     }
 
@@ -1433,6 +1468,11 @@ impl Compiler {
             Expr::DeepIndex(di) => self.compile_deep_index(di, ctx),
             Expr::FlatExtract(fe) => self.compile_flat_extract(fe, ctx),
             Expr::StructuredExtract(se) => self.compile_structured_extract(se, ctx),
+            Expr::TerminalSize(_) => {
+                let dst = ctx.alloc_temp()?;
+                ctx.emit(Instruction::QueryTerminalSize(dst));
+                Ok(dst)
+            }
         }
     }
 
@@ -3241,7 +3281,7 @@ fn collect_free_in_expr(
             }
         }
         // Literals and shell expressions have no capturable sub-expressions
-        Expr::Literal(_) | Expr::Execute(_) | Expr::BashExec(_) => {}
+        Expr::Literal(_) | Expr::Execute(_) | Expr::BashExec(_) | Expr::TerminalSize(_) => {}
     }
 }
 
@@ -3365,7 +3405,17 @@ fn collect_free_in_stmts(
             Statement::Newline(_) | Statement::Break(_) | Statement::Continue(_)
             | Statement::FunctionDecl(_) | Statement::LifetimeEnd(_)
             | Statement::Input(_) | Statement::CliArgsCapture(_)
-            | Statement::SetNumeralMode { .. } => {}
+            | Statement::SetNumeralMode { .. }
+            | Statement::ClearScreen(_) | Statement::KeyInput(_) => {}
+
+            Statement::Sleep(s) => collect_free_in_expr(&s.duration, locals, outer_ctx, seen, free),
+            Statement::OutputPos(op) => {
+                collect_free_in_expr(&op.pos, locals, outer_ctx, seen, free);
+                for item in &op.items { collect_free_in_expr(item, locals, outer_ctx, seen, free); }
+            }
+            Statement::TuiBlock(tb) => {
+                collect_free_in_stmts(&tb.body.statements, locals, outer_ctx, seen, free);
+            }
         }
     }
 }
@@ -3532,11 +3582,18 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::TryCatch(r) => upd(*r),
             Instruction::LoadGlobal(d, _) => upd(*d),
             Instruction::StoreGlobal(_, s) => upd(*s),
+            Instruction::Sleep(r) | Instruction::QueryTerminalSize(r)
+            | Instruction::ReadKey(r, _) => upd(*r),
+            Instruction::PrintAt(r_pos, items) => {
+                upd(*r_pos);
+                for &r in items { upd(r); }
+            }
             // No-register instructions
             Instruction::SetupOutputWriteback(_) | Instruction::TryBegin(_)
             | Instruction::TryEnd(_) | Instruction::RaiseError(_)
             | Instruction::Jump(_) | Instruction::Halt | Instruction::PrintNewline
-            | Instruction::SetNumeralMode(_) => {}
+            | Instruction::SetNumeralMode(_)
+            | Instruction::ClearScreen | Instruction::EnterTui | Instruction::ExitTui => {}
         }
     }
     max

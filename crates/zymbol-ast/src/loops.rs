@@ -81,3 +81,14 @@ impl Continue {
         Continue { label, span }
     }
 }
+
+/// Sleep statement: @~ N (milliseconds, only valid inside @ block)
+#[derive(Debug, Clone)]
+pub struct Sleep {
+    pub duration: Box<Expr>,
+    pub span: Span,
+}
+
+impl Sleep {
+    pub fn new(duration: Box<Expr>, span: Span) -> Self { Self { duration, span } }
+}

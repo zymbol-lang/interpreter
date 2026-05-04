@@ -591,6 +591,27 @@ impl VariableAnalyzer {
                     self.analyze_block(&finally.block);
                 }
             }
+            Statement::Sleep(s) => self.analyze_expr(&s.duration),
+
+            Statement::ClearScreen(_) => {}
+
+            Statement::KeyInput(ki) => {
+                if !self.variables.contains_key(&ki.variable) {
+                    self.declare_variable(ki.variable.clone(), ki.span, false);
+                } else {
+                    self.assign_variable(&ki.variable, ki.span);
+                }
+            }
+
+            Statement::OutputPos(op) => {
+                self.analyze_expr(&op.pos);
+                for item in &op.items {
+                    self.analyze_expr(item);
+                }
+            }
+
+            Statement::TuiBlock(tb) => self.analyze_block(&tb.body),
+
             // No variables introduced or consumed — pure runtime side effect
             Statement::SetNumeralMode { .. } => {}
         }
@@ -953,6 +974,8 @@ impl VariableAnalyzer {
                     }
                 }
             }
+
+            Expr::TerminalSize(_) => {}
         }
     }
 

@@ -33,6 +33,12 @@ pub enum PipeArg {
     Expr(Expr),        // Regular expression argument
 }
 
+/// Terminal size query expression: >>? — returns (rows, cols) positional tuple
+#[derive(Debug, Clone)]
+pub struct TerminalSizeExpr {
+    pub span: Span,
+}
+
 /// Pipe expression: value |> func(_, args) or value |> lambda(_)
 #[derive(Debug, Clone)]
 pub struct PipeExpr {

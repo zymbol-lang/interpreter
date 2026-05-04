@@ -1549,3 +1549,47 @@ fn test_computed_range_var_bounds_vm() {
     let src = "m = [[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16]]\ninicio=2\nfin=4\n>> m[1>inicio..fin] ¶\n";
     assert_eq!(run_vm(src).unwrap(), "[2, 3, 4]\n");
 }
+
+// ── TUI primitives: TW tests ──────────────────────────────────────────────────
+
+#[test]
+fn test_sleep_zero() {
+    let src = "@~ 0\n>> \"ok\" ¶\n";
+    assert_eq!(run(src), "ok\n");
+}
+
+#[test]
+fn test_terminal_size_type() {
+    // >>? returns a (rows, cols) tuple; both must be positive integers
+    let src = "[H, W] = >>?\n>> (H > 0) ¶\n>> (W > 0) ¶\n";
+    assert_eq!(run(src), "#1\n#1\n");
+}
+
+// ── TUI primitives: VM parity tests ──────────────────────────────────────────
+
+#[test]
+fn test_sleep_zero_vm() {
+    let src = "@~ 0\n>> \"ok\" ¶\n";
+    assert_eq!(run_vm(src).expect("VM sleep"), run(src));
+}
+
+#[test]
+fn test_clear_screen_vm() {
+    // >>! produces ANSI escape sequences; TW == VM output must match
+    let src = ">>!\n>> \"after\" ¶\n";
+    assert_eq!(run_vm(src).expect("VM clear"), run(src));
+}
+
+#[test]
+fn test_terminal_size_vm() {
+    // Both pipelines should return the same (rows, cols) tuple
+    let src = "[H, W] = >>?\n>> H ¶\n>> W ¶\n";
+    assert_eq!(run_vm(src).expect("VM terminal size"), run(src));
+}
+
+#[test]
+fn test_output_pos_vm() {
+    // >>~ produces ANSI cursor-move escape; TW == VM output must match
+    let src = ">>~ (1, 1) > \"x\"\n";
+    assert_eq!(run_vm(src).expect("VM outputpos"), run(src));
+}

@@ -119,13 +119,19 @@ impl Parser {
                 Ok(Statement::SetNumeralMode { base, span })
             }
             TokenKind::Output => self.parse_output(),
+            TokenKind::OutputClear => self.parse_clear_screen(),
+            TokenKind::OutputPos => self.parse_output_pos(),
+            TokenKind::OutputGate => self.parse_tui_block(),
             TokenKind::Input => self.parse_input(),
+            TokenKind::KeyBlock => self.parse_key_input(true),
+            TokenKind::KeyNonBlock => self.parse_key_input(false),
             TokenKind::CliArgsCapture => self.parse_cli_args_capture(),
             TokenKind::Question => self.parse_if(),
             TokenKind::DoubleQuestion => self.parse_match_statement(),
             TokenKind::At | TokenKind::AtLabel(_) | TokenKind::AtColonLabel(_) => self.parse_loop(),
             TokenKind::AtBreak | TokenKind::AtColonLabelBreak(_) => self.parse_break(),
             TokenKind::AtContinue | TokenKind::AtColonLabelContinue(_) => self.parse_continue(),
+            TokenKind::AtTilde => self.parse_sleep(),
             TokenKind::TryBlock => self.parse_try_statement(),
             TokenKind::Newline | TokenKind::Backslash2 => self.parse_newline(),
             TokenKind::Backslash => self.parse_lifetime_end(),
@@ -1069,6 +1075,10 @@ impl Parser {
             TokenKind::BashOpen => {
                 // Parse bash execute expression: <\ expr... \>
                 self.parse_bash_exec_expr()
+            }
+            TokenKind::OutputQuery => {
+                let span = self.advance().span;
+                Ok(Expr::TerminalSize(zymbol_ast::TerminalSizeExpr { span }))
             }
             TokenKind::Eof => Err(Diagnostic::error("expected expression, found end of file")
                 .with_span(token.span)),

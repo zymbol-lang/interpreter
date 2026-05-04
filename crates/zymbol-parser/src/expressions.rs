@@ -458,6 +458,11 @@ impl Parser {
 
         loop {
             let token = self.peek().clone();
+            // Stop if next token is on a different source line than the current expression.
+            // This prevents >>~ items greedily consuming `[`, `.`, `(` from the next line.
+            if token.span.start.line != expr.span().start.line {
+                break;
+            }
             match token.kind {
                 // ── Structural postfix ────────────────────────────────────────
                 TokenKind::LBracket => {

@@ -607,6 +607,36 @@ impl DefUseAnalyzer {
                 }
             }
 
+            Statement::Sleep(s) => self.analyze_expr(&s.duration, node_index),
+
+            Statement::ClearScreen(_) => {}
+
+            Statement::KeyInput(ki) => {
+                let chain = self.chains.entry(ki.variable.clone()).or_insert_with(|| {
+                    DefUseChain::new(ki.variable.clone())
+                });
+                chain.add_definition(Definition {
+                    var_name: ki.variable.clone(),
+                    node: node_index,
+                    span: ki.span,
+                    is_underscore: ki.variable.starts_with('_'),
+                    scope_depth: self.scope_depth,
+                });
+            }
+
+            Statement::OutputPos(op) => {
+                self.analyze_expr(&op.pos, node_index);
+                for item in &op.items {
+                    self.analyze_expr(item, node_index);
+                }
+            }
+
+            Statement::TuiBlock(tb) => {
+                for stmt in &tb.body.statements {
+                    self.analyze_statement(stmt, node_index);
+                }
+            }
+
             Statement::Break(_) | Statement::Continue(_) | Statement::Newline(_) |
             Statement::FunctionDecl(_) | Statement::CliArgsCapture(_) |
             Statement::SetNumeralMode { .. } => {
@@ -923,7 +953,7 @@ impl DefUseAnalyzer {
             }
 
             // Literals and other leaf nodes - no variable uses
-            Expr::Literal(_) => {}
+            Expr::Literal(_) | Expr::TerminalSize(_) => {}
         }
     }
 

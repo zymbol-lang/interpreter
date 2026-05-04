@@ -48,6 +48,35 @@ pub struct Newline {
     pub span: Span,
 }
 
+/// Clear screen statement: >>!
+#[derive(Debug, Clone)]
+pub struct ClearScreen {
+    pub span: Span,
+}
+
+/// Key input statement: <<| var (blocking) or <<|? var (non-blocking)
+#[derive(Debug, Clone)]
+pub struct KeyInput {
+    pub variable: String,
+    pub blocking: bool,
+    pub span: Span,
+}
+
+/// Positioned output: >>~ (row, col [, fg [, bg]]) > items
+#[derive(Debug, Clone)]
+pub struct OutputPos {
+    pub pos: Box<crate::Expr>,
+    pub items: Vec<crate::Expr>,
+    pub span: Span,
+}
+
+/// TUI block: >>| { } — alternate screen + raw mode scope
+#[derive(Debug, Clone)]
+pub struct TuiBlock {
+    pub body: crate::Block,
+    pub span: Span,
+}
+
 // Implementations
 
 impl Output {
@@ -63,7 +92,25 @@ impl Input {
 }
 
 impl Newline {
-    pub fn new(span: Span) -> Self {
-        Self { span }
+    pub fn new(span: Span) -> Self { Self { span } }
+}
+
+impl ClearScreen {
+    pub fn new(span: Span) -> Self { Self { span } }
+}
+
+impl KeyInput {
+    pub fn new(variable: String, blocking: bool, span: Span) -> Self {
+        Self { variable, blocking, span }
     }
+}
+
+impl OutputPos {
+    pub fn new(pos: Box<crate::Expr>, items: Vec<crate::Expr>, span: Span) -> Self {
+        Self { pos, items, span }
+    }
+}
+
+impl TuiBlock {
+    pub fn new(body: crate::Block, span: Span) -> Self { Self { body, span } }
 }

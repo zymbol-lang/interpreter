@@ -7,7 +7,7 @@
 //! - Labeled loops: @ @label { }
 
 use std::io::Write;
-use zymbol_ast::{Break, Continue, Expr, Loop};
+use zymbol_ast::{Break, Continue, Expr, Loop, Sleep};
 use crate::{ControlFlow, Interpreter, Result, RuntimeError, Value};
 
 /// Returns true if an assignment's RHS contains a hot self-reference to the same variable.
@@ -67,6 +67,23 @@ impl<W: Write> Interpreter<W> {
             ControlFlow::Return(_) => true,
             ControlFlow::None => false,
         }
+    }
+
+    /// Execute sleep statement: @~ N (milliseconds)
+    pub(crate) fn execute_sleep(&mut self, sleep: &Sleep) -> Result<()> {
+        let ms = match self.eval_expr(&sleep.duration)? {
+            Value::Int(n) if n >= 0 => n as u64,
+            Value::Int(n) => return Err(RuntimeError::Generic {
+                message: format!("@~ requires non-negative duration, got {}", n),
+                span: sleep.span,
+            }),
+            other => return Err(RuntimeError::Generic {
+                message: format!("@~ requires integer milliseconds, got {}", self.value_type_name(&other)),
+                span: sleep.span,
+            }),
+        };
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+        Ok(())
     }
 
     /// Execute break statement: @! [label]

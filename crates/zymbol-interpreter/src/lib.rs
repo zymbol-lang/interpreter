@@ -1004,6 +1004,11 @@ impl<W: Write> Interpreter<W> {
                 self.numeral_mode = *base;
                 Ok(())
             }
+            Statement::Sleep(s) => self.execute_sleep(s),
+            Statement::ClearScreen(cs) => self.execute_clear_screen(cs),
+            Statement::KeyInput(ki) => self.execute_key_input(ki),
+            Statement::OutputPos(op) => self.execute_output_pos(op),
+            Statement::TuiBlock(tb) => self.execute_tui_block(tb),
         }
     }
 
@@ -1160,6 +1165,7 @@ impl<W: Write> Interpreter<W> {
             Expr::DeepIndex(di) => self.eval_deep_index(di),
             Expr::FlatExtract(fe) => self.eval_flat_extract(fe),
             Expr::StructuredExtract(se) => self.eval_structured_extract(se),
+            Expr::TerminalSize(t) => self.eval_terminal_size(t.span),
         }
     }
 

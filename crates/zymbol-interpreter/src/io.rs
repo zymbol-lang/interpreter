@@ -6,8 +6,9 @@
 //! - Newline: write newline to output
 
 use std::io::Write;
-use zymbol_ast::{Input, InputCast, InputPrompt, Newline, Output};
+use zymbol_ast::{ClearScreen, Input, InputCast, InputPrompt, KeyInput, Newline, Output, OutputPos, TuiBlock};
 use zymbol_lexer::StringPart;
+use zymbol_span::Span;
 use crate::numeral_mode::{to_numeral_int, to_numeral_float, to_numeral_bool};
 use crate::data_ops::parse_numeric_string;
 use crate::{Interpreter, Result, RuntimeError, Value};
@@ -88,6 +89,130 @@ impl<W: Write> Interpreter<W> {
         self.set_variable(&input.variable, value);
         Ok(())
     }
+
+    /// Clear screen: >>!
+    pub(crate) fn execute_clear_screen(&mut self, cs: &ClearScreen) -> Result<()> {
+        crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+            crossterm::cursor::MoveTo(0, 0)
+        ).map_err(|e| RuntimeError::Generic { message: e.to_string(), span: cs.span })
+    }
+
+    /// Terminal size query: >>?  — returns (rows, cols)
+    pub(crate) fn eval_terminal_size(&mut self, span: Span) -> Result<Value> {
+        let (cols, rows) = crossterm::terminal::size()
+            .map_err(|e| RuntimeError::Generic { message: e.to_string(), span })?;
+        Ok(Value::Tuple(vec![Value::Int(rows as i64), Value::Int(cols as i64)]))
+    }
+
+    /// Blocking / non-blocking key input: <<| var  or  <<|? var
+    pub(crate) fn execute_key_input(&mut self, ki: &KeyInput) -> Result<()> {
+        use crossterm::event::{self, Event, KeyEvent};
+        let ch = if ki.blocking {
+            loop {
+                match event::read().map_err(|e| RuntimeError::Generic {
+                    message: e.to_string(), span: ki.span,
+                })? {
+                    Event::Key(KeyEvent { code, .. }) => break map_key_code(code),
+                    _ => continue,
+                }
+            }
+        } else {
+            if event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+                match event::read().unwrap_or(Event::FocusLost) {
+                    Event::Key(KeyEvent { code, .. }) => map_key_code(code),
+                    _ => '\0',
+                }
+            } else { '\0' }
+        };
+        self.set_variable(&ki.variable, Value::Char(ch));
+        Ok(())
+    }
+
+    /// Positioned output: >>~ (row, col [, fg [, bg]]) > items
+    pub(crate) fn execute_output_pos(&mut self, op: &OutputPos) -> Result<()> {
+        use crossterm::{execute, cursor, style};
+        let pos_val = self.eval_expr(&op.pos)?;
+        let (row, col, fg, bg) = extract_pos_tuple(pos_val, op.span)?;
+        execute!(std::io::stdout(), cursor::MoveTo(col - 1, row - 1))
+            .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
+        if fg > 0 {
+            execute!(std::io::stdout(),
+                style::SetForegroundColor(style::Color::AnsiValue(fg as u8))).ok();
+        }
+        if bg > 0 {
+            execute!(std::io::stdout(),
+                style::SetBackgroundColor(style::Color::AnsiValue(bg as u8))).ok();
+        }
+        for expr in &op.items {
+            let value = self.eval_expr(expr)?;
+            print!("{}", value.to_display_string());
+        }
+        if fg > 0 || bg > 0 {
+            execute!(std::io::stdout(), style::ResetColor).ok();
+        }
+        std::io::stdout().flush().ok();
+        Ok(())
+    }
+
+    /// TUI block: >>| { } — alternate screen + raw mode
+    pub(crate) fn execute_tui_block(&mut self, tb: &TuiBlock) -> Result<()> {
+        use crossterm::{execute, terminal, cursor};
+        terminal::enable_raw_mode().map_err(|e| RuntimeError::Generic {
+            message: format!("failed to enable raw mode: {}", e), span: tb.span,
+        })?;
+        execute!(std::io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)
+            .map_err(|e| RuntimeError::Generic {
+                message: format!("failed to enter alternate screen: {}", e), span: tb.span,
+            })?;
+        let result = self.execute_block(&tb.body);
+        let _ = execute!(std::io::stdout(), terminal::LeaveAlternateScreen, cursor::Show);
+        let _ = terminal::disable_raw_mode();
+        result
+    }
+}
+
+fn map_key_code(code: crossterm::event::KeyCode) -> char {
+    use crossterm::event::KeyCode::*;
+    match code {
+        Char(c) => c,
+        Up      => '↑',
+        Down    => '↓',
+        Left    => '←',
+        Right   => '→',
+        Enter   => '\n',
+        Esc     => '\x1B',
+        _       => '\0',
+    }
+}
+
+fn extract_pos_tuple(val: Value, span: Span) -> Result<(u16, u16, i64, i64)> {
+    let items = match val {
+        Value::Tuple(v) => v,
+        other => return Err(RuntimeError::Generic {
+            message: format!(">>~ expects tuple, got {}", other.to_display_string()),
+            span,
+        }),
+    };
+    if items.len() < 2 || items.len() > 4 {
+        return Err(RuntimeError::Generic {
+            message: format!(">>~ tuple needs 2–4 elements, got {}", items.len()),
+            span,
+        });
+    }
+    let to_u16 = |v: &Value, name: &str| match v {
+        Value::Int(n) if *n >= 1 => Ok(*n as u16),
+        other => Err(RuntimeError::Generic {
+            message: format!(">>~ {}: expected positive Int, got {}", name, other.to_display_string()),
+            span,
+        }),
+    };
+    let row = to_u16(&items[0], "row")?;
+    let col = to_u16(&items[1], "col")?;
+    let fg  = if items.len() > 2 { match &items[2] { Value::Int(n) => *n, _ => 0 } } else { 0 };
+    let bg  = if items.len() > 3 { match &items[3] { Value::Int(n) => *n, _ => 0 } } else { 0 };
+    Ok((row, col, fg, bg))
 }
 
 #[cfg(test)]

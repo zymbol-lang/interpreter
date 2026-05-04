@@ -1998,6 +1998,7 @@ dependencies = [
 name = "zymbol-interpreter"
 version = "0.0.5"
 dependencies = [
+ "crossterm",
  "thiserror 1.0.69",
  "zymbol-ast",
  "zymbol-common",
@@ -2096,6 +2097,7 @@ dependencies = [
 name = "zymbol-vm"
 version = "0.0.5"
 dependencies = [
+ "crossterm",
  "thiserror 1.0.69",
  "zymbol-bytecode",
  "zymbol-intrinsics",

@@ -619,7 +619,7 @@ fn collect_refs_in_expr(
             }
         }
         // Literals and shell exprs have no capturable sub-expressions
-        Expr::Literal(_) | Expr::Execute(_) | Expr::BashExec(_) => {}
+        Expr::Literal(_) | Expr::Execute(_) | Expr::BashExec(_) | Expr::TerminalSize(_) => {}
     }
 }
 

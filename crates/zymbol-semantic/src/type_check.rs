@@ -1888,6 +1888,8 @@ impl TypeChecker {
                 self.infer_expr(&se.array);
                 ZymbolType::Array(Box::new(ZymbolType::Array(Box::new(ZymbolType::Any))))
             }
+
+            Expr::TerminalSize(_) => ZymbolType::Tuple(vec![ZymbolType::Int, ZymbolType::Int]),
         }
     }
 

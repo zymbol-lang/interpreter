@@ -14,6 +14,7 @@ zymbol-lexer.workspace = true
 zymbol-parser.workspace = true
 zymbol-semantic = { path = "../zymbol-semantic" }
 thiserror.workspace = true
+crossterm = { workspace = true }
 
 [dev-dependencies]
 zymbol-lexer.workspace = true

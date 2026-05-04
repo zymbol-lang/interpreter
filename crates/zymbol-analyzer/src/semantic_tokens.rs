@@ -83,7 +83,14 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
 
         // I/O and flow operators
         TokenKind::Output            // >>
+        | TokenKind::OutputClear     // >>!
+        | TokenKind::OutputQuery     // >>?
+        | TokenKind::OutputGate      // >>|
+        | TokenKind::OutputPos       // >>~
         | TokenKind::Input           // <<
+        | TokenKind::KeyBlock        // <<|
+        | TokenKind::KeyNonBlock     // <<|?
+        | TokenKind::AtTilde         // @~
         | TokenKind::Newline         // ¶
         | TokenKind::Backslash2      // \\
         | TokenKind::Arrow           // ->
@@ -269,6 +276,7 @@ fn token_length(kind: &TokenKind) -> u32 {
         | TokenKind::DoubleQuestion // ??
         | TokenKind::AtBreak        // @!
         | TokenKind::AtContinue     // @>
+        | TokenKind::AtTilde        // @~
         | TokenKind::AtColonLabelBreak(_)    // @:label! (2+name+1 chars, approximated as 2 here)
         | TokenKind::AtColonLabelContinue(_) // @:label> (2+name+1 chars, approximated as 2 here)
         | TokenKind::TryBlock       // !?
@@ -327,7 +335,15 @@ fn token_length(kind: &TokenKind) -> u32 {
         | TokenKind::DollarMinusLBracket  // $-[
         | TokenKind::DollarCaretPlus      // $^+
         | TokenKind::DollarCaretMinus     // $^-
+        | TokenKind::OutputClear          // >>!
+        | TokenKind::OutputQuery          // >>?
+        | TokenKind::OutputGate           // >>|
+        | TokenKind::OutputPos            // >>~
+        | TokenKind::KeyBlock             // <<|
         => 3,
+
+        TokenKind::KeyNonBlock            // <<|?
+        => 4,
         TokenKind::DollarCaret            // $^ (2 chars)
         => 2,
 

@@ -234,6 +234,22 @@ pub enum Instruction {
     /// Store to a module-level global variable: global_vars[idx] = src
     StoreGlobal(u16, Reg),
 
+    // ── TUI primitives ───────────────────────────────────────────────────
+    /// @~ N — sleep N milliseconds (ms value in reg)
+    Sleep(Reg),
+    /// >>! — clear terminal screen (no registers)
+    ClearScreen,
+    /// >>? — query terminal size → Value::Tuple([rows, cols]) stored in dst
+    QueryTerminalSize(Reg),
+    /// <<| var / <<|? var — read one key → Value::Char in dst; blocking flag
+    ReadKey(Reg, bool),
+    /// >>~ pos > items — positioned output (pos tuple in r_pos, items in Vec<Reg>)
+    PrintAt(Reg, Vec<Reg>),
+    /// >>| { } — enter alternate screen + raw mode
+    EnterTui,
+    /// >>| { } — leave alternate screen + disable raw mode
+    ExitTui,
+
     // ── Halt ─────────────────────────────────────────────────────────────
     Halt,
 }

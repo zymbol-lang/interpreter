@@ -6,12 +6,20 @@
 //! - Loop control: BREAK (@!), CONTINUE (@>)
 //! - Labeled loops: @label { }  (fused — @label is a single token)
 
-use zymbol_ast::{Break, Continue, Loop, Statement};
+use zymbol_ast::{Break, Continue, Loop, Sleep, Statement};
 use zymbol_error::Diagnostic;
 use zymbol_lexer::TokenKind;
 use crate::Parser;
 
 impl Parser {
+    /// Parse sleep statement: @~ N (milliseconds)
+    pub(crate) fn parse_sleep(&mut self) -> Result<Statement, Diagnostic> {
+        let start_span = self.advance().span; // consume @~
+        let duration = self.parse_expr()?;
+        let span = start_span.to(&duration.span());
+        Ok(Statement::Sleep(Sleep::new(Box::new(duration), span)))
+    }
+
     /// Parse break statement: @! [label] or @:label!
     pub(crate) fn parse_break(&mut self) -> Result<Statement, Diagnostic> {
         let token = self.advance(); // consume @! or @:label!

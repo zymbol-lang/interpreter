@@ -55,6 +55,13 @@ impl Lexer {
             return Some(Token::new(TokenKind::AtColonLabel(label), self.span(start)));
         }
 
+        // Check for @~ (sleep)
+        if ch == '@' && self.peek() == Some('~') {
+            self.advance(); // consume @
+            self.advance(); // consume ~
+            return Some(Token::new(TokenKind::AtTilde, self.span(start)));
+        }
+
         // Check for @ (loop)
         if ch == '@' {
             self.advance();
