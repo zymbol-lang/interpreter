@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.0.4-informational?style=flat-square"/>
+  <img src="https://img.shields.io/badge/version-v0.0.5-informational?style=flat-square"/>
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square"/>
   <img src="https://img.shields.io/badge/status-active-brightgreen?style=flat-square"/>
@@ -130,7 +130,8 @@ zymbol build program.zy -o myprogram --release
 | Loops | `@` (infinite/while/times/for), `@!` (break), `@>` (continue), `@:label` (labeled) |
 | Functions | `->` (lambda), `<~` (return / output param) |
 | Collections | `$#` (len), `$+` (append), `$-` (remove), `$[..]` (slice), `$?` (contains), `$??` (find all), `$^+`/`$^-` (sort), `$^` (custom sort), `$>` (map), `$|` (filter), `$<` (reduce) |
-| Strings | `$~~[p:r]` (replace), `$/` (split), `$++` (build) |
+| Strings | `$~~[p:r]` (replace), `$/` (split), `$++` (build), `$*` (repeat N times) |
+| TUI / Terminal | `@~` (sleep ms), `>>!` (clear screen), `>>?` (query size → `[rows,cols]`), `>>~` (positioned print), `<<\|` (blocking keypress), `<<\|?` (non-blocking keypress), `>>|` (TUI block) |
 | Multi-dim index | `arr[i>j]` (scalar), `arr[p;q]` (flat), `arr[[g];[g]]` (structured) |
 | Pipe | `\|>` with `_` placeholder |
 | Errors | `!?` (try), `:!` (catch), `:>` (finally), `$!` (is error), `$!!` (propagate) |
@@ -353,6 +354,10 @@ parts = "a,b,c" $/ ','           // ["a", "b", "c"]
 rep   = s$~~["l":"L"]            // "HeLLo WorLd"
 out   = "n=" $++ 42 " flag=" #1  // "n=42 flag=#1"
 
+// Repeat string N times
+line  = "=" $* 20                // "===================="
+sep   = "-" $* 10                // "----------"
+
 // Iteration
 @ c:"hello" { >> c "-" }         // h-e-l-l-o-
 ```
@@ -494,7 +499,7 @@ bash tests/scripts/vm_compare.sh
 ```
 
 Current status: **717 unit tests passing** across all crates.  
-VM parity: **403/405 PASS** (2 vm-skip for TW-only analysis tests, 0 failures).
+VM parity: **424/424 PASS** (424 golden-file pairs; `@vm-skip` files excluded).
 
 ---
 
@@ -506,7 +511,7 @@ interpreter/
 ├── zymbol-lang.ebnf     # Formal grammar (EBNF, v2.3.0)
 ├── install-zymbol.sh    # Install script
 ├── crates/              # Rust source crates
-├── tests/               # End-to-end test suite (405 files)
+├── tests/               # End-to-end test suite (424 golden pairs, 441 .zy files)
 ├── docs/                # Extended documentation
 ├── LICENSE
 ├── LICENSE-AGPL-3.0     # AGPL-3.0 (interpreter source)

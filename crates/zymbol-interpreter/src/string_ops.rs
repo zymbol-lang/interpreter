@@ -7,11 +7,37 @@
 //! Note: $?? is now CollectionFindAllExpr (eval_collection_find_all in collection_ops.rs).
 //! $++ and old $-- are retired in v0.0.2.
 
-use zymbol_ast::{ConcatBuildExpr, StringReplaceExpr, StringSplitExpr};
+use zymbol_ast::{ConcatBuildExpr, StringRepeatExpr, StringReplaceExpr, StringSplitExpr};
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
 
 impl<W: Write> Interpreter<W> {
+    /// Evaluate string repeat operator: string$* n → string repeated n times
+    pub(crate) fn eval_string_repeat(&mut self, op: &StringRepeatExpr) -> Result<Value> {
+        let string_val = self.eval_expr(&op.string)?;
+        let count_val  = self.eval_expr(&op.count)?;
+        let s = match &string_val {
+            Value::String(s) => s.clone(),
+            Value::Char(c)   => c.to_string(),
+            _ => return Err(RuntimeError::Generic {
+                message: format!("$* requires a string, got {}", self.value_type_name(&string_val)),
+                span: op.span,
+            }),
+        };
+        let n = match count_val {
+            Value::Int(n) if n >= 0 => n as usize,
+            Value::Int(n) => return Err(RuntimeError::Generic {
+                message: format!("$* repetition count must be non-negative, got {}", n),
+                span: op.span,
+            }),
+            other => return Err(RuntimeError::Generic {
+                message: format!("$* repetition count must be an integer, got {}", self.value_type_name(&other)),
+                span: op.span,
+            }),
+        };
+        Ok(Value::String(s.repeat(n)))
+    }
+
     /// Evaluate string replace operator: string$~~[pattern:replacement] or string$~~[pattern:replacement:count]
     /// Replaces pattern with replacement text
     /// - If count not provided or is 0, replaces all occurrences

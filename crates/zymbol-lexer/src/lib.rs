@@ -135,6 +135,8 @@ pub enum TokenKind {
     DollarTildeTilde,
     /// $/ (split string by delimiter)
     DollarSlash,
+    /// $* (repeat string N times)
+    DollarStar,
 
     // Error handling operators
     /// $! (is_error - check if value is an error)

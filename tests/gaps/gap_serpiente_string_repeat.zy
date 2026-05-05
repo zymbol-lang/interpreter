@@ -1,0 +1,23 @@
+// GAP-001 (resuelto): $* string repeat operator.
+// Needed for drawing borders in Serpiente: "═" $* AN replaces the 7-line
+// _linea_h() workaround.
+
+// Basic repeat
+linea = "=" $* 5
+>> linea ¶
+
+// Repeat with variable count
+n = 3
+borde = "-" $* n
+>> borde ¶
+
+// Inline in output
+>> "abc" $* 2 ¶
+
+// Repeat 0 times = empty string
+vacio = "x" $* 0
+>> "|" vacio "|" ¶
+
+// Multi-char string repeat
+bloque = "ab" $* 3
+>> bloque ¶

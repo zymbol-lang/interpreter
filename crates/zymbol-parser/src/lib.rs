@@ -579,6 +579,9 @@ impl Parser {
                 TokenKind::DollarSlash => {
                     expr = self.parse_string_split(expr)?;
                 }
+                TokenKind::DollarStar => {
+                    expr = self.parse_string_repeat(expr)?;
+                }
                 TokenKind::DollarTilde => {
                     expr = self.parse_collection_update(expr)?;
                 }
@@ -759,6 +762,9 @@ impl Parser {
                 }
                 TokenKind::DollarSlash => {
                     expr = self.parse_string_split(expr)?;
+                }
+                TokenKind::DollarStar => {
+                    expr = self.parse_string_repeat(expr)?;
                 }
                 TokenKind::DollarLBracket => {
                     expr = self.parse_collection_slice(expr)?;

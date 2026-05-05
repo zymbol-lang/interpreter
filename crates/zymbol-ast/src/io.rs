@@ -62,10 +62,11 @@ pub struct KeyInput {
     pub span: Span,
 }
 
-/// Positioned output: >>~ (row, col [, fg [, bg]]) > items
+/// Positioned output: >>~ (fila, col, BKS, fg, bg) > items
+/// Sparse inline syntax: >>~(,,,15,0)> — None = slot absent
 #[derive(Debug, Clone)]
 pub struct OutputPos {
-    pub pos: Box<crate::Expr>,
+    pub slots: Vec<Option<crate::Expr>>,  // [fila, col, BKS, fg, bg] — up to 5, None = absent
     pub items: Vec<crate::Expr>,
     pub span: Span,
 }
@@ -106,8 +107,8 @@ impl KeyInput {
 }
 
 impl OutputPos {
-    pub fn new(pos: Box<crate::Expr>, items: Vec<crate::Expr>, span: Span) -> Self {
-        Self { pos, items, span }
+    pub fn new(slots: Vec<Option<crate::Expr>>, items: Vec<crate::Expr>, span: Span) -> Self {
+        Self { slots, items, span }
     }
 }
 

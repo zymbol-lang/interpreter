@@ -604,7 +604,9 @@ impl VariableAnalyzer {
             }
 
             Statement::OutputPos(op) => {
-                self.analyze_expr(&op.pos);
+                for slot in &op.slots {
+                    if let Some(expr) = slot { self.analyze_expr(expr); }
+                }
                 for item in &op.items {
                     self.analyze_expr(item);
                 }
@@ -844,6 +846,11 @@ impl VariableAnalyzer {
             }
 
             // String operations
+            Expr::StringRepeat(op) => {
+                self.analyze_expr(&op.string);
+                self.analyze_expr(&op.count);
+            }
+
             Expr::StringReplace(op) => {
                 self.analyze_expr(&op.string);
                 self.analyze_expr(&op.pattern);

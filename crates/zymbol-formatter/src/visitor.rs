@@ -214,9 +214,14 @@ impl<'a> FormatVisitor<'a> {
                 }
             }
             Statement::OutputPos(op) => {
-                self.output.write(">>~ ");
-                self.format_expr(&op.pos);
-                self.output.write(" >");
+                self.output.write(">>~ (");
+                let mut first = true;
+                for slot in &op.slots {
+                    if !first { self.output.write(", "); }
+                    first = false;
+                    if let Some(expr) = slot { self.format_expr(expr); }
+                }
+                self.output.write(") >");
                 for item in &op.items {
                     self.output.write(" ");
                     self.format_expr(item);
@@ -579,6 +584,11 @@ impl<'a> FormatVisitor<'a> {
             Expr::CollectionFindAll(op) => self.format_collection_find_all(op),
             Expr::CollectionUpdate(op) => self.format_collection_update(op),
             Expr::CollectionSlice(op) => self.format_collection_slice(op),
+            Expr::StringRepeat(op) => {
+                self.format_expr(&op.string);
+                self.output.write(" $* ");
+                self.format_expr(&op.count);
+            }
             Expr::StringReplace(op) => self.format_string_replace(op),
             Expr::StringSplit(op) => {
                 self.format_expr(&op.string);

@@ -225,23 +225,69 @@ impl Parser {
         Ok(Statement::KeyInput(KeyInput::new(variable, blocking, span)))
     }
 
-    /// Parse positioned output: >>~ expr > item item ...
+    /// Parse positioned output: >>~ (fila, col, BKS, fg, bg) > items
+    /// Sparse inline: >>~(,,,15,0)> — commas as position markers, empty slot = absent
     pub(crate) fn parse_output_pos(&mut self) -> Result<Statement, Diagnostic> {
         let start_span = self.advance().span; // consume >>~
-        let start_line = start_span.start.line;
-        // Use parse_postfix (not parse_expr) so '>' is not consumed as a comparison operator
-        let pos = self.parse_postfix()?;
-        // expect '>' separator
+
+        let slots: Vec<Option<Expr>> = if matches!(self.peek().kind, TokenKind::LParen) {
+            self.parse_sparse_pos_tuple()?
+        } else if matches!(self.peek().kind, TokenKind::Ident(_)) {
+            // Variable evaluated at runtime as dense tuple
+            let expr = self.parse_postfix()?;
+            vec![Some(expr)]
+        } else {
+            let t = self.peek().clone();
+            return Err(Diagnostic::error("expected '(' or variable after >>~")
+                .with_span(t.span)
+                .with_help("syntax: >>~ (fila, col [, BKS [, fg [, bg]]]) > items"));
+        };
+
         let gt = self.peek().clone();
         if !matches!(gt.kind, TokenKind::Gt) {
-            return Err(Diagnostic::error("expected '>' after position in >>~")
+            return Err(Diagnostic::error("expected '>' after >>~ position")
                 .with_span(gt.span)
-                .with_help("syntax: >>~ (row, col) > items"));
+                .with_help("syntax: >>~ (fila, col) > items"));
         }
-        self.advance(); // consume >
-        let items = self.parse_output_items_same_line(start_line)?;
-        let end_span = items.last().map(|e| e.span()).unwrap_or(gt.span);
-        Ok(Statement::OutputPos(OutputPos::new(Box::new(pos), items, start_span.to(&end_span))))
+        let gt_span = self.advance().span; // consume >
+        let items = self.parse_output_items_same_line(gt_span.start.line)?;
+        let end_span = items.last().map(|e| e.span()).unwrap_or(gt_span);
+        Ok(Statement::OutputPos(OutputPos::new(slots, items, start_span.to(&end_span))))
+    }
+
+    /// Parse sparse position tuple: (slot0, slot1, slot2, slot3, slot4)
+    /// Each slot may be empty (absent). Max 5 slots: [fila, col, BKS, fg, bg].
+    fn parse_sparse_pos_tuple(&mut self) -> Result<Vec<Option<Expr>>, Diagnostic> {
+        self.advance(); // consume (
+        let mut slots: Vec<Option<Expr>> = Vec::new();
+
+        loop {
+            match self.peek().kind.clone() {
+                TokenKind::RParen => {
+                    self.advance(); // consume )
+                    break;
+                }
+                TokenKind::Comma => {
+                    slots.push(None); // absent slot
+                    self.advance();   // consume ,
+                }
+                _ => {
+                    let expr = self.parse_expr()?;
+                    slots.push(Some(expr));
+                    if matches!(self.peek().kind, TokenKind::Comma) {
+                        self.advance(); // consume ,
+                    }
+                }
+            }
+            if slots.len() > 5 {
+                let t = self.peek().clone();
+                return Err(Diagnostic::error(
+                    ">>~ position tuple has at most 5 slots: (fila, col, BKS, fg, bg)",
+                )
+                .with_span(t.span));
+            }
+        }
+        Ok(slots)
     }
 
     /// Parse TUI block: >>| { statements }

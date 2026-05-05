@@ -7,8 +7,8 @@
 
 use std::io::Write;
 use zymbol_ast::{ClearScreen, Input, InputCast, InputPrompt, KeyInput, Newline, Output, OutputPos, TuiBlock};
-use zymbol_lexer::StringPart;
 use zymbol_span::Span;
+use zymbol_lexer::StringPart;
 use crate::numeral_mode::{to_numeral_int, to_numeral_float, to_numeral_bool};
 use crate::data_ops::parse_numeric_string;
 use crate::{Interpreter, Result, RuntimeError, Value};
@@ -130,27 +130,90 @@ impl<W: Write> Interpreter<W> {
         Ok(())
     }
 
-    /// Positioned output: >>~ (row, col [, fg [, bg]]) > items
+    /// Positioned output: >>~ (fila, col, BKS, fg, bg) > items
+    /// Sparse syntax: >>~(,,,15,0)> — None slot = do not touch that parameter.
     pub(crate) fn execute_output_pos(&mut self, op: &OutputPos) -> Result<()> {
         use crossterm::{execute, cursor, style};
-        let pos_val = self.eval_expr(&op.pos)?;
-        let (row, col, fg, bg) = extract_pos_tuple(pos_val, op.span)?;
-        execute!(std::io::stdout(), cursor::MoveTo(col - 1, row - 1))
-            .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
-        if fg > 0 {
-            execute!(std::io::stdout(),
-                style::SetForegroundColor(style::Color::AnsiValue(fg as u8))).ok();
+
+        // Mode: single-slot variable → dense tuple evaluated at runtime
+        if op.slots.len() == 1 {
+            if let Some(expr) = &op.slots[0] {
+                let val = self.eval_expr(expr)?;
+                if let Value::Tuple(ref items) = val {
+                    let get_int = |i: usize| -> Option<i64> {
+                        match items.get(i) { Some(Value::Int(n)) => Some(*n), _ => None }
+                    };
+                    if let (Some(r), Some(c)) = (get_int(0), get_int(1)) {
+                        execute!(std::io::stdout(), cursor::MoveTo(c as u16 - 1, r as u16 - 1))
+                            .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
+                    }
+                    let bks = get_int(2).unwrap_or(0);
+                    let mut styled = false;
+                    if bks & 1 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Bold)).ok();       styled = true; }
+                    if bks & 2 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Italic)).ok();     styled = true; }
+                    if bks & 4 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Underlined)).ok(); styled = true; }
+                    let mut colored = false;
+                    if let Some(fg) = get_int(3) {
+                        execute!(std::io::stdout(), style::SetForegroundColor(style::Color::AnsiValue(fg as u8))).ok();
+                        colored = true;
+                    }
+                    if let Some(bg) = get_int(4) {
+                        execute!(std::io::stdout(), style::SetBackgroundColor(style::Color::AnsiValue(bg as u8))).ok();
+                        colored = true;
+                    }
+                    for item in &op.items { print!("{}", self.eval_expr(item)?.to_display_string()); }
+                    if styled || colored { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Reset)).ok(); }
+                    std::io::stdout().flush().ok();
+                    return Ok(());
+                }
+            }
         }
-        if bg > 0 {
-            execute!(std::io::stdout(),
-                style::SetBackgroundColor(style::Color::AnsiValue(bg as u8))).ok();
+
+        // Normal sparse/inline mode: evaluate each slot independently
+        let mut vals: Vec<Option<i64>> = Vec::with_capacity(5);
+        for slot in &op.slots {
+            match slot {
+                None => vals.push(None),
+                Some(expr) => {
+                    let v = self.eval_expr(expr)?;
+                    vals.push(match v {
+                        Value::Int(n) => Some(n),
+                        other => return Err(RuntimeError::Generic {
+                            message: format!(">>~ slot expects Int, got {}", other.to_display_string()),
+                            span: op.span,
+                        }),
+                    });
+                }
+            }
         }
-        for expr in &op.items {
-            let value = self.eval_expr(expr)?;
-            print!("{}", value.to_display_string());
+
+        let get = |i: usize| vals.get(i).copied().flatten();
+
+        if let (Some(r), Some(c)) = (get(0), get(1)) {
+            execute!(std::io::stdout(), cursor::MoveTo(c as u16 - 1, r as u16 - 1))
+                .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
         }
-        if fg > 0 || bg > 0 {
-            execute!(std::io::stdout(), style::ResetColor).ok();
+
+        let bks = get(2).unwrap_or(0);
+        let mut styled = false;
+        if bks & 1 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Bold)).ok();       styled = true; }
+        if bks & 2 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Italic)).ok();     styled = true; }
+        if bks & 4 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Underlined)).ok(); styled = true; }
+
+        let mut colored = false;
+        if let Some(fg) = get(3) {
+            execute!(std::io::stdout(), style::SetForegroundColor(style::Color::AnsiValue(fg as u8))).ok();
+            colored = true;
+        }
+        if let Some(bg) = get(4) {
+            execute!(std::io::stdout(), style::SetBackgroundColor(style::Color::AnsiValue(bg as u8))).ok();
+            colored = true;
+        }
+
+        for expr in &op.items { print!("{}", self.eval_expr(expr)?.to_display_string()); }
+
+        if styled || colored {
+            execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Reset)).ok();
         }
         std::io::stdout().flush().ok();
         Ok(())
@@ -187,33 +250,6 @@ fn map_key_code(code: crossterm::event::KeyCode) -> char {
     }
 }
 
-fn extract_pos_tuple(val: Value, span: Span) -> Result<(u16, u16, i64, i64)> {
-    let items = match val {
-        Value::Tuple(v) => v,
-        other => return Err(RuntimeError::Generic {
-            message: format!(">>~ expects tuple, got {}", other.to_display_string()),
-            span,
-        }),
-    };
-    if items.len() < 2 || items.len() > 4 {
-        return Err(RuntimeError::Generic {
-            message: format!(">>~ tuple needs 2–4 elements, got {}", items.len()),
-            span,
-        });
-    }
-    let to_u16 = |v: &Value, name: &str| match v {
-        Value::Int(n) if *n >= 1 => Ok(*n as u16),
-        other => Err(RuntimeError::Generic {
-            message: format!(">>~ {}: expected positive Int, got {}", name, other.to_display_string()),
-            span,
-        }),
-    };
-    let row = to_u16(&items[0], "row")?;
-    let col = to_u16(&items[1], "col")?;
-    let fg  = if items.len() > 2 { match &items[2] { Value::Int(n) => *n, _ => 0 } } else { 0 };
-    let bg  = if items.len() > 3 { match &items[3] { Value::Int(n) => *n, _ => 0 } } else { 0 };
-    Ok((row, col, fg, bg))
-}
 
 #[cfg(test)]
 mod tests {

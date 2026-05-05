@@ -1,0 +1,33 @@
+// @vm-skip: hot definition operator ° is tree-walker only — not yet compiled in VM.
+// Feature: Hot Definition operator ° (U+00B0, resuelto v0.0.5).
+// Variables con ° se inicializan al neutro del contexto (0, [], "")
+// en su primer uso sin necesidad de declaracion previa.
+
+// += con hot def → neutro numerico = 0
+total° += 10
+total° += 20
+total° += 30
+>> total ¶
+
+// RHS hot def → p° = 0, result = 0 + n
+n = 7
+resultado = resultado° + n
+>> resultado ¶
+
+// Array accumulation via $+
+@ i:1..5:1 {
+    arr° = arr°$+ i
+}
+>> arr ¶
+
+// Incremento repetido
+contador° ++
+contador° ++
+contador° ++
+>> contador ¶
+
+// Multiple hot defs in same scope
+a° += 1
+b° += 2
+suma = a° + b°
+>> suma ¶

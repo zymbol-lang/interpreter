@@ -120,6 +120,16 @@ impl Parser {
         )))
     }
 
+    /// Parse string repeat: string$* n → string repeated n times
+    pub(crate) fn parse_string_repeat(&mut self, string: Expr) -> Result<Expr, Diagnostic> {
+        use zymbol_ast::StringRepeatExpr;
+        let start_span = string.span();
+        self.advance(); // consume $*
+        let count = self.parse_postfix()?;
+        let span = start_span.to(&count.span());
+        Ok(Expr::StringRepeat(StringRepeatExpr::new(Box::new(string), Box::new(count), span)))
+    }
+
     /// Parse string split: string$/ delimiter → Array(String)
     /// Splits a string by a char or string delimiter.
     pub(crate) fn parse_string_split(&mut self, string: Expr) -> Result<Expr, Diagnostic> {

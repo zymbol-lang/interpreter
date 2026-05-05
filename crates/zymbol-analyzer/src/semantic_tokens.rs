@@ -156,6 +156,7 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         | TokenKind::DollarMinusMinus // $--
         | TokenKind::DollarTildeTilde // $~~
         | TokenKind::DollarSlash     // $/
+        | TokenKind::DollarStar      // $*
         | TokenKind::DollarExclaim   // $!
         | TokenKind::DollarExclaimExclaim // $!!
         | TokenKind::DollarCaretPlus  // $^+
@@ -312,6 +313,7 @@ fn token_length(kind: &TokenKind) -> u32 {
         | TokenKind::DollarLt       // $<
         | TokenKind::DollarExclaim  // $!
         | TokenKind::DollarSlash    // $/
+        | TokenKind::DollarStar     // $* (string repeat)
         | TokenKind::HashPipe       // #|
         | TokenKind::HashQuestion   // #?
         | TokenKind::HashDot        // #.

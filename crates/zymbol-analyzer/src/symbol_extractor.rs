@@ -344,7 +344,9 @@ impl SymbolExtractor {
             Statement::Sleep(s) => self.extract_from_expr(&s.duration),
 
             Statement::OutputPos(op) => {
-                self.extract_from_expr(&op.pos);
+                for slot in &op.slots {
+                    if let Some(expr) = slot { self.extract_from_expr(expr); }
+                }
                 for item in &op.items { self.extract_from_expr(item); }
             }
 

@@ -1,0 +1,6 @@
+// @vm-skip
+// GAP-005: sparse >>~ syntax — position-only slots (no color/style)
+// Tests that absent slots (None) don't move cursor or change style.
+// Expected: ESC[1;1HA (position row=1 col=1, text "A")
+
+>>~ (1, 1) > "A"

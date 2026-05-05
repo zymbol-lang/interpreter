@@ -44,7 +44,7 @@ pub use collection_ops::{
 };
 
 mod string_ops;
-pub use string_ops::{StringReplaceExpr, StringSplitExpr, ConcatBuildExpr};
+pub use string_ops::{StringReplaceExpr, StringSplitExpr, StringRepeatExpr, ConcatBuildExpr};
 
 mod data_ops;
 pub use data_ops::{
@@ -201,6 +201,8 @@ pub enum Expr {
     CollectionUpdate(CollectionUpdateExpr),
     /// Collection slice: collection$[start..end]
     CollectionSlice(CollectionSliceExpr),
+    /// String repeat: string$* n → string repeated n times
+    StringRepeat(StringRepeatExpr),
     /// String replace: string$~~[pattern:replacement:count?] - replace pattern with replacement
     StringReplace(StringReplaceExpr),
     /// String split: string$/ delimiter → Array(String)
@@ -394,6 +396,7 @@ impl Expr {
             Expr::CollectionFindAll(op) => op.span,
             Expr::CollectionUpdate(op) => op.span,
             Expr::CollectionSlice(op) => op.span,
+            Expr::StringRepeat(op) => op.span,
             Expr::StringReplace(op) => op.span,
             Expr::StringSplit(op) => op.span,
             Expr::ConcatBuild(op) => op.span,

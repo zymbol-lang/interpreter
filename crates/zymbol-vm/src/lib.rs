@@ -166,6 +166,9 @@ impl Value {
             (Value::Char(a), Value::Char(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Unit, Value::Unit) => true,
+            (Value::Tuple(a), Value::Tuple(b)) => {
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.equals(y))
+            }
             _ => false,
         }
     }
@@ -317,6 +320,14 @@ fn cmp_direct(va: &Value, vb: &Value) -> i32 {
         (Value::String(x), Value::String(y)) => ord(x.as_str().cmp(y.as_str())),
         (Value::Char(x), Value::Char(y))   => ord(x.cmp(y)),
         (Value::Bool(x), Value::Bool(y))   => ord(x.cmp(y)),
+        (Value::Tuple(x), Value::Tuple(y)) => {
+            if x.len() != y.len() { return 1; }
+            for (a, b) in x.iter().zip(y.iter()) {
+                let r = cmp_direct(a, b);
+                if r != 0 { return r; }
+            }
+            0
+        }
         _ => 1,
     }
 }
@@ -351,6 +362,20 @@ fn get_chunk(program: &CompiledProgram, chunk_idx: usize) -> &Chunk {
         &program.main
     } else {
         &program.functions[chunk_idx]
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// TuiGuard — restores terminal on drop, regardless of control-flow path
+// ──────────────────────────────────────────────────────────────────────────────
+
+struct TuiGuard;
+impl Drop for TuiGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::execute!(std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::cursor::Show);
+        let _ = crossterm::terminal::disable_raw_mode();
     }
 }
 
@@ -491,6 +516,10 @@ impl<W: Write> VM<W> {
                 return Err(_err);
             }};
         }
+
+        // TUI cleanup guards — dropped on any return path (Ok, Err, or panic).
+        // Popped explicitly by ExitTui on the normal path.
+        let mut tui_stack: Vec<TuiGuard> = Vec::new();
 
         loop {
             // chunk borrows only from `program` — no conflict with `self.value_stack`
@@ -741,6 +770,22 @@ impl<W: Write> VM<W> {
                         other => raise!(VmError::TypeError { expected: "String or Array", got: other.type_name().to_string() }),
                     };
                     wreg!(dst, Value::Int(n));
+                }
+
+                &Instruction::StrRepeat(dst, str_reg, n_reg) => {
+                    let result = {
+                        let s = match &self.value_stack[base + str_reg as usize] {
+                            Value::String(s) => s.as_str().to_owned(),
+                            Value::Char(c)   => c.to_string(),
+                            other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                        };
+                        let n = match &self.value_stack[base + n_reg as usize] {
+                            Value::Int(n) if *n >= 0 => *n as usize,
+                            other => raise!(VmError::TypeError { expected: "non-negative Int", got: other.type_name().to_string() }),
+                        };
+                        s.repeat(n)
+                    };
+                    wreg!(dst, Value::String(ZyStr::new(result)));
                 }
 
                 // ── Comparison ──────────────────────────────────────────────
@@ -2193,9 +2238,10 @@ impl<W: Write> VM<W> {
                     use crossterm::event::{self, Event, KeyEvent};
                     let ch = if blocking {
                         loop {
-                            match event::read().unwrap_or(Event::FocusLost) {
-                                Event::Key(KeyEvent { code, .. }) => break vm_map_key_code(code),
-                                _ => continue,
+                            match event::read() {
+                                Ok(Event::Key(KeyEvent { code, .. })) => break vm_map_key_code(code),
+                                Ok(_) => continue,
+                                Err(_) => break '\0', // non-TTY: no input available
                             }
                         }
                     } else if event::poll(std::time::Duration::ZERO).unwrap_or(false) {
@@ -2211,42 +2257,57 @@ impl<W: Write> VM<W> {
 
                 Instruction::PrintAt(r_pos, item_regs) => {
                     let pos_val = rreg!(*r_pos).clone();
-                    let (row, col, fg, bg) = vm_extract_pos(pos_val);
-                    crossterm::execute!(std::io::stdout(),
-                        crossterm::cursor::MoveTo(col - 1, row - 1)).ok();
-                    if fg > 0 {
+                    let (fila, col, bks, fg, bg) = vm_extract_pos(pos_val);
+                    if let (Some(r), Some(c)) = (fila, col) {
+                        crossterm::execute!(std::io::stdout(),
+                            crossterm::cursor::MoveTo(c - 1, r - 1)).ok();
+                    }
+                    let mut styled = false;
+                    if bks & 1 != 0 { crossterm::execute!(std::io::stdout(), crossterm::style::SetAttribute(crossterm::style::Attribute::Bold)).ok();       styled = true; }
+                    if bks & 2 != 0 { crossterm::execute!(std::io::stdout(), crossterm::style::SetAttribute(crossterm::style::Attribute::Italic)).ok();     styled = true; }
+                    if bks & 4 != 0 { crossterm::execute!(std::io::stdout(), crossterm::style::SetAttribute(crossterm::style::Attribute::Underlined)).ok(); styled = true; }
+                    let mut colored = false;
+                    if let Some(fg) = fg {
                         crossterm::execute!(std::io::stdout(),
                             crossterm::style::SetForegroundColor(
                                 crossterm::style::Color::AnsiValue(fg as u8))).ok();
+                        colored = true;
                     }
-                    if bg > 0 {
+                    if let Some(bg) = bg {
                         crossterm::execute!(std::io::stdout(),
                             crossterm::style::SetBackgroundColor(
                                 crossterm::style::Color::AnsiValue(bg as u8))).ok();
+                        colored = true;
                     }
                     for &r in item_regs {
                         print!("{}", rreg!(r));
                     }
-                    if fg > 0 || bg > 0 {
+                    if styled || colored {
                         crossterm::execute!(std::io::stdout(),
-                            crossterm::style::ResetColor).ok();
+                            crossterm::style::SetAttribute(crossterm::style::Attribute::Reset)).ok();
                     }
                     std::io::stdout().flush().ok();
                 }
 
                 Instruction::EnterTui => {
-                    crossterm::terminal::enable_raw_mode().ok();
-                    crossterm::execute!(std::io::stdout(),
+                    if let Err(e) = crossterm::terminal::enable_raw_mode() {
+                        raise!(VmError::Generic(format!("failed to enable raw mode: {}", e)));
+                    }
+                    if let Err(e) = crossterm::execute!(std::io::stdout(),
                         crossterm::terminal::EnterAlternateScreen,
-                        crossterm::cursor::Hide).ok();
+                        crossterm::cursor::Hide)
+                    {
+                        let _ = crossterm::terminal::disable_raw_mode();
+                        raise!(VmError::Generic(format!("failed to enter alternate screen: {}", e)));
+                    }
+                    tui_stack.push(TuiGuard);
                 }
 
                 Instruction::ExitTui => {
-                    // TODO: TuiBlock cleanup on break — if @! escapes, ExitTui won't run
-                    let _ = crossterm::execute!(std::io::stdout(),
-                        crossterm::terminal::LeaveAlternateScreen,
-                        crossterm::cursor::Show);
-                    let _ = crossterm::terminal::disable_raw_mode();
+                    // Pop the guard — its Drop performs cleanup.
+                    // If ExitTui is skipped (@:label! / error), the guard is dropped
+                    // when tui_stack goes out of scope at the end of run().
+                    tui_stack.pop();
                 }
 
                 Instruction::Halt => return Ok(()),
@@ -2759,6 +2820,21 @@ impl<W: Write> VM<W> {
                     };
                     w!(dst, Value::Int(n));
                 }
+                &Instruction::StrRepeat(dst, str_reg, n_reg) => {
+                    let result = {
+                        let s = match r!(str_reg) {
+                            Value::String(s) => s.as_str().to_owned(),
+                            Value::Char(c)   => c.to_string(),
+                            other => return Err(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                        };
+                        let n = match r!(n_reg) {
+                            Value::Int(n) if *n >= 0 => *n as usize,
+                            other => return Err(VmError::TypeError { expected: "non-negative Int", got: other.type_name().to_string() }),
+                        };
+                        s.repeat(n)
+                    };
+                    w!(dst, Value::String(ZyStr::new(result)));
+                }
                 &Instruction::StrCharAt(dst, str_reg, idx_reg) => {
                     let ch = match (r!(str_reg), r!(idx_reg)) {
                         (Value::String(s), Value::Int(i)) => {
@@ -3090,17 +3166,30 @@ fn vm_map_key_code(code: crossterm::event::KeyCode) -> char {
     }
 }
 
-fn vm_extract_pos(val: Value) -> (u16, u16, i64, i64) {
+fn vm_extract_pos(val: Value) -> (Option<u16>, Option<u16>, i64, Option<i64>, Option<i64>) {
     let items = match val {
         Value::Tuple(v) => (*v).clone(),
-        _ => return (1, 1, 0, 0),
+        _ => return (None, None, 0, None, None),
     };
-    let to_u16 = |v: &Value| match v { Value::Int(n) if *n >= 1 => *n as u16, _ => 1 };
-    let row = items.get(0).map(to_u16).unwrap_or(1);
-    let col = items.get(1).map(to_u16).unwrap_or(1);
-    let fg  = if items.len() > 2 { match &items[2] { Value::Int(n) => *n, _ => 0 } } else { 0 };
-    let bg  = if items.len() > 3 { match &items[3] { Value::Int(n) => *n, _ => 0 } } else { 0 };
-    (row, col, fg, bg)
+    // Variable-based mode: >>~ pos > items compiles as MakeTuple([r_pos]) wrapping the
+    // dense tuple. Unwrap one level when the outer tuple holds a single inner tuple.
+    if items.len() == 1 {
+        if let Value::Tuple(_) = &items[0] {
+            return vm_extract_pos(items.into_iter().next().unwrap());
+        }
+    }
+    let get_int = |i: usize| -> Option<i64> {
+        match items.get(i) {
+            Some(Value::Int(n)) => Some(*n),
+            _ => None, // Unit or absent = None
+        }
+    };
+    let fila = get_int(0).map(|n| n as u16);
+    let col  = get_int(1).map(|n| n as u16);
+    let bks  = get_int(2).unwrap_or(0);
+    let fg   = get_int(3);
+    let bg   = get_int(4);
+    (fila, col, bks, fg, bg)
 }
 
 fn vm_natural_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {

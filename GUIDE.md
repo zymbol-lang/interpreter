@@ -4,8 +4,8 @@
 > `zymbol run` (tree-walker) and `zymbol run --vm` (register VM).
 > If a construct is not documented here, it may not be implemented.
 
-**Interpreter version**: v0.0.4
-**Test coverage**: 393/393 parity (TW ↔ VM)
+**Interpreter version**: v0.0.5
+**Test coverage**: 424/424 golden-file pairs; `@vm-skip` files excluded from VM parity
 
 See also: [REFERENCE.md](REFERENCE.md) — limitations, error taxonomy, symbol table  
 See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar, coverage status, TW/VM internals
@@ -19,6 +19,7 @@ See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar, coverage stat
 1b. [Lexical Structure](#1b-lexical-structure)
 2. [Data Types](#2-data-types)
 3. [Output and Input](#3-output-and-input)
+3b. [TUI Primitives](#3b-tui-primitives)
 4. [Variables and Constants](#4-variables-and-constants)
 5. [Operators](#5-operators)
 6. [Control Flow](#6-control-flow)
@@ -376,6 +377,107 @@ ok = a == b
 
 ---
 
+## 3b. TUI Primitives
+
+Terminal control operators for building interactive terminal UIs.
+All TUI primitives are tree-walker only unless noted otherwise.
+
+### Sleep — `@~`
+
+```zymbol
+@~ 500        // pause execution for 500 milliseconds
+@~ 1000       // 1 second
+```
+
+### Clear Screen — `>>!`
+
+```zymbol
+>>!           // clear the terminal and move cursor to home (row 1, col 1)
+```
+
+### Query Terminal Size — `>>?`
+
+Returns a `[rows, cols]` array with the current terminal dimensions:
+
+```zymbol
+[H, W] = >>?
+>> "Terminal: " H "x" W ¶     // e.g. Terminal: 40x120
+```
+
+### Positioned Output — `>>~`
+
+Print at a specific terminal position. Cursor is moved but not restored after printing.
+
+```zymbol
+// Full form: (row, col, BKS, fg, bg) where BKS = Bold(1)+Italic(2)+Underline(4)
+>>~ (5, 10, 0, 255, 0) > "hello"       // row 5, col 10, default style, fg=255 bg=0
+
+// Position only — no style change
+>>~ (3, 1) > "header"
+
+// Sparse form — omit any slot with a comma
+>>~ (,,, 196) > "red text"             // fg=196, no cursor move
+>>~ (1,, 1) > "bold at row 1"          // bold, column stays unchanged
+```
+
+Variable-based position (tuple variable):
+
+```zymbol
+pos = (10, 5)
+>>~ pos > "at pos"
+```
+
+ANSI color indices (0–255): standard 16 system colors, then 6×6×6 cube (16–231),
+then grayscale (232–255). `0` = use terminal default.
+
+### Key Input
+
+`<<|` reads one keypress (blocking). `<<|?` polls without blocking.
+
+```zymbol
+// Blocking — waits until a key is pressed
+<<| k
+>> "key: " k ¶
+
+// Non-blocking — '\0' if no key is pending
+<<|? k
+? k <> '\0' { >> "pressed: " k ¶ }
+```
+
+Special keys are mapped to single-character symbols:
+
+| Key | Value |
+|-----|-------|
+| Arrow Up | `'U'` |
+| Arrow Down | `'D'` |
+| Arrow Left | `'L'` |
+| Arrow Right | `'R'` |
+| Enter | `'\n'` |
+| Escape | `'\x1b'` |
+| Other | the character as-is |
+
+### TUI Block — `>>|`
+
+Enters a full-screen TUI context: alternate screen + raw mode. Cleans up on exit.
+
+```zymbol
+>>| {
+    >>!                            // clear alternate screen
+    >>~ (1, 1) > "Press q to quit"
+    @ {                            // game loop
+        <<| k
+        ? k == 'q' { @! }
+        // render frame
+    }
+}
+// terminal restored to normal after the block
+```
+
+> `>>|` errors if the process is not attached to a TTY (e.g. redirected output).
+> Use it only for interactive programs.
+
+---
+
 ## 4. Variables and Constants
 
 ```zymbol
@@ -525,6 +627,48 @@ json = "\{\"key\":\"value\"\}"            // → {"key":"value"}
 
 > **⚠ False warning**: `unused variable 'name'` may appear even when `name` is used
 > inside an interpolated string. This is a static analyzer bug — ignore it.
+
+### Hot Definition Operator `°` (U+00B0)
+
+`varname°` auto-initializes a variable to the **neutral value** of the inferred context
+on the very first use, then applies the operation. Subsequent uses behave as a normal variable.
+
+```zymbol
+// Accumulate without explicit initialization
+@ item:[10, 20, 30] {
+    total° += item       // first iteration: total = 0 + 10 = 10
+}
+>> total ¶               // → 60
+
+// Array accumulation
+@ x:[1, 2, 3] {
+    lista° $+ x          // first use: lista = [] then append x
+}
+>> lista ¶               // → [1, 2, 3]
+
+// String accumulation
+@ s:["a", "b", "c"] {
+    resultado° $++ s
+}
+>> resultado ¶           // → abc
+```
+
+**Neutral values by context:**
+
+| Operation | Neutral |
+|-----------|---------|
+| `+=` `-=` | `0` (Int) or `0.0` (Float) |
+| `*=` `/=` | `1` |
+| `$+` `$++` (array) | `[]` |
+| `$++` (string) | `""` |
+
+**Semantic warnings** — emitted but not errors:
+- `x° *= 5` — hot-def multiply: always `0` on first use
+- `x° /= 2` — hot-def divide: division of `0`
+- `x° ^= 2` — hot-def power: always `0` on first use
+
+> `°` is tree-walker only. The VM compiler reports a `undefined variable` error for
+> hot-definition patterns; add `@vm-skip` to files that use it.
 
 ---
 
@@ -1960,6 +2104,27 @@ desc = "Hello {name}, you have {n} items"
 ```zymbol
 @ c:"hello" { >> c "-" }
 >> ¶    // → h-e-l-l-o-
+```
+
+### String Repeat — `$*`
+
+`"string" $* N` repeats a string N times and returns the result. N must be a non-negative Int.
+
+```zymbol
+line   = "=" $* 20
+sep    = "-" $* 10
+border = "|" $* (cols - 2)
+
+>> line ¶    // → ====================
+>> sep ¶     // → ----------
+
+// N = 0 → empty string
+>> ("x" $* 0) ¶   // →
+
+// Useful for padding and TUI borders
+titulo = "Score"
+>> "[" titulo "]" ¶
+>> "=" $* (titulo$# + 2) ¶   // → =======
 ```
 
 ---

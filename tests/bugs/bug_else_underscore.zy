@@ -1,0 +1,30 @@
+// BUG-002 regression (resuelto v0.0.5): _ (not _?) is the unconditional else branch.
+// Before fix: _? without a condition caused "expected expression, found LBrace".
+// This test verifies that _ works as else and _? requires a condition.
+
+x = 5
+? x > 10 {
+    >> "grande" ¶
+} _ {
+    >> "normal" ¶
+}
+
+// Chain: if / else-if / else
+y = 3
+? y == 1 {
+    >> "uno" ¶
+} _? y == 2 {
+    >> "dos" ¶
+} _ {
+    >> "otro" ¶
+}
+
+// Nested: else with block containing logic
+z = 0
+? z > 0 {
+    >> "positivo" ¶
+} _ {
+    z = z - 1
+    >> "no positivo" ¶
+    >> z ¶
+}

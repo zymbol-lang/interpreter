@@ -27,7 +27,49 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 - Implemented across: lexer (`HotIdent` token), parser (`hot: bool` field on `Assignment`),
   interpreter (neutral inference in `loops.rs`), semantic type-checker (`type_check.rs`).
 
+**TUI / Terminal primitives (IMPL-V005)**
+- `@~ N` — sleep N milliseconds. Implemented via `std::thread::sleep`; emits `Sleep` bytecode in VM.
+- `>>!` — clear terminal screen (ANSI `\x1b[2J\x1b[H`). New `ClearScreen` instruction in VM.
+- `>>?` — query terminal size; returns `[rows, cols]` array via crossterm. New `QueryTermSize` instruction.
+- `>>~ (row, col, BKS, fg, bg) > items` — positioned output with optional style. Sparse syntax:
+  any slot may be omitted (`>>~ (,,, 196) > "red"` sets fg only; `>>~ (3, 1) > "text"` positions only).
+  BKS bitmask: `1`=Bold, `2`=Italic, `4`=Underline. ANSI 256-color palette (0=terminal default).
+  Variable-based: `pos = (3, 1)` then `>>~ pos > "text"`.
+- `<<| var` — blocking keypress read. Arrow keys → `'U'`/`'D'`/`'L'`/`'R'`; Enter → `'\n'`; Escape → `'\x1b'`.
+- `<<|? var` — non-blocking keypress poll; returns `'\0'` if no key pending.
+- `>>| { }` — TUI block: enters alternate screen + raw mode via crossterm; restores terminal on exit.
+  New `EnterTui`/`ExitTui` instructions in VM with proper error propagation.
+- Type-checker updated: `<<|` / `<<|?` now resolve without `undefined variable` error (GAP-S3 fix).
+- New test directory `tests/tui/` — 7 cases covering all 6 TUI primitives.
+- New VS Code snippets: `outp`, `outps`, `outpc`, `key`, `keynb`, `tui`, `sleep`, `cls`, `termsize`.
+
+**String repeat operator `$*`**
+- `"string" $* N` repeats a string N times. Implemented in tree-walker (`strings.rs`) and VM
+  (`StrRepeat` instruction).
+- New test: `tests/gaps/gap_serpiente_string_repeat.zy` (GAP-S1).
+- VS Code grammar: `$*` added to `collection-operators` character class.
+- New VS Code snippet: `repeat`.
+
+**Hot Definition operator `°` (U+00B0)**
+- Already shipped in the Added section above.
+- New VS Code snippet: `hotacc`.
+
 ### Fixed
+
+**BUG-005 — VM tuple `==` and `<>` always returned `#0`**
+- Tuple equality (`==`) and inequality (`<>`) in `--vm` mode always evaluated to `#0` regardless
+  of actual content.
+- Root cause: `cmp_direct()` and `Value::equals()` in `crates/zymbol-vm/src/lib.rs` had no `Tuple`
+  arm — fell through to the `_ => 1` (not-equal) and `_ => false` defaults.
+- Fix: recursive element-wise comparison added to both functions.
+  `cmp_direct`: compares element by element, returns first non-zero or 0 if all equal.
+  `Value::equals`: `a.len() == b.len() && zip.all(|(x, y)| x.equals(y))`.
+- Additionally: `vm_extract_pos()` now unwraps a single-element outer tuple produced by the
+  compiler when a variable-based `>>~ pos > ...` is used (was silently failing to move cursor).
+- Root cause of Serpiente v0.0.5 bug: food detection `cab == (fr_com, fc_com + 1)` always false
+  in VM mode → `comio` never set → score stayed 0 → second fruit never spawned.
+- New test: `tests/bugs/bug_vm_tuple_equality.zy` (7 cases: literal, variable, arithmetic slot,
+  `<>` inequality, Serpiente food-collision pattern, conditional, nested tuples).
 
 **BUG-001 — Re-exported functions lose origin module scope**
 - Functions accessed through an i18n re-export adapter (`alias::fn <= newname`) raised
@@ -85,13 +127,30 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
   Normal unnamed iterator variables still warn as before.
 - New test: `tests/gaps/gap003_loop_iter_lifetime_warning.zy`.
 
+### VS Code extension — v0.1.2
+
+**Syntax highlighting:**
+- `$*` added to `collection-operators` character class in `zymbol.tmGrammar.json`.
+  `$*` was missing; strings and numbers using it were unhighlighted.
+
+**Snippets (`zymbol.json`):**
+- `outps` — `>>~ (row, col, BKS, fg, bg) > value` — positioned print with full style
+- `outpc` — `>>~ (,,,fg) > value` — set foreground color without moving cursor
+- `repeat` — `"str" $* n` — string repeat
+- `hotacc` — `total° += value` — hot definition accumulator
+- (Existing snippets `outp`, `key`, `keynb`, `tui`, `sleep`, `cls`, `termsize` shipped in this release.)
+
+Built: `zymbol-lang-0.1.2-2026-05-04.vsix`
+
 ### Test suite — v0.0.5
 
 | Suite | Result |
 |-------|--------|
 | `cargo test` (all crates) | all pass |
-| `expected_compare.sh gaps` | **15 / 15 pass** |
-| `expected_compare.sh bugs` | **8 / 8 pass** |
+| `expected_compare.sh` (all) | **424 / 424 pass** |
+| `expected_compare.sh gaps` | **20 / 20 pass** (+ gap001–003, gap-S1–S4) |
+| `expected_compare.sh bugs` | **16 / 16 pass** (+ bug-S01, bug-S02, BUG-005) |
+| `expected_compare.sh tui` | **5 / 5 pass** (2 vm-skip: `<<\|`, `>>|`) |
 
 ---
 

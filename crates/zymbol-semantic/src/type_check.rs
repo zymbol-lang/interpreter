@@ -685,6 +685,11 @@ impl TypeChecker {
                 }
             }
 
+            Statement::KeyInput(ki) => {
+                // <<| var and <<|? var always produce Char
+                self.env.define_var(&ki.variable, ZymbolType::Char);
+            }
+
             // Other statements don't need type checking
             _ => {}
         }
@@ -776,6 +781,11 @@ impl TypeChecker {
                 }
                 Statement::Loop(loop_stmt) => {
                     self.define_local_vars_from_block(&loop_stmt.body);
+                }
+                Statement::KeyInput(ki) => {
+                    if self.env.lookup_var(&ki.variable).is_none() {
+                        self.env.define_var(&ki.variable, ZymbolType::Char);
+                    }
                 }
                 _ => {}
             }
@@ -1726,6 +1736,7 @@ impl TypeChecker {
             }
 
             // String operations
+            Expr::StringRepeat(_) => ZymbolType::String,
             Expr::StringReplace(_) => ZymbolType::String,
             Expr::StringSplit(_) => ZymbolType::Array(Box::new(ZymbolType::String)),
             Expr::ConcatBuild(op) => {

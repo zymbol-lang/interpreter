@@ -704,7 +704,21 @@ impl Compiler {
                 Ok(())
             }
             Statement::OutputPos(op) => {
-                let r_pos = self.compile_expr(&op.pos, ctx)?;
+                // Compile each slot: None → LoadUnit, Some(expr) → compile expr
+                let mut slot_regs = Vec::with_capacity(op.slots.len());
+                for slot in &op.slots {
+                    let r = match slot {
+                        None => {
+                            let r = ctx.alloc_temp()?;
+                            ctx.emit(Instruction::LoadUnit(r));
+                            r
+                        }
+                        Some(expr) => self.compile_expr(expr, ctx)?,
+                    };
+                    slot_regs.push(r);
+                }
+                let r_pos = ctx.alloc_temp()?;
+                ctx.emit(Instruction::MakeTuple(r_pos, slot_regs));
                 let mut regs = Vec::new();
                 for item in &op.items {
                     regs.push(self.compile_expr(item, ctx)?);
@@ -1411,6 +1425,15 @@ impl Compiler {
                 Ok(dst)
             }
             // ── String modification operators ──────────────────────────────
+            Expr::StringRepeat(op) => {
+                let r_str = self.compile_expr(&op.string, ctx)?;
+                let r_n   = self.compile_expr(&op.count, ctx)?;
+                let dst   = ctx.alloc_temp()?;
+                ctx.emit(Instruction::StrRepeat(dst, r_str, r_n));
+                ctx.set_reg_type(dst, StaticType::String);
+                Ok(dst)
+            }
+
             Expr::StringReplace(op) => {
                 let r_str = self.compile_expr(&op.string, ctx)?;
                 let r_pat = self.compile_expr(&op.pattern, ctx)?;
@@ -3230,6 +3253,10 @@ fn collect_free_in_expr(
                 }
             }
         }
+        Expr::StringRepeat(op) => {
+            collect_free_in_expr(&op.string, locals, outer_ctx, seen, free);
+            collect_free_in_expr(&op.count, locals, outer_ctx, seen, free);
+        }
         Expr::StringReplace(op) => {
             collect_free_in_expr(&op.string, locals, outer_ctx, seen, free);
             collect_free_in_expr(&op.pattern, locals, outer_ctx, seen, free);
@@ -3410,7 +3437,9 @@ fn collect_free_in_stmts(
 
             Statement::Sleep(s) => collect_free_in_expr(&s.duration, locals, outer_ctx, seen, free),
             Statement::OutputPos(op) => {
-                collect_free_in_expr(&op.pos, locals, outer_ctx, seen, free);
+                for slot in &op.slots {
+                    if let Some(expr) = slot { collect_free_in_expr(expr, locals, outer_ctx, seen, free); }
+                }
                 for item in &op.items { collect_free_in_expr(item, locals, outer_ctx, seen, free); }
             }
             Statement::TuiBlock(tb) => {
@@ -3561,6 +3590,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::StrSplitMap(d, s, p, f) | Instruction::StrSplitFilter(d, s, p, f) => { upd(*d); upd(*s); upd(*p); upd(*f); }
             Instruction::StrSplitReduce(d, s, p, i, f) => { upd(*d); upd(*s); upd(*p); upd(*i); upd(*f); }
             Instruction::StrLen(d, s) | Instruction::StrChars(d, s) => { upd(*d); upd(*s); }
+            Instruction::StrRepeat(d, s, n) => { upd(*d); upd(*s); upd(*n); }
             Instruction::StrSplit(d, s, p) | Instruction::StrContains(d, s, p)
             | Instruction::StrSlice(d, s, p) | Instruction::StrFindPos(d, s, p)
             | Instruction::ConcatStr(d, s, p) | Instruction::StrCharAt(d, s, p) => { upd(*d); upd(*s); upd(*p); }

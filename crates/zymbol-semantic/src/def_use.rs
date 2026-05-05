@@ -625,7 +625,9 @@ impl DefUseAnalyzer {
             }
 
             Statement::OutputPos(op) => {
-                self.analyze_expr(&op.pos, node_index);
+                for slot in &op.slots {
+                    if let Some(expr) = slot { self.analyze_expr(expr, node_index); }
+                }
                 for item in &op.items {
                     self.analyze_expr(item, node_index);
                 }
@@ -846,6 +848,11 @@ impl DefUseAnalyzer {
             }
 
             // String operations
+            Expr::StringRepeat(op) => {
+                self.analyze_expr(&op.string, node_index);
+                self.analyze_expr(&op.count, node_index);
+            }
+
             Expr::StringReplace(str_replace) => {
                 self.analyze_expr(&str_replace.string, node_index);
                 self.analyze_expr(&str_replace.pattern, node_index);

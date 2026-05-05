@@ -1129,6 +1129,7 @@ impl<W: Write> Interpreter<W> {
             Expr::CollectionFindAll(op) => self.eval_collection_find_all(op),
             Expr::CollectionUpdate(op) => self.eval_collection_update(op),
             Expr::CollectionSlice(op) => self.eval_collection_slice(op),
+            Expr::StringRepeat(op) => self.eval_string_repeat(op),
             Expr::StringReplace(op) => self.eval_string_replace(op),
             Expr::StringSplit(op) => self.eval_string_split(op),
             Expr::ConcatBuild(op) => self.eval_concat_build(op),

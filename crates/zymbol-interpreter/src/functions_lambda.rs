@@ -576,6 +576,10 @@ fn collect_refs_in_expr(
             collect_refs_in_expr(&op.collection, locals, refs);
             collect_refs_in_expr(&op.value, locals, refs);
         }
+        Expr::StringRepeat(op) => {
+            collect_refs_in_expr(&op.string, locals, refs);
+            collect_refs_in_expr(&op.count, locals, refs);
+        }
         Expr::StringReplace(op) => {
             collect_refs_in_expr(&op.string, locals, refs);
             collect_refs_in_expr(&op.pattern, locals, refs);

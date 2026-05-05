@@ -1,0 +1,13 @@
+// BUG-001 regression (resuelto v0.0.5): >>~ items must not consume tokens from the next line.
+// Before fix: consecutive >>~ statements merged into one; the second line's tokens
+// became extra items of the first statement causing parse errors.
+// This test verifies that two consecutive >> statements in a function body
+// each produce independent output without bleeding into the next line.
+
+renderizar(cabecera, cuerpo, pie) {
+    >> cabecera ¶
+    >> cuerpo ¶
+    >> pie ¶
+}
+
+renderizar("header", "body", "footer")

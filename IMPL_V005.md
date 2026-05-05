@@ -15,7 +15,7 @@ Features designed for the Znake project. All are purely additive — no existing
 | 2 | Clear screen | `>>!` | Low |
 | 3 | Terminal size | `>>?` | Low |
 | 4 | Key input | `<<\|` / `<<\|?` | Medium |
-| 5 | Positioned output | `>>~ (r,c,fg,bg) > items` | Medium |
+| 5 | Positioned output | `>>~ (r,c,BKS,fg,bg) > items` — sparse: `>>~(,,,fg,bg)>` | Medium |
 | 6 | TUI block | `>>\| { }` | Medium |
 
 Recommended implementation order: 1 → 2 → 3 → 4 → 5 → 6.
@@ -470,149 +470,286 @@ Expr::TerminalSize(t) => self.eval_terminal_size(t.span),
 
 ---
 
-## Feature 5 — Positioned output: `>>~ (pos) > items`
+## Feature 5 — Positioned output: `>>~ (fila,col,BKS,fg,bg) > items`
 
-### 5a. Lexer — new token `OutputPos`
+### Diseño (v2 — revisado)
 
-Already covered in Feature 4 lookahead — `>>~` → `OutputPos`.
+**Tupla de posición:** `(fila, col, BKS, fg, bg)` — hasta 5 slots, todos opcionales
+excepto que fila y col deben ir juntos (ambos presentes o ambos ausentes).
 
-### 5b. AST — new node `OutputPos`
+**Slot BKS** (posición 3) — máscara de bits de atributos de texto:
+
+| Valor | Atributos |
+|-------|-----------|
+| 0 | texto normal (sin atributos) |
+| 1 | **negrita** (Bold) |
+| 2 | *cursiva* (Italic / K) |
+| 3 | negrita + cursiva |
+| 4 | subrayado (Underline / S) |
+| 5 | negrita + subrayado |
+| 6 | cursiva + subrayado |
+| 7 | negrita + cursiva + subrayado |
+
+**Slots fg/bg** (posiciones 4 y 5) — color ANSI 0–255.
+La **presencia** del slot determina si se aplica; su **valor** es el color real.
+El color 0 es gris oscuro válido (no significa "sin color").
+
+**Sintaxis sparse** — específica de la declaración inline de `>>~`.
+Las comas son marcadores de posición; un slot vacío = ausente = no tocar ese parámetro:
+
+```
+>>~(3, 5, 1, 15, 0)>   ← completo: fila=3 col=5 BKS=1(B) fg=15 bg=0
+>>~(3, 5, 0, 15)>       ← sin bg
+>>~(3, 5, 1)>           ← solo posición + negrita, sin color
+>>~(3, 5)>              ← solo posición
+>>~(,,, 15, 0)>         ← sin mover cursor, sin BKS; fg=15 bg=0
+>>~(,,,, 11)>           ← solo cambiar bg a 11, nada más
+>>~(3, 5,, 10)>         ← posición + sin BKS + fg=10
+```
+
+**Semántica de slots ausentes:**
+
+| Slot ausente | Efecto en runtime |
+|---|---|
+| fila **o** col | no ejecutar `MoveTo` (mantener posición actual) |
+| BKS | no aplicar ningún atributo de texto |
+| fg | no cambiar color de texto |
+| bg | no cambiar color de fondo |
+
+**Reset:** Si se aplicó cualquier atributo o color → `SetAttribute(Attribute::Reset)`
+(ESC[0m) que limpia colores Y atributos en una sola secuencia.
+
+**Breaking change vs v1:** el tercer slot era `fg`, ahora es `BKS`.
+Todas las llamadas existentes `>>~(fila, col, fg)` deben actualizar a `>>~(fila, col, 0, fg)`.
+
+---
+
+### 5a. Lexer — token `OutputPos`
+
+Sin cambios respecto a v1 — `>>~` → `OutputPos`, ya cubierto en el lookahead de Feature 4.
+
+---
+
+### 5b. AST — node `OutputPos` (actualizado)
 
 **File:** `crates/zymbol-ast/src/io.rs`
 
+El nodo ya no almacena un `Box<Expr>` genérico para la posición.
+Almacena directamente los 5 slots como `Vec<Option<Expr>>` para evitar
+introducir una construcción sparse en el lenguaje general.
+
 ```rust
-/// Positioned output: >>~ (row, col [, fg [, bg]]) > items
+/// Positioned output: >>~ (fila, col, BKS, fg, bg) > items
+/// Sparse inline syntax: >>~(,,,15,0)> — None = slot ausente
 #[derive(Debug, Clone)]
 pub struct OutputPos {
-    pub pos: Box<Expr>,      // must evaluate to a tuple (2–4 elements)
+    pub slots: Vec<Option<Expr>>,  // [fila, col, BKS, fg, bg] — hasta 5, None = ausente
     pub items: Vec<Expr>,
     pub span: Span,
 }
 
 impl OutputPos {
-    pub fn new(pos: Box<Expr>, items: Vec<Expr>, span: Span) -> Self {
-        Self { pos, items, span }
+    pub fn new(slots: Vec<Option<Expr>>, items: Vec<Expr>, span: Span) -> Self {
+        Self { slots, items, span }
     }
 }
 ```
 
-**`lib.rs` Statement enum:**
+**`lib.rs` Statement enum:** sin cambio — `OutputPos(OutputPos)`.
 
-```rust
-OutputPos(OutputPos),
-```
+---
 
-### 5c. Parser — `parse_output_pos()`
+### 5c. Parser — `parse_output_pos()` (actualizado)
 
 **File:** `crates/zymbol-parser/src/io.rs`
 
+Dos rutas de parseo:
+- **Inline sparse** `(...)` — parser dedicado que produce `Vec<Option<Expr>>`
+- **Variable** `ident` — evalúa en runtime como tupla densa (backward compat)
+
 ```rust
-/// Parse >>~ (pos) > items
 pub(crate) fn parse_output_pos(&mut self) -> Result<Statement, Diagnostic> {
     let start_span = self.advance().span; // consume >>~
 
-    // Parse position: either inline tuple (r,c,...) or identifier
-    let pos = match &self.peek().kind {
-        TokenKind::LParen | TokenKind::Ident(_) => self.parse_expr()?,
-        _ => {
-            let t = self.peek().clone();
-            return Err(Diagnostic::error("expected position tuple or variable after >>~")
-                .with_span(t.span)
-                .with_help("syntax: >>~ (row, col) > items  OR  >>~ var > items"));
-        }
+    let slots: Vec<Option<Expr>> = if matches!(self.peek().kind, TokenKind::LParen) {
+        self.parse_sparse_pos_tuple()?          // >>~(fila, col, BKS, fg, bg)
+    } else if matches!(self.peek().kind, TokenKind::Ident(_)) {
+        // Variable — se evalúa en runtime como tupla densa
+        let expr = self.parse_expr()?;
+        vec![Some(expr)]                        // señal al intérprete: modo variable
+    } else {
+        let t = self.peek().clone();
+        return Err(Diagnostic::error("expected '(' or variable after >>~")
+            .with_span(t.span)
+            .with_help("syntax: >>~ (fila, col [, BKS [, fg [, bg]]]) > items"));
     };
 
-    // Expect closing > of the modifier
-    let gt = self.peek().clone();
-    if !matches!(gt.kind, TokenKind::Greater) {
-        return Err(Diagnostic::error("expected '>' to close >>~ position modifier")
-            .with_span(gt.span)
-            .with_help("syntax: >>~ (row, col) > items"));
+    // consumir >
+    if !matches!(self.peek().kind, TokenKind::Greater) {
+        let t = self.peek().clone();
+        return Err(Diagnostic::error("expected '>' after >>~ position")
+            .with_span(t.span));
     }
-    self.advance(); // consume >
+    let gt_span = self.advance().span;
 
-    // Parse output items (same logic as parse_output, reuse helper)
-    let items = self.parse_output_items()?;
+    let items = self.parse_output_items_same_line(gt_span.start.line)?;
+    let span = start_span.to(items.last().map(|e| e.span()).unwrap_or(gt_span));
+    Ok(Statement::OutputPos(OutputPos::new(slots, items, span)))
+}
 
-    let span = start_span.to(
-        items.last().map(|e| e.span()).unwrap_or(gt.span)
-    );
-    Ok(Statement::OutputPos(OutputPos::new(Box::new(pos), items, span)))
+/// Parsea (slot0, slot1, slot2, slot3, slot4) donde cada slot puede estar vacío.
+/// Vacío = None. Máximo 5 slots: [fila, col, BKS, fg, bg].
+fn parse_sparse_pos_tuple(&mut self) -> Result<Vec<Option<Expr>>, Diagnostic> {
+    self.advance(); // consume (
+    let mut slots: Vec<Option<Expr>> = Vec::new();
+
+    loop {
+        match self.peek().kind {
+            TokenKind::RParen => {
+                self.advance(); // consume )
+                break;
+            }
+            TokenKind::Comma => {
+                slots.push(None);           // slot vacío
+                self.advance();             // consume ,
+            }
+            _ => {
+                let expr = self.parse_expr()?;
+                slots.push(Some(expr));
+                if matches!(self.peek().kind, TokenKind::Comma) {
+                    self.advance();         // consume ,
+                }
+            }
+        }
+        if slots.len() > 5 {
+            let t = self.peek().clone();
+            return Err(Diagnostic::error(">>~ position tuple has at most 5 slots: (fila, col, BKS, fg, bg)")
+                .with_span(t.span));
+        }
+    }
+    Ok(slots)
 }
 ```
 
-Extract item parsing from `parse_output()` into `parse_output_items()` so both
-`parse_output()` and `parse_output_pos()` share the loop.
+---
 
-**Dispatch** (`lib.rs`):
-
-```rust
-TokenKind::OutputPos => self.parse_output_pos(),
-```
-
-### 5d. Interpreter — `execute_output_pos()`
+### 5d. Interpreter — `execute_output_pos()` (actualizado)
 
 **File:** `crates/zymbol-interpreter/src/io.rs`
 
 ```rust
-use crossterm::{execute, cursor, style};
-
 pub(crate) fn execute_output_pos(&mut self, op: &OutputPos) -> Result<()> {
-    let pos_val = self.eval_expr(&op.pos)?;
+    use crossterm::{execute, cursor, style};
 
-    let (row, col, fg, bg) = extract_pos_tuple(pos_val, op.span)?;
+    // Evaluar cada slot presente
+    let mut vals: Vec<Option<i64>> = Vec::with_capacity(5);
+    for slot in &op.slots {
+        match slot {
+            None       => vals.push(None),
+            Some(expr) => {
+                let v = self.eval_expr(expr)?;
+                vals.push(match v {
+                    Value::Int(n) => Some(n),
+                    other => return Err(RuntimeError::Generic {
+                        message: format!(">>~ slot expects Int, got {}", other.type_name()),
+                        span: op.span,
+                    }),
+                });
+            }
+        }
+    }
 
-    // crossterm is 0-based; Zymbol uses 1-based rows/cols
-    execute!(std::io::stdout(), cursor::MoveTo(col - 1, row - 1))
-        .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
+    let get = |i: usize| vals.get(i).copied().flatten();
 
-    if fg > 0 {
-        execute!(std::io::stdout(),
-            style::SetForegroundColor(style::Color::AnsiValue(fg as u8)))
+    // Mover cursor solo si fila Y col están presentes
+    let fila = get(0);
+    let col  = get(1);
+    if let (Some(r), Some(c)) = (fila, col) {
+        execute!(std::io::stdout(), cursor::MoveTo(c as u16 - 1, r as u16 - 1))
             .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
     }
-    if bg > 0 {
+
+    // Atributos BKS
+    let bks = get(2).unwrap_or(0);
+    let mut styled = false;
+    if bks & 1 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Bold)).ok();       styled = true; }
+    if bks & 2 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Italic)).ok();     styled = true; }
+    if bks & 4 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Underlined)).ok(); styled = true; }
+
+    // Colores — presencia del slot determina aplicación (0 = gris oscuro válido)
+    let mut colored = false;
+    if let Some(fg) = get(3) {
         execute!(std::io::stdout(),
-            style::SetBackgroundColor(style::Color::AnsiValue(bg as u8)))
-            .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
+            style::SetForegroundColor(style::Color::AnsiValue(fg as u8))).ok();
+        colored = true;
+    }
+    if let Some(bg) = get(4) {
+        execute!(std::io::stdout(),
+            style::SetBackgroundColor(style::Color::AnsiValue(bg as u8))).ok();
+        colored = true;
     }
 
-    // Output items to stdout directly (bypass W writer which may be buffered)
+    // Imprimir items
     for expr in &op.items {
-        let value = self.eval_expr(expr)?;
-        print!("{}", value.to_display_string());
+        print!("{}", self.eval_expr(expr)?.to_display_string());
     }
 
-    if fg > 0 || bg > 0 {
-        execute!(std::io::stdout(), style::ResetColor)
-            .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
+    // Reset total si se aplicó algo (ESC[0m limpia colores Y atributos)
+    if styled || colored {
+        execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Reset)).ok();
     }
 
-    use std::io::Write;
     std::io::stdout().flush().ok();
     Ok(())
 }
+```
 
-fn extract_pos_tuple(val: Value, span: Span) -> Result<(u16, u16, i64, i64)> {
+**Nota sobre modo variable** (`>>~ ident > items`): cuando `op.slots` tiene
+exactamente un elemento `Some(expr)` que evalúa a un `Value::Tuple`, usar la
+lógica de tupla densa — slots presentes por longitud, no por `Option`.
+Esta ruta no soporta sparse ni BKS; es solo compat con variables pre-computadas.
+
+---
+
+### 5e. VM — `PrintAt` + `vm_extract_pos` (actualizado)
+
+El compilador emite `Instruction::PrintAt(r_pos, item_regs)`.
+El `r_pos` apunta a un `Value::Tuple` con hasta 5 elementos donde `Value::Unit`
+representa slot ausente (el compilador emite `LoadUnit` para slots `None`).
+
+```rust
+fn vm_extract_pos(val: Value) -> (Option<u16>, Option<u16>, i64, Option<i64>, Option<i64>) {
     let items = match val {
-        Value::Tuple(v) => v,
-        other => return Err(RuntimeError::Generic {
-            message: format!(">>~ expects a tuple, got {}", other.type_name()),
-            span,
-        }),
+        Value::Tuple(v) => (*v).clone(),
+        _ => return (None, None, 0, None, None),
     };
-    if items.len() < 2 || items.len() > 4 {
-        return Err(RuntimeError::Generic {
-            message: format!(">>~ tuple must have 2–4 elements (row, col [, fg [, bg]]), got {}", items.len()),
-            span,
-        });
-    }
-    let row = as_u16(&items[0], "row", span)?;
-    let col = as_u16(&items[1], "col", span)?;
-    let fg  = if items.len() > 2 { as_i64(&items[2], "fg",  span)? } else { 0 };
-    let bg  = if items.len() > 3 { as_i64(&items[3], "bg",  span)? } else { 0 };
-    Ok((row, col, fg, bg))
+    let get_int = |i: usize| -> Option<i64> {
+        match items.get(i) {
+            Some(Value::Int(n)) => Some(*n),
+            _ => None,                          // Unit o ausente = None
+        }
+    };
+    let fila = get_int(0).map(|n| n as u16);
+    let col  = get_int(1).map(|n| n as u16);
+    let bks  = get_int(2).unwrap_or(0);
+    let fg   = get_int(3);
+    let bg   = get_int(4);
+    (fila, col, bks, fg, bg)
 }
+```
+
+---
+
+### Actualización de `dibujo.zy` (breaking change)
+
+Todas las llamadas `>>~(fila, col, fg)` existentes deben actualizar el tercer slot:
+
+```zymbol
+// Antes (v1)
+>>~ (1, col_m, 8) > "┤"
+
+// Después (v2)
+>>~ (1, col_m, 0, 8) > "┤"
 ```
 
 ---

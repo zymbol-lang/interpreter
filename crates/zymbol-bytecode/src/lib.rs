@@ -61,6 +61,8 @@ pub enum Instruction {
     /// dst = base $++ item0 item1 …  — concat string parts, or push to array
     ConcatBuild(Reg, Reg, Vec<Reg>),
     StrLen(Reg, Reg),
+    /// dst = str_reg.repeat(n_reg) → String
+    StrRepeat(Reg, Reg, Reg),
     /// dst = str.split(char_reg) → Array of Strings
     StrSplit(Reg, Reg, Reg),
     /// dst = str.contains(elem_reg) → Bool  (elem is Char or String)
