@@ -1,4 +1,3 @@
-// @vm-skip: TypeOf(Value::Error) returns ##_ instead of ##Kind in VM
 // P3-E: Complete type model — #? tuple structure
 
 // Named function: type ##(), display <funct/N>

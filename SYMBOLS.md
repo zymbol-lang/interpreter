@@ -270,85 +270,26 @@ and its body, or a loop and its label.
 | `:!` | catch clause | binds the error type being caught |
 | `:>` | finally clause | defines the cleanup binding |
 | `name: value` | named tuple field | names a field within the tuple |
-| `<# path:alias` | module import with alias | *names* the import *(proposed — see below)* |
-| `#> { fn:name }` | export with rename | *names* the public surface of a function *(proposed)* |
+| `<# path : alias` | module import with alias | *names* the import |
+| `#> { fn : name }` | export with rename | *names* the public surface of a function |
 
 **Contract:** `:` always introduces or references a *name* — a definition relationship
 between a symbol and what it stands for.
 
 ---
 
-### Design Issue: `<=` as a Dual-Role Symbol
+### Resolved: `<=` dual-role retired (v0.0.5)
 
-Currently `<=` carries **two unrelated meanings** that violate the single-abstraction
-contract:
-
-| Context | `<=` meaning | Where |
-|---------|-------------|-------|
-| `<# ./math <= m` | alias / name binding | module import |
-| `#> { _add <= sum }` | rename on export | export block |
-| `x <= y` | less than or equal | comparison expression |
-
-A symbol that means "name this" in one context and "compare magnitudes" in another
-breaks the design invariant. A reader learning `<=` in an expression context would
-misread it in a module context — and vice versa.
-
-#### Proposed fix: replace `<=` with `:` in all module contexts
-
-The `:` family already covers "naming / binding". The change is minimal and consistent:
+`<=` is now used **exclusively** as the less-than-or-equal comparison operator.
+All module alias and export rename uses of `<=` have been replaced with `:`:
 
 ```
-// IMPORT — current
-<# ./math <= m
-m::add(5, 3)
-
-// IMPORT — proposed
-<# ./math:m
-m::add(5, 3)
+<# ./math : m        // import math, named m
+#> { _add : sum }    // export _add as public name sum
+#> { other::func : alias }
 ```
 
-```
-// EXPORT RENAME — current
-#> { _add <= sum }
-
-// EXPORT RENAME — proposed
-#> { _add:sum }
-```
-
-```
-// RE-EXPORT WITH RENAME — current
-#> { other::func <= alias }
-
-// RE-EXPORT WITH RENAME — proposed
-#> { other::func:alias }
-```
-
-**After this change:**
-- `<=` becomes exclusively the **less-than-or-equal** comparison operator — no exceptions
-- `:` handles all naming/binding consistently: `@:label`, `<# path:alias`, `_add:sum`, `:=`
-- The parallel with `@:label` is exact: `<# ./math:m` reads as "import math, calling it m"
-
-#### Coherence with the full `:` family
-
-| Symbol | Reads as | Named thing |
-|--------|----------|-------------|
-| `@:outer` | "loop, named outer" | a loop |
-| `:= PI` | "constant, named PI" | a value |
-| `name: expr` | "field named name" | a tuple field |
-| `<# ./math:m` | "import math, named m" | a module |
-| `_add:sum` | "function _add, exported as sum" | a public name |
-
-#### Impact
-
-This is a **breaking change** — all existing imports must be updated:
-```
-<# ./module <= alias   →   <# ./module:alias
-```
-And export renames:
-```
-#> { internal <= public }   →   #> { internal:public }
-```
-The `<=` token would remain for comparison only. Its dual-role as alias is retired.
+This restores the single-abstraction invariant: `:` handles all naming/binding.
 
 ---
 

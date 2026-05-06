@@ -252,8 +252,25 @@ pub enum Instruction {
     /// >>| { } — leave alternate screen + disable raw mode
     ExitTui,
 
+    // ── Hot variable initialization ───────────────────────────────────────
+    /// If dst currently holds Unit (uninitialized), set it to the neutral element.
+    /// Used for hot-def (x°) variables: runs on every potential first-use site
+    /// but is a no-op after the first real initialization.
+    HotInit(Reg, HotNeutral),
+
+    // ── CLI args ─────────────────────────────────────────────────────────
+    /// dst = Array of CLI arguments passed after the script path (argv[1..])
+    LoadCliArgs(Reg),
+
     // ── Halt ─────────────────────────────────────────────────────────────
     Halt,
+}
+
+/// Neutral element kind for hot-definition variables (x°)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotNeutral {
+    Int,   // 0
+    Array, // []
 }
 
 /// Part of a BuildStr instruction

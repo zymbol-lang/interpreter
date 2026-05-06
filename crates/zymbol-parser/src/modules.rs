@@ -3,7 +3,7 @@
 //! Handles parsing of module declarations, imports, and exports:
 //! - Module declaration: # module_name { ... } (block syntax required)
 //! - Export blocks: #> { items } (public API definition)
-//! - Import statements: <# path <= alias (import with required alias)
+//! - Import statements: <# path : alias (import with required alias)
 //! - Module paths: ./relative, ../parent, absolute paths
 
 use zymbol_ast::{Expr, ExportBlock, ExportItem, ImportStmt, ItemType, ModuleDecl, ModulePath, Statement};
@@ -16,7 +16,7 @@ impl Parser {
     /// Parse a complete module block: # [.]name { imports, exports, consts, vars, fns }
     ///
     /// Only the following are allowed inside a module block:
-    ///   <# path <= alias      — import
+    ///   <# path : alias      — import
     ///   #> { ... }            — export block
     ///   NAME := literal       — constant (literal RHS only)
     ///   var = literal         — private mutable state (literal RHS only)
@@ -225,8 +225,8 @@ impl Parser {
     /// Parse export item: own_item, alias::func, alias.CONST, or renamed
     /// Supports three forms:
     /// - Own item: identifier (exports own function/constant)
-    /// - Re-export function: alias::function [<= new_name]
-    /// - Re-export constant: alias.CONSTANT [<= NEW_NAME]
+    /// - Re-export function: alias::function [: new_name]
+    /// - Re-export constant: alias.CONSTANT [: NEW_NAME]
     pub(crate) fn parse_export_item(&mut self) -> Result<ExportItem, Diagnostic> {
         let start = self.peek().span;
 
@@ -268,9 +268,9 @@ impl Parser {
                     }
                 };
 
-                // Check for rename (<= new_name)
-                let rename = if matches!(self.peek().kind, TokenKind::Le) {
-                    self.advance(); // consume <=
+                // Check for rename (: new_name)
+                let rename = if matches!(self.peek().kind, TokenKind::Colon) {
+                    self.advance(); // consume :
                     let rename_token = self.peek().clone();
                     match &rename_token.kind {
                         TokenKind::Ident(name) => {
@@ -280,7 +280,7 @@ impl Parser {
                             Some(name)
                         }
                         _ => {
-                            return Err(Diagnostic::error("expected new name after '<='")
+                            return Err(Diagnostic::error("expected new name after ':'")
                                 .with_span(rename_token.span))
                         }
                     }
@@ -316,9 +316,9 @@ impl Parser {
                     }
                 };
 
-                // Check for rename (<= NEW_NAME)
-                let rename = if matches!(self.peek().kind, TokenKind::Le) {
-                    self.advance(); // consume <=
+                // Check for rename (: NEW_NAME)
+                let rename = if matches!(self.peek().kind, TokenKind::Colon) {
+                    self.advance(); // consume :
                     let rename_token = self.peek().clone();
                     match &rename_token.kind {
                         TokenKind::Ident(name) => {
@@ -328,7 +328,7 @@ impl Parser {
                             Some(name)
                         }
                         _ => {
-                            return Err(Diagnostic::error("expected new name after '<='")
+                            return Err(Diagnostic::error("expected new name after ':'")
                                 .with_span(rename_token.span))
                         }
                     }
@@ -346,9 +346,9 @@ impl Parser {
                 ))
             }
             _ => {
-                // Own item: identifier [<= public_name]
-                let rename = if matches!(self.peek().kind, TokenKind::Le) {
-                    self.advance(); // consume <=
+                // Own item: identifier [: public_name]
+                let rename = if matches!(self.peek().kind, TokenKind::Colon) {
+                    self.advance(); // consume :
                     let rename_token = self.peek().clone();
                     match &rename_token.kind {
                         TokenKind::Ident(name) => {
@@ -358,7 +358,7 @@ impl Parser {
                             Some(name)
                         }
                         _ => {
-                            return Err(Diagnostic::error("expected public name after '<='")
+                            return Err(Diagnostic::error("expected public name after ':'")
                                 .with_span(rename_token.span))
                         }
                     }
@@ -371,7 +371,7 @@ impl Parser {
         }
     }
 
-    /// Parse import statement: <# path <= alias
+    /// Parse import statement: <# path : alias
     /// Path can be relative (./file, ../file) or absolute
     /// Alias is REQUIRED (not optional)
     pub(crate) fn parse_import_statement(&mut self) -> Result<ImportStmt, Diagnostic> {
@@ -387,13 +387,14 @@ impl Parser {
         // Parse module path
         let path = self.parse_module_path()?;
 
-        // Consume <=
-        let le_token = self.peek().clone();
-        if !matches!(le_token.kind, TokenKind::Le) {
-            return Err(Diagnostic::error("expected '<=' for module alias")
-                .with_span(le_token.span));
+        // Consume :
+        let colon_token = self.peek().clone();
+        if !matches!(colon_token.kind, TokenKind::Colon) {
+            return Err(Diagnostic::error("expected ':' for module alias")
+                .with_span(colon_token.span)
+                .with_help("import syntax: <# path : alias"));
         }
-        self.advance(); // consume <=
+        self.advance(); // consume :
 
         // Parse alias
         let alias_token = self.peek().clone();
@@ -404,7 +405,7 @@ impl Parser {
                 name
             }
             _ => {
-                return Err(Diagnostic::error("expected alias name after '<='")
+                return Err(Diagnostic::error("expected alias name after ':'")
                     .with_span(alias_token.span))
             }
         };
@@ -559,7 +560,7 @@ mod tests {
 
     #[test]
     fn test_parse_import_statement() {
-        let program = parse("<# ./lib/math_utils <= math").expect("should parse");
+        let program = parse("<# ./lib/math_utils : math").expect("should parse");
         assert_eq!(program.imports.len(), 1);
 
         let import = &program.imports[0];
@@ -573,7 +574,7 @@ mod tests {
 
     #[test]
     fn test_parse_import_parent_directory() {
-        let program = parse("<# ../utils/config <= cfg").expect("should parse");
+        let program = parse("<# ../utils/config : cfg").expect("should parse");
         assert_eq!(program.imports.len(), 1);
 
         let import = &program.imports[0];
@@ -664,7 +665,7 @@ mod tests {
 
     #[test]
     fn test_parse_export_reexport_renamed() {
-        let program = parse("# facade {\n#> { math::subtract <= minus }\n}").expect("should parse");
+        let program = parse("# facade {\n#> { math::subtract : minus }\n}").expect("should parse");
         let module = program.module_decl.unwrap();
         let export_block = module.export_block.unwrap();
 
@@ -682,7 +683,7 @@ mod tests {
 
     #[test]
     fn test_parse_export_mixed_items() {
-        let program = parse("# core {\n#> { math::add, own_func, math.PI, text::trim <= strip }\nown_func() { <~ 1 }\n}").expect("should parse");
+        let program = parse("# core {\n#> { math::add, own_func, math.PI, text::trim : strip }\nown_func() { <~ 1 }\n}").expect("should parse");
         let module = program.module_decl.unwrap();
         let export_block = module.export_block.unwrap();
 
@@ -712,8 +713,8 @@ mod tests {
     fn test_parse_complete_module_example() {
         let source = r#"
 # app {
-    <# ./lib/math_utils <= math
-    <# ./lib/text_utils <= text
+    <# ./lib/math_utils : math
+    <# ./lib/text_utils : text
 }
 "#;
 
@@ -729,7 +730,7 @@ mod tests {
 
     #[test]
     fn test_parse_export_own_renamed() {
-        let program = parse("# calc {\n#> { internal_add <= sum }\ninternal_add(a, b) { <~ a + b }\n}").expect("should parse");
+        let program = parse("# calc {\n#> { internal_add : sum }\ninternal_add(a, b) { <~ a + b }\n}").expect("should parse");
         let module = program.module_decl.unwrap();
         let export_block = module.export_block.unwrap();
 

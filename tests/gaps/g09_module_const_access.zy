@@ -2,7 +2,7 @@
 // Before fix: TypeChecker emitted a fatal "undefined variable 'alias'"
 // error for MemberAccess nodes, blocking execution entirely.
 
-<# ./g09_config_mod <= cfg
+<# ./g09_config_mod : cfg
 
 // Direct constant access via dot
 url = cfg.BASE_URL

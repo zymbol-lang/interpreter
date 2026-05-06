@@ -2,7 +2,7 @@
 // Verify that module functions can see module variables
 // but NOT main program variables
 
-<# ./math_test <= math
+<# ./math_test : math
 
 >> "=== Test 1: Module function using module constants ===" ¶
 

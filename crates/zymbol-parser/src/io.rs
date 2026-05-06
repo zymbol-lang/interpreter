@@ -157,7 +157,13 @@ impl Parser {
                 | TokenKind::At            // loop/break/continue
                 | TokenKind::AtLabel(_)       // labeled loop (legacy)
                 | TokenKind::AtColonLabel(_) // labeled loop
+                | TokenKind::AtTilde       // sleep statement
                 | TokenKind::Input         // input statement
+                | TokenKind::KeyBlock      // blocking key input
+                | TokenKind::KeyNonBlock   // non-blocking key input
+                | TokenKind::OutputClear   // clear screen
+                | TokenKind::OutputPos     // positioned output
+                | TokenKind::OutputGate    // TUI block
                 | TokenKind::Return        // return statement
                 => {
                     break;

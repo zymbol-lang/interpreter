@@ -245,6 +245,7 @@ fn run_file(path: PathBuf, args: Vec<String>, use_vm: bool) -> Result<()> {
             }
         };
         let mut vm = VM::new(std::io::stdout());
+        vm.set_cli_args(args.clone());
         if let Err(e) = vm.run(&compiled) {
             eprintln!("Runtime error: {}", e);
             std::process::exit(1);

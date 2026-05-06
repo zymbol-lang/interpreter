@@ -2,8 +2,8 @@
 // Test de módulos construidos sobre <\ \>
 // Demuestra cómo construir bibliotecas estándar usando comandos bash
 
-<# ./matematicas/fecha_hora <= fecha
-<# ./matematicas/sistema <= sys
+<# ./matematicas/fecha_hora : fecha
+<# ./matematicas/sistema : sys
 
 >> "=== Test de Módulos del Sistema ===" ¶
 ¶

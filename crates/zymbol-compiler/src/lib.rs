@@ -92,12 +92,15 @@ struct FunctionCtx {
     loop_stack: Vec<LoopCtx>,
     /// Name of this function (for error messages)
     name: String,
+    /// Hot variables (x°): persist across block scopes, never zeroed by zero_new_vars
+    hot_vars: HashSet<String>,
 }
 
 impl FunctionCtx {
     fn new(name: impl Into<String>) -> Self {
         Self {
             register_map: HashMap::new(),
+            hot_vars: HashSet::new(),
             reg_types: Vec::new(),
             next_reg: 0,
             instructions: Vec::new(),
@@ -190,10 +193,11 @@ impl FunctionCtx {
 
     /// After compiling a block: zero out registers for variables newly introduced in that block
     /// and remove them from the register_map (they're now out of scope).
+    /// Hot variables (x°) are exempt — they persist across block scopes.
     fn zero_new_vars(&mut self, saved: &std::collections::HashSet<String>) {
         let new_vars: Vec<(String, Reg)> = self.register_map
             .iter()
-            .filter(|(name, _)| !saved.contains(name.as_str()))
+            .filter(|(name, _)| !saved.contains(name.as_str()) && !self.hot_vars.contains(name.as_str()))
             .map(|(n, &r)| (n.clone(), r))
             .collect();
         for (name, reg) in new_vars {
@@ -267,6 +271,9 @@ pub struct Compiler {
     /// Known module aliases (registered via import). Used to distinguish
     /// "private function" errors from "completely unknown" errors at call sites.
     known_module_aliases: HashSet<String>,
+    /// Source of named functions: name → (param_names, body_statements).
+    /// Used to recompile named functions as closures when they capture outer variables.
+    fn_source: HashMap<String, (Vec<String>, Vec<Statement>)>,
 }
 
 impl Compiler {
@@ -289,6 +296,7 @@ impl Compiler {
             global_var_map: HashMap::new(),
             global_var_inits: Vec::new(),
             known_module_aliases: HashSet::new(),
+            fn_source: HashMap::new(),
         };
 
         // Process imports first — register module functions as "alias::func"
@@ -311,6 +319,11 @@ impl Compiler {
                 if out_flags.iter().any(|&b| b) {
                     compiler.output_param_map.insert(idx, out_flags);
                 }
+                // Store body + param names for potential closure recompilation (Gap 3)
+                let param_names: Vec<String> = decl.parameters.iter()
+                    .map(|p| p.name.clone())
+                    .collect();
+                compiler.fn_source.insert(decl.name.clone(), (param_names, decl.body.statements.clone()));
                 // placeholder — will be replaced in second pass
                 compiler.functions.push(Chunk::new(&decl.name));
             }
@@ -605,6 +618,46 @@ impl Compiler {
         Ok(chunk)
     }
 
+    /// Recompile a named function as a closure with captured upvalues.
+    /// Used when a named function is used as a first-class value and its body
+    /// references variables from the enclosing scope.
+    fn compile_named_fn_as_closure(
+        &mut self,
+        original_name: &str,
+        params: Vec<String>,
+        stmts: Vec<Statement>,
+        free_vars: &[String],
+    ) -> Result<FuncIdx, CompileError> {
+        let closure_name = format!("<closure#{}/{}>", self.functions.len(), original_name);
+        let func_idx = self.functions.len() as FuncIdx;
+        self.functions.push(Chunk::new(&closure_name));
+        self.function_index.insert(closure_name.clone(), func_idx);
+
+        let mut closure_ctx = FunctionCtx::new(&closure_name);
+        for param in &params {
+            closure_ctx.alloc_reg(param)?;
+        }
+        let num_params = params.len() as u16;
+        // Upvalues occupy registers [num_params..num_params+k)
+        for fv in free_vars {
+            closure_ctx.alloc_reg(fv)?;
+        }
+
+        let prev_in_fn = self.in_function_body;
+        self.in_function_body = true;
+        for stmt in &stmts {
+            self.compile_stmt(stmt, &mut closure_ctx)?;
+        }
+        self.in_function_body = prev_in_fn;
+
+        let unit_reg = closure_ctx.alloc_temp()?;
+        closure_ctx.emit(Instruction::LoadUnit(unit_reg));
+        closure_ctx.emit(Instruction::Return(unit_reg));
+        let chunk = closure_ctx.into_chunk(num_params);
+        self.functions[func_idx as usize] = chunk;
+        Ok(func_idx)
+    }
+
     // ── Statement compilation ───────────────────────────────────────────────
 
     fn compile_stmt(
@@ -613,7 +666,16 @@ impl Compiler {
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
         match stmt {
-            Statement::Assignment(a) => self.compile_assignment(&a.name, &a.value, ctx),
+            Statement::Assignment(a) => {
+                // Hot assignment (x° = ...): pre-initialize to neutral element if variable is new
+                if a.hot && ctx.get_reg(&a.name).is_err() {
+                    let neutral_reg = ctx.alloc_reg(&a.name)?;
+                    let neutral = hot_neutral_instr(&a.value, &a.name, neutral_reg);
+                    ctx.emit(neutral);
+                    ctx.hot_vars.insert(a.name.clone());
+                }
+                self.compile_assignment(&a.name, &a.value, ctx)
+            }
             Statement::ConstDecl(c) => self.compile_assignment(&c.name, &c.value, ctx),
             Statement::Output(o) => self.compile_output(o, ctx),
             Statement::Newline(_n) => {
@@ -676,8 +738,10 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Statement::CliArgsCapture(_) => {
-                Err(CompileError::Unsupported("CLI args capture — VM Fase 4C".into()))
+            Statement::CliArgsCapture(cap) => {
+                let dst = ctx.alloc_reg(&cap.variable_name)?;
+                ctx.emit(Instruction::LoadCliArgs(dst));
+                Ok(())
             }
             Statement::SetNumeralMode { base, .. } => {
                 ctx.emit(Instruction::SetNumeralMode(*base));
@@ -1246,6 +1310,13 @@ impl Compiler {
                 if let Ok(r) = ctx.get_reg(&id.name) {
                     return Ok(r);
                 }
+                // Hot variable (x°) on RHS: auto-initialize to neutral element if not yet defined
+                if id.hot {
+                    let dst = ctx.alloc_reg(&id.name)?;
+                    ctx.emit(Instruction::LoadInt(dst, 0));
+                    ctx.hot_vars.insert(id.name.clone());
+                    return Ok(dst);
+                }
                 // Fall back to global constant inlining (module-level consts in function bodies)
                 if let Some(mc) = self.global_consts.get(&id.name).cloned() {
                     let dst = ctx.alloc_temp()?;
@@ -1266,14 +1337,37 @@ impl Compiler {
                     return Ok(dst);
                 }
                 // Named function used as first-class value: f = myFunc, arr$> myFunc, x |> myFunc
-                if let Some(&func_idx) = self.function_index.get(&id.name) {
+                if self.function_index.contains_key(&id.name) {
+                    // Check if the function body captures variables from the current scope
+                    let maybe_source = self.fn_source.get(&id.name).cloned();
+                    if let Some((params, stmts)) = maybe_source {
+                        let mut locals: HashSet<String> = params.iter().cloned().collect();
+                        let mut seen = HashSet::new();
+                        let mut free: Vec<String> = Vec::new();
+                        collect_free_in_stmts(&stmts, &mut locals, ctx, &mut seen, &mut free);
+                        if !free.is_empty() {
+                            let new_func_idx = self.compile_named_fn_as_closure(
+                                &id.name.clone(),
+                                params,
+                                stmts,
+                                &free,
+                            )?;
+                            let captured: Vec<Reg> = free.iter()
+                                .map(|v| ctx.get_reg(v))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            let dst = ctx.alloc_temp()?;
+                            ctx.emit(Instruction::MakeClosure(dst, new_func_idx, captured));
+                            return Ok(dst);
+                        }
+                    }
+                    let func_idx = *self.function_index.get(&id.name).unwrap();
                     let dst = ctx.alloc_temp()?;
                     ctx.emit(Instruction::MakeFunc(dst, func_idx));
                     return Ok(dst);
                 }
                 // In function bodies, defer to runtime (matches tree-walker behavior)
                 if self.in_function_body {
-                    let msg = format!("undefined variable: '{}'", id.name);
+                    let msg = format!("'{}' is undefined — did you mean '{}°' (hot definition)?", id.name, id.name);
                     let idx = self.intern_string(&msg);
                     let dst = ctx.alloc_temp()?;
                     ctx.emit(Instruction::RaiseError(idx));
@@ -3060,6 +3154,25 @@ impl Compiler {
     }
 }
 
+// ── Hot-definition neutral element ───────────────────────────────────────────
+
+/// Return the HotInit instruction for a hot variable based on the RHS expression.
+/// - CollectionAppend(var, ...) → HotNeutral::Array (neutral for accumulation is [])
+/// - Everything else            → HotNeutral::Int (neutral = 0)
+/// HotInit is a conditional init: only sets the register if it currently holds Unit,
+/// so it is safe to emit inside a loop body (no-op after the first iteration).
+fn hot_neutral_instr(value: &Expr, var_name: &str, dst: Reg) -> Instruction {
+    use zymbol_bytecode::HotNeutral;
+    if let Expr::CollectionAppend(ca) = value {
+        if let Expr::Identifier(id) = ca.collection.as_ref() {
+            if id.name == var_name {
+                return Instruction::HotInit(dst, HotNeutral::Array);
+            }
+        }
+    }
+    Instruction::HotInit(dst, HotNeutral::Int)
+}
+
 // ── 4E: Free-variable collection for closure capture ─────────────────────────
 
 /// Collect free variables in a lambda body: identifiers that appear in `outer_ctx`
@@ -3624,6 +3737,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             | Instruction::Jump(_) | Instruction::Halt | Instruction::PrintNewline
             | Instruction::SetNumeralMode(_)
             | Instruction::ClearScreen | Instruction::EnterTui | Instruction::ExitTui => {}
+            Instruction::LoadCliArgs(dst) => upd(*dst),
+            Instruction::HotInit(dst, _) => upd(*dst),
         }
     }
     max

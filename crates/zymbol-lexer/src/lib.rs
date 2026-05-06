@@ -1963,14 +1963,14 @@ mod tests {
 
     #[test]
     fn test_module_import_statement() {
-        let tokens = lex("<# ./math_utils <= math");
-        // ModuleImport, Dot, Slash, Ident, Le, Ident, Eof
+        let tokens = lex("<# ./math_utils : math");
+        // ModuleImport, Dot, Slash, Ident, Colon, Ident, Eof
         assert_eq!(tokens.len(), 7);
         assert!(matches!(tokens[0], TokenKind::ModuleImport));
         assert!(matches!(tokens[1], TokenKind::Dot));
         assert!(matches!(tokens[2], TokenKind::Slash));
         assert!(matches!(tokens[3], TokenKind::Ident(_)));
-        assert!(matches!(tokens[4], TokenKind::Le)); // <= for alias
+        assert!(matches!(tokens[4], TokenKind::Colon)); // : for alias
         assert!(matches!(tokens[5], TokenKind::Ident(_)));
     }
 
@@ -2045,8 +2045,8 @@ mod tests {
 
     #[test]
     fn test_re_export_renamed() {
-        let tokens = lex("math::add <= sum");
-        // Ident, ScopeResolution, Ident, Le, Ident, Eof
+        let tokens = lex("math::add : sum");
+        // Ident, ScopeResolution, Ident, Colon, Ident, Eof
         assert_eq!(tokens.len(), 6);
         match &tokens[0] {
             TokenKind::Ident(s) => assert_eq!(s, "math"),
@@ -2057,7 +2057,7 @@ mod tests {
             TokenKind::Ident(s) => assert_eq!(s, "add"),
             _ => panic!("Expected identifier"),
         }
-        assert!(matches!(tokens[3], TokenKind::Le)); // <= for rename
+        assert!(matches!(tokens[3], TokenKind::Colon)); // : for rename
         match &tokens[4] {
             TokenKind::Ident(s) => assert_eq!(s, "sum"),
             _ => panic!("Expected identifier"),

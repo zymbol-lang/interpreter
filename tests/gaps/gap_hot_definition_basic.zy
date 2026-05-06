@@ -1,4 +1,4 @@
-// @vm-skip: hot definition operator ° is tree-walker only — not yet compiled in VM.
+// Feature: Hot Definition operator ° (U+00B0, implemented v0.0.5).
 // Feature: Hot Definition operator ° (U+00B0, resuelto v0.0.5).
 // Variables con ° se inicializan al neutro del contexto (0, [], "")
 // en su primer uso sin necesidad de declaracion previa.

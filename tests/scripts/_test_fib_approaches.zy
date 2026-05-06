@@ -1,4 +1,4 @@
-<# ./lib_time <= T
+<# ./lib_time : T
 
 fib_rec(n) {
     ? n <= 1 { <~ n }

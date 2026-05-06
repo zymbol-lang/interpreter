@@ -1,6 +1,7 @@
-# Implementation Plan — v0.0.5 TUI Primitives
+# Implementation Plan — v0.0.5 TUI Primitives + Module Alias Syntax
 
-Features designed for the Znake project. All are purely additive — no existing behaviour changes.
+Features 1–6 are designed for the Znake project and are purely additive.
+Feature 7 is a **breaking syntax change** that retires `<=` as a dual-role symbol.
 
 **Dependency to do first:** add `crossterm.workspace = true` to
 `crates/zymbol-interpreter/Cargo.toml` before touching any crossterm call.
@@ -17,9 +18,11 @@ Features designed for the Znake project. All are purely additive — no existing
 | 4 | Key input | `<<\|` / `<<\|?` | Medium |
 | 5 | Positioned output | `>>~ (r,c,BKS,fg,bg) > items` — sparse: `>>~(,,,fg,bg)>` | Medium |
 | 6 | TUI block | `>>\| { }` | Medium |
+| 7 | Module alias with `:` | `<# path : alias` / `#> { fn : pub }` | Low (breaking) |
 
-Recommended implementation order: 1 → 2 → 3 → 4 → 5 → 6.
+Recommended implementation order: 1 → 2 → 3 → 4 → 5 → 6 → 7.
 Features 2–6 all depend on crossterm being wired in (step 0).
+Feature 7 has no dependencies — it can be applied independently at any point.
 
 ---
 
@@ -863,6 +866,116 @@ The existing `execute_loop()` then catches the re-raised `Break` and stops norma
 
 ---
 
+## Feature 7 — Module alias: `<# path : alias` (retire `<=` in module contexts)
+
+**Breaking change.** `<=` is replaced by `:` as the separator between module path and alias,
+and between export items and their public rename. After this change `<=` is used exclusively
+as the less-than-or-equal comparison operator. No new tokens or AST nodes — `Colon` already
+exists in the lexer.
+
+Rationale: documented in `SYMBOLS.md` under "Design Issue: `<=` as a Dual-Role Symbol".
+
+### 7a. Parser — `parse_import_statement()`
+
+**File:** `crates/zymbol-parser/src/modules.rs`
+
+```rust
+// Before
+if !matches!(le_token.kind, TokenKind::Le) {
+    return Err(Diagnostic::error("expected '<=' for module alias")
+        .with_span(le_token.span));
+}
+self.advance(); // consume <=
+
+// After
+if !matches!(le_token.kind, TokenKind::Colon) {
+    return Err(Diagnostic::error("expected ':' for module alias")
+        .with_span(le_token.span)
+        .with_help("import syntax: <# path : alias"));
+}
+self.advance(); // consume :
+```
+
+Also update the alias ident error: `"expected alias name after ':'"`.
+Update doc comment (`/// Parse import statement: <# path : alias`) and module-level comment.
+
+### 7b. Parser — `parse_export_item()` rename branches (×3)
+
+**File:** `crates/zymbol-parser/src/modules.rs`
+
+Three places where `TokenKind::Le` gates an optional rename (re-export function, re-export
+constant, own item):
+
+```rust
+// Before (×3)
+// Check for rename (<= new_name)
+let rename = if matches!(self.peek().kind, TokenKind::Le) {
+    self.advance(); // consume <=
+    ...
+    return Err(Diagnostic::error("expected new name after '<='") ...
+
+// After (×3)
+// Check for rename (: new_name)
+let rename = if matches!(self.peek().kind, TokenKind::Colon) {
+    self.advance(); // consume :
+    ...
+    return Err(Diagnostic::error("expected new name after ':'") ...
+```
+
+### 7c. Lexer unit tests
+
+**File:** `crates/zymbol-lexer/src/lib.rs`
+
+```rust
+// test_module_import_statement (~line 1966)
+let tokens = lex("<# ./math_utils : math");
+// ModuleImport, Dot, Slash, Ident, Colon, Ident, Eof
+assert!(matches!(tokens[4], TokenKind::Colon)); // : for alias
+
+// test_re_export_renamed (~line 2048)
+let tokens = lex("math::add : sum");
+// Ident, ScopeResolution, Ident, Colon, Ident, Eof
+assert!(matches!(tokens[3], TokenKind::Colon)); // : for rename
+```
+
+### 7d. Parser unit tests
+
+**File:** `crates/zymbol-parser/src/modules.rs`
+
+All inline test strings with `<=` in module context:
+
+| Location | Before | After |
+|----------|--------|-------|
+| `parse("<# ./lib/math_utils <= math")` | `<=` | `:` |
+| `parse("<# ../utils/config <= cfg")` | `<=` | `:` |
+| `"math::subtract <= minus"` | `<=` | `:` |
+| `"text::trim <= strip"` | `<=` | `:` |
+| `<# ./lib/math_utils <= math` (multiline string) | `<=` | `:` |
+| `<# ./lib/text_utils <= text` (multiline string) | `<=` | `:` |
+| `"internal_add <= sum"` | `<=` | `:` |
+
+### 7e. Source file migration (~57 `.zy` files)
+
+`<# path <= alias` → `<# path : alias`
+`fn <= pub_name` (export rename) → `fn : pub_name`
+
+Files to update:
+- `tests/bugs/` — bug001_adaptador.zy, bug001_scope_reexport.zy, bug01_module_intra_calls.zy
+- `tests/errors/runtime/` — E004_circular.zy, E008_private_access.zy, E010_reexport_private.zy, E012_no_export.zy, module_not_found.zy
+- `tests/errors/semantic/` — E002_mod_not_found.zy, E003_bad_path.zy, E004_mod_a.zy, E004_mod_b.zy, E006_reexport_missing.zy, E007_reexport_type.zy, E010_reexport_private.zy
+- `tests/gaps/` — g09_module_const_access.zy, g11_module_void_call.zy, g13_module_private_state.zy, g14_export_block_position.zy, g14_flex_mod.zy, g17_script_toplevel_functions.zy
+- `tests/i18n/` — matematicas/한국인.zy, matematicas/ελληνικά.zy, matematicas/עִברִית.zy, test_archivos.zy, test_database.zy, test_http_api.zy, test_modulos_sistema.zy, 한국_앱.zy, Ελληνική_εφαρμογή.zy, אפליקציית_מתמטיקה.zy
+- `tests/modules_scope/` — 09_import_order_flexibility.zy, 10_private_state_persistence.zy, circ_mod_a/b/c.zy, test_11_block_syntax.zy, test_12_private_state_block.zy, test_circular_modules.zy, test_complex.zy, test_export_alias.zy, test_isolation.zy, test_module_scope.zy
+- `tests/scripts/` — bench_collections.zy, bench_match.zy, bench_recursion_loop.zy, bench_recursion.zy, bench_strings_modify.zy, bench_strings_stress.zy, bench_strings.zy, lib_time.zy (comment only), stress.zy, _test_fib_approaches.zy
+- `tests/stress_v2/` — bench_hof.zy, bench_numeric.zy, bench_pipeline.zy, bench_text.zy
+
+### 7f. Documentation
+
+- **`SYMBOLS.md`** — remove "(proposed)" from `:` family entry `<# path : alias`; strike/resolve the "Design Issue" section
+- **`MANUAL.md`** — update import syntax example from `<# path <= alias` to `<# path : alias`
+
+---
+
 ## Summary of new tokens
 
 | Token | Lexed from | Category |
@@ -877,6 +990,8 @@ The existing `execute_loop()` then catches the re-raised `Break` and stops norma
 
 All `>>X` tokens share one lookahead point when `>>` is lexed.
 All `<<X` tokens share one lookahead point when `<<` is lexed.
+
+Feature 7 introduces no new tokens — `Colon` (`:`) was already present in the lexer.
 
 ## Summary of new AST nodes
 
@@ -914,4 +1029,5 @@ For each feature, add tests in the crate where they live:
 | 4 | `interpreter/io.rs` | `>>!` executes without panic (stdout capture) |
 | 5 | `interpreter/io.rs` | `[H, W] = >>?` produces Tuple of two non-zero Ints |
 | 6 | `interpreter/io.rs` | `>>~ (1,1) > "x"` writes to stdout (crossterm calls) |
-| 7 | `interpreter/io.rs` | `>>\ | { >>! }` enters and leaves alternate screen cleanly |
+| 6 | `interpreter/io.rs` | `>>\| { >>! }` enters and leaves alternate screen cleanly |
+| 7 | `parser/modules.rs` | `<# path : alias` parses; old `<=` syntax yields "expected ':'" error |

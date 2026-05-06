@@ -2,7 +2,7 @@
 // Test de interacción con base de datos SQLite
 // Demuestra CRUD completo usando interpolación de variables
 
-<# ./matematicas/db <= db
+<# ./matematicas/db : db
 
 >> "=== Test de Base de Datos SQLite ===" ¶
 ¶

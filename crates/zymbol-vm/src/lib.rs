@@ -399,6 +399,8 @@ pub struct VM<W: Write> {
     numeral_mode: u32,
     /// Module-level global variables (mutable, shared across all calls)
     global_vars: Vec<Value>,
+    /// CLI arguments passed after the script path (argv[1..], skipping --vm flags)
+    cli_args: Vec<String>,
     output: W,
 }
 
@@ -412,8 +414,14 @@ impl<W: Write> VM<W> {
             string_rcs: Vec::new(),
             numeral_mode: 0x0030, // ASCII_BASE default
             global_vars: Vec::new(),
+            cli_args: Vec::new(),
             output,
         }
+    }
+
+    /// Set CLI arguments before running (argv after the script path, minus VM flags).
+    pub fn set_cli_args(&mut self, args: Vec<String>) {
+        self.cli_args = args;
     }
 
     pub fn run(&mut self, program: &CompiledProgram) -> Result<(), VmError> {
@@ -1969,25 +1977,34 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::TypeOf(dst, src) => {
                     let val = self.reg_get(src).clone();
-                    let (type_sym, len) = match &val {
-                        Value::Int(n) => ("###", n.to_string().len() as i64),
-                        Value::Float(fl) => ("##.", fl.to_string().len() as i64),
-                        Value::String(s) => ("##\"", s.as_ref().chars().count() as i64),
-                        Value::Char(_) => ("##'", 1),
-                        Value::Bool(_) => ("##?", 1),
-                        Value::Array(a) => ("##]", a.as_ref().len() as i64),
-                        Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
-                        Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
-                        Value::Function(_, arity) => ("##()", *arity as i64),
-                        Value::Closure(_, arity, _) => ("##->", *arity as i64),
-                        Value::Unit => ("##_", 0),
-                        Value::Error(_) => ("##_", 0),
+                    let tuple_val = if let Value::Error(s) = &val {
+                        let s_ref = s.as_ref();
+                        let kind = s_ref.find('(').map(|i| &s_ref[..i]).unwrap_or(s_ref);
+                        Value::Tuple(Rc::new(vec![
+                            Value::String(ZyStr::new(kind.to_string())),
+                            Value::Int(0),
+                            val.clone(),
+                        ]))
+                    } else {
+                        let (type_sym, len) = match &val {
+                            Value::Int(n) => ("###", n.to_string().len() as i64),
+                            Value::Float(fl) => ("##.", fl.to_string().len() as i64),
+                            Value::String(s) => ("##\"", s.as_ref().chars().count() as i64),
+                            Value::Char(_) => ("##'", 1),
+                            Value::Bool(_) => ("##?", 1),
+                            Value::Array(a) => ("##]", a.as_ref().len() as i64),
+                            Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
+                            Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
+                            Value::Function(_, arity) => ("##()", *arity as i64),
+                            Value::Closure(_, arity, _) => ("##->", *arity as i64),
+                            _ => ("##_", 0),
+                        };
+                        Value::Tuple(Rc::new(vec![
+                            Value::String(ZyStr::new(type_sym.to_string())),
+                            Value::Int(len),
+                            val,
+                        ]))
                     };
-                    let tuple_val = Value::Tuple(Rc::new(vec![
-                        Value::String(ZyStr::new(type_sym.to_string())),
-                        Value::Int(len),
-                        val,
-                    ]));
                     self.reg_set(dst, tuple_val);
                 }
 
@@ -2308,6 +2325,23 @@ impl<W: Write> VM<W> {
                     // If ExitTui is skipped (@:label! / error), the guard is dropped
                     // when tui_stack goes out of scope at the end of run().
                     tui_stack.pop();
+                }
+
+                &Instruction::HotInit(dst, neutral) => {
+                    if matches!(self.reg_get(dst), Value::Unit) {
+                        let val = match neutral {
+                            zymbol_bytecode::HotNeutral::Int => Value::Int(0),
+                            zymbol_bytecode::HotNeutral::Array => Value::Array(Rc::new(Vec::new())),
+                        };
+                        wreg!(dst, val);
+                    }
+                }
+
+                &Instruction::LoadCliArgs(dst) => {
+                    let arr: Vec<Value> = self.cli_args.iter()
+                        .map(|s| Value::String(ZyStr::from_str_ref(s)))
+                        .collect();
+                    wreg!(dst, Value::Array(Rc::new(arr)));
                 }
 
                 Instruction::Halt => return Ok(()),
@@ -3089,20 +3123,31 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::TypeOf(dst, src) => {
                     let val = r!(src).clone();
-                    let (type_sym, len) = match &val {
-                        Value::Int(n) => ("###", n.to_string().len() as i64),
-                        Value::Float(fl) => ("##.", fl.to_string().len() as i64),
-                        Value::String(s) => ("##\"", s.as_ref().chars().count() as i64),
-                        Value::Char(_) => ("##'", 1),
-                        Value::Bool(_) => ("##?", 1),
-                        Value::Array(a) => ("##]", a.as_ref().len() as i64),
-                        Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
-                        Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
-                        Value::Function(_, arity) => ("##()", *arity as i64),
-                        Value::Closure(_, arity, _) => ("##->", *arity as i64),
-                        _ => ("##_", 0),
+                    let result = if let Value::Error(s) = &val {
+                        let s_ref = s.as_ref();
+                        let kind = s_ref.find('(').map(|i| &s_ref[..i]).unwrap_or(s_ref);
+                        Value::Tuple(Rc::new(vec![
+                            Value::String(ZyStr::new(kind.to_string())),
+                            Value::Int(0),
+                            val.clone(),
+                        ]))
+                    } else {
+                        let (type_sym, len) = match &val {
+                            Value::Int(n) => ("###", n.to_string().len() as i64),
+                            Value::Float(fl) => ("##.", fl.to_string().len() as i64),
+                            Value::String(s) => ("##\"", s.as_ref().chars().count() as i64),
+                            Value::Char(_) => ("##'", 1),
+                            Value::Bool(_) => ("##?", 1),
+                            Value::Array(a) => ("##]", a.as_ref().len() as i64),
+                            Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
+                            Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
+                            Value::Function(_, arity) => ("##()", *arity as i64),
+                            Value::Closure(_, arity, _) => ("##->", *arity as i64),
+                            _ => ("##_", 0),
+                        };
+                        Value::Tuple(Rc::new(vec![val.clone(), Value::String(ZyStr::new(type_sym.to_string())), Value::Int(len)]))
                     };
-                    w!(dst, Value::Tuple(Rc::new(vec![val.clone(), Value::String(ZyStr::new(type_sym.to_string())), Value::Int(len)])));
+                    w!(dst, result);
                 }
 
                 // ── Precision ops ────────────────────────────────────────────

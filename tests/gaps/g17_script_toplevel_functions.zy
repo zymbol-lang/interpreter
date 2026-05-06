@@ -3,7 +3,7 @@
 // script-level function — alias::fn() calls inside the function body
 // failed with "module not found".
 
-<# ./g17_helper_mod <= h
+<# ./g17_helper_mod : h
 
 // Top-level script function that uses a module alias internally
 say_hello(name) {

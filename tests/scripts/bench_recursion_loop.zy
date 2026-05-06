@@ -7,7 +7,7 @@
 // Run: zymbol run tests/scripts/bench_recursion_loop.zy
 // ============================================================================
 
-<# ./lib_time <= T
+<# ./lib_time : T
 
 >> "=== Zymbol Benchmark: Recursion vs Loop ===" ¶
 

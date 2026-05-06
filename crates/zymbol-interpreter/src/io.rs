@@ -30,13 +30,22 @@ impl<W: Write> Interpreter<W> {
             };
             write!(self.output, "{}", s)?;
         }
+        // In TUI mode (raw mode active) stdout is line-buffered: text without \n stays
+        // invisible until the next flush. Force flush so >> output appears immediately.
+        if self.tui_depth > 0 {
+            self.output.flush()?;
+        }
         Ok(())
     }
 
     /// Execute newline statement: ¶ OR \\
     pub(crate) fn execute_newline(&mut self, _newline: &Newline) -> Result<()> {
-        // Explicit newline: ¶ or \\
-        writeln!(self.output)?;
+        // In raw mode (inside >>| TUI block) \n alone doesn't return to col 1 — need \r\n.
+        if self.tui_depth > 0 {
+            write!(self.output, "\r\n")?;
+        } else {
+            writeln!(self.output)?;
+        }
         Ok(())
     }
 
@@ -229,7 +238,9 @@ impl<W: Write> Interpreter<W> {
             .map_err(|e| RuntimeError::Generic {
                 message: format!("failed to enter alternate screen: {}", e), span: tb.span,
             })?;
+        self.tui_depth += 1;
         let result = self.execute_block(&tb.body);
+        self.tui_depth -= 1;
         let _ = execute!(std::io::stdout(), terminal::LeaveAlternateScreen, cursor::Show);
         let _ = terminal::disable_raw_mode();
         result

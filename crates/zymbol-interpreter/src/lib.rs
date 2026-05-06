@@ -325,6 +325,8 @@ pub struct Interpreter<W: Write> {
     /// When > 0, Return must clone (finally block may reference the variable after <~).
     /// When == 0, Return can move (take_variable) — O(1) for String/Array.
     try_depth: u8,
+    /// Depth of active >>| TUI blocks. When > 0, raw mode is active and ¶/\\ must emit \r\n.
+    pub(crate) tui_depth: u8,
     /// TCO support: name of the currently executing function (None = not in a function).
     /// Used to detect `<~ f(same_args)` tail-call patterns.
     pub(crate) current_function: Option<String>,
@@ -624,6 +626,7 @@ impl Interpreter<std::io::Stdout> {
             const_vec_pool: Vec::new(),
             arg_vec_pool: Vec::new(),
             try_depth: 0,
+            tui_depth: 0,
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),
@@ -669,6 +672,7 @@ impl<W: Write> Interpreter<W> {
             const_vec_pool: Vec::new(),
             arg_vec_pool: Vec::new(),
             try_depth: 0,
+            tui_depth: 0,
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),

@@ -3,7 +3,7 @@
 // Demuestra operaciones de archivos y carpetas usando <\ \>
 // IMPORTANTE: Usa strings para rutas y flags
 
-<# ./matematicas/archivos <= arch
+<# ./matematicas/archivos : arch
 
 >> "=== Test de Módulo de Archivos ===" ¶
 ¶

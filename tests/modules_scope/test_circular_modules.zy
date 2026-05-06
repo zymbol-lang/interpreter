@@ -4,6 +4,6 @@
 // Expected: E004 Circular dependency detected at semantic analysis phase
 // (program never executes)
 
-<# ./circ_mod_a <= a
+<# ./circ_mod_a : a
 
 >> a::fun_a(1) ¶

@@ -39,3 +39,6 @@ tests/output/
 # Packaging — built artifacts and release notes (uploaded to GitHub Releases, not committed)
 packaging/dist/
 packaging/RELEASE_NOTES_*.md
+
+# Manual test logs (generated per session, not committed)
+tests/manual/logs/manual_*.log

@@ -3,7 +3,7 @@
 // This module uses Form 2: #> follows the <# imports
 
 # g14_flex_mod {
-    <# ./g09_config_mod <= cfg
+    <# ./g09_config_mod : cfg
 
     #> { greet, HOST }
 
