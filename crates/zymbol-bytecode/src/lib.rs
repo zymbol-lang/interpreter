@@ -245,6 +245,10 @@ pub enum Instruction {
     QueryTerminalSize(Reg),
     /// <<| var / <<|? var — read one key → Value::Char in dst; blocking flag
     ReadKey(Reg, bool),
+    /// << var / << "prompt" var / << #|var| — read a line from stdin → store in dst
+    /// prompt_reg: Some(r) = print register r as prompt before reading; None = no prompt
+    /// numeric: true = apply parse_numeric_string (Int/Float, fallback String)
+    ReadLine(Reg, Option<Reg>, bool),
     /// >>~ pos > items — positioned output (pos tuple in r_pos, items in Vec<Reg>)
     PrintAt(Reg, Vec<Reg>),
     /// >>| { } — enter alternate screen + raw mode

@@ -2272,6 +2272,46 @@ impl<W: Write> VM<W> {
                     wreg!(dst, Value::Char(ch));
                 }
 
+                &Instruction::ReadLine(dst, prompt_reg, numeric) => {
+                    use std::io::{BufRead, Write};
+                    // Show prompt if present
+                    if let Some(pr) = prompt_reg {
+                        print!("{}", rreg!(pr));
+                        std::io::stdout().flush().ok();
+                    }
+                    // Inside TUI block: disable raw mode + show cursor so user can type
+                    let in_tui = !tui_stack.is_empty();
+                    if in_tui {
+                        crossterm::terminal::disable_raw_mode().ok();
+                        crossterm::execute!(std::io::stdout(), crossterm::cursor::Show).ok();
+                    }
+                    let mut line = String::new();
+                    std::io::stdin().lock().read_line(&mut line).ok();
+                    if in_tui {
+                        crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide).ok();
+                        if let Err(e) = crossterm::terminal::enable_raw_mode() {
+                            raise!(VmError::Generic(format!("input: failed to restore raw mode: {}", e)));
+                        }
+                    }
+                    let trimmed = line.trim().to_string();
+                    let value = if numeric {
+                        if let Ok(i) = trimmed.parse::<i64>() {
+                            Value::Int(i)
+                        } else if let Ok(f) = trimmed.parse::<f64>() {
+                            Value::Float(f)
+                        } else if let Some(norm) = normalize_unicode_digits(&trimmed) {
+                            if let Ok(i) = norm.parse::<i64>() { Value::Int(i) }
+                            else if let Ok(f) = norm.parse::<f64>() { Value::Float(f) }
+                            else { Value::String(ZyStr::new(trimmed)) }
+                        } else {
+                            Value::String(ZyStr::new(trimmed))
+                        }
+                    } else {
+                        Value::String(ZyStr::new(trimmed))
+                    };
+                    wreg!(dst, value);
+                }
+
                 Instruction::PrintAt(r_pos, item_regs) => {
                     let pos_val = rreg!(*r_pos).clone();
                     let (fila, col, bks, fg, bg) = vm_extract_pos(pos_val);
@@ -2312,6 +2352,7 @@ impl<W: Write> VM<W> {
                     }
                     if let Err(e) = crossterm::execute!(std::io::stdout(),
                         crossterm::terminal::EnterAlternateScreen,
+                        crossterm::cursor::MoveTo(0, 0),
                         crossterm::cursor::Hide)
                     {
                         let _ = crossterm::terminal::disable_raw_mode();

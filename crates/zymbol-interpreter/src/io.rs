@@ -83,10 +83,24 @@ impl<W: Write> Interpreter<W> {
         }
 
         // Delegate reading to the injected input function.
-        // In normal execution this reads from stdin; in the REPL it temporarily
-        // disables raw mode so the user can type with echo and press Enter normally.
-        let line = (self.input_fn)()
-            .map_err(|e| RuntimeError::Generic {
+        // Inside a TUI block (raw mode active), temporarily disable raw mode and show the
+        // cursor so the user can type with echo and press Enter normally, then restore after.
+        if self.tui_depth > 0 {
+            crossterm::terminal::disable_raw_mode().map_err(|e| RuntimeError::Generic {
+                message: format!("input: failed to disable raw mode: {}", e),
+                span: input.span,
+            })?;
+            crossterm::execute!(std::io::stdout(), crossterm::cursor::Show).ok();
+        }
+        let line_result = (self.input_fn)();
+        if self.tui_depth > 0 {
+            crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide).ok();
+            crossterm::terminal::enable_raw_mode().map_err(|e| RuntimeError::Generic {
+                message: format!("input: failed to restore raw mode: {}", e),
+                span: input.span,
+            })?;
+        }
+        let line = line_result.map_err(|e| RuntimeError::Generic {
                 message: format!("input read error: {}", e),
                 span: input.span,
             })?;
@@ -234,7 +248,7 @@ impl<W: Write> Interpreter<W> {
         terminal::enable_raw_mode().map_err(|e| RuntimeError::Generic {
             message: format!("failed to enable raw mode: {}", e), span: tb.span,
         })?;
-        execute!(std::io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)
+        execute!(std::io::stdout(), terminal::EnterAlternateScreen, cursor::MoveTo(0, 0), cursor::Hide)
             .map_err(|e| RuntimeError::Generic {
                 message: format!("failed to enter alternate screen: {}", e), span: tb.span,
             })?;

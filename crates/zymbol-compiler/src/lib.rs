@@ -14,7 +14,9 @@ use zymbol_ast::{
     TryStmt, FormatKind, PrecisionOp,
     DestructureAssign, DestructureItem, DestructurePattern,
     DeepIndexExpr, FlatExtractExpr, StructuredExtractExpr,
+    InputPrompt, InputCast,
 };
+use zymbol_lexer::StringPart;
 use zymbol_ast::Pattern;
 use zymbol_ast::BasePrefix;
 use zymbol_ast::CastKind;
@@ -728,8 +730,52 @@ impl Compiler {
                 self.compile_match_stmt(m, ctx)
             }
             Statement::DestructureAssign(d) => self.compile_destructure_assign(d, ctx),
-            // Unsupported — produce meaningful error
-            Statement::Input(_) => Err(CompileError::Unsupported("input (<<)".into())),
+            Statement::Input(input) => {
+                let dst = if let Ok(r) = ctx.get_reg(&input.variable) {
+                    r
+                } else {
+                    let r = ctx.alloc_temp()?;
+                    ctx.register_map.insert(input.variable.clone(), r);
+                    r
+                };
+
+                let prompt_reg = match &input.prompt {
+                    None => None,
+                    Some(InputPrompt::Simple(s)) => {
+                        let idx = self.intern_string(s);
+                        let r = ctx.alloc_temp()?;
+                        ctx.emit(Instruction::LoadStr(r, idx));
+                        Some(r)
+                    }
+                    Some(InputPrompt::Interpolated(parts)) => {
+                        let mut build_parts: Vec<BuildPart> = Vec::new();
+                        for part in parts {
+                            match part {
+                                StringPart::Text(s) => {
+                                    let idx = self.intern_string(s);
+                                    build_parts.push(BuildPart::Lit(idx));
+                                }
+                                StringPart::Variable(name) => {
+                                    if let Ok(r) = ctx.get_reg(name) {
+                                        build_parts.push(BuildPart::Reg(r));
+                                    } else {
+                                        let text = format!("{{{}}}", name);
+                                        let idx = self.intern_string(&text);
+                                        build_parts.push(BuildPart::Lit(idx));
+                                    }
+                                }
+                            }
+                        }
+                        let r = ctx.alloc_temp()?;
+                        ctx.emit(Instruction::BuildStr(r, build_parts));
+                        Some(r)
+                    }
+                };
+
+                let numeric = input.cast == InputCast::Numeric;
+                ctx.emit(Instruction::ReadLine(dst, prompt_reg, numeric));
+                Ok(())
+            }
             Statement::Try(ts) => self.compile_try(ts, ctx),
             Statement::LifetimeEnd(lifetime_end) => {
                 if let Ok(r) = ctx.get_reg(&lifetime_end.variable_name) {
@@ -3727,6 +3773,10 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::StoreGlobal(_, s) => upd(*s),
             Instruction::Sleep(r) | Instruction::QueryTerminalSize(r)
             | Instruction::ReadKey(r, _) => upd(*r),
+            Instruction::ReadLine(d, prompt_r, _) => {
+                upd(*d);
+                if let Some(r) = prompt_r { upd(*r); }
+            }
             Instruction::PrintAt(r_pos, items) => {
                 upd(*r_pos);
                 for &r in items { upd(r); }

@@ -9,9 +9,43 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ## [Unreleased]
 
+### Added
+
+**`<<` input support in VM (IMPL-V005-INPUT)**
+- `ReadLine(dst, Option<Reg>, bool)` — new bytecode instruction. Reads a line from stdin,
+  optionally printing a prompt register first; `bool` flag enables numeric cast (Int/Float/String).
+- Compiler: `Statement::Input` now compiles to bytecode. Simple prompts → `LoadStr`; interpolated
+  prompts → `BuildStr` from `Vec<StringPart>`. `InputCast::Numeric` passes `true` to `ReadLine`.
+- VM: handler mirrors interpreter behavior — inside TUI block (`tui_stack` non-empty) temporarily
+  disables raw mode and shows cursor for input, then restores; numeric cast uses `normalize_unicode_digits`.
+- Def-use analysis updated for `ReadLine`.
+
+### Fixed
+
+**`<<` inside `>>|` TUI block freezes terminal**
+- `execute_input` (interpreter) and VM `ReadLine`: when `tui_depth > 0` / `tui_stack` non-empty,
+  now calls `disable_raw_mode()` + `cursor::Show` before reading and restores after.
+  Previously `read_line()` blocked indefinitely because raw mode discards `\n`.
+
+**`>>|` cursor not at (1,1) on entry**
+- `execute_tui_block` and VM `EnterTui`: added `cursor::MoveTo(0, 0)` immediately after
+  `EnterAlternateScreen`. Some terminals inherit the main-screen cursor position, causing the
+  first `<<` prompt or `>>~` output to appear at arbitrary rows.
+
 ---
 
 ## [0.0.5] — 2026-04-29
+
+### Breaking Changes
+
+**Module alias separator changed from `<=` to `:`**
+- `<# path <= alias` → `<# path : alias`
+- Export rename `fn <= pub_name` → `fn : pub_name`
+- `<=` is now used exclusively as the less-than-or-equal comparison operator.
+  It is no longer valid as a separator in `<#` import statements or `#>` export blocks.
+- Migration: ~57 `.zy` source files updated. Parser now emits `"expected ':' for module alias"`
+  if the old `<=` form is used in a module context.
+- No new tokens introduced — `Colon` (`:`) was already present in the lexer.
 
 ### Added
 
@@ -30,17 +64,17 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 **TUI / Terminal primitives (IMPL-V005)**
 - `@~ N` — sleep N milliseconds. Implemented via `std::thread::sleep`; emits `Sleep` bytecode in VM.
 - `>>!` — clear terminal screen (ANSI `\x1b[2J\x1b[H`). New `ClearScreen` instruction in VM.
-- `>>?` — query terminal size; returns `[rows, cols]` array via crossterm. New `QueryTermSize` instruction.
+- `>>?` — query terminal size; returns `(rows, cols)` positional tuple via crossterm. New `QueryTermSize` instruction.
 - `>>~ (row, col, BKS, fg, bg) > items` — positioned output with optional style. Sparse syntax:
   any slot may be omitted (`>>~ (,,, 196) > "red"` sets fg only; `>>~ (3, 1) > "text"` positions only).
   BKS bitmask: `1`=Bold, `2`=Italic, `4`=Underline. ANSI 256-color palette (0=terminal default).
   Variable-based: `pos = (3, 1)` then `>>~ pos > "text"`.
-- `<<| var` — blocking keypress read. Arrow keys → `'U'`/`'D'`/`'L'`/`'R'`; Enter → `'\n'`; Escape → `'\x1b'`.
+- `<<| var` — blocking keypress read. Arrow keys → `'↑'`/`'↓'`/`'←'`/`'→'`; Enter → `'\n'`; Escape → `'\x1B'`.
 - `<<|? var` — non-blocking keypress poll; returns `'\0'` if no key pending.
 - `>>| { }` — TUI block: enters alternate screen + raw mode via crossterm; restores terminal on exit.
   New `EnterTui`/`ExitTui` instructions in VM with proper error propagation.
 - Type-checker updated: `<<|` / `<<|?` now resolve without `undefined variable` error (GAP-S3 fix).
-- New test directory `tests/tui/` — 7 cases covering all 6 TUI primitives.
+- New test directory `tests/manual/tui/` — manual cases covering all 6 TUI primitives.
 - New VS Code snippets: `outp`, `outps`, `outpc`, `key`, `keynb`, `tui`, `sleep`, `cls`, `termsize`.
 
 **String repeat operator `$*`**
@@ -72,7 +106,7 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
   `<>` inequality, Serpiente food-collision pattern, conditional, nested tuples).
 
 **BUG-001 — Re-exported functions lose origin module scope**
-- Functions accessed through an i18n re-export adapter (`alias::fn <= newname`) raised
+- Functions accessed through an i18n re-export adapter (`alias::fn : newname`) raised
   `undefined variable` for any module-level variable the function read.
 - Root cause: `eval_traditional_function_call` loaded context from the adapter module path,
   which carries no variables.
@@ -126,6 +160,28 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
      definition before the loop, the reuse is deliberate and no warning is emitted.
   Normal unnamed iterator variables still warn as before.
 - New test: `tests/gaps/gap003_loop_iter_lifetime_warning.zy`.
+
+**TUI-FIX-01 — `>>` inside `>>| {}` invisible before `<<|` key read**
+- `execute_output()` writes to Rust's `Stdout` which is line-buffered; text without `\n`
+  stays in the internal buffer until the next explicit flush.
+  Inside a TUI block, the next flush was triggered by the following `>>~` call — always
+  after the `<<|` read — so `>> "text"` before a key read was never visible to the user.
+- Fix: added `tui_depth: u8` counter to `Interpreter`. `execute_tui_block()` increments it
+  before executing the body and decrements it on exit. `execute_output()` calls
+  `self.output.flush()` when `tui_depth > 0`.
+
+**TUI-FIX-02 — `¶` / `\\` inside `>>| {}` broke column alignment**
+- In raw mode, `\n` (LF) moves the cursor down but does NOT return to column 1.
+  `execute_newline()` used `writeln!()` which emits only `\n`, causing subsequent text
+  to appear offset from the left edge.
+- Fix: `execute_newline()` emits `"\r\n"` (CRLF) when `tui_depth > 0`, `"\n"` otherwise.
+
+**TUI-FIX-03 — TUI tokens not recognized as statement starters inside `>>`**
+- Six v0.0.5 tokens (`KeyBlock`, `KeyNonBlock`, `OutputPos`, `OutputClear`, `OutputGate`,
+  `AtTilde`) were absent from the statement-break list in `parse_output()`.
+  When any of them appeared on the line after a `>>` statement, the parser attempted to
+  consume them as output expressions and failed with `"expected expression, found KeyBlock"`.
+- Fix: all six tokens added to the break-pattern in `crates/zymbol-parser/src/io.rs`.
 
 ### VS Code extension — v0.1.2
 
