@@ -1,0 +1,12 @@
+// Multiple redundant ° on the same variable outside a loop → one warning per redundant use
+
+// First use is valid (defines x); second and third warn
+x° += 1
+x° += 2
+x° += 3
+>> x ¶
+
+// Same with prefix: first °y valid; second warns
+°y += 10
+°y += 20
+>> y ¶

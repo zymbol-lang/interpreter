@@ -310,7 +310,7 @@ Statement::KeyInput(ki) => self.execute_key_input(ki),
 
 **Note on raw mode:** `event::read()` and `event::poll()` require the terminal to be
 in raw mode to capture single keystrokes without waiting for Enter. Raw mode is
-enabled/disabled by `execute_tui_block()` (Feature 7). Inside `>>| { }`, raw mode
+enabled/disabled by `execute_tui_block()` (Feature 6). Inside `>>| { }`, raw mode
 is already active. If key input is used outside a TUI block, raw mode must be
 enabled/disabled temporarily around the call (or error).
 
@@ -1031,3 +1031,102 @@ For each feature, add tests in the crate where they live:
 | 6 | `interpreter/io.rs` | `>>~ (1,1) > "x"` writes to stdout (crossterm calls) |
 | 6 | `interpreter/io.rs` | `>>\| { >>! }` enters and leaves alternate screen cleanly |
 | 7 | `parser/modules.rs` | `<# path : alias` parses; old `<=` syntax yields "expected ':'" error |
+| 8 | `interpreter/loops.rs` | `total° += item` accumulates across iterations; variable visible after loop |
+| 9 | `interpreter/strings.rs` | `"ab" $* 3` → `"ababab"`; negative count → runtime error |
+
+---
+
+## Feature 8 — Hot Definition operator `°` (U+00B0) — two-form scope anchoring
+
+**Syntax**:
+- `x° op= n` (postfix LHS) — anchors to the **nearest enclosing `@` scope**; dies when loop ends.
+- `°x op= n` (prefix LHS) — anchors to the **scope above the nearest `@`**; survives loop.
+- `x = °x$+ i` (prefix RHS) — same anchor as prefix LHS; initializes in outer scope on first use.
+- `x = x° + n` (postfix RHS) — same anchor as postfix LHS; for self-reference expressions.
+
+`°x` on the RHS is the preferred idiom for plain-assignment accumulators:
+```
+arr = °arr$+ i      // cleaner than: °arr = arr°$+ i
+total = °total + n  // cleaner than: °total += n
+```
+
+**Lexer** (`zymbol-lexer`):
+- `identifier°` (postfix) → `HotIdent(String)` token.
+- `°identifier` (prefix) → `PreHotIdent(String)` token; detected in `next_token()` when `°`
+  is followed immediately by an identifier character.
+- Both tokens are valid in expression position (RHS) as well as statement-level LHS.
+
+**Parser** (`zymbol-parser`, `variables.rs` + `lib.rs`):
+- `HotIdent` LHS → `Assignment { hot: true, pre_hot: false, ... }`.
+- `PreHotIdent` LHS → `Assignment { hot: false, pre_hot: true, ... }`.
+- `PreHotIdent` is dispatched at statement level (same operator set as `HotIdent`).
+- Compound operators (`+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `++`, `--`) work for both LHS forms.
+- In expression (RHS) context: `HotIdent` → `IdentifierExpr { hot: true }`; `PreHotIdent` → `IdentifierExpr { pre_hot: true }`. Both are handled in `parse_primary`.
+- `IdentifierExpr` now carries `pre_hot: bool` alongside `hot: bool`.
+
+**Interpreter** (`zymbol-interpreter`):
+
+*`lib.rs`* — `Interpreter<W>` carries a new field:
+```rust
+loop_scope_depths: Vec<usize>  // tracks scope_stack index of each active @ loop
+```
+New methods:
+- `push_loop_scope()` — `push_scope()` + record depth; called at the START of every `@` loop.
+- `pop_loop_scope()` — remove depth record + `pop_scope()`; called when the loop ends.
+- `set_at_nearest_loop(name, val)` — writes to `scope_stack[loop_scope_depths.last()]`; falls back to `scope_stack[0]` outside any loop.
+- `set_above_nearest_loop(name, val)` — writes to `scope_stack[loop_scope_depths[len-2]]` (nested loops) or `scope_stack[0]` (single/no loop).
+
+*`loops.rs`* — `execute_loop` wraps every loop variant with `push_loop_scope` / `pop_loop_scope`.
+QW16 body-scope optimization updated to also treat `pre_hot` assignments as not needing a body scope.
+
+*`variables.rs`* — `execute_assignment`:
+- `assign.hot` first use → `set_at_nearest_loop(name, neutral)`
+- `assign.pre_hot` first use → `set_above_nearest_loop(name, neutral)`
+- Subsequent uses: `get_variable_mut` finds the variable wherever it lives; fast paths mutate in-place.
+
+Neutral values inferred by `hot_neutral_from_value`:
+- `+=`, `-=` → `0` (Int) or `0.0` (Float, when RHS is float)
+- `*=`, `/=` → `1` (multiplicative identity)
+- `$+` array append → `[]`
+- string juxtaposition (`BinaryOp::Concat`) → `""`
+
+**VM compiler** (`zymbol-compiler`, `hot_neutral_instr`): emits `HotInit(dst, HotNeutral)` where:
+- `CollectionAppend` → `HotNeutral::Array`
+- `Binary(Mul|Div, var, _)` → `HotNeutral::IntOne`
+- everything else → `HotNeutral::Int`
+
+`HotNeutral` is defined in `zymbol-bytecode`. VM handler maps `IntOne` → `Value::Int(1)`.
+
+**Type checker** (`zymbol-semantic`, `type_check.rs`):
+- `assign.hot || assign.pre_hot` on first use → pre-declare variable to suppress false "undefined" error.
+- Pre-loop scan now includes `pre_hot` assignments and recurses into nested `?` / `@` blocks
+  via `collect_pre_hot_vars()` so variables are visible at the outer scope after the loop.
+- Warning only for `^=` — `0^n = 0` remains vacuous with neutral 0.
+- `*=` and `/=` no longer warn (neutral 1 makes them useful).
+
+**VM status**: tree-walker only. Both `x°` and `°x` require `@vm-skip`.
+The VM's flat register frame does not support the scope-stack anchoring that `°` relies on.
+Float `*=`/`/=` also fails in VM (no `Int(1)` → `Float(1.0)` promotion); use explicit `x = 1.0`.
+
+---
+
+## Feature 9 — String repeat `$*`
+
+**Syntax**: `"str" $* N` — repeats a string N times.
+
+**Lexer**: `$*` is a two-char token in the collection operator group. Add to the `twoMap` /
+`$`-operator dispatch block alongside `$+`, `$-`, `$++`, `$--`.
+
+**Parser**: parse as binary infix — left operand is a string expression, right operand is an
+integer. Produce node `StrRepeat { base: Expr, count: Expr }`.
+
+**Interpreter** (`zymbol-interpreter`, `strings.rs`): evaluate both operands. If base is
+`String` and count is `Int(n)`, return `base.repeat(n as usize)`. Raise runtime error on
+negative count.
+
+**VM** (`zymbol-vm`): new instruction `StrRepeat(dst, base_reg, count_reg)`. Compiler emits it
+for `StrRepeat` AST nodes. Full parity with tree-walker (no `@vm-skip` needed).
+
+**Test**: `tests/gaps/gap_serpiente_string_repeat.zy` (GAP-S1).
+**VS Code**: `$*` added to `collection-operators` character class in `zymbol.tmGrammar.json`;
+snippet `repeat` — `"str" $* n`.

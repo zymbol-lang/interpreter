@@ -273,8 +273,10 @@ pub enum Instruction {
 /// Neutral element kind for hot-definition variables (x°)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotNeutral {
-    Int,   // 0
-    Array, // []
+    Int,    // 0
+    IntOne, // 1  (multiplicative identity: *=, /=)
+    Array,  // []
+    String, // ""
 }
 
 /// Part of a BuildStr instruction

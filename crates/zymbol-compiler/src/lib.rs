@@ -94,8 +94,10 @@ struct FunctionCtx {
     loop_stack: Vec<LoopCtx>,
     /// Name of this function (for error messages)
     name: String,
-    /// Hot variables (x°): persist across block scopes, never zeroed by zero_new_vars
+    /// Hot variables (both x° and °x): persist across block scopes, never zeroed by zero_new_vars
     hot_vars: HashSet<String>,
+    /// Postfix-hot variables (x° only): scoped to their loop, reset to Unit when loop ends
+    postfix_hot_vars: HashSet<String>,
 }
 
 impl FunctionCtx {
@@ -103,6 +105,7 @@ impl FunctionCtx {
         Self {
             register_map: HashMap::new(),
             hot_vars: HashSet::new(),
+            postfix_hot_vars: HashSet::new(),
             reg_types: Vec::new(),
             next_reg: 0,
             instructions: Vec::new(),
@@ -193,9 +196,26 @@ impl FunctionCtx {
         self.register_map.keys().cloned().collect()
     }
 
+    /// After a loop ends: reset postfix-hot (x°) registers that were created DURING this loop
+    /// to Unit, mirroring the tree-walker's loop-scope lifetime for x°.
+    /// `pre_loop_hot` is the snapshot of hot_vars taken before the loop body was compiled.
+    fn reset_postfix_hot_after_loop(&mut self, pre_loop_hot: &std::collections::HashSet<String>) {
+        let to_reset: Vec<(String, Reg)> = self.postfix_hot_vars
+            .iter()
+            .filter(|name| !pre_loop_hot.contains(*name))
+            .filter_map(|name| self.register_map.get(name).map(|&r| (name.clone(), r)))
+            .collect();
+        for (name, reg) in to_reset {
+            self.instructions.push(Instruction::LoadUnit(reg));
+            self.register_map.remove(&name);
+            self.hot_vars.remove(&name);
+            self.postfix_hot_vars.remove(&name);
+        }
+    }
+
     /// After compiling a block: zero out registers for variables newly introduced in that block
     /// and remove them from the register_map (they're now out of scope).
-    /// Hot variables (x°) are exempt — they persist across block scopes.
+    /// Hot variables (both x° and °x) are exempt — they persist across block scopes within a loop.
     fn zero_new_vars(&mut self, saved: &std::collections::HashSet<String>) {
         let new_vars: Vec<(String, Reg)> = self.register_map
             .iter()
@@ -669,12 +689,16 @@ impl Compiler {
     ) -> Result<(), CompileError> {
         match stmt {
             Statement::Assignment(a) => {
-                // Hot assignment (x° = ...): pre-initialize to neutral element if variable is new
-                if a.hot && ctx.get_reg(&a.name).is_err() {
+                // Hot/pre_hot assignment (x° or °x): pre-initialize to neutral element if variable is new
+                if (a.hot || a.pre_hot) && ctx.get_reg(&a.name).is_err() {
                     let neutral_reg = ctx.alloc_reg(&a.name)?;
                     let neutral = hot_neutral_instr(&a.value, &a.name, neutral_reg);
                     ctx.emit(neutral);
                     ctx.hot_vars.insert(a.name.clone());
+                    if a.hot {
+                        // Postfix (x°) scopes to its loop; tracked separately for reset on loop exit
+                        ctx.postfix_hot_vars.insert(a.name.clone());
+                    }
                 }
                 self.compile_assignment(&a.name, &a.value, ctx)
             }
@@ -866,6 +890,13 @@ impl Compiler {
         if let Expr::CollectionAppend(ca) = value {
             if let Expr::Identifier(ident) = ca.collection.as_ref() {
                 if ident.name == name {
+                    // Hot/pre_hot RHS self-ref (arr = arr°$+ i  or  arr = °arr$+ i):
+                    // initialize to [] on first use
+                    if (ident.hot || ident.pre_hot) && ctx.get_reg(name).is_err() {
+                        let arr_reg = ctx.alloc_reg(name)?;
+                        ctx.emit(Instruction::HotInit(arr_reg, zymbol_bytecode::HotNeutral::Array));
+                        ctx.hot_vars.insert(name.to_string());
+                    }
                     if let Ok(arr_reg) = ctx.get_reg(name) {
                         let r_elem = self.compile_expr(&ca.element, ctx)?;
                         ctx.emit(Instruction::ArrayPush(arr_reg, r_elem));
@@ -1079,6 +1110,7 @@ impl Compiler {
         ctx.emit(Instruction::LoadInt(r_end, n - 1));
         ctx.emit(Instruction::LoadInt(r_one, 1));
 
+        let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
         ctx.loop_stack.push(LoopCtx { break_patches: Vec::new(), continue_patches: Vec::new(), label: lp.label.clone() });
 
@@ -1097,6 +1129,7 @@ impl Compiler {
         let lctx = ctx.loop_stack.pop().unwrap();
         for pos in lctx.break_patches { ctx.patch_jump(pos, loop_end); }
         for pos in lctx.continue_patches { ctx.patch_jump(pos, inc_label); }
+        ctx.reset_postfix_hot_after_loop(&pre_loop_hot);
         Ok(())
     }
 
@@ -1111,6 +1144,7 @@ impl Compiler {
         let r_cmp = ctx.alloc_temp()?;
         ctx.emit(Instruction::LoadInt(r_i, 0));
 
+        let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
         ctx.loop_stack.push(LoopCtx { break_patches: Vec::new(), continue_patches: Vec::new(), label: lp.label.clone() });
 
@@ -1129,6 +1163,7 @@ impl Compiler {
         let lctx = ctx.loop_stack.pop().unwrap();
         for pos in lctx.break_patches { ctx.patch_jump(pos, loop_end); }
         for pos in lctx.continue_patches { ctx.patch_jump(pos, inc_label); }
+        ctx.reset_postfix_hot_after_loop(&pre_loop_hot);
         Ok(())
     }
 
@@ -1137,6 +1172,7 @@ impl Compiler {
         lp: &Loop,
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
+        let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
         ctx.loop_stack.push(LoopCtx {
             break_patches: Vec::new(),
@@ -1155,6 +1191,7 @@ impl Compiler {
         for pos in lctx.continue_patches {
             ctx.patch_jump(pos, loop_start);
         }
+        ctx.reset_postfix_hot_after_loop(&pre_loop_hot);
         Ok(())
     }
 
@@ -1164,6 +1201,7 @@ impl Compiler {
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
         let cond_expr = lp.condition.as_ref().unwrap();
+        let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
 
         ctx.loop_stack.push(LoopCtx {
@@ -1188,6 +1226,7 @@ impl Compiler {
         for pos in lctx.continue_patches {
             ctx.patch_jump(pos, loop_start);
         }
+        ctx.reset_postfix_hot_after_loop(&pre_loop_hot);
         Ok(())
     }
 
@@ -1236,6 +1275,7 @@ impl Compiler {
 
         // Loop header: check exit condition using conditional branches
         // Range is INCLUSIVE: @ i:0..N → 0,1,...,N
+        let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
 
         ctx.loop_stack.push(LoopCtx {
@@ -1293,6 +1333,7 @@ impl Compiler {
         for pos in lctx.continue_patches {
             ctx.patch_jump(pos, inc_label);
         }
+        ctx.reset_postfix_hot_after_loop(&pre_loop_hot);
         Ok(())
     }
 
@@ -1356,11 +1397,14 @@ impl Compiler {
                 if let Ok(r) = ctx.get_reg(&id.name) {
                     return Ok(r);
                 }
-                // Hot variable (x°) on RHS: auto-initialize to neutral element if not yet defined
-                if id.hot {
+                // Hot/pre_hot variable (x° or °x) on RHS: auto-initialize to neutral element if not yet defined
+                if id.hot || id.pre_hot {
                     let dst = ctx.alloc_reg(&id.name)?;
-                    ctx.emit(Instruction::LoadInt(dst, 0));
+                    ctx.emit(Instruction::HotInit(dst, zymbol_bytecode::HotNeutral::Int));
                     ctx.hot_vars.insert(id.name.clone());
+                    if id.hot {
+                        ctx.postfix_hot_vars.insert(id.name.clone());
+                    }
                     return Ok(dst);
                 }
                 // Fall back to global constant inlining (module-level consts in function bodies)
@@ -3001,6 +3045,7 @@ impl Compiler {
         let r_one = ctx.alloc_temp()?;
         ctx.emit(Instruction::LoadInt(r_one, 1));
 
+        let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
         ctx.loop_stack.push(LoopCtx {
             break_patches: Vec::new(),
@@ -3037,6 +3082,7 @@ impl Compiler {
             for pos in lctx.break_patches    { ctx.patch_jump(pos, loop_end); }
             for pos in lctx.continue_patches { ctx.patch_jump(pos, inc_label); }
         }
+        ctx.reset_postfix_hot_after_loop(&pre_loop_hot);
         Ok(())
     }
 
@@ -3203,8 +3249,10 @@ impl Compiler {
 // ── Hot-definition neutral element ───────────────────────────────────────────
 
 /// Return the HotInit instruction for a hot variable based on the RHS expression.
-/// - CollectionAppend(var, ...) → HotNeutral::Array (neutral for accumulation is [])
-/// - Everything else            → HotNeutral::Int (neutral = 0)
+/// - CollectionAppend(var, ...) → HotNeutral::Array  (neutral = [])
+/// - ConcatBuild(var, ...)      → HotNeutral::String (neutral = "")
+/// - Binary(Mul|Div, var, _)   → HotNeutral::IntOne  (neutral = 1, multiplicative identity)
+/// - Everything else            → HotNeutral::Int     (neutral = 0)
 /// HotInit is a conditional init: only sets the register if it currently holds Unit,
 /// so it is safe to emit inside a loop body (no-op after the first iteration).
 fn hot_neutral_instr(value: &Expr, var_name: &str, dst: Reg) -> Instruction {
@@ -3213,6 +3261,23 @@ fn hot_neutral_instr(value: &Expr, var_name: &str, dst: Reg) -> Instruction {
         if let Expr::Identifier(id) = ca.collection.as_ref() {
             if id.name == var_name {
                 return Instruction::HotInit(dst, HotNeutral::Array);
+            }
+        }
+    }
+    if let Expr::Binary(bin) = value {
+        if bin.op == BinaryOp::Concat {
+            return Instruction::HotInit(dst, HotNeutral::String);
+        }
+        if let Expr::Identifier(id) = bin.left.as_ref() {
+            if id.name == var_name && matches!(bin.op, BinaryOp::Mul | BinaryOp::Div) {
+                return Instruction::HotInit(dst, HotNeutral::IntOne);
+            }
+        }
+    }
+    if let Expr::ConcatBuild(cb) = value {
+        if let Expr::Identifier(id) = cb.base.as_ref() {
+            if id.name == var_name {
+                return Instruction::HotInit(dst, HotNeutral::String);
             }
         }
     }

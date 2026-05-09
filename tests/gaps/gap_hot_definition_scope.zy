@@ -1,0 +1,24 @@
+// hot-def ° scope anchoring: VM parity achieved in v0.0.5
+// x° anchors to nearest @; °x anchors to scope above nearest @.
+
+// 1. °x inside nested ? — the @ is the nearest loop; °x goes above it (global)
+@ i:[1, 2, 3, 4, 5] {
+    ? i % 2 == 0 {
+        °pares += i
+    }
+}
+>> pares ¶
+
+// 2. Nested @: °x inside @ k anchors to @ j scope (survives @ k, not @ j)
+@ _j:[1, 2] {
+    @ k:[10, 20] {
+        °acum_k += k
+    }
+    >> acum_k ¶
+}
+
+// 3. °x accumulate strings across loop iterations
+@ ch:["a", "b", "c"] {
+    °palabra = palabra ch
+}
+>> palabra ¶

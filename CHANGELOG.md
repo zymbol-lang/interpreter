@@ -49,17 +49,18 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ### Added
 
-**Hot Definition operator `°` (U+00B0)**
-- New postfix operator on identifiers: `x° += 1` auto-initializes `x` to the neutral
-  value of the inferred context on first use, then applies the operation.
-- Neutral values: numeric context → `0` / `0.0`; string context → `""`;
-  array context → `[]`.
-- Valid in both LHS (`x° += n`) and RHS (`p = p° + c`).
-- Warnings emitted on semantically vacuous hot-defs:
-  `x° *= 5` → always 0; `x° /= 2` → division of 0; `x° ^= 2` → always 0.
+**Hot Definition operator `°` (U+00B0) — two-form scope anchoring**
+- Two LHS forms with distinct scope lifetimes:
+  - `x° op= n` (postfix) — anchors to the nearest enclosing `@` scope; variable dies when the loop ends.
+  - `°x op= n` (prefix) — anchors to the scope **above** the nearest `@`; variable survives the loop.
+  - Outside any loop both forms anchor to global/function scope (no difference).
+- RHS hot read `p = p° + c` — returns neutral if undefined, does not anchor to any scope.
+- Neutral values: `+=`/`-=` → `0`/`0.0`; `*=`/`/=` → `1`; array `$+` → `[]`; string juxtaposition → `""`.
+- Warning emitted for semantically vacuous hot-def: `x° ^= 2` → always 0.
 - Undefined variable error now includes hint: `'x' is undefined — did you mean 'x°' (hot definition)?`
-- Implemented across: lexer (`HotIdent` token), parser (`hot: bool` field on `Assignment`),
-  interpreter (neutral inference in `loops.rs`), semantic type-checker (`type_check.rs`).
+- Implemented across: lexer (`HotIdent`, `PreHotIdent` tokens), parser (`hot`/`pre_hot` fields on `Assignment`),
+  interpreter (loop scope stack with `push_loop_scope`/`set_at_nearest_loop`/`set_above_nearest_loop`),
+  semantic type-checker with recursive pre_hot scan for nested `?`/`@` blocks.
 
 **TUI / Terminal primitives (IMPL-V005)**
 - `@~ N` — sleep N milliseconds. Implemented via `std::thread::sleep`; emits `Sleep` bytecode in VM.
@@ -83,10 +84,6 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 - New test: `tests/gaps/gap_serpiente_string_repeat.zy` (GAP-S1).
 - VS Code grammar: `$*` added to `collection-operators` character class.
 - New VS Code snippet: `repeat`.
-
-**Hot Definition operator `°` (U+00B0)**
-- Already shipped in the Added section above.
-- New VS Code snippet: `hotacc`.
 
 ### Fixed
 

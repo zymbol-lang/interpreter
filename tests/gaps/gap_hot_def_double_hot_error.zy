@@ -1,0 +1,6 @@
+// Lexer error: °arr° (prefix + postfix on same identifier) is ambiguous
+
+@ i:1..3 {
+    arr = °arr°$+ i
+}
+>> arr ¶

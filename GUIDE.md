@@ -100,7 +100,7 @@ All are the same idea: *this slot is intentionally left unbound*.
 | Precision / cast | `#.2\|x\|`, `##.x`, `###x` | numeric transformations at the type boundary |
 | Module declaration | `# calc` | names the file as a module (meta-identifier) |
 | Module export | `#> { }` | declares the public surface of a module |
-| Module import | `<# ./calc <= c` | brings a module into scope |
+| Module import | `<# ./calc : c` | brings a module into scope |
 | Numeral mode | `#०९#` | switches output digit script |
 
 Types, modules, and numeral modes share `#` because all three are about *what something is or how it is represented*, not *what value it holds*.
@@ -131,7 +131,7 @@ zymbol run --help
 - **Tree-walker**: canonical behavior, descriptive error messages, debugging
 - **VM**: production, ~1.1–1.5× faster than Python for most workloads
 
-Both modes produce **identical output** on 393/393 parity tests.
+Both modes produce **identical output** on 424/424 parity tests.
 
 ---
 
@@ -261,7 +261,7 @@ These constructs exist in Zymbol but are **not first-class values** — they can
 | Construct | Usage | Why not a value |
 |-----------|-------|-----------------|
 | Range (`1..5`) | Loop iterator only: `@ i:1..5 { }` | Storing a range raises a runtime error |
-| Module (`<# ./m <= m`) | Namespace only: `m::fn()`, `m.CONST` | Module alias is not a runtime value |
+| Module (`<# ./m : m`) | Namespace only: `m::fn()`, `m.CONST` | Module alias is not a runtime value |
 
 ### Type Inspection with `#?`
 
@@ -380,7 +380,10 @@ ok = a == b
 ## 3b. TUI Primitives
 
 Terminal control operators for building interactive terminal UIs.
-All TUI primitives are tree-walker only unless noted otherwise.
+Some TUI primitives are tree-walker only; see the per-primitive notes below for VM support status.
+
+> Most TUI primitives require an enclosing `>>| { }` block (raw mode + alternate screen).
+> `>>!` and `>>?` work standalone. `<<|` and `<<|?` require raw mode provided by `>>|`.
 
 ### Sleep — `@~`
 
@@ -630,27 +633,77 @@ json = "\{\"key\":\"value\"\}"            // → {"key":"value"}
 
 ### Hot Definition Operator `°` (U+00B0)
 
-`varname°` auto-initializes a variable to the **neutral value** of the inferred context
-on the very first use, then applies the operation. Subsequent uses behave as a normal variable.
+Two forms control where the auto-initialized variable lives:
+
+| Form | Position | Anchors to |
+|------|----------|-----------|
+| Postfix `x°` | LHS or RHS | Nearest enclosing `@` scope — dies when the loop ends |
+| Prefix `°x` | LHS or RHS | Scope **above** the nearest `@` — survives the loop |
+
+Both forms auto-initialize to the **neutral value** on the very first use.
+
+**Prefix `°x` on RHS** — the cleanest form for loop accumulators:
 
 ```zymbol
-// Accumulate without explicit initialization
+// °total in RHS: auto-init above @ on first use, survives loop
 @ item:[10, 20, 30] {
-    total° += item       // first iteration: total = 0 + 10 = 10
+    total = °total + item    // first use: total = 0 + 10 = 10
 }
->> total ¶               // → 60
+>> total ¶                   // → 60
 
-// Array accumulation
+// °arr in RHS: auto-init to [] above @, survives loop
 @ x:[1, 2, 3] {
-    lista° $+ x          // first use: lista = [] then append x
+    arr = °arr$+ x           // first use: arr = []$+ x = [x]
 }
->> lista ¶               // → [1, 2, 3]
+>> arr ¶                     // → [1, 2, 3]
 
-// String accumulation
-@ s:["a", "b", "c"] {
-    resultado° $++ s
+// °x on LHS: equivalent for compound operators
+@ item:[10, 20, 30] {
+    °total += item           // same semantics as total = °total + item
 }
->> resultado ¶           // → abc
+>> total ¶                   // → 60
+
+// x° (postfix): lives only while the loop runs
+@ i:[1, 2, 3] {
+    i° += 1                  // visible inside the loop only
+}
+// i is NOT accessible here — it died with the loop scope
+```
+
+**String accumulation** — use `°x` on LHS with plain RHS:
+
+```zymbol
+@ ch:["a", "b", "c"] {
+    °resultado = resultado ch    // neutral "" on first use; survives loop
+}
+>> resultado ¶                   // → abc
+```
+
+**Prefix `°x` in nested scopes:**
+
+```zymbol
+// °pares inside ? inside @ — anchors above the @, survives to global
+@ i:[1, 2, 3, 4, 5] {
+    ? i % 2 == 0 {
+        °pares += i
+    }
+}
+>> pares ¶               // → 6
+
+// °acum_k inside nested @ k — anchors to outer @ j scope
+@ _j:[1, 2] {
+    @ k:[10, 20] {
+        °acum_k += k
+    }
+    >> acum_k ¶          // → 30, then 60 (persists across _j iterations)
+}
+```
+
+**Outside any loop**, both `x°` and `°x` anchor to the global/function scope:
+
+```zymbol
+x° *= 7    // outside any loop → global scope → x = 7
+>> x ¶     // → 7
 ```
 
 **Neutral values by context:**
@@ -659,16 +712,13 @@ on the very first use, then applies the operation. Subsequent uses behave as a n
 |-----------|---------|
 | `+=` `-=` | `0` (Int) or `0.0` (Float) |
 | `*=` `/=` | `1` |
-| `$+` `$++` (array) | `[]` |
-| `$++` (string) | `""` |
+| `$+` (array append) | `[]` |
+| juxtaposition (string) | `""` |
 
 **Semantic warnings** — emitted but not errors:
-- `x° *= 5` — hot-def multiply: always `0` on first use
-- `x° /= 2` — hot-def divide: division of `0`
 - `x° ^= 2` — hot-def power: always `0` on first use
 
-> `°` is tree-walker only. The VM compiler reports a `undefined variable` error for
-> hot-definition patterns; add `@vm-skip` to files that use it.
+> Both `x°` and `°x` are tree-walker only. Add `@vm-skip` to files that use them.
 
 ---
 
@@ -2391,7 +2441,7 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 ```zymbol
 // file: lib/utils.zy
 # utils {
-    <# ./dep <= d          // imports (must precede re-exports that reference the alias)
+    <# ./dep : d          // imports (must precede re-exports that reference the alias)
 
     #> {                   // export block
         add
@@ -2418,7 +2468,7 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 
 | Element | Allowed | Notes |
 |---------|---------|-------|
-| `<# path <= alias` | ✓ | Import |
+| `<# path : alias` | ✓ | Import |
 | `#> { ... }` | ✓ | Export block |
 | `NAME := literal` | ✓ | Exported constant (literal RHS only) |
 | `var = literal` | ✓ | Private mutable state (literal RHS only) |
@@ -2458,7 +2508,7 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 
 ```zymbol
 // main.zy
-<# ./counter <= c
+<# ./counter : c
 
 c::increment()         // count → 1
 c::increment()         // count → 2
@@ -2472,7 +2522,7 @@ x = c.count            // ✗ Runtime error: Module 'c' has no constant 'count'
 
 ```zymbol
 // Import with alias (alias is required)
-<# ./lib/utils <= u
+<# ./lib/utils : u
 
 // Call exported function
 result = u::add(5, 3)
@@ -2486,9 +2536,9 @@ pi = u.PI
 ### Import Paths
 
 ```zymbol
-<# ./module <= m         // same directory
-<# ../shared/lib <= s    // parent directory
-<# ./sub/folder <= c     // subdirectory
+<# ./module : m         // same directory
+<# ../shared/lib : s    // parent directory
+<# ./sub/folder : c     // subdirectory
 ```
 
 ### Export Aliases
@@ -2496,25 +2546,25 @@ pi = u.PI
 ```zymbol
 // Export with a different public name
 #> {
-    internal_fn <= public_name
-    INTERNAL_CONST <= PUBLIC_CONST
+    internal_fn : public_name
+    INTERNAL_CONST : PUBLIC_CONST
 }
 ```
 
 ### Re-export from Another Module
 
-Use `::` to re-export a function imported from another module, and `.` to re-export a constant. Place the `<#` import before `#>` so the alias is in scope. The re-export alias follows `<=`:
+Use `::` to re-export a function imported from another module, and `.` to re-export a constant. Place the `<#` import before `#>` so the alias is in scope. The re-export alias follows `:`:
 
 ```zymbol
 // math.zy
 # math {
-    <# ./core <= c
+    <# ./core : c
 
     #> {
         c::add           // re-export function as-is (callers use m::add)
-        c::add <= sum    // re-export function with different public name
+        c::add : sum    // re-export function with different public name
         c.PI             // re-export constant
-        c.PI <= TAU      // re-export constant with different name
+        c.PI : TAU      // re-export constant with different name
     }
 }
 ```
@@ -3010,6 +3060,8 @@ output = </ ./subscript.zy />
 >> output
 ```
 
+> For a list of bugs fixed in each version, see [CHANGELOG.md](CHANGELOG.md).
+
 ---
 
 ## 22. Verified Examples
@@ -3104,7 +3156,7 @@ n_scores = scores$#
 
 ```zymbol
 // file: main.zy
-<# ./calc <= c
+<# ./calc : c
 
 >> c::add(10, 5) ¶          // → 15
 >> c::subtract(10, 5) ¶     // → 5

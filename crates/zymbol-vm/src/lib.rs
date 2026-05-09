@@ -2372,7 +2372,9 @@ impl<W: Write> VM<W> {
                     if matches!(self.reg_get(dst), Value::Unit) {
                         let val = match neutral {
                             zymbol_bytecode::HotNeutral::Int => Value::Int(0),
+                            zymbol_bytecode::HotNeutral::IntOne => Value::Int(1),
                             zymbol_bytecode::HotNeutral::Array => Value::Array(Rc::new(Vec::new())),
+                            zymbol_bytecode::HotNeutral::String => Value::String(ZyStr::from_str_ref("")),
                         };
                         wreg!(dst, val);
                     }

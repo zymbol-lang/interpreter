@@ -63,6 +63,8 @@ pub enum TokenKind {
     Ident(String),
     /// Identifier with hot-definition marker ° — auto-initialize on first use
     HotIdent(String),
+    /// Prefix hot-definition °x — anchor to scope above nearest @
+    PreHotIdent(String),
 
     // Operators
     /// = (assignment operator)
@@ -840,6 +842,30 @@ impl Lexer {
         // Check for number — any digit from any supported numeral system
         if digit_blocks::digit_value(ch).is_some() {
             return self.lex_number(start);
+        }
+
+        // Check for °identifier prefix (pre-hot: anchor to scope above nearest @)
+        if ch == '°' && self.peek().map_or(false, Self::is_ident_start) {
+            self.advance(); // consume °
+            let ident_start = self.position();
+            let token = self.lex_identifier(ident_start);
+            let name = match token.kind {
+                TokenKind::Ident(n) => n,
+                TokenKind::HotIdent(n) => {
+                    let span = self.span(start);
+                    self.diagnostics.push(
+                        Diagnostic::error(format!(
+                            "ambiguous hot-definition markers on '{}': use either '°{}' (anchors above loop) or '{}°' (anchors at loop), not both",
+                            n, n, n
+                        ))
+                        .with_span(span)
+                        .with_help("remove one of the two '°' markers"),
+                    );
+                    n
+                }
+                _ => unreachable!(),
+            };
+            return Token::new(TokenKind::PreHotIdent(name), self.span(start));
         }
 
         // Check for identifier (letters, Unicode, or emojis)

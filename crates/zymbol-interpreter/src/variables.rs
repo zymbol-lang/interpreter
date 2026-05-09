@@ -22,6 +22,16 @@ fn hot_neutral_from_value(value: &Expr, name: &str) -> Value {
             Value::Int(0)
         }
         Expr::Binary(bin) if bin.op == BinaryOp::Concat => Value::String(String::new()),
+        Expr::Binary(bin)
+            if matches!(bin.op, BinaryOp::Mul | BinaryOp::Div) =>
+        {
+            if let Expr::Identifier(ident) = bin.left.as_ref() {
+                if ident.name == name {
+                    return Value::Int(1);
+                }
+            }
+            Value::Int(0)
+        }
         _ => Value::Int(0),
     }
 }
@@ -40,10 +50,16 @@ impl<W: Write> Interpreter<W> {
             });
         }
 
-        // Hot LHS: auto-initialize variable to neutral on first use
+        // Hot LHS (x°): auto-initialize to neutral in nearest @ scope on first use
         if assign.hot && self.get_variable(&assign.name).is_none() {
             let neutral = hot_neutral_from_value(&assign.value, &assign.name);
-            self.set_variable(&assign.name, neutral);
+            self.set_at_nearest_loop(&assign.name, neutral);
+        }
+
+        // Pre-hot LHS (°x): auto-initialize to neutral in scope above nearest @ on first use
+        if assign.pre_hot && self.get_variable(&assign.name).is_none() {
+            let neutral = hot_neutral_from_value(&assign.value, &assign.name);
+            self.set_above_nearest_loop(&assign.name, neutral);
         }
 
         // B3: fast path for self-assign collection mutation (e.g. arr = arr$+ elem)
@@ -81,15 +97,19 @@ impl<W: Write> Interpreter<W> {
                 if let Expr::Identifier(ident) = op.collection.as_ref() {
                     if ident.name == assign.name {
                         let element = self.eval_expr(&op.element)?;
-                        // Hot RHS: auto-init on first use.
+                        // Hot/pre_hot RHS: auto-init on first use.
                         // Char element → init to "" (String); anything else → init to [] (Array)
-                        if ident.hot && self.get_variable(&assign.name).is_none() {
+                        if (ident.hot || ident.pre_hot) && self.get_variable(&assign.name).is_none() {
                             let neutral = if matches!(element, Value::Char(_)) {
                                 Value::String(String::new())
                             } else {
                                 Value::Array(Vec::new())
                             };
-                            self.set_variable(&assign.name, neutral);
+                            if ident.pre_hot {
+                                self.set_above_nearest_loop(&assign.name, neutral);
+                            } else {
+                                self.set_variable(&assign.name, neutral);
+                            }
                         }
                         // Array $+ Value
                         if let Some(Value::Array(arr)) = self.get_variable_mut(&assign.name) {

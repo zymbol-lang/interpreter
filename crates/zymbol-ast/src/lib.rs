@@ -264,7 +264,10 @@ pub enum Expr {
 pub struct IdentifierExpr {
     pub name: String,
     pub span: Span,
+    /// `x°` — postfix hot; auto-init to neutral in nearest `@` scope
     pub hot: bool,
+    /// `°x` — prefix pre-hot; auto-init to neutral in scope above nearest `@`
+    pub pre_hot: bool,
 }
 
 
@@ -306,11 +309,15 @@ pub struct FunctionCallExpr {
 
 impl IdentifierExpr {
     pub fn new(name: String, span: Span) -> Self {
-        Self { name, span, hot: false }
+        Self { name, span, hot: false, pre_hot: false }
     }
 
     pub fn new_hot(name: String, span: Span) -> Self {
-        Self { name, span, hot: true }
+        Self { name, span, hot: true, pre_hot: false }
+    }
+
+    pub fn new_pre_hot(name: String, span: Span) -> Self {
+        Self { name, span, hot: false, pre_hot: true }
     }
 }
 

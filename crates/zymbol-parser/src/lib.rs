@@ -241,6 +241,30 @@ impl Parser {
                     Ok(Statement::Expr(ExprStatement::new(expr, span)))
                 }
             }
+            TokenKind::PreHotIdent(_) => {
+                // Pre-hot identifier (°x): only valid as LHS of assignment
+                let is_assignment_op = self.peek_ahead(1)
+                    .map(|t| matches!(t.kind,
+                        TokenKind::Assign
+                        | TokenKind::PlusAssign
+                        | TokenKind::MinusAssign
+                        | TokenKind::StarAssign
+                        | TokenKind::SlashAssign
+                        | TokenKind::PercentAssign
+                        | TokenKind::CaretAssign
+                        | TokenKind::PlusPlus
+                        | TokenKind::MinusMinus
+                    ))
+                    .unwrap_or(false);
+                if is_assignment_op {
+                    self.parse_assignment()
+                } else {
+                    let span = self.peek().span;
+                    Err(Diagnostic::error("'°name' is only valid as an assignment target")
+                        .with_span(span)
+                        .with_help("use '°x += n' to anchor accumulation above the nearest loop"))
+                }
+            }
             TokenKind::LBracket => {
                 // Could be array destructure: [a, b] = expr
                 // is_array_destructure() saves/restores state, so peek() still returns '[' after
@@ -989,10 +1013,16 @@ impl Parser {
                 }
             }
             TokenKind::HotIdent(name) => {
-                // Hot identifier in expression context: strips ° and marks hot for auto-init
+                // Hot identifier in expression context: x° — marks hot for auto-init in nearest @ scope
                 let name = name.clone();
                 self.advance();
                 Ok(Expr::Identifier(IdentifierExpr::new_hot(name, token.span)))
+            }
+            TokenKind::PreHotIdent(name) => {
+                // Pre-hot identifier in expression context: °x — auto-init in scope above nearest @
+                let name = name.clone();
+                self.advance();
+                Ok(Expr::Identifier(IdentifierExpr::new_pre_hot(name, token.span)))
             }
             TokenKind::LParen => {
                 // Parse grouped expression (expr), tuple (expr, expr, ...), named tuple (name: expr, ...), or lambda (a, b) -> expr

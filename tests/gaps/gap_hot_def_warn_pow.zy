@@ -1,0 +1,14 @@
+// Warning: x° ^= n or °x ^= n — neutral is 0, so 0^n = 0 always (vacuous)
+
+// Postfix form: warning emitted, result is 0
+x° ^= 3
+>> x ¶
+
+// Prefix form: same warning
+°y ^= 2
+>> y ¶
+
+// Control: ^= on already-defined value works correctly (no hot-def, no warning)
+z = 2
+z ^= 3
+>> z ¶

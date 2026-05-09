@@ -276,6 +276,9 @@ pub struct Interpreter<W: Write> {
     /// Stack of variable scopes (lexical scoping)
     /// Index 0 is the global scope, higher indices are nested blocks
     scope_stack: Vec<HashMap<String, Value>>,
+    /// Indices into scope_stack where @ loop scopes start.
+    /// Used by x° (set_at_nearest_loop) and °x (set_above_nearest_loop).
+    loop_scope_depths: Vec<usize>,
     functions: HashMap<String, Rc<FunctionDef>>,
     control_flow: ControlFlow,
     /// Track which variables are mutable (for parameter validation)
@@ -378,6 +381,41 @@ impl<W: Write> Interpreter<W> {
                 s.clear();
                 if self.const_set_pool.len() < 128 { self.const_set_pool.push(s); }
             }
+        }
+    }
+
+    /// Push a loop-anchor scope for a `@` loop and record its depth.
+    pub(crate) fn push_loop_scope(&mut self) {
+        self.push_scope();
+        self.loop_scope_depths.push(self.scope_stack.len() - 1);
+    }
+
+    /// Pop the loop-anchor scope when a `@` loop ends.
+    pub(crate) fn pop_loop_scope(&mut self) {
+        self.loop_scope_depths.pop();
+        self.pop_scope();
+    }
+
+    /// `x°`: write variable to nearest enclosing `@` scope.
+    /// Variable lives for the loop duration, dies when the loop ends.
+    pub(crate) fn set_at_nearest_loop(&mut self, name: &str, value: Value) {
+        if let Some(&idx) = self.loop_scope_depths.last() {
+            self.scope_stack[idx].insert(name.to_string(), value);
+        } else {
+            self.scope_stack[0].insert(name.to_string(), value);
+        }
+    }
+
+    /// `°x`: write variable to the scope ABOVE the nearest `@`.
+    /// Variable survives the loop (anchors to next outer loop or global/function scope).
+    pub(crate) fn set_above_nearest_loop(&mut self, name: &str, value: Value) {
+        let len = self.loop_scope_depths.len();
+        if len >= 2 {
+            let idx = self.loop_scope_depths[len - 2];
+            self.scope_stack[idx].insert(name.to_string(), value);
+        } else {
+            // Single loop or no loop: anchor to global/function bottom scope
+            self.scope_stack[0].insert(name.to_string(), value);
         }
     }
 
@@ -603,6 +641,7 @@ impl Interpreter<std::io::Stdout> {
         Self {
             output: std::io::stdout(),
             scope_stack: vec![HashMap::new()],  // Start with one global scope
+            loop_scope_depths: Vec::new(),
             functions: HashMap::new(),
             control_flow: ControlFlow::None,
             mutable_vars_stack: vec![HashSet::new()],
@@ -649,6 +688,7 @@ impl<W: Write> Interpreter<W> {
         Self {
             output,
             scope_stack: vec![HashMap::new()],  // Start with one global scope
+            loop_scope_depths: Vec::new(),
             functions: HashMap::new(),
             control_flow: ControlFlow::None,
             mutable_vars_stack: vec![HashSet::new()],

@@ -1,0 +1,8 @@
+// x° (postfix) scopes to its nearest @ loop; dies when that loop ends.
+// After loop-1 ends, x is gone; >> x below is a compile-time "undefined variable" error.
+// Use °x (prefix) when the variable should survive past the loop.
+
+// x° anchors AT loop-1; after loop-1 ends, x is gone; loop-2 starts fresh
+@ i:1..3 { x° += i }
+@ j:1..3 { x° += j }
+>> x ¶

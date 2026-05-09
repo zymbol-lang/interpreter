@@ -1,0 +1,26 @@
+// °x in if-else branches inside a loop — each branch accumulates independently
+
+// Split 1..5 into even/odd sums
+@ i:1..5 {
+    ? i % 2 == 0 {
+        °pares += i
+    } _ {
+        °impares += i
+    }
+}
+>> pares ¶
+>> impares ¶
+
+// Three-way split: low / mid / high
+@ n:1..9 {
+    ? n < 4 {
+        °bajo += n
+    } _? n < 7 {
+        °medio += n
+    } _ {
+        °alto += n
+    }
+}
+>> bajo ¶
+>> medio ¶
+>> alto ¶
