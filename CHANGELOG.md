@@ -9,6 +9,30 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ## [Unreleased]
 
+### Improved
+
+**Standalone binaries now embed bytecode instead of source (~60% smaller)**
+- `zymbol build` previously embedded the raw `.zy` source and re-ran the full
+  pipeline (lex → parse → compile) on every execution, shipping lexer, parser,
+  AST, compiler, and interpreter as dead weight in the standalone binary.
+- New approach: compile to bytecode **at build time** inside `zymbol build`,
+  serialize via `bincode`, and embed the bytes. The generated binary links only
+  `zymbol-bytecode` + `zymbol-vm` (2 crates instead of 7).
+- `zymbol-bytecode`: all types (`CompiledProgram`, `Instruction`, `Chunk`,
+  `GlobalInit`, `BuildPart`, `HotNeutral`) now derive `Serialize`/`Deserialize`.
+- `zymbol-standalone`: `write_source()` replaced by `write_bytecode()`;
+  `new_from_source` accepts `base_dir` for module resolution via
+  `Compiler::compile_with_dir`.
+- Template `main.rs`: 16 lines — `bincode::deserialize(BYTECODE)` + `vm.run()`.
+- **Result: serpiente standalone 2.2 MB → 901 KB (~2.4× smaller). VM execution
+  replaces tree-walker, startup has zero lex/parse/compile overhead.**
+- This is also the foundation for the upcoming `.zyb` bytecode file format
+  (see ROADMAP — "Bytecode File Format").
+- Reported by **[@wux4an](https://github.com/wux4an)** in
+  [interpreter#1](https://github.com/zymbol-lang/interpreter/issues/1) —
+  whose honest critique of the `zymbol build` limitations on release binaries
+  directly motivated this redesign.
+
 ### Added
 
 **`<<` input support in VM (IMPL-V005-INPUT)**
