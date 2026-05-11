@@ -1,11 +1,13 @@
 //! Bytecode definitions for Zymbol-Lang Register VM
 
+use serde::{Deserialize, Serialize};
+
 pub type Reg = u16;
 pub type Label = u32;
 pub type FuncIdx = u32;
 pub type StrIdx = u32;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Instruction {
     // ── Literals ──────────────────────────────────────────────────────────
     LoadInt(Reg, i64),
@@ -271,7 +273,7 @@ pub enum Instruction {
 }
 
 /// Neutral element kind for hot-definition variables (x°)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HotNeutral {
     Int,    // 0
     IntOne, // 1  (multiplicative identity: *=, /=)
@@ -280,7 +282,7 @@ pub enum HotNeutral {
 }
 
 /// Part of a BuildStr instruction
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BuildPart {
     /// A literal string from the string pool
     Lit(StrIdx),
@@ -288,7 +290,7 @@ pub enum BuildPart {
     Reg(Reg),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chunk {
     pub name: String,
     pub instructions: Vec<Instruction>,
@@ -308,7 +310,7 @@ impl Chunk {
 }
 
 /// Initial value for a module-level global variable
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GlobalInit {
     Int(i64),
     Float(f64),
@@ -318,7 +320,7 @@ pub enum GlobalInit {
     Unit,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CompiledProgram {
     pub main: Chunk,
     pub functions: Vec<Chunk>,

@@ -381,7 +381,8 @@ fn build_file(path: PathBuf, output: Option<PathBuf>, release: bool) -> Result<(
     });
 
     // Build standalone executable
-    let builder = StandaloneBuilder::new_from_source(source, output_path, release);
+    let base_dir = path.canonicalize().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let builder = StandaloneBuilder::new_from_source(source, base_dir, output_path, release);
     builder.build()
         .with_context(|| "failed to build executable")?;
 
