@@ -379,7 +379,7 @@ zymbol-cli       (all of the above) ──────────────�
 | `zymbol run FILE` | Execute with tree-walker (default) |
 | `zymbol run --vm FILE` | Execute with register VM |
 | `zymbol run FILE [ARGS]` | Pass CLI arguments to program (`><` capture) |
-| `zymbol build FILE -o OUT [--release]` | Compile to standalone executable |
+| `zymbol build FILE -o OUT [--release]` | Package into standalone executable (bundles source + interpreter; not native compilation). Requires: Rust/Cargo installed, full repo checkout, run from `interpreter/` |
 | `zymbol check FILE` | Syntax and semantic check only |
 | `zymbol fmt FILE [--write] [--check] [--indent N]` | Format source code |
 | `zymbol repl` | Start interactive REPL |

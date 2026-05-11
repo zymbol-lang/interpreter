@@ -111,7 +111,10 @@ zymbol check program.zy
 # Format code
 zymbol fmt program.zy --write
 
-# Compile to standalone executable
+# Package into standalone executable
+# Note: bundles the source code and Zymbol interpreter into one binary — not native compilation.
+# Requires: Rust/Cargo installed, full repo checkout, and must be run from interpreter/.
+# See aprende_zymbol/avanzado/05_herramientas.md for full setup instructions.
 zymbol build program.zy -o myprogram --release
 ```
 
