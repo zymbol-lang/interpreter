@@ -761,4 +761,24 @@ mod tests {
         let program = parse("# ok_mod {\nPI := 3.14\ncount = 0\nadd(a, b) { <~ a + b }\n}").expect("should parse");
         assert_eq!(program.statements.len(), 3);
     }
+
+    // ── v0.0.5: Feature 7 — module alias uses `:`, not `<=` ──────────────────────
+
+    #[test]
+    fn test_import_colon_syntax_accepted() {
+        // `<# path : alias` must parse cleanly
+        let result = parse("<# ./lib/math_utils : math");
+        assert!(result.is_ok(), "`:` import alias must be accepted");
+        let program = result.unwrap();
+        assert_eq!(program.imports[0].alias, "math");
+    }
+
+    #[test]
+    fn test_import_le_syntax_rejected() {
+        // Old `<# path <= alias` must produce "expected ':'" error
+        let result = parse("<# ./lib/math_utils <= math");
+        assert!(result.is_err(), "old `<=` import alias must be rejected");
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(err_msg.contains("':'"), "error should mention ':'");
+    }
 }

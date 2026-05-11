@@ -138,7 +138,40 @@ They are documented in the manual as known limitations.
 
 ### Medium Term
 
-#### Performance
+#### Bytecode File Format (`.zyb`)
+
+Introduce a first-class bytecode format so compiled programs can be distributed and
+executed independently of the source code and compilation pipeline.
+
+**Architecture:**
+```
+file.zy  ──►  zymbol compile file.zy -o file.zyb   ──►  file.zyb
+                                                           │
+                                         ┌─────────────────┴──────────────────┐
+                                         ▼                                     ▼
+                               zymbol run --vm file.zyb              standalone binary
+                               (skip lex/parse/compile,              (embed .zyb bytes
+                                detect .zyb by extension)             + minimal VM stub)
+```
+
+**Implementation steps:**
+
+1. **Serde on `zymbol-bytecode`** — add `Serialize`/`Deserialize` to `CompiledProgram`
+   and all its types. Use `bincode` or `postcard` for a compact binary format.
+
+2. **`zymbol compile` subcommand** — new CLI command that runs lex → parse → compile
+   and writes the result as `file.zyb`.
+
+3. **`zymbol run --vm file.zyb`** — detect `.zyb` extension, deserialize directly into
+   `CompiledProgram`, skip lex/parse/compile entirely.
+
+4. **Standalone refactor** — `zymbol build` compiles to bytecode at build time and
+   embeds the `.zyb` bytes in the binary. The generated executable only links
+   `zymbol-bytecode` + `zymbol-vm`, dropping lexer/parser/AST/compiler from the
+   standalone. Reduces dead weight and improves startup time.
+
+This is also the foundation for the future LLVM backend — `.zyb` becomes the
+intermediate representation handed off to the native code compiler.
 
 - **Bytecode disk cache (`.zyc` files)**
   Serialize `CompiledProgram` to disk with `bincode`. On re-run, check hash and skip

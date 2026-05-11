@@ -2577,4 +2577,71 @@ add(a, b) {
         let tokens2 = lex("arr$-[0]");
         assert!(matches!(tokens2[1], TokenKind::DollarMinusLBracket));
     }
+
+    // ── v0.0.5 tokens ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_at_tilde_token() {
+        let tokens = lex("@~ 100");
+        assert_eq!(tokens.len(), 3, "AtTilde, Integer, Eof");
+        assert!(matches!(tokens[0], TokenKind::AtTilde));
+        match &tokens[1] {
+            TokenKind::Integer(n) => assert_eq!(*n, 100),
+            _ => panic!("Expected integer literal, got {:?}", tokens[1]),
+        }
+    }
+
+    #[test]
+    fn test_key_block_token() {
+        let tokens = lex("<<| tecla");
+        assert_eq!(tokens.len(), 3, "KeyBlock, Ident, Eof");
+        assert!(matches!(tokens[0], TokenKind::KeyBlock));
+        assert!(matches!(tokens[1], TokenKind::Ident(_)));
+    }
+
+    #[test]
+    fn test_key_nonblock_token() {
+        let tokens = lex("<<|? tecla");
+        assert_eq!(tokens.len(), 3, "KeyNonBlock, Ident, Eof");
+        assert!(matches!(tokens[0], TokenKind::KeyNonBlock));
+        assert!(matches!(tokens[1], TokenKind::Ident(_)));
+    }
+
+    #[test]
+    fn test_output_clear_token() {
+        let tokens = lex(">>!");
+        assert_eq!(tokens.len(), 2, "OutputClear, Eof");
+        assert!(matches!(tokens[0], TokenKind::OutputClear));
+    }
+
+    #[test]
+    fn test_output_query_token() {
+        let tokens = lex("[H, W] = >>?");
+        let pos = tokens.iter().position(|t| matches!(t, TokenKind::OutputQuery));
+        assert!(pos.is_some(), "OutputQuery token not found");
+    }
+
+    #[test]
+    fn test_output_gate_token() {
+        let tokens = lex(">>| {");
+        assert_eq!(tokens.len(), 3, "OutputGate, LBrace, Eof");
+        assert!(matches!(tokens[0], TokenKind::OutputGate));
+    }
+
+    #[test]
+    fn test_dollar_star_token() {
+        let tokens = lex("\"ab\" $* 3");
+        // Str, DollarStar, Int, Eof
+        assert_eq!(tokens.len(), 4);
+        assert!(matches!(tokens[1], TokenKind::DollarStar));
+    }
+
+    #[test]
+    fn test_key_nonblock_not_confused_with_key_block() {
+        // <<|? must NOT be mistaken for <<| followed by ?
+        let tokens = lex("<<|?");
+        assert_eq!(tokens.len(), 2, "KeyNonBlock, Eof");
+        assert!(matches!(tokens[0], TokenKind::KeyNonBlock),
+            "got {:?}", tokens[0]);
+    }
 }
