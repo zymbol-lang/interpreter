@@ -506,6 +506,19 @@ VM parity: **424/424 PASS** (424 golden-file pairs; `@vm-skip` files excluded).
 
 ---
 
+## Real-World Validation Projects
+
+Each milestone is stress-tested by building a non-trivial program entirely in Zymbol.
+Every obstacle found during construction is recorded and fed back into the language.
+
+| Project | Validates | Description |
+|---------|-----------|-------------|
+| [ZethyCLI](https://github.com/zymbol-lang/zy-ZethyCLI) | **v0.0.3** | Multi-turn AI chat CLI for Ollama — stress-tests modules, string handling, and HTTP |
+| [ZyAudit](https://github.com/zymbol-lang/zy-ZyAudit) | **v0.0.4** | Code auditing tool with Mandarin identifiers — validates Unicode/CJK as first-class citizens |
+| [Serpiente](https://github.com/zymbol-lang/zy-Serpiente) | **v0.0.5** *(in progress)* | Snake TUI game — stress-tests terminal primitives, register VM, and hot-definition variables |
+
+---
+
 ## Project Layout
 
 ```
