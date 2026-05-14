@@ -5,7 +5,7 @@
     //       (like +%s%N) must be quoted as string literals.
     //
     // Usage:
-    //   <# ./lib_time : T
+    //   <# ./lib_time => T
     //   t0 = T::now()
     //   // ... work ...
     //   >> T::elapsed(t0) ¶          // "(0.235s)"

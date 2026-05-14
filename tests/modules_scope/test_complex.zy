@@ -1,6 +1,6 @@
 // Test: Complex module with blocks and scopes
 
-<# ./complex_module : complex
+<# ./complex_module => complex
 
 >> "=== Test 1: Module function with IF blocks ===" ¶
 

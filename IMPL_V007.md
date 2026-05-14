@@ -7,11 +7,11 @@ No new syntax. Full re-export support for the i18n three-layer pattern.
 
 ## Design principles
 
-1. **Transparent to the user.** `<# std/env <= env` and `env::get("KEY")` are indistinguishable
+1. **Transparent to the user.** `<# std/env => env` and `env::get("KEY")` are indistinguishable
    from a `.zy` module. Same syntax, same call convention, same re-export rules.
 
 2. **Re-exportable for i18n.** A translation module can re-export native functions under any
-   name: `env::get <= obtener`. The i18n three-layer pattern (`I18N.md`) works unchanged.
+   name: `env::get : obtener`. The i18n three-layer pattern (`I18N.md`) works unchanged.
 
 3. **Zero parser / AST / lexer changes.** All changes are confined to `zymbol-interpreter`
    and a new `stdlib/` subtree inside it.
@@ -226,11 +226,11 @@ This makes the i18n three-layer pattern work for stdlib modules:
 ```zymbol
 # .entorno_es {
     #> {
-        env::get  <= obtener
-        env::set  <= establecer
-        env::args <= argumentos
+        env::get  : obtener
+        env::set  : establecer
+        env::args : argumentos
     }
-    <# std/env <= env
+    <# std/env => env
 }
 ```
 
@@ -700,19 +700,19 @@ from `I18N.md` works for stdlib modules with zero additional changes.
 ```zymbol
 # .entorno_es {
     #> {
-        env::get    <= obtener
-        env::set    <= establecer
-        env::args   <= argumentos
-        env::home   <= inicio
+        env::get    : obtener
+        env::set    : establecer
+        env::args   : argumentos
+        env::home   : inicio
     }
-    <# std/env <= env
+    <# std/env => env
 }
 ```
 
 ### Consumer in Spanish
 
 ```zymbol
-<# ./entorno_es <= entorno
+<# ./entorno_es => entorno
 
 url  = entorno::obtener("DATABASE_URL")
 ruta = entorno::inicio()

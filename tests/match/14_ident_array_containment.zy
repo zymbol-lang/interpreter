@@ -2,16 +2,16 @@
 codigos_ok = [200, 201, 202]
 codigo = 201
 result = ?? codigo {
-    codigos_ok : "success"
-    _          : "other"
+    codigos_ok => "success"
+    _          => "other"
 }
 >> result ¶
 
 // Not in array
 codigo2 = 404
 result2 = ?? codigo2 {
-    codigos_ok : "success"
-    _          : "other"
+    codigos_ok => "success"
+    _          => "other"
 }
 >> result2 ¶
 
@@ -19,7 +19,7 @@ result2 = ?? codigo2 {
 dias_habil = ["lun", "mar", "mie", "jue", "vie"]
 hoy = "mar"
 tipo = ?? hoy {
-    dias_habil : "weekday"
-    _          : "weekend"
+    dias_habil => "weekday"
+    _          => "weekend"
 }
 >> tipo ¶

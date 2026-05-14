@@ -3,7 +3,7 @@
 // a counter::increment() call did not change anything visible on next call.
 // The write-back mechanism after each function execution fixes this.
 
-<# ./g13_counter_mod : c
+<# ./g13_counter_mod => c
 
 // Three increments — count should reach 3
 c::increment()

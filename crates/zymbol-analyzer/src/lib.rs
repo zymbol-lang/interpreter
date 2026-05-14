@@ -844,7 +844,7 @@ impl Analyzer {
                 format!("```zymbol\n# {}\n```\n(module)", name)
             }
             symbol_extractor::SymbolKind::Import => {
-                format!("```zymbol\n<# ... <= {}\n```\n(import)", name)
+                format!("```zymbol\n<# ... => {}\n```\n(import)", name)
             }
             symbol_extractor::SymbolKind::Iterator => {
                 format!("```zymbol\n@ {}:...\n```\n(loop iterator)", name)
@@ -1500,8 +1500,8 @@ fn builtin_completions() -> Vec<lsp_types::CompletionItem> {
         CompletionItem {
             label: "match".to_string(),
             kind: Some(CompletionItemKind::KEYWORD),
-            detail: Some("?? expr { pattern : value }".to_string()),
-            insert_text: Some("?? ${1:expr} {\n\t${2:pattern} : ${3:value}\n\t_ : ${4:default}\n}".to_string()),
+            detail: Some("?? expr { pattern => value }".to_string()),
+            insert_text: Some("?? ${1:expr} {\n\t${2:pattern} => ${3:value}\n\t_ => ${4:default}\n}".to_string()),
             insert_text_format: Some(InsertTextFormat::SNIPPET),
             ..Default::default()
         },
@@ -1609,8 +1609,8 @@ fn builtin_completions() -> Vec<lsp_types::CompletionItem> {
         CompletionItem {
             label: "import".to_string(),
             kind: Some(CompletionItemKind::KEYWORD),
-            detail: Some("<# ./path <= alias".to_string()),
-            insert_text: Some("<# ./${1:module} <= ${0:alias}".to_string()),
+            detail: Some("<# ./path => alias".to_string()),
+            insert_text: Some("<# ./${1:module} => ${0:alias}".to_string()),
             insert_text_format: Some(InsertTextFormat::SNIPPET),
             ..Default::default()
         },

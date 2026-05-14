@@ -128,7 +128,7 @@ impl<'a> FormatVisitor<'a> {
             ExportItem::Own { name, rename, .. } => {
                 self.output.write(name);
                 if let Some(alias) = rename {
-                    self.output.write(" <= ");
+                    self.output.write(" => ");
                     self.output.write(alias);
                 }
             }
@@ -146,7 +146,7 @@ impl<'a> FormatVisitor<'a> {
                 }
                 self.output.write(item_name);
                 if let Some(alias) = rename {
-                    self.output.write(" <= ");
+                    self.output.write(" => ");
                     self.output.write(alias);
                 }
             }
@@ -169,7 +169,7 @@ impl<'a> FormatVisitor<'a> {
         }
         self.output.write(&path.components.join("/"));
 
-        self.output.write(" <= ");
+        self.output.write(" => ");
         self.output.write(&import.alias);
     }
 
@@ -1154,7 +1154,7 @@ impl<'a> FormatVisitor<'a> {
     /// Format a match case
     fn format_match_case(&mut self, case: &MatchCase) {
         self.format_pattern(&case.pattern);
-        self.output.write(" :");
+        self.output.write(" =>");
 
         if let Some(ref value) = case.value {
             self.output.space();

@@ -2,7 +2,7 @@
 // Form 1: #> before imports (always worked)
 // Form 2: #> after imports (G14 fix — parser now accepts this)
 
-<# ./g14_flex_mod : mod
+<# ./g14_flex_mod => mod
 
 // Constant access
 h = mod.HOST

@@ -2,7 +2,7 @@
 // Test de interacción con base de datos SQLite
 // Demuestra CRUD completo usando interpolación de variables
 
-<# ./matematicas/db : db
+<# ./matematicas/db => db
 
 >> "=== Test de Base de Datos SQLite ===" ¶
 ¶
@@ -46,10 +46,10 @@ usuario_actualizado = db::consultar_usuario_por_id(database)
 ¶
 
 >> "7. Consultas personalizadas:" ¶
-total = <\ sqlite3 {database} "SELECT COUNT(*) FROM usuarios;" \>
+total = <\ "sqlite3 {database} "SELECT COUNT(*) FROM usuarios;" \>
 >> "   Total de usuarios: " total ¶
 
-mayores = <\ sqlite3 {database} "SELECT nombre, edad FROM usuarios WHERE edad > 25;" \>
+mayores = <\ "sqlite3 {database} \"SELECT nombre, edad FROM usuarios WHERE edad > 25;\"" \>
 >> "   Usuarios mayores de 25:" ¶
 >> mayores ¶
 ¶
@@ -63,7 +63,7 @@ usuarios_final = db::consultar_usuarios(database)
 ¶
 
 >> "9. Limpieza - eliminando base de datos de prueba" ¶
-dummy = <\ rm "-f" {database} \>
+dummy = <\ "rm "-f" {database}" \>
 >> "   Base de datos eliminada" ¶
 ¶
 

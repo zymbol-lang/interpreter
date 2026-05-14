@@ -94,6 +94,7 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         | TokenKind::Newline         // ¶
         | TokenKind::Backslash2      // \\
         | TokenKind::Arrow           // ->
+        | TokenKind::FatArrow        // =>
         | TokenKind::ScopeResolution // ::
         | TokenKind::PipeOp          // |>
         | TokenKind::CliArgsCapture   // ><
@@ -270,6 +271,7 @@ fn token_length(kind: &TokenKind) -> u32 {
         TokenKind::Output           // >>
         | TokenKind::Input          // <<
         | TokenKind::Arrow          // ->
+        | TokenKind::FatArrow       // =>
         | TokenKind::Return         // <~
         | TokenKind::ScopeResolution // ::
         | TokenKind::PipeOp         // |>

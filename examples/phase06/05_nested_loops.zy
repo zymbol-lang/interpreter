@@ -1,8 +1,8 @@
 // Phase 6: Nested loops with labels
-// Demonstrates @ @label and labeled break
+// Demonstrates @:label and labeled break
 
 i = 0
-@ @outer i < 3 {
+@:outer i < 3 {
     >> "Outer loop: " i ¶
 
     j = 0
@@ -12,7 +12,7 @@ i = 0
         ? i == 1 {
             ? j == 1 {
                 >> "  Breaking outer loop at i=" i " j=" j ¶
-                @! outer
+                @:outer!
             }
         }
 

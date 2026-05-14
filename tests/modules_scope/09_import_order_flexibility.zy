@@ -1,7 +1,7 @@
 // Test: #> export block can appear before or after <# imports
 // Both orderings are valid
 
-<# ./math_test : math
+<# ./math_test => math
 
 result = math::add(10, 5)
 >> result ¶

@@ -220,10 +220,10 @@ fn test_match_expression() {
     let out = run(r#"
 score = 85
 grade = ?? score {
-    90..100 : "A"
-    80..89  : "B"
-    70..79  : "C"
-    _       : "F"
+    90..100 => "A"
+    80..89  => "B"
+    70..79  => "C"
+    _       => "F"
 }
 >> grade ¶
 "#);
@@ -620,13 +620,13 @@ fn test_complex_match_with_execution() {
     let out = run(r#"
 action = "greet"
 ?? action {
-    "greet" : {
+    "greet" => {
         >> "Hello!" ¶
     }
-    "bye" : {
+    "bye" => {
         >> "Goodbye!" ¶
     }
-    _ : {
+    _ => {
         >> "Unknown" ¶
     }
 }
@@ -773,10 +773,10 @@ fn test_match_expression_vm() {
     let src = r#"
 score = 85
 grade = ?? score {
-    90..100 : "A"
-    80..89  : "B"
-    70..79  : "C"
-    _       : "F"
+    90..100 => "A"
+    80..89  => "B"
+    70..79  => "C"
+    _       => "F"
 }
 >> grade ¶
 "#;
@@ -1151,13 +1151,13 @@ fn test_complex_match_with_execution_vm() {
     let src = r#"
 action = "greet"
 ?? action {
-    "greet" : {
+    "greet" => {
         >> "Hello!" ¶
     }
-    "bye" : {
+    "bye" => {
         >> "Goodbye!" ¶
     }
-    _ : {
+    _ => {
         >> "Unknown" ¶
     }
 }

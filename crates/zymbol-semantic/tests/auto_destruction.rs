@@ -414,9 +414,9 @@ fn test_match_expression() {
     let source = r#"
 x = 5
 result = ?? x {
-    1..3 : "low"
-    4..6 : "mid"
-    _ : "high"
+    1..3 => "low"
+    4..6 => "mid"
+    _ => "high"
 }
 >> result ¶
 "#;

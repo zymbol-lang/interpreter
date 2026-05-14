@@ -69,6 +69,8 @@ pub enum TokenKind {
     // Operators
     /// = (assignment operator)
     Assign,
+    /// => (fat arrow — maps to / renames as: match arms, module aliases)
+    FatArrow,
     /// := (constant declaration operator)
     ConstAssign,
     /// , (comma for concatenation)
@@ -1989,14 +1991,14 @@ mod tests {
 
     #[test]
     fn test_module_import_statement() {
-        let tokens = lex("<# ./math_utils : math");
-        // ModuleImport, Dot, Slash, Ident, Colon, Ident, Eof
+        let tokens = lex("<# ./math_utils => math");
+        // ModuleImport, Dot, Slash, Ident, FatArrow, Ident, Eof
         assert_eq!(tokens.len(), 7);
         assert!(matches!(tokens[0], TokenKind::ModuleImport));
         assert!(matches!(tokens[1], TokenKind::Dot));
         assert!(matches!(tokens[2], TokenKind::Slash));
         assert!(matches!(tokens[3], TokenKind::Ident(_)));
-        assert!(matches!(tokens[4], TokenKind::Colon)); // : for alias
+        assert!(matches!(tokens[4], TokenKind::FatArrow)); // => for alias
         assert!(matches!(tokens[5], TokenKind::Ident(_)));
     }
 
@@ -2071,8 +2073,8 @@ mod tests {
 
     #[test]
     fn test_re_export_renamed() {
-        let tokens = lex("math::add : sum");
-        // Ident, ScopeResolution, Ident, Colon, Ident, Eof
+        let tokens = lex("math::add => sum");
+        // Ident, ScopeResolution, Ident, FatArrow, Ident, Eof
         assert_eq!(tokens.len(), 6);
         match &tokens[0] {
             TokenKind::Ident(s) => assert_eq!(s, "math"),
@@ -2083,11 +2085,27 @@ mod tests {
             TokenKind::Ident(s) => assert_eq!(s, "add"),
             _ => panic!("Expected identifier"),
         }
-        assert!(matches!(tokens[3], TokenKind::Colon)); // : for rename
+        assert!(matches!(tokens[3], TokenKind::FatArrow)); // => for rename
         match &tokens[4] {
             TokenKind::Ident(s) => assert_eq!(s, "sum"),
             _ => panic!("Expected identifier"),
         }
+    }
+
+    #[test]
+    fn test_fat_arrow_token() {
+        let tokens = lex("=>");
+        assert_eq!(tokens.len(), 2); // FatArrow + Eof
+        assert!(matches!(tokens[0], TokenKind::FatArrow));
+    }
+
+    #[test]
+    fn test_fat_arrow_vs_assign_and_gt() {
+        // => is FatArrow, not Assign + Gt
+        let tokens = lex("a => b");
+        // Ident, FatArrow, Ident, Eof
+        assert_eq!(tokens.len(), 4);
+        assert!(matches!(tokens[1], TokenKind::FatArrow));
     }
 
     #[test]

@@ -4,9 +4,9 @@
 // BashExec in match arm (was impossible before G12 redesign)
 lang = "py"
 label = ?? lang {
-    "py" : <\ "echo python" \>
-    "sh" : <\ "echo shell" \>
-    _    : "unknown"
+    "py" => <\ "echo python" \>
+    "sh" => <\ "echo shell" \>
+    _    => "unknown"
 }
 >> label ¶
 

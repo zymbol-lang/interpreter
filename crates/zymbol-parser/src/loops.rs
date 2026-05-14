@@ -20,51 +20,27 @@ impl Parser {
         Ok(Statement::Sleep(Sleep::new(Box::new(duration), span)))
     }
 
-    /// Parse break statement: @! [label] or @:label!
+    /// Parse break statement: @! or @:label!
     pub(crate) fn parse_break(&mut self) -> Result<Statement, Diagnostic> {
         let token = self.advance(); // consume @! or @:label!
         let start_span = token.span;
 
         let label = match &token.kind {
-            // @:label! — label is embedded in the token
             TokenKind::AtColonLabelBreak(name) => Some(name.clone()),
-            // @! — check for optional space-separated label (legacy @! label)
-            _ => {
-                if matches!(self.peek().kind, TokenKind::Ident(_)) {
-                    let label_token = self.advance();
-                    match &label_token.kind {
-                        TokenKind::Ident(name) => Some(name.clone()),
-                        _ => unreachable!(),
-                    }
-                } else {
-                    None
-                }
-            }
+            _ => None,
         };
 
         Ok(Statement::Break(Break::new(label, start_span)))
     }
 
-    /// Parse continue statement: @> [label] or @:label>
+    /// Parse continue statement: @> or @:label>
     pub(crate) fn parse_continue(&mut self) -> Result<Statement, Diagnostic> {
         let token = self.advance(); // consume @> or @:label>
         let start_span = token.span;
 
         let label = match &token.kind {
-            // @:label> — label is embedded in the token
             TokenKind::AtColonLabelContinue(name) => Some(name.clone()),
-            // @> — check for optional space-separated label (legacy @> label)
-            _ => {
-                if matches!(self.peek().kind, TokenKind::Ident(_)) {
-                    let label_token = self.advance();
-                    match &label_token.kind {
-                        TokenKind::Ident(name) => Some(name.clone()),
-                        _ => unreachable!(),
-                    }
-                } else {
-                    None
-                }
-            }
+            _ => None,
         };
 
         Ok(Statement::Continue(Continue::new(label, start_span)))

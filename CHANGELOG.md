@@ -9,6 +9,15 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ## [Unreleased]
 
+### Changed (Breaking)
+
+**`FatArrow` operator `=>` for match arms, import aliases, and export renames**
+- Match arm separator: `pattern => result` (was `pattern : result`).
+- Import alias separator: `<# path => alias` (was `<# path <= alias`).
+- Export rename separator: `#> { fn => pub }` (was `fn <= pub_name`).
+- Rationale: `=>` reads as "maps to" / "becomes" — unambiguous across all contexts.
+- Full design history: `IMPL_V005.md §Feature-7`.
+
 ### Improved
 
 **Standalone binaries now embed bytecode instead of source (~60% smaller)**
@@ -59,17 +68,6 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 ---
 
 ## [0.0.5] — 2026-04-29
-
-### Breaking Changes
-
-**Module alias separator changed from `<=` to `:`**
-- `<# path <= alias` → `<# path : alias`
-- Export rename `fn <= pub_name` → `fn : pub_name`
-- `<=` is now used exclusively as the less-than-or-equal comparison operator.
-  It is no longer valid as a separator in `<#` import statements or `#>` export blocks.
-- Migration: ~57 `.zy` source files updated. Parser now emits `"expected ':' for module alias"`
-  if the old `<=` form is used in a module context.
-- No new tokens introduced — `Colon` (`:`) was already present in the lexer.
 
 ### Added
 

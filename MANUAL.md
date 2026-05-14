@@ -1,10 +1,15 @@
 # Zymbol-Lang — Language Manual
 
-> **Authoritative reference** — all examples verified empirically on both execution modes:
-> `zymbol run` (tree-walker) and `zymbol run --vm` (register VM).
-> If a construct is not documented here, it may not be implemented.
+> **DEPRECATED as of v0.0.5** — This document is frozen at v0.0.4 and will not receive further updates.
+> Content has been migrated and expanded across three successor documents:
+>
+> - [`GUIDE.md`](GUIDE.md) — authoritative language reference with examples
+> - [`REFERENCE.md`](REFERENCE.md) — limitations, error taxonomy, symbol table
+> - [`IMPLEMENTATION.md`](IMPLEMENTATION.md) — EBNF grammar, coverage status, internals
+>
+> This file is kept for historical reference only.
 
-**Interpreter version**: v0.0.4
+**Interpreter version**: v0.0.4 (frozen)
 **Test coverage**: 150/150 interpreter PASS (wt + vm); 13/13 index_nav PASS
 
 ---

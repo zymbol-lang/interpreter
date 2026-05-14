@@ -25,6 +25,13 @@ impl Lexer {
             return Some(Token::new(TokenKind::Eq, self.span(start)));
         }
 
+        // Check for => (fat arrow — match arm separator and module alias)
+        if ch == '=' && self.peek() == Some('>') {
+            self.advance(); // consume =
+            self.advance(); // consume >
+            return Some(Token::new(TokenKind::FatArrow, self.span(start)));
+        }
+
         // Check for = (assign)
         if ch == '=' {
             self.advance();

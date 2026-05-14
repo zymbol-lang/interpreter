@@ -251,10 +251,10 @@ set_match_value(val, result<~) {
 
 value = 85
 ?? value {
-    90..100 : { set_match_value(1, match_result) }
-    80..89  : { set_match_value(2, match_result) }
-    70..79  : { set_match_value(3, match_result) }
-    _       : { set_match_value(0, match_result) }
+    90..100 => { set_match_value(1, match_result) }
+    80..89  => { set_match_value(2, match_result) }
+    70..79  => { set_match_value(3, match_result) }
+    _       => { set_match_value(0, match_result) }
 }
 
 >> "Match result: " match_result ¶  // Expected: 2

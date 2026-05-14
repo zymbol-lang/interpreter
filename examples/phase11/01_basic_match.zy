@@ -6,14 +6,14 @@
 // Match on integer literal
 day = 3
 day_name = ?? day {
-    1 : "Monday"
-    2 : "Tuesday"
-    3 : "Wednesday"
-    4 : "Thursday"
-    5 : "Friday"
-    6 : "Saturday"
-    7 : "Sunday"
-    _ : "Unknown"
+    1 => "Monday"
+    2 => "Tuesday"
+    3 => "Wednesday"
+    4 => "Thursday"
+    5 => "Friday"
+    6 => "Saturday"
+    7 => "Sunday"
+    _ => "Unknown"
 }
 
 >> "Day " day " is: " day_name ¶
@@ -21,10 +21,10 @@ day_name = ?? day {
 // Match on string literal
 language = "Zymbol"
 message = ?? language {
-    "Rust" : "Systems programming"
-    "Python" : "Scripting"
-    "Zymbol" : "Symbolic programming"
-    _ : "Unknown language"
+    "Rust" => "Systems programming"
+    "Python" => "Scripting"
+    "Zymbol" => "Symbolic programming"
+    _ => "Unknown language"
 }
 
 >> "Language: " message ¶
@@ -32,8 +32,8 @@ message = ?? language {
 // Match on boolean
 active = #1
 status = ?? active {
-    #1 : "Active"
-    #0 : "Inactive"
+    #1 => "Active"
+    #0 => "Inactive"
 }
 
 >> "Status: " status ¶
@@ -41,9 +41,9 @@ status = ?? active {
 // Match with wildcard default
 unknown_value = 42
 result = ?? unknown_value {
-    1 : "One"
-    2 : "Two"
-    _ : "Other"
+    1 => "One"
+    2 => "Two"
+    _ => "Other"
 }
 
 >> "Unknown value result: " result ¶

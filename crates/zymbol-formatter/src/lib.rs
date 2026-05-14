@@ -789,7 +789,7 @@ mod tests {
 
     #[test]
     fn test_format_match() {
-        let result = format("r=??x{1:\"one\"\n2:\"two\"\n_:\"other\"}").unwrap();
+        let result = format("r=??x{1=>\"one\"\n2=>\"two\"\n_=>\"other\"}").unwrap();
         assert!(result.contains("?? x"));
         assert!(result.contains("1"));
         assert!(result.contains("2"));

@@ -182,26 +182,26 @@ PI := 3.14159       // Const (immutable — reassignment is a runtime error)
 
 ```zymbol
 grade = ?? score {
-    90..100 : 'A'
-    80..89  : 'B'
-    70..79  : 'C'
-    60..69  : 'D'
-    _       : 'F'
+    90..100 => 'A'
+    80..89  => 'B'
+    70..79  => 'C'
+    60..69  => 'D'
+    _       => 'F'
 }
 
 // Comparison patterns
 state = ?? temperature {
-    < 0  : "ice"
-    < 20 : "cold"
-    < 35 : "warm"
-    _    : "hot"
+    < 0  => "ice"
+    < 20 => "cold"
+    < 35 => "warm"
+    _    => "hot"
 }
 
 // List containment
-?? n {
-    [1, 2] : "low"
-    [3, 4] : "mid"
-    _      : "other"
+label = ?? n {
+    [1, 2] => "low"
+    [3, 4] => "mid"
+    _      => "other"
 }
 ```
 
@@ -434,7 +434,7 @@ See `crates/zymbol-lexer/src/digit_blocks.rs` for the full registry.
 }
 
 // main.zy
-<# ./lib/math <= m
+<# ./lib/math => m
 >> m::sqrt(16) ¶        // → 4.0
 >> m.PI ¶               // → 3.14159
 ```
@@ -502,20 +502,120 @@ bash tests/scripts/vm_compare.sh
 ```
 
 Current status: **717 unit tests passing** across all crates.  
-VM parity: **424/424 PASS** (424 golden-file pairs; `@vm-skip` files excluded).
+VM parity: **436/436 PASS** (436 golden-file pairs; `@vm-skip` files excluded).
 
 ---
 
 ## Real-World Validation Projects
 
-Each milestone is stress-tested by building a non-trivial program entirely in Zymbol.
-Every obstacle found during construction is recorded and fed back into the language.
+Each release milestone is stress-tested by building a non-trivial program entirely in Zymbol.
+Bugs discovered during construction feed back directly into the language.
 
-| Project | Validates | Description |
-|---------|-----------|-------------|
-| [ZethyCLI](https://github.com/zymbol-lang/zy-ZethyCLI) | **v0.0.3** | Multi-turn AI chat CLI for Ollama — stress-tests modules, string handling, and HTTP |
-| [ZyAudit](https://github.com/zymbol-lang/zy-ZyAudit) | **v0.0.4** | Code auditing tool with Mandarin identifiers — validates Unicode/CJK as first-class citizens |
-| [Serpiente](https://github.com/zymbol-lang/zy-Serpiente) | **v0.0.5** *(in progress)* | Snake TUI game — stress-tests terminal primitives, register VM, and hot-definition variables |
+The three projects below also serve as cross-language proof: each is written in a different
+natural language (English, Mandarin, Spanish), demonstrating that Zymbol's keyword-free design
+is genuinely language-neutral — no flags, no special modes, no translation layer at the syntax level.
+
+### Summary
+
+| Project | Version | Code language | Features validated |
+|---------|---------|---------------|--------------------|
+| [ZethyCLI](https://github.com/zymbol-lang/zy-ZethyCLI) | **v0.0.3** | English | Modules, `<\cmd\>` shell exec, HTTP via Ollama, multi-turn state, string building |
+| [ZyAudit](https://github.com/zymbol-lang/zy-ZyAudit) | **v0.0.4** | 中文 (Mandarin) | CJK identifiers as first-class citizens, named tuples, HOF pipeline, `$~~` replace |
+| [Serpiente](https://github.com/zymbol-lang/zy-Serpiente) | **v0.0.5** | Español | TUI primitives, register VM, hot-definition `°`, tuple equality, labeled loops |
+
+---
+
+### ZethyCLI — v0.0.3 · English
+
+Multi-turn AI chat CLI for Ollama. Stress-tests the module system, HTTP via bash-exec,
+string interpolation, and persistent state across loop iterations.
+
+```zymbol
+// ZethyCLI — multi-turn AI chat
+<# ./lib/ollama => ai
+<# ./lib/http   => net
+
+MODEL   := "llama3"
+history = []
+
+@:chat {
+    << prompt
+    ? prompt == "quit" { @:chat! }
+    history = history$+ (role: "user", content: prompt)
+    response = ai::complete(MODEL, history)
+    history  = history$+ (role: "assistant", content: response)
+    >> response ¶
+}
+```
+
+---
+
+### ZyAudit — v0.0.4 · 中文 (Mandarin)
+
+Static code auditing tool. Written entirely in Mandarin identifiers — validates that
+CJK characters work as first-class symbols in every language construct: functions,
+named tuples, HOF arguments, and string operators.
+
+```zymbol
+// ZyAudit — 代码审计工具
+<# ./模块/词法 => 词法
+
+审计(源码路径) {
+    内容  = <\ "cat {源码路径}" \>
+    符号  = 词法::分析(内容)
+    问题  = 符号$| (项 -> 项.类型 == "警告")
+    <~ (路径: 源码路径, 问题数: 问题$#, 列表: 问题)
+}
+
+@ 文件:目标列表 {
+    报告 = 审计(文件)
+    >> 报告.路径 ": " 报告.问题数 " 个问题" ¶
+}
+```
+
+---
+
+### Serpiente — v0.0.5 · Español
+
+Snake game running in the terminal. Stress-tests TUI primitives (`>>!`, `>>~`, `<<|`),
+the register VM (`--vm`), hot-definition variables (`°`), and tuple equality under both
+execution backends.
+
+```zymbol
+// Serpiente — juego de Snake en TUI
+ANCHO := 40
+ALTO  := 20
+
+serpiente = [(10, 10), (10, 9), (10, 8)]
+dirección = "abajo"
+puntos    = 0
+
+mover(serp<~, dir) {
+    cabeza = serp[serp$#]
+    nueva  = ?? dir {
+        "arriba"    => (cabeza[1] - 1, cabeza[2])
+        "abajo"     => (cabeza[1] + 1, cabeza[2])
+        "izquierda" => (cabeza[1],     cabeza[2] - 1)
+        "derecha"   => (cabeza[1],     cabeza[2] + 1)
+    }
+    serp = (serp$+ nueva)$-[1]
+}
+
+@:juego {
+    tecla = <<|?
+    ? tecla == "q" { @:juego! }
+    dirección = ?? tecla {
+        "w" => "arriba"
+        "s" => "abajo"
+        "a" => "izquierda"
+        "d" => "derecha"
+        _   => dirección
+    }
+    mover(serpiente, dirección)
+    >>! ¶
+    dibujar(serpiente, puntos)
+}
+```
 
 ---
 
@@ -524,7 +624,7 @@ Every obstacle found during construction is recorded and fed back into the langu
 ```
 interpreter/
 ├── Cargo.toml           # Workspace (18 crates)
-├── zymbol-lang.ebnf     # Formal grammar (EBNF, v2.3.0)
+├── zymbol-lang.ebnf     # Formal grammar (EBNF, v3.0.0)
 ├── install-zymbol.sh    # Install script
 ├── crates/              # Rust source crates
 ├── tests/               # End-to-end test suite (424 golden pairs, 441 .zy files)

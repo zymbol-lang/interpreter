@@ -36,8 +36,8 @@ date_str = <\ "date '+%Y-%m-%d %H:%M:%S'" \>
 
 <\ "printf '%s\\n' '" SEP "' > " log_file \>
 wlog(log_file, "  Zymbol Manual Test Log")
-wlog(log_file, "  Date : " $++ date_str)
-wlog(log_file, "  Log  : " $++ log_file)
+wlog(log_file, "  Date => " $++ date_str)
+wlog(log_file, "  Log  => " $++ log_file)
 wlog(log_file, SEP)
 wlog(log_file, "")
 
@@ -103,10 +103,10 @@ skipped = 0
     // ── Append result to log ──────────────────────────────────────────────────
     t = <\ "date '+%H:%M:%S'" \>
     wlog(log_file, SUB)
-    wlog(log_file, "  File   : " $++ test_file)
-    wlog(log_file, "  Result : " $++ result)
-    ? (note$# > 0) { wlog(log_file, "  Note   : " $++ note) }
-    wlog(log_file, "  Time   : " $++ t)
+    wlog(log_file, "  File   => " $++ test_file)
+    wlog(log_file, "  Result => " $++ result)
+    ? (note$# > 0) { wlog(log_file, "  Note   => " $++ note) }
+    wlog(log_file, "  Time   => " $++ t)
     wlog(log_file, "")
 }
 
@@ -115,18 +115,18 @@ skipped = 0
 >> SEP ¶
 >> "  SUMMARY" ¶
 >> SEP ¶
->> "  Total  : " total ¶
->> "  PASS   : " pass ¶
->> "  FAIL   : " fail ¶
->> "  SKIP   : " skipped ¶
+>> "  Total  => " total ¶
+>> "  PASS   => " pass ¶
+>> "  FAIL   => " fail ¶
+>> "  SKIP   => " skipped ¶
 >> "" ¶
 >> "  Log: " log_file ¶
 >> SEP ¶
 
 wlog(log_file, SEP)
 wlog(log_file, "  SUMMARY")
-wlog(log_file, "  Total  : " $++ total)
-wlog(log_file, "  PASS   : " $++ pass)
-wlog(log_file, "  FAIL   : " $++ fail)
-wlog(log_file, "  SKIP   : " $++ skipped)
+wlog(log_file, "  Total  => " $++ total)
+wlog(log_file, "  PASS   => " $++ pass)
+wlog(log_file, "  FAIL   => " $++ fail)
+wlog(log_file, "  SKIP   => " $++ skipped)
 wlog(log_file, SEP)

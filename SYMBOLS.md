@@ -270,26 +270,48 @@ and its body, or a loop and its label.
 | `:!` | catch clause | binds the error type being caught |
 | `:>` | finally clause | defines the cleanup binding |
 | `name: value` | named tuple field | names a field within the tuple |
-| `<# path : alias` | module import with alias | *names* the import |
-| `#> { fn : name }` | export with rename | *names* the public surface of a function |
+| `@ i:arr` | for-each loop variable | *names* the iteration variable |
+| `1..10:2` | range step | *names* the increment |
+| `$~~[p:r]` | string replace separator | *names* replacement vs pattern |
+| `$[i:n]` | count-based slice | *names* start:count bounds |
 
 **Contract:** `:` always introduces or references a *name* — a definition relationship
-between a symbol and what it stands for.
+between a symbol and what it stands for. Alias and rename operations now use `=>`
+(which adds the outward direction: the name *maps toward* the consumer).
 
 ---
 
 ### Resolved: `<=` dual-role retired (v0.0.5)
 
 `<=` is now used **exclusively** as the less-than-or-equal comparison operator.
-All module alias and export rename uses of `<=` have been replaced with `:`:
+All module alias and export rename uses of `<=` have been replaced with `=>`:
 
 ```
-<# ./math : m        // import math, named m
-#> { _add : sum }    // export _add as public name sum
-#> { other::func : alias }
+<# ./math => m          // import math, named m
+#> { _add => sum }      // export _add as public name sum
+#> { other::func => alias }
 ```
 
-This restores the single-abstraction invariant: `:` handles all naming/binding.
+(The v0.0.5 development cycle went through an intermediate step using `:` before settling
+on `=>`. That history is documented in `IMPL_V005.md §Design history`.)
+
+---
+
+### `=>` — Maps To / Becomes / Is Exported As
+
+`=>` marks a **renaming or mapping relationship** — the left side is known internally
+by one name, but is expressed, matched against, or exported under the right side.
+
+| Symbol | Operation | Why `=>` |
+|--------|-----------|---------|
+| `?? x { pat => val }` | match arm separator | pattern *maps to* result |
+| `<# ruta => alias` | import alias | module *becomes known as* alias |
+| `#> { fn => pub }` | export rename | internal name *becomes* public name |
+
+**Contract:** `=>` always describes a transformation of identity — one name or pattern
+becomes another in the consumer's view. `=` encodes the mapping/equality relationship;
+`>` encodes the outward direction (the mapping resolves toward the consumer).
+This completes the arrow family alongside `->` (into body) and `<~` (back to caller).
 
 ---
 
@@ -358,6 +380,13 @@ Using `@~` outside a loop is a semantic error, same as `@!` outside a loop.
 ## Occupied Symbol Combinations Reference
 
 Use this table when designing new operators to avoid conflicts.
+
+### `=>` (maps to / renames as)
+| Used | Meaning |
+|------|---------|
+| `=>` | match arm separator, import alias, export rename |
+
+
 
 ### `<<` prefix (flow inward)
 | Used | Meaning |

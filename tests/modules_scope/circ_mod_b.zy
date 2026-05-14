@@ -1,6 +1,6 @@
 // Module B — imports Module C and calls c::fun_c
 # circ_mod_b {
-    <# ./circ_mod_c : c
+    <# ./circ_mod_c => c
 
     #> {
         fun_b

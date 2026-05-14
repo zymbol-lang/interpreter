@@ -209,7 +209,7 @@ mod tests {
     fn test_standalone_builder_creation() {
         let source = r#">> "Hello""#.to_string();
         let output = PathBuf::from("/tmp/test");
-        let builder = StandaloneBuilder::new_from_source(source.clone(), output, true);
+        let builder = StandaloneBuilder::new_from_source(source.clone(), None, output, true);
 
         assert_eq!(builder.source_code, source);
     }

@@ -18,7 +18,7 @@ Feature 7 is a **breaking syntax change** that retires `<=` as a dual-role symbo
 | 4 | Key input | `<<\|` / `<<\|?` | Medium |
 | 5 | Positioned output | `>>~ (r,c,BKS,fg,bg) > items` — sparse: `>>~(,,,fg,bg)>` | Medium |
 | 6 | TUI block | `>>\| { }` | Medium |
-| 7 | Module alias with `:` | `<# path : alias` / `#> { fn : pub }` | Low (breaking) |
+| 7 | Module alias separator (`<=` → `:` → `=>`) | `<# path => alias` / `#> { fn => pub }` | Low (breaking) |
 
 Recommended implementation order: 1 → 2 → 3 → 4 → 5 → 6 → 7.
 Features 2–6 all depend on crossterm being wired in (step 0).
@@ -866,12 +866,16 @@ The existing `execute_loop()` then catches the re-raised `Break` and stops norma
 
 ---
 
-## Feature 7 — Module alias: `<# path : alias` (retire `<=` in module contexts)
+## Feature 7 — Module alias separator (`<=` → `:` → `=>`)
+
+> **Note (post-implementation):** The separator settled on `=>` (`TokenKind::FatArrow`), not `:`.
+> The implementation plan below documents Step 2 of three (`<=` → `:`).
+> See §"Design history: the three-step alias separator" at the end of this file for the full account.
+> For the final syntax, see `CHANGELOG.md §[Unreleased]`.
 
 **Breaking change.** `<=` is replaced by `:` as the separator between module path and alias,
-and between export items and their public rename. After this change `<=` is used exclusively
-as the less-than-or-equal comparison operator. No new tokens or AST nodes — `Colon` already
-exists in the lexer.
+and between export items and their public rename (Step 2 of the journey).
+No new tokens or AST nodes — `Colon` already exists in the lexer.
 
 Rationale: documented in `SYMBOLS.md` under "Design Issue: `<=` as a Dual-Role Symbol".
 
@@ -973,6 +977,49 @@ Files to update:
 
 - **`SYMBOLS.md`** — remove "(proposed)" from `:` family entry `<# path : alias`; strike/resolve the "Design Issue" section
 - **`MANUAL.md`** — update import syntax example from `<# path <= alias` to `<# path : alias`
+
+---
+
+## Design history: the three-step alias separator
+
+> This section narrates the internal development journey of Feature 7.
+> For the final syntax, see `CHANGELOG.md §[Unreleased]`.
+> No intermediate state was ever published as a stable release — all three steps
+> occurred within the v0.0.5 development cycle.
+
+**Step 1 — `<=` (initial design)**
+The original module alias syntax used `<=` as the separator: `<# path <= alias`.
+Visual metaphor: "receiving" the module into a local name. The problem: `<=` was already
+the less-than-or-equal comparison operator, creating a dual role that confused the formatter
+and the type-checker. In any expression context, `path <= alias` parsed as a comparison,
+not a binding.
+
+**Step 2 — `:` (first replacement — what this plan implements)**
+`<=` was replaced by `Colon` (`:`) which already existed in the lexer.
+Syntax: `<# path : alias` / `#> { fn : pub }`.
+This resolved the dual-role conflict and required migrating ~57 `.zy` source files.
+This is the step documented in the implementation plan above.
+
+**Step 3 — `=>` (FatArrow, final decision)**
+During Serpiente development, `:` as an alias separator created a new ambiguity: `:` was also
+the match-arm separator (`pattern : result`), the named-tuple field separator (`(name: val)`),
+the for-each range separator (`@ i:1..10`), and several other binding uses. Reading
+`<# path : alias` versus `@ i:1..10` in the same file required contextual disambiguation
+that users found confusing.
+
+`=>` was adopted as the unambiguous separator for all "maps to" constructs:
+- Match arms: `pattern => result`
+- Import alias: `<# path => alias`
+- Export rename: `#> { fn => pub }`
+
+New token `TokenKind::FatArrow` was added to the lexer (`=` + `>`, routed before plain `=`).
+The formatter bug where it still emitted `<=` for import/export was fixed as part of this step.
+
+**Contract:** `=>` = `=` (mapping/equality) + `>` (outward direction). Reads as "becomes" or
+"maps to". Has no other meaning in the language.
+
+**Net result visible to users:** `<=` was the old syntax. `=>` is the current syntax.
+The intermediate `:` step is an implementation detail internal to v0.0.5 development.
 
 ---
 
@@ -1130,3 +1177,25 @@ for `StrRepeat` AST nodes. Full parity with tree-walker (no `@vm-skip` needed).
 **Test**: `tests/gaps/gap_serpiente_string_repeat.zy` (GAP-S1).
 **VS Code**: `$*` added to `collection-operators` character class in `zymbol.tmGrammar.json`;
 snippet `repeat` — `"str" $* n`.
+
+---
+
+## ✅ Conclusion — v0.0.5 COMPLETE (2026-04-29)
+
+All features in this plan were implemented and shipped in v0.0.5.
+
+| # | Feature | Status |
+|---|---------|--------|
+| 0 | crossterm wired into interpreter crate | ✅ complete |
+| 1 | Sleep `@~ N` | ✅ complete |
+| 2 | Clear screen `>>!` | ✅ complete |
+| 3 | Terminal size `>>?` | ✅ complete |
+| 4 | Key input `<<\|` / `<<\|?` | ✅ complete |
+| 5 | Positioned output `>>~ (r,c,BKS,fg,bg)` + sparse form | ✅ complete — BKS bitmask redesign included |
+| 6 | TUI block `>>\| { }` + VM cleanup guard | ✅ complete |
+| 7 | Module alias `=>` (FatArrow) replacing `<=` in import/export | ✅ complete — went through `<=` → `:` → `=>` internally; final syntax is `=>` |
+| 8 | Hot-definition operator `°` (prefix + postfix) | ✅ complete — added during Serpiente development |
+| 9 | String repeat `$*` | ✅ complete — added during Serpiente development |
+
+Test coverage at release: 424/424 E2E golden-file pairs; 423/423 TW ↔ VM parity tests.
+Validated by `bash tests/scripts/vm_compare.sh` (0 FAIL, 0 SKIP).

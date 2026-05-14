@@ -30,7 +30,7 @@ The interpreter supports two independent execution strategies:
 interpreter/
 ├── Cargo.toml                  # Workspace manifest (17 members)
 ├── Cargo.lock
-├── zymbol.ebnf                 # Formal grammar (EBNF)
+├── zymbol-lang.ebnf            # Formal grammar (EBNF) — v3.0.0, generated 2026-05-12
 ├── install-zymbol.sh           # Install script
 ├── crates/
 │   ├── zymbol-span/            # Source position tracking

@@ -3,7 +3,7 @@
 // Run: zymbol run --vm tests/stress_v2/bench_numeric.zy
 // ============================================================================
 
-<# ../scripts/lib_time : T
+<# ../scripts/lib_time => T
 
 >> "=== Zymbol Numeric v2 ===" ¶
 t_total = T::now()

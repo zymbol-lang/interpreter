@@ -1,4 +1,4 @@
-<# ./export_alias : m
+<# ./export_alias => m
 
 // Access function via its public name "sum" (internal name is _add)
 result = m::sum(3, 4)

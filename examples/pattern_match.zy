@@ -3,11 +3,11 @@
 // Grade a student based on score
 grade(score) {
     result = ?? score {
-        90..100 : 'A' { >> "Excellent!" ¶ }
-        80..89  : 'B' { >> "Great job!" ¶ }
-        70..79  : 'C' { >> "Good work!" ¶ }
-        60..69  : 'D' { >> "Needs improvement" ¶ }
-        _       : 'F' { >> "Please study more" ¶ }
+        90..100 => 'A' { >> "Excellent!" ¶ }
+        80..89  => 'B' { >> "Great job!" ¶ }
+        70..79  => 'C' { >> "Good work!" ¶ }
+        60..69  => 'D' { >> "Needs improvement" ¶ }
+        _       => 'F' { >> "Please study more" ¶ }
     }
 
     <~ result
@@ -25,9 +25,9 @@ scores = [95, 87, 72, 65, 45]
 // Day of week example using guards for multiple values
 day = 3
 day_type = ?? day {
-    _ ? day == 1 || day == 7 : "Weekend"
-    2..6                     : "Weekday"
-    _                        : "Invalid day"
+    _ ? day == 1 || day == 7 => "Weekend"
+    2..6                     => "Weekday"
+    _                        => "Invalid day"
 }
 
 >> ¶
@@ -38,10 +38,10 @@ day_type = ?? day {
 >> "FizzBuzz (1-15):" ¶
 @ n:1..15 {
     result = ?? n {
-        _ ? n % 15 == 0 : "FizzBuzz"
-        _ ? n % 3 == 0  : "Fizz"
-        _ ? n % 5 == 0  : "Buzz"
-        _               : n
+        _ ? n % 15 == 0 => "FizzBuzz"
+        _ ? n % 3 == 0  => "Fizz"
+        _ ? n % 5 == 0  => "Buzz"
+        _               => n
     }
     >> result + " "
 }
