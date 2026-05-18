@@ -28,7 +28,7 @@ jobs:
           - arch: aarch64
             rust_target: aarch64-unknown-linux-gnu
             musl_target: aarch64-unknown-linux-musl
-            cross_linker_pkg: gcc-aarch64-linux-gnu
+            cross_linker_pkg: gcc-aarch64-linux-gnu libc6-dev-arm64-cross
             use_cross: true
 
     steps:
