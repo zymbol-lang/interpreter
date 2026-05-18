@@ -15,19 +15,21 @@ permissions:
 jobs:
   build-linux:
     name: Linux ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
             musl_target: x86_64-unknown-linux-musl
-            musl_linker: ''
+            cross_linker_pkg: ''
+            cross_linker_bin: ''
           - arch: aarch64
-            runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
             musl_target: aarch64-unknown-linux-musl
-            musl_linker: musl-gcc
+            cross_linker_pkg: gcc-aarch64-linux-gnu
+            cross_linker_bin: aarch64-linux-gnu-gcc
 
     steps:
       - name: Checkout
@@ -36,7 +38,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.musl_target }}
+          targets: ${{ matrix.rust_target }},${{ matrix.musl_target }}
 
       - name: Read version
         run: |
@@ -48,10 +50,25 @@ jobs:
           sudo add-apt-repository universe -y
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            dpkg rpm-build zstd musl-tools
+            dpkg rpm-build zstd musl-tools \
+            ${{ matrix.cross_linker_pkg }}
+
+      - name: Configure cross-linker (aarch64 only)
+        if: matrix.cross_linker_bin != ''
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<EOF
+          [target.${{ matrix.rust_target }}]
+          linker = "${{ matrix.cross_linker_bin }}"
+          EOF
 
       - name: Build GNU binary
-        run: cargo build --release
+        run: cargo build --release --target ${{ matrix.rust_target }}
+
+      - name: Expose binary at target/release/ for build-packages.sh
+        run: |
+          mkdir -p target/release
+          cp "target/${{ matrix.rust_target }}/release/zymbol" target/release/zymbol
 
       - name: Build .deb, .rpm, .pkg.tar.zst
         run: |
@@ -63,16 +80,15 @@ jobs:
             --out-dir packaging/dist
 
       - name: Build static musl binary
-        env:
-          MUSL_LINKER: ${{ matrix.musl_linker }}
-          MUSL_TARGET: ${{ matrix.musl_target }}
         run: |
-          if [[ -n "$MUSL_LINKER" ]]; then
-            ENV_KEY="CARGO_TARGET_$(echo "$MUSL_TARGET" | tr '[:lower:]-' '[:upper:]_')_LINKER"
-            export "$ENV_KEY=$MUSL_LINKER"
+          MUSL_TARGET="${{ matrix.musl_target }}"
+          if [[ "${{ matrix.arch }}" == "aarch64" ]]; then
+            cargo install cross --locked
+            cross build --release --target "$MUSL_TARGET"
+          else
+            RUSTFLAGS="-C target-feature=+crt-static" \
+              cargo build --release --target "$MUSL_TARGET"
           fi
-          RUSTFLAGS="-C target-feature=+crt-static" \
-            cargo build --release --target "$MUSL_TARGET"
           install -m755 \
             "target/$MUSL_TARGET/release/zymbol" \
             "packaging/dist/zymbol_lang_v${VERSION}_${{ matrix.arch }}_linux"
