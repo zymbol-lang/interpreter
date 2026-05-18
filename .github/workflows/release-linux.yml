@@ -45,14 +45,11 @@ jobs:
           VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
-      - name: Install packaging tools
+      - name: Install tools (main repo only — no universe needed)
         run: |
-          echo "deb http://azure.archive.ubuntu.com/ubuntu jammy universe" \
-            | sudo tee /etc/apt/sources.list.d/jammy-universe.list
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            dpkg rpm-build zstd musl-tools \
-            ${{ matrix.cross_linker_pkg }}
+            zstd ${{ matrix.cross_linker_pkg }}
 
       - name: Configure cross-linker (aarch64 only)
         if: matrix.cross_linker_bin != ''
@@ -71,14 +68,39 @@ jobs:
           mkdir -p target/release
           cp "target/${{ matrix.rust_target }}/release/zymbol" target/release/zymbol
 
-      - name: Build .deb, .rpm, .pkg.tar.zst
+      - name: Build .deb (dpkg-deb is pre-installed)
         run: |
           bash packaging/build-packages.sh \
             --arch ${{ matrix.arch }} \
-            --formats deb,rpm,arch \
+            --formats deb \
             --no-build \
             --no-timestamp \
             --out-dir packaging/dist
+
+      - name: Build .pkg.tar.zst (Arch Linux)
+        run: |
+          bash packaging/build-packages.sh \
+            --arch ${{ matrix.arch }} \
+            --formats arch \
+            --no-build \
+            --no-timestamp \
+            --out-dir packaging/dist
+
+      - name: Build .rpm (via Fedora container)
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            --workdir /workspace \
+            fedora:40 \
+            bash -c "
+              dnf install -y rpm-build > /dev/null 2>&1 &&
+              bash packaging/build-packages.sh \
+                --arch ${{ matrix.arch }} \
+                --formats rpm \
+                --no-build \
+                --no-timestamp \
+                --out-dir packaging/dist
+            "
 
       - name: Build static musl binary
         run: |
