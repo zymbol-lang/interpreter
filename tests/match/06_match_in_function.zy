@@ -1,10 +1,10 @@
 // Test: match inside function
 classify(n) {
     <~ ?? n {
-        0      : "zero"
-        1..9   : "single digit"
-        10..99 : "double digit"
-        _      : "large"
+        0      => "zero"
+        1..9   => "single digit"
+        10..99 => "double digit"
+        _      => "large"
     }
 }
 

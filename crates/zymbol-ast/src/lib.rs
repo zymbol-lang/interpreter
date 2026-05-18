@@ -11,13 +11,13 @@ mod literals;
 pub use literals::LiteralExpr;
 
 mod io;
-pub use io::{Input, InputCast, InputPrompt, Newline, Output};
+pub use io::{ClearScreen, Input, InputCast, InputPrompt, KeyInput, Newline, Output, OutputPos, TuiBlock};
 
 mod if_stmt;
 pub use if_stmt::{ElseIfBranch, IfStmt};
 
 mod loops;
-pub use loops::{Break, Continue, Loop};
+pub use loops::{Break, Continue, Loop, Sleep};
 
 mod match_stmt;
 pub use match_stmt::{MatchCase, MatchExpr, Pattern};
@@ -44,7 +44,7 @@ pub use collection_ops::{
 };
 
 mod string_ops;
-pub use string_ops::{StringReplaceExpr, StringSplitExpr, ConcatBuildExpr};
+pub use string_ops::{StringReplaceExpr, StringSplitExpr, StringRepeatExpr, ConcatBuildExpr};
 
 mod data_ops;
 pub use data_ops::{
@@ -54,7 +54,7 @@ pub use data_ops::{
 };
 
 mod expressions;
-pub use expressions::{BinaryExpr, UnaryExpr, PipeExpr, PipeArg};
+pub use expressions::{BinaryExpr, UnaryExpr, PipeExpr, PipeArg, TerminalSizeExpr};
 
 mod script_exec;
 pub use script_exec::{ExecuteExpr, BashExecExpr};
@@ -123,6 +123,16 @@ pub enum Statement {
     /// Sets the active output numeral system for all subsequent >> outputs.
     /// `base` is the block base codepoint of the chosen script.
     SetNumeralMode { base: u32, span: Span },
+    /// Sleep statement: @~ N (milliseconds, only valid inside @ block)
+    Sleep(Sleep),
+    /// Key input: <<| var (blocking) or <<|? var (non-blocking)
+    KeyInput(KeyInput),
+    /// Clear screen: >>!
+    ClearScreen(ClearScreen),
+    /// Positioned output: >>~ (row, col [, fg [, bg]]) > items
+    OutputPos(OutputPos),
+    /// TUI block: >>| { } — alternate screen + raw mode scope
+    TuiBlock(TuiBlock),
 }
 
 /// Expression statement: expr (evaluated for side effects, result discarded)
@@ -191,6 +201,8 @@ pub enum Expr {
     CollectionUpdate(CollectionUpdateExpr),
     /// Collection slice: collection$[start..end]
     CollectionSlice(CollectionSliceExpr),
+    /// String repeat: string$* n → string repeated n times
+    StringRepeat(StringRepeatExpr),
     /// String replace: string$~~[pattern:replacement:count?] - replace pattern with replacement
     StringReplace(StringReplaceExpr),
     /// String split: string$/ delimiter → Array(String)
@@ -241,6 +253,8 @@ pub enum Expr {
     FlatExtract(FlatExtractExpr),
     /// Structured extraction: arr[[g] ; [g]] — returns Array of Arrays
     StructuredExtract(StructuredExtractExpr),
+    /// Terminal size query: >>? — returns (rows, cols) tuple
+    TerminalSize(TerminalSizeExpr),
 }
 
 
@@ -250,6 +264,10 @@ pub enum Expr {
 pub struct IdentifierExpr {
     pub name: String,
     pub span: Span,
+    /// `x°` — postfix hot; auto-init to neutral in nearest `@` scope
+    pub hot: bool,
+    /// `°x` — prefix pre-hot; auto-init to neutral in scope above nearest `@`
+    pub pre_hot: bool,
 }
 
 
@@ -291,7 +309,15 @@ pub struct FunctionCallExpr {
 
 impl IdentifierExpr {
     pub fn new(name: String, span: Span) -> Self {
-        Self { name, span }
+        Self { name, span, hot: false, pre_hot: false }
+    }
+
+    pub fn new_hot(name: String, span: Span) -> Self {
+        Self { name, span, hot: true, pre_hot: false }
+    }
+
+    pub fn new_pre_hot(name: String, span: Span) -> Self {
+        Self { name, span, hot: false, pre_hot: true }
     }
 }
 
@@ -377,6 +403,7 @@ impl Expr {
             Expr::CollectionFindAll(op) => op.span,
             Expr::CollectionUpdate(op) => op.span,
             Expr::CollectionSlice(op) => op.span,
+            Expr::StringRepeat(op) => op.span,
             Expr::StringReplace(op) => op.span,
             Expr::StringSplit(op) => op.span,
             Expr::ConcatBuild(op) => op.span,
@@ -402,6 +429,7 @@ impl Expr {
             Expr::DeepIndex(di) => di.span,
             Expr::FlatExtract(fe) => fe.span,
             Expr::StructuredExtract(se) => se.span,
+            Expr::TerminalSize(t) => t.span,
         }
     }
 }

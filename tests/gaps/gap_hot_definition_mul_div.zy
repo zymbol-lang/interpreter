@@ -1,0 +1,24 @@
+// hot-def ° operator: VM parity achieved in v0.0.5
+// *= and /= use neutral 1 (multiplicative identity), not 0.
+
+// °prod (prefix) accumulates product and survives the loop: 1 * 2 * 3 * 4 = 24
+@ i:[2, 3, 4] {
+    °prod *= i
+}
+>> prod ¶
+
+// °div_int (prefix): 1 / 2 / 4 = 0 (integer truncation)
+@ i:[2, 4] {
+    °div_int /= i
+}
+>> div_int ¶
+
+// x° outside loop: single application (no loop → global scope)
+x° *= 7
+>> x ¶
+
+// °suma (prefix): += still uses neutral 0 (no regression)
+@ i:[10, 20, 30] {
+    °suma += i
+}
+>> suma ¶

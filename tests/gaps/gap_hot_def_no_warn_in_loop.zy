@@ -1,0 +1,16 @@
+// Inside a loop, ° on an already-defined var does NOT warn (loop_depth > 0)
+
+// acc defined before loop; inside loop acc° += i is valid (no warning)
+acc° = 0
+@ i:1..4 {
+    acc° += i
+}
+>> acc ¶
+
+// Nested: °acum (prefix) inside @ k anchors to @ _j scope; no warning in either loop
+@ _j:1..2 {
+    @ k:1..3 {
+        °acum += k
+    }
+    >> acum ¶
+}

@@ -83,10 +83,18 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
 
         // I/O and flow operators
         TokenKind::Output            // >>
+        | TokenKind::OutputClear     // >>!
+        | TokenKind::OutputQuery     // >>?
+        | TokenKind::OutputGate      // >>|
+        | TokenKind::OutputPos       // >>~
         | TokenKind::Input           // <<
+        | TokenKind::KeyBlock        // <<|
+        | TokenKind::KeyNonBlock     // <<|?
+        | TokenKind::AtTilde         // @~
         | TokenKind::Newline         // ¶
         | TokenKind::Backslash2      // \\
         | TokenKind::Arrow           // ->
+        | TokenKind::FatArrow        // =>
         | TokenKind::ScopeResolution // ::
         | TokenKind::PipeOp          // |>
         | TokenKind::CliArgsCapture   // ><
@@ -149,6 +157,7 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         | TokenKind::DollarMinusMinus // $--
         | TokenKind::DollarTildeTilde // $~~
         | TokenKind::DollarSlash     // $/
+        | TokenKind::DollarStar      // $*
         | TokenKind::DollarExclaim   // $!
         | TokenKind::DollarExclaimExclaim // $!!
         | TokenKind::DollarCaretPlus  // $^+
@@ -200,7 +209,7 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         => Some(token_type_index::NUMBER),
 
         // Identifiers - default to variable (context can refine later)
-        TokenKind::Ident(_) => Some(token_type_index::VARIABLE),
+        TokenKind::Ident(_) | TokenKind::HotIdent(_) | TokenKind::PreHotIdent(_) => Some(token_type_index::VARIABLE),
 
         // Delimiters - no semantic meaning for highlighting
         TokenKind::LBrace
@@ -262,6 +271,7 @@ fn token_length(kind: &TokenKind) -> u32 {
         TokenKind::Output           // >>
         | TokenKind::Input          // <<
         | TokenKind::Arrow          // ->
+        | TokenKind::FatArrow       // =>
         | TokenKind::Return         // <~
         | TokenKind::ScopeResolution // ::
         | TokenKind::PipeOp         // |>
@@ -269,6 +279,7 @@ fn token_length(kind: &TokenKind) -> u32 {
         | TokenKind::DoubleQuestion // ??
         | TokenKind::AtBreak        // @!
         | TokenKind::AtContinue     // @>
+        | TokenKind::AtTilde        // @~
         | TokenKind::AtColonLabelBreak(_)    // @:label! (2+name+1 chars, approximated as 2 here)
         | TokenKind::AtColonLabelContinue(_) // @:label> (2+name+1 chars, approximated as 2 here)
         | TokenKind::TryBlock       // !?
@@ -304,6 +315,7 @@ fn token_length(kind: &TokenKind) -> u32 {
         | TokenKind::DollarLt       // $<
         | TokenKind::DollarExclaim  // $!
         | TokenKind::DollarSlash    // $/
+        | TokenKind::DollarStar     // $* (string repeat)
         | TokenKind::HashPipe       // #|
         | TokenKind::HashQuestion   // #?
         | TokenKind::HashDot        // #.
@@ -327,7 +339,15 @@ fn token_length(kind: &TokenKind) -> u32 {
         | TokenKind::DollarMinusLBracket  // $-[
         | TokenKind::DollarCaretPlus      // $^+
         | TokenKind::DollarCaretMinus     // $^-
+        | TokenKind::OutputClear          // >>!
+        | TokenKind::OutputQuery          // >>?
+        | TokenKind::OutputGate           // >>|
+        | TokenKind::OutputPos            // >>~
+        | TokenKind::KeyBlock             // <<|
         => 3,
+
+        TokenKind::KeyNonBlock            // <<|?
+        => 4,
         TokenKind::DollarCaret            // $^ (2 chars)
         => 2,
 
@@ -347,6 +367,8 @@ fn token_length(kind: &TokenKind) -> u32 {
         TokenKind::Integer(n) => format!("{}", n).len() as u32,
         TokenKind::Float(f) => format!("{}", f).len() as u32,
         TokenKind::Ident(name) => name.len() as u32,
+        TokenKind::HotIdent(name) => (name.len() + '°'.len_utf8()) as u32,
+        TokenKind::PreHotIdent(name) => (name.len() + '°'.len_utf8()) as u32,
         TokenKind::HashComma | TokenKind::HashCaret => 2, // #, or #^ (two-char tokens)
         TokenKind::HashHashDot | TokenKind::HashHashBang => 3, // ##. or ##! (three-char)
         TokenKind::HashHashHash => 3, // ### (three-char)

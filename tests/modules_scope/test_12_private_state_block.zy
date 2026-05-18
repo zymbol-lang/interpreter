@@ -1,4 +1,4 @@
-<# ./private_state_block <= c
+<# ./private_state_block => c
 
 c::increment()
 c::increment()

@@ -6,7 +6,7 @@
 //! - Newline statements: ¶ OR \\
 //! - CLI args capture: >< variable
 
-use zymbol_ast::{CliArgsCaptureStmt, Expr, IdentifierExpr, Input, InputCast, InputPrompt, LiteralExpr, Newline, Output};
+use zymbol_ast::{ClearScreen, CliArgsCaptureStmt, Expr, IdentifierExpr, Input, InputCast, InputPrompt, KeyInput, LiteralExpr, Newline, Output, OutputPos, TuiBlock};
 use zymbol_common::Literal;
 use zymbol_error::Diagnostic;
 use zymbol_lexer::{StringPart, TokenKind};
@@ -157,7 +157,13 @@ impl Parser {
                 | TokenKind::At            // loop/break/continue
                 | TokenKind::AtLabel(_)       // labeled loop (legacy)
                 | TokenKind::AtColonLabel(_) // labeled loop
+                | TokenKind::AtTilde       // sleep statement
                 | TokenKind::Input         // input statement
+                | TokenKind::KeyBlock      // blocking key input
+                | TokenKind::KeyNonBlock   // non-blocking key input
+                | TokenKind::OutputClear   // clear screen
+                | TokenKind::OutputPos     // positioned output
+                | TokenKind::OutputGate    // TUI block
                 | TokenKind::Return        // return statement
                 => {
                     break;
@@ -205,6 +211,123 @@ impl Parser {
     }
 
     /// Parse CLI args capture statement: >< variable
+    /// Parse clear screen: >>!
+    pub(crate) fn parse_clear_screen(&mut self) -> Result<Statement, Diagnostic> {
+        let span = self.advance().span; // consume >>!
+        Ok(Statement::ClearScreen(ClearScreen::new(span)))
+    }
+
+    /// Parse key input: <<| var (blocking) or <<|? var (non-blocking)
+    pub(crate) fn parse_key_input(&mut self, blocking: bool) -> Result<Statement, Diagnostic> {
+        let start_span = self.advance().span; // consume <<| or <<|?
+        let var_token = self.peek().clone();
+        let variable = match &var_token.kind {
+            TokenKind::Ident(name) => { self.advance(); name.clone() }
+            _ => return Err(Diagnostic::error("expected variable name after key input operator")
+                .with_span(var_token.span)
+                .with_help(if blocking { "syntax: <<| var" } else { "syntax: <<|? var" })),
+        };
+        let span = start_span.to(&var_token.span);
+        Ok(Statement::KeyInput(KeyInput::new(variable, blocking, span)))
+    }
+
+    /// Parse positioned output: >>~ (fila, col, BKS, fg, bg) > items
+    /// Sparse inline: >>~(,,,15,0)> — commas as position markers, empty slot = absent
+    pub(crate) fn parse_output_pos(&mut self) -> Result<Statement, Diagnostic> {
+        let start_span = self.advance().span; // consume >>~
+
+        let slots: Vec<Option<Expr>> = if matches!(self.peek().kind, TokenKind::LParen) {
+            self.parse_sparse_pos_tuple()?
+        } else if matches!(self.peek().kind, TokenKind::Ident(_)) {
+            // Variable evaluated at runtime as dense tuple
+            let expr = self.parse_postfix()?;
+            vec![Some(expr)]
+        } else {
+            let t = self.peek().clone();
+            return Err(Diagnostic::error("expected '(' or variable after >>~")
+                .with_span(t.span)
+                .with_help("syntax: >>~ (fila, col [, BKS [, fg [, bg]]]) > items"));
+        };
+
+        let gt = self.peek().clone();
+        if !matches!(gt.kind, TokenKind::Gt) {
+            return Err(Diagnostic::error("expected '>' after >>~ position")
+                .with_span(gt.span)
+                .with_help("syntax: >>~ (fila, col) > items"));
+        }
+        let gt_span = self.advance().span; // consume >
+        let items = self.parse_output_items_same_line(gt_span.start.line)?;
+        let end_span = items.last().map(|e| e.span()).unwrap_or(gt_span);
+        Ok(Statement::OutputPos(OutputPos::new(slots, items, start_span.to(&end_span))))
+    }
+
+    /// Parse sparse position tuple: (slot0, slot1, slot2, slot3, slot4)
+    /// Each slot may be empty (absent). Max 5 slots: [fila, col, BKS, fg, bg].
+    fn parse_sparse_pos_tuple(&mut self) -> Result<Vec<Option<Expr>>, Diagnostic> {
+        self.advance(); // consume (
+        let mut slots: Vec<Option<Expr>> = Vec::new();
+
+        loop {
+            match self.peek().kind.clone() {
+                TokenKind::RParen => {
+                    self.advance(); // consume )
+                    break;
+                }
+                TokenKind::Comma => {
+                    slots.push(None); // absent slot
+                    self.advance();   // consume ,
+                }
+                _ => {
+                    let expr = self.parse_expr()?;
+                    slots.push(Some(expr));
+                    if matches!(self.peek().kind, TokenKind::Comma) {
+                        self.advance(); // consume ,
+                    }
+                }
+            }
+            if slots.len() > 5 {
+                let t = self.peek().clone();
+                return Err(Diagnostic::error(
+                    ">>~ position tuple has at most 5 slots: (fila, col, BKS, fg, bg)",
+                )
+                .with_span(t.span));
+            }
+        }
+        Ok(slots)
+    }
+
+    /// Parse TUI block: >>| { statements }
+    pub(crate) fn parse_tui_block(&mut self) -> Result<Statement, Diagnostic> {
+        let start_span = self.advance().span; // consume >>|
+        if !matches!(self.peek().kind, TokenKind::LBrace) {
+            let t = self.peek().clone();
+            return Err(Diagnostic::error("expected '{' after >>|")
+                .with_span(t.span)
+                .with_help("TUI block syntax: >>| { statements }"));
+        }
+        let body = self.parse_block()?;
+        let span = start_span.to(&body.span);
+        Ok(Statement::TuiBlock(TuiBlock::new(body, span)))
+    }
+
+    /// Parse items for >>~ positioned output; stops at end of source line, ¶, \\, } or EOF.
+    /// Uses the source line of the >>~ token to detect line boundaries (the lexer discards \n).
+    /// Used by >>~ so that consecutive positioned-output statements don't merge into one.
+    pub(crate) fn parse_output_items_same_line(&mut self, line: u32) -> Result<Vec<Expr>, Diagnostic> {
+        let mut items = Vec::new();
+        loop {
+            if matches!(
+                self.peek().kind,
+                TokenKind::Newline | TokenKind::Backslash2 | TokenKind::RBrace | TokenKind::Eof
+            ) { break; }
+            if self.peek().span.start.line != line {
+                break;
+            }
+            items.push(self.parse_output_item()?);
+        }
+        Ok(items)
+    }
+
     pub(crate) fn parse_cli_args_capture(&mut self) -> Result<Statement, Diagnostic> {
         let start_span = self.advance().span; // consume ><
 

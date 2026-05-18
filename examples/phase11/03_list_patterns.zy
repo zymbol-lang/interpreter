@@ -6,8 +6,8 @@
 // Match empty list
 empty = []
 result1 = ?? empty {
-    [] : "Empty array"
-    _  : "Non-empty array"
+    [] => "Empty array"
+    _  => "Non-empty array"
 }
 
 >> "Empty array: " result1 ¶
@@ -15,8 +15,8 @@ result1 = ?? empty {
 // Match single-element list
 single = [42]
 single_result = ?? single {
-    [42] : "The answer"
-    _    : "Something else"
+    [42] => "The answer"
+    _    => "Something else"
 }
 
 >> "Single element result: " single_result ¶

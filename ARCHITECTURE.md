@@ -30,7 +30,7 @@ The interpreter supports two independent execution strategies:
 interpreter/
 ├── Cargo.toml                  # Workspace manifest (17 members)
 ├── Cargo.lock
-├── zymbol.ebnf                 # Formal grammar (EBNF)
+├── zymbol-lang.ebnf            # Formal grammar (EBNF) — v3.0.0, generated 2026-05-12
 ├── install-zymbol.sh           # Install script
 ├── crates/
 │   ├── zymbol-span/            # Source position tracking
@@ -379,7 +379,7 @@ zymbol-cli       (all of the above) ──────────────�
 | `zymbol run FILE` | Execute with tree-walker (default) |
 | `zymbol run --vm FILE` | Execute with register VM |
 | `zymbol run FILE [ARGS]` | Pass CLI arguments to program (`><` capture) |
-| `zymbol build FILE -o OUT [--release]` | Compile to standalone executable |
+| `zymbol build FILE -o OUT [--release]` | Package into standalone executable (bundles source + interpreter; not native compilation). Requires: Rust/Cargo installed, full repo checkout, run from `interpreter/` |
 | `zymbol check FILE` | Syntax and semantic check only |
 | `zymbol fmt FILE [--write] [--check] [--indent N]` | Format source code |
 | `zymbol repl` | Start interactive REPL |

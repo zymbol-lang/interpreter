@@ -1,6 +1,6 @@
 // Module C — imports Module A, completing the cycle: A → B → C → A
 # circ_mod_c {
-    <# ./circ_mod_a <= a
+    <# ./circ_mod_a => a
 
     #> {
         fun_c

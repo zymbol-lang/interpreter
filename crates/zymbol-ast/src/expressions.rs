@@ -33,12 +33,22 @@ pub enum PipeArg {
     Expr(Expr),        // Regular expression argument
 }
 
+/// Terminal size query expression: >>? — returns (rows, cols) positional tuple
+#[derive(Debug, Clone)]
+pub struct TerminalSizeExpr {
+    pub span: Span,
+}
+
 /// Pipe expression: value |> func(_, args) or value |> lambda(_)
 #[derive(Debug, Clone)]
 pub struct PipeExpr {
-    pub left: Box<Expr>,       // Value being piped
-    pub callable: Box<Expr>,   // Function/lambda to call
-    pub arguments: Vec<PipeArg>, // Arguments with placeholders
+    pub left: Box<Expr>,
+    pub callable: Box<Expr>,
+    pub arguments: Vec<PipeArg>,
+    /// True when the user wrote `|> f` with no explicit argument list.
+    /// The parser inserts a Placeholder in `arguments`, but the formatter
+    /// must not emit `(_)` — it should reconstruct the no-args form (§2.1).
+    pub implicit: bool,
     pub span: Span,
 }
 

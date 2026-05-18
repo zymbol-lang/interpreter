@@ -7,16 +7,39 @@
 //! - Labeled loops: @ @label { }
 
 use std::io::Write;
-use zymbol_ast::{Break, Continue, Expr, Loop};
+use zymbol_ast::{Break, Continue, Expr, Loop, Sleep};
 use crate::{ControlFlow, Interpreter, Result, RuntimeError, Value};
 
+/// Returns true if an assignment's RHS contains a hot self-reference to the same variable.
+/// Covers `arr = arr°$+ i` (CollectionAppend) and `s = s° + ch` (Binary Add).
+fn rhs_has_hot_self_ref(expr: &zymbol_ast::Expr, name: &str) -> bool {
+    use zymbol_ast::Expr;
+    match expr {
+        Expr::CollectionAppend(op) => {
+            if let Expr::Identifier(id) = op.collection.as_ref() {
+                (id.hot || id.pre_hot) && id.name == name
+            } else { false }
+        }
+        Expr::Binary(bin) => {
+            if let Expr::Identifier(id) = bin.left.as_ref() {
+                (id.hot || id.pre_hot) && id.name == name
+            } else { false }
+        }
+        _ => false,
+    }
+}
+
 /// QW16: Returns true if the block introduces any variable NOT already in scope.
-/// If false, execute_block_no_scope is safe — no new scope is needed.
+/// Hot (`x°`) and pre-hot (`°x`) assignments always anchor to a loop scope, so they
+/// never need a fresh body scope. If false, execute_block_no_scope is safe.
 /// Checked ONCE before the loop starts (not per iteration).
 fn body_needs_own_scope<W: std::io::Write>(block: &zymbol_ast::Block, interp: &Interpreter<W>) -> bool {
     use zymbol_ast::Statement;
     block.statements.iter().any(|s| match s {
-        Statement::Assignment(a) => interp.get_variable(&a.name).is_none(),
+        Statement::Assignment(a) => {
+            let is_hot = a.hot || a.pre_hot || rhs_has_hot_self_ref(&a.value, &a.name);
+            !is_hot && interp.get_variable(&a.name).is_none()
+        }
         Statement::ConstDecl(_) => true,
         Statement::DestructureAssign(_) => true,
         _ => false,
@@ -47,6 +70,23 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
+    /// Execute sleep statement: @~ N (milliseconds)
+    pub(crate) fn execute_sleep(&mut self, sleep: &Sleep) -> Result<()> {
+        let ms = match self.eval_expr(&sleep.duration)? {
+            Value::Int(n) if n >= 0 => n as u64,
+            Value::Int(n) => return Err(RuntimeError::Generic {
+                message: format!("@~ requires non-negative duration, got {}", n),
+                span: sleep.span,
+            }),
+            other => return Err(RuntimeError::Generic {
+                message: format!("@~ requires integer milliseconds, got {}", self.value_type_name(&other)),
+                span: sleep.span,
+            }),
+        };
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+        Ok(())
+    }
+
     /// Execute break statement: @! [label]
     pub(crate) fn execute_break(&mut self, break_stmt: &Break) -> Result<()> {
         self.set_control_flow(ControlFlow::Break(break_stmt.label.clone()));
@@ -60,7 +100,15 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Execute loop statement: @ condition { } or @ var:iterable { }
+    /// Always creates a persistent loop-anchor scope so that x° and °x anchoring works.
     pub(crate) fn execute_loop(&mut self, loop_stmt: &Loop) -> Result<()> {
+        self.push_loop_scope();
+        let result = self.run_loop(loop_stmt);
+        self.pop_loop_scope();
+        result
+    }
+
+    fn run_loop(&mut self, loop_stmt: &Loop) -> Result<()> {
         // Check if this is a for-each loop
         if let (Some(iterator_var), Some(iterable_expr)) = (&loop_stmt.iterator_var, &loop_stmt.iterable) {
             // B5: Fast path for integer ranges — avoid Vec allocation
@@ -91,7 +139,7 @@ impl<W: Write> Interpreter<W> {
 
                 let forward = start <= end;
                 let mut current = start;
-                // QW16: check once whether loop body needs a fresh scope
+                // QW16: check once whether loop body needs a fresh scope per iteration
                 let needs_scope = body_needs_own_scope(&loop_stmt.body, self);
                 loop {
                     if (forward && current > end) || (!forward && current < end) { break; }
@@ -113,13 +161,11 @@ impl<W: Write> Interpreter<W> {
             // Slow path: non-range iterables (arrays, strings)
             let values = self.eval_iterable(iterable_expr)?;
 
-            // QW16: check once whether loop body needs a fresh scope
+            // QW16: check once whether loop body needs a fresh scope per iteration
             let needs_scope = body_needs_own_scope(&loop_stmt.body, self);
             for value in values {
-                // Set iterator variable
                 self.set_variable(iterator_var, value);
 
-                // Execute loop body
                 if needs_scope {
                     self.execute_block(&loop_stmt.body)?;
                 } else {
@@ -133,13 +179,10 @@ impl<W: Write> Interpreter<W> {
         } else {
             // While loop, TIMES loop, or infinite loop
 
-            // Check if we have a condition
             if let Some(condition_expr) = &loop_stmt.condition {
-                // Evaluate condition ONCE to determine loop type
                 let initial_value = self.eval_expr(condition_expr)?;
 
-                // INFERENCIA: Detect TIMES vs WHILE based on initial value type
-                // QW16: check once whether loop body needs a fresh scope
+                // QW16: check once whether loop body needs a fresh scope per iteration
                 let needs_scope = body_needs_own_scope(&loop_stmt.body, self);
                 match initial_value {
                     Value::Int(n) if n > 0 => {
@@ -158,11 +201,8 @@ impl<W: Write> Interpreter<W> {
                         loop {
                             let condition = self.eval_expr(condition_expr)?;
 
-                            if !self.is_truthy(&condition) {
-                                break; // Exit loop if condition is false
-                            }
+                            if !self.is_truthy(&condition) { break; }
 
-                            // Execute loop body
                             if needs_scope {
                                 self.execute_block(&loop_stmt.body)?;
                             } else {
@@ -174,7 +214,6 @@ impl<W: Write> Interpreter<W> {
                 }
             } else {
                 // Infinite loop: no condition
-                // QW16: check once whether loop body needs a fresh scope
                 let needs_scope = body_needs_own_scope(&loop_stmt.body, self);
                 loop {
                     if needs_scope {

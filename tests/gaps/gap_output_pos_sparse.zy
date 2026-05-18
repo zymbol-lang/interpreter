@@ -1,0 +1,13 @@
+// GAP-005 (resuelto v0.0.5): sparse >>~ syntax with up to 5 slots.
+// (fila, col, BKS, fg, bg) — None slots skipped at runtime.
+// This test uses only position slots (no colors) to produce deterministic ANSI output.
+
+// 2-slot: position only
+>>~ (1, 1) > "A"
+
+// 2-slot: different position
+>>~ (2, 3) > "B"
+
+// 2-slot via variable (backward compat dense tuple)
+pos = (1, 5)
+>>~ pos > "C"

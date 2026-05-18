@@ -3,7 +3,7 @@
 // Run: cargo build --release && time ./target/release/zymbol run tests/scripts/stress.zy
 // ============================================================================
 
-<# ./lib_time <= T
+<# ./lib_time => T
 
 >> "=== Zymbol Stress Test ===" ¶
 

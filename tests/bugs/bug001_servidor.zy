@@ -1,0 +1,12 @@
+// Module used by bug001_scope_reexport.zy
+// BUG-001: module-level variable accessed by function exported through re-export adapter
+
+# bug001_servidor {
+    #> { obtener_host, obtener_version }
+
+    host    := "localhost:8080"
+    version := "1.0.0"
+
+    obtener_host()    { <~ host }
+    obtener_version() { <~ version }
+}

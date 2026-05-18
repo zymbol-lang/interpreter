@@ -1,0 +1,34 @@
+// hot-def ° operator: VM parity achieved in v0.0.5
+// ° is only needed on the FIRST use — it auto-initializes and is then redundant.
+
+// x° on FIRST use only; subsequent uses are plain (no °)
+total° += 10
+total += 20
+total += 30
+>> total ¶
+
+// RHS hot read → resultado° = 0 if undefined, then result = 0 + n
+n = 7
+resultado = resultado° + n
+>> resultado ¶
+
+// °arr in RHS: auto-init to [] above nearest @, survives loop
+@ h:1..2 {
+    >> h ¶
+    @ i:1..5:1 {
+        arr = °arr $+ (i * h)
+    }
+    >> arr ¶
+}
+
+// ° only on first use outside loop
+contador° ++
+contador ++
+contador ++
+>> contador ¶
+
+// Multiple hot defs in same scope
+a° += 1
+b° += 2
+suma = a + b
+>> suma ¶

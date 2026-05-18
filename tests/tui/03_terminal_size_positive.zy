@@ -1,0 +1,7 @@
+// >>? returns (rows, cols) as a positional tuple.
+// Both dimensions must be positive integers in any real terminal.
+[H, W] = >>?
+ok_h = H > 0
+ok_w = W > 0
+>> ok_h ¶
+>> ok_w ¶

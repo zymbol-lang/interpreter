@@ -119,13 +119,19 @@ impl Parser {
                 Ok(Statement::SetNumeralMode { base, span })
             }
             TokenKind::Output => self.parse_output(),
+            TokenKind::OutputClear => self.parse_clear_screen(),
+            TokenKind::OutputPos => self.parse_output_pos(),
+            TokenKind::OutputGate => self.parse_tui_block(),
             TokenKind::Input => self.parse_input(),
+            TokenKind::KeyBlock => self.parse_key_input(true),
+            TokenKind::KeyNonBlock => self.parse_key_input(false),
             TokenKind::CliArgsCapture => self.parse_cli_args_capture(),
             TokenKind::Question => self.parse_if(),
             TokenKind::DoubleQuestion => self.parse_match_statement(),
             TokenKind::At | TokenKind::AtLabel(_) | TokenKind::AtColonLabel(_) => self.parse_loop(),
             TokenKind::AtBreak | TokenKind::AtColonLabelBreak(_) => self.parse_break(),
             TokenKind::AtContinue | TokenKind::AtColonLabelContinue(_) => self.parse_continue(),
+            TokenKind::AtTilde => self.parse_sleep(),
             TokenKind::TryBlock => self.parse_try_statement(),
             TokenKind::Newline | TokenKind::Backslash2 => self.parse_newline(),
             TokenKind::Backslash => self.parse_lifetime_end(),
@@ -208,6 +214,55 @@ impl Parser {
                         let span = expr.span();
                         Ok(Statement::Expr(ExprStatement::new(expr, span)))
                     }
+                }
+            }
+            TokenKind::HotIdent(_) => {
+                // Hot identifier: only valid for assignments (LHS hot) or expression statements
+                let is_assignment_op = self.peek_ahead(1)
+                    .map(|t| matches!(t.kind,
+                        TokenKind::Assign
+                        | TokenKind::PlusAssign
+                        | TokenKind::MinusAssign
+                        | TokenKind::StarAssign
+                        | TokenKind::SlashAssign
+                        | TokenKind::PercentAssign
+                        | TokenKind::CaretAssign
+                        | TokenKind::PlusPlus
+                        | TokenKind::MinusMinus
+                        | TokenKind::LBracket
+                        | TokenKind::DollarExclaimExclaim
+                    ))
+                    .unwrap_or(false);
+                if is_assignment_op {
+                    self.parse_assignment()
+                } else {
+                    let expr = self.parse_expr()?;
+                    let span = expr.span();
+                    Ok(Statement::Expr(ExprStatement::new(expr, span)))
+                }
+            }
+            TokenKind::PreHotIdent(_) => {
+                // Pre-hot identifier (°x): only valid as LHS of assignment
+                let is_assignment_op = self.peek_ahead(1)
+                    .map(|t| matches!(t.kind,
+                        TokenKind::Assign
+                        | TokenKind::PlusAssign
+                        | TokenKind::MinusAssign
+                        | TokenKind::StarAssign
+                        | TokenKind::SlashAssign
+                        | TokenKind::PercentAssign
+                        | TokenKind::CaretAssign
+                        | TokenKind::PlusPlus
+                        | TokenKind::MinusMinus
+                    ))
+                    .unwrap_or(false);
+                if is_assignment_op {
+                    self.parse_assignment()
+                } else {
+                    let span = self.peek().span;
+                    Err(Diagnostic::error("'°name' is only valid as an assignment target")
+                        .with_span(span)
+                        .with_help("use '°x += n' to anchor accumulation above the nearest loop"))
                 }
             }
             TokenKind::LBracket => {
@@ -548,6 +603,9 @@ impl Parser {
                 TokenKind::DollarSlash => {
                     expr = self.parse_string_split(expr)?;
                 }
+                TokenKind::DollarStar => {
+                    expr = self.parse_string_repeat(expr)?;
+                }
                 TokenKind::DollarTilde => {
                     expr = self.parse_collection_update(expr)?;
                 }
@@ -728,6 +786,9 @@ impl Parser {
                 }
                 TokenKind::DollarSlash => {
                     expr = self.parse_string_split(expr)?;
+                }
+                TokenKind::DollarStar => {
+                    expr = self.parse_string_repeat(expr)?;
                 }
                 TokenKind::DollarLBracket => {
                     expr = self.parse_collection_slice(expr)?;
@@ -951,6 +1012,18 @@ impl Parser {
                     Ok(Expr::Identifier(IdentifierExpr::new(name, span_start)))
                 }
             }
+            TokenKind::HotIdent(name) => {
+                // Hot identifier in expression context: x° — marks hot for auto-init in nearest @ scope
+                let name = name.clone();
+                self.advance();
+                Ok(Expr::Identifier(IdentifierExpr::new_hot(name, token.span)))
+            }
+            TokenKind::PreHotIdent(name) => {
+                // Pre-hot identifier in expression context: °x — auto-init in scope above nearest @
+                let name = name.clone();
+                self.advance();
+                Ok(Expr::Identifier(IdentifierExpr::new_pre_hot(name, token.span)))
+            }
             TokenKind::LParen => {
                 // Parse grouped expression (expr), tuple (expr, expr, ...), named tuple (name: expr, ...), or lambda (a, b) -> expr
 
@@ -1038,6 +1111,10 @@ impl Parser {
             TokenKind::BashOpen => {
                 // Parse bash execute expression: <\ expr... \>
                 self.parse_bash_exec_expr()
+            }
+            TokenKind::OutputQuery => {
+                let span = self.advance().span;
+                Ok(Expr::TerminalSize(zymbol_ast::TerminalSizeExpr { span }))
             }
             TokenKind::Eof => Err(Diagnostic::error("expected expression, found end of file")
                 .with_span(token.span)),

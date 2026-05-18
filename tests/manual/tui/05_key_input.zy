@@ -1,0 +1,3 @@
+// @vm-skip: requires interactive TTY for keyboard input
+<<| key
+>> key ¶

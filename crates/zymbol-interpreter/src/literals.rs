@@ -13,11 +13,11 @@ impl<W: Write> Interpreter<W> {
     /// Evaluate a literal expression
     pub(crate) fn eval_literal(&mut self, lit: &LiteralExpr) -> Result<Value> {
         Ok(match &lit.value {
-            // Plain string — never interpolated; \x01 sentinel → literal {
-            Literal::String(s) => Value::String(s.replace('\x01', "{")),
+            // Plain string — never interpolated; sentinels → literal braces
+            Literal::String(s) => Value::String(s.replace('\x01', "{").replace('\x02', "}")),
             // Interpolated string — resolve {var} at runtime, then restore escaped braces
             Literal::InterpolatedString(s) => {
-                Value::String(self.interpolate_string(s).replace('\x01', "{"))
+                Value::String(self.interpolate_string(s).replace('\x01', "{").replace('\x02', "}"))
             }
             Literal::Int(n) => Value::Int(*n),
             Literal::Float(f) => Value::Float(*f),

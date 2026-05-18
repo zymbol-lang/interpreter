@@ -3,7 +3,7 @@
 // Run: time ./target/release/zymbol run tests/scripts/bench_recursion.zy
 // ============================================================================
 
-<# ./lib_time <= T
+<# ./lib_time => T
 
 >> "=== Zymbol Benchmark: Recursion ===" ¶
 

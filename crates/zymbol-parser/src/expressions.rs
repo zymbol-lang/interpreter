@@ -43,6 +43,7 @@ impl Parser {
                     left: Box::new(left),
                     callable: Box::new(callable),
                     arguments: vec![zymbol_ast::PipeArg::Placeholder],
+                    implicit: true,
                     span,
                 });
                 continue;
@@ -88,6 +89,7 @@ impl Parser {
                 left: Box::new(left),
                 callable: Box::new(callable),
                 arguments,
+                implicit: false,
                 span,
             });
         }
@@ -115,6 +117,7 @@ impl Parser {
                     left: Box::new(left),
                     callable: Box::new(callable),
                     arguments: vec![zymbol_ast::PipeArg::Placeholder],
+                    implicit: true,
                     span,
                 });
                 continue;
@@ -141,6 +144,7 @@ impl Parser {
                 left: Box::new(left),
                 callable: Box::new(callable),
                 arguments,
+                implicit: false,
                 span,
             });
         }
@@ -454,6 +458,11 @@ impl Parser {
 
         loop {
             let token = self.peek().clone();
+            // Stop if next token is on a different source line than the current expression.
+            // This prevents >>~ items greedily consuming `[`, `.`, `(` from the next line.
+            if token.span.start.line != expr.span().start.line {
+                break;
+            }
             match token.kind {
                 // ── Structural postfix ────────────────────────────────────────
                 TokenKind::LBracket => {
@@ -567,6 +576,9 @@ impl Parser {
                 }
                 TokenKind::DollarSlash => {
                     expr = self.parse_string_split(expr)?;
+                }
+                TokenKind::DollarStar => {
+                    expr = self.parse_string_repeat(expr)?;
                 }
                 TokenKind::DollarTilde => {
                     expr = self.parse_collection_update(expr)?;

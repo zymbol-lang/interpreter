@@ -1,0 +1,16 @@
+// BUG-002: >< identifier must declare the variable in the semantic scope.
+// Before fix: zymbol check reported "undefined variable" for any use of the
+// captured variable inside blocks (? {}, @ {}, etc.).
+
+>< args
+
+// Direct use — worked before fix too
+total = args$#
+>> "total: " total ¶
+
+// Use inside if block — triggered BUG-002 before fix
+? (total > 0) {
+    >> "primer arg: " args[1] ¶
+} _ {
+    >> "sin argumentos" ¶
+}

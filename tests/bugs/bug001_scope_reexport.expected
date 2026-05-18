@@ -1,0 +1,4 @@
+directo: localhost:8080
+directo: 1.0.0
+adaptador: localhost:8080
+adaptador: 1.0.0

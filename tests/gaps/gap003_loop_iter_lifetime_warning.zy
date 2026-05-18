@@ -1,0 +1,18 @@
+// GAP-003: ambiguous lifetime warning on loop iterator variables.
+// Rules after fix:
+//   _ prefix  → warning suppressed (programmer signals "I know this is loop-scoped")
+//   plain name → warning emitted  (expected, alerts programmer)
+//   pre-defined → warning suppressed (deliberate reuse, not ambiguous)
+
+array = [1, 2, 3]
+
+// _ prefix — no warning
+@ _elem:array {
+    >> _elem ¶
+}
+
+// pre-defined variable — no warning
+item = 0
+@ item:array {
+    >> item ¶
+}

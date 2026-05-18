@@ -4,6 +4,7 @@
 //! - $~~ (replace pattern with replacement text)
 //! - $/ (split string by delimiter)
 //! - $++ (concat-build: append multiple items into a string or array)
+//! - $* (repeat string N times)
 //!
 //! Note: $?? (find all), $+[i] (insert), $-[i..j] (remove range) are handled
 //! by the unified collection_ops structs (CollectionFindAllExpr, CollectionInsertExpr,
@@ -40,6 +41,20 @@ pub struct ConcatBuildExpr {
 impl ConcatBuildExpr {
     pub fn new(base: Box<Expr>, items: Vec<Expr>, span: Span) -> Self {
         Self { base, items, span }
+    }
+}
+
+/// String repeat expression: string$* n → string repeated n times
+#[derive(Debug, Clone)]
+pub struct StringRepeatExpr {
+    pub string: Box<Expr>,
+    pub count: Box<Expr>,
+    pub span: Span,
+}
+
+impl StringRepeatExpr {
+    pub fn new(string: Box<Expr>, count: Box<Expr>, span: Span) -> Self {
+        Self { string, count, span }
     }
 }
 

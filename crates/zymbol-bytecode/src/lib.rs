@@ -1,11 +1,13 @@
 //! Bytecode definitions for Zymbol-Lang Register VM
 
+use serde::{Deserialize, Serialize};
+
 pub type Reg = u16;
 pub type Label = u32;
 pub type FuncIdx = u32;
 pub type StrIdx = u32;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Instruction {
     // ── Literals ──────────────────────────────────────────────────────────
     LoadInt(Reg, i64),
@@ -61,6 +63,8 @@ pub enum Instruction {
     /// dst = base $++ item0 item1 …  — concat string parts, or push to array
     ConcatBuild(Reg, Reg, Vec<Reg>),
     StrLen(Reg, Reg),
+    /// dst = str_reg.repeat(n_reg) → String
+    StrRepeat(Reg, Reg, Reg),
     /// dst = str.split(char_reg) → Array of Strings
     StrSplit(Reg, Reg, Reg),
     /// dst = str.contains(elem_reg) → Bool  (elem is Char or String)
@@ -234,12 +238,51 @@ pub enum Instruction {
     /// Store to a module-level global variable: global_vars[idx] = src
     StoreGlobal(u16, Reg),
 
+    // ── TUI primitives ───────────────────────────────────────────────────
+    /// @~ N — sleep N milliseconds (ms value in reg)
+    Sleep(Reg),
+    /// >>! — clear terminal screen (no registers)
+    ClearScreen,
+    /// >>? — query terminal size → Value::Tuple([rows, cols]) stored in dst
+    QueryTerminalSize(Reg),
+    /// <<| var / <<|? var — read one key → Value::Char in dst; blocking flag
+    ReadKey(Reg, bool),
+    /// << var / << "prompt" var / << #|var| — read a line from stdin → store in dst
+    /// prompt_reg: Some(r) = print register r as prompt before reading; None = no prompt
+    /// numeric: true = apply parse_numeric_string (Int/Float, fallback String)
+    ReadLine(Reg, Option<Reg>, bool),
+    /// >>~ pos > items — positioned output (pos tuple in r_pos, items in Vec<Reg>)
+    PrintAt(Reg, Vec<Reg>),
+    /// >>| { } — enter alternate screen + raw mode
+    EnterTui,
+    /// >>| { } — leave alternate screen + disable raw mode
+    ExitTui,
+
+    // ── Hot variable initialization ───────────────────────────────────────
+    /// If dst currently holds Unit (uninitialized), set it to the neutral element.
+    /// Used for hot-def (x°) variables: runs on every potential first-use site
+    /// but is a no-op after the first real initialization.
+    HotInit(Reg, HotNeutral),
+
+    // ── CLI args ─────────────────────────────────────────────────────────
+    /// dst = Array of CLI arguments passed after the script path (argv[1..])
+    LoadCliArgs(Reg),
+
     // ── Halt ─────────────────────────────────────────────────────────────
     Halt,
 }
 
+/// Neutral element kind for hot-definition variables (x°)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HotNeutral {
+    Int,    // 0
+    IntOne, // 1  (multiplicative identity: *=, /=)
+    Array,  // []
+    String, // ""
+}
+
 /// Part of a BuildStr instruction
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BuildPart {
     /// A literal string from the string pool
     Lit(StrIdx),
@@ -247,7 +290,7 @@ pub enum BuildPart {
     Reg(Reg),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chunk {
     pub name: String,
     pub instructions: Vec<Instruction>,
@@ -267,7 +310,7 @@ impl Chunk {
 }
 
 /// Initial value for a module-level global variable
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GlobalInit {
     Int(i64),
     Float(f64),
@@ -277,7 +320,7 @@ pub enum GlobalInit {
     Unit,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CompiledProgram {
     pub main: Chunk,
     pub functions: Vec<Chunk>,

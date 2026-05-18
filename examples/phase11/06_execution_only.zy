@@ -9,23 +9,23 @@ score = 95
 >> "Score: " score ¶
 
 ?? score {
-    90..100 : {
+    90..100 => {
         >> "  Grade: A" ¶
         >> "  Excellent work!" ¶
     }
-    80..89 : {
+    80..89 => {
         >> "  Grade: B" ¶
         >> "  Good job!" ¶
     }
-    70..79 : {
+    70..79 => {
         >> "  Grade: C" ¶
         >> "  Satisfactory" ¶
     }
-    60..69 : {
+    60..69 => {
         >> "  Grade: D" ¶
         >> "  Needs improvement" ¶
     }
-    _ : {
+    _ => {
         >> "  Grade: F" ¶
         >> "  Failed" ¶
     }
@@ -37,14 +37,14 @@ day = 3
 >> "Day number: " day ¶
 
 ?? day {
-    1 : { >> "  Monday" ¶ }
-    2 : { >> "  Tuesday" ¶ }
-    3 : { >> "  Wednesday" ¶ }
-    4 : { >> "  Thursday" ¶ }
-    5 : { >> "  Friday" ¶ }
-    6 : { >> "  Saturday (Weekend!)" ¶ }
-    7 : { >> "  Sunday (Weekend!)" ¶ }
-    _ : { >> "  Invalid day" ¶ }
+    1 => { >> "  Monday" ¶ }
+    2 => { >> "  Tuesday" ¶ }
+    3 => { >> "  Wednesday" ¶ }
+    4 => { >> "  Thursday" ¶ }
+    5 => { >> "  Friday" ¶ }
+    6 => { >> "  Saturday (Weekend!)" ¶ }
+    7 => { >> "  Sunday (Weekend!)" ¶ }
+    _ => { >> "  Invalid day" ¶ }
 }
 
 ¶
@@ -53,23 +53,23 @@ status = "PROCESSING"
 >> "Order status: " status ¶
 
 ?? status {
-    "PENDING" : {
+    "PENDING" => {
         >> "  Status: Order pending" ¶
         >> "  Action: Send confirmation email" ¶
     }
-    "PROCESSING" : {
+    "PROCESSING" => {
         >> "  Status: Order being processed" ¶
         >> "  Action: Update inventory" ¶
     }
-    "SHIPPED" : {
+    "SHIPPED" => {
         >> "  Status: Order shipped" ¶
         >> "  Action: Send tracking information" ¶
     }
-    "DELIVERED" : {
+    "DELIVERED" => {
         >> "  Status: Order delivered" ¶
         >> "  Action: Request feedback" ¶
     }
-    _ : {
+    _ => {
         >> "  Status: Unknown" ¶
         >> "  Action: Review manually" ¶
     }

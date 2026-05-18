@@ -591,6 +591,29 @@ impl VariableAnalyzer {
                     self.analyze_block(&finally.block);
                 }
             }
+            Statement::Sleep(s) => self.analyze_expr(&s.duration),
+
+            Statement::ClearScreen(_) => {}
+
+            Statement::KeyInput(ki) => {
+                if !self.variables.contains_key(&ki.variable) {
+                    self.declare_variable(ki.variable.clone(), ki.span, false);
+                } else {
+                    self.assign_variable(&ki.variable, ki.span);
+                }
+            }
+
+            Statement::OutputPos(op) => {
+                for slot in &op.slots {
+                    if let Some(expr) = slot { self.analyze_expr(expr); }
+                }
+                for item in &op.items {
+                    self.analyze_expr(item);
+                }
+            }
+
+            Statement::TuiBlock(tb) => self.analyze_block(&tb.body),
+
             // No variables introduced or consumed — pure runtime side effect
             Statement::SetNumeralMode { .. } => {}
         }
@@ -823,6 +846,11 @@ impl VariableAnalyzer {
             }
 
             // String operations
+            Expr::StringRepeat(op) => {
+                self.analyze_expr(&op.string);
+                self.analyze_expr(&op.count);
+            }
+
             Expr::StringReplace(op) => {
                 self.analyze_expr(&op.string);
                 self.analyze_expr(&op.pattern);
@@ -953,6 +981,8 @@ impl VariableAnalyzer {
                     }
                 }
             }
+
+            Expr::TerminalSize(_) => {}
         }
     }
 

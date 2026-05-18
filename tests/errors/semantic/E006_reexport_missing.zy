@@ -1,5 +1,5 @@
 # E006_reexport_missing {
-    <# ./E006_base <= base
+    <# ./E006_base => base
 
     #> {
         base::real_fn

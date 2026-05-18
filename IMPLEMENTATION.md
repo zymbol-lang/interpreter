@@ -2,7 +2,7 @@
 
 Internal reference for contributors and tooling authors: EBNF grammar, feature coverage, and execution model details.
 
-**Interpreter version**: v0.0.4
+**Interpreter version**: v0.0.5
 
 See also: [GUIDE.md](GUIDE.md) — language guide for users  
 See also: [REFERENCE.md](REFERENCE.md) — limitations and symbol table
@@ -100,14 +100,15 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 
 ## Appendix A. Normative EBNF Grammar
 
-Source file: [`zymbol-lang.ebnf`](zymbol-lang.ebnf) — version 2.3.0, sprint v0.0.4_1.
+Source file: [`zymbol-lang.ebnf`](zymbol-lang.ebnf) — version 3.0.0, sprint v0.0.5.
 
-All rules below are implemented unless explicitly marked `[NOT IMPLEMENTED]`. Rules marked `[WT only]` are tree-walker only; the register VM (`--vm`) does not support them.
+The canonical grammar is maintained in `zymbol-lang.ebnf`. The inline copy below is **superseded** — refer to the file for the authoritative rules.  The inline copy is kept only for quick offline reference and reflects v2.3.0 (sprint v0.0.4_1); known divergences from v3.0.0 are noted where visible.
 
 ```ebnf
 (*
   Zymbol-Lang EBNF Grammar
   Version: 2.3.0 — Sprint v0.0.4_1
+  SUPERSEDED by zymbol-lang.ebnf v3.0.0 (2026-05-12).
   No keywords — pure symbolic syntax with full Unicode support.
   All rules implemented unless marked [NOT IMPLEMENTED].
 *)

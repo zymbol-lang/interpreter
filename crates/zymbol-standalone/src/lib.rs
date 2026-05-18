@@ -7,19 +7,26 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
+use zymbol_bytecode::CompiledProgram;
+use zymbol_compiler::Compiler;
+use zymbol_lexer::Lexer;
+use zymbol_parser::Parser;
+use zymbol_span::FileId;
 
 /// Builder for standalone executables
 pub struct StandaloneBuilder {
     source_code: String,
+    base_dir: Option<PathBuf>,
     output_path: PathBuf,
     release: bool,
 }
 
 impl StandaloneBuilder {
     /// Create a new standalone builder from source code
-    pub fn new_from_source(source_code: String, output_path: PathBuf, release: bool) -> Self {
+    pub fn new_from_source(source_code: String, base_dir: Option<PathBuf>, output_path: PathBuf, release: bool) -> Self {
         Self {
             source_code,
+            base_dir,
             output_path,
             release,
         }
@@ -38,8 +45,8 @@ impl StandaloneBuilder {
         // Setup project structure
         self.setup_project(build_dir)?;
 
-        // Embed source code
-        self.write_source(build_dir)?;
+        // Compile to bytecode and embed
+        self.write_bytecode(build_dir)?;
 
         // Build with cargo
         self.cargo_build(build_dir)?;
@@ -74,28 +81,19 @@ impl StandaloneBuilder {
         // Get absolute paths to required crates
         let current_dir = std::env::current_dir()?;
 
-        let span_path = current_dir.join("crates/zymbol-span").canonicalize()?;
-        let error_path = current_dir.join("crates/zymbol-error").canonicalize()?;
-        let common_path = current_dir.join("crates/zymbol-common").canonicalize()?;
-        let ast_path = current_dir.join("crates/zymbol-ast").canonicalize()?;
-        let lexer_path = current_dir.join("crates/zymbol-lexer").canonicalize()?;
-        let parser_path = current_dir.join("crates/zymbol-parser").canonicalize()?;
-        let interpreter_path = current_dir.join("crates/zymbol-interpreter").canonicalize()?;
+        let bytecode_path = current_dir.join("crates/zymbol-bytecode").canonicalize()?;
+        let vm_path = current_dir.join("crates/zymbol-vm").canonicalize()?;
 
-        // Create Cargo.toml
         let cargo_toml = format!(r#"[package]
 name = "zymbol-program"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-zymbol-span = {{ path = "{}" }}
-zymbol-error = {{ path = "{}" }}
-zymbol-common = {{ path = "{}" }}
-zymbol-ast = {{ path = "{}" }}
-zymbol-lexer = {{ path = "{}" }}
-zymbol-parser = {{ path = "{}" }}
-zymbol-interpreter = {{ path = "{}" }}
+zymbol-bytecode = {{ path = "{}" }}
+zymbol-vm = {{ path = "{}" }}
+bincode = "1.3"
+serde = {{ version = "1.0", features = ["derive"] }}
 
 [profile.release]
 opt-level = 3
@@ -103,13 +101,8 @@ lto = true
 strip = true
 codegen-units = 1
 "#,
-            span_path.display(),
-            error_path.display(),
-            common_path.display(),
-            ast_path.display(),
-            lexer_path.display(),
-            parser_path.display(),
-            interpreter_path.display()
+            bytecode_path.display(),
+            vm_path.display()
         );
 
         fs::write(build_dir.join("Cargo.toml"), cargo_toml)
@@ -118,21 +111,33 @@ codegen-units = 1
         Ok(())
     }
 
-    fn write_source(&self, build_dir: &Path) -> Result<()> {
-        println!("  → Embedding source code ({} bytes)...", self.source_code.len());
+    fn compile_to_bytecode(&self) -> Result<CompiledProgram> {
+        let lexer = Lexer::new(&self.source_code, FileId(0));
+        let (tokens, _) = lexer.tokenize();
+        let parser = Parser::new(tokens);
+        let program = parser.parse().map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        Compiler::compile_with_dir(&program, self.base_dir.as_deref())
+            .map_err(|e| anyhow::anyhow!("{:?}", e))
+    }
 
-        // Escape the source code for Rust string literal
-        let escaped = self.source_code
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('\n', "\\n")
-            .replace('\r', "\\r")
-            .replace('\t', "\\t");
+    fn write_bytecode(&self, build_dir: &Path) -> Result<()> {
+        let compiled = self.compile_to_bytecode()
+            .context("Failed to compile source to bytecode")?;
 
-        let source_file = format!("pub const SOURCE: &str = \"{}\";\n", escaped);
+        let bytes: Vec<u8> = bincode::serialize(&compiled)
+            .context("Failed to serialize bytecode")?;
 
-        fs::write(build_dir.join("src/source.rs"), source_file)
-            .context("Failed to write source.rs")?;
+        println!("  → Embedding bytecode ({} bytes)...", bytes.len());
+
+        let mut literal = String::from("pub static BYTECODE: &[u8] = &[");
+        for (i, b) in bytes.iter().enumerate() {
+            if i % 16 == 0 { literal.push_str("\n    "); }
+            literal.push_str(&format!("{},", b));
+        }
+        literal.push_str("\n];\n");
+
+        fs::write(build_dir.join("src/bytecode.rs"), literal)
+            .context("Failed to write bytecode.rs")?;
 
         Ok(())
     }
@@ -204,7 +209,7 @@ mod tests {
     fn test_standalone_builder_creation() {
         let source = r#">> "Hello""#.to_string();
         let output = PathBuf::from("/tmp/test");
-        let builder = StandaloneBuilder::new_from_source(source.clone(), output, true);
+        let builder = StandaloneBuilder::new_from_source(source.clone(), None, output, true);
 
         assert_eq!(builder.source_code, source);
     }

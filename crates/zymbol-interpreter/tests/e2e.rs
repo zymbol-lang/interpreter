@@ -220,10 +220,10 @@ fn test_match_expression() {
     let out = run(r#"
 score = 85
 grade = ?? score {
-    90..100 : "A"
-    80..89  : "B"
-    70..79  : "C"
-    _       : "F"
+    90..100 => "A"
+    80..89  => "B"
+    70..79  => "C"
+    _       => "F"
 }
 >> grade ¶
 "#);
@@ -620,13 +620,13 @@ fn test_complex_match_with_execution() {
     let out = run(r#"
 action = "greet"
 ?? action {
-    "greet" : {
+    "greet" => {
         >> "Hello!" ¶
     }
-    "bye" : {
+    "bye" => {
         >> "Goodbye!" ¶
     }
-    _ : {
+    _ => {
         >> "Unknown" ¶
     }
 }
@@ -773,10 +773,10 @@ fn test_match_expression_vm() {
     let src = r#"
 score = 85
 grade = ?? score {
-    90..100 : "A"
-    80..89  : "B"
-    70..79  : "C"
-    _       : "F"
+    90..100 => "A"
+    80..89  => "B"
+    70..79  => "C"
+    _       => "F"
 }
 >> grade ¶
 "#;
@@ -1151,13 +1151,13 @@ fn test_complex_match_with_execution_vm() {
     let src = r#"
 action = "greet"
 ?? action {
-    "greet" : {
+    "greet" => {
         >> "Hello!" ¶
     }
-    "bye" : {
+    "bye" => {
         >> "Goodbye!" ¶
     }
-    _ : {
+    _ => {
         >> "Unknown" ¶
     }
 }
@@ -1548,4 +1548,114 @@ fn test_depth4_range_last_vm() {
 fn test_computed_range_var_bounds_vm() {
     let src = "m = [[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16]]\ninicio=2\nfin=4\n>> m[1>inicio..fin] ¶\n";
     assert_eq!(run_vm(src).unwrap(), "[2, 3, 4]\n");
+}
+
+// ── TUI primitives: TW tests ──────────────────────────────────────────────────
+
+#[test]
+fn test_sleep_zero() {
+    let src = "@~ 0\n>> \"ok\" ¶\n";
+    assert_eq!(run(src), "ok\n");
+}
+
+#[test]
+fn test_terminal_size_type() {
+    // >>? returns a (rows, cols) tuple; both must be positive integers
+    let src = "[H, W] = >>?\n>> (H > 0) ¶\n>> (W > 0) ¶\n";
+    assert_eq!(run(src), "#1\n#1\n");
+}
+
+// ── TUI primitives: VM parity tests ──────────────────────────────────────────
+
+#[test]
+fn test_sleep_zero_vm() {
+    let src = "@~ 0\n>> \"ok\" ¶\n";
+    assert_eq!(run_vm(src).expect("VM sleep"), run(src));
+}
+
+#[test]
+fn test_clear_screen_vm() {
+    // >>! produces ANSI escape sequences; TW == VM output must match
+    let src = ">>!\n>> \"after\" ¶\n";
+    assert_eq!(run_vm(src).expect("VM clear"), run(src));
+}
+
+#[test]
+fn test_terminal_size_vm() {
+    // Both pipelines should return the same (rows, cols) tuple
+    let src = "[H, W] = >>?\n>> H ¶\n>> W ¶\n";
+    assert_eq!(run_vm(src).expect("VM terminal size"), run(src));
+}
+
+#[test]
+fn test_output_pos_vm() {
+    // >>~ produces ANSI cursor-move escape; TW == VM output must match
+    let src = ">>~ (1, 1) > \"x\"\n";
+    assert_eq!(run_vm(src).expect("VM outputpos"), run(src));
+}
+
+// ── v0.0.5: Feature 9 — String repeat ($*) ───────────────────────────────────
+
+#[test]
+fn test_string_repeat_basic() {
+    assert_eq!(run(">> \"ab\" $* 3 ¶\n"), "ababab\n");
+}
+
+#[test]
+fn test_string_repeat_one() {
+    assert_eq!(run(">> \"xy\" $* 1 ¶\n"), "xy\n");
+}
+
+#[test]
+fn test_string_repeat_zero() {
+    assert_eq!(run(">> \"|\" (\"x\" $* 0) \"|\" ¶\n"), "||\n");
+}
+
+#[test]
+fn test_string_repeat_with_variable() {
+    assert_eq!(run("n = 3\n>> \"-\" $* n ¶\n"), "---\n");
+}
+
+#[test]
+fn test_string_repeat_multichar() {
+    assert_eq!(run(">> \"ab\" $* 3 ¶\n"), "ababab\n");
+}
+
+// ── v0.0.5: Feature 8 — Hot definition (°) ───────────────────────────────────
+
+#[test]
+fn test_hot_def_postfix_accumulates() {
+    // total° += i — postfix anchors to nearest @ scope; completes cleanly inside loop
+    let src = "@ i:[1, 2, 3, 4] { total° += i }\n>> \"ok\" ¶\n";
+    assert_eq!(run(src), "ok\n");
+}
+
+#[test]
+fn test_hot_def_prefix_survives_loop() {
+    // °total — anchors ABOVE the loop; survives and is visible after loop ends
+    let src = "@ i:[10, 20, 30] { °total += i }\n>> total ¶\n";
+    assert_eq!(run(src), "60\n");
+}
+
+#[test]
+fn test_hot_def_array_append() {
+    // °nums = °nums$+ i — collects into list; anchors above loop; survives loop end
+    let src = "@ i:[1, 2, 3] { °nums = °nums$+ i }\n>> nums ¶\n";
+    assert_eq!(run(src), "[1, 2, 3]\n");
+}
+
+#[test]
+fn test_hot_def_mul_div_neutral() {
+    // °prod *= i — prefix anchors above loop; neutral for *= is 1; 1..4 = [1,2,3,4]
+    let src = "@ i:1..4 { °prod *= i }\n>> prod ¶\n";
+    assert_eq!(run(src), "24\n");
+}
+
+// ── v0.0.5: Feature 1 — Sleep (@~) ───────────────────────────────────────────
+
+#[test]
+fn test_sleep_negative_error() {
+    let err = run_err("@~ -1\n");
+    assert!(err.contains("non-negative") || err.contains("negative"),
+        "expected 'non-negative' in error, got: {err}");
 }

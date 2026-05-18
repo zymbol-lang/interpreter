@@ -1,6 +1,6 @@
 // Test: Module isolation - module functions CANNOT see main variables
 
-<# ./isolated_module <= isolated
+<# ./isolated_module => isolated
 
 >> "=== Testing Module Isolation ===" ¶
 ¶

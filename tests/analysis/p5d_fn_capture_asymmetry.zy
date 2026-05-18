@@ -1,4 +1,4 @@
-// @vm-skip: named fn with free var (base) — VM named fn compilation doesn't capture outer scope
+// P5-D: Named function capture asymmetry — first-class snapshot
 // P5-D: Named function capture asymmetry — first-class snapshot
 // When used as a value, the function captures the outer scope at assignment time.
 // Subsequent changes to the outer variable do not affect the captured snapshot.

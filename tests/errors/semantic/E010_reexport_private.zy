@@ -1,5 +1,5 @@
 # E010_reexport_private {
-    <# ./E010_base <= base
+    <# ./E010_base => base
 
     #> {
         base::public_fn

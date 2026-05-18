@@ -1,10 +1,10 @@
 // Test: multi-value arms via list patterns (replaces old _? workaround)
 classify(n) {
     <~ ?? n {
-        [1, 2] : "low"
-        [3, 4] : "mid"
-        [5, 6] : "high"
-        _      : "other"
+        [1, 2] => "low"
+        [3, 4] => "mid"
+        [5, 6] => "high"
+        _      => "other"
     }
 }
 
@@ -19,9 +19,9 @@ classify(n) {
 // Multi-value string arms
 day_type(day) {
     <~ ?? day {
-        ["Mon", "Tue", "Wed", "Thu", "Fri"] : "weekday"
-        ["Sat", "Sun"]                       : "weekend"
-        _                                    : "unknown"
+        ["Mon", "Tue", "Wed", "Thu", "Fri"] => "weekday"
+        ["Sat", "Sun"]                       => "weekend"
+        _                                    => "unknown"
     }
 }
 

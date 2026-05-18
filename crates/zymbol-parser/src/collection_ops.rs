@@ -17,10 +17,12 @@
 //! - $< (reduce - accumulate)
 
 use zymbol_ast::{
-    CollectionAppendExpr, CollectionContainsExpr, CollectionInsertExpr, CollectionLengthExpr,
-    CollectionRemoveAllExpr, CollectionRemoveAtExpr, CollectionRemoveRangeExpr,
-    CollectionRemoveValueExpr, CollectionUpdateExpr, CollectionSliceExpr, CollectionSortExpr, Expr,
+    BinaryExpr, CollectionAppendExpr, CollectionContainsExpr, CollectionInsertExpr,
+    CollectionLengthExpr, CollectionRemoveAllExpr, CollectionRemoveAtExpr,
+    CollectionRemoveRangeExpr, CollectionRemoveValueExpr, CollectionUpdateExpr,
+    CollectionSliceExpr, CollectionSortExpr, Expr,
 };
+use zymbol_common::BinaryOp;
 use zymbol_error::Diagnostic;
 use zymbol_lexer::TokenKind;
 use crate::Parser;
@@ -246,6 +248,25 @@ impl Parser {
     }
 
     /// Parse collection slice: collection$[start..end]
+    /// Parse a slice bound: postfix expression with optional additive arithmetic (+/-).
+    /// Does NOT parse `..` or higher-precedence operators so the slice separator is safe.
+    /// Supports: p, p-1, p+1, arr$#-1, -1 (GAP-001 fix).
+    fn parse_slice_bound(&mut self) -> Result<Expr, Diagnostic> {
+        let mut left = self.parse_postfix()?;
+        while matches!(self.peek().kind, TokenKind::Plus | TokenKind::Minus) {
+            let op_token = self.advance();
+            let op = match op_token.kind {
+                TokenKind::Plus  => BinaryOp::Add,
+                TokenKind::Minus => BinaryOp::Sub,
+                _ => unreachable!(),
+            };
+            let right = self.parse_postfix()?;
+            let span = left.span().to(&right.span());
+            left = Expr::Binary(BinaryExpr::new(op, Box::new(left), Box::new(right), span));
+        }
+        Ok(left)
+    }
+
     pub(crate) fn parse_collection_slice(&mut self, collection: Expr) -> Result<Expr, Diagnostic> {
         let start_span = collection.span();
         self.advance(); // consume $[
@@ -255,14 +276,13 @@ impl Parser {
 
         // Check if starts with .. (e.g., $[..end])
         if !matches!(self.peek().kind, TokenKind::DotDot) {
-            // Parse start (use parse_postfix to avoid parsing .. as range operator)
-            start = Some(Box::new(self.parse_postfix()?));
+            start = Some(Box::new(self.parse_slice_bound()?));
         }
 
         // Case: $[start:count] — count-based slice (alternative syntax)
         if start.is_some() && matches!(self.peek().kind, TokenKind::Colon) {
             self.advance(); // consume :
-            let count = self.parse_postfix()?;
+            let count = self.parse_slice_bound()?;
             let close_token = self.peek().clone();
             if !matches!(close_token.kind, TokenKind::RBracket) {
                 return Err(Diagnostic::error("expected ']' after count")
@@ -289,8 +309,7 @@ impl Parser {
 
         // Check if ends immediately (e.g., $[start..])
         if !matches!(self.peek().kind, TokenKind::RBracket) {
-            // Parse end (use parse_postfix to avoid parsing further operators)
-            end = Some(Box::new(self.parse_postfix()?));
+            end = Some(Box::new(self.parse_slice_bound()?));
         }
 
         // Must have closing ]

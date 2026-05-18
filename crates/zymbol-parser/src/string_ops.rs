@@ -45,7 +45,9 @@ impl Parser {
         loop {
             let next_tok = self.peek();
             let same_line = next_tok.span.start.line == op_token.span.start.line;
-            if same_line && Self::can_juxtapose(&next_tok.kind) {
+            let can_start = Self::can_juxtapose(&next_tok.kind)
+                || matches!(next_tok.kind, TokenKind::LParen);
+            if same_line && can_start {
                 let item = self.parse_postfix()?;
                 last_span = item.span();
                 items.push(item);
@@ -116,6 +118,16 @@ impl Parser {
             count,
             span,
         )))
+    }
+
+    /// Parse string repeat: string$* n → string repeated n times
+    pub(crate) fn parse_string_repeat(&mut self, string: Expr) -> Result<Expr, Diagnostic> {
+        use zymbol_ast::StringRepeatExpr;
+        let start_span = string.span();
+        self.advance(); // consume $*
+        let count = self.parse_postfix()?;
+        let span = start_span.to(&count.span());
+        Ok(Expr::StringRepeat(StringRepeatExpr::new(Box::new(string), Box::new(count), span)))
     }
 
     /// Parse string split: string$/ delimiter → Array(String)

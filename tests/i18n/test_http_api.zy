@@ -2,7 +2,7 @@
 // Test de consumo de APIs con curl
 // Demuestra interacción HTTP usando interpolación de variables
 
-<# ./matematicas/http <= http
+<# ./matematicas/http => http
 
 >> "=== Test de Consumo de APIs ===" ¶
 ¶

@@ -20,6 +20,7 @@ tests/
 ├── safe_access/         # $? safe navigation, $! propagation
 ├── strings/             # String operators: $/, $++, #|x|, format, precision
 ├── analysis/            # Static analysis (unused vars, circular imports)
+├── tui/                 # TUI / terminal primitives tests (@~, >>!, >>?, >>~, <<|, >>|)
 ├── gaps/                # Language gap regression tests — one test per GAP documented in ZethyCLICLI/GAPS.md
 ├── bugs/                # Bug regression tests — one test per BUG; must never regress
 └── scripts/             # Test runner scripts and benchmarks
@@ -44,6 +45,13 @@ a GAP is resolved so the fix can never silently regress.
 | `g14_export_block_position.zy` | G14 | `#>` valid after `<#` imports (not just immediately after `# name`) |
 | `g17_script_toplevel_functions.zy` | G17 | Script-level functions inherit import aliases from caller |
 | `g21_string_escape_braces.zy` | G21 | `\{` produces `{` literally, never interpolates; `{var}` still interpolates |
+| `gap001_slice_arith_bounds.zy` | GAP-001 | `$[pos-1..end]` arithmetic expressions accepted as slice bounds |
+| `gap002_concat_paren_items.zy` | GAP-002 | `"prefix" $++ (expr)` parenthesized items accepted in `$++` |
+| `gap003_loop_iter_lifetime_warning.zy` | GAP-003 | `_` prefix and pre-declared vars suppress ambiguous-lifetime warning |
+| `gap_serpiente_string_repeat.zy` | GAP-S1 | `$*` string-repeat operator: `"str" $* N` |
+| `gap_output_pos_sparse.zy` | GAP-S2 | Sparse `>>~` syntax: `(,,, fg)` and `(row, col)` inline and variable-based |
+| `gap_key_input_type_check.zy` | GAP-S3 | `<<\|` key-read usage with semantic type-check pass; function branching on char |
+| `gap_hot_definition_basic.zy` | GAP-S4 | `°` hot-definition operator: auto-initializes to neutral on first use |
 
 ### `bugs/` — Bug regression tests
 
@@ -58,6 +66,9 @@ in code that previously worked correctly.
 | `bug04_literal_brace_string.zy` | BUG-04 / BUG-07 | `\{` and `\}` produce literal braces; never trigger interpolation |
 | `bug06_output_literal_callable.zy` | BUG-06 | `>> "literal" (expr)` outputs two items, not a function call crash |
 | `bug_double_interpolation.zy` | Double-interpolation | `\{var\}` must never interpolate; only `{var}` does |
+| `bug_output_pos_cross_line.zy` | BUG-S01 | Consecutive `>>` in function body each produce independent output lines |
+| `bug_else_underscore.zy` | BUG-S02 | `_` unconditional else and `_?` conditional else-if parse and execute correctly |
+| `bug_vm_tuple_equality.zy` | BUG-005 | VM tuple `==`/`<>` — recursive element-wise comparison (was always `#0`) |
 
 Top-level `.zy` + `.expected` pairs cover cross-cutting scenarios (scope, error handling, memory model).
 
@@ -130,6 +141,9 @@ bash tests/scripts/vm_compare.sh
 | `named_tuples` | 5 | `(:k v)` creation, access, destructuring |
 | `output` | 6 | `>>` `¶` formatting `#,\|x\|` `#^\|x\|` precision `#.N\|x\|` |
 | `safe_access` | 6 | `$?` `$!` `$!!` error propagation |
-| `strings` | 16 | `$/` split, `$++` concat-build, `#\|x\|` Unicode eval, format |
+| `strings` | 16 | `$/` split, `$++` concat-build, `$*` repeat, `#\|x\|` Unicode eval, format |
+| `tui` | 7 | `@~` sleep, `>>!` clear, `>>?` size, `>>~` positioned, `<<\|` key, `>>|` TUI block |
+| `gaps` | 20 | Language gap regressions (GAP-001–GAP-003, GAP-S1–GAP-S4, G7–G21) |
+| `bugs` | 16 | Bug regressions (BUG-001–BUG-005, BUG-S01–BUG-S02, BUG-NEW-01–02) |
 
-Total: **317** golden-file test pairs.
+Total: **424** golden-file test pairs (`.expected` files).

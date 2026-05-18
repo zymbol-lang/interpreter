@@ -1,0 +1,29 @@
+// GAP-006 (resuelto v0.0.5): type checker must not flag <<| variable as undefined.
+// Before fix: variables bound by <<| and <<|? fell through to _ => {} in
+// type_check.rs without being registered in the scope, causing false
+// "undefined variable" diagnostics on every subsequent use.
+//
+// This program does not execute key reads (requires TTY inside >>| block).
+// Its purpose is to verify that `zymbol check` produces no false errors.
+// Run with: zymbol check gap_key_input_type_check.zy → "No errors or warnings"
+//
+// @vm-skip
+
+// Placeholder that mirrors the <<| usage pattern in dibujo.zy:
+// Inside a TUI block the type checker must accept tecla after <<| tecla.
+// Here we simulate the semantic context: a function that references a
+// variable that would be defined by <<|.
+
+verificar_tecla(tecla) {
+    ? tecla == '1' {
+        >> "opcion 1" ¶
+    } _? tecla == '2' {
+        >> "opcion 2" ¶
+    } _ {
+        >> "otra" ¶
+    }
+    <~ tecla
+}
+
+resultado = verificar_tecla('2')
+>> resultado ¶

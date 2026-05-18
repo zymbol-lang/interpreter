@@ -14,6 +14,10 @@ pub struct Assignment {
     pub name: String,
     pub value: Expr,
     pub span: Span,
+    /// `x° op= n` — anchor to nearest enclosing `@` scope
+    pub hot: bool,
+    /// `°x op= n` — anchor to the scope above the nearest enclosing `@`
+    pub pre_hot: bool,
 }
 
 /// Constant declaration: name := expr (immutable)
@@ -33,7 +37,15 @@ pub struct LifetimeEnd {
 
 impl Assignment {
     pub fn new(name: String, value: Expr, span: Span) -> Self {
-        Self { name, value, span }
+        Self { name, value, span, hot: false, pre_hot: false }
+    }
+
+    pub fn new_hot(name: String, value: Expr, span: Span) -> Self {
+        Self { name, value, span, hot: true, pre_hot: false }
+    }
+
+    pub fn new_pre_hot(name: String, value: Expr, span: Span) -> Self {
+        Self { name, value, span, hot: false, pre_hot: true }
     }
 }
 

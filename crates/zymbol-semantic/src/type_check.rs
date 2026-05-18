@@ -264,6 +264,10 @@ pub struct TypeChecker {
     /// Import aliases registered in the current program (e.g. `u` from `<# ./utils <= u`)
     /// These are valid identifiers that resolve to modules, not regular variables.
     module_aliases: HashSet<String>,
+    /// Nesting depth of @ loop bodies currently being analyzed.
+    /// Used to suppress "redundant °" warnings inside loops, where every iteration
+    /// re-executes the same statement (°x is needed on every iteration, not just the first).
+    loop_depth: u32,
 }
 
 impl TypeChecker {
@@ -274,6 +278,7 @@ impl TypeChecker {
             errors: Vec::new(),
             warnings: Vec::new(),
             module_aliases: HashSet::new(),
+            loop_depth: 0,
         }
     }
 
@@ -369,10 +374,92 @@ impl TypeChecker {
         !self.errors.is_empty()
     }
 
+    /// Collect pre_hot variable names from a block, recursing into `?` branches but
+    /// stopping at nested `@` loops — each loop level pre-declares its own `°x` variables.
+    /// Covers both `°x` LHS assignments and `arr = °arr$+ i` (RHS pre_hot self-ref) patterns.
+    fn collect_pre_hot_vars(block: &zymbol_ast::Block, out: &mut Vec<String>) {
+        for stmt in &block.statements {
+            match stmt {
+                Statement::Assignment(a) => {
+                    if a.pre_hot || Self::rhs_has_pre_hot_self_ref(&a.value, &a.name) {
+                        if !out.contains(&a.name) { out.push(a.name.clone()); }
+                    }
+                }
+                Statement::If(if_stmt) => {
+                    Self::collect_pre_hot_vars(&if_stmt.then_block, out);
+                    for branch in &if_stmt.else_if_branches {
+                        Self::collect_pre_hot_vars(&branch.block, out);
+                    }
+                    if let Some(else_block) = &if_stmt.else_block {
+                        Self::collect_pre_hot_vars(else_block, out);
+                    }
+                }
+                // Do NOT recurse into nested @ loops: their °x variables anchor to
+                // the scope just outside that inner loop, not the current outer scope.
+                _ => {}
+            }
+        }
+    }
+
+    /// Returns true if `expr` has a pre_hot self-reference to `name` on the RHS.
+    fn rhs_has_pre_hot_self_ref(expr: &Expr, name: &str) -> bool {
+        match expr {
+            Expr::CollectionAppend(op) => {
+                if let Expr::Identifier(id) = op.collection.as_ref() {
+                    id.pre_hot && id.name == name
+                } else { false }
+            }
+            Expr::Binary(bin) => {
+                if let Expr::Identifier(id) = bin.left.as_ref() {
+                    id.pre_hot && id.name == name
+                } else { false }
+            }
+            _ => false,
+        }
+    }
+
     /// Check a statement
     fn check_statement(&mut self, stmt: &Statement) {
         match stmt {
             Statement::Assignment(assign) => {
+                // Hot LHS (x°) or pre-hot LHS (°x): pre-declare before inferring RHS
+                if (assign.hot || assign.pre_hot) && self.env.lookup_var(&assign.name).is_none() {
+                    self.env.define_var(&assign.name, ZymbolType::Any);
+                    // Warn for operators that remain vacuous even with their correct neutral
+                    if let Expr::Binary(bin) = &assign.value {
+                        if let Expr::Identifier(lhs) = bin.left.as_ref() {
+                            if lhs.name == assign.name && bin.op == BinaryOp::Pow {
+                                self.warnings.push(
+                                    Diagnostic::warning(format!(
+                                        "'{}°' hot-initialized to 0 — '^' will always produce 0",
+                                        assign.name
+                                    ))
+                                    .with_span(assign.span)
+                                );
+                            }
+                        }
+                    }
+                } else if (assign.hot || assign.pre_hot) && self.env.lookup_var(&assign.name).is_some()
+                    && self.loop_depth == 0
+                {
+                    // Variable already defined outside any loop — hot-def marker is redundant.
+                    // Inside loops we suppress this: the loop body executes N times and
+                    // `°` is the accumulation marker for every iteration, not just the first.
+                    let marker = if assign.pre_hot {
+                        format!("°{}", assign.name)
+                    } else {
+                        format!("{}°", assign.name)
+                    };
+                    self.warnings.push(
+                        Diagnostic::warning(format!(
+                            "'{}' is already defined — `°` initializer is redundant; remove it",
+                            marker
+                        ))
+                        .with_span(assign.span)
+                        .with_help("use `°` only on the first assignment to auto-initialize")
+                    );
+                }
+
                 let value_type = self.infer_expr(&assign.value);
 
                 // Check if reassigning a constant - this is an ERROR
@@ -408,6 +495,25 @@ impl TypeChecker {
 
             Statement::Output(output) => {
                 for expr in &output.exprs {
+                    // Hot/pre_hot identifiers in output context are always wrong:
+                    // `°` marks initialization, but >> is a read operation.
+                    if let Expr::Identifier(ident) = expr {
+                        if ident.hot || ident.pre_hot {
+                            let corrected = if ident.pre_hot {
+                                format!(">> {} ¶", ident.name)
+                            } else {
+                                format!(">> {} ¶", ident.name)
+                            };
+                            self.errors.push(
+                                Diagnostic::error(format!(
+                                    "`°` has no effect in output context — use `{}`",
+                                    corrected
+                                ))
+                                .with_span(ident.span)
+                                .with_help("the `°` marker is for initialization in assignments, not for reading")
+                            );
+                        }
+                    }
                     self.infer_expr(expr);
                 }
             }
@@ -415,6 +521,11 @@ impl TypeChecker {
             Statement::Input(input) => {
                 // Input always produces a string
                 self.env.define_var(&input.variable, ZymbolType::String);
+            }
+
+            Statement::CliArgsCapture(capture) => {
+                // >< identifier — declares identifier as Array in the current scope
+                self.env.define_var(&capture.variable_name, ZymbolType::Array(Box::new(ZymbolType::String)));
             }
 
             Statement::If(if_stmt) => {
@@ -486,6 +597,28 @@ impl TypeChecker {
                     }
                 }
 
+                // Pre-declare only PREFIX hot (°x, °arr$+i) in the OUTER scope so they survive
+                // after the loop. Postfix hot (x°) anchors to the loop scope itself and must NOT
+                // be visible outside — it is defined inside the loop body scope instead.
+                for stmt in &loop_stmt.body.statements {
+                    if let Statement::Assignment(a) = stmt {
+                        let is_prefix_hot = a.pre_hot
+                            || Self::rhs_has_pre_hot_self_ref(&a.value, &a.name);
+                        if is_prefix_hot && self.env.lookup_var(&a.name).is_none() {
+                            self.env.define_var(&a.name, ZymbolType::Any);
+                        }
+                    }
+                }
+                // Recursive scan: °x (pre_hot) may be nested in ? or inner @ blocks.
+                // Pre-declare all of them in the current outer scope.
+                let mut pre_hot_names = Vec::new();
+                Self::collect_pre_hot_vars(&loop_stmt.body, &mut pre_hot_names);
+                for name in pre_hot_names {
+                    if self.env.lookup_var(&name).is_none() {
+                        self.env.define_var(&name, ZymbolType::Any);
+                    }
+                }
+
                 self.env.enter_scope();
 
                 // Define iterator variable
@@ -503,9 +636,11 @@ impl TypeChecker {
                     self.env.define_var(iter_var, iter_type);
                 }
 
+                self.loop_depth += 1;
                 for stmt in &loop_stmt.body.statements {
                     self.check_statement(stmt);
                 }
+                self.loop_depth -= 1;
                 self.env.exit_scope();
             }
 
@@ -611,6 +746,11 @@ impl TypeChecker {
                 }
             }
 
+            Statement::KeyInput(ki) => {
+                // <<| var and <<|? var always produce Char
+                self.env.define_var(&ki.variable, ZymbolType::Char);
+            }
+
             // Other statements don't need type checking
             _ => {}
         }
@@ -702,6 +842,11 @@ impl TypeChecker {
                 }
                 Statement::Loop(loop_stmt) => {
                     self.define_local_vars_from_block(&loop_stmt.body);
+                }
+                Statement::KeyInput(ki) => {
+                    if self.env.lookup_var(&ki.variable).is_none() {
+                        self.env.define_var(&ki.variable, ZymbolType::Char);
+                    }
                 }
                 _ => {}
             }
@@ -1182,6 +1327,9 @@ impl TypeChecker {
                     // It's a module alias (e.g. `u` from `<# ./utils <= u`)
                     // Valid as the object of a member access (u.CONST) — not an undefined variable
                     ZymbolType::Any
+                } else if ident.hot {
+                    // Hot identifier: auto-initializes at runtime — not an undefined variable error
+                    ZymbolType::Any
                 } else {
                     // Variable not defined - emit error
                     self.errors.push(
@@ -1649,6 +1797,7 @@ impl TypeChecker {
             }
 
             // String operations
+            Expr::StringRepeat(_) => ZymbolType::String,
             Expr::StringReplace(_) => ZymbolType::String,
             Expr::StringSplit(_) => ZymbolType::Array(Box::new(ZymbolType::String)),
             Expr::ConcatBuild(op) => {
@@ -1811,6 +1960,8 @@ impl TypeChecker {
                 self.infer_expr(&se.array);
                 ZymbolType::Array(Box::new(ZymbolType::Array(Box::new(ZymbolType::Any))))
             }
+
+            Expr::TerminalSize(_) => ZymbolType::Tuple(vec![ZymbolType::Int, ZymbolType::Int]),
         }
     }
 

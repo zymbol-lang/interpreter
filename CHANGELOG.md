@@ -9,6 +9,224 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ## [Unreleased]
 
+### Changed (Breaking)
+
+**`FatArrow` operator `=>` for match arms, import aliases, and export renames**
+- Match arm separator: `pattern => result` (was `pattern : result`).
+- Import alias separator: `<# path => alias` (was `<# path <= alias`).
+- Export rename separator: `#> { fn => pub }` (was `fn <= pub_name`).
+- Rationale: `=>` reads as "maps to" / "becomes" — unambiguous across all contexts.
+- Full design history: `IMPL_V005.md §Feature-7`.
+
+### Improved
+
+**Standalone binaries now embed bytecode instead of source (~60% smaller)**
+- `zymbol build` previously embedded the raw `.zy` source and re-ran the full
+  pipeline (lex → parse → compile) on every execution, shipping lexer, parser,
+  AST, compiler, and interpreter as dead weight in the standalone binary.
+- New approach: compile to bytecode **at build time** inside `zymbol build`,
+  serialize via `bincode`, and embed the bytes. The generated binary links only
+  `zymbol-bytecode` + `zymbol-vm` (2 crates instead of 7).
+- `zymbol-bytecode`: all types (`CompiledProgram`, `Instruction`, `Chunk`,
+  `GlobalInit`, `BuildPart`, `HotNeutral`) now derive `Serialize`/`Deserialize`.
+- `zymbol-standalone`: `write_source()` replaced by `write_bytecode()`;
+  `new_from_source` accepts `base_dir` for module resolution via
+  `Compiler::compile_with_dir`.
+- Template `main.rs`: 16 lines — `bincode::deserialize(BYTECODE)` + `vm.run()`.
+- **Result: serpiente standalone 2.2 MB → 901 KB (~2.4× smaller). VM execution
+  replaces tree-walker, startup has zero lex/parse/compile overhead.**
+- This is also the foundation for the upcoming `.zyb` bytecode file format
+  (see ROADMAP — "Bytecode File Format").
+- Reported by **[@wux4an](https://github.com/wux4an)** in
+  [interpreter#1](https://github.com/zymbol-lang/interpreter/issues/1) —
+  whose honest critique of the `zymbol build` limitations on release binaries
+  directly motivated this redesign.
+
+### Added
+
+**`<<` input support in VM (IMPL-V005-INPUT)**
+- `ReadLine(dst, Option<Reg>, bool)` — new bytecode instruction. Reads a line from stdin,
+  optionally printing a prompt register first; `bool` flag enables numeric cast (Int/Float/String).
+- Compiler: `Statement::Input` now compiles to bytecode. Simple prompts → `LoadStr`; interpolated
+  prompts → `BuildStr` from `Vec<StringPart>`. `InputCast::Numeric` passes `true` to `ReadLine`.
+- VM: handler mirrors interpreter behavior — inside TUI block (`tui_stack` non-empty) temporarily
+  disables raw mode and shows cursor for input, then restores; numeric cast uses `normalize_unicode_digits`.
+- Def-use analysis updated for `ReadLine`.
+
+### Fixed
+
+**`<<` inside `>>|` TUI block freezes terminal**
+- `execute_input` (interpreter) and VM `ReadLine`: when `tui_depth > 0` / `tui_stack` non-empty,
+  now calls `disable_raw_mode()` + `cursor::Show` before reading and restores after.
+  Previously `read_line()` blocked indefinitely because raw mode discards `\n`.
+
+**`>>|` cursor not at (1,1) on entry**
+- `execute_tui_block` and VM `EnterTui`: added `cursor::MoveTo(0, 0)` immediately after
+  `EnterAlternateScreen`. Some terminals inherit the main-screen cursor position, causing the
+  first `<<` prompt or `>>~` output to appear at arbitrary rows.
+
+---
+
+## [0.0.5] — 2026-04-29
+
+### Added
+
+**Hot Definition operator `°` (U+00B0) — two-form scope anchoring**
+- Two LHS forms with distinct scope lifetimes:
+  - `x° op= n` (postfix) — anchors to the nearest enclosing `@` scope; variable dies when the loop ends.
+  - `°x op= n` (prefix) — anchors to the scope **above** the nearest `@`; variable survives the loop.
+  - Outside any loop both forms anchor to global/function scope (no difference).
+- RHS hot read `p = p° + c` — returns neutral if undefined, does not anchor to any scope.
+- Neutral values: `+=`/`-=` → `0`/`0.0`; `*=`/`/=` → `1`; array `$+` → `[]`; string juxtaposition → `""`.
+- Warning emitted for semantically vacuous hot-def: `x° ^= 2` → always 0.
+- Undefined variable error now includes hint: `'x' is undefined — did you mean 'x°' (hot definition)?`
+- Implemented across: lexer (`HotIdent`, `PreHotIdent` tokens), parser (`hot`/`pre_hot` fields on `Assignment`),
+  interpreter (loop scope stack with `push_loop_scope`/`set_at_nearest_loop`/`set_above_nearest_loop`),
+  semantic type-checker with recursive pre_hot scan for nested `?`/`@` blocks.
+
+**TUI / Terminal primitives (IMPL-V005)**
+- `@~ N` — sleep N milliseconds. Implemented via `std::thread::sleep`; emits `Sleep` bytecode in VM.
+- `>>!` — clear terminal screen (ANSI `\x1b[2J\x1b[H`). New `ClearScreen` instruction in VM.
+- `>>?` — query terminal size; returns `(rows, cols)` positional tuple via crossterm. New `QueryTermSize` instruction.
+- `>>~ (row, col, BKS, fg, bg) > items` — positioned output with optional style. Sparse syntax:
+  any slot may be omitted (`>>~ (,,, 196) > "red"` sets fg only; `>>~ (3, 1) > "text"` positions only).
+  BKS bitmask: `1`=Bold, `2`=Italic, `4`=Underline. ANSI 256-color palette (0=terminal default).
+  Variable-based: `pos = (3, 1)` then `>>~ pos > "text"`.
+- `<<| var` — blocking keypress read. Arrow keys → `'↑'`/`'↓'`/`'←'`/`'→'`; Enter → `'\n'`; Escape → `'\x1B'`.
+- `<<|? var` — non-blocking keypress poll; returns `'\0'` if no key pending.
+- `>>| { }` — TUI block: enters alternate screen + raw mode via crossterm; restores terminal on exit.
+  New `EnterTui`/`ExitTui` instructions in VM with proper error propagation.
+- Type-checker updated: `<<|` / `<<|?` now resolve without `undefined variable` error (GAP-S3 fix).
+- New test directory `tests/manual/tui/` — manual cases covering all 6 TUI primitives.
+- New VS Code snippets: `outp`, `outps`, `outpc`, `key`, `keynb`, `tui`, `sleep`, `cls`, `termsize`.
+
+**String repeat operator `$*`**
+- `"string" $* N` repeats a string N times. Implemented in tree-walker (`strings.rs`) and VM
+  (`StrRepeat` instruction).
+- New test: `tests/gaps/gap_serpiente_string_repeat.zy` (GAP-S1).
+- VS Code grammar: `$*` added to `collection-operators` character class.
+- New VS Code snippet: `repeat`.
+
+### Fixed
+
+**BUG-005 — VM tuple `==` and `<>` always returned `#0`**
+- Tuple equality (`==`) and inequality (`<>`) in `--vm` mode always evaluated to `#0` regardless
+  of actual content.
+- Root cause: `cmp_direct()` and `Value::equals()` in `crates/zymbol-vm/src/lib.rs` had no `Tuple`
+  arm — fell through to the `_ => 1` (not-equal) and `_ => false` defaults.
+- Fix: recursive element-wise comparison added to both functions.
+  `cmp_direct`: compares element by element, returns first non-zero or 0 if all equal.
+  `Value::equals`: `a.len() == b.len() && zip.all(|(x, y)| x.equals(y))`.
+- Additionally: `vm_extract_pos()` now unwraps a single-element outer tuple produced by the
+  compiler when a variable-based `>>~ pos > ...` is used (was silently failing to move cursor).
+- Root cause of Serpiente v0.0.5 bug: food detection `cab == (fr_com, fc_com + 1)` always false
+  in VM mode → `comio` never set → score stayed 0 → second fruit never spawned.
+- New test: `tests/bugs/bug_vm_tuple_equality.zy` (7 cases: literal, variable, arithmetic slot,
+  `<>` inequality, Serpiente food-collision pattern, conditional, nested tuples).
+
+**BUG-001 — Re-exported functions lose origin module scope**
+- Functions accessed through an i18n re-export adapter (`alias::fn : newname`) raised
+  `undefined variable` for any module-level variable the function read.
+- Root cause: `eval_traditional_function_call` loaded context from the adapter module path,
+  which carries no variables.
+- Fix: `FunctionDef` now carries `origin_module_path: Option<PathBuf>`. The call site
+  derives `effective_path` from that field, falling back to the caller's module only when
+  the function has no recorded origin.
+- New test: `tests/bugs/bug001_scope_reexport.zy` (3-file i18n fixture).
+
+**BUG-002 — `><` CLI args capture not registered in semantic scope**
+- `zymbol check` and the LSP reported `undefined variable` for any use of the captured
+  identifier inside blocks (`? {}`, `@ {}`, etc.) after `>< args`.
+- Root cause: `Statement::CliArgsCapture` had no handler in `type_check.rs`.
+- Fix: added handler that calls `env.define_var(name, Array(String))`.
+- New test: `tests/bugs/bug002_cli_args_scope.zy`.
+
+**BUG-003 — LSP percent-decodes Unicode directory names in file URIs**
+- VS Code sends `file:///home/user/%E6%BA%90%E7%A0%81/mod.zy` for paths inside directories
+  with Unicode names (e.g. `源码/`). The LSP resolver built a path with the literal
+  percent-encoded segment, which does not exist on the filesystem → `module-not-found` for
+  every import inside those directories. CLI was unaffected.
+- Fix: `uri_to_path` in `workspace.rs` now calls `percent_decode` before constructing the
+  `PathBuf`. Multi-byte UTF-8 sequences (e.g. `源` = 3 bytes) are collected as raw bytes
+  before UTF-8 reconstruction. No new dependencies.
+- Four new unit tests in `workspace.rs`: encoded Unicode, plain Unicode, `%2F`, no-op.
+
+**GAP-001 — Arithmetic expressions as slice bounds `$[start..end]`**
+- `$[pos-1..end]` or `$[start..pos+1]` caused a parse error; only literals and plain
+  identifiers were accepted as bounds.
+- Root cause: `parse_collection_slice` called `parse_postfix` for bounds, which stops
+  before `+`/`-` and cannot consume `..` without ambiguity.
+- Fix: new `parse_slice_bound()` method in `collection_ops.rs` wraps `parse_postfix` with
+  a `+`/`-` loop, stopping before `..`. Replaces all three bound call-sites in
+  `parse_collection_slice`.
+- New test: `tests/gaps/gap001_slice_arith_bounds.zy`.
+
+**GAP-002 — Parenthesized expressions not accepted as `$++` items**
+- `"prefix" $++ (expr)` failed with a parse error; `>>` accepted the same form correctly.
+- Root cause: `parse_string_insert` gated item collection with `can_juxtapose()`, which
+  intentionally excludes `LParen` to avoid lambda-comparator ambiguity in `$^+`.
+- Fix: local `can_start` flag in `parse_string_insert` adds `TokenKind::LParen` without
+  modifying `can_juxtapose` globally. `$^+` and juxtaposition chains are unaffected.
+- New test: `tests/gaps/gap002_concat_paren_items.zy`.
+
+**GAP-003 — `ambiguous lifetime` warning on every loop iterator variable**
+- `@ elem:arr { }` always emitted `warning: ambiguous lifetime for 'elem'` regardless of
+  whether the programmer had signalled intent.
+- Fix in `def_use.rs` — two suppression rules, no new syntax:
+  1. `_` prefix (`@ _elem:arr`): existing "intentionally ignored" convention now also
+     suppresses the lifetime warning, consistent with unused-variable suppression.
+  2. Pre-defined variable (`x = 0` then `@ x:arr`): if the variable already has a
+     definition before the loop, the reuse is deliberate and no warning is emitted.
+  Normal unnamed iterator variables still warn as before.
+- New test: `tests/gaps/gap003_loop_iter_lifetime_warning.zy`.
+
+**TUI-FIX-01 — `>>` inside `>>| {}` invisible before `<<|` key read**
+- `execute_output()` writes to Rust's `Stdout` which is line-buffered; text without `\n`
+  stays in the internal buffer until the next explicit flush.
+  Inside a TUI block, the next flush was triggered by the following `>>~` call — always
+  after the `<<|` read — so `>> "text"` before a key read was never visible to the user.
+- Fix: added `tui_depth: u8` counter to `Interpreter`. `execute_tui_block()` increments it
+  before executing the body and decrements it on exit. `execute_output()` calls
+  `self.output.flush()` when `tui_depth > 0`.
+
+**TUI-FIX-02 — `¶` / `\\` inside `>>| {}` broke column alignment**
+- In raw mode, `\n` (LF) moves the cursor down but does NOT return to column 1.
+  `execute_newline()` used `writeln!()` which emits only `\n`, causing subsequent text
+  to appear offset from the left edge.
+- Fix: `execute_newline()` emits `"\r\n"` (CRLF) when `tui_depth > 0`, `"\n"` otherwise.
+
+**TUI-FIX-03 — TUI tokens not recognized as statement starters inside `>>`**
+- Six v0.0.5 tokens (`KeyBlock`, `KeyNonBlock`, `OutputPos`, `OutputClear`, `OutputGate`,
+  `AtTilde`) were absent from the statement-break list in `parse_output()`.
+  When any of them appeared on the line after a `>>` statement, the parser attempted to
+  consume them as output expressions and failed with `"expected expression, found KeyBlock"`.
+- Fix: all six tokens added to the break-pattern in `crates/zymbol-parser/src/io.rs`.
+
+### VS Code extension — v0.1.2
+
+**Syntax highlighting:**
+- `$*` added to `collection-operators` character class in `zymbol.tmGrammar.json`.
+  `$*` was missing; strings and numbers using it were unhighlighted.
+
+**Snippets (`zymbol.json`):**
+- `outps` — `>>~ (row, col, BKS, fg, bg) > value` — positioned print with full style
+- `outpc` — `>>~ (,,,fg) > value` — set foreground color without moving cursor
+- `repeat` — `"str" $* n` — string repeat
+- `hotacc` — `total° += value` — hot definition accumulator
+- (Existing snippets `outp`, `key`, `keynb`, `tui`, `sleep`, `cls`, `termsize` shipped in this release.)
+
+Built: `zymbol-lang-0.1.2-2026-05-04.vsix`
+
+### Test suite — v0.0.5
+
+| Suite | Result |
+|-------|--------|
+| `cargo test` (all crates) | all pass |
+| `expected_compare.sh` (all) | **424 / 424 pass** |
+| `expected_compare.sh gaps` | **20 / 20 pass** (+ gap001–003, gap-S1–S4) |
+| `expected_compare.sh bugs` | **16 / 16 pass** (+ bug-S01, bug-S02, BUG-005) |
+| `expected_compare.sh tui` | **5 / 5 pass** (2 vm-skip: `<<\|`, `>>|`) |
+
 ---
 
 ## [0.0.4] — 2026-04-16
@@ -544,7 +762,8 @@ Initial release — Zymbol-Lang interpreter v5I.
 
 ---
 
-[Unreleased]: https://github.com/zymbol-lang/zymbol/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/zymbol-lang/zymbol/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/zymbol-lang/zymbol/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/zymbol-lang/zymbol/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/zymbol-lang/zymbol/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/zymbol-lang/zymbol/compare/v0.0.1...v0.0.2

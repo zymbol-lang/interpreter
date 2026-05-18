@@ -1,7 +1,7 @@
 // BUG-01: functions in the same module can call each other
 // Before fix: "undefined function 'bar'" even when both are in the same module
 
-<# ./bug01_intra_mod <= m
+<# ./bug01_intra_mod => m
 
 // exported calling exported
 r1 = m::foo()

@@ -17,8 +17,10 @@ impl Parser {
     /// Parse assignment statement: name = expr (with compound ops and increment/decrement)
     pub(crate) fn parse_assignment(&mut self) -> Result<Statement, Diagnostic> {
         let ident_token = self.advance();
-        let name = match &ident_token.kind {
-            TokenKind::Ident(s) => s.clone(),
+        let (name, hot, pre_hot) = match &ident_token.kind {
+            TokenKind::Ident(s)       => (s.clone(), false, false),
+            TokenKind::HotIdent(s)    => (s.clone(), true,  false),
+            TokenKind::PreHotIdent(s) => (s.clone(), false, true),
             _ => return Err(Diagnostic::error("expected identifier").with_span(ident_token.span)),
         };
 
@@ -89,7 +91,7 @@ impl Parser {
                 span,
             ));
 
-            return Ok(Statement::Assignment(Assignment::new(name, update_expr, span)));
+            return Ok(Statement::Assignment(Assignment { name, value: update_expr, span, hot, pre_hot }));
         }
 
         let assign_token = self.peek();
@@ -124,7 +126,7 @@ impl Parser {
             ));
 
             let span = ident_token.span.to(&op_token.span);
-            return Ok(Statement::Assignment(Assignment::new(name, binary_expr, span)));
+            return Ok(Statement::Assignment(Assignment { name, value: binary_expr, span, hot, pre_hot }));
         }
 
         // Check for compound assignment (+=, -=, *=, /=, %=, ^=)
@@ -158,7 +160,7 @@ impl Parser {
             ));
 
             let span = ident_token.span.to(&binary_expr.span());
-            Ok(Statement::Assignment(Assignment::new(name, binary_expr, span)))
+            Ok(Statement::Assignment(Assignment { name, value: binary_expr, span, hot, pre_hot }))
         } else {
             // Regular assignment: name = expr [expr ...]
             // Juxtaposition concatenation: s = "hello" ' ' name " world"
@@ -166,7 +168,7 @@ impl Parser {
             let first = self.parse_expr()?;
             let value = self.parse_juxtapose_chain(first)?;
             let span = ident_token.span.to(&value.span());
-            Ok(Statement::Assignment(Assignment::new(name, value, span)))
+            Ok(Statement::Assignment(Assignment { name, value, span, hot, pre_hot }))
         }
     }
 
@@ -236,7 +238,8 @@ impl Parser {
             TokenKind::Integer(_) |
             TokenKind::Float(_) |
             TokenKind::Boolean(_) |
-            TokenKind::Ident(_)
+            TokenKind::Ident(_) |
+            TokenKind::HotIdent(_)
         )
     }
 

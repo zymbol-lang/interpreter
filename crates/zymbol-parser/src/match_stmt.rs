@@ -12,7 +12,7 @@ use zymbol_lexer::TokenKind;
 use crate::Parser;
 
 impl Parser {
-    /// Parse match expression: ?? expr { pattern : value }
+    /// Parse match expression: ?? expr { pattern => value }
     pub(crate) fn parse_match_expr(&mut self) -> Result<Expr, Diagnostic> {
         let match_expr = self.parse_match_expr_inner()?;
         Ok(Expr::Match(match_expr))
@@ -36,7 +36,7 @@ impl Parser {
         if !matches!(lbrace_token.kind, TokenKind::LBrace) {
             return Err(Diagnostic::error("expected '{' after match expression")
                 .with_span(lbrace_token.span)
-                .with_help("match syntax: ?? expr { pattern : value }"));
+                .with_help("match syntax: ?? expr { pattern => value }"));
         }
         self.advance(); // consume {
 
@@ -49,14 +49,14 @@ impl Parser {
             // Parse pattern
             let pattern = self.parse_pattern()?;
 
-            // Expect :
-            let colon_token = self.peek().clone();
-            if !matches!(colon_token.kind, TokenKind::Colon) {
-                return Err(Diagnostic::error("expected ':' after pattern")
-                    .with_span(colon_token.span)
-                    .with_help("match case syntax: pattern : [value] [{ block }]"));
+            // Expect =>
+            let arrow_token = self.peek().clone();
+            if !matches!(arrow_token.kind, TokenKind::FatArrow) {
+                return Err(Diagnostic::error("expected '=>' after pattern")
+                    .with_span(arrow_token.span)
+                    .with_help("match case syntax: pattern => [value] [{ block }]"));
             }
-            self.advance(); // consume :
+            self.advance(); // consume =>
 
             // Check if we have a block-only case (no value)
             let (value, block) = if matches!(self.peek().kind, TokenKind::LBrace) {
@@ -82,7 +82,7 @@ impl Parser {
                 val.span()
             } else {
                 // This shouldn't happen - we should have either value or block
-                colon_token.span
+                arrow_token.span
             };
 
             let case_span = case_start.to(&case_end);

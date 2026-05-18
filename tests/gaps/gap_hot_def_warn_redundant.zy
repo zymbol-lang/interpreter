@@ -1,0 +1,16 @@
+// Redundant ° outside a loop → warning (non-fatal), execution continues
+
+// Postfix form: second x° warns, result is still cumulative
+x° += 10
+x° += 5
+>> x ¶
+
+// Prefix form: second °y warns, result is still cumulative
+°y += 100
+°y += 50
+>> y ¶
+
+// Mix: first use postfix, second use prefix — second warns
+a° += 1
+°a += 9
+>> a ¶

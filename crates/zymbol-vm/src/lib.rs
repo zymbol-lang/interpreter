@@ -166,6 +166,9 @@ impl Value {
             (Value::Char(a), Value::Char(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Unit, Value::Unit) => true,
+            (Value::Tuple(a), Value::Tuple(b)) => {
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.equals(y))
+            }
             _ => false,
         }
     }
@@ -317,6 +320,14 @@ fn cmp_direct(va: &Value, vb: &Value) -> i32 {
         (Value::String(x), Value::String(y)) => ord(x.as_str().cmp(y.as_str())),
         (Value::Char(x), Value::Char(y))   => ord(x.cmp(y)),
         (Value::Bool(x), Value::Bool(y))   => ord(x.cmp(y)),
+        (Value::Tuple(x), Value::Tuple(y)) => {
+            if x.len() != y.len() { return 1; }
+            for (a, b) in x.iter().zip(y.iter()) {
+                let r = cmp_direct(a, b);
+                if r != 0 { return r; }
+            }
+            0
+        }
         _ => 1,
     }
 }
@@ -355,6 +366,20 @@ fn get_chunk(program: &CompiledProgram, chunk_idx: usize) -> &Chunk {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// TuiGuard — restores terminal on drop, regardless of control-flow path
+// ──────────────────────────────────────────────────────────────────────────────
+
+struct TuiGuard;
+impl Drop for TuiGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::execute!(std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::cursor::Show);
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // VM — Sprint 5C: flat register stack
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -374,6 +399,8 @@ pub struct VM<W: Write> {
     numeral_mode: u32,
     /// Module-level global variables (mutable, shared across all calls)
     global_vars: Vec<Value>,
+    /// CLI arguments passed after the script path (argv[1..], skipping --vm flags)
+    cli_args: Vec<String>,
     output: W,
 }
 
@@ -387,8 +414,14 @@ impl<W: Write> VM<W> {
             string_rcs: Vec::new(),
             numeral_mode: 0x0030, // ASCII_BASE default
             global_vars: Vec::new(),
+            cli_args: Vec::new(),
             output,
         }
+    }
+
+    /// Set CLI arguments before running (argv after the script path, minus VM flags).
+    pub fn set_cli_args(&mut self, args: Vec<String>) {
+        self.cli_args = args;
     }
 
     pub fn run(&mut self, program: &CompiledProgram) -> Result<(), VmError> {
@@ -491,6 +524,10 @@ impl<W: Write> VM<W> {
                 return Err(_err);
             }};
         }
+
+        // TUI cleanup guards — dropped on any return path (Ok, Err, or panic).
+        // Popped explicitly by ExitTui on the normal path.
+        let mut tui_stack: Vec<TuiGuard> = Vec::new();
 
         loop {
             // chunk borrows only from `program` — no conflict with `self.value_stack`
@@ -741,6 +778,22 @@ impl<W: Write> VM<W> {
                         other => raise!(VmError::TypeError { expected: "String or Array", got: other.type_name().to_string() }),
                     };
                     wreg!(dst, Value::Int(n));
+                }
+
+                &Instruction::StrRepeat(dst, str_reg, n_reg) => {
+                    let result = {
+                        let s = match &self.value_stack[base + str_reg as usize] {
+                            Value::String(s) => s.as_str().to_owned(),
+                            Value::Char(c)   => c.to_string(),
+                            other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                        };
+                        let n = match &self.value_stack[base + n_reg as usize] {
+                            Value::Int(n) if *n >= 0 => *n as usize,
+                            other => raise!(VmError::TypeError { expected: "non-negative Int", got: other.type_name().to_string() }),
+                        };
+                        s.repeat(n)
+                    };
+                    wreg!(dst, Value::String(ZyStr::new(result)));
                 }
 
                 // ── Comparison ──────────────────────────────────────────────
@@ -1924,25 +1977,34 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::TypeOf(dst, src) => {
                     let val = self.reg_get(src).clone();
-                    let (type_sym, len) = match &val {
-                        Value::Int(n) => ("###", n.to_string().len() as i64),
-                        Value::Float(fl) => ("##.", fl.to_string().len() as i64),
-                        Value::String(s) => ("##\"", s.as_ref().chars().count() as i64),
-                        Value::Char(_) => ("##'", 1),
-                        Value::Bool(_) => ("##?", 1),
-                        Value::Array(a) => ("##]", a.as_ref().len() as i64),
-                        Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
-                        Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
-                        Value::Function(_, arity) => ("##()", *arity as i64),
-                        Value::Closure(_, arity, _) => ("##->", *arity as i64),
-                        Value::Unit => ("##_", 0),
-                        Value::Error(_) => ("##_", 0),
+                    let tuple_val = if let Value::Error(s) = &val {
+                        let s_ref = s.as_ref();
+                        let kind = s_ref.find('(').map(|i| &s_ref[..i]).unwrap_or(s_ref);
+                        Value::Tuple(Rc::new(vec![
+                            Value::String(ZyStr::new(kind.to_string())),
+                            Value::Int(0),
+                            val.clone(),
+                        ]))
+                    } else {
+                        let (type_sym, len) = match &val {
+                            Value::Int(n) => ("###", n.to_string().len() as i64),
+                            Value::Float(fl) => ("##.", fl.to_string().len() as i64),
+                            Value::String(s) => ("##\"", s.as_ref().chars().count() as i64),
+                            Value::Char(_) => ("##'", 1),
+                            Value::Bool(_) => ("##?", 1),
+                            Value::Array(a) => ("##]", a.as_ref().len() as i64),
+                            Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
+                            Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
+                            Value::Function(_, arity) => ("##()", *arity as i64),
+                            Value::Closure(_, arity, _) => ("##->", *arity as i64),
+                            _ => ("##_", 0),
+                        };
+                        Value::Tuple(Rc::new(vec![
+                            Value::String(ZyStr::new(type_sym.to_string())),
+                            Value::Int(len),
+                            val,
+                        ]))
                     };
-                    let tuple_val = Value::Tuple(Rc::new(vec![
-                        Value::String(ZyStr::new(type_sym.to_string())),
-                        Value::Int(len),
-                        val,
-                    ]));
                     self.reg_set(dst, tuple_val);
                 }
 
@@ -2164,6 +2226,165 @@ impl<W: Write> VM<W> {
                     if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
                         *slot = val;
                     }
+                }
+
+                // ── TUI primitives ──────────────────────────────────────────────
+                &Instruction::Sleep(reg) => {
+                    let ms = match rreg!(reg) {
+                        Value::Int(n) if *n >= 0 => *n as u64,
+                        Value::Int(n) => raise!(VmError::Generic(format!(
+                            "@~ requires non-negative ms, got {}", n))),
+                        other => raise!(VmError::TypeError {
+                            expected: "Int", got: other.type_name().to_string() }),
+                    };
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                }
+
+                Instruction::ClearScreen => {
+                    crossterm::execute!(std::io::stdout(),
+                        crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+                        crossterm::cursor::MoveTo(0, 0)).ok();
+                }
+
+                &Instruction::QueryTerminalSize(dst) => {
+                    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+                    wreg!(dst, Value::Tuple(std::rc::Rc::new(vec![Value::Int(rows as i64), Value::Int(cols as i64)])));
+                }
+
+                &Instruction::ReadKey(dst, blocking) => {
+                    use crossterm::event::{self, Event, KeyEvent};
+                    let ch = if blocking {
+                        loop {
+                            match event::read() {
+                                Ok(Event::Key(KeyEvent { code, .. })) => break vm_map_key_code(code),
+                                Ok(_) => continue,
+                                Err(_) => break '\0', // non-TTY: no input available
+                            }
+                        }
+                    } else if event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+                        match event::read().unwrap_or(Event::FocusLost) {
+                            Event::Key(KeyEvent { code, .. }) => vm_map_key_code(code),
+                            _ => '\0',
+                        }
+                    } else {
+                        '\0'
+                    };
+                    wreg!(dst, Value::Char(ch));
+                }
+
+                &Instruction::ReadLine(dst, prompt_reg, numeric) => {
+                    use std::io::{BufRead, Write};
+                    // Show prompt if present
+                    if let Some(pr) = prompt_reg {
+                        print!("{}", rreg!(pr));
+                        std::io::stdout().flush().ok();
+                    }
+                    // Inside TUI block: disable raw mode + show cursor so user can type
+                    let in_tui = !tui_stack.is_empty();
+                    if in_tui {
+                        crossterm::terminal::disable_raw_mode().ok();
+                        crossterm::execute!(std::io::stdout(), crossterm::cursor::Show).ok();
+                    }
+                    let mut line = String::new();
+                    std::io::stdin().lock().read_line(&mut line).ok();
+                    if in_tui {
+                        crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide).ok();
+                        if let Err(e) = crossterm::terminal::enable_raw_mode() {
+                            raise!(VmError::Generic(format!("input: failed to restore raw mode: {}", e)));
+                        }
+                    }
+                    let trimmed = line.trim().to_string();
+                    let value = if numeric {
+                        if let Ok(i) = trimmed.parse::<i64>() {
+                            Value::Int(i)
+                        } else if let Ok(f) = trimmed.parse::<f64>() {
+                            Value::Float(f)
+                        } else if let Some(norm) = normalize_unicode_digits(&trimmed) {
+                            if let Ok(i) = norm.parse::<i64>() { Value::Int(i) }
+                            else if let Ok(f) = norm.parse::<f64>() { Value::Float(f) }
+                            else { Value::String(ZyStr::new(trimmed)) }
+                        } else {
+                            Value::String(ZyStr::new(trimmed))
+                        }
+                    } else {
+                        Value::String(ZyStr::new(trimmed))
+                    };
+                    wreg!(dst, value);
+                }
+
+                Instruction::PrintAt(r_pos, item_regs) => {
+                    let pos_val = rreg!(*r_pos).clone();
+                    let (fila, col, bks, fg, bg) = vm_extract_pos(pos_val);
+                    if let (Some(r), Some(c)) = (fila, col) {
+                        crossterm::execute!(std::io::stdout(),
+                            crossterm::cursor::MoveTo(c - 1, r - 1)).ok();
+                    }
+                    let mut styled = false;
+                    if bks & 1 != 0 { crossterm::execute!(std::io::stdout(), crossterm::style::SetAttribute(crossterm::style::Attribute::Bold)).ok();       styled = true; }
+                    if bks & 2 != 0 { crossterm::execute!(std::io::stdout(), crossterm::style::SetAttribute(crossterm::style::Attribute::Italic)).ok();     styled = true; }
+                    if bks & 4 != 0 { crossterm::execute!(std::io::stdout(), crossterm::style::SetAttribute(crossterm::style::Attribute::Underlined)).ok(); styled = true; }
+                    let mut colored = false;
+                    if let Some(fg) = fg {
+                        crossterm::execute!(std::io::stdout(),
+                            crossterm::style::SetForegroundColor(
+                                crossterm::style::Color::AnsiValue(fg as u8))).ok();
+                        colored = true;
+                    }
+                    if let Some(bg) = bg {
+                        crossterm::execute!(std::io::stdout(),
+                            crossterm::style::SetBackgroundColor(
+                                crossterm::style::Color::AnsiValue(bg as u8))).ok();
+                        colored = true;
+                    }
+                    for &r in item_regs {
+                        print!("{}", rreg!(r));
+                    }
+                    if styled || colored {
+                        crossterm::execute!(std::io::stdout(),
+                            crossterm::style::SetAttribute(crossterm::style::Attribute::Reset)).ok();
+                    }
+                    std::io::stdout().flush().ok();
+                }
+
+                Instruction::EnterTui => {
+                    if let Err(e) = crossterm::terminal::enable_raw_mode() {
+                        raise!(VmError::Generic(format!("failed to enable raw mode: {}", e)));
+                    }
+                    if let Err(e) = crossterm::execute!(std::io::stdout(),
+                        crossterm::terminal::EnterAlternateScreen,
+                        crossterm::cursor::MoveTo(0, 0),
+                        crossterm::cursor::Hide)
+                    {
+                        let _ = crossterm::terminal::disable_raw_mode();
+                        raise!(VmError::Generic(format!("failed to enter alternate screen: {}", e)));
+                    }
+                    tui_stack.push(TuiGuard);
+                }
+
+                Instruction::ExitTui => {
+                    // Pop the guard — its Drop performs cleanup.
+                    // If ExitTui is skipped (@:label! / error), the guard is dropped
+                    // when tui_stack goes out of scope at the end of run().
+                    tui_stack.pop();
+                }
+
+                &Instruction::HotInit(dst, neutral) => {
+                    if matches!(self.reg_get(dst), Value::Unit) {
+                        let val = match neutral {
+                            zymbol_bytecode::HotNeutral::Int => Value::Int(0),
+                            zymbol_bytecode::HotNeutral::IntOne => Value::Int(1),
+                            zymbol_bytecode::HotNeutral::Array => Value::Array(Rc::new(Vec::new())),
+                            zymbol_bytecode::HotNeutral::String => Value::String(ZyStr::from_str_ref("")),
+                        };
+                        wreg!(dst, val);
+                    }
+                }
+
+                &Instruction::LoadCliArgs(dst) => {
+                    let arr: Vec<Value> = self.cli_args.iter()
+                        .map(|s| Value::String(ZyStr::from_str_ref(s)))
+                        .collect();
+                    wreg!(dst, Value::Array(Rc::new(arr)));
                 }
 
                 Instruction::Halt => return Ok(()),
@@ -2676,6 +2897,21 @@ impl<W: Write> VM<W> {
                     };
                     w!(dst, Value::Int(n));
                 }
+                &Instruction::StrRepeat(dst, str_reg, n_reg) => {
+                    let result = {
+                        let s = match r!(str_reg) {
+                            Value::String(s) => s.as_str().to_owned(),
+                            Value::Char(c)   => c.to_string(),
+                            other => return Err(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                        };
+                        let n = match r!(n_reg) {
+                            Value::Int(n) if *n >= 0 => *n as usize,
+                            other => return Err(VmError::TypeError { expected: "non-negative Int", got: other.type_name().to_string() }),
+                        };
+                        s.repeat(n)
+                    };
+                    w!(dst, Value::String(ZyStr::new(result)));
+                }
                 &Instruction::StrCharAt(dst, str_reg, idx_reg) => {
                     let ch = match (r!(str_reg), r!(idx_reg)) {
                         (Value::String(s), Value::Int(i)) => {
@@ -2930,20 +3166,31 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::TypeOf(dst, src) => {
                     let val = r!(src).clone();
-                    let (type_sym, len) = match &val {
-                        Value::Int(n) => ("###", n.to_string().len() as i64),
-                        Value::Float(fl) => ("##.", fl.to_string().len() as i64),
-                        Value::String(s) => ("##\"", s.as_ref().chars().count() as i64),
-                        Value::Char(_) => ("##'", 1),
-                        Value::Bool(_) => ("##?", 1),
-                        Value::Array(a) => ("##]", a.as_ref().len() as i64),
-                        Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
-                        Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
-                        Value::Function(_, arity) => ("##()", *arity as i64),
-                        Value::Closure(_, arity, _) => ("##->", *arity as i64),
-                        _ => ("##_", 0),
+                    let result = if let Value::Error(s) = &val {
+                        let s_ref = s.as_ref();
+                        let kind = s_ref.find('(').map(|i| &s_ref[..i]).unwrap_or(s_ref);
+                        Value::Tuple(Rc::new(vec![
+                            Value::String(ZyStr::new(kind.to_string())),
+                            Value::Int(0),
+                            val.clone(),
+                        ]))
+                    } else {
+                        let (type_sym, len) = match &val {
+                            Value::Int(n) => ("###", n.to_string().len() as i64),
+                            Value::Float(fl) => ("##.", fl.to_string().len() as i64),
+                            Value::String(s) => ("##\"", s.as_ref().chars().count() as i64),
+                            Value::Char(_) => ("##'", 1),
+                            Value::Bool(_) => ("##?", 1),
+                            Value::Array(a) => ("##]", a.as_ref().len() as i64),
+                            Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
+                            Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
+                            Value::Function(_, arity) => ("##()", *arity as i64),
+                            Value::Closure(_, arity, _) => ("##->", *arity as i64),
+                            _ => ("##_", 0),
+                        };
+                        Value::Tuple(Rc::new(vec![val.clone(), Value::String(ZyStr::new(type_sym.to_string())), Value::Int(len)]))
                     };
-                    w!(dst, Value::Tuple(Rc::new(vec![val.clone(), Value::String(ZyStr::new(type_sym.to_string())), Value::Int(len)])));
+                    w!(dst, result);
                 }
 
                 // ── Precision ops ────────────────────────────────────────────
@@ -2991,6 +3238,46 @@ impl<W: Write> VM<W> {
         self.value_stack.truncate(base);
         Ok(Value::Unit)
     }
+}
+
+fn vm_map_key_code(code: crossterm::event::KeyCode) -> char {
+    use crossterm::event::KeyCode::*;
+    match code {
+        Char(c) => c,
+        Up      => '↑',
+        Down    => '↓',
+        Left    => '←',
+        Right   => '→',
+        Enter   => '\n',
+        Esc     => '\x1B',
+        _       => '\0',
+    }
+}
+
+fn vm_extract_pos(val: Value) -> (Option<u16>, Option<u16>, i64, Option<i64>, Option<i64>) {
+    let items = match val {
+        Value::Tuple(v) => (*v).clone(),
+        _ => return (None, None, 0, None, None),
+    };
+    // Variable-based mode: >>~ pos > items compiles as MakeTuple([r_pos]) wrapping the
+    // dense tuple. Unwrap one level when the outer tuple holds a single inner tuple.
+    if items.len() == 1 {
+        if let Value::Tuple(_) = &items[0] {
+            return vm_extract_pos(items.into_iter().next().unwrap());
+        }
+    }
+    let get_int = |i: usize| -> Option<i64> {
+        match items.get(i) {
+            Some(Value::Int(n)) => Some(*n),
+            _ => None, // Unit or absent = None
+        }
+    };
+    let fila = get_int(0).map(|n| n as u16);
+    let col  = get_int(1).map(|n| n as u16);
+    let bks  = get_int(2).unwrap_or(0);
+    let fg   = get_int(3);
+    let bg   = get_int(4);
+    (fila, col, bks, fg, bg)
 }
 
 fn vm_natural_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {

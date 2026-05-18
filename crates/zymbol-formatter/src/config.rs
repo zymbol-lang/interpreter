@@ -11,20 +11,11 @@ pub struct FormatterConfig {
     /// Maximum line length before wrapping (default: 100)
     pub max_line_length: usize,
 
-    /// Continuation indent for wrapped lines (default: 8)
-    pub continuation_indent: usize,
-
     /// Whether to use spaces (true) or tabs (false) for indentation (default: true)
     pub use_spaces: bool,
 
-    /// Maximum number of elements in an inline array (default: 5)
-    pub max_inline_array_elements: usize,
-
     /// Maximum length for an inline array before wrapping (default: 60)
     pub max_inline_array_length: usize,
-
-    /// Whether to add trailing commas in multiline collections (default: true)
-    pub trailing_commas: bool,
 
     /// Whether to put opening brace on same line (default: true)
     pub brace_same_line: bool,
@@ -38,11 +29,8 @@ impl Default for FormatterConfig {
         Self {
             indent_size: 4,
             max_line_length: 100,
-            continuation_indent: 8,
             use_spaces: true,
-            max_inline_array_elements: 5,
             max_inline_array_length: 60,
-            trailing_commas: false,
             brace_same_line: true,
             inline_single_statement: true,
         }
@@ -67,21 +55,9 @@ impl FormatterConfig {
         self
     }
 
-    /// Builder method to set continuation indent
-    pub fn with_continuation_indent(mut self, indent: usize) -> Self {
-        self.continuation_indent = indent;
-        self
-    }
-
     /// Builder method to use tabs instead of spaces
     pub fn with_tabs(mut self) -> Self {
         self.use_spaces = false;
-        self
-    }
-
-    /// Builder method to disable trailing commas
-    pub fn without_trailing_commas(mut self) -> Self {
-        self.trailing_commas = false;
         self
     }
 
@@ -117,7 +93,6 @@ mod tests {
         assert_eq!(config.indent_size, 4);
         assert_eq!(config.max_line_length, 100);
         assert!(config.use_spaces);
-        assert!(config.trailing_commas);
     }
 
     #[test]
@@ -125,13 +100,11 @@ mod tests {
         let config = FormatterConfig::new()
             .with_indent_size(2)
             .with_max_line_length(80)
-            .with_tabs()
-            .without_trailing_commas();
+            .with_tabs();
 
         assert_eq!(config.indent_size, 2);
         assert_eq!(config.max_line_length, 80);
         assert!(!config.use_spaces);
-        assert!(!config.trailing_commas);
     }
 
     #[test]

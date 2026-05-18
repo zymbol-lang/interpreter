@@ -294,9 +294,9 @@ fn test_match_statement_underscore_vars() {
     let source = r#"
 x = 5
 result = ?? x {
-    1..3 : "low" { _temp = "L"; >> _temp ¶ }
-    4..6 : "mid" { _temp = "M"; >> _temp ¶ }
-    _ : "high" { _temp = "H"; >> _temp ¶ }
+    1..3 => "low" { _temp = "L"; >> _temp ¶ }
+    4..6 => "mid" { _temp = "M"; >> _temp ¶ }
+    _ => "high" { _temp = "H"; >> _temp ¶ }
 }
 "#;
     let (_warnings, errors) = parse_and_analyze(source);

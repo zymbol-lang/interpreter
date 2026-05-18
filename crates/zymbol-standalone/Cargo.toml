@@ -6,6 +6,12 @@ license.workspace = true
 description = "Standalone executable builder for Zymbol-Lang"
 
 [dependencies]
+zymbol-span.workspace = true
 zymbol-ast.workspace = true
+zymbol-lexer.workspace = true
+zymbol-parser.workspace = true
+zymbol-bytecode.workspace = true
+zymbol-compiler.workspace = true
 anyhow.workspace = true
+bincode.workspace = true
 tempfile = "3.13"

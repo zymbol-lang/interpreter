@@ -256,10 +256,7 @@ impl Parser {
             );
             if !is_lambda {
                 let token = self.advance();
-                return Ok(Expr::Identifier(IdentifierExpr {
-                    name: name.clone(),
-                    span: token.span,
-                }));
+                return Ok(Expr::Identifier(IdentifierExpr::new(name.clone(), token.span)));
             }
         }
         self.parse_lambda()

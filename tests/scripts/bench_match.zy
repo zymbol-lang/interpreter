@@ -3,41 +3,41 @@
 // Run: time ./target/release/zymbol run tests/scripts/bench_match.zy
 // ============================================================================
 
-<# ./lib_time <= T
+<# ./lib_time => T
 
 >> "=== Zymbol Benchmark: Pattern Matching ===" ¶
 
 classify(x) {
     <~ ?? x {
-        1 : "one"
-        2 : "two"
-        3 : "three"
-        4 : "four"
-        5 : "five"
-        _ : "other"
+        1 => "one"
+        2 => "two"
+        3 => "three"
+        4 => "four"
+        5 => "five"
+        _ => "other"
     }
 }
 
 grade(score) {
     <~ ?? score {
-        90..100 : "A"
-        80..89  : "B"
-        70..79  : "C"
-        60..69  : "D"
-        0..59   : "F"
-        _       : "?"
+        90..100 => "A"
+        80..89  => "B"
+        70..79  => "C"
+        60..69  => "D"
+        0..59   => "F"
+        _       => "?"
     }
 }
 
 quadrant(x, y) {
     <~ ?? x {
-        0..100 : ?? y {
-            0..100 : "Q1"
-            _      : "Q4"
+        0..100 => ?? y {
+            0..100 => "Q1"
+            _      => "Q4"
         }
-        _ : ?? y {
-            0..100 : "Q2"
-            _      : "Q3"
+        _ => ?? y {
+            0..100 => "Q2"
+            _      => "Q3"
         }
     }
 }

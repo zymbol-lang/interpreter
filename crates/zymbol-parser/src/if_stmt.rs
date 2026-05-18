@@ -26,6 +26,12 @@ impl Parser {
         while matches!(self.peek().kind, TokenKind::ElseIf) {
             let else_if_start = self.advance().span; // consume _?
 
+            if matches!(self.peek().kind, TokenKind::LBrace) {
+                return Err(Diagnostic::error("'_?' requires a condition")
+                    .with_span(else_if_start)
+                    .with_help("use '_' (without '?') for an unconditional else branch"));
+            }
+
             // Parse else-if condition
             let else_if_condition = Box::new(self.parse_expr()?);
 

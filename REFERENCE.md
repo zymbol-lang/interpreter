@@ -2,7 +2,7 @@
 
 Complete lookup reference: known limitations, error taxonomy, and symbol table.
 
-**Interpreter version**: v0.0.4
+**Interpreter version**: v0.0.5
 
 See also: [GUIDE.md](GUIDE.md) — full language guide with examples  
 See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar and internals

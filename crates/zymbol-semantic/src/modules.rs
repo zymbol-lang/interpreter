@@ -338,6 +338,11 @@ impl ModuleAnalyzer {
                 }
                 return None;
             }
+            Statement::Sleep(s) => ("sleep (@~)", s.span),
+            Statement::ClearScreen(s) => ("clear screen (>>!)", s.span),
+            Statement::KeyInput(s) => ("key input (<<|)", s.span),
+            Statement::OutputPos(s) => ("positioned output (>>~)", s.span),
+            Statement::TuiBlock(s) => ("TUI block (>>|)", s.span),
             Statement::FunctionDecl(_) => return None,
         };
         Some(SemanticError::ExecutableStatementInModule {

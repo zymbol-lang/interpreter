@@ -1,0 +1,11 @@
+// °x (prefix) anchors ABOVE the nearest loop — survives loop end and crosses sequential loops
+
+// °x survives first loop; second loop continues accumulation
+@ i:1..3 { °x += i }
+@ j:1..3 { °x += j }
+>> x ¶
+
+// °arr accumulates across two sequential loops
+@ i:1..3 { °arr = °arr$+ i }
+@ j:4..5 { °arr = °arr$+ j }
+>> arr ¶

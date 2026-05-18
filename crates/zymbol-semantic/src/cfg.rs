@@ -637,6 +637,11 @@ impl Spannable for Statement {
             Statement::Expr(s) => &s.span,
             Statement::CliArgsCapture(s) => &s.span,
             Statement::SetNumeralMode { span, .. } => span,
+            Statement::Sleep(s) => &s.span,
+            Statement::ClearScreen(s) => &s.span,
+            Statement::KeyInput(s) => &s.span,
+            Statement::OutputPos(s) => &s.span,
+            Statement::TuiBlock(s) => &s.span,
         }
     }
 }

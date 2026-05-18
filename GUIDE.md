@@ -4,8 +4,8 @@
 > `zymbol run` (tree-walker) and `zymbol run --vm` (register VM).
 > If a construct is not documented here, it may not be implemented.
 
-**Interpreter version**: v0.0.4
-**Test coverage**: 393/393 parity (TW ↔ VM)
+**Interpreter version**: v0.0.5
+**Test coverage**: 436/436 golden-file pairs; `@vm-skip` files excluded from VM parity
 
 See also: [REFERENCE.md](REFERENCE.md) — limitations, error taxonomy, symbol table  
 See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar, coverage status, TW/VM internals
@@ -19,6 +19,7 @@ See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar, coverage stat
 1b. [Lexical Structure](#1b-lexical-structure)
 2. [Data Types](#2-data-types)
 3. [Output and Input](#3-output-and-input)
+3b. [TUI Primitives](#3b-tui-primitives)
 4. [Variables and Constants](#4-variables-and-constants)
 5. [Operators](#5-operators)
 6. [Control Flow](#6-control-flow)
@@ -81,7 +82,7 @@ Zymbol does not enforce one symbol per concept. Instead, a symbol may appear in 
 |---------|---------|---------|
 | else branch | `_ { }` | default case — no condition binds |
 | else-if | `_? x > 0 { }` | else-if — extends the non-binding chain |
-| wildcard in match | `?? x { _ -> "other" }` | catch-all arm — value not bound |
+| wildcard in match | `?? x { _ => "other" }` | catch-all arm — value not bound |
 | destructuring ignore | `[a, _, c] = arr` | middle element not bound |
 | pipe placeholder | `x \|> f(_, 2)` | position of piped value in args |
 | unused variable prefix | `_i:1..5` | iterator declared but not used in body |
@@ -99,7 +100,7 @@ All are the same idea: *this slot is intentionally left unbound*.
 | Precision / cast | `#.2\|x\|`, `##.x`, `###x` | numeric transformations at the type boundary |
 | Module declaration | `# calc` | names the file as a module (meta-identifier) |
 | Module export | `#> { }` | declares the public surface of a module |
-| Module import | `<# ./calc <= c` | brings a module into scope |
+| Module import | `<# ./calc => c` | brings a module into scope |
 | Numeral mode | `#०९#` | switches output digit script |
 
 Types, modules, and numeral modes share `#` because all three are about *what something is or how it is represented*, not *what value it holds*.
@@ -130,7 +131,7 @@ zymbol run --help
 - **Tree-walker**: canonical behavior, descriptive error messages, debugging
 - **VM**: production, ~1.1–1.5× faster than Python for most workloads
 
-Both modes produce **identical output** on 393/393 parity tests.
+Both modes produce **identical output** on 424/424 parity tests.
 
 ---
 
@@ -260,7 +261,7 @@ These constructs exist in Zymbol but are **not first-class values** — they can
 | Construct | Usage | Why not a value |
 |-----------|-------|-----------------|
 | Range (`1..5`) | Loop iterator only: `@ i:1..5 { }` | Storing a range raises a runtime error |
-| Module (`<# ./m <= m`) | Namespace only: `m::fn()`, `m.CONST` | Module alias is not a runtime value |
+| Module (`<# ./m => m`) | Namespace only: `m::fn()`, `m.CONST` | Module alias is not a runtime value |
 
 ### Type Inspection with `#?`
 
@@ -373,6 +374,110 @@ ok = a == b
 ```
 
 > **Note**: `><` capture only works in tree-walker mode.
+
+---
+
+## 3b. TUI Primitives
+
+Terminal control operators for building interactive terminal UIs.
+Some TUI primitives are tree-walker only; see the per-primitive notes below for VM support status.
+
+> Most TUI primitives require an enclosing `>>| { }` block (raw mode + alternate screen).
+> `>>!` and `>>?` work standalone. `<<|` and `<<|?` require raw mode provided by `>>|`.
+
+### Sleep — `@~`
+
+```zymbol
+@~ 500        // pause execution for 500 milliseconds
+@~ 1000       // 1 second
+```
+
+### Clear Screen — `>>!`
+
+```zymbol
+>>!           // clear the terminal and move cursor to home (row 1, col 1)
+```
+
+### Query Terminal Size — `>>?`
+
+Returns a `[rows, cols]` array with the current terminal dimensions:
+
+```zymbol
+[H, W] = >>?
+>> "Terminal: " H "x" W ¶     // e.g. Terminal: 40x120
+```
+
+### Positioned Output — `>>~`
+
+Print at a specific terminal position. Cursor is moved but not restored after printing.
+
+```zymbol
+// Full form: (row, col, BKS, fg, bg) where BKS = Bold(1)+Italic(2)+Underline(4)
+>>~ (5, 10, 0, 255, 0) > "hello"       // row 5, col 10, default style, fg=255 bg=0
+
+// Position only — no style change
+>>~ (3, 1) > "header"
+
+// Sparse form — omit any slot with a comma
+>>~ (,,, 196) > "red text"             // fg=196, no cursor move
+>>~ (1,, 1) > "bold at row 1"          // bold, column stays unchanged
+```
+
+Variable-based position (tuple variable):
+
+```zymbol
+pos = (10, 5)
+>>~ pos > "at pos"
+```
+
+ANSI color indices (0–255): standard 16 system colors, then 6×6×6 cube (16–231),
+then grayscale (232–255). `0` = use terminal default.
+
+### Key Input
+
+`<<|` reads one keypress (blocking). `<<|?` polls without blocking.
+
+```zymbol
+// Blocking — waits until a key is pressed
+<<| k
+>> "key: " k ¶
+
+// Non-blocking — '\0' if no key is pending
+<<|? k
+? k <> '\0' { >> "pressed: " k ¶ }
+```
+
+Special keys are mapped to single-character symbols:
+
+| Key | Value |
+|-----|-------|
+| Arrow Up | `'U'` |
+| Arrow Down | `'D'` |
+| Arrow Left | `'L'` |
+| Arrow Right | `'R'` |
+| Enter | `'\n'` |
+| Escape | `'\x1b'` |
+| Other | the character as-is |
+
+### TUI Block — `>>|`
+
+Enters a full-screen TUI context: alternate screen + raw mode. Cleans up on exit.
+
+```zymbol
+>>| {
+    >>!                            // clear alternate screen
+    >>~ (1, 1) > "Press q to quit"
+    @ {                            // game loop
+        <<| k
+        ? k == 'q' { @! }
+        // render frame
+    }
+}
+// terminal restored to normal after the block
+```
+
+> `>>|` errors if the process is not attached to a TTY (e.g. redirected output).
+> Use it only for interactive programs.
 
 ---
 
@@ -507,6 +612,8 @@ This works for both regular and `_`-prefixed variables.
 Works in **any context** — assignments, arguments, array literals, etc.:
 
 ```zymbol
+greet(s) { <~ s }
+
 name = "World"
 msg = "Hello {name}!"           // in assignment
 greet("Hello {name}")           // as argument
@@ -520,11 +627,102 @@ To include a **literal `{` or `}`** in a string (without triggering interpolatio
 
 ```zymbol
 >> "Use \{ and \} as literal braces" ¶   // → Use { and } as literal braces
-json = "\{\"key\":\"value\"\}"            // → {"key":"value"}
+json = "\{\"key\":\"value\"\}"
+>> json ¶                                // → {"key":"value"}
 ```
 
 > **⚠ False warning**: `unused variable 'name'` may appear even when `name` is used
 > inside an interpolated string. This is a static analyzer bug — ignore it.
+
+### Hot Definition Operator `°` (U+00B0)
+
+Two forms control where the auto-initialized variable lives:
+
+| Form | Position | Anchors to |
+|------|----------|-----------|
+| Postfix `x°` | LHS or RHS | Nearest enclosing `@` scope — dies when the loop ends |
+| Prefix `°x` | LHS or RHS | Scope **above** the nearest `@` — survives the loop |
+
+Both forms auto-initialize to the **neutral value** on the very first use.
+
+**Prefix `°x` on RHS** — the cleanest form for loop accumulators:
+
+```zymbol
+// °total in RHS: auto-init above @ on first use, survives loop
+@ item:[10, 20, 30] {
+    total = °total + item    // first use: total = 0 + 10 = 10
+}
+>> total ¶                   // → 60
+
+// °arr in RHS: auto-init to [] above @, survives loop
+@ x:[1, 2, 3] {
+    arr = °arr$+ x           // first use: arr = []$+ x = [x]
+}
+>> arr ¶                     // → [1, 2, 3]
+
+// °x on LHS: equivalent for compound operators
+@ item:[10, 20, 30] {
+    °sum += item             // same semantics as sum = °sum + item
+}
+>> sum ¶                     // → 60
+
+// x° (postfix): lives only while the loop runs
+@ i:[1, 2, 3] {
+    i° += 1                  // visible inside the loop only
+}
+// i is NOT accessible here — it died with the loop scope
+```
+
+**String accumulation** — use `°x` on LHS with plain RHS:
+
+```zymbol
+@ ch:["a", "b", "c"] {
+    °resultado = resultado ch    // neutral "" on first use; survives loop
+}
+>> resultado ¶                   // → abc
+```
+
+**Prefix `°x` in nested scopes:**
+
+```zymbol
+// °pares inside ? inside @ — anchors above the @, survives to global
+@ i:[1, 2, 3, 4, 5] {
+    ? i % 2 == 0 {
+        °pares += i
+    }
+}
+>> pares ¶               // → 6
+
+// °acum_k inside nested @ k — anchors to outer @ j scope
+@ _j:[1, 2] {
+    @ k:[10, 20] {
+        °acum_k += k
+    }
+    >> acum_k ¶          // → 30  (after _j=1)
+                         // → 60  (after _j=2, persists across iterations)
+}
+```
+
+**Outside any loop**, both `x°` and `°x` anchor to the global/function scope:
+
+```zymbol
+x° *= 7    // outside any loop → global scope → x = 7
+>> x ¶     // → 7
+```
+
+**Neutral values by context:**
+
+| Operation | Neutral |
+|-----------|---------|
+| `+=` `-=` | `0` (Int) or `0.0` (Float) |
+| `*=` `/=` | `1` |
+| `$+` (array append) | `[]` |
+| juxtaposition (string) | `""` |
+
+**Semantic warnings** — emitted but not errors:
+- `x° ^= 2` — hot-def power: always `0` on first use
+
+> Both `x°` and `°x` are tree-walker only. Add `@vm-skip` to files that use them.
 
 ---
 
@@ -635,20 +833,20 @@ Ident, and List.
 ```zymbol
 score = 85
 grade = ?? score {
-    90..100 : 'A'
-    80..89  : 'B'
-    70..79  : 'C'
-    60..69  : 'D'
-    _       : 'F'
+    90..100 => 'A'
+    80..89  => 'B'
+    70..79  => 'C'
+    60..69  => 'D'
+    _       => 'F'
 }
 >> "grade: " grade ¶
 
 color = "red"
 code = ?? color {
-    "red"   : "#FF0000"
-    "green" : "#00FF00"
-    "blue"  : "#0000FF"
-    _       : "#000000"
+    "red"   => "#FF0000"
+    "green" => "#00FF00"
+    "blue"  => "#0000FF"
+    _       => "#000000"
 }
 >> code ¶
 ```
@@ -661,18 +859,18 @@ compares the scrutinee against `expr`. Arms are tested in order; first match win
 ```zymbol
 temperature = -5
 state = ?? temperature {
-    < 0   : "ice"
-    < 20  : "cold"
-    < 35  : "warm"
-    _     : "hot"
+    < 0   => "ice"
+    < 20  => "cold"
+    < 35  => "warm"
+    _     => "hot"
 }
 >> state ¶    // → ice
 
 n = 42
 ?? n {
-    == 0    : { >> "zero" ¶ }
-    < 0     : { >> "negative" ¶ }
-    _       : { >> "positive: " n ¶ }
+    == 0    => { >> "zero" ¶ }
+    < 0     => { >> "negative" ¶ }
+    _       => { >> "positive: " n ¶ }    // → positive: 42
 }
 ```
 
@@ -685,19 +883,19 @@ An identifier used as a pattern looks up the named variable at runtime:
 ```zymbol
 expected = 200
 code = 200
-?? code {
-    expected : "ok"
-    _        : "fail"
+r1 = ?? code {
+    expected => "ok"
+    _        => "fail"
 }
-// → ok
+>> r1 ¶    // → ok
 
 weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 day = "Mon"
-?? day {
-    weekdays : "weekday"
-    _        : "weekend"
+r2 = ?? day {
+    weekdays => "weekday"
+    _        => "weekend"
 }
-// → weekday
+>> r2 ¶    // → weekday
 ```
 
 ### List Patterns
@@ -710,36 +908,36 @@ day = "Mon"
 ```zymbol
 // Scalar containment
 n = 3
-?? n {
-    [1, 2] : "low"
-    [3, 4] : "mid"
-    [5, 6] : "high"
-    _      : "other"
+label = ?? n {
+    [1, 2] => "low"
+    [3, 4] => "mid"
+    [5, 6] => "high"
+    _      => "other"
 }
-// → mid
+>> label ¶    // → mid
 
 // Structural array match
 cmd = ["run", "main.zy"]
 ?? cmd {
-    ["run", _]    : { >> "run command" ¶ }
-    ["build", _]  : { >> "build command" ¶ }
-    []            : { >> "empty" ¶ }
-    _             : { >> "unknown" ¶ }
+    ["run", _]    => { >> "run command" ¶ }
+    ["build", _]  => { >> "build command" ¶ }
+    []            => { >> "empty" ¶ }
+    _             => { >> "unknown" ¶ }
 }
 // → run command
 
 // Match on array length/shape
 data = [10, 20, 30]
 ?? data {
-    [_]       : { >> "one element" ¶ }
-    [_, _]    : { >> "two elements" ¶ }
-    [_, _, _] : { >> "three elements" ¶ }
-    _         : { >> "more" ¶ }
+    [_]       => { >> "one element" ¶ }
+    [_, _]    => { >> "two elements" ¶ }
+    [_, _, _] => { >> "three elements" ¶ }
+    _         => { >> "more" ¶ }
 }
 // → three elements
 ```
 
-> **⚠ Not implemented**: Identifier binding in patterns (`n : n * 2`).
+> **⚠ Not implemented**: Identifier binding in patterns (`n => n * 2`).
 
 ---
 
@@ -763,10 +961,10 @@ When the loop specifier is a positive integer literal, the body executes **exact
 
 ```zymbol
 @ 5 { >> "Zz" }
-// → ZzZzZzZzZz
+>> ¶    // → ZzZzZzZzZz
 
 @ 100 { >> "*" }
-// → (100 asterisks)
+>> ¶    // → (100 asterisks)
 ```
 
 The counter is implicit — no iterator variable is exposed. Use `@!` to break early if needed:
@@ -868,7 +1066,7 @@ count = 0
         >> "{i}{j} "
     }
 }
->> ¶
+>> ¶    // → 11 21 31 41
 
 // Multiple nested labels
 @:a i:1..3 {
@@ -880,7 +1078,7 @@ count = 0
         }
     }
 }
->> ¶
+>> ¶    // → 111 112 113 131 132 133 211
 
 // Without explicit labels (nested break via flag)
 found = #0
@@ -1008,7 +1206,7 @@ double(x) { <~ x * 2 }
 is_big(x) { <~ x > 10 }
 
 // Direct assignment
-r = classify(9)              // → "Fizz"
+r = classify(9)              // = "Fizz"
 
 // In output — any position
 >> classify(15) ¶            // → FizzBuzz
@@ -1016,20 +1214,20 @@ r = classify(9)              // → "Fizz"
 >> classify(3) " and " classify(5) ¶   // → Fizz and Buzz
 
 // As a condition
-? is_big(20) { >> "big" ¶ }
+? is_big(20) { >> "big" ¶ }    // → big
 
 // As match subject
 label = ?? classify(6) {
-    "Fizz" : "mult of 3"
-    "Buzz" : "mult of 5"
-    _      : "other"
+    "Fizz" => "mult of 3"
+    "Buzz" => "mult of 5"
+    _      => "other"
 }
 
 // Nested (composition)
-r = double(double(3))        // → 12
+r = double(double(3))        // = 12
 
 // Arithmetic with function calls
-r = double(4) + double(3)    // → 14
+r = double(4) + double(3)    // = 14
 
 // Inside loop body
 sum = 0
@@ -1288,9 +1486,10 @@ In 0-based systems, the same loop would require `0..(arr$#-1)` or similar.
 ### Length
 
 ```zymbol
+arr = [10, 20, 30, 40, 50]
 len = arr$#
 >> len ¶        // → 5
->> (arr$#) ¶    // ✅ parentheses required in >>
+>> (arr$#) ¶    // → 5  (parentheses required in >>)
 ```
 
 ### Append, Insert, Remove, Contains, Slice
@@ -1398,8 +1597,8 @@ Works on strings too — lexicographic order:
 
 ```zymbol
 words = ["banana", "apple", "cherry", "date"]
->> words$^+ ¶    // → ["apple", "banana", "cherry", "date"]
->> words$^- ¶    // → ["date", "cherry", "banana", "apple"]
+>> words$^+ ¶    // → [apple, banana, cherry, date]
+>> words$^- ¶    // → [date, cherry, banana, apple]
 ```
 
 **Custom comparator** — use `$^` (no `+`/`-`) with a two-argument lambda that returns
@@ -1692,8 +1891,8 @@ The range expands that dimension; remaining steps apply to each element in the r
 ```zymbol
 m = [[1,2,3], [4,5,6], [7,8,9]]
 
-// Rows 1-2 at col 2; rows 2-3 at col 3 → [[2, 5], [6, 9]]
->> m[[1..2>2] ; [2..3>3]] ¶
+// Rows 1-2 at col 2; rows 2-3 at col 3
+>> m[[1..2>2] ; [2..3>3]] ¶    // → [[2, 5], [6, 9]]
 
 // Layer 1, rows 1..3, col 2 (3D cube example)
 cubo = [
@@ -1962,6 +2161,28 @@ desc = "Hello {name}, you have {n} items"
 >> ¶    // → h-e-l-l-o-
 ```
 
+### String Repeat — `$*`
+
+`"string" $* N` repeats a string N times and returns the result. N must be a non-negative Int.
+
+```zymbol
+cols   = 40
+line   = "=" $* 20
+sep    = "-" $* 10
+border = "|" $* (cols - 2)
+
+>> line ¶    // → ====================
+>> sep ¶     // → ----------
+
+// N = 0 → empty string (nothing printed before ¶)
+>> ("x" $* 0) ¶
+
+// Useful for padding and TUI borders
+titulo = "Score"
+>> "[" titulo "]" ¶              // → [Score]
+>> "=" $* (titulo$# + 2) ¶      // → =======
+```
+
 ---
 
 ## 14. Higher-Order Functions
@@ -2226,7 +2447,7 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 ```zymbol
 // file: lib/utils.zy
 # utils {
-    <# ./dep <= d          // imports (must precede re-exports that reference the alias)
+    <# ./dep => d          // imports (must precede re-exports that reference the alias)
 
     #> {                   // export block
         add
@@ -2253,7 +2474,7 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 
 | Element | Allowed | Notes |
 |---------|---------|-------|
-| `<# path <= alias` | ✓ | Import |
+| `<# path => alias` | ✓ | Import |
 | `#> { ... }` | ✓ | Export block |
 | `NAME := literal` | ✓ | Exported constant (literal RHS only) |
 | `var = literal` | ✓ | Private mutable state (literal RHS only) |
@@ -2293,7 +2514,7 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 
 ```zymbol
 // main.zy
-<# ./counter <= c
+<# ./counter => c
 
 c::increment()         // count → 1
 c::increment()         // count → 2
@@ -2307,7 +2528,7 @@ x = c.count            // ✗ Runtime error: Module 'c' has no constant 'count'
 
 ```zymbol
 // Import with alias (alias is required)
-<# ./lib/utils <= u
+<# ./lib/utils => u
 
 // Call exported function
 result = u::add(5, 3)
@@ -2321,9 +2542,9 @@ pi = u.PI
 ### Import Paths
 
 ```zymbol
-<# ./module <= m         // same directory
-<# ../shared/lib <= s    // parent directory
-<# ./sub/folder <= c     // subdirectory
+<# ./module => m         // same directory
+<# ../shared/lib => s    // parent directory
+<# ./sub/folder => c     // subdirectory
 ```
 
 ### Export Aliases
@@ -2331,25 +2552,25 @@ pi = u.PI
 ```zymbol
 // Export with a different public name
 #> {
-    internal_fn <= public_name
-    INTERNAL_CONST <= PUBLIC_CONST
+    internal_fn => public_name
+    INTERNAL_CONST => PUBLIC_CONST
 }
 ```
 
 ### Re-export from Another Module
 
-Use `::` to re-export a function imported from another module, and `.` to re-export a constant. Place the `<#` import before `#>` so the alias is in scope. The re-export alias follows `<=`:
+Use `::` to re-export a function imported from another module, and `.` to re-export a constant. Place the `<#` import before `#>` so the alias is in scope. The re-export alias follows `:`:
 
 ```zymbol
 // math.zy
 # math {
-    <# ./core <= c
+    <# ./core => c
 
     #> {
         c::add           // re-export function as-is (callers use m::add)
-        c::add <= sum    // re-export function with different public name
+        c::add => sum    // re-export function with different public name
         c.PI             // re-export constant
-        c.PI <= TAU      // re-export constant with different name
+        c.PI => TAU      // re-export constant with different name
     }
 }
 ```
@@ -2730,8 +2951,8 @@ Boolean values can be matched with `??` using any script's `#0`/`#1`:
 x = ५ > ३     // Bool — evaluates to true (#१)
 
 ?? x {
-    #१ : { >> "हाँ" ¶ }     // → हाँ
-    #०  : { >> "नहीं" ¶ }
+    #१ => { >> "हाँ" ¶ }     // → हाँ
+    #०  => { >> "नहीं" ¶ }
 }
 ```
 
@@ -2845,6 +3066,8 @@ output = </ ./subscript.zy />
 >> output
 ```
 
+> For a list of bugs fixed in each version, see [CHANGELOG.md](CHANGELOG.md).
+
 ---
 
 ## 22. Verified Examples
@@ -2939,7 +3162,7 @@ n_scores = scores$#
 
 ```zymbol
 // file: main.zy
-<# ./calc <= c
+<# ./calc => c
 
 >> c::add(10, 5) ¶          // → 15
 >> c::subtract(10, 5) ¶     // → 5

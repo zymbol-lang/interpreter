@@ -7,7 +7,7 @@
 // Run (VM):  time zymbol run --vm tests/scripts/bench_strings_stress.zy
 // ============================================================================
 
-<# ./lib_time <= T
+<# ./lib_time => T
 
 >> "=== Zymbol String Stress (Extended) ===" ¶
 

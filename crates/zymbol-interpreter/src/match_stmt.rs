@@ -15,7 +15,7 @@ use std::io::Write;
 #[inline(always)]
 fn literal_to_value(lit: &Literal) -> Value {
     match lit {
-        Literal::String(s) | Literal::InterpolatedString(s) => Value::String(s.replace('\x01', "{")),
+        Literal::String(s) | Literal::InterpolatedString(s) => Value::String(s.replace('\x01', "{").replace('\x02', "}")),
         Literal::Int(n)    => Value::Int(*n),
         Literal::Float(f)  => Value::Float(*f),
         Literal::Char(c)   => Value::Char(*c),
@@ -33,7 +33,7 @@ impl<W: Write> Interpreter<W> {
             // Warning: match returns values but they're being discarded
             eprintln!("warning: match expression returns values but result is unused");
             eprintln!("  --> consider assigning to a variable: `result = ?? expr {{ ... }}`");
-            eprintln!("  --> or use execution-only form: `?? expr {{ pattern : {{ block }} }}`");
+            eprintln!("  --> or use execution-only form: `?? expr {{ pattern => {{ block }} }}`");
         }
 
         // Execute match as statement (discard return value)
@@ -87,7 +87,7 @@ impl<W: Write> Interpreter<W> {
             Pattern::Literal(lit, _) => {
                 // Check if literal equals value
                 let pattern_value = match lit {
-                    Literal::String(s) | Literal::InterpolatedString(s) => Value::String(s.replace('\x01', "{")),
+                    Literal::String(s) | Literal::InterpolatedString(s) => Value::String(s.replace('\x01', "{").replace('\x02', "}")),
                     Literal::Int(n) => Value::Int(*n),
                     Literal::Float(f) => Value::Float(*f),
                     Literal::Char(c) => Value::Char(*c),
@@ -241,9 +241,9 @@ mod tests {
         let code = r#"
 score = 95
 ?? score {
-    90..100 : { >> "A" ¶ }
-    80..89 : { >> "B" ¶ }
-    _ : { >> "F" ¶ }
+    90..100 => { >> "A" ¶ }
+    80..89 => { >> "B" ¶ }
+    _ => { >> "F" ¶ }
 }
 "#;
         let output = run(code);
@@ -255,8 +255,8 @@ score = 95
         let code = r#"
 score = 50
 ?? score {
-    90..100 : { >> "Excellent" ¶ }
-    _ : { >> "Need improvement" ¶ }
+    90..100 => { >> "Excellent" ¶ }
+    _ => { >> "Need improvement" ¶ }
 }
 "#;
         let output = run(code);
@@ -268,12 +268,12 @@ score = 50
         let code = r#"
 status = "PROCESSING"
 ?? status {
-    "PENDING" : { >> "Waiting" ¶ }
-    "PROCESSING" : {
+    "PENDING" => { >> "Waiting" ¶ }
+    "PROCESSING" => {
         >> "Processing order" ¶
         >> "Updating inventory" ¶
     }
-    _ : { >> "Unknown" ¶ }
+    _ => { >> "Unknown" ¶ }
 }
 "#;
         let output = run(code);
@@ -285,9 +285,9 @@ status = "PROCESSING"
         let code = r#"
 score = 95
 grade = ?? score {
-    90..100 : 'A' { >> "Excellent!" ¶ }
-    80..89 : 'B'
-    _ : 'F'
+    90..100 => 'A' { >> "Excellent!" ¶ }
+    80..89 => 'B'
+    _ => 'F'
 }
 >> grade ¶
 "#;
@@ -300,9 +300,9 @@ grade = ?? score {
         let code = r#"
 x = 10
 ?? x {
-    10 : "ten"
-    20 : "twenty"
-    _ : "other"
+    10 => "ten"
+    20 => "twenty"
+    _ => "other"
 }
 >> "done" ¶
 "#;

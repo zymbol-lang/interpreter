@@ -1,0 +1,24 @@
+// Hot-def inside functions — each call gets a fresh scope
+
+// °s accumulates over loop; function returns the total; each call independent
+acum(n) {
+    @ i:1..n { °s += i }
+    <~ s
+}
+>> acum(4) ¶
+>> acum(3) ¶
+
+// Array accumulation inside a function
+colectar(n) {
+    @ i:1..n { °items = °items$+ i }
+    <~ items
+}
+>> colectar(4) ¶
+>> colectar(2) ¶
+
+// Hot-def subtraction in function
+negativo(n) {
+    °r -= n
+    <~ r
+}
+>> negativo(7) ¶

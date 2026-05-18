@@ -6,7 +6,8 @@
 //! - Newline: write newline to output
 
 use std::io::Write;
-use zymbol_ast::{Input, InputCast, InputPrompt, Newline, Output};
+use zymbol_ast::{ClearScreen, Input, InputCast, InputPrompt, KeyInput, Newline, Output, OutputPos, TuiBlock};
+use zymbol_span::Span;
 use zymbol_lexer::StringPart;
 use crate::numeral_mode::{to_numeral_int, to_numeral_float, to_numeral_bool};
 use crate::data_ops::parse_numeric_string;
@@ -29,13 +30,22 @@ impl<W: Write> Interpreter<W> {
             };
             write!(self.output, "{}", s)?;
         }
+        // In TUI mode (raw mode active) stdout is line-buffered: text without \n stays
+        // invisible until the next flush. Force flush so >> output appears immediately.
+        if self.tui_depth > 0 {
+            self.output.flush()?;
+        }
         Ok(())
     }
 
     /// Execute newline statement: ¶ OR \\
     pub(crate) fn execute_newline(&mut self, _newline: &Newline) -> Result<()> {
-        // Explicit newline: ¶ or \\
-        writeln!(self.output)?;
+        // In raw mode (inside >>| TUI block) \n alone doesn't return to col 1 — need \r\n.
+        if self.tui_depth > 0 {
+            write!(self.output, "\r\n")?;
+        } else {
+            writeln!(self.output)?;
+        }
         Ok(())
     }
 
@@ -73,10 +83,24 @@ impl<W: Write> Interpreter<W> {
         }
 
         // Delegate reading to the injected input function.
-        // In normal execution this reads from stdin; in the REPL it temporarily
-        // disables raw mode so the user can type with echo and press Enter normally.
-        let line = (self.input_fn)()
-            .map_err(|e| RuntimeError::Generic {
+        // Inside a TUI block (raw mode active), temporarily disable raw mode and show the
+        // cursor so the user can type with echo and press Enter normally, then restore after.
+        if self.tui_depth > 0 {
+            crossterm::terminal::disable_raw_mode().map_err(|e| RuntimeError::Generic {
+                message: format!("input: failed to disable raw mode: {}", e),
+                span: input.span,
+            })?;
+            crossterm::execute!(std::io::stdout(), crossterm::cursor::Show).ok();
+        }
+        let line_result = (self.input_fn)();
+        if self.tui_depth > 0 {
+            crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide).ok();
+            crossterm::terminal::enable_raw_mode().map_err(|e| RuntimeError::Generic {
+                message: format!("input: failed to restore raw mode: {}", e),
+                span: input.span,
+            })?;
+        }
+        let line = line_result.map_err(|e| RuntimeError::Generic {
                 message: format!("input read error: {}", e),
                 span: input.span,
             })?;
@@ -88,7 +112,169 @@ impl<W: Write> Interpreter<W> {
         self.set_variable(&input.variable, value);
         Ok(())
     }
+
+    /// Clear screen: >>!
+    pub(crate) fn execute_clear_screen(&mut self, cs: &ClearScreen) -> Result<()> {
+        crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+            crossterm::cursor::MoveTo(0, 0)
+        ).map_err(|e| RuntimeError::Generic { message: e.to_string(), span: cs.span })
+    }
+
+    /// Terminal size query: >>?  — returns (rows, cols)
+    pub(crate) fn eval_terminal_size(&mut self, span: Span) -> Result<Value> {
+        let (cols, rows) = crossterm::terminal::size()
+            .map_err(|e| RuntimeError::Generic { message: e.to_string(), span })?;
+        Ok(Value::Tuple(vec![Value::Int(rows as i64), Value::Int(cols as i64)]))
+    }
+
+    /// Blocking / non-blocking key input: <<| var  or  <<|? var
+    pub(crate) fn execute_key_input(&mut self, ki: &KeyInput) -> Result<()> {
+        use crossterm::event::{self, Event, KeyEvent};
+        let ch = if ki.blocking {
+            loop {
+                match event::read().map_err(|e| RuntimeError::Generic {
+                    message: e.to_string(), span: ki.span,
+                })? {
+                    Event::Key(KeyEvent { code, .. }) => break map_key_code(code),
+                    _ => continue,
+                }
+            }
+        } else {
+            if event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+                match event::read().unwrap_or(Event::FocusLost) {
+                    Event::Key(KeyEvent { code, .. }) => map_key_code(code),
+                    _ => '\0',
+                }
+            } else { '\0' }
+        };
+        self.set_variable(&ki.variable, Value::Char(ch));
+        Ok(())
+    }
+
+    /// Positioned output: >>~ (fila, col, BKS, fg, bg) > items
+    /// Sparse syntax: >>~(,,,15,0)> — None slot = do not touch that parameter.
+    pub(crate) fn execute_output_pos(&mut self, op: &OutputPos) -> Result<()> {
+        use crossterm::{execute, cursor, style};
+
+        // Mode: single-slot variable → dense tuple evaluated at runtime
+        if op.slots.len() == 1 {
+            if let Some(expr) = &op.slots[0] {
+                let val = self.eval_expr(expr)?;
+                if let Value::Tuple(ref items) = val {
+                    let get_int = |i: usize| -> Option<i64> {
+                        match items.get(i) { Some(Value::Int(n)) => Some(*n), _ => None }
+                    };
+                    if let (Some(r), Some(c)) = (get_int(0), get_int(1)) {
+                        execute!(std::io::stdout(), cursor::MoveTo(c as u16 - 1, r as u16 - 1))
+                            .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
+                    }
+                    let bks = get_int(2).unwrap_or(0);
+                    let mut styled = false;
+                    if bks & 1 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Bold)).ok();       styled = true; }
+                    if bks & 2 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Italic)).ok();     styled = true; }
+                    if bks & 4 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Underlined)).ok(); styled = true; }
+                    let mut colored = false;
+                    if let Some(fg) = get_int(3) {
+                        execute!(std::io::stdout(), style::SetForegroundColor(style::Color::AnsiValue(fg as u8))).ok();
+                        colored = true;
+                    }
+                    if let Some(bg) = get_int(4) {
+                        execute!(std::io::stdout(), style::SetBackgroundColor(style::Color::AnsiValue(bg as u8))).ok();
+                        colored = true;
+                    }
+                    for item in &op.items { print!("{}", self.eval_expr(item)?.to_display_string()); }
+                    if styled || colored { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Reset)).ok(); }
+                    std::io::stdout().flush().ok();
+                    return Ok(());
+                }
+            }
+        }
+
+        // Normal sparse/inline mode: evaluate each slot independently
+        let mut vals: Vec<Option<i64>> = Vec::with_capacity(5);
+        for slot in &op.slots {
+            match slot {
+                None => vals.push(None),
+                Some(expr) => {
+                    let v = self.eval_expr(expr)?;
+                    vals.push(match v {
+                        Value::Int(n) => Some(n),
+                        other => return Err(RuntimeError::Generic {
+                            message: format!(">>~ slot expects Int, got {}", other.to_display_string()),
+                            span: op.span,
+                        }),
+                    });
+                }
+            }
+        }
+
+        let get = |i: usize| vals.get(i).copied().flatten();
+
+        if let (Some(r), Some(c)) = (get(0), get(1)) {
+            execute!(std::io::stdout(), cursor::MoveTo(c as u16 - 1, r as u16 - 1))
+                .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
+        }
+
+        let bks = get(2).unwrap_or(0);
+        let mut styled = false;
+        if bks & 1 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Bold)).ok();       styled = true; }
+        if bks & 2 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Italic)).ok();     styled = true; }
+        if bks & 4 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Underlined)).ok(); styled = true; }
+
+        let mut colored = false;
+        if let Some(fg) = get(3) {
+            execute!(std::io::stdout(), style::SetForegroundColor(style::Color::AnsiValue(fg as u8))).ok();
+            colored = true;
+        }
+        if let Some(bg) = get(4) {
+            execute!(std::io::stdout(), style::SetBackgroundColor(style::Color::AnsiValue(bg as u8))).ok();
+            colored = true;
+        }
+
+        for expr in &op.items { print!("{}", self.eval_expr(expr)?.to_display_string()); }
+
+        if styled || colored {
+            execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Reset)).ok();
+        }
+        std::io::stdout().flush().ok();
+        Ok(())
+    }
+
+    /// TUI block: >>| { } — alternate screen + raw mode
+    pub(crate) fn execute_tui_block(&mut self, tb: &TuiBlock) -> Result<()> {
+        use crossterm::{execute, terminal, cursor};
+        terminal::enable_raw_mode().map_err(|e| RuntimeError::Generic {
+            message: format!("failed to enable raw mode: {}", e), span: tb.span,
+        })?;
+        execute!(std::io::stdout(), terminal::EnterAlternateScreen, cursor::MoveTo(0, 0), cursor::Hide)
+            .map_err(|e| RuntimeError::Generic {
+                message: format!("failed to enter alternate screen: {}", e), span: tb.span,
+            })?;
+        self.tui_depth += 1;
+        let result = self.execute_block(&tb.body);
+        self.tui_depth -= 1;
+        let _ = execute!(std::io::stdout(), terminal::LeaveAlternateScreen, cursor::Show);
+        let _ = terminal::disable_raw_mode();
+        result
+    }
 }
+
+fn map_key_code(code: crossterm::event::KeyCode) -> char {
+    use crossterm::event::KeyCode::*;
+    match code {
+        Char(c) => c,
+        Up      => '↑',
+        Down    => '↓',
+        Left    => '←',
+        Right   => '→',
+        Enter   => '\n',
+        Esc     => '\x1B',
+        _       => '\0',
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

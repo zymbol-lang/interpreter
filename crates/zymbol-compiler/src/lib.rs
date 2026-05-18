@@ -14,7 +14,9 @@ use zymbol_ast::{
     TryStmt, FormatKind, PrecisionOp,
     DestructureAssign, DestructureItem, DestructurePattern,
     DeepIndexExpr, FlatExtractExpr, StructuredExtractExpr,
+    InputPrompt, InputCast,
 };
+use zymbol_lexer::StringPart;
 use zymbol_ast::Pattern;
 use zymbol_ast::BasePrefix;
 use zymbol_ast::CastKind;
@@ -92,12 +94,18 @@ struct FunctionCtx {
     loop_stack: Vec<LoopCtx>,
     /// Name of this function (for error messages)
     name: String,
+    /// Hot variables (both x° and °x): persist across block scopes, never zeroed by zero_new_vars
+    hot_vars: HashSet<String>,
+    /// Postfix-hot variables (x° only): scoped to their loop, reset to Unit when loop ends
+    postfix_hot_vars: HashSet<String>,
 }
 
 impl FunctionCtx {
     fn new(name: impl Into<String>) -> Self {
         Self {
             register_map: HashMap::new(),
+            hot_vars: HashSet::new(),
+            postfix_hot_vars: HashSet::new(),
             reg_types: Vec::new(),
             next_reg: 0,
             instructions: Vec::new(),
@@ -188,12 +196,30 @@ impl FunctionCtx {
         self.register_map.keys().cloned().collect()
     }
 
+    /// After a loop ends: reset postfix-hot (x°) registers that were created DURING this loop
+    /// to Unit, mirroring the tree-walker's loop-scope lifetime for x°.
+    /// `pre_loop_hot` is the snapshot of hot_vars taken before the loop body was compiled.
+    fn reset_postfix_hot_after_loop(&mut self, pre_loop_hot: &std::collections::HashSet<String>) {
+        let to_reset: Vec<(String, Reg)> = self.postfix_hot_vars
+            .iter()
+            .filter(|name| !pre_loop_hot.contains(*name))
+            .filter_map(|name| self.register_map.get(name).map(|&r| (name.clone(), r)))
+            .collect();
+        for (name, reg) in to_reset {
+            self.instructions.push(Instruction::LoadUnit(reg));
+            self.register_map.remove(&name);
+            self.hot_vars.remove(&name);
+            self.postfix_hot_vars.remove(&name);
+        }
+    }
+
     /// After compiling a block: zero out registers for variables newly introduced in that block
     /// and remove them from the register_map (they're now out of scope).
+    /// Hot variables (both x° and °x) are exempt — they persist across block scopes within a loop.
     fn zero_new_vars(&mut self, saved: &std::collections::HashSet<String>) {
         let new_vars: Vec<(String, Reg)> = self.register_map
             .iter()
-            .filter(|(name, _)| !saved.contains(name.as_str()))
+            .filter(|(name, _)| !saved.contains(name.as_str()) && !self.hot_vars.contains(name.as_str()))
             .map(|(n, &r)| (n.clone(), r))
             .collect();
         for (name, reg) in new_vars {
@@ -267,6 +293,9 @@ pub struct Compiler {
     /// Known module aliases (registered via import). Used to distinguish
     /// "private function" errors from "completely unknown" errors at call sites.
     known_module_aliases: HashSet<String>,
+    /// Source of named functions: name → (param_names, body_statements).
+    /// Used to recompile named functions as closures when they capture outer variables.
+    fn_source: HashMap<String, (Vec<String>, Vec<Statement>)>,
 }
 
 impl Compiler {
@@ -289,6 +318,7 @@ impl Compiler {
             global_var_map: HashMap::new(),
             global_var_inits: Vec::new(),
             known_module_aliases: HashSet::new(),
+            fn_source: HashMap::new(),
         };
 
         // Process imports first — register module functions as "alias::func"
@@ -311,6 +341,11 @@ impl Compiler {
                 if out_flags.iter().any(|&b| b) {
                     compiler.output_param_map.insert(idx, out_flags);
                 }
+                // Store body + param names for potential closure recompilation (Gap 3)
+                let param_names: Vec<String> = decl.parameters.iter()
+                    .map(|p| p.name.clone())
+                    .collect();
+                compiler.fn_source.insert(decl.name.clone(), (param_names, decl.body.statements.clone()));
                 // placeholder — will be replaced in second pass
                 compiler.functions.push(Chunk::new(&decl.name));
             }
@@ -605,6 +640,46 @@ impl Compiler {
         Ok(chunk)
     }
 
+    /// Recompile a named function as a closure with captured upvalues.
+    /// Used when a named function is used as a first-class value and its body
+    /// references variables from the enclosing scope.
+    fn compile_named_fn_as_closure(
+        &mut self,
+        original_name: &str,
+        params: Vec<String>,
+        stmts: Vec<Statement>,
+        free_vars: &[String],
+    ) -> Result<FuncIdx, CompileError> {
+        let closure_name = format!("<closure#{}/{}>", self.functions.len(), original_name);
+        let func_idx = self.functions.len() as FuncIdx;
+        self.functions.push(Chunk::new(&closure_name));
+        self.function_index.insert(closure_name.clone(), func_idx);
+
+        let mut closure_ctx = FunctionCtx::new(&closure_name);
+        for param in &params {
+            closure_ctx.alloc_reg(param)?;
+        }
+        let num_params = params.len() as u16;
+        // Upvalues occupy registers [num_params..num_params+k)
+        for fv in free_vars {
+            closure_ctx.alloc_reg(fv)?;
+        }
+
+        let prev_in_fn = self.in_function_body;
+        self.in_function_body = true;
+        for stmt in &stmts {
+            self.compile_stmt(stmt, &mut closure_ctx)?;
+        }
+        self.in_function_body = prev_in_fn;
+
+        let unit_reg = closure_ctx.alloc_temp()?;
+        closure_ctx.emit(Instruction::LoadUnit(unit_reg));
+        closure_ctx.emit(Instruction::Return(unit_reg));
+        let chunk = closure_ctx.into_chunk(num_params);
+        self.functions[func_idx as usize] = chunk;
+        Ok(func_idx)
+    }
+
     // ── Statement compilation ───────────────────────────────────────────────
 
     fn compile_stmt(
@@ -613,7 +688,20 @@ impl Compiler {
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
         match stmt {
-            Statement::Assignment(a) => self.compile_assignment(&a.name, &a.value, ctx),
+            Statement::Assignment(a) => {
+                // Hot/pre_hot assignment (x° or °x): pre-initialize to neutral element if variable is new
+                if (a.hot || a.pre_hot) && ctx.get_reg(&a.name).is_err() {
+                    let neutral_reg = ctx.alloc_reg(&a.name)?;
+                    let neutral = hot_neutral_instr(&a.value, &a.name, neutral_reg);
+                    ctx.emit(neutral);
+                    ctx.hot_vars.insert(a.name.clone());
+                    if a.hot {
+                        // Postfix (x°) scopes to its loop; tracked separately for reset on loop exit
+                        ctx.postfix_hot_vars.insert(a.name.clone());
+                    }
+                }
+                self.compile_assignment(&a.name, &a.value, ctx)
+            }
             Statement::ConstDecl(c) => self.compile_assignment(&c.name, &c.value, ctx),
             Statement::Output(o) => self.compile_output(o, ctx),
             Statement::Newline(_n) => {
@@ -666,8 +754,52 @@ impl Compiler {
                 self.compile_match_stmt(m, ctx)
             }
             Statement::DestructureAssign(d) => self.compile_destructure_assign(d, ctx),
-            // Unsupported — produce meaningful error
-            Statement::Input(_) => Err(CompileError::Unsupported("input (<<)".into())),
+            Statement::Input(input) => {
+                let dst = if let Ok(r) = ctx.get_reg(&input.variable) {
+                    r
+                } else {
+                    let r = ctx.alloc_temp()?;
+                    ctx.register_map.insert(input.variable.clone(), r);
+                    r
+                };
+
+                let prompt_reg = match &input.prompt {
+                    None => None,
+                    Some(InputPrompt::Simple(s)) => {
+                        let idx = self.intern_string(s);
+                        let r = ctx.alloc_temp()?;
+                        ctx.emit(Instruction::LoadStr(r, idx));
+                        Some(r)
+                    }
+                    Some(InputPrompt::Interpolated(parts)) => {
+                        let mut build_parts: Vec<BuildPart> = Vec::new();
+                        for part in parts {
+                            match part {
+                                StringPart::Text(s) => {
+                                    let idx = self.intern_string(s);
+                                    build_parts.push(BuildPart::Lit(idx));
+                                }
+                                StringPart::Variable(name) => {
+                                    if let Ok(r) = ctx.get_reg(name) {
+                                        build_parts.push(BuildPart::Reg(r));
+                                    } else {
+                                        let text = format!("{{{}}}", name);
+                                        let idx = self.intern_string(&text);
+                                        build_parts.push(BuildPart::Lit(idx));
+                                    }
+                                }
+                            }
+                        }
+                        let r = ctx.alloc_temp()?;
+                        ctx.emit(Instruction::BuildStr(r, build_parts));
+                        Some(r)
+                    }
+                };
+
+                let numeric = input.cast == InputCast::Numeric;
+                ctx.emit(Instruction::ReadLine(dst, prompt_reg, numeric));
+                Ok(())
+            }
             Statement::Try(ts) => self.compile_try(ts, ctx),
             Statement::LifetimeEnd(lifetime_end) => {
                 if let Ok(r) = ctx.get_reg(&lifetime_end.variable_name) {
@@ -676,11 +808,62 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Statement::CliArgsCapture(_) => {
-                Err(CompileError::Unsupported("CLI args capture — VM Fase 4C".into()))
+            Statement::CliArgsCapture(cap) => {
+                let dst = ctx.alloc_reg(&cap.variable_name)?;
+                ctx.emit(Instruction::LoadCliArgs(dst));
+                Ok(())
             }
             Statement::SetNumeralMode { base, .. } => {
                 ctx.emit(Instruction::SetNumeralMode(*base));
+                Ok(())
+            }
+            Statement::Sleep(s) => {
+                let r_ms = self.compile_expr(&s.duration, ctx)?;
+                ctx.emit(Instruction::Sleep(r_ms));
+                Ok(())
+            }
+            Statement::ClearScreen(_) => {
+                ctx.emit(Instruction::ClearScreen);
+                Ok(())
+            }
+            Statement::KeyInput(ki) => {
+                let dst = if let Ok(r) = ctx.get_reg(&ki.variable) {
+                    r
+                } else {
+                    let r = ctx.alloc_temp()?;
+                    ctx.register_map.insert(ki.variable.clone(), r);
+                    r
+                };
+                ctx.emit(Instruction::ReadKey(dst, ki.blocking));
+                Ok(())
+            }
+            Statement::OutputPos(op) => {
+                // Compile each slot: None → LoadUnit, Some(expr) → compile expr
+                let mut slot_regs = Vec::with_capacity(op.slots.len());
+                for slot in &op.slots {
+                    let r = match slot {
+                        None => {
+                            let r = ctx.alloc_temp()?;
+                            ctx.emit(Instruction::LoadUnit(r));
+                            r
+                        }
+                        Some(expr) => self.compile_expr(expr, ctx)?,
+                    };
+                    slot_regs.push(r);
+                }
+                let r_pos = ctx.alloc_temp()?;
+                ctx.emit(Instruction::MakeTuple(r_pos, slot_regs));
+                let mut regs = Vec::new();
+                for item in &op.items {
+                    regs.push(self.compile_expr(item, ctx)?);
+                }
+                ctx.emit(Instruction::PrintAt(r_pos, regs));
+                Ok(())
+            }
+            Statement::TuiBlock(tb) => {
+                ctx.emit(Instruction::EnterTui);
+                self.compile_block(&tb.body, ctx)?;
+                ctx.emit(Instruction::ExitTui);
                 Ok(())
             }
         }
@@ -707,6 +890,13 @@ impl Compiler {
         if let Expr::CollectionAppend(ca) = value {
             if let Expr::Identifier(ident) = ca.collection.as_ref() {
                 if ident.name == name {
+                    // Hot/pre_hot RHS self-ref (arr = arr°$+ i  or  arr = °arr$+ i):
+                    // initialize to [] on first use
+                    if (ident.hot || ident.pre_hot) && ctx.get_reg(name).is_err() {
+                        let arr_reg = ctx.alloc_reg(name)?;
+                        ctx.emit(Instruction::HotInit(arr_reg, zymbol_bytecode::HotNeutral::Array));
+                        ctx.hot_vars.insert(name.to_string());
+                    }
                     if let Ok(arr_reg) = ctx.get_reg(name) {
                         let r_elem = self.compile_expr(&ca.element, ctx)?;
                         ctx.emit(Instruction::ArrayPush(arr_reg, r_elem));
@@ -920,6 +1110,7 @@ impl Compiler {
         ctx.emit(Instruction::LoadInt(r_end, n - 1));
         ctx.emit(Instruction::LoadInt(r_one, 1));
 
+        let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
         ctx.loop_stack.push(LoopCtx { break_patches: Vec::new(), continue_patches: Vec::new(), label: lp.label.clone() });
 
@@ -938,6 +1129,7 @@ impl Compiler {
         let lctx = ctx.loop_stack.pop().unwrap();
         for pos in lctx.break_patches { ctx.patch_jump(pos, loop_end); }
         for pos in lctx.continue_patches { ctx.patch_jump(pos, inc_label); }
+        ctx.reset_postfix_hot_after_loop(&pre_loop_hot);
         Ok(())
     }
 
@@ -952,6 +1144,7 @@ impl Compiler {
         let r_cmp = ctx.alloc_temp()?;
         ctx.emit(Instruction::LoadInt(r_i, 0));
 
+        let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
         ctx.loop_stack.push(LoopCtx { break_patches: Vec::new(), continue_patches: Vec::new(), label: lp.label.clone() });
 
@@ -970,6 +1163,7 @@ impl Compiler {
         let lctx = ctx.loop_stack.pop().unwrap();
         for pos in lctx.break_patches { ctx.patch_jump(pos, loop_end); }
         for pos in lctx.continue_patches { ctx.patch_jump(pos, inc_label); }
+        ctx.reset_postfix_hot_after_loop(&pre_loop_hot);
         Ok(())
     }
 
@@ -978,6 +1172,7 @@ impl Compiler {
         lp: &Loop,
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
+        let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
         ctx.loop_stack.push(LoopCtx {
             break_patches: Vec::new(),
@@ -996,6 +1191,7 @@ impl Compiler {
         for pos in lctx.continue_patches {
             ctx.patch_jump(pos, loop_start);
         }
+        ctx.reset_postfix_hot_after_loop(&pre_loop_hot);
         Ok(())
     }
 
@@ -1005,6 +1201,7 @@ impl Compiler {
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
         let cond_expr = lp.condition.as_ref().unwrap();
+        let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
 
         ctx.loop_stack.push(LoopCtx {
@@ -1029,6 +1226,7 @@ impl Compiler {
         for pos in lctx.continue_patches {
             ctx.patch_jump(pos, loop_start);
         }
+        ctx.reset_postfix_hot_after_loop(&pre_loop_hot);
         Ok(())
     }
 
@@ -1077,6 +1275,7 @@ impl Compiler {
 
         // Loop header: check exit condition using conditional branches
         // Range is INCLUSIVE: @ i:0..N → 0,1,...,N
+        let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
 
         ctx.loop_stack.push(LoopCtx {
@@ -1134,6 +1333,7 @@ impl Compiler {
         for pos in lctx.continue_patches {
             ctx.patch_jump(pos, inc_label);
         }
+        ctx.reset_postfix_hot_after_loop(&pre_loop_hot);
         Ok(())
     }
 
@@ -1197,6 +1397,16 @@ impl Compiler {
                 if let Ok(r) = ctx.get_reg(&id.name) {
                     return Ok(r);
                 }
+                // Hot/pre_hot variable (x° or °x) on RHS: auto-initialize to neutral element if not yet defined
+                if id.hot || id.pre_hot {
+                    let dst = ctx.alloc_reg(&id.name)?;
+                    ctx.emit(Instruction::HotInit(dst, zymbol_bytecode::HotNeutral::Int));
+                    ctx.hot_vars.insert(id.name.clone());
+                    if id.hot {
+                        ctx.postfix_hot_vars.insert(id.name.clone());
+                    }
+                    return Ok(dst);
+                }
                 // Fall back to global constant inlining (module-level consts in function bodies)
                 if let Some(mc) = self.global_consts.get(&id.name).cloned() {
                     let dst = ctx.alloc_temp()?;
@@ -1217,14 +1427,37 @@ impl Compiler {
                     return Ok(dst);
                 }
                 // Named function used as first-class value: f = myFunc, arr$> myFunc, x |> myFunc
-                if let Some(&func_idx) = self.function_index.get(&id.name) {
+                if self.function_index.contains_key(&id.name) {
+                    // Check if the function body captures variables from the current scope
+                    let maybe_source = self.fn_source.get(&id.name).cloned();
+                    if let Some((params, stmts)) = maybe_source {
+                        let mut locals: HashSet<String> = params.iter().cloned().collect();
+                        let mut seen = HashSet::new();
+                        let mut free: Vec<String> = Vec::new();
+                        collect_free_in_stmts(&stmts, &mut locals, ctx, &mut seen, &mut free);
+                        if !free.is_empty() {
+                            let new_func_idx = self.compile_named_fn_as_closure(
+                                &id.name.clone(),
+                                params,
+                                stmts,
+                                &free,
+                            )?;
+                            let captured: Vec<Reg> = free.iter()
+                                .map(|v| ctx.get_reg(v))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            let dst = ctx.alloc_temp()?;
+                            ctx.emit(Instruction::MakeClosure(dst, new_func_idx, captured));
+                            return Ok(dst);
+                        }
+                    }
+                    let func_idx = *self.function_index.get(&id.name).unwrap();
                     let dst = ctx.alloc_temp()?;
                     ctx.emit(Instruction::MakeFunc(dst, func_idx));
                     return Ok(dst);
                 }
                 // In function bodies, defer to runtime (matches tree-walker behavior)
                 if self.in_function_body {
-                    let msg = format!("undefined variable: '{}'", id.name);
+                    let msg = format!("'{}' is undefined — did you mean '{}°' (hot definition)?", id.name, id.name);
                     let idx = self.intern_string(&msg);
                     let dst = ctx.alloc_temp()?;
                     ctx.emit(Instruction::RaiseError(idx));
@@ -1376,6 +1609,15 @@ impl Compiler {
                 Ok(dst)
             }
             // ── String modification operators ──────────────────────────────
+            Expr::StringRepeat(op) => {
+                let r_str = self.compile_expr(&op.string, ctx)?;
+                let r_n   = self.compile_expr(&op.count, ctx)?;
+                let dst   = ctx.alloc_temp()?;
+                ctx.emit(Instruction::StrRepeat(dst, r_str, r_n));
+                ctx.set_reg_type(dst, StaticType::String);
+                Ok(dst)
+            }
+
             Expr::StringReplace(op) => {
                 let r_str = self.compile_expr(&op.string, ctx)?;
                 let r_pat = self.compile_expr(&op.pattern, ctx)?;
@@ -1433,6 +1675,11 @@ impl Compiler {
             Expr::DeepIndex(di) => self.compile_deep_index(di, ctx),
             Expr::FlatExtract(fe) => self.compile_flat_extract(fe, ctx),
             Expr::StructuredExtract(se) => self.compile_structured_extract(se, ctx),
+            Expr::TerminalSize(_) => {
+                let dst = ctx.alloc_temp()?;
+                ctx.emit(Instruction::QueryTerminalSize(dst));
+                Ok(dst)
+            }
         }
     }
 
@@ -1592,7 +1839,7 @@ impl Compiler {
             }
             Literal::String(s) => {
                 // resolve \x01 sentinel (from \{ escape) to literal {
-                let resolved = s.replace('\x01', "{");
+                let resolved = s.replace('\x01', "{").replace('\x02', "}");
                 let idx = self.intern_string(&resolved);
                 ctx.emit(Instruction::LoadStr(dst, idx));
                 ctx.set_reg_type(dst, StaticType::String);
@@ -1603,7 +1850,7 @@ impl Compiler {
                     return self.compile_interpolated_string(s, ctx);
                 }
                 // No real {var} — just sentinel resolution
-                let resolved = s.replace('\x01', "{");
+                let resolved = s.replace('\x01', "{").replace('\x02', "}");
                 let idx = self.intern_string(&resolved);
                 ctx.emit(Instruction::LoadStr(dst, idx));
                 ctx.set_reg_type(dst, StaticType::String);
@@ -1899,7 +2146,7 @@ impl Compiler {
             Expr::Literal(lit) => match &lit.value {
                 Literal::Int(n) => Some(ModuleConst::Int(*n as i64)),
                 Literal::Float(f) => Some(ModuleConst::Float(*f)),
-                Literal::String(s) | Literal::InterpolatedString(s) => Some(ModuleConst::String(s.replace('\x01', "{"))),
+                Literal::String(s) | Literal::InterpolatedString(s) => Some(ModuleConst::String(s.replace('\x01', "{").replace('\x02', "}"))),
                 Literal::Bool(b) => Some(ModuleConst::Bool(*b)),
                 Literal::Char(c) => Some(ModuleConst::Char(*c)),
             },
@@ -2054,7 +2301,7 @@ impl Compiler {
                             ctx.emit_jump_if_not_placeholder(r_cmp)
                         }
                         zymbol_common::Literal::String(s) | zymbol_common::Literal::InterpolatedString(s) => {
-                            let resolved = s.replace('\x01', "{");
+                            let resolved = s.replace('\x01', "{").replace('\x02', "}");
                             let idx = self.intern_string(&resolved);
                             let body_label = ctx.current_label() + 2; // skip to MatchStr body
                             let _ms_pos = ctx.emit(Instruction::MatchStr(r_sub, idx, body_label as Label));
@@ -2220,7 +2467,7 @@ impl Compiler {
                                         struct_skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                                     }
                                     zymbol_common::Literal::String(s) | zymbol_common::Literal::InterpolatedString(s) => {
-                                        let resolved = s.replace('\x01', "{");
+                                        let resolved = s.replace('\x01', "{").replace('\x02', "}");
                                         let idx = self.intern_string(&resolved);
                                         let body_lbl = (ctx.current_label() + 2) as Label;
                                         ctx.emit(Instruction::MatchStr(r_elem, idx, body_lbl));
@@ -2268,7 +2515,7 @@ impl Compiler {
                                         jump_to_body_patches.push(ctx.emit(Instruction::JumpIf(r_cmp, 0)));
                                     }
                                     zymbol_common::Literal::String(s) | zymbol_common::Literal::InterpolatedString(s) => {
-                                        let resolved = s.replace('\x01', "{");
+                                        let resolved = s.replace('\x01', "{").replace('\x02', "}");
                                         let idx = self.intern_string(&resolved);
                                         jump_to_body_patches.push(ctx.emit(Instruction::MatchStr(r_sub, idx, 0)));
                                     }
@@ -2721,7 +2968,7 @@ impl Compiler {
                     }
                     if !current_lit.is_empty() {
                         // Resolve \x01 sentinel (from \{ escape) to literal {
-                        let resolved = current_lit.replace('\x01', "{");
+                        let resolved = current_lit.replace('\x01', "{").replace('\x02', "}");
                         let idx = self.intern_string(&resolved);
                         parts.push(BuildPart::Lit(idx));
                         current_lit.clear();
@@ -2745,7 +2992,7 @@ impl Compiler {
         }
         if !current_lit.is_empty() {
             // Resolve \x01 sentinel (from \{ escape) to literal {
-            let resolved = current_lit.replace('\x01', "{");
+            let resolved = current_lit.replace('\x01', "{").replace('\x02', "}");
             let idx = self.intern_string(&resolved);
             parts.push(BuildPart::Lit(idx));
         }
@@ -2798,6 +3045,7 @@ impl Compiler {
         let r_one = ctx.alloc_temp()?;
         ctx.emit(Instruction::LoadInt(r_one, 1));
 
+        let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
         ctx.loop_stack.push(LoopCtx {
             break_patches: Vec::new(),
@@ -2834,6 +3082,7 @@ impl Compiler {
             for pos in lctx.break_patches    { ctx.patch_jump(pos, loop_end); }
             for pos in lctx.continue_patches { ctx.patch_jump(pos, inc_label); }
         }
+        ctx.reset_postfix_hot_after_loop(&pre_loop_hot);
         Ok(())
     }
 
@@ -2995,6 +3244,44 @@ impl Compiler {
         ctx.set_reg_type(dst, StaticType::String);
         Ok(dst)
     }
+}
+
+// ── Hot-definition neutral element ───────────────────────────────────────────
+
+/// Return the HotInit instruction for a hot variable based on the RHS expression.
+/// - CollectionAppend(var, ...) → HotNeutral::Array  (neutral = [])
+/// - ConcatBuild(var, ...)      → HotNeutral::String (neutral = "")
+/// - Binary(Mul|Div, var, _)   → HotNeutral::IntOne  (neutral = 1, multiplicative identity)
+/// - Everything else            → HotNeutral::Int     (neutral = 0)
+/// HotInit is a conditional init: only sets the register if it currently holds Unit,
+/// so it is safe to emit inside a loop body (no-op after the first iteration).
+fn hot_neutral_instr(value: &Expr, var_name: &str, dst: Reg) -> Instruction {
+    use zymbol_bytecode::HotNeutral;
+    if let Expr::CollectionAppend(ca) = value {
+        if let Expr::Identifier(id) = ca.collection.as_ref() {
+            if id.name == var_name {
+                return Instruction::HotInit(dst, HotNeutral::Array);
+            }
+        }
+    }
+    if let Expr::Binary(bin) = value {
+        if bin.op == BinaryOp::Concat {
+            return Instruction::HotInit(dst, HotNeutral::String);
+        }
+        if let Expr::Identifier(id) = bin.left.as_ref() {
+            if id.name == var_name && matches!(bin.op, BinaryOp::Mul | BinaryOp::Div) {
+                return Instruction::HotInit(dst, HotNeutral::IntOne);
+            }
+        }
+    }
+    if let Expr::ConcatBuild(cb) = value {
+        if let Expr::Identifier(id) = cb.base.as_ref() {
+            if id.name == var_name {
+                return Instruction::HotInit(dst, HotNeutral::String);
+            }
+        }
+    }
+    Instruction::HotInit(dst, HotNeutral::Int)
 }
 
 // ── 4E: Free-variable collection for closure capture ─────────────────────────
@@ -3190,6 +3477,10 @@ fn collect_free_in_expr(
                 }
             }
         }
+        Expr::StringRepeat(op) => {
+            collect_free_in_expr(&op.string, locals, outer_ctx, seen, free);
+            collect_free_in_expr(&op.count, locals, outer_ctx, seen, free);
+        }
         Expr::StringReplace(op) => {
             collect_free_in_expr(&op.string, locals, outer_ctx, seen, free);
             collect_free_in_expr(&op.pattern, locals, outer_ctx, seen, free);
@@ -3241,7 +3532,7 @@ fn collect_free_in_expr(
             }
         }
         // Literals and shell expressions have no capturable sub-expressions
-        Expr::Literal(_) | Expr::Execute(_) | Expr::BashExec(_) => {}
+        Expr::Literal(_) | Expr::Execute(_) | Expr::BashExec(_) | Expr::TerminalSize(_) => {}
     }
 }
 
@@ -3365,7 +3656,19 @@ fn collect_free_in_stmts(
             Statement::Newline(_) | Statement::Break(_) | Statement::Continue(_)
             | Statement::FunctionDecl(_) | Statement::LifetimeEnd(_)
             | Statement::Input(_) | Statement::CliArgsCapture(_)
-            | Statement::SetNumeralMode { .. } => {}
+            | Statement::SetNumeralMode { .. }
+            | Statement::ClearScreen(_) | Statement::KeyInput(_) => {}
+
+            Statement::Sleep(s) => collect_free_in_expr(&s.duration, locals, outer_ctx, seen, free),
+            Statement::OutputPos(op) => {
+                for slot in &op.slots {
+                    if let Some(expr) = slot { collect_free_in_expr(expr, locals, outer_ctx, seen, free); }
+                }
+                for item in &op.items { collect_free_in_expr(item, locals, outer_ctx, seen, free); }
+            }
+            Statement::TuiBlock(tb) => {
+                collect_free_in_stmts(&tb.body.statements, locals, outer_ctx, seen, free);
+            }
         }
     }
 }
@@ -3511,6 +3814,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::StrSplitMap(d, s, p, f) | Instruction::StrSplitFilter(d, s, p, f) => { upd(*d); upd(*s); upd(*p); upd(*f); }
             Instruction::StrSplitReduce(d, s, p, i, f) => { upd(*d); upd(*s); upd(*p); upd(*i); upd(*f); }
             Instruction::StrLen(d, s) | Instruction::StrChars(d, s) => { upd(*d); upd(*s); }
+            Instruction::StrRepeat(d, s, n) => { upd(*d); upd(*s); upd(*n); }
             Instruction::StrSplit(d, s, p) | Instruction::StrContains(d, s, p)
             | Instruction::StrSlice(d, s, p) | Instruction::StrFindPos(d, s, p)
             | Instruction::ConcatStr(d, s, p) | Instruction::StrCharAt(d, s, p) => { upd(*d); upd(*s); upd(*p); }
@@ -3532,11 +3836,24 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::TryCatch(r) => upd(*r),
             Instruction::LoadGlobal(d, _) => upd(*d),
             Instruction::StoreGlobal(_, s) => upd(*s),
+            Instruction::Sleep(r) | Instruction::QueryTerminalSize(r)
+            | Instruction::ReadKey(r, _) => upd(*r),
+            Instruction::ReadLine(d, prompt_r, _) => {
+                upd(*d);
+                if let Some(r) = prompt_r { upd(*r); }
+            }
+            Instruction::PrintAt(r_pos, items) => {
+                upd(*r_pos);
+                for &r in items { upd(r); }
+            }
             // No-register instructions
             Instruction::SetupOutputWriteback(_) | Instruction::TryBegin(_)
             | Instruction::TryEnd(_) | Instruction::RaiseError(_)
             | Instruction::Jump(_) | Instruction::Halt | Instruction::PrintNewline
-            | Instruction::SetNumeralMode(_) => {}
+            | Instruction::SetNumeralMode(_)
+            | Instruction::ClearScreen | Instruction::EnterTui | Instruction::ExitTui => {}
+            Instruction::LoadCliArgs(dst) => upd(*dst),
+            Instruction::HotInit(dst, _) => upd(*dst),
         }
     }
     max

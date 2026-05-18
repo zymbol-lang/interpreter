@@ -534,18 +534,25 @@ impl DefUseAnalyzer {
                 // We mark them as ambiguous by setting is_underscore=true so they're
                 // excluded from destruction schedules.
                 if let Some(ref iter_var) = loop_stmt.iterator_var {
+                    // Suppress ambiguous-lifetime warning in two cases:
+                    // 1. _ prefix: programmer explicitly signals "I know this is loop-scoped"
+                    // 2. Variable already defined before the loop: deliberate reuse, not ambiguous
+                    let already_defined = self.chains.contains_key(iter_var);
+                    let suppress = iter_var.starts_with('_') || already_defined;
+
                     let chain = self.chains.entry(iter_var.clone()).or_insert_with(|| {
                         DefUseChain::new(iter_var.clone())
                     });
 
-                    // Mark as ambiguous (loop variant)
-                    chain.is_ambiguous = true;
-                    chain.ambiguity = Some(AmbiguousLifetime {
-                        variable: iter_var.clone(),
-                        reason: AmbiguityReason::LoopVariant,
-                        nodes: HashSet::new(),
-                        suggested_span: loop_stmt.body.span,
-                    });
+                    if !suppress {
+                        chain.is_ambiguous = true;
+                        chain.ambiguity = Some(AmbiguousLifetime {
+                            variable: iter_var.clone(),
+                            reason: AmbiguityReason::LoopVariant,
+                            nodes: HashSet::new(),
+                            suggested_span: loop_stmt.body.span,
+                        });
+                    }
                 }
 
                 // Analyze loop body
@@ -597,6 +604,38 @@ impl DefUseAnalyzer {
                     for stmt in &finally.block.statements {
                         self.analyze_statement(stmt, node_index);
                     }
+                }
+            }
+
+            Statement::Sleep(s) => self.analyze_expr(&s.duration, node_index),
+
+            Statement::ClearScreen(_) => {}
+
+            Statement::KeyInput(ki) => {
+                let chain = self.chains.entry(ki.variable.clone()).or_insert_with(|| {
+                    DefUseChain::new(ki.variable.clone())
+                });
+                chain.add_definition(Definition {
+                    var_name: ki.variable.clone(),
+                    node: node_index,
+                    span: ki.span,
+                    is_underscore: ki.variable.starts_with('_'),
+                    scope_depth: self.scope_depth,
+                });
+            }
+
+            Statement::OutputPos(op) => {
+                for slot in &op.slots {
+                    if let Some(expr) = slot { self.analyze_expr(expr, node_index); }
+                }
+                for item in &op.items {
+                    self.analyze_expr(item, node_index);
+                }
+            }
+
+            Statement::TuiBlock(tb) => {
+                for stmt in &tb.body.statements {
+                    self.analyze_statement(stmt, node_index);
                 }
             }
 
@@ -809,6 +848,11 @@ impl DefUseAnalyzer {
             }
 
             // String operations
+            Expr::StringRepeat(op) => {
+                self.analyze_expr(&op.string, node_index);
+                self.analyze_expr(&op.count, node_index);
+            }
+
             Expr::StringReplace(str_replace) => {
                 self.analyze_expr(&str_replace.string, node_index);
                 self.analyze_expr(&str_replace.pattern, node_index);
@@ -916,7 +960,7 @@ impl DefUseAnalyzer {
             }
 
             // Literals and other leaf nodes - no variable uses
-            Expr::Literal(_) => {}
+            Expr::Literal(_) | Expr::TerminalSize(_) => {}
         }
     }
 

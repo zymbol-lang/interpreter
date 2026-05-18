@@ -327,6 +327,29 @@ impl SymbolExtractor {
                 }
             }
 
+            Statement::KeyInput(ki) => {
+                self.symbols.push(Symbol::new(
+                    ki.variable.clone(),
+                    SymbolKind::Variable,
+                    ki.span,
+                ));
+            }
+
+            Statement::TuiBlock(tb) => {
+                for stmt in &tb.body.statements {
+                    self.extract_from_statement(stmt);
+                }
+            }
+
+            Statement::Sleep(s) => self.extract_from_expr(&s.duration),
+
+            Statement::OutputPos(op) => {
+                for slot in &op.slots {
+                    if let Some(expr) = slot { self.extract_from_expr(expr); }
+                }
+                for item in &op.items { self.extract_from_expr(item); }
+            }
+
             // Statements without symbol definitions
             Statement::Output(_)
             | Statement::Return(_)
@@ -334,6 +357,7 @@ impl SymbolExtractor {
             | Statement::Continue(_)
             | Statement::Newline(_)
             | Statement::LifetimeEnd(_)
+            | Statement::ClearScreen(_)
             | Statement::SetNumeralMode { .. } => {}
         }
     }

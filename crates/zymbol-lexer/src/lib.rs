@@ -25,8 +25,20 @@ pub enum TokenKind {
     // I/O operators
     /// >> (output operator)
     Output,
+    /// >>! (clear screen)
+    OutputClear,
+    /// >>? (query terminal size)
+    OutputQuery,
+    /// >>| (TUI block gate)
+    OutputGate,
+    /// >>~ (positioned output)
+    OutputPos,
     /// << (input operator)
     Input,
+    /// <<| (blocking key read)
+    KeyBlock,
+    /// <<|? (non-blocking key read)
+    KeyNonBlock,
 
     // Literals
     /// String literal (simple)
@@ -49,10 +61,16 @@ pub enum TokenKind {
     // Identifiers
     /// Identifier (variable name)
     Ident(String),
+    /// Identifier with hot-definition marker ° — auto-initialize on first use
+    HotIdent(String),
+    /// Prefix hot-definition °x — anchor to scope above nearest @
+    PreHotIdent(String),
 
     // Operators
     /// = (assignment operator)
     Assign,
+    /// => (fat arrow — maps to / renames as: match arms, module aliases)
+    FatArrow,
     /// := (constant declaration operator)
     ConstAssign,
     /// , (comma for concatenation)
@@ -121,6 +139,8 @@ pub enum TokenKind {
     DollarTildeTilde,
     /// $/ (split string by delimiter)
     DollarSlash,
+    /// $* (repeat string N times)
+    DollarStar,
 
     // Error handling operators
     /// $! (is_error - check if value is an error)
@@ -195,6 +215,8 @@ pub enum TokenKind {
     AtBreak,
     /// @> (continue)
     AtContinue,
+    /// @~ (sleep — only valid inside @ block)
+    AtTilde,
     /// @label (labeled loop declaration, legacy — fused without colon)
     AtLabel(String),
     /// @:label (labeled loop declaration: @:outer i:1..5 { })
@@ -824,6 +846,30 @@ impl Lexer {
             return self.lex_number(start);
         }
 
+        // Check for °identifier prefix (pre-hot: anchor to scope above nearest @)
+        if ch == '°' && self.peek().map_or(false, Self::is_ident_start) {
+            self.advance(); // consume °
+            let ident_start = self.position();
+            let token = self.lex_identifier(ident_start);
+            let name = match token.kind {
+                TokenKind::Ident(n) => n,
+                TokenKind::HotIdent(n) => {
+                    let span = self.span(start);
+                    self.diagnostics.push(
+                        Diagnostic::error(format!(
+                            "ambiguous hot-definition markers on '{}': use either '°{}' (anchors above loop) or '{}°' (anchors at loop), not both",
+                            n, n, n
+                        ))
+                        .with_span(span)
+                        .with_help("remove one of the two '°' markers"),
+                    );
+                    n
+                }
+                _ => unreachable!(),
+            };
+            return Token::new(TokenKind::PreHotIdent(name), self.span(start));
+        }
+
         // Check for identifier (letters, Unicode, or emojis)
         if Self::is_ident_start(ch) {
             return self.lex_identifier(start);
@@ -852,6 +898,14 @@ impl Lexer {
                 self.advance();
             } else {
                 break;
+            }
+        }
+
+        // Strip ° suffix → emit HotIdent (auto-initialize on first use)
+        if ident.ends_with('°') {
+            let stripped = &ident[..ident.len() - '°'.len_utf8()];
+            if !stripped.is_empty() {
+                return Token::new(TokenKind::HotIdent(stripped.to_string()), self.span(start));
             }
         }
 
@@ -1443,7 +1497,7 @@ mod tests {
 
         match &tokens[0] {
             TokenKind::String(s) => {
-                assert_eq!(s, "Use \x01curly} braces literally");
+                assert_eq!(s, "Use \x01curly\x02 braces literally");
             }
             _ => panic!("Expected plain String with literal braces"),
         }
@@ -1937,14 +1991,14 @@ mod tests {
 
     #[test]
     fn test_module_import_statement() {
-        let tokens = lex("<# ./math_utils <= math");
-        // ModuleImport, Dot, Slash, Ident, Le, Ident, Eof
+        let tokens = lex("<# ./math_utils => math");
+        // ModuleImport, Dot, Slash, Ident, FatArrow, Ident, Eof
         assert_eq!(tokens.len(), 7);
         assert!(matches!(tokens[0], TokenKind::ModuleImport));
         assert!(matches!(tokens[1], TokenKind::Dot));
         assert!(matches!(tokens[2], TokenKind::Slash));
         assert!(matches!(tokens[3], TokenKind::Ident(_)));
-        assert!(matches!(tokens[4], TokenKind::Le)); // <= for alias
+        assert!(matches!(tokens[4], TokenKind::FatArrow)); // => for alias
         assert!(matches!(tokens[5], TokenKind::Ident(_)));
     }
 
@@ -2019,8 +2073,8 @@ mod tests {
 
     #[test]
     fn test_re_export_renamed() {
-        let tokens = lex("math::add <= sum");
-        // Ident, ScopeResolution, Ident, Le, Ident, Eof
+        let tokens = lex("math::add => sum");
+        // Ident, ScopeResolution, Ident, FatArrow, Ident, Eof
         assert_eq!(tokens.len(), 6);
         match &tokens[0] {
             TokenKind::Ident(s) => assert_eq!(s, "math"),
@@ -2031,11 +2085,27 @@ mod tests {
             TokenKind::Ident(s) => assert_eq!(s, "add"),
             _ => panic!("Expected identifier"),
         }
-        assert!(matches!(tokens[3], TokenKind::Le)); // <= for rename
+        assert!(matches!(tokens[3], TokenKind::FatArrow)); // => for rename
         match &tokens[4] {
             TokenKind::Ident(s) => assert_eq!(s, "sum"),
             _ => panic!("Expected identifier"),
         }
+    }
+
+    #[test]
+    fn test_fat_arrow_token() {
+        let tokens = lex("=>");
+        assert_eq!(tokens.len(), 2); // FatArrow + Eof
+        assert!(matches!(tokens[0], TokenKind::FatArrow));
+    }
+
+    #[test]
+    fn test_fat_arrow_vs_assign_and_gt() {
+        // => is FatArrow, not Assign + Gt
+        let tokens = lex("a => b");
+        // Ident, FatArrow, Ident, Eof
+        assert_eq!(tokens.len(), 4);
+        assert!(matches!(tokens[1], TokenKind::FatArrow));
     }
 
     #[test]
@@ -2524,5 +2594,72 @@ add(a, b) {
         assert!(matches!(tokens[1], TokenKind::DollarMinusMinus));
         let tokens2 = lex("arr$-[0]");
         assert!(matches!(tokens2[1], TokenKind::DollarMinusLBracket));
+    }
+
+    // ── v0.0.5 tokens ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_at_tilde_token() {
+        let tokens = lex("@~ 100");
+        assert_eq!(tokens.len(), 3, "AtTilde, Integer, Eof");
+        assert!(matches!(tokens[0], TokenKind::AtTilde));
+        match &tokens[1] {
+            TokenKind::Integer(n) => assert_eq!(*n, 100),
+            _ => panic!("Expected integer literal, got {:?}", tokens[1]),
+        }
+    }
+
+    #[test]
+    fn test_key_block_token() {
+        let tokens = lex("<<| tecla");
+        assert_eq!(tokens.len(), 3, "KeyBlock, Ident, Eof");
+        assert!(matches!(tokens[0], TokenKind::KeyBlock));
+        assert!(matches!(tokens[1], TokenKind::Ident(_)));
+    }
+
+    #[test]
+    fn test_key_nonblock_token() {
+        let tokens = lex("<<|? tecla");
+        assert_eq!(tokens.len(), 3, "KeyNonBlock, Ident, Eof");
+        assert!(matches!(tokens[0], TokenKind::KeyNonBlock));
+        assert!(matches!(tokens[1], TokenKind::Ident(_)));
+    }
+
+    #[test]
+    fn test_output_clear_token() {
+        let tokens = lex(">>!");
+        assert_eq!(tokens.len(), 2, "OutputClear, Eof");
+        assert!(matches!(tokens[0], TokenKind::OutputClear));
+    }
+
+    #[test]
+    fn test_output_query_token() {
+        let tokens = lex("[H, W] = >>?");
+        let pos = tokens.iter().position(|t| matches!(t, TokenKind::OutputQuery));
+        assert!(pos.is_some(), "OutputQuery token not found");
+    }
+
+    #[test]
+    fn test_output_gate_token() {
+        let tokens = lex(">>| {");
+        assert_eq!(tokens.len(), 3, "OutputGate, LBrace, Eof");
+        assert!(matches!(tokens[0], TokenKind::OutputGate));
+    }
+
+    #[test]
+    fn test_dollar_star_token() {
+        let tokens = lex("\"ab\" $* 3");
+        // Str, DollarStar, Int, Eof
+        assert_eq!(tokens.len(), 4);
+        assert!(matches!(tokens[1], TokenKind::DollarStar));
+    }
+
+    #[test]
+    fn test_key_nonblock_not_confused_with_key_block() {
+        // <<|? must NOT be mistaken for <<| followed by ?
+        let tokens = lex("<<|?");
+        assert_eq!(tokens.len(), 2, "KeyNonBlock, Eof");
+        assert!(matches!(tokens[0], TokenKind::KeyNonBlock),
+            "got {:?}", tokens[0]);
     }
 }

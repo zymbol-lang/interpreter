@@ -84,6 +84,9 @@ enum ControlFlow {
 struct FunctionDef {
     parameters: Vec<zymbol_ast::Parameter>,
     body: zymbol_ast::Block,
+    /// Path of the module where this function was defined.
+    /// Used to restore the correct scope when a function is called through a re-export adapter.
+    origin_module_path: Option<PathBuf>,
 }
 
 
@@ -273,6 +276,9 @@ pub struct Interpreter<W: Write> {
     /// Stack of variable scopes (lexical scoping)
     /// Index 0 is the global scope, higher indices are nested blocks
     scope_stack: Vec<HashMap<String, Value>>,
+    /// Indices into scope_stack where @ loop scopes start.
+    /// Used by x° (set_at_nearest_loop) and °x (set_above_nearest_loop).
+    loop_scope_depths: Vec<usize>,
     functions: HashMap<String, Rc<FunctionDef>>,
     control_flow: ControlFlow,
     /// Track which variables are mutable (for parameter validation)
@@ -322,6 +328,8 @@ pub struct Interpreter<W: Write> {
     /// When > 0, Return must clone (finally block may reference the variable after <~).
     /// When == 0, Return can move (take_variable) — O(1) for String/Array.
     try_depth: u8,
+    /// Depth of active >>| TUI blocks. When > 0, raw mode is active and ¶/\\ must emit \r\n.
+    pub(crate) tui_depth: u8,
     /// TCO support: name of the currently executing function (None = not in a function).
     /// Used to detect `<~ f(same_args)` tail-call patterns.
     pub(crate) current_function: Option<String>,
@@ -373,6 +381,41 @@ impl<W: Write> Interpreter<W> {
                 s.clear();
                 if self.const_set_pool.len() < 128 { self.const_set_pool.push(s); }
             }
+        }
+    }
+
+    /// Push a loop-anchor scope for a `@` loop and record its depth.
+    pub(crate) fn push_loop_scope(&mut self) {
+        self.push_scope();
+        self.loop_scope_depths.push(self.scope_stack.len() - 1);
+    }
+
+    /// Pop the loop-anchor scope when a `@` loop ends.
+    pub(crate) fn pop_loop_scope(&mut self) {
+        self.loop_scope_depths.pop();
+        self.pop_scope();
+    }
+
+    /// `x°`: write variable to nearest enclosing `@` scope.
+    /// Variable lives for the loop duration, dies when the loop ends.
+    pub(crate) fn set_at_nearest_loop(&mut self, name: &str, value: Value) {
+        if let Some(&idx) = self.loop_scope_depths.last() {
+            self.scope_stack[idx].insert(name.to_string(), value);
+        } else {
+            self.scope_stack[0].insert(name.to_string(), value);
+        }
+    }
+
+    /// `°x`: write variable to the scope ABOVE the nearest `@`.
+    /// Variable survives the loop (anchors to next outer loop or global/function scope).
+    pub(crate) fn set_above_nearest_loop(&mut self, name: &str, value: Value) {
+        let len = self.loop_scope_depths.len();
+        if len >= 2 {
+            let idx = self.loop_scope_depths[len - 2];
+            self.scope_stack[idx].insert(name.to_string(), value);
+        } else {
+            // Single loop or no loop: anchor to global/function bottom scope
+            self.scope_stack[0].insert(name.to_string(), value);
         }
     }
 
@@ -598,6 +641,7 @@ impl Interpreter<std::io::Stdout> {
         Self {
             output: std::io::stdout(),
             scope_stack: vec![HashMap::new()],  // Start with one global scope
+            loop_scope_depths: Vec::new(),
             functions: HashMap::new(),
             control_flow: ControlFlow::None,
             mutable_vars_stack: vec![HashSet::new()],
@@ -621,6 +665,7 @@ impl Interpreter<std::io::Stdout> {
             const_vec_pool: Vec::new(),
             arg_vec_pool: Vec::new(),
             try_depth: 0,
+            tui_depth: 0,
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),
@@ -643,6 +688,7 @@ impl<W: Write> Interpreter<W> {
         Self {
             output,
             scope_stack: vec![HashMap::new()],  // Start with one global scope
+            loop_scope_depths: Vec::new(),
             functions: HashMap::new(),
             control_flow: ControlFlow::None,
             mutable_vars_stack: vec![HashSet::new()],
@@ -666,6 +712,7 @@ impl<W: Write> Interpreter<W> {
             const_vec_pool: Vec::new(),
             arg_vec_pool: Vec::new(),
             try_depth: 0,
+            tui_depth: 0,
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),
@@ -925,6 +972,7 @@ impl<W: Write> Interpreter<W> {
                 let func_def = FunctionDef {
                     parameters: func_decl.parameters.clone(),
                     body: func_decl.body.clone(),
+                    origin_module_path: self.current_file.clone(),
                 };
                 self.functions.insert(func_decl.name.clone(), Rc::new(func_def));
                 Ok(())
@@ -1000,6 +1048,11 @@ impl<W: Write> Interpreter<W> {
                 self.numeral_mode = *base;
                 Ok(())
             }
+            Statement::Sleep(s) => self.execute_sleep(s),
+            Statement::ClearScreen(cs) => self.execute_clear_screen(cs),
+            Statement::KeyInput(ki) => self.execute_key_input(ki),
+            Statement::OutputPos(op) => self.execute_output_pos(op),
+            Statement::TuiBlock(tb) => self.execute_tui_block(tb),
         }
     }
 
@@ -1120,6 +1173,7 @@ impl<W: Write> Interpreter<W> {
             Expr::CollectionFindAll(op) => self.eval_collection_find_all(op),
             Expr::CollectionUpdate(op) => self.eval_collection_update(op),
             Expr::CollectionSlice(op) => self.eval_collection_slice(op),
+            Expr::StringRepeat(op) => self.eval_string_repeat(op),
             Expr::StringReplace(op) => self.eval_string_replace(op),
             Expr::StringSplit(op) => self.eval_string_split(op),
             Expr::ConcatBuild(op) => self.eval_concat_build(op),
@@ -1156,6 +1210,7 @@ impl<W: Write> Interpreter<W> {
             Expr::DeepIndex(di) => self.eval_deep_index(di),
             Expr::FlatExtract(fe) => self.eval_flat_extract(fe),
             Expr::StructuredExtract(se) => self.eval_structured_extract(se),
+            Expr::TerminalSize(t) => self.eval_terminal_size(t.span),
         }
     }
 
