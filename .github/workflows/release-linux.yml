@@ -1,0 +1,101 @@
+name: Build Linux packages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to upload to (e.g. v0.0.5)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            musl_target: x86_64-unknown-linux-musl
+            musl_linker: ''
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            musl_target: aarch64-unknown-linux-musl
+            musl_linker: musl-gcc
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.musl_target }}
+
+      - name: Read version
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            dpkg rpm-build zstd musl-tools
+
+      - name: Build GNU binary
+        run: cargo build --release
+
+      - name: Build .deb, .rpm, .pkg.tar.zst
+        run: |
+          bash packaging/build-packages.sh \
+            --arch ${{ matrix.arch }} \
+            --formats deb,rpm,arch \
+            --no-build \
+            --no-timestamp \
+            --out-dir packaging/dist
+
+      - name: Build static musl binary
+        env:
+          MUSL_LINKER: ${{ matrix.musl_linker }}
+          MUSL_TARGET: ${{ matrix.musl_target }}
+        run: |
+          if [[ -n "$MUSL_LINKER" ]]; then
+            ENV_KEY="CARGO_TARGET_$(echo "$MUSL_TARGET" | tr '[:lower:]-' '[:upper:]_')_LINKER"
+            export "$ENV_KEY=$MUSL_LINKER"
+          fi
+          RUSTFLAGS="-C target-feature=+crt-static" \
+            cargo build --release --target "$MUSL_TARGET"
+          install -m755 \
+            "target/$MUSL_TARGET/release/zymbol" \
+            "packaging/dist/zymbol_lang_v${VERSION}_${{ matrix.arch }}_linux"
+
+      - name: Compute SHA256
+        run: |
+          cd packaging/dist
+          sha256sum \
+            "zymbol_lang_v${VERSION}_${{ matrix.arch }}.deb" \
+            "zymbol_lang_v${VERSION}_${{ matrix.arch }}.rpm" \
+            "zymbol_lang_v${VERSION}_${{ matrix.arch }}.pkg.tar.zst" \
+            "zymbol_lang_v${VERSION}_${{ matrix.arch }}_linux" \
+            | tee "SHA256SUMS_${{ matrix.arch }}_linux.txt"
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          cd packaging/dist
+          gh release upload "$TAG" \
+            "zymbol_lang_v${VERSION}_${{ matrix.arch }}.deb" \
+            "zymbol_lang_v${VERSION}_${{ matrix.arch }}.rpm" \
+            "zymbol_lang_v${VERSION}_${{ matrix.arch }}.pkg.tar.zst" \
+            "zymbol_lang_v${VERSION}_${{ matrix.arch }}_linux" \
+            "SHA256SUMS_${{ matrix.arch }}_linux.txt" \
+            --clobber
