@@ -646,6 +646,18 @@ interpreter/
 
 ---
 
+## Authorship & AI Collaboration
+
+Zymbol-Lang is designed by **[OscarE.EspinozaB](https://github.com/zymbol-lang/interpreter/commits?author=OscarEEspinozaB)**. Every decision about the language — its philosophy, syntax, operator semantics, type system, module design, execution model, and the verification environment used to validate correctness — originates from and is controlled by its author.
+
+The implementation was built using **[Claude Code](https://claude.ai/code)** (Anthropic) as the engineering team: writing Rust code, tests, and tooling under the author's direction and specifications. The use of AI is transparent and intentional — it is not concealed or minimized.
+
+What AI does not replace: the design rationale, the specification that guides each feature, the test suite that defines correctness, the judgment calls on what to build and what to reject, and the final say on every merged change. Those remain entirely with the author.
+
+This collaboration model made it possible for a single person to deliver a complete language toolchain — interpreter, register VM, LSP server, formatter, REPL, VS Code extension, and web playground — that would otherwise require a full team. The result is not AI-generated filler: it is a meticulous, carefully guided project where AI serves as a capable and disciplined engineering partner.
+
+---
+
 ## License
 
 This project is available under multiple licenses:
