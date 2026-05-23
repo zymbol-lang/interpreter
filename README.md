@@ -511,9 +511,10 @@ VM parity: **436/436 PASS** (436 golden-file pairs; `@vm-skip` files excluded).
 Each release milestone is stress-tested by building a non-trivial program entirely in Zymbol.
 Bugs discovered during construction feed back directly into the language.
 
-The three projects below also serve as cross-language proof: each is written in a different
-natural language (English, Mandarin, Spanish), demonstrating that Zymbol's keyword-free design
-is genuinely language-neutral — no flags, no special modes, no translation layer at the syntax level.
+The four projects below also serve as cross-language proof: each is written in a different
+natural language (English, Mandarin Chinese, Spanish, and Klingon pIqaD), demonstrating that
+Zymbol's keyword-free design is genuinely language-neutral — no flags, no special modes, no
+translation layer at the syntax level.
 
 ### Summary
 
@@ -522,6 +523,7 @@ is genuinely language-neutral — no flags, no special modes, no translation lay
 | [ZethyCLI](https://github.com/zymbol-lang/zy-ZethyCLI) | **v0.0.3** | English | Modules, `<\cmd\>` shell exec, HTTP via Ollama, multi-turn state, string building |
 | [ZyAudit](https://github.com/zymbol-lang/zy-ZyAudit) | **v0.0.4** | 中文 (Mandarin) | CJK identifiers as first-class citizens, named tuples, HOF pipeline, `$~~` replace |
 | [Serpiente](https://github.com/zymbol-lang/zy-Serpiente) | **v0.0.5** | Español | TUI primitives, register VM, hot-definition `°`, tuple equality, labeled loops |
+| [Hov veS](https://github.com/zymbol-lang/zyKlingonGalaxy) | **v0.0.5** | pIqaD (Klingon) | Multi-module orchestration, Galaxian formation AI, delta rendering, dual projectiles, 3-language i18n |
 
 ---
 
@@ -614,6 +616,57 @@ mover(serp<~, dir) {
     mover(serpiente, dirección)
     >>! ¶
     dibujar(serpiente, puntos)
+}
+```
+
+---
+
+### Hov veS — v0.0.5 · pIqaD (Klingon)
+
+Galaxian-style space shooter for the terminal, set in the Klingon universe.
+Written entirely in Klingon pIqaD script (CSUR U+F8D0–F8FF) — validates
+multi-module orchestration, Galaxian formation AI with drift and dive attacks,
+delta rendering, a dual projectile system (disruptor + rapid fire), and
+3-language i18n (pIqaD / English / Spanish) threaded as a parameter through
+all five cooperating modules.
+
+The i18n approach is notable: pIqaD text renders first; EN/ES overrides
+rewrite the same terminal row via a second `>>~` positioned output call — no
+lookup tables, no per-string branching at every callsite.
+
+```zymbol
+// Hov veS — entry point (pIqaD identifiers shown in Roman transliteration)
+<# ./Duj  => nav     // player ship
+<# ./jagh => flota   // enemy fleet
+<# ./bach => bach    // projectiles
+<# ./HUD  => HUD     // display
+
+[AN, AL] = >>?                              // query real terminal size
+// seed from three independent BashExec entropy sources
+mIS = (nS1 + nS2 * 1009 + nS3 * 6271) % 2147483647
+
+>>| {
+    °partidas = 0                           // hot-def: persist across games
+    °historial = []
+    idioma = HUD::sel_Hol(AN, AL)          // returns pIqaD/EN/ES token
+
+    @:bucle {
+        retardo = HUD::menu_HeH(AN, AL, idioma)
+        [ghom, mIS] = flota::chen_ghom(AN, AL, 1, mIS)
+        @:oleada {
+            <<|? tecla
+            [ghom, jaHDu, mIS, hubo_drift] =
+                flota::Suy_mIw(ghom, jaHDu, AN, AL, HoS, mIS)
+            [jagh_bachDu, mIS] =
+                bach::jagh_tagh(jagh_bachDu, ghom, jaHDu, mIS, HoS)
+            HUD::chou_bID(...)              // delta render — only changed cells
+            @~ retardo
+        }
+        °partidas += 1
+        °historial = °historial$+ nob
+        res = HUD::Hegh_nav(nob, HoS, °partidas, °historial, AN, AL, idioma)
+        ? res == 's' { @:bucle! }
+    }
 }
 ```
 
