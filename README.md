@@ -524,7 +524,7 @@ language-neutral — no flags, no special modes, no translation layer at the syn
 | [ZyAudit](https://github.com/zymbol-lang/zy-ZyAudit) | **v0.0.4** | 中文 (Mandarin) | CJK identifiers as first-class citizens, named tuples, HOF pipeline, `$~~` replace |
 | [Serpiente](https://github.com/zymbol-lang/zy-Serpiente) | **v0.0.5** | Español | TUI primitives, register VM, hot-definition `°`, tuple equality, labeled loops |
 | [Hov veS](https://github.com/zymbol-lang/zyKlingonGalaxy) | **v0.0.5** | pIqaD (Klingon) | Multi-module orchestration, Galaxian formation AI, delta rendering, dual projectiles, 3-language i18n |
-| [Zofia](https://github.com/zymbol-lang/zy-Zofia) | **v0.0.6** | Español | Scientific computing, transformer AI from scratch, `^` float exponents, global `:=` scope fix, `#.N\|x\|` formatting |
+| [Zofía](https://github.com/zymbol-lang/zy-Zofia) | **v0.0.6** | Español | Scientific computing, transformer AI from scratch, `^` float exponents, global `:=` scope fix, `#.N\|x\|` formatting |
 
 ---
 
@@ -673,7 +673,7 @@ mIS = (nS1 + nS2 * 1009 + nS3 * 6271) % 2147483647
 
 ---
 
-### Zofia — v0.0.6 · Español (scientific computing)
+### Zofía — v0.0.6 · Español (scientific computing)
 
 Transformer AI encoder built from scratch in Zymbol — tensors, gradients, attention,
 and positional encoding, all in pure Zymbol with no external math library.
@@ -681,7 +681,7 @@ The project is designed as an educational resource for Latin American learners:
 every identifier, comment, and document is in Spanish, with English references
 to the academic literature inline.
 
-Zofia is the primary driver of v0.0.6. Building it exposed two language issues
+Zofía is the primary driver of v0.0.6. Building it exposed two language issues
 that were fixed during development:
 
 - **Global `:=` scope** — constants declared at script level were invisible inside
@@ -695,7 +695,7 @@ Discovery: `^` already handles float exponents internally via `f64::powf`, makin
 `std/matematica` module to only `sin`, `cos`, and `ln`.
 
 ```zymbol
-// Zofia — sigmoide, softmax, and positional encoding in pure Zymbol
+// Zofía — sigmoide, softmax, and positional encoding in pure Zymbol
 PI := 3.14159265358979323846
 E  := 2.71828182845904523536
 

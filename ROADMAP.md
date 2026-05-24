@@ -268,9 +268,9 @@ Both are addressed by the Cranelift JIT milestone.
 ## v0.0.6 Roadmap — Refinement & Scientific Stdlib
 
 > **Focus:** polish of existing features + stdlib foundation for scientific computing.
-> Primary drivers: general depuration + **Zofia** (first scientific computing project
+> Primary drivers: general depuration + **Zofía** (first scientific computing project
 > in Zymbol — tensors, neural networks, transformer encoder from scratch).
-> Zofia's `HALLAZGOS.md` is the living gap tracker that feeds this milestone.
+> Zofía's `HALLAZGOS.md` is the living gap tracker that feeds this milestone.
 > No new syntax in core language — improvements are additive.
 
 ### Depuration (polish)
@@ -284,13 +284,13 @@ Both are addressed by the Cranelift JIT milestone.
 | `--time` flag | CLI | Print execution time — `zymbol run --time file.zy` |
 | `--no-color` flag | CLI | Disable ANSI output — for piped output / log files |
 | LSP module completion | LSP | Autocomplete module names in `<#` and `alias::` calls |
-| VM: remaining parity | VM | Cover the 5% gaps exposed by Zofia's tensor operations |
+| VM: remaining parity | VM | Cover the 5% gaps exposed by Zofía's tensor operations |
 
-### New Features (driven by Zofia HALLAZGOS)
+### New Features (driven by Zofía HALLAZGOS)
 
 #### `std/math` — mathematical functions  ← GAP-Z001, GAP-Z002
 
-The absence of `sqrt`, `exp`, `log`, `sin`, `cos`, `pow`, `abs` blocks Zofia
+The absence of `sqrt`, `exp`, `log`, `sin`, `cos`, `pow`, `abs` blocks Zofía
 Phases 3–5 (activations, attention, positional encoding). Move `std/math`
 from Long Term to v0.0.6.
 
@@ -317,7 +317,7 @@ Implementation: thin Rust wrappers over `f64` stdlib methods. No new syntax.
 
 #### Float formatting in `>>`  ← GAP-Z004, IDEA-Z002
 
-Zofia's tensor printer outputs `0.3333333333333333` — unreadable for
+Zofía's tensor printer outputs `0.3333333333333333` — unreadable for
 educational output. A format modifier on `>>`:
 
 ```zymbol
@@ -330,7 +330,7 @@ Applies only to numeric values. Ignored for strings/booleans/etc.
 
 #### `$@` functional map operator  ← IDEA-Z003
 
-Zofia applies scalar functions (relu, sigmoid) to every element of a tensor.
+Zofía applies scalar functions (relu, sigmoid) to every element of a tensor.
 Current approach requires an explicit loop. `$@` eliminates the boilerplate:
 
 ```zymbol
@@ -354,11 +354,11 @@ letters — language-agnostic):
 << :##"30   "Etiqueta: "          -- text, max 30 chars
 ```
 
-### Zofia integration checkpoints
+### Zofía integration checkpoints
 
-v0.0.6 is considered complete for Zofia when:
+v0.0.6 is considered complete for Zofía when:
 
-| Zofia Phase | Unblocked by |
+| Zofía Phase | Unblocked by |
 |-------------|-------------|
 | Fase 1 — tensor | Depuration items (float format) |
 | Fase 2 — grad | No new Zymbol features needed |
@@ -383,4 +383,4 @@ v0.0.6 is considered complete for Zofia when:
 | v0.0.3 | i18n + safe access | Unicode grapheme clusters, safe access `?.`, null coalescing |
 | v0.0.4 | Module system + REPL | Full module import/export, circular import detection, REPL improvements |
 | v0.0.5 | TUI + VM parity | `>>|` `>>~` `>>!` `>>?` `<<\|` `@~`, `$*` string repeat, tuple equality VM, LSP `<<\|` fix, text styles `>>~(,,BKS,fg,bg)` |
-| **v0.0.6** | **Refinement + Scientific Stdlib** | `std/math`, float formatting, `$@` map, typed input, depuration — **driven by Zofia** |
+| **v0.0.6** | **Refinement + Scientific Stdlib** | `std/math`, float formatting, `$@` map, typed input, depuration — **driven by Zofía** |
