@@ -677,7 +677,7 @@ mIS = (nS1 + nS2 * 1009 + nS3 * 6271) % 2147483647
 
 Transformer AI encoder built from scratch in Zymbol — tensors, gradients, attention,
 and positional encoding, all in pure Zymbol with no external math library.
-The project is designed as an educational resource for Latin American learners:
+The project is designed as an educational resource for Spanish-speaking learners:
 every identifier, comment, and document is in Spanish, with English references
 to the academic literature inline.
 
