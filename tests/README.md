@@ -69,6 +69,7 @@ in code that previously worked correctly.
 | `bug_output_pos_cross_line.zy` | BUG-S01 | Consecutive `>>` in function body each produce independent output lines |
 | `bug_else_underscore.zy` | BUG-S02 | `_` unconditional else and `_?` conditional else-if parse and execute correctly |
 | `bug_vm_tuple_equality.zy` | BUG-005 | VM tuple `==`/`<>` — recursive element-wise comparison (was always `#0`) |
+| `bug_vm_string_append.zy` | BUG-006 | VM `$+` with String left-operand — concatenation instead of crash (`ArrayPush` now handles `Value::String`) |
 
 Top-level `.zy` + `.expected` pairs cover cross-cutting scenarios (scope, error handling, memory model).
 
@@ -144,6 +145,6 @@ bash tests/scripts/vm_compare.sh
 | `strings` | 16 | `$/` split, `$++` concat-build, `$*` repeat, `#\|x\|` Unicode eval, format |
 | `tui` | 7 | `@~` sleep, `>>!` clear, `>>?` size, `>>~` positioned, `<<\|` key, `>>|` TUI block |
 | `gaps` | 20 | Language gap regressions (GAP-001–GAP-003, GAP-S1–GAP-S4, G7–G21) |
-| `bugs` | 16 | Bug regressions (BUG-001–BUG-005, BUG-S01–BUG-S02, BUG-NEW-01–02) |
+| `bugs` | 17 | Bug regressions (BUG-001–BUG-006, BUG-S01–BUG-S02, BUG-NEW-01–02) |
 
-Total: **424** golden-file test pairs (`.expected` files).
+Total: **425** golden-file test pairs (`.expected` files).

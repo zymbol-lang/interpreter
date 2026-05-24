@@ -971,6 +971,17 @@ impl<W: Write> VM<W> {
                     match unsafe { self.value_stack.get_unchecked_mut(base + arr_reg as usize) } {
                         Value::Array(rc_arr) => Rc::make_mut(rc_arr).push(val),
                         Value::Tuple(rc_tup) => Rc::make_mut(rc_tup).push(val),
+                        Value::String(s) => {
+                            // $+ on string: d $+ s → string concatenation
+                            use std::fmt::Write as _;
+                            let mut buf = s.clone().try_into_string();
+                            match val {
+                                Value::String(r) => buf.push_str(r.as_str()),
+                                Value::Char(c) => buf.push(c),
+                                other => { let _ = write!(buf, "{}", other); }
+                            }
+                            *s = ZyStr::new(buf);
+                        }
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
                     }
                 }
@@ -2761,6 +2772,16 @@ impl<W: Write> VM<W> {
                     match &mut self.value_stack[base + arr_reg as usize] {
                         Value::Array(rc) => Rc::make_mut(rc).push(val),
                         Value::Tuple(rc) => Rc::make_mut(rc).push(val),
+                        Value::String(s) => {
+                            use std::fmt::Write as _;
+                            let mut buf = s.clone().try_into_string();
+                            match val {
+                                Value::String(r) => buf.push_str(r.as_str()),
+                                Value::Char(c) => buf.push(c),
+                                other => { let _ = write!(buf, "{}", other); }
+                            }
+                            *s = ZyStr::new(buf);
+                        }
                         _ => {}
                     }
                 }

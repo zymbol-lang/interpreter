@@ -1,1 +1,1 @@
-Runtime error: runtime error: undefined variable: 'outer'
+Runtime error: 'outer' is undefined — did you mean 'outer°' (hot definition)?

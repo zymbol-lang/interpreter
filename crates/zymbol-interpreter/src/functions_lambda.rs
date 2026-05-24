@@ -299,10 +299,34 @@ impl<W: Write> Interpreter<W> {
                 None
             }
         } else {
-            // Script-level function: inherit caller's import aliases so module calls
-            // (alias::fn()) resolve correctly inside the function body.
+            // Script-level or intra-module function call (no explicit alias:: prefix).
+            // Inherit caller's import aliases so module calls (alias::fn()) resolve correctly.
             self.import_aliases = saved.import_aliases.clone();
-            None  // function table unchanged — script fns share caller's table
+            // Inject script-level constants (:=) into the function's fresh isolated scope.
+            // Constants are globally scoped by design — any := defined before the call site
+            // must be visible inside function bodies. Regular variables (=) remain caller-scoped.
+            // saved.const_vars_stack[i] names the constants in saved.scope_stack[i]; we inject
+            // all of them so nested call chains (A calls B calls C) propagate constants correctly.
+            for (scope, const_set) in saved.scope_stack.iter().zip(saved.const_vars_stack.iter()) {
+                for const_name in const_set {
+                    if let Some(value) = scope.get(const_name) {
+                        self.set_variable(const_name, value.clone());
+                    }
+                }
+            }
+            // Intra-module call: if the function was defined inside a loaded module (e.g., a
+            // private helper called from another function in the same module), inject that
+            // module's variables so module-level constants (:=) and mutable state are visible.
+            // Main-script functions have origin_module_path = Some(main.zy) which is NOT in
+            // loaded_modules, so injection is safely skipped for script-level calls.
+            if let Some(ref origin_path) = func_def.origin_module_path {
+                if let Some(module) = self.loaded_modules.get(origin_path).cloned() {
+                    for (name, value) in &module.all_variables {
+                        self.set_variable(name, value.clone());
+                    }
+                }
+            }
+            None  // function table unchanged — already set to module's all_functions by outer call
         };
 
         // QW8: move values out of arg_values instead of cloning

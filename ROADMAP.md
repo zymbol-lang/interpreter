@@ -265,6 +265,109 @@ Both are addressed by the Cranelift JIT milestone.
 
 ---
 
+## v0.0.6 Roadmap — Refinement & Scientific Stdlib
+
+> **Focus:** polish of existing features + stdlib foundation for scientific computing.
+> Primary drivers: general depuration + **Zofia** (first scientific computing project
+> in Zymbol — tensors, neural networks, transformer encoder from scratch).
+> Zofia's `HALLAZGOS.md` is the living gap tracker that feeds this milestone.
+> No new syntax in core language — improvements are additive.
+
+### Depuration (polish)
+
+| Item | Area | Description |
+|------|------|-------------|
+| Error suggestions | Diagnostics | `"undefined 'funciom'"` → `help: did you mean 'funcion'?` |
+| `zymbol check` exit code | CLI | Non-zero exit on warnings — enables CI pipelines |
+| REPL persistent history | REPL | Persist `~/.zymbol_history` across sessions |
+| `--quiet` flag | CLI | Suppress startup banner — clean output in scripts |
+| `--time` flag | CLI | Print execution time — `zymbol run --time file.zy` |
+| `--no-color` flag | CLI | Disable ANSI output — for piped output / log files |
+| LSP module completion | LSP | Autocomplete module names in `<#` and `alias::` calls |
+| VM: remaining parity | VM | Cover the 5% gaps exposed by Zofia's tensor operations |
+
+### New Features (driven by Zofia HALLAZGOS)
+
+#### `std/math` — mathematical functions  ← GAP-Z001, GAP-Z002
+
+The absence of `sqrt`, `exp`, `log`, `sin`, `cos`, `pow`, `abs` blocks Zofia
+Phases 3–5 (activations, attention, positional encoding). Move `std/math`
+from Long Term to v0.0.6.
+
+Zymbol-idiomatic API (language-agnostic names, not English abbreviations):
+
+```zymbol
+<# std/math <= mat
+
+mat::raiz(x)            -- sqrt
+mat::exp(x)             -- e^x
+mat::ln(x)              -- natural log
+mat::log(x, base)       -- log_base(x)
+mat::pot(base, exp)     -- base^exp
+mat::sen(x)             -- sin (radians)
+mat::cos(x)             -- cos (radians)
+mat::abs(x)             -- |x|
+mat::max(a, b)          -- scalar max
+mat::min(a, b)          -- scalar min
+mat::PI                 -- 3.14159265358979...
+mat::E                  -- 2.71828182845904...
+```
+
+Implementation: thin Rust wrappers over `f64` stdlib methods. No new syntax.
+
+#### Float formatting in `>>`  ← GAP-Z004, IDEA-Z002
+
+Zofia's tensor printer outputs `0.3333333333333333` — unreadable for
+educational output. A format modifier on `>>`:
+
+```zymbol
+>> x :#4    -- 4 decimal places: "0.3333"
+>> x :#2e   -- scientific notation 2 dec: "3.33e-01"
+>> x :#0    -- integer truncation: "0"
+```
+
+Applies only to numeric values. Ignored for strings/booleans/etc.
+
+#### `$@` functional map operator  ← IDEA-Z003
+
+Zofia applies scalar functions (relu, sigmoid) to every element of a tensor.
+Current approach requires an explicit loop. `$@` eliminates the boilerplate:
+
+```zymbol
+resultado = vec $@ relu_escalar            -- apply to each element
+resultado = mat $@ (fn, arg1)              -- with extra args
+```
+
+Coherent with `$` collection prefix. `@` already means "for each" in the
+language (loop operator).
+
+#### Typed input constraints  ← IDEA-Z004
+
+Restrict `<<` at the operator level — invalid characters rejected on keypress,
+no manual validation code needed. Uses existing Zymbol type symbols (no English
+letters — language-agnostic):
+
+```zymbol
+<< :###4    "Capas (1–99): "      -- integer, up to 4 digits
+<< :+###4   "Dimensión: "         -- positive integer, up to 4 digits
+<< :+##.4   "Tasa aprendizaje: "  -- positive decimal, up to 4 decimal places
+<< :##"30   "Etiqueta: "          -- text, max 30 chars
+```
+
+### Zofia integration checkpoints
+
+v0.0.6 is considered complete for Zofia when:
+
+| Zofia Phase | Unblocked by |
+|-------------|-------------|
+| Fase 1 — tensor | Depuration items (float format) |
+| Fase 2 — grad | No new Zymbol features needed |
+| Fase 3 — activacion | `std/math` (exp, log) |
+| Fase 4 — atencion | `std/math` (sqrt) |
+| Fase 5 — transformador | `std/math` (sin, cos, pow) + `$@` map |
+
+---
+
 ## Version History
 
 | Version | Milestone | Description |
@@ -277,3 +380,7 @@ Both are addressed by the Cranelift JIT milestone.
 | Sprint 5D–5D+ | VM memory | `sizeof(Value)` 40→16 bytes, string pool, slim frames |
 | Sprint 5I | Language complete | Indexed assign, comma concat, guard patterns, range step, BaseConvert, labeled loops |
 | v0.0.2 | Collection API + destructuring | `$+[i]` `$-` `$--` `$-[i]` `$-[i..j]` `$??` `$^+` `$^-`, negative indices normalized, destructuring assignment |
+| v0.0.3 | i18n + safe access | Unicode grapheme clusters, safe access `?.`, null coalescing |
+| v0.0.4 | Module system + REPL | Full module import/export, circular import detection, REPL improvements |
+| v0.0.5 | TUI + VM parity | `>>|` `>>~` `>>!` `>>?` `<<\|` `@~`, `$*` string repeat, tuple equality VM, LSP `<<\|` fix, text styles `>>~(,,BKS,fg,bg)` |
+| **v0.0.6** | **Refinement + Scientific Stdlib** | `std/math`, float formatting, `$@` map, typed input, depuration — **driven by Zofia** |

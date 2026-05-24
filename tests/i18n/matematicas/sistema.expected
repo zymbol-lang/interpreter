@@ -3,12 +3,12 @@
 [1m[34m  55[39m[0m [34m|[39m
 [1m[34m  55[39m[0m [34m|[39m         resultado = <\ ls | wc "-l" \>
 [34m     |[39m [1m[31m                          ^[39m[0m
-[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+[1m[31merror[39m[0m: unexpected token: String("-l")
   [1m[34m-->[39m[0m tests/i18n/matematicas/sistema.zy:55:32
 [1m[34m  55[39m[0m [34m|[39m
 [1m[34m  55[39m[0m [34m|[39m         resultado = <\ ls | wc "-l" \>
 [34m     |[39m [1m[31m                               ^^^^[39m[0m
-  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: unexpected token: BashClose
   [1m[34m-->[39m[0m tests/i18n/matematicas/sistema.zy:55:37
 [1m[34m  55[39m[0m [34m|[39m
@@ -26,12 +26,12 @@
 [1m[34m  67[39m[0m [34m|[39m
 [1m[34m  67[39m[0m [34m|[39m         resultado = <\ ps aux | wc "-l" \>
 [34m     |[39m [1m[31m                              ^[39m[0m
-[1m[31merror[39m[0m: expected assignment operator (=, +=, -=, *=, /=, %=, ^=, ++, --)
+[1m[31merror[39m[0m: unexpected token: String("-l")
   [1m[34m-->[39m[0m tests/i18n/matematicas/sistema.zy:67:36
 [1m[34m  67[39m[0m [34m|[39m
 [1m[34m  67[39m[0m [34m|[39m         resultado = <\ ps aux | wc "-l" \>
 [34m     |[39m [1m[31m                                   ^^^^[39m[0m
-  [1m[32mhelp:[39m[0m use '=' to assign a value to a variable
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
 [1m[31merror[39m[0m: unexpected token: BashClose
   [1m[34m-->[39m[0m tests/i18n/matematicas/sistema.zy:67:41
 [1m[34m  67[39m[0m [34m|[39m
