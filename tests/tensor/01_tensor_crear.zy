@@ -1,0 +1,16 @@
+// Test: crear tensores N-D y forma_de
+<# ./tensor => t
+
+// Vector 1D relleno de ceros
+v = t::crear([4], 0.0)
+t::imprimir(v)
+
+// Matriz 2D rellena de unos
+m = t::crear([2, 3], 1.0)
+t::imprimir(m)
+
+// forma_de — vector literal
+>> t::forma_de([10.0, 20.0, 30.0]) ¶
+
+// forma_de — matriz literal 3x2
+>> t::forma_de([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]) ¶

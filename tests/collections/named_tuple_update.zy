@@ -1,4 +1,3 @@
-// @vm-skip
 // Test: $~ funcional update sobre named tuples (G2)
 
 // Update por índice entero (posicional, 1-based)

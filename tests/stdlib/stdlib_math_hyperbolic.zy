@@ -1,4 +1,3 @@
-// @vm-skip
 // Test: tanh, sinh, cosh, sigmoid
 <# std/math => mat
 

@@ -1,0 +1,20 @@
+// Test: tensores N-dimensionales (3D)
+<# ./tensor => t
+
+// crear tensor 3D [2,2,2]
+t3 = t::crear([2, 2, 2], 1.0)
+>> t::forma_de(t3) ¶
+
+// sumar dos tensores 3D
+t4 = t::sumar(t3, t3)
+>> t::elemento(t4, [1, 1, 1]) ¶
+>> t::elemento(t4, [2, 2, 2]) ¶
+
+// aplanar tensor 3D -> lista plana de 8 elementos
+>> t::aplanar(t3) ¶
+
+// reformar lista a tensor 3D y verificar forma
+plana = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+t3b = t::reformar(plana, [2, 2, 2])
+>> t::forma_de(t3b) ¶
+>> t::elemento(t3b, [2, 2, 2]) ¶

@@ -1,4 +1,3 @@
-// @vm-skip
 // Test: std/math binary functions
 <# std/math => mat
 

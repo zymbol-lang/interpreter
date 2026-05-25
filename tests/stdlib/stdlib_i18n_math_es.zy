@@ -1,4 +1,3 @@
-// @vm-skip
 // Test: std/math re-exported through a Spanish adapter module
 <# ./matematica_es => mat
 

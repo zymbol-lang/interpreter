@@ -1,0 +1,198 @@
+# tensor {
+    #> {
+        crear
+        crear_desde_lista
+        forma_de
+        elemento
+        sumar
+        restar
+        multiplicar_escalar
+        producto_punto
+        producto_matricial
+        transponer
+        aplanar
+        reformar
+        imprimir
+    }
+
+    // Devuelve la lista sin el primer elemento (para descomponer una forma N-D)
+    _sub_lista(lista) {
+        res = []
+        @ _i:2..lista$# { res = res$+ lista[_i] }
+        <~ res
+    }
+
+    crear(forma, valor_inicial) {
+        // Crea tensor N-D lleno de valor_inicial con la forma dada
+        // ej: crear([2, 3], 0.0) -> [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+        ? (forma$# == 1) {
+            fila = []
+            @ _i:1..forma[1] { fila = fila$+ valor_inicial }
+            <~ fila
+        }
+        sub = _sub_lista(forma)
+        res = []
+        @ _i:1..forma[1] { res = res$+ crear(sub, valor_inicial) }
+        <~ res
+    }
+
+    forma_de(t) {
+        // Devuelve la forma del tensor como lista de enteros
+        // ej: forma_de([[1,2],[3,4]]) -> [2, 2]
+        tipo = (t[1]#?)[1]
+        ? (tipo == "##]") {
+            sub = forma_de(t[1])
+            res = [t$#]
+            @ d:sub { res = res$+ d }
+            <~ res
+        }
+        <~ [t$#]
+    }
+
+    elemento(t, indices) {
+        // Accede un elemento por lista de indices 1-based
+        // ej: elemento(mat, [2, 3]) == mat[2>3]
+        actual = t
+        @ idx:indices { actual = actual[idx] }
+        <~ actual
+    }
+
+    sumar(a, b) {
+        // Suma elemento a elemento — recursivo para cualquier profundidad
+        // Precondicion: a y b tienen la misma forma
+        tipo = (a[1]#?)[1]
+        ? (!(tipo == "##]")) {
+            res = []
+            @ _i:1..a$# { res = res$+ (a[_i] + b[_i]) }
+            <~ res
+        }
+        res = []
+        @ _i:1..a$# { res = res$+ sumar(a[_i], b[_i]) }
+        <~ res
+    }
+
+    restar(a, b) {
+        // Resta elemento a elemento
+        tipo = (a[1]#?)[1]
+        ? (!(tipo == "##]")) {
+            res = []
+            @ _i:1..a$# { res = res$+ (a[_i] - b[_i]) }
+            <~ res
+        }
+        res = []
+        @ _i:1..a$# { res = res$+ restar(a[_i], b[_i]) }
+        <~ res
+    }
+
+    multiplicar_escalar(t, esc) {
+        // Multiplica cada elemento por el escalar
+        tipo = (t[1]#?)[1]
+        ? (!(tipo == "##]")) {
+            <~ t $> v -> v * esc
+        }
+        res = []
+        @ elem:t { res = res$+ multiplicar_escalar(elem, esc) }
+        <~ res
+    }
+
+    producto_punto(a, b) {
+        // Σᵢ aᵢ × bᵢ — el resultado es un escalar
+        suma = 0.0
+        @ _i:1..a$# { suma = suma + a[_i] * b[_i] }
+        <~ suma
+    }
+
+    producto_matricial(A, B) {
+        // (AB)ᵢⱼ = Σₖ Aᵢₖ × Bₖⱼ  — columnas de A == filas de B
+        C = []
+        @ i:1..A$# {
+            fila = []
+            @ j:1..B[1]$# {
+                suma = 0.0
+                @ _ki:1..A[1]$# { suma = suma + A[i>_ki] * B[_ki>j] }
+                fila = fila$+ suma
+            }
+            C = C$+ fila
+        }
+        <~ C
+    }
+
+    transponer(mat) {
+        // Aᵀᵢⱼ = Aⱼᵢ — intercambia filas por columnas
+        res = []
+        @ j:1..mat[1]$# {
+            fila = []
+            @ _i:1..mat$# { fila = fila$+ mat[_i>j] }
+            res = res$+ fila
+        }
+        <~ res
+    }
+
+    aplanar(t) {
+        // Convierte tensor N-D en lista plana (flatten)
+        tipo = (t[1]#?)[1]
+        ? (!(tipo == "##]")) { <~ t }
+        res = []
+        @ elem:t {
+            sub = aplanar(elem)
+            @ e:sub { res = res$+ e }
+        }
+        <~ res
+    }
+
+    _reformar_rec(lista, inicio, forma) {
+        // Construye tensor con `forma` tomando elementos desde posicion `inicio`
+        // Devuelve (tensor_construido, siguiente_posicion)
+        ? (forma$# == 1) {
+            res = []
+            pos = inicio
+            @ _i:1..forma[1] {
+                res = res$+ lista[pos]
+                pos = pos + 1
+            }
+            <~ (res, pos)
+        }
+        sub_f = _sub_lista(forma)
+        res = []
+        pos = inicio
+        @ _i:1..forma[1] {
+            ret = _reformar_rec(lista, pos, sub_f)
+            res = res$+ ret[1]
+            pos = ret[2]
+        }
+        <~ (res, pos)
+    }
+
+    reformar(t, nueva_forma) {
+        // Reorganiza los elementos en una nueva forma
+        // Precondicion: producto(nueva_forma) == numero total de elementos
+        plana = aplanar(t)
+        ret = _reformar_rec(plana, 1, nueva_forma)
+        <~ ret[1]
+    }
+
+    crear_desde_lista(lista_plana, forma) {
+        // Construye un tensor desde una lista plana con la forma dada
+        <~ reformar(lista_plana, forma)
+    }
+
+    imprimir(t) {
+        // Muestra el tensor con cabecera de forma y valores formateados
+        forma = forma_de(t)
+        ndim = forma$#
+        ? (ndim == 1) {
+            largo = forma[1]
+            >> "Tensor [{largo}]:" ¶
+            >> t ¶
+        } _? (ndim == 2) {
+            filas = forma[1]
+            cols = forma[2]
+            >> "Tensor [{filas}x{cols}]:" ¶
+            @ fila:t { >> fila ¶ }
+        } _ {
+            d = forma[1]
+            >> "Tensor {forma}:" ¶
+            @ elem:t { imprimir(elem) }
+        }
+    }
+}

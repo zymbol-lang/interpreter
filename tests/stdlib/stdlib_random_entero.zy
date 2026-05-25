@@ -1,4 +1,3 @@
-// @vm-skip
 // Test: random::entero(min, max) always returns Int in [min, max]
 <# std/random => rnd
 

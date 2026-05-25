@@ -1,4 +1,3 @@
-// @vm-skip
 // Test: tan, asin, acos, atan, atan2
 <# std/math => mat
 

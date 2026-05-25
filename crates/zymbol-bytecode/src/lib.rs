@@ -118,6 +118,8 @@ pub enum Instruction {
     Return(Reg),
     /// Call a function/lambda stored in a register (for lambdas as values)
     CallDynamic(Reg, Reg, Vec<Reg>),
+    /// Call a stdlib native function; builtin_id is a constant from the `builtins` module
+    CallBuiltin(Reg, u16, Vec<Reg>),
 
     // ── I/O ──────────────────────────────────────────────────────────────
     Print(Reg),
@@ -318,6 +320,37 @@ pub enum GlobalInit {
     Char(char),
     Str(String),
     Unit,
+}
+
+/// Builtin function IDs — shared between compiler (emit site) and VM (dispatch).
+pub mod builtins {
+    // std/math functions
+    pub const SQRT:    u16 = 0;
+    pub const EXP:     u16 = 1;
+    pub const LN:      u16 = 2;
+    pub const LOG:     u16 = 3;
+    pub const POW:     u16 = 4;
+    pub const SIN:     u16 = 5;
+    pub const COS:     u16 = 6;
+    pub const TAN:     u16 = 7;
+    pub const ASIN:    u16 = 8;
+    pub const ACOS:    u16 = 9;
+    pub const ATAN:    u16 = 10;
+    pub const ATAN2:   u16 = 11;
+    pub const TANH:    u16 = 12;
+    pub const SINH:    u16 = 13;
+    pub const COSH:    u16 = 14;
+    pub const SIGMOID: u16 = 15;
+    pub const ABS:     u16 = 16;
+    pub const MAX:     u16 = 17;
+    pub const MIN:     u16 = 18;
+    pub const FLOOR:   u16 = 19;
+    pub const CEIL:    u16 = 20;
+    pub const ROUND:   u16 = 21;
+    // std/random functions
+    pub const RAND_ENTERO:   u16 = 100;
+    pub const RAND_RANGO:    u16 = 101;
+    pub const RAND_PESO_F64: u16 = 102;
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -1,4 +1,3 @@
-// @vm-skip
 // Test: std/math constants PI and E
 <# std/math => mat
 

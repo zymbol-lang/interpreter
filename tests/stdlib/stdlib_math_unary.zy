@@ -1,4 +1,3 @@
-// @vm-skip
 // Test: std/math unary functions
 <# std/math => mat
 

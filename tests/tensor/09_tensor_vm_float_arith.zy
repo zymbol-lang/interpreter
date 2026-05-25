@@ -1,0 +1,21 @@
+// Test: aritmetica Float desde elementos de arreglo — regresion BUG-Z001
+// El VM seleccionaba AddInt para registros Unknown (ArrayGet no anotaba tipo)
+// causando TypeError al encontrar Float. Este test valida el fix del dispatch dinamico.
+<# ./tensor => t
+
+// producto_punto: usa a[i] * b[i] + acumulacion — ejercita MulInt y AddInt con Float
+>> t::producto_punto([3.0, 4.0], [3.0, 4.0]) ¶
+
+// sumar: usa a[i] + b[i] — ejercita AddInt con Float
+t::imprimir(t::sumar([2.0, 4.0, 6.0], [1.0, 2.0, 3.0]))
+
+// restar: usa a[i] - b[i] — ejercita SubInt con Float
+t::imprimir(t::restar([5.0, 5.0, 5.0], [1.0, 2.0, 3.0]))
+
+// multiplicar_escalar: usa v * esc — ejercita MulInt con Float
+t::imprimir(t::multiplicar_escalar([1.0, 2.0, 3.0], 4.0))
+
+// producto_matricial: cadena completa de multiplicaciones Float desde arreglos
+A = [[2.0, 0.0], [0.0, 3.0]]
+B = [[4.0, 0.0], [0.0, 2.0]]
+t::imprimir(t::producto_matricial(A, B))

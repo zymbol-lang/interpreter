@@ -1,4 +1,3 @@
-// @vm-skip
 // Test: random::peso_f64() always returns Float in [-0.1, 0.1]
 <# std/random => rnd
 

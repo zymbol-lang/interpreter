@@ -296,6 +296,8 @@ pub struct Compiler {
     /// Source of named functions: name → (param_names, body_statements).
     /// Used to recompile named functions as closures when they capture outer variables.
     fn_source: HashMap<String, (Vec<String>, Vec<Statement>)>,
+    /// Builtin function IDs: "alias::func" → builtin_id (for std/math, std/random).
+    builtin_map: HashMap<String, u16>,
 }
 
 impl Compiler {
@@ -319,6 +321,7 @@ impl Compiler {
             global_var_inits: Vec::new(),
             known_module_aliases: HashSet::new(),
             fn_source: HashMap::new(),
+            builtin_map: HashMap::new(),
         };
 
         // Process imports first — register module functions as "alias::func"
@@ -400,6 +403,29 @@ impl Compiler {
     /// registering exported ones as `alias::func_name` in function_index.
     /// Also handles: circular import detection, nested sub-imports, and re-exports.
     fn compile_import(&mut self, import: &zymbol_ast::ImportStmt, base_dir: &Path) -> Result<(), CompileError> {
+        // Detect stdlib modules (std/math, std/random) — no file needed.
+        if import.path.parent_levels == 0 {
+            let module_key = import.path.components.join("/");
+            if let Some(entries) = stdlib_builtin_entries(&module_key) {
+                let alias = import.alias.clone();
+                for (func_name, builtin_id) in entries {
+                    self.builtin_map.insert(format!("{}::{}", alias, func_name), builtin_id);
+                }
+                if module_key == "std/math" {
+                    self.module_constants.insert(
+                        format!("{}.PI", alias),
+                        ModuleConst::Float(std::f64::consts::PI),
+                    );
+                    self.module_constants.insert(
+                        format!("{}.E", alias),
+                        ModuleConst::Float(std::f64::consts::E),
+                    );
+                }
+                self.known_module_aliases.insert(alias);
+                return Ok(());
+            }
+        }
+
         // Build file path from import path components
         let mut path = base_dir.to_path_buf();
         for _ in 0..import.path.parent_levels {
@@ -604,6 +630,11 @@ impl Compiler {
             if let Some(&idx) = self.function_index.get(&src_qualified) {
                 let dst_qualified = format!("{}::{}", alias, public_name);
                 self.function_index.insert(dst_qualified, idx);
+            }
+            // Propagate stdlib builtin re-exports (e.g., i18n adapter modules)
+            if let Some(&bid) = self.builtin_map.get(&src_qualified) {
+                let dst_qualified = format!("{}::{}", alias, public_name);
+                self.builtin_map.insert(dst_qualified, bid);
             }
         }
         for (src_alias, item_name, public_name) in &reexport_consts {
@@ -2053,6 +2084,27 @@ impl Compiler {
         call: &zymbol_ast::FunctionCallExpr,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
+        // Check builtin FIRST so stdlib calls (std/math, std/random, i18n re-exports) are
+        // handled before the "module does not export function" RaiseError path fires.
+        let maybe_builtin_id = match call.callable.as_ref() {
+            Expr::MemberAccess(ma) => {
+                if let Expr::Identifier(obj) = ma.object.as_ref() {
+                    let qualified = format!("{}::{}", obj.name, ma.field);
+                    self.builtin_map.get(&qualified).copied()
+                } else { None }
+            }
+            _ => None,
+        };
+        if let Some(builtin_id) = maybe_builtin_id {
+            let mut arg_regs = Vec::with_capacity(call.arguments.len());
+            for arg in &call.arguments {
+                arg_regs.push(self.compile_expr(arg, ctx)?);
+            }
+            let dst = ctx.alloc_temp()?;
+            ctx.emit(Instruction::CallBuiltin(dst, builtin_id, arg_regs));
+            return Ok(dst);
+        }
+
         // Check if the callable is a known static function name or a module call (alias::func)
         let maybe_func_idx = match call.callable.as_ref() {
             Expr::Identifier(id) => self.function_index.get(&id.name)
@@ -3760,6 +3812,44 @@ fn eliminate_dead_code(instructions: Vec<Instruction>, old_num_regs: u16) -> (Ve
     (new_instructions, num_registers)
 }
 
+/// Return the (function_name, builtin_id) pairs for a known stdlib module path,
+/// or None if the path is not a stdlib module.
+fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16)>> {
+    use zymbol_bytecode::builtins as B;
+    match module_key {
+        "std/math" => Some(vec![
+            ("sqrt",    B::SQRT),
+            ("exp",     B::EXP),
+            ("ln",      B::LN),
+            ("log",     B::LOG),
+            ("pow",     B::POW),
+            ("sin",     B::SIN),
+            ("cos",     B::COS),
+            ("tan",     B::TAN),
+            ("asin",    B::ASIN),
+            ("acos",    B::ACOS),
+            ("atan",    B::ATAN),
+            ("atan2",   B::ATAN2),
+            ("tanh",    B::TANH),
+            ("sinh",    B::SINH),
+            ("cosh",    B::COSH),
+            ("sigmoid", B::SIGMOID),
+            ("abs",     B::ABS),
+            ("max",     B::MAX),
+            ("min",     B::MIN),
+            ("floor",   B::FLOOR),
+            ("ceil",    B::CEIL),
+            ("round",   B::ROUND),
+        ]),
+        "std/random" => Some(vec![
+            ("entero",   B::RAND_ENTERO),
+            ("rango",    B::RAND_RANGO),
+            ("peso_f64", B::RAND_PESO_F64),
+        ]),
+        _ => None,
+    }
+}
+
 /// Return the highest register index referenced in `instructions`, if any.
 fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
     let mut max: Option<u16> = None;
@@ -3854,6 +3944,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             | Instruction::ClearScreen | Instruction::EnterTui | Instruction::ExitTui => {}
             Instruction::LoadCliArgs(dst) => upd(*dst),
             Instruction::HotInit(dst, _) => upd(*dst),
+            Instruction::CallBuiltin(dst, _, args) => { upd(*dst); for &r in args { upd(r); } }
         }
     }
     max

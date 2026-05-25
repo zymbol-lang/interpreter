@@ -1,4 +1,3 @@
-// @vm-skip
 // Test: std/math Int→Float promotion (Int arguments accepted)
 <# std/math => mat
 
