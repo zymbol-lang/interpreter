@@ -130,7 +130,7 @@ impl TypeConstraint {
     fn to_type(&self) -> ZymbolType {
         match self {
             TypeConstraint::Exact(t) => t.clone(),
-            TypeConstraint::Numeric => ZymbolType::Int, // Default to Int if only numeric constraint
+            TypeConstraint::Numeric => ZymbolType::Float, // Numeric-only params accept both Int and Float (Int→Float is compatible)
             TypeConstraint::Boolean => ZymbolType::Bool,
             TypeConstraint::CompatibleWith(t) => t.clone(),
             TypeConstraint::Unconstrained => ZymbolType::Any,

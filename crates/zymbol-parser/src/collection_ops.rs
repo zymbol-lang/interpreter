@@ -228,11 +228,11 @@ impl Parser {
     pub(crate) fn parse_collection_update(&mut self, target: Expr) -> Result<Expr, Diagnostic> {
         let start_span = target.span();
 
-        // Target must be an IndexExpr (e.g., arr[0] or matrix[i][j])
-        if !matches!(target, Expr::Index(_)) {
+        // Target must be an IndexExpr (arr[i]) or DeepIndexExpr (arr[i>j>k])
+        if !matches!(target, Expr::Index(_) | Expr::DeepIndex(_)) {
             return Err(Diagnostic::error("collection update ($~) requires indexed expression")
                 .with_span(start_span)
-                .with_help("use: arr[index]$~ value"));
+                .with_help("use: arr[i]$~ value  or  arr[i>j]$~ value"));
         }
 
         self.advance(); // consume $~

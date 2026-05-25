@@ -1,0 +1,4 @@
+// @vm-skip
+// Test: std/math type error includes function name in message
+<# std/math => mat
+mat::sqrt("x")

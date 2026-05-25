@@ -1,8 +1,9 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **v0.0.2** — interpreter feature-complete, dual execution modes,
-> 243/246 VM parity tests passing (3 failures: HTTP client + CLI args not yet in VM).
-> Collection API v0.0.2 + destructuring. **1-based indexing** across all collections.
+> Current status: **v0.0.6 (in progress)** — stdlib infrastructure complete.
+> `std/math` (13 functions + PI, E) and `std/random` (xoshiro256++) shipped.
+> Semantic analyzer updated. 9 stdlib tests passing.
+> Remaining v0.0.6 items: float formatting, typed input, depuration polish.
 
 ---
 
@@ -220,15 +221,16 @@ maximum performance or deployment without the Zymbol runtime.
 
 Built-in modules accessible via `<#`:
 
-| Module | Description |
-|--------|-------------|
-| `std/io` | File read/write, path utilities |
-| `std/math` | sqrt, floor, ceil, sin, cos, log, etc. |
-| `std/string` | Advanced string utilities |
-| `std/time` | Timestamps, duration, formatting |
-| `std/net` | HTTP client (basic) |
-| `std/json` | JSON parse and serialize |
-| `std/env` | Environment variables, OS info |
+| Module | Description | Status |
+|--------|-------------|--------|
+| `std/math` | `sqrt exp ln log pow sin cos abs max min floor ceil round` + `PI E` | ✅ v0.0.6 |
+| `std/random` | `entero rango peso_f64` (xoshiro256++) | ✅ v0.0.6 |
+| `std/io` | File read/write, path utilities | planned |
+| `std/env` | Environment variables, OS info | planned |
+| `std/json` | JSON parse and serialize | planned |
+| `std/net` | HTTP client (basic) | planned |
+| `std/string` | Advanced string utilities | planned |
+| `std/time` | Timestamps, duration, formatting | planned |
 
 #### Package Manager
 
@@ -288,32 +290,53 @@ Both are addressed by the Cranelift JIT milestone.
 
 ### New Features (driven by Zofía HALLAZGOS)
 
-#### `std/math` — mathematical functions  ← GAP-Z001, GAP-Z002
+#### ✅ `std/math` — mathematical functions  ← GAP-Z001, GAP-Z002  **[DONE]**
 
-The absence of `sqrt`, `exp`, `log`, `sin`, `cos`, `pow`, `abs` blocks Zofía
-Phases 3–5 (activations, attention, positional encoding). Move `std/math`
-from Long Term to v0.0.6.
-
-Zymbol-idiomatic API (language-agnostic names, not English abbreviations):
+Shipped in v0.0.6. Names follow the international standard (C / Python / Rust).
+For localized names use the i18n three-layer pattern — re-export under the
+target language's names (see `Zofia/modulos/matematica_std.zy` for the Spanish adapter).
 
 ```zymbol
-<# std/math <= mat
+<# std/math => mat
 
-mat::raiz(x)            -- sqrt
-mat::exp(x)             -- e^x
-mat::ln(x)              -- natural log
-mat::log(x, base)       -- log_base(x)
-mat::pot(base, exp)     -- base^exp
-mat::sen(x)             -- sin (radians)
-mat::cos(x)             -- cos (radians)
-mat::abs(x)             -- |x|
-mat::max(a, b)          -- scalar max
-mat::min(a, b)          -- scalar min
-mat::PI                 -- 3.14159265358979...
-mat::E                  -- 2.71828182845904...
+mat::sqrt(x)          -- raíz cuadrada
+mat::exp(x)           -- e^x
+mat::ln(x)            -- logaritmo natural
+mat::log(x)           -- logaritmo natural (alias)
+mat::log(x, base)     -- logaritmo en base arbitraria
+mat::pow(base, exp)   -- base^exp  (Float)
+mat::sin(x)           -- seno (radianes)
+mat::cos(x)           -- coseno (radianes)
+mat::abs(x)           -- |x|  (Int→Int, Float→Float)
+mat::max(a, b)        -- máximo escalar
+mat::min(a, b)        -- mínimo escalar
+mat::floor(x)         -- entero inferior
+mat::ceil(x)          -- entero superior
+mat::round(x)         -- redondeo al más cercano
+mat.PI                -- 3.141592653589793
+mat.E                 -- 2.718281828459045
 ```
 
-Implementation: thin Rust wrappers over `f64` stdlib methods. No new syntax.
+- **Int → Float promotion:** `mat::sqrt(4)` → `2.0` — all functions accept `###`.
+- **Implementation:** `crates/zymbol-interpreter/src/stdlib/math.rs` — thin Rust
+  wrappers over `f64` stdlib methods. `enum FunctionDef::Native` dispatch. No new syntax.
+- **Tests:** `interpreter/tests/stdlib/stdlib_math_*.zy` (6 test files, all passing).
+
+#### ✅ `std/random` — pseudo-random number generation  ← GAP-Z003  **[DONE]**
+
+Shipped in v0.0.6. Uses xoshiro256++ with thread-local state, auto-seeded from
+`SystemTime` on first call. No seed object needed from Zymbol's perspective.
+
+```zymbol
+<# std/random => rnd
+
+rnd::entero(min, max)  -- Int en [min, max]  (uniforme)
+rnd::rango(n)          -- Int en [0, n-1]    (uniforme)
+rnd::peso_f64()        -- Float en [-0.1, 0.1]  (inicialización de pesos NN)
+```
+
+- **Implementation:** `crates/zymbol-interpreter/src/stdlib/random.rs`.
+- **Tests:** `interpreter/tests/stdlib/stdlib_random_*.zy` (3 test files, all passing).
 
 #### Float formatting in `>>`  ← GAP-Z004, IDEA-Z002
 
@@ -328,18 +351,18 @@ educational output. A format modifier on `>>`:
 
 Applies only to numeric values. Ignored for strings/booleans/etc.
 
-#### `$@` functional map operator  ← IDEA-Z003
+#### ~~`$@` functional map operator~~  ← IDEA-Z003  **[DISCARDED]**
 
-Zofía applies scalar functions (relu, sigmoid) to every element of a tensor.
-Current approach requires an explicit loop. `$@` eliminates the boilerplate:
+Redundant with the existing `$>` map operator, which already covers every
+use case identified in Zofía:
 
 ```zymbol
-resultado = vec $@ relu_escalar            -- apply to each element
-resultado = mat $@ (fn, arg1)              -- with extra args
+resultado = vec$> relu_escalar          -- referencia a función nombrada
+resultado = vec$> (v -> mat::exp(v))    -- lambda inline
+exps      = vec$> (v -> mat::exp(v))    -- softmax step 1
 ```
 
-Coherent with `$` collection prefix. `@` already means "for each" in the
-language (loop operator).
+Adding `$@` would be duplicate syntax with no benefit. Discarded.
 
 #### Typed input constraints  ← IDEA-Z004
 
@@ -356,15 +379,13 @@ letters — language-agnostic):
 
 ### Zofía integration checkpoints
 
-v0.0.6 is considered complete for Zofía when:
-
-| Zofía Phase | Unblocked by |
-|-------------|-------------|
-| Fase 1 — tensor | Depuration items (float format) |
-| Fase 2 — grad | No new Zymbol features needed |
-| Fase 3 — activacion | `std/math` (exp, log) |
-| Fase 4 — atencion | `std/math` (sqrt) |
-| Fase 5 — transformador | `std/math` (sin, cos, pow) + `$@` map |
+| Zofía Phase | Unblocked by | Estado |
+|-------------|-------------|--------|
+| Fase 1 — tensor | Depuration items (float format) | pendiente |
+| Fase 2 — grad | No new Zymbol features needed | pendiente |
+| Fase 3 — activacion | `std/math` (`exp`, `log`) | ✅ desbloqueado |
+| Fase 4 — atencion | `std/math` (`sqrt`) | ✅ desbloqueado |
+| Fase 5 — transformador | `std/math` (`sin`, `cos`, `pow`) + `std/random` (`peso_f64`) | ✅ desbloqueado |
 
 ---
 
@@ -383,4 +404,4 @@ v0.0.6 is considered complete for Zofía when:
 | v0.0.3 | i18n + safe access | Unicode grapheme clusters, safe access `?.`, null coalescing |
 | v0.0.4 | Module system + REPL | Full module import/export, circular import detection, REPL improvements |
 | v0.0.5 | TUI + VM parity | `>>|` `>>~` `>>!` `>>?` `<<\|` `@~`, `$*` string repeat, tuple equality VM, LSP `<<\|` fix, text styles `>>~(,,BKS,fg,bg)` |
-| **v0.0.6** | **Refinement + Scientific Stdlib** | `std/math`, float formatting, `$@` map, typed input, depuration — **driven by Zofía** |
+| **v0.0.6** | **Refinement + Scientific Stdlib** | `std/math` (sqrt/exp/ln/log/pow/sin/cos/abs/max/min/floor/ceil/round + PI/E), `std/random` (xoshiro256++), stdlib infrastructure (`enum FunctionDef`, `load_stdlib_module`, semantic suppression), 9 stdlib tests — **driven by Zofía**; float formatting + typed input pending |

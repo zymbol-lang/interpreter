@@ -1,0 +1,8 @@
+// @vm-skip
+// Test: std/math re-exported through a Spanish adapter module
+<# ./matematica_es => mat
+
+>> mat::sen(0.0) ¶
+>> mat::cos(0.0) ¶
+>> mat::raiz(9.0) ¶
+>> mat::abs(-5) ¶

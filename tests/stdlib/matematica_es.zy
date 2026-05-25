@@ -1,0 +1,28 @@
+# matematica_es {
+    <# std/math => _mat
+
+    #> {
+        _mat::sqrt    => raiz
+        _mat::exp     => exp
+        _mat::ln      => ln
+        _mat::log     => log
+        _mat::pow     => pot
+        _mat::sin     => sen
+        _mat::cos     => cos
+        _mat::tan     => tan
+        _mat::asin    => arcsen
+        _mat::acos    => arccos
+        _mat::atan    => arctan
+        _mat::atan2   => arctan2
+        _mat::tanh    => tanh
+        _mat::sinh    => senh
+        _mat::cosh    => cosh
+        _mat::sigmoid => sigmoide
+        _mat::abs     => abs
+        _mat::max     => max
+        _mat::min     => min
+        _mat::floor   => piso
+        _mat::ceil    => techo
+        _mat::round   => redondear
+    }
+}
