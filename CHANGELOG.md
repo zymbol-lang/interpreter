@@ -44,6 +44,28 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ### Added
 
+**Typed wildcards in test golden files (`***time***`, `***float***`, etc.)**
+- `.expected` files now support typed regex wildcards alongside the existing `****` glob:
+  - `***int***` — any integer (`-?[0-9]+`)
+  - `***float***` — any float, including scientific notation
+  - `***num***` — any number (int or float)
+  - `***time***` — execution timing values such as `0.167s` or `12ms`
+  - `***date***` — ISO 8601 dates such as `2026-05-26`
+  - `***path***` — any non-whitespace path
+- Matching uses `re.fullmatch` via Python 3 (always available); falls back to
+  the existing `****` glob when Python 3 is absent.
+- New `--regen --smart` flag in `expected_compare.sh`: automatically detects
+  timing and date patterns in the output and replaces them with the corresponding
+  wildcard. Fixes `stress_v2/bench_*.zy` tests that failed due to timing variance.
+- Same typed wildcards available in `semantic_compare.sh`.
+- `vm_compare.sh`: restored `tests/manual/` files (466 total; 463 PASS + 3 `@vm-skip`).
+
+**GAP-Z009 regression test — named functions retain module aliases as HOF values**
+- New test `tests/bugs/bug_named_fn_module_alias_hof.zy` covers the case where a named
+  function referencing a module alias (e.g. `mat::sqrt`) is passed as a first-class value
+  to a higher-order function and invoked from inside it. Previously failed with
+  `"undefined module alias: 'mat'"`.
+
 **`<<` input support in VM (IMPL-V005-INPUT)**
 - `ReadLine(dst, Option<Reg>, bool)` — new bytecode instruction. Reads a line from stdin,
   optionally printing a prompt register first; `bool` flag enables numeric cast (Int/Float/String).
@@ -54,6 +76,18 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 - Def-use analysis updated for `ReadLine`.
 
 ### Fixed
+
+**BUG-007 — Semantic checker incorrectly rejected recursive integer functions after GAP-Z008**
+- Functions like `gcd(a, b) { <~ gcd(b, a % b) }` were rejected with
+  `"argument 2 has type Float, but function expects Int"` when the parameter `a`
+  had only a `Numeric` constraint (no direct Int evidence). `Numeric.to_type()`
+  returns `Float` (GAP-Z008), making `a % b` resolve to `Float`, which then
+  failed against `b`'s `Exact(Int)` type in the recursive call.
+- Root cause: `types_compatible_static()` in `zymbol-semantic/src/type_check.rs`
+  had no `(Float, Int)` arm — fell through to `_ => false`.
+- Fix: added `(ZymbolType::Float, ZymbolType::Int) => true` — bidirectional
+  numeric compatibility, consistent with the runtime's dynamic dispatch (BUG-Z001).
+- New test: `tests/bugs/bug_semantic_numeric_recursive.zy`.
 
 **`<<` inside `>>|` TUI block freezes terminal**
 - `execute_input` (interpreter) and VM `ReadLine`: when `tui_depth > 0` / `tui_stack` non-empty,

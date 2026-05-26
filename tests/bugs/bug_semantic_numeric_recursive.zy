@@ -1,0 +1,38 @@
+// BUG-007 (GAP-Z008 regression): Numeric-constrained parameters default to Float,
+// causing recursive calls to fail type checking when the accumulated arithmetic
+// result (e.g. `a % b` where a::Float, b::Int) is passed to an Int-typed parameter.
+//
+// Root cause: zymbol-semantic/src/type_check.rs types_compatible_static() has no
+// (Float, Int) arm — falls through to _ => false — so a % b (typed Float because
+// Numeric.to_type() = Float) is rejected when gcd's second param is Exact(Int).
+//
+// Reproduction: define a recursive function whose parameter has only Numeric
+// constraints (no Int evidence), then recursively pass arithmetic over that param.
+//
+// Expected: all three functions run and produce correct output
+// Actual:   "argument 2 has type Float, but function 'gcd' expects Int" (before fix)
+//
+// Fix: added (ZymbolType::Float, ZymbolType::Int) => true to types_compatible_static()
+//      in crates/zymbol-semantic/src/type_check.rs — bidirectional numeric compatibility.
+
+// Caso 1 — GCD (algoritmo de Euclides): param `a` sin evidencia de Int → Numeric → Float
+// La llamada recursiva gcd(b, a % b) fallaba con el checker
+gcd(a, b) {
+    ? b == 0 { <~ a }
+    _ { <~ gcd(b, a % b) }
+}
+>> gcd(48, 18) ¶
+>> gcd(100, 35) ¶
+>> gcd(17, 19) ¶
+
+// Caso 2 — función aritmética pura que recibe tanto Int como Float
+multiplicar(a, b) { <~ a * b }
+>> multiplicar(3, 4) ¶
+>> multiplicar(3.0, 4.0) ¶
+
+// Caso 3 — potencia recursiva con param sin evidencia de Int
+pot(base, exp) {
+    ? exp == 0 { <~ 1 }
+    _ { <~ base * pot(base, exp - 1) }
+}
+>> pot(2, 10) ¶

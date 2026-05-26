@@ -1248,8 +1248,11 @@ impl TypeChecker {
             (ZymbolType::Unknown, _) | (_, ZymbolType::Unknown) => true,
             // Exact match
             (a, b) if a == b => true,
-            // Int is compatible with Float
-            (ZymbolType::Int, ZymbolType::Float) => true,
+            // Numeric types are bidirectionally compatible: Int→Float and Float→Int.
+            // Needed because Numeric-constrained params resolve to Float via to_type(),
+            // so arithmetic results (e.g. `a % b` where a::Numeric) carry Float type
+            // even when the runtime value is integral.
+            (ZymbolType::Int, ZymbolType::Float) | (ZymbolType::Float, ZymbolType::Int) => true,
             // Arrays are compatible if element types are compatible
             (ZymbolType::Array(a), ZymbolType::Array(b)) => Self::types_compatible_static(a, b),
             // Tuples are compatible if all elements are compatible
