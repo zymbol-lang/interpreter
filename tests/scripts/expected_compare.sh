@@ -83,7 +83,12 @@ strip_warnings() {
 # ── Run one file, return stdout only (no warnings) ───────────────────────────
 run_file() {
     local file="$1"
-    timeout 10 "$ZYMBOL" run "$file" 2>&1 | strip_warnings || true
+    local input_file="${file%.zy}.input"
+    if [[ -f "$input_file" ]]; then
+        timeout 10 "$ZYMBOL" run "$file" < "$input_file" 2>&1 | strip_warnings || true
+    else
+        timeout 10 "$ZYMBOL" run "$file" 2>&1 | strip_warnings || true
+    fi
 }
 
 # ── Smart annotation: replace known dynamic patterns with typed wildcards ─────

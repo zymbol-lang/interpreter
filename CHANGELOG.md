@@ -60,6 +60,53 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 - Same typed wildcards available in `semantic_compare.sh`.
 - `vm_compare.sh`: restored `tests/manual/` files (466 total; 463 PASS + 3 `@vm-skip`).
 
+**REPL test harness — headless integration and CLI tests (`zymbol-repl`)**
+- New `tests/common/mod.rs` — `ReplTestHarness`: wraps `Interpreter<Vec<u8>>` for TTY-free testing.
+  Supports mocked `<<` input via `set_input_fn` + `Rc<RefCell<VecDeque<String>>>`.
+  Methods: `run_line`, `output`, `value`, `error`, `history`, `variables`.
+- `tests/repl_integration.rs` — 27 integration tests covering: pIqaD digit/letter/alphabet roundtrip,
+  variable listing, history order and empty-line skipping, `<<` input (no-prompt, whitespace trim,
+  empty string, numeric cast int/float, with prompt, sequential, usable in expression),
+  `<<|?` non-blocking (headless → `'\0'`, no error), `<<|` blocking (headless → error),
+  `>>|` TUI block (headless → raw-mode error), RESET scope, undefined-variable and syntax errors.
+- `tests/cli_repl.rs` — 11 CLI subprocess tests using `assert_cmd`: basic output, arithmetic,
+  pIqaD roundtrip, variable persistence, `>>~` ANSI escape sequences (single/multiple/multichar),
+  `>>!` clear-screen ANSI codes, `>>?` terminal size and condition.
+- `line_editor.rs` — 4 new unit tests: `cursor_word_left/right`, `delete_word_before/after`.
+
+**REPL improvements (zymbol-repl)**
+- `count_display_width`: `s.chars().count()` → `s.width()` (unicode-width crate).
+  Fixes cursor misalignment with CJK (2-col), emoji (2-col), pIqaD PUA (1-col, unchanged).
+- Word navigation: `Ctrl+Left/Right` (word jump), `Ctrl+W` (delete word before), `Alt+D` (delete word after).
+- Persistent history: loaded from `~/.zymbol_history` on startup, saved on exit.
+- Batch mode (`start_batch`): detects piped stdin via `IsTty`; runs without raw mode — enables
+  `assert_cmd` CLI tests and `zymbol repl < file.zy` scripted usage.
+- `RESET` command: clears all variables and function definitions from the interpreter scope.
+- New dependencies: `unicode-width = "0.2"`, `dirs = "5"`.
+
+**VM fix — `<<|` blocking key input propagates error in headless mode**
+- `Instruction::ReadKey` (blocking): `Err(_) => break '\0'` replaced with
+  `Err(e) => return Err(VmError::Generic(e.to_string()))`.
+  Tree-walker and VM now produce identical output (`Runtime error: Failed to initialize input reader`)
+  when `<<|` runs without a TTY, enabling automated TW/VM parity testing.
+
+**`@vm-skip` removed from all three `tests/manual/tui/` files**
+- `05_key_input.zy`: VM now errors identically to TW on headless `<<|`.
+- `06_tui_block.zy`: TW and VM always produced identical headless error; tag was unnecessary.
+- `07_output_pos_sparse.zy`: TW and VM always matched; tag was unnecessary.
+- `vm_compare.sh` result: **478/478 PASS, 0 FAIL, 0 SKIP** (was 466 PASS + 3 `@vm-skip`).
+
+**New E2E test category: `tests/input/`**
+- 8 golden-file tests for the `<<` input statement, each with a `.input` companion file:
+  `01_basic`, `02_numeric` (int), `03_multiple` (3 sequential), `04_trimming` (whitespace stripped),
+  `05_prompt_displayed`, `06_in_condition` (drives branch), `07_in_loop` (accumulates sum), `08_numeric_float`.
+- `.input` companion files: `expected_compare.sh` and `vm_compare.sh` now auto-detect a `.input`
+  file alongside any `.zy` test and pipe it as stdin — no script arguments required.
+
+**New TUI E2E tests in `tests/tui/`**
+- 4 new golden files: `05_output_pos_multiple` (3 consecutive `>>~`), `06_clear_then_pos` (`>>!` + `>>~`),
+  `07_terminal_size_ops` (`>>?` decomposed + arithmetic), `08_output_pos_multichar` (multi-char `>>~` text).
+
 **GAP-Z009 regression test — named functions retain module aliases as HOF values**
 - New test `tests/bugs/bug_named_fn_module_alias_hof.zy` covers the case where a named
   function referencing a module alias (e.g. `mat::sqrt`) is passed as a first-class value
@@ -98,6 +145,19 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 - `execute_tui_block` and VM `EnterTui`: added `cursor::MoveTo(0, 0)` immediately after
   `EnterAlternateScreen`. Some terminals inherit the main-screen cursor position, causing the
   first `<<` prompt or `>>~` output to appear at arbitrary rows.
+
+### Test suite — [Unreleased]
+
+| Suite | Result |
+|-------|--------|
+| `cargo test` (all crates) | **820 / 820 pass** |
+| `expected_compare.sh` (all) | **464 / 464 pass** |
+| `expected_compare.sh tui` | **8 / 8 pass** (+4 new: multi-pos, clear+pos, size-ops, multichar) |
+| `expected_compare.sh input` | **8 / 8 pass** (new category: `<<` with `.input` companion files) |
+| `expected_compare.sh gaps` | **33 / 33 pass** |
+| `expected_compare.sh bugs` | **19 / 19 pass** |
+| `vm_compare.sh` | **478 / 478 PASS, 0 SKIP** (was 466 PASS + 3 `@vm-skip`) |
+| `zymbol-repl` unit + integration + CLI | **48 / 48 pass** (10 unit · 27 integration · 11 CLI) |
 
 ---
 

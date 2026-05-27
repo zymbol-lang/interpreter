@@ -825,6 +825,32 @@ impl<W: Write> Interpreter<W> {
         self.cli_args = Some(args_values);
     }
 
+    /// Reset interpreter scope: clears all variables, functions, and aliases.
+    /// Keeps the output writer and any already-loaded modules.
+    pub fn reset_scope(&mut self) {
+        self.scope_stack.clear();
+        self.scope_stack.push(HashMap::new());
+        self.mutable_vars_stack.clear();
+        self.mutable_vars_stack.push(HashSet::new());
+        self.const_vars_stack.clear();
+        self.const_vars_stack.push(HashSet::new());
+        self.functions.clear();
+        self.dead_variables.clear();
+        self.import_aliases.clear();
+        self.loading_modules.clear();
+        self.loop_scope_depths.clear();
+        self.has_any_const = false;
+        self.has_control_flow = false;
+        self.control_flow = ControlFlow::None;
+        self.statement_index = 0;
+        self.tco_pending = false;
+        self.tco_args.clear();
+        self.current_function = None;
+        self.numeral_mode = 0x0030;
+        self.tui_depth = 0;
+        self.try_depth = 0;
+    }
+
     /// Execute a single line of code (for REPL)
     /// Returns the value of the last expression if any
     pub fn execute_line(&mut self, source: &str) -> Result<Option<Value>> {

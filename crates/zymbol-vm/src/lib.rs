@@ -2365,7 +2365,7 @@ impl<W: Write> VM<W> {
                             match event::read() {
                                 Ok(Event::Key(KeyEvent { code, .. })) => break vm_map_key_code(code),
                                 Ok(_) => continue,
-                                Err(_) => break '\0', // non-TTY: no input available
+                                Err(e) => return Err(VmError::Generic(e.to_string())),
                             }
                         }
                     } else if event::poll(std::time::Duration::ZERO).unwrap_or(false) {

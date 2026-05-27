@@ -324,6 +324,78 @@ impl LineEditor {
         line
     }
 
+    // === Word navigation ===
+
+    /// Move cursor to the start of the previous word (Ctrl+Left / Alt+B).
+    pub fn cursor_word_left(&mut self) {
+        self.clear_selection();
+        let buf = self.current_buffer.as_bytes();
+        let mut pos = self.cursor_pos;
+        // Skip trailing whitespace
+        while pos > 0 && buf[pos - 1].is_ascii_whitespace() {
+            pos -= 1;
+        }
+        // Skip the word
+        while pos > 0 && !buf[pos - 1].is_ascii_whitespace() {
+            pos -= 1;
+        }
+        self.cursor_pos = pos;
+    }
+
+    /// Move cursor to the start of the next word (Ctrl+Right / Alt+F).
+    pub fn cursor_word_right(&mut self) {
+        self.clear_selection();
+        let buf = self.current_buffer.as_bytes();
+        let len = buf.len();
+        let mut pos = self.cursor_pos;
+        // Skip current word
+        while pos < len && !buf[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        // Skip whitespace
+        while pos < len && buf[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        self.cursor_pos = pos;
+    }
+
+    /// Delete from the cursor back to the start of the previous word (Ctrl+W).
+    pub fn delete_word_before(&mut self) {
+        if self.has_selection() {
+            self.delete_selection();
+            return;
+        }
+        let old_pos = self.cursor_pos;
+        self.cursor_word_left();
+        let new_pos = self.cursor_pos;
+        if new_pos < old_pos {
+            self.current_buffer.drain(new_pos..old_pos);
+        }
+    }
+
+    /// Delete from the cursor forward to the end of the next word (Alt+D).
+    pub fn delete_word_after(&mut self) {
+        if self.has_selection() {
+            self.delete_selection();
+            return;
+        }
+        let start = self.cursor_pos;
+        let buf = self.current_buffer.as_bytes();
+        let len = buf.len();
+        let mut end = start;
+        // Skip current word
+        while end < len && !buf[end].is_ascii_whitespace() {
+            end += 1;
+        }
+        // Skip trailing whitespace
+        while end < len && buf[end].is_ascii_whitespace() {
+            end += 1;
+        }
+        if end > start {
+            self.current_buffer.drain(start..end);
+        }
+    }
+
     // === Private helpers ===
 
     /// Find the byte position of the previous character
@@ -453,5 +525,48 @@ mod tests {
         assert_eq!(line, "test command");
         assert_eq!(editor.buffer(), "");
         assert_eq!(editor.cursor_pos(), 0);
+    }
+
+    #[test]
+    fn test_cursor_word_left() {
+        let mut editor = LineEditor::new();
+        editor.insert_str("hello world");
+        // cursor is at end (pos 11)
+        editor.cursor_word_left();
+        assert_eq!(&editor.buffer()[editor.cursor_pos()..], "world");
+        editor.cursor_word_left();
+        assert_eq!(editor.cursor_pos(), 0);
+    }
+
+    #[test]
+    fn test_cursor_word_right() {
+        let mut editor = LineEditor::new();
+        editor.insert_str("hello world");
+        editor.cursor_home();
+        editor.cursor_word_right();
+        assert_eq!(&editor.buffer()[..editor.cursor_pos()], "hello ");
+        editor.cursor_word_right();
+        assert_eq!(editor.cursor_pos(), editor.buffer().len());
+    }
+
+    #[test]
+    fn test_delete_word_before() {
+        let mut editor = LineEditor::new();
+        editor.insert_str("hello world");
+        editor.delete_word_before();
+        assert_eq!(editor.buffer(), "hello ");
+        editor.delete_word_before();
+        assert_eq!(editor.buffer(), "");
+    }
+
+    #[test]
+    fn test_delete_word_after() {
+        let mut editor = LineEditor::new();
+        editor.insert_str("hello world");
+        editor.cursor_home();
+        editor.delete_word_after();
+        assert_eq!(editor.buffer(), "world");
+        editor.delete_word_after();
+        assert_eq!(editor.buffer(), "");
     }
 }

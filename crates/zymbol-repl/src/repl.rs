@@ -3,14 +3,17 @@
 use crate::colors;
 use crate::line_editor::LineEditor;
 use crate::raw_writer::RawModeWriter;
+use unicode_width::UnicodeWidthStr;
 use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
     style::Stylize,
     terminal::{self, ClearType},
+    tty::IsTty,
 };
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 use zymbol_interpreter::{Interpreter, Value};
 
 /// The REPL instance
@@ -22,6 +25,8 @@ pub struct Repl {
     editor: LineEditor,
     /// Whether the REPL should continue running
     running: bool,
+    /// Path to the history file (~/.zymbol_history), if determinable.
+    history_path: Option<PathBuf>,
 }
 
 impl Default for Repl {
@@ -45,15 +50,45 @@ impl Repl {
             Ok(buf)
         });
 
+        let history_path = dirs::home_dir().map(|p| p.join(".zymbol_history"));
+        let mut editor = LineEditor::new();
+
+        // Load persisted history (most-recent-first in the file).
+        if let Some(ref path) = history_path {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                for line in content.lines() {
+                    if !line.is_empty() {
+                        editor.add_to_history(line.to_string());
+                    }
+                }
+            }
+        }
+
         Self {
             interpreter,
-            editor: LineEditor::new(),
+            editor,
             running: true,
+            history_path,
+        }
+    }
+
+    /// Persist the current history to ~/.zymbol_history.
+    fn save_history(&self) {
+        if let Some(ref path) = self.history_path {
+            let lines: Vec<&str> = self.editor.get_history();
+            // File stores oldest-first so that add_to_history re-inserts in correct order.
+            let content: String = lines.iter().rev().map(|s| *s).collect::<Vec<_>>().join("\n");
+            let _ = std::fs::write(path, content);
         }
     }
 
     /// Start the REPL loop
     pub fn start(&mut self) -> io::Result<()> {
+        // When stdin is not a TTY (piped input, CI, tests), use simple batch mode.
+        if !io::stdin().is_tty() {
+            return self.start_batch();
+        }
+
         // Enable raw mode for terminal
         terminal::enable_raw_mode()?;
 
@@ -85,6 +120,9 @@ impl Repl {
                 }
             }
         }
+
+        // Persist history before restoring terminal.
+        self.save_history();
 
         // Restore terminal
         terminal::disable_raw_mode()?;
@@ -266,6 +304,28 @@ impl Repl {
                 KeyAction::Continue
             }
 
+            // Word navigation — Ctrl+Left / Ctrl+Right
+            (KeyCode::Left, KeyModifiers::CONTROL) => {
+                self.editor.cursor_word_left();
+                KeyAction::Continue
+            }
+            (KeyCode::Right, KeyModifiers::CONTROL) => {
+                self.editor.cursor_word_right();
+                KeyAction::Continue
+            }
+
+            // Delete word before cursor — Ctrl+W
+            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                self.editor.delete_word_before();
+                KeyAction::Continue
+            }
+
+            // Delete word after cursor — Alt+D
+            (KeyCode::Char('d'), KeyModifiers::ALT) => {
+                self.editor.delete_word_after();
+                KeyAction::Continue
+            }
+
             // Backspace and Delete
             (KeyCode::Backspace, _) => {
                 self.editor.backspace();
@@ -316,6 +376,11 @@ impl Repl {
                 Ok(())
             }
             "HISTORY" => self.show_history(&mut stdout),
+            "RESET" => {
+                self.interpreter.reset_scope();
+                writeln!(stdout, "Scope cleared.\r")?;
+                Ok(())
+            }
             _ => {
                 // Check for variable inspection (name?)
                 if trimmed.ends_with('?') && trimmed.len() > 1 {
@@ -338,15 +403,19 @@ impl Repl {
         writeln!(stdout, "  {}     - List all defined variables\r", colors::command("VARS"))?;
         writeln!(stdout, "  {}    - Clear the screen\r", colors::command("CLEAR"))?;
         writeln!(stdout, "  {}  - Show command history\r", colors::command("HISTORY"))?;
+        writeln!(stdout, "  {}    - Clear all variables and functions\r", colors::command("RESET"))?;
         writeln!(stdout, "\r")?;
         writeln!(stdout, "{}", colors::command("Variable Inspection:"))?;
         writeln!(stdout, "  {}   - Show type and value of variable\r", colors::type_name("name?"))?;
         writeln!(stdout, "\r")?;
         writeln!(stdout, "{}", colors::command("Keyboard Shortcuts:"))?;
-        writeln!(stdout, "  Enter       - Execute current line\r")?;
-        writeln!(stdout, "  Esc         - Cancel current input\r")?;
-        writeln!(stdout, "  Ctrl+C      - Exit (or copy if selection)\r")?;
-        writeln!(stdout, "  Ctrl+L      - Clear screen\r")?;
+        writeln!(stdout, "  Enter           - Execute current line\r")?;
+        writeln!(stdout, "  Esc             - Cancel current input\r")?;
+        writeln!(stdout, "  Ctrl+C          - Exit (or copy if selection)\r")?;
+        writeln!(stdout, "  Ctrl+L          - Clear screen\r")?;
+        writeln!(stdout, "  Ctrl+Left/Right - Move by word\r")?;
+        writeln!(stdout, "  Ctrl+W          - Delete word before cursor\r")?;
+        writeln!(stdout, "  Alt+D           - Delete word after cursor\r")?;
         writeln!(stdout, "  Up/Down     - Navigate history\r")?;
         writeln!(stdout, "  Shift+Arrow - Select text\r")?;
         writeln!(stdout, "  Ctrl+X      - Cut selection\r")?;
@@ -452,6 +521,24 @@ impl Repl {
         }
         stdout.flush()
     }
+
+    /// Non-interactive mode: read lines from stdin, execute each, print output.
+    /// Used when stdin is not a TTY (piped input, CI, tests).
+    fn start_batch(&mut self) -> io::Result<()> {
+        let stdin = io::stdin();
+        for line in stdin.lock().lines() {
+            let line = line?;
+            if line.trim().eq_ignore_ascii_case("exit")
+                || line.trim().eq_ignore_ascii_case("quit")
+            {
+                break;
+            }
+            let mut stdout = io::stdout();
+            self.execute_code(&line, &mut stdout)?;
+            stdout.flush()?;
+        }
+        Ok(())
+    }
 }
 
 /// Action to take after handling a key event
@@ -501,7 +588,10 @@ fn value_type_name(value: &Value) -> String {
     }
 }
 
-/// Count display width of a string (accounting for wide characters)
+/// Count display columns occupied by a string.
+/// Uses Unicode East Asian Width so that CJK / emoji (2 cols) and
+/// zero-width combining characters (0 cols) are handled correctly.
+/// pIqaD PUA codepoints (U+F8D0–U+F8FF) return width 1 — correct.
 fn count_display_width(s: &str) -> usize {
-    s.chars().count()
+    s.width()
 }

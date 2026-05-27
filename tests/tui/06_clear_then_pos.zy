@@ -1,0 +1,3 @@
+// Clear screen then position output at (1,1)
+>>!
+>>~ (1, 1) > "Z"

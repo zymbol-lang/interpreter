@@ -138,7 +138,7 @@ zymbol build program.zy -o myprogram --release
 | Multi-dim index | `arr[i>j]` (scalar), `arr[p;q]` (flat), `arr[[g];[g]]` (structured) |
 | Pipe | `\|>` with `_` placeholder |
 | Errors | `!?` (try), `:!` (catch), `:>` (finally), `$!` (is error), `$!!` (propagate) |
-| Modules | `#` (declare), `#>` (export), `<#` (import), `<=` (alias), `::` (call), `.` (access) |
+| Modules | `#` (declare), `#>` (export), `<#` (import), `=>` (alias / re-export rename), `::` (call), `.` (access) |
 | Types | `#1`/`#0` (bool), `'c'` (char), `"s"` (string), `x#?` (type metadata) |
 | Casts | `##.expr` (→Float), `###expr` (→Int round), `##!expr` (→Int truncate) |
 | Format | `#.N\|x\|` (round), `#!N\|x\|` (truncate), `#,\|x\|` (comma sep), `#^\|x\|` (scientific) |
@@ -447,7 +447,7 @@ Korean, Hebrew, or Mandarin without any changes to the original:
 
 ```zymbol
 // Consumer in Greek — never reads the original Spanish source
-<# ./matematicas/ελληνικά <= μαθ
+<# ./matematicas/ελληνικά => μαθ
 >> μαθ::προσθέτω(10, 5) ¶    // → 15
 >> μαθ.ΠΙ ¶                   // → 3.14159
 ```
@@ -501,8 +501,9 @@ cargo test
 bash tests/scripts/vm_compare.sh
 ```
 
-Current status: **717 unit tests passing** across all crates.  
-VM parity: **437/437 PASS** (437 golden-file pairs; `@vm-skip` files excluded).
+Current status: **820 tests passing** via `cargo test` (0 failed, 0 ignored).  
+VM parity: **478/478 PASS** (478 files, 0 `@vm-skip` — all TUI/input tests now run in both TW and VM).  
+Golden files: **464/464 PASS** via `expected_compare.sh` (includes 8 TUI + 8 input category tests).
 
 ---
 
@@ -743,7 +744,7 @@ interpreter/
 ├── zymbol-lang.ebnf     # Formal grammar (EBNF, v3.0.0)
 ├── install-zymbol.sh    # Install script
 ├── crates/              # Rust source crates
-├── tests/               # End-to-end test suite (424 golden pairs, 441 .zy files)
+├── tests/               # End-to-end test suite (478 vm-compare files; 464 golden .expected pairs)
 ├── docs/                # Extended documentation
 ├── LICENSE
 ├── LICENSE-AGPL-3.0     # AGPL-3.0 (interpreter source)

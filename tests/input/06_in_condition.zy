@@ -1,0 +1,7 @@
+// Input value drives a conditional branch
+<< #|n|
+? n > 0 {
+    >> "positive" ¶
+} _ {
+    >> "non-positive" ¶
+}
