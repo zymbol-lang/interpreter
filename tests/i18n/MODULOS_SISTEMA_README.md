@@ -52,7 +52,7 @@ Ubicación: `matematicas/fecha_hora.zy`
 
 **Ejemplo de uso:**
 ```zymbol
-<# ./matematicas/fecha_hora <= fecha
+<# ./matematicas/fecha_hora => fecha
 
 >> "Hoy es: " fecha::fecha_actual() ¶
 >> "Son las: " fecha::hora_actual() ¶
@@ -77,7 +77,7 @@ Ubicación: `matematicas/sistema.zy`
 
 **Ejemplo de uso:**
 ```zymbol
-<# ./matematicas/sistema <= sys
+<# ./matematicas/sistema => sys
 
 >> "Usuario: " sys::usuario_actual() ¶
 >> "Host: " sys::nombre_host() ¶
@@ -110,7 +110,7 @@ Ubicación: `matematicas/archivos.zy`
 
 **Ejemplo de uso:**
 ```zymbol
-<# ./matematicas/archivos <= arch
+<# ./matematicas/archivos => arch
 
 // Consultar existencia
 >> "¿Existe calculator.zy? " arch::existe_archivo() ¶
@@ -236,8 +236,8 @@ tipo = <\ file "archivo.txt" \>
 
 // Script que crea respaldo de archivos importantes
 
-<# ./matematicas/fecha_hora <= fecha
-<# ./matematicas/sistema <= sys
+<# ./matematicas/fecha_hora => fecha
+<# ./matematicas/sistema => sys
 
 >> "=== Script de Respaldo ===" ¶
 ¶
