@@ -22,7 +22,7 @@
 | Input `<<` with prompt | ✅ |
 | CLI args capture `><` | ✅ |
 | Control flow: `?` / `_?` / `_` | ✅ |
-| Match `??` (literal, range, guard `_?`, wildcard) | ✅ |
+| Match `??` (literal, range, comparison `< expr`, ident/containment, list, wildcard) | ✅ |
 | All loop forms: infinite, while, for-each, range | ✅ |
 | Range step and reverse range | ✅ |
 | Labeled loops with `@!` / `@>` | ✅ |
@@ -79,8 +79,8 @@
 
 | Suite | Status |
 |-------|--------|
-| 94 E2E tests (47 tree-walker + 47 VM) | ✅ PASS |
-| VM parity check (vm_compare.sh) | ✅ 159/159 PASS |
+| Unit + integration (`cargo test`) | ✅ 778 passed, 0 failed, 4 ignored |
+| VM parity check (`vm_compare.sh`) | ✅ 463/463 PASS (466 files, 3 vm-skip) |
 | RosettaStone i18n suite (105 languages) | ✅ PASS |
 
 ---
@@ -94,14 +94,18 @@ They are documented in the manual as known limitations.
 
 | Gap | Description | Workaround |
 |-----|-------------|------------|
-| **Match multi-value arms** | `1, 2 : "low"` syntax not parsed | Use guard: `_? n == 1 \|\| n == 2 : "low"` |
-| **Match identifier binding** | `n : n * 2` pattern not supported | Use guard or extract value before match |
-| **Module constant access** | `alias.CONST` fails at runtime | Use getter function: `alias::get_CONST()` |
-| **HOF with lambda variable** | `arr$> fn` where `fn` is a variable | Wrap: `arr$> (x -> fn(x))` |
-| **Named functions as values** | `f = myFunc` fails | Wrap: `f = x -> myFunc(x)` |
-| **CLI args in VM mode** | `><` capture not implemented in VM | Use tree-walker for CLI arg programs |
-| **`$!!` from lambdas** | Error propagation only works in named functions | Wrap lambda body in a named function |
-| **`do-while ~>`** | Post-condition loop syntax defined in EBNF, not parsed | Infinite loop with `@!` break at end |
+| **Match multi-value arms** | `1, 2 => "low"` (one arm, several values) not parsed — `[NI02]` | Repeat the value across separate arms |
+| **Match identifier binding** | `pattern as name` binding syntax — `[NI03]` | Extract the value before the match |
+| **`$!!` from lambdas** | Error propagation only works in named functions — `[NI04]` | Wrap lambda body in a named function |
+| **`do-while ~>`** | Post-condition loop `[NI01]` — not parsed | Infinite loop with `@!` break at end |
+| **Dict / map literal** | `[NI05]` — no `key: value` collection literal | Use named tuples, or arrays of `(k, v)` pairs |
+
+> **Resolved since this table was first written** (verified against `crates/` + `tests/`):
+> module constant access `alias.CONST` (see REFERENCE.md L4), named functions as
+> first-class values (`f = myFunc`) and as HOF references (`arr$> myFunc`)
+> (`tests/analysis/p0a_named_fn_firstclass.zy`, GAP-Z009), and `><` CLI-args capture
+> in VM mode (`LoadCliArgs`). Match guard patterns `_?` were **removed**, not added
+> (EBNF `[D03]`/`[R05]`).
 
 ### Static Analyzer False Positives
 
@@ -120,9 +124,8 @@ They are documented in the manual as known limitations.
 
 #### Fix known language gaps
 
-- **Match multi-value arms**: extend parser to accept `val1, val2 : expr` arm syntax
-- **Match identifier binding**: extend AST to support `ident : body` pattern
-- **Module constant access**: fix `alias.CONST` lookup in module scope resolver
+- **Match multi-value arms**: extend parser to accept `val1, val2 => expr` arm syntax
+- **Match identifier binding**: extend AST to support `pattern as name` binding
 
 #### Fix static analyzer false positives
 
@@ -133,7 +136,6 @@ They are documented in the manual as known limitations.
 
 #### VM completeness
 
-- **CLI args capture `><`** in VM mode (parity with tree-walker)
 - **Module system in VM**: full parity with tree-walker for `<#` imports
 - **Format expressions in VM**: `e|x|`, `c|x|` full parity (`#.N|x|` already working)
 
@@ -190,7 +192,6 @@ intermediate representation handed off to the native code compiler.
 
 - **Array type inference relaxation**: allow mixed-type arrays with dynamic dispatch
   (currently requires homogeneous element types)
-- **Module constants via `.`**: complete the `alias.CONST` access path
 - **`$!!` error propagation from lambdas**: currently limited to named functions; extend
   to propagate through the lambda's call frame to its immediate caller
 - **`do-while ~>` post-condition loop**: implement EBNF rule `block ~> expr`; parser

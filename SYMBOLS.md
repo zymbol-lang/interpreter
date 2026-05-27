@@ -36,7 +36,7 @@ hold; the program is *asking a question* rather than stating a fact.
 | `$??` | find all indices | asks "where is this value?" → positions or empty |
 | `x#?` | type metadata | asks "what is this value at the meta level?" |
 | `!?` | try block | the block may or may not throw |
-| `<<|?` | key read non-blocking | asks "is a key available right now?" → `''` if not *(proposed)* |
+| `<<|?` | key read non-blocking | asks "is a key available right now?" → `''` if not |
 
 **Contract:** wherever `?` appears, the result is *conditional* — the outcome depends on
 a runtime question that may return false, empty, or uncertain.
@@ -60,7 +60,7 @@ Using them outside a loop is a semantic error (same constraint as `<~` inside fu
 | `@>` | continue | skip forward in time — next iteration |
 | `@:label!` | labeled break | cut a named time context short |
 | `@:label>` | labeled continue | skip forward in a named time context |
-| `@~` | sleep N ms | **pause** time for N milliseconds *(proposed)* |
+| `@~` | sleep N ms | **pause** time for N milliseconds |
 
 **Contract:** every `@`-prefixed statement operates *within* a temporal context (a loop).
 `@!`, `@>`, and `@~` are all semantic errors if used outside a `@` block.
@@ -86,8 +86,8 @@ stream moving in one direction. Modified with other symbols, they specify *what*
 |--------|-----------|-----------------|
 | `>>` | output (print) | data flows *outward* to the terminal |
 | `<<` | input (read line) | data flows *inward* from stdin, line by line |
-| `<<|` | read single key (blocking) | one character flows in — waits until it does *(proposed)* |
-| `<<|?` | read single key (non-blocking) | asks if one character is available *right now* *(proposed)* |
+| `<<|` | read single key (blocking) | one character flows in — waits until it does |
+| `<<|?` | read single key (non-blocking) | asks if one character is available *right now* |
 | `<#` | module import | a module flows inward into scope |
 | `#>` | module export | symbols flow outward from the module |
 | `<~` | return / output param | value flows back to the caller |
@@ -185,7 +185,7 @@ value in place (semantically), or routing a value back through a modified channe
 | `param~` | mutable parameter | the parameter is a *modifiable* copy of the argument |
 | `$~~[p:r]` | string replace | the string is *transformed* by replacement |
 | `arr[i]$~` | functional update | the collection is *transformed* at index i |
-| `@~` | sleep N ms | the time flow is *paused/modified* *(proposed)* |
+| `@~` | sleep N ms | the time flow is *paused/modified* |
 
 **Contract:** `~` signals that something is being *changed* — a value returned and
 altered, a parameter that flows back to the caller, a collection transformed in-place.
@@ -227,8 +227,8 @@ passes all (open), passes conditionally (filter), or holds until ready (blocking
 | `#,\|x\|` | comma format | `\|...\|` = boundary fences enclosing the value |
 | `#^\|x\|` | scientific format | same boundary fence pattern |
 | `#.N\|x\|` | round | same boundary fence pattern |
-| `<<\|` | read single key (blocking) | *one* character passes through the gate *(proposed)* |
-| `<<\|?` | read single key (non-blocking) | gate queries if a character is available *(proposed)* |
+| `<<\|` | read single key (blocking) | *one* character passes through the gate |
+| `<<\|?` | read single key (non-blocking) | gate queries if a character is available |
 
 **Contract:** `|` controls passage. In format expressions, `|...|` acts as a fence
 containing the value. In `$|` and `|>`, it gates the flow of data. In `<<|` and `<<|?`,
@@ -346,7 +346,9 @@ into the decimal component of a number, or across a range.
 
 ---
 
-## Proposed New Symbols Summary (v0.0.5)
+## New Symbols Introduced in v0.0.5
+
+These symbols shipped in v0.0.5 and are fully implemented (tree-walker + VM).
 
 | Symbol | Family | Operation | Constraint |
 |--------|--------|-----------|------------|
@@ -392,8 +394,8 @@ Use this table when designing new operators to avoid conflicts.
 | Used | Meaning |
 |------|---------|
 | `<<` | read line (input) |
-| `<<\|` | read key blocking *(proposed)* |
-| `<<\|?` | read key non-blocking *(proposed)* |
+| `<<\|` | read key blocking |
+| `<<\|?` | read key non-blocking |
 
 ### `>>` prefix (flow outward)
 | Used | Meaning |
@@ -409,7 +411,7 @@ Use this table when designing new operators to avoid conflicts.
 | `@:label` | label |
 | `@:label!` | labeled break |
 | `@:label>` | labeled continue |
-| `@~` | sleep *(proposed)* |
+| `@~` | sleep |
 
 ### `#` prefix (meta / type)
 | Used | Meaning |
@@ -451,7 +453,7 @@ Use this table when designing new operators to avoid conflicts.
 | `param~` | mutable parameter |
 | `$~~` | string replace (as `$` operator) |
 | `$~` | functional update (as `$` operator) |
-| `@~` | sleep — time modification *(proposed)* |
+| `@~` | sleep — time modification |
 
 ### `!` (force / error)
 | Used | Meaning |

@@ -3,8 +3,9 @@
   Version:    3.0.0
   Generated:  2026-05-12
   Sprint:     v0.0.5
-  E2E tests:  436/436  (tree-walker + VM parity, 34 skipped)
-  Unit tests: 0
+  Test counts: authoritative via the test suite, not this header.
+    E2E / VM parity:  bash tests/scripts/vm_compare.sh
+    Unit tests:       cargo test
 
   Source of truth: Rust implementation in interpreter/crates/
     zymbol-lexer   (TokenKind catalog)
@@ -105,7 +106,17 @@ path_segment = identifier ;
   Export block: declares which functions are publicly visible.
   Placed inside the module block, before any member declarations.
 *)
-export_block = "<#!" , "{" , identifier , { "," , identifier } , "}" ;
+export_block = "#>" , "{" , export_item , { "," , export_item } , "}" ;
+
+(*
+  An export item is a bare name (export a local declaration) or a re-export that
+  pulls a function or constant from an imported module, optionally renamed with =>.
+*)
+export_item =
+    identifier                                   (* export local declaration *)
+  | identifier , "::" , identifier , [ "=>" , identifier ]   (* re-export module fn *)
+  | identifier , "." , identifier , [ "=>" , identifier ]    (* re-export module const *)
+  ;
 
 
 (* ============================================================
@@ -1079,7 +1090,7 @@ block_comment = "/*" , { block_comment | (* any character *) } , "*/" ;
     ##.  ###  ##!   #|  #,|  #^|  #.N|  #!N|   #?
 
   MODULE
-    <#   <#!   ::
+    <#   #>   ::   =>
 
   CONTROL
     ?    ??    @    @:label   @!   @>   @~

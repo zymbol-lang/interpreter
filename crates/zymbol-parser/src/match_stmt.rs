@@ -3,7 +3,7 @@
 //! Handles parsing of:
 //! - MATCH expression: ?? expr { cases }
 //! - MATCH statement: ?? expr { cases } (discards value)
-//! - Pattern matching: All pattern types (literals, ranges, lists, guards)
+//! - Pattern matching: literals, ranges, lists, comparison patterns, identifier, wildcard
 
 use zymbol_ast::{Expr, LiteralExpr, MatchCase, MatchExpr, Pattern, Statement};
 use zymbol_common::{BinaryOp, Literal};

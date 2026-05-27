@@ -49,7 +49,7 @@ n = arr$#            // ✅ intermediate variable
 `alias.CONST` access now works correctly:
 
 ```zymbol
-<# ./math <= m
+<# ./math => m
 pi = m.PI    // ✅ works
 e  = m.E     // ✅ works
 ```
@@ -71,7 +71,7 @@ add(a, b) { <~ a + b }
 
 // ✅ Position 2 — after imports (G14 fix):
 # module_name
-<# ./dep <= d
+<# ./dep => d
 #> { add, PI }
 PI := 3.14
 add(a, b) { <~ a + b }
@@ -443,8 +443,8 @@ Fail-safe operations are distinguished from error-handling by the absence of any
 | `0x`, `0b`, `0o`, `0d` | Base literals | `0x41` → `'A'` |
 | `#` | Module declaration | `# name` |
 | `#>` | Module export | `#> { fn, CONST }` |
-| `<#` | Module import | `<# ./mod <= alias` |
-| `<=` | Alias | (used in `<#` and `#>`) |
+| `<#` | Module import | `<# ./mod => alias` |
+| `=>` | Alias / re-export rename | (used in `<#` import, `#>` export, and match arms) |
 | `::` | Module function call | `m::func(args)` |
 | `.` | Member access | `tuple.field` |
 | `<\ cmd \>` | BashExec | `<\ ls -la \>` |
