@@ -4,13 +4,23 @@
 #
 # Runs `zymbol check` on each .zy file that has a matching .expected file,
 # strips ANSI escape codes, then compares against the golden output.
-# Lines in .expected may use **** as a wildcard for path-dependent parts.
 #
 # Usage:
 #   ./tests/scripts/semantic_compare.sh              # all tests/errors/semantic/
 #   ./tests/scripts/semantic_compare.sh E002         # filter by name
 #   ./tests/scripts/semantic_compare.sh --regen      # regenerate all .expected
 #   ./tests/scripts/semantic_compare.sh E004 --regen
+#
+# Wildcards in .expected files (same as expected_compare.sh):
+#   ****         — any sequence of characters (glob, always available)
+#   ***int***    — any integer
+#   ***float***  — any float
+#   ***num***    — any number (int or float)
+#   ***time***   — timing value (e.g. 0.167s)
+#   ***date***   — ISO date (e.g. 2026-05-26)
+#   ***path***   — file path (non-whitespace)
+#
+# Typed wildcards require python3. Without it, falls back to **** (glob).
 # =============================================================================
 
 set -euo pipefail
@@ -31,6 +41,12 @@ for arg in "$@"; do
         *)       FILTER="$arg" ;;
     esac
 done
+
+# ── Python3 availability (needed for typed wildcards) ─────────────────────────
+_ZY_HAS_PYTHON=0
+if command -v python3 &>/dev/null; then
+    _ZY_HAS_PYTHON=1
+fi
 
 if [[ ! -x "$ZYMBOL" ]]; then
     echo -e "${RED}error: binary not found at $ZYMBOL${RESET}"
@@ -91,15 +107,55 @@ if [[ $REGEN -eq 1 ]]; then
     exit 0
 fi
 
-# Wildcard match: **** in .expected matches any sequence of characters
-matches_golden() {
+# ── Typed wildcard matching (Python3 path) ────────────────────────────────────
+_matches_golden_python() {
     local actual="$1"
     local golden="$2"
+    ZYTEST_ACTUAL="$actual" ZYTEST_GOLDEN="$golden" python3 <<'PYEOF'
+import re, os, sys
 
-    if [[ "$golden" != *"****"* ]]; then
-        [[ "$actual" == "$golden" ]]
-        return
-    fi
+actual_text = os.environ.get('ZYTEST_ACTUAL', '')
+golden_text = os.environ.get('ZYTEST_GOLDEN', '')
+
+TOKENS = {
+    '***float***': r'-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?',
+    '***time***':  r'[0-9]+(\.[0-9]+)?[mu\xb5]?s',
+    '***date***':  r'[0-9]{4}-[0-9]{2}-[0-9]{2}',
+    '***path***':  r'\S+',
+    '***int***':   r'-?[0-9]+',
+    '***num***':   r'-?[0-9]+(\.[0-9]+)?',
+    '****':        r'.*',
+}
+
+TOK_PAT = re.compile(
+    '(' + '|'.join(re.escape(k) for k in TOKENS) + ')'
+)
+
+def line_to_pattern(line):
+    parts = TOK_PAT.split(line)
+    return ''.join(TOKENS.get(p, re.escape(p)) for p in parts)
+
+actual_lines = actual_text.split('\n')
+golden_lines = golden_text.split('\n')
+
+if len(actual_lines) != len(golden_lines):
+    sys.exit(1)
+
+for actual_line, golden_line in zip(actual_lines, golden_lines):
+    if '***' in golden_line:
+        if not re.fullmatch(line_to_pattern(golden_line), actual_line):
+            sys.exit(1)
+    elif actual_line != golden_line:
+        sys.exit(1)
+
+sys.exit(0)
+PYEOF
+}
+
+# ── Glob-only fallback (**** only, no typed wildcards) ───────────────────────
+_matches_golden_glob() {
+    local actual="$1"
+    local golden="$2"
 
     local actual_lines golden_lines
     mapfile -t actual_lines <<< "$actual"
@@ -123,6 +179,23 @@ matches_golden() {
         fi
     done
     return 0
+}
+
+# ── Dispatch: typed wildcards (Python3) or glob fallback ─────────────────────
+matches_golden() {
+    local actual="$1"
+    local golden="$2"
+
+    if [[ "$golden" != *"***"* ]]; then
+        [[ "$actual" == "$golden" ]]
+        return
+    fi
+
+    if [[ $_ZY_HAS_PYTHON -eq 1 ]]; then
+        _matches_golden_python "$actual" "$golden"
+    else
+        _matches_golden_glob "$actual" "$golden"
+    fi
 }
 
 # Normal mode: compare against .expected

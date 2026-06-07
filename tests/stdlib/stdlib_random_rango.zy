@@ -1,0 +1,12 @@
+// Test: random::rango(n) always returns Int in [0, n-1]
+<# std/random => rnd
+
+ok = #1
+i = 0
+@ (i < 100) {
+    n = rnd::rango(10)
+    ? (n < 0 || n > 9) { ok = #0 }
+    i = i + 1
+}
+? ok { >> "ok" ¶ }
+? (!ok) { >> "fail" ¶ }

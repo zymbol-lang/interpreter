@@ -1,0 +1,11 @@
+// Test: tanh, sinh, cosh, sigmoid
+<# std/math => mat
+
+>> mat::tanh(0) ¶
+>> #.6|mat::tanh(1)| ¶
+>> #.6|mat::tanh(-1)| ¶
+>> mat::sigmoid(0) ¶
+>> #.6|mat::sigmoid(2)| ¶
+>> #.6|mat::sigmoid(-2)| ¶
+>> #.6|mat::sinh(1)| ¶
+>> #.6|mat::cosh(1)| ¶

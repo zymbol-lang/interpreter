@@ -1,0 +1,14 @@
+// Test: operaciones elemento-a-elemento sobre vectores
+<# ./tensor => t
+
+a = [1.0, 2.0, 3.0]
+b = [4.0, 5.0, 6.0]
+
+// suma elemento a elemento
+t::imprimir(t::sumar(a, b))
+
+// resta elemento a elemento
+t::imprimir(t::restar(b, a))
+
+// multiplicacion por escalar
+t::imprimir(t::multiplicar_escalar(a, 3.0))

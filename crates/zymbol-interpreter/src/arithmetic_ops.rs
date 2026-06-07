@@ -26,9 +26,7 @@ impl<W: Write> Interpreter<W> {
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + *b as f64)),
 
             _ => Err(RuntimeError::Generic {
-                message: format!(
-                    "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\""
-                ),
+                message: "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\"".to_string(),
                 span: *span,
             }),
         }
@@ -124,7 +122,7 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             _ => Err(RuntimeError::Generic {
-                message: format!("/ requires numeric operands — use $/ to split strings"),
+                message: "/ requires numeric operands — use $/ to split strings".to_string(),
                 span: *span,
             }),
         }

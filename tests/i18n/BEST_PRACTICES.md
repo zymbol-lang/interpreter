@@ -86,12 +86,12 @@ CONSTANT := 42
 # ko
 
 #> {
-    mod::function1 <= 함수1
-    mod::function2 <= 함수2
-    mod.CONSTANT <= 상수
+    mod::function1 => 함수1
+    mod::function2 => 함수2
+    mod.CONSTANT => 상수
 }
 
-<# ./module <= mod
+<# ./module => mod
 ```
 
 ---
@@ -101,7 +101,7 @@ CONSTANT := 42
 ### Importing Original Module
 
 ```zymbol
-<# ./matematicas/module <= math
+<# ./matematicas/module => math
 
 result = math::sumar(5, 3)
 ```
@@ -109,7 +109,7 @@ result = math::sumar(5, 3)
 ### Importing Translation
 
 ```zymbol
-<# ./matematicas/ko <= 수학
+<# ./matematicas/ko => 수학
 
 결과 = 수학::더하다(5, 3)
 ```
@@ -117,8 +117,8 @@ result = math::sumar(5, 3)
 ### Importing Multiple Translations
 
 ```zymbol
-<# ./matematicas/ko <= 한국수학
-<# ./matematicas/ja <= 日本数学
+<# ./matematicas/ko => 한국수학
+<# ./matematicas/ja => 日本数学
 
 // Use Korean names
 한국결과 = 한국수학::더하다(10, 5)
@@ -147,19 +147,19 @@ File: `my_module/pt.zy`
 # pt
 
 #> {
-    mod::add <= adicionar
-    mod::subtract <= subtrair
-    mod::multiply <= multiplicar
-    mod.PI <= PI
+    mod::add => adicionar
+    mod::subtract => subtrair
+    mod::multiply => multiplicar
+    mod.PI => PI
 }
 
-<# ./module <= mod
+<# ./module => mod
 ```
 
 ### Step 3: Use Translation
 
 ```zymbol
-<# ./my_module/pt <= matematica
+<# ./my_module/pt => matematica
 
 soma = matematica::adicionar(10, 5)
 pi_valor = matematica.PI
@@ -195,8 +195,8 @@ calculator/
 File: `apps/calculator_es.zy`
 
 ```zymbol
-<# ../core/es <= matematicas
-<# ../ui/es <= interfaz
+<# ../core/es => matematicas
+<# ../ui/es => interfaz
 
 // Use Spanish names throughout
 resultado = matematicas::sumar(10, 5)
@@ -208,8 +208,8 @@ interfaz::mostrar_resultado(resultado)
 File: `apps/calculator_ko.zy`
 
 ```zymbol
-<# ../core/ko <= 수학
-<# ../ui/ko <= 인터페이스
+<# ../core/ko => 수학
+<# ../ui/ko => 인터페이스
 
 // Use Korean names throughout
 결과 = 수학::더하다(10, 5)
@@ -238,8 +238,8 @@ game_engine/
 ### Importing Nested Modules
 
 ```zymbol
-<# ./game_engine/physics/ko <= 물리엔진
-<# ./game_engine/graphics/ko <= 그래픽엔진
+<# ./game_engine/physics/ko => 물리엔진
+<# ./game_engine/graphics/ko => 그래픽엔진
 
 물리엔진::중력계산(9.8)
 그래픽엔진::화면렌더링()

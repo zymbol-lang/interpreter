@@ -1,4 +1,3 @@
-// @vm-skip: requires TTY for raw mode
 >>| {
   >> "tui" ¶
 }

@@ -1,0 +1,10 @@
+// Test: std/math binary functions
+<# std/math => mat
+
+>> mat::pow(2.0, 10.0) ¶
+>> mat::log(100.0, 10.0) ¶
+>> mat::log(1.0) ¶
+>> mat::max(3, 5) ¶
+>> mat::min(3, 5) ¶
+>> mat::max(1.5, 2.7) ¶
+>> mat::min(1.5, 2.7) ¶

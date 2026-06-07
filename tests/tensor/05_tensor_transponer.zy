@@ -1,0 +1,11 @@
+// Test: transponer matrices
+<# ./tensor => t
+
+// [[1,2,3],[4,5,6]] -> [[1,4],[2,5],[3,6]]
+Amat = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+t::imprimir(t::transponer(Amat))
+
+// transponer dos veces = identidad
+At = t::transponer(Amat)
+Att = t::transponer(At)
+t::imprimir(Att)

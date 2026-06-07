@@ -23,7 +23,7 @@ pub fn first(s: &str, sep: char) -> &str {
 /// Return the last part after splitting by `sep`, or the whole string if sep not found.
 #[inline]
 pub fn last(s: &str, sep: char) -> &str {
-    s.split(sep).last().unwrap_or(s)
+    s.split(sep).next_back().unwrap_or(s)
 }
 
 /// Split by `sep` and rejoin with `joiner` — single allocation, no intermediate Vec<Value>.

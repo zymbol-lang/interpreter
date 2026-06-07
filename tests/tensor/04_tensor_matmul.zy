@@ -1,0 +1,16 @@
+// Test: producto matricial
+<# ./tensor => t
+
+// [[1,2],[3,4]] x [[5,6],[7,8]] = [[19,22],[43,50]]
+A = [[1.0, 2.0], [3.0, 4.0]]
+B = [[5.0, 6.0], [7.0, 8.0]]
+t::imprimir(t::producto_matricial(A, B))
+
+// identidad x A = A
+I = [[1.0, 0.0], [0.0, 1.0]]
+t::imprimir(t::producto_matricial(I, A))
+
+// forma de (3x4) x (4x2) = [3, 2]
+M1 = t::crear([3, 4], 1.0)
+M2 = t::crear([4, 2], 1.0)
+>> t::forma_de(t::producto_matricial(M1, M2)) ¶

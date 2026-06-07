@@ -1,0 +1,6 @@
+[1m[31merror[39m[0m: ambiguous hot-definition markers on 'arr': use either '°arr' (anchors above loop) or 'arr°' (anchors at loop), not both
+  [1m[34m-->[39m[0m tests/gaps/gap_hot_def_double_hot_error.zy:4:11
+[1m[34m   4[39m[0m [34m|[39m
+[1m[34m   4[39m[0m [34m|[39m     arr = °arr°$+ i
+[34m     |[39m [1m[31m          ^^^^^[39m[0m
+  [1m[32mhelp:[39m[0m remove one of the two '°' markers

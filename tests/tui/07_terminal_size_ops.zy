@@ -1,0 +1,5 @@
+// >>? returns (rows, cols); verify both dimensions and their product
+[H, W] = >>?
+area = H * W
+ok = area > 0
+>> ok ¶

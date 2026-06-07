@@ -422,6 +422,20 @@ impl ModuleAnalyzer {
         import: &ImportStmt,
         current_file: &Path,
     ) -> Result<(), SemanticError> {
+        // Stdlib imports (bare path, first component "std") are always valid —
+        // they are resolved at runtime, not via the filesystem.
+        if Self::is_stdlib_path(&import.path) {
+            let synthetic = PathBuf::from(format!(
+                "__stdlib__/{}",
+                import.path.components.join("/")
+            ));
+            self.import_graph
+                .entry(current_file.to_path_buf())
+                .or_default()
+                .push(synthetic);
+            return Ok(());
+        }
+
         // Resolve the module path
         let resolved_path = self.resolve_module_path(&import.path, current_file)?;
 
@@ -440,6 +454,12 @@ impl ModuleAnalyzer {
             .push(resolved_path);
 
         Ok(())
+    }
+
+    fn is_stdlib_path(path: &ModulePath) -> bool {
+        !path.is_relative
+            && !path.is_absolute
+            && path.components.first().map(|s| s == "std").unwrap_or(false)
     }
 
     /// Check for circular dependencies using DFS
@@ -510,9 +530,14 @@ impl ModuleAnalyzer {
         // Build import alias map
         let mut import_map: HashMap<String, PathBuf> = HashMap::new();
         for import in imports {
-            if let Ok(resolved) = self.resolve_module_path(&import.path, file_path) {
-                import_map.insert(import.alias.clone(), resolved);
-            }
+            let resolved = if Self::is_stdlib_path(&import.path) {
+                PathBuf::from(format!("__stdlib__/{}", import.path.components.join("/")))
+            } else if let Ok(p) = self.resolve_module_path(&import.path, file_path) {
+                p
+            } else {
+                continue;
+            };
+            import_map.insert(import.alias.clone(), resolved);
         }
 
         if let Some(ref export_block) = module_decl.export_block {

@@ -37,13 +37,19 @@ normalize_output() {
 run_file() {
     local file="$1"
     local mode="$2"   # "" or "--vm"
-    local dir
-    dir="$(dirname "$file")"
+    local input_file="${file%.zy}.input"
+    local cmd
 
     if [[ "$mode" == "--vm" ]]; then
-        timeout "$TIMEOUT_SEC" "$ZYMBOL" run --vm "$file" 2>&1 || true
+        cmd=(timeout "$TIMEOUT_SEC" "$ZYMBOL" run --vm "$file")
     else
-        timeout "$TIMEOUT_SEC" "$ZYMBOL" run "$file" 2>&1 || true
+        cmd=(timeout "$TIMEOUT_SEC" "$ZYMBOL" run "$file")
+    fi
+
+    if [[ -f "$input_file" ]]; then
+        "${cmd[@]}" < "$input_file" 2>&1 || true
+    else
+        "${cmd[@]}" 2>&1 || true
     fi
 }
 
@@ -52,7 +58,6 @@ mapfile -t FILES < <(
     find "$TESTS_DIR" -name "*.zy" \
         ! -path "*/scripts/*" \
         ! -path "*/stress_v2/*" \
-        ! -path "*/manual/*" \
         ! -path "*/matematicas/module.zy" \
         | sort
 )

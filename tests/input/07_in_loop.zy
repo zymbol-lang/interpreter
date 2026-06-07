@@ -1,0 +1,7 @@
+// Collect 3 inputs inside a loop, sum them
+total = 0
+@(3) {
+    << #|v|
+    total = total + v
+}
+>> total ¶

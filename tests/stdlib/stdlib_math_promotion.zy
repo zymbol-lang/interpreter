@@ -1,0 +1,7 @@
+// Test: std/math Int→Float promotion (Int arguments accepted)
+<# std/math => mat
+
+>> mat::sqrt(4) ¶
+>> mat::exp(0) ¶
+>> mat::abs(-7) ¶
+>> mat::pow(2, 8) ¶

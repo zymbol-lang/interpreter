@@ -1,0 +1,29 @@
+// Test: $~ funcional update sobre named tuples (G2)
+
+// Update por índice entero (posicional, 1-based)
+p = (x: 1, y: 2, z: 3)
+p2 = p[2]$~ 99
+>> p2.x ¶
+>> p2.y ¶
+>> p2.z ¶
+
+// Update por nombre de campo (string)
+p3 = p["z"]$~ 42
+>> p3.x ¶
+>> p3.y ¶
+>> p3.z ¶
+
+// El original no se modifica
+>> p.x ¶
+>> p.y ¶
+>> p.z ¶
+
+// Índice negativo
+p4 = p[-1]$~ 77
+>> p4.z ¶
+
+// Update encadenado (simula deep update en named tuple anidado)
+a = (val: 10, meta: (ok: #1, code: 0))
+a2 = a["meta"]$~ (a.meta["code"]$~ 200)
+>> a2.meta.code ¶
+>> a2.meta.ok ¶

@@ -1,0 +1,23 @@
+═══════════════════════════════════════════════════════════
+  Zymbol — Manual Test Suite
+═══════════════════════════════════════════════════════════
+These tests require a real TTY and human visual confirmation.
+Each test runs, you observe the terminal, then mark PASS/FAIL.
+───────────────────────────────────────────────────────────
+  TEST 1 — tui/05_key_input.zy
+  What it does => reads a single keypress (<<|)
+  How to test  => press any key when prompted
+  Expected     => the pressed key name is printed, then newline
+───────────────────────────────────────────────────────────
+  TEST 2 — tui/06_tui_block.zy
+  What it does => enters alternate screen (>>| block), prints 'tui', exits
+  How to test  => observe the terminal switches to alternate screen
+  Expected     => alternate screen shows 'tui', then terminal returns to normal
+───────────────────────────────────────────────────────────
+  TEST 3 — tui/07_output_pos_sparse.zy
+  What it does => positions output at screen row=1 col=1 (>>~ syntax)
+  How to test  => 'A' should appear at top-left of terminal
+  Expected     => ESC[1;1H cursor move followed by 'A'
+═══════════════════════════════════════════════════════════
+  3 tests total
+═══════════════════════════════════════════════════════════

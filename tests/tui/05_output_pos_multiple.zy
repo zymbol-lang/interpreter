@@ -1,0 +1,4 @@
+// Multiple positioned outputs: each >>~ emits its own cursor-move + text
+>>~ (1, 1) > "A"
+>>~ (2, 5) > "B"
+>>~ (3, 10) > "C"

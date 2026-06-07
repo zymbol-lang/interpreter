@@ -13,3 +13,10 @@ zymbol-error.workspace = true
 zymbol-span.workspace = true
 crossterm = "0.28"
 arboard = "3.4"
+unicode-width = "0.2"
+dirs = "5"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"

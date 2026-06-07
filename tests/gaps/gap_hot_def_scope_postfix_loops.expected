@@ -1,0 +1,6 @@
+[1m[31merror[39m[0m: undefined variable 'x'
+  [1m[34m-->[39m[0m tests/gaps/gap_hot_def_scope_postfix_loops.zy:8:4
+[1m[34m   8[39m[0m [34m|[39m
+[1m[34m   8[39m[0m [34m|[39m >> x ¶
+[34m     |[39m [1m[31m   ^[39m[0m
+  [1m[32mhelp:[39m[0m variables must be defined before use

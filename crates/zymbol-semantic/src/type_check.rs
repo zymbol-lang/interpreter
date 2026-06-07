@@ -130,7 +130,7 @@ impl TypeConstraint {
     fn to_type(&self) -> ZymbolType {
         match self {
             TypeConstraint::Exact(t) => t.clone(),
-            TypeConstraint::Numeric => ZymbolType::Int, // Default to Int if only numeric constraint
+            TypeConstraint::Numeric => ZymbolType::Float, // Numeric-only params accept both Int and Float (Int→Float is compatible)
             TypeConstraint::Boolean => ZymbolType::Bool,
             TypeConstraint::CompatibleWith(t) => t.clone(),
             TypeConstraint::Unconstrained => ZymbolType::Any,
@@ -380,11 +380,9 @@ impl TypeChecker {
     fn collect_pre_hot_vars(block: &zymbol_ast::Block, out: &mut Vec<String>) {
         for stmt in &block.statements {
             match stmt {
-                Statement::Assignment(a) => {
-                    if a.pre_hot || Self::rhs_has_pre_hot_self_ref(&a.value, &a.name) {
-                        if !out.contains(&a.name) { out.push(a.name.clone()); }
-                    }
-                }
+                Statement::Assignment(a)
+                    if (a.pre_hot || Self::rhs_has_pre_hot_self_ref(&a.value, &a.name))
+                        && !out.contains(&a.name) => { out.push(a.name.clone()); }
                 Statement::If(if_stmt) => {
                     Self::collect_pre_hot_vars(&if_stmt.then_block, out);
                     for branch in &if_stmt.else_if_branches {
@@ -499,11 +497,10 @@ impl TypeChecker {
                     // `°` marks initialization, but >> is a read operation.
                     if let Expr::Identifier(ident) = expr {
                         if ident.hot || ident.pre_hot {
-                            let corrected = if ident.pre_hot {
-                                format!(">> {} ¶", ident.name)
-                            } else {
-                                format!(">> {} ¶", ident.name)
-                            };
+                            // The `°` marker must be dropped regardless of its
+                            // position (prefix `pre_hot` or suffix `hot`): output
+                            // just reads the bare name.
+                            let corrected = format!(">> {} ¶", ident.name);
                             self.errors.push(
                                 Diagnostic::error(format!(
                                     "`°` has no effect in output context — use `{}`",
@@ -808,11 +805,10 @@ impl TypeChecker {
     fn define_local_vars_from_block(&mut self, block: &Block) {
         for stmt in &block.statements {
             match stmt {
-                Statement::Assignment(assign) => {
-                    if self.env.lookup_var(&assign.name).is_none() {
+                Statement::Assignment(assign)
+                    if self.env.lookup_var(&assign.name).is_none() => {
                         self.env.define_var(&assign.name, ZymbolType::Any);
                     }
-                }
                 Statement::DestructureAssign(d) => {
                     let names: Vec<String> = match &d.pattern {
                         DestructurePattern::Array(items) | DestructurePattern::Positional(items) => {
@@ -843,11 +839,10 @@ impl TypeChecker {
                 Statement::Loop(loop_stmt) => {
                     self.define_local_vars_from_block(&loop_stmt.body);
                 }
-                Statement::KeyInput(ki) => {
-                    if self.env.lookup_var(&ki.variable).is_none() {
+                Statement::KeyInput(ki)
+                    if self.env.lookup_var(&ki.variable).is_none() => {
                         self.env.define_var(&ki.variable, ZymbolType::Char);
                     }
-                }
                 _ => {}
             }
         }
@@ -1248,8 +1243,11 @@ impl TypeChecker {
             (ZymbolType::Unknown, _) | (_, ZymbolType::Unknown) => true,
             // Exact match
             (a, b) if a == b => true,
-            // Int is compatible with Float
-            (ZymbolType::Int, ZymbolType::Float) => true,
+            // Numeric types are bidirectionally compatible: Int→Float and Float→Int.
+            // Needed because Numeric-constrained params resolve to Float via to_type(),
+            // so arithmetic results (e.g. `a % b` where a::Numeric) carry Float type
+            // even when the runtime value is integral.
+            (ZymbolType::Int, ZymbolType::Float) | (ZymbolType::Float, ZymbolType::Int) => true,
             // Arrays are compatible if element types are compatible
             (ZymbolType::Array(a), ZymbolType::Array(b)) => Self::types_compatible_static(a, b),
             // Tuples are compatible if all elements are compatible

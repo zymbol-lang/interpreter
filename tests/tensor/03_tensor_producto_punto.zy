@@ -1,0 +1,11 @@
+// Test: producto punto (resultado escalar)
+<# ./tensor => t
+
+// [1,2,3] . [4,5,6] = 4+10+18 = 32
+>> t::producto_punto([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]) ¶
+
+// [2,3] . [4,-1] = 8-3 = 5
+>> t::producto_punto([2.0, 3.0], [4.0, -1.0]) ¶
+
+// vector unitario . si mismo = 1
+>> t::producto_punto([1.0, 0.0, 0.0], [1.0, 0.0, 0.0]) ¶

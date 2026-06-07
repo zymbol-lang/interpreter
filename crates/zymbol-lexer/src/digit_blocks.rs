@@ -131,12 +131,7 @@ pub fn digit_value(ch: char) -> Option<u8> {
 /// ```
 pub fn digit_block_base(ch: char) -> Option<u32> {
     let cp = ch as u32;
-    for &(base, _) in DIGIT_BLOCKS {
-        if cp >= base && cp <= base + 9 {
-            return Some(base);
-        }
-    }
-    None
+    DIGIT_BLOCKS.iter().map(|&(base, _)| base).find(|&base| cp >= base && cp <= base + 9)
 }
 
 #[cfg(test)]

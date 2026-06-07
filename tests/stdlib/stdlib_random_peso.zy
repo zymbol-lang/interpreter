@@ -1,0 +1,12 @@
+// Test: random::peso_f64() always returns Float in [-0.1, 0.1]
+<# std/random => rnd
+
+ok = #1
+i = 0
+@ (i < 100) {
+    w = rnd::peso_f64()
+    ? (w < -0.1 || w > 0.1) { ok = #0 }
+    i = i + 1
+}
+? ok { >> "ok" ¶ }
+? (!ok) { >> "fail" ¶ }

@@ -1,0 +1,6 @@
+[1m[31merror[39m[0m: `°` has no effect in output context — use `>> x ¶`
+  [1m[34m-->[39m[0m tests/gaps/gap_hot_def_error_in_output.zy:4:4
+[1m[34m   4[39m[0m [34m|[39m
+[1m[34m   4[39m[0m [34m|[39m >> x° ¶
+[34m     |[39m [1m[31m   ^^[39m[0m
+  [1m[32mhelp:[39m[0m the `°` marker is for initialization in assignments, not for reading

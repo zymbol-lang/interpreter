@@ -28,6 +28,7 @@ impl<W: Write> Interpreter<W> {
             body: lambda.body.clone(),
             captures: Rc::new(captures),
             is_named_fn: false,
+            module_aliases: std::collections::HashMap::new(),
         }))
     }
 
@@ -88,6 +89,13 @@ impl<W: Write> Interpreter<W> {
 
         // B2: zero-copy save + fresh isolated scope (see take_call_state)
         let saved = self.take_call_state();
+
+        // G7 fix: named functions carry module_aliases captured at definition time.
+        // take_call_state() clears import_aliases; restore from the function's own
+        // snapshot so that alias::fn calls work regardless of call depth.
+        if func.is_named_fn && !func.module_aliases.is_empty() {
+            self.import_aliases = func.module_aliases.clone();
+        }
 
         // Restore closure captures into the fresh scope (before binding params,
         // so params shadow captures with the same name).
@@ -221,19 +229,36 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
-    /// Convert a named FunctionDef into a first-class FunctionValue (Opción A).
+    /// Convert a named FunctionDef into a first-class FunctionValue.
     /// Selectively captures only the variables referenced in the function body
     /// from the current scope, so the result behaves like a closure.
     pub(crate) fn func_def_to_value(&self, func_def: &Rc<FunctionDef>) -> FunctionValue {
+        let FunctionDef::Zymbol { parameters, body, .. } = func_def.as_ref() else {
+            // Native functions cannot be used as first-class values in v0.0.6.
+            return FunctionValue {
+                params: vec![],
+                body: zymbol_ast::LambdaBody::Block(
+                    zymbol_ast::Block::new(vec![], zymbol_span::Span::new(
+                        zymbol_span::Position::start(),
+                        zymbol_span::Position::start(),
+                        zymbol_span::FileId(0),
+                    ))
+                ),
+                captures: Rc::new(std::collections::HashMap::new()),
+                is_named_fn: false,
+                module_aliases: std::collections::HashMap::new(),
+            };
+        };
         let mut refs = HashSet::new();
-        let mut locals: HashSet<String> = func_def.parameters.iter().map(|p| p.name.clone()).collect();
-        collect_refs_in_stmts(&func_def.body.statements, &mut locals, &mut refs);
+        let mut locals: HashSet<String> = parameters.iter().map(|p| p.name.clone()).collect();
+        collect_refs_in_stmts(&body.statements, &mut locals, &mut refs);
         let captures = self.capture_only(&refs);
         FunctionValue {
-            params: func_def.parameters.iter().map(|p| p.name.clone()).collect(),
-            body: zymbol_ast::LambdaBody::Block(func_def.body.clone()),
+            params: parameters.iter().map(|p| p.name.clone()).collect(),
+            body: zymbol_ast::LambdaBody::Block(body.clone()),
             captures: Rc::new(captures),
             is_named_fn: true,
+            module_aliases: self.import_aliases.clone(),
         }
     }
 
@@ -246,12 +271,38 @@ impl<W: Write> Interpreter<W> {
         module_info: Option<(String, std::path::PathBuf)>,
         func_name: Option<&str>,
     ) -> Result<Value> {
+        // Native dispatch: evaluate args and invoke the function pointer directly.
+        // No scope setup needed — native functions are pure Rust, isolated from interpreter state.
+        if let FunctionDef::Native { arity, func, .. } = func_def.as_ref() {
+            let expected = *arity;
+            let got = arguments.len() as i8;
+            if expected >= 0 && got != expected {
+                return Err(RuntimeError::Generic {
+                    message: format!(
+                        "function expects {} argument(s), got {}",
+                        expected, got
+                    ),
+                    span: *span,
+                });
+            }
+            let mut arg_values = Vec::with_capacity(arguments.len());
+            for arg in arguments {
+                arg_values.push(self.eval_expr(arg)?);
+            }
+            return func(arg_values, *span);
+        }
+
+        // Zymbol function: destructure the enum — unreachable arm is dead code after the guard above.
+        let FunctionDef::Zymbol { parameters, body, origin_module_path } = func_def.as_ref() else {
+            unreachable!()
+        };
+
         // Check parameter count
-        if arguments.len() != func_def.parameters.len() {
+        if arguments.len() != parameters.len() {
             return Err(RuntimeError::Generic {
                 message: format!(
                     "function expects {} arguments, got {}",
-                    func_def.parameters.len(),
+                    parameters.len(),
                     arguments.len()
                 ),
                 span: *span,
@@ -273,7 +324,7 @@ impl<W: Write> Interpreter<W> {
 
         // B4: pre-alloc scope capacity to avoid rehashing on parameter binding
         if let Some(scope) = self.scope_stack.last_mut() {
-            scope.reserve(func_def.parameters.len());
+            scope.reserve(parameters.len());
         }
 
         // If this is a module function call, restore module's execution context.
@@ -285,7 +336,7 @@ impl<W: Write> Interpreter<W> {
         // BUG-001 fix: if the function was defined in a different module than the one being
         // called through (re-export adapter), load context from the origin module instead.
         let saved_functions = if let Some((_, module_path)) = &module_info {
-            let effective_path: &std::path::PathBuf = func_def.origin_module_path
+            let effective_path: &std::path::PathBuf = origin_module_path
                 .as_ref()
                 .unwrap_or(module_path);
             if let Some(module) = self.loaded_modules.get(effective_path).cloned() {
@@ -299,15 +350,39 @@ impl<W: Write> Interpreter<W> {
                 None
             }
         } else {
-            // Script-level function: inherit caller's import aliases so module calls
-            // (alias::fn()) resolve correctly inside the function body.
+            // Script-level or intra-module function call (no explicit alias:: prefix).
+            // Inherit caller's import aliases so module calls (alias::fn()) resolve correctly.
             self.import_aliases = saved.import_aliases.clone();
-            None  // function table unchanged — script fns share caller's table
+            // Inject script-level constants (:=) into the function's fresh isolated scope.
+            // Constants are globally scoped by design — any := defined before the call site
+            // must be visible inside function bodies. Regular variables (=) remain caller-scoped.
+            // saved.const_vars_stack[i] names the constants in saved.scope_stack[i]; we inject
+            // all of them so nested call chains (A calls B calls C) propagate constants correctly.
+            for (scope, const_set) in saved.scope_stack.iter().zip(saved.const_vars_stack.iter()) {
+                for const_name in const_set {
+                    if let Some(value) = scope.get(const_name) {
+                        self.set_variable(const_name, value.clone());
+                    }
+                }
+            }
+            // Intra-module call: if the function was defined inside a loaded module (e.g., a
+            // private helper called from another function in the same module), inject that
+            // module's variables so module-level constants (:=) and mutable state are visible.
+            // Main-script functions have origin_module_path = Some(main.zy) which is NOT in
+            // loaded_modules, so injection is safely skipped for script-level calls.
+            if let Some(ref origin_path) = origin_module_path {
+                if let Some(module) = self.loaded_modules.get(origin_path).cloned() {
+                    for (name, value) in &module.all_variables {
+                        self.set_variable(name, value.clone());
+                    }
+                }
+            }
+            None  // function table unchanged — already set to module's all_functions by outer call
         };
 
         // QW8: move values out of arg_values instead of cloning
         // set_variable_new: skip scope-stack scan for Normal params (fresh isolated scope)
-        for (i, param) in func_def.parameters.iter().enumerate() {
+        for (i, param) in parameters.iter().enumerate() {
             let arg_value = std::mem::replace(&mut arg_values[i], Value::Unit);
             match param.kind {
                 ParameterKind::Normal => {
@@ -334,7 +409,7 @@ impl<W: Write> Interpreter<W> {
 
         // QW13 fix: track output param names so MoveOrClone skips take_variable for them
         let prev_output_params = std::mem::take(&mut self.current_output_params);
-        for param in &func_def.parameters {
+        for param in parameters {
             if matches!(param.kind, ParameterKind::Output) {
                 self.current_output_params.insert(param.name.clone());
             }
@@ -343,14 +418,14 @@ impl<W: Write> Interpreter<W> {
         // QW1: execute_block_no_scope — take_call_state already owns scope[0] (params).
         // QW17: TCO loop — if tco_pending is set after execution, rebind params and restart.
         let return_value = 'tco: loop {
-            self.execute_block_no_scope(&func_def.body)?;
+            self.execute_block_no_scope(body)?;
 
             if self.tco_pending {
                 self.tco_pending = false;
                 // Rebind parameters to tco_args
                 // Move tco_args into params (no clone — QW8 semantics for TCO)
                 let tco_args = std::mem::take(&mut self.tco_args);
-                for (param, val) in func_def.parameters.iter().zip(tco_args.into_iter()) {
+                for (param, val) in parameters.iter().zip(tco_args) {
                     self.set_variable(&param.name, val);
                 }
                 // Clear the Return control flow set by the TCO trigger
@@ -398,10 +473,10 @@ impl<W: Write> Interpreter<W> {
 
         // QW2: lazy output-param collection — only allocate if function has output params.
         // Eliminates HashMap::new() on every call (most functions have no output params).
-        let has_output_params = func_def.parameters.iter().any(|p| matches!(p.kind, ParameterKind::Output));
+        let has_output_params = parameters.iter().any(|p| matches!(p.kind, ParameterKind::Output));
         if has_output_params {
             let mut updates = Vec::new();
-            for (i, param) in func_def.parameters.iter().enumerate() {
+            for (i, param) in parameters.iter().enumerate() {
                 if matches!(param.kind, ParameterKind::Output) {
                     if let Expr::Identifier(ident) = &arguments[i] {
                         let value = self.get_variable(&param.name).cloned().unwrap_or(Value::Unit);

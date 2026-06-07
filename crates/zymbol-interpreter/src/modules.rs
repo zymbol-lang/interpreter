@@ -40,6 +40,15 @@ pub(crate) struct LoadedModule {
 impl<W: Write> Interpreter<W> {
     /// Load an import statement and register the module alias
     pub(crate) fn load_import(&mut self, import: &zymbol_ast::ImportStmt) -> Result<()> {
+        // Intercept stdlib: bare path (not ./ or /) whose first component is "std"
+        if !import.path.is_relative
+            && !import.path.is_absolute
+            && import.path.components.first().map(|s| s == "std").unwrap_or(false)
+        {
+            let module_key = import.path.components.join("/");
+            return self.load_stdlib_module(&module_key, &import.alias);
+        }
+
         // Resolve the module path
         let module_path = self.resolve_module_path(&import.path)?;
 
@@ -279,6 +288,22 @@ impl<W: Write> Interpreter<W> {
         self.loaded_modules
             .insert(file_path.to_path_buf(), loaded_module);
 
+        Ok(())
+    }
+
+    /// Load a stdlib module (std/math, std/random, etc.) by synthetic path key.
+    fn load_stdlib_module(&mut self, module_key: &str, alias: &str) -> Result<()> {
+        let synthetic = PathBuf::from(format!("__stdlib__/{}", module_key));
+
+        if !self.loaded_modules.contains_key(&synthetic) {
+            let module = crate::stdlib::build_module(module_key)
+                .ok_or_else(|| RuntimeError::ModuleNotFound {
+                    path: module_key.to_string(),
+                })?;
+            self.loaded_modules.insert(synthetic.clone(), module);
+        }
+
+        self.import_aliases.insert(alias.to_string(), synthetic);
         Ok(())
     }
 }

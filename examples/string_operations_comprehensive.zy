@@ -1,206 +1,119 @@
 // Comprehensive String Operations Guide for Zymbol
-// Shows all available string operations and workarounds
+// Shows the native string operators (1-based indexing throughout)
 
 >> "========================================" ¶
 >> "  STRING OPERATIONS - COMPREHENSIVE" ¶
 >> "========================================" ¶
 ¶
 
-// ===== 1. LENGTH ($# - Works!) =====
+// ===== 1. LENGTH ($#) =====
 >> "--- 1. Length ($#) ---" ¶
 texto = "holamundo"
-len = texto$#
->> "Length of 'holamundo': " len ¶
+>> "Length of 'holamundo': " (texto$#) ¶
 ¶
 
-// ===== 2. SLICING ($[..] - Works!) =====
->> "--- 2. Slicing ($[..]) ---" ¶
-primeros = texto$[0..4]
-ultimos = texto$[5..]
-medio = texto$[2..7]
->> "First 4: " primeros ¶
->> "Last 4: " ultimos ¶
->> "Middle [2..7]: " medio ¶
+// ===== 2. SLICING ($[a..b], 1-based inclusive) =====
+>> "--- 2. Slicing ($[a..b]) ---" ¶
+>> "First 4 [1..4]: " texto$[1..4] ¶
+>> "Last 4  [6..]:  " texto$[6..] ¶
+>> "Middle  [3..7]: " texto$[3..7] ¶
 ¶
 
-// ===== 3. CONCATENATION (+ operator) =====
->> "--- 3. Concatenation (+) ---" ¶
-saludo = "Hola" + " " + "Mundo"
+// ===== 3. CONCATENATION (juxtaposition / $++) =====
+>> "--- 3. Concatenation ---" ¶
+saludo = "Hola" $++ " " $++ "Mundo"
 >> saludo ¶
-con_char = saludo + '!'
+con_char = saludo $++ "!"
 >> con_char ¶
 ¶
 
-// ===== 4. SPLIT (/ operator) =====
->> "--- 4. Split (/) ---" ¶
-csv = "apple,banana,orange"
-frutas = csv / ','
+// ===== 4. SPLIT ($/) =====
+>> "--- 4. Split ($/) ---" ¶
+frutas = "apple,banana,orange" $/ ","
 >> "Split by comma: " frutas ¶
->> "First fruit: " frutas[0] ¶
+>> "First fruit: " frutas[1] ¶
 ¶
 
-// ===== 5. CONTAINS (workaround with loop) =====
->> "--- 5. Contains (loop workaround) ---" ¶
-texto = "holamundo"
-target = 'o'
-found = #0
-
-@ char:texto {
-    ? char == target {
-        found = #1
-        @!
-    }
-}
-
->> "Contains 'o': " found ¶
+// ===== 5. CONTAINS ($?) =====
+>> "--- 5. Contains ($?) ---" ¶
+>> "Contains 'mun': " (texto$? "mun") ¶
+>> "Contains 'xyz': " (texto$? "xyz") ¶
 ¶
 
-// ===== 6. REMOVE CHARACTER (slicing workaround) =====
->> "--- 6. Remove Character at Index ---" ¶
-original = "holamundo"
-// Remove char at index 3 ('a'): "hol" + "mundo"
-sin_a = original$[0..3] + original$[4..]
->> "Original: " original ¶
->> "Without char at index 3: " sin_a ¶
+// ===== 6. REPLACE ($~~[old:new]) =====
+>> "--- 6. Replace ($~~) ---" ¶
+>> "Replace 'o' with '0': " (texto$~~["o":"0"]) ¶
 ¶
 
-// ===== 7. REPLACE CHARACTER (slicing workaround) =====
->> "--- 7. Replace Character at Index ---" ¶
-original = "holamundo"
-// Replace char at index 3 with 'X': "hol" + "X" + "mundo"
-reemplazado = original$[0..3] + "X" + original$[4..]
->> "Original: " original ¶
->> "Replaced char at index 3: " reemplazado ¶
+// ===== 7. INDEXING (1-based) =====
+>> "--- 7. Character Indexing ---" ¶
+>> "First char  [1]: " texto[1] ¶
+>> "Fourth char [4]: " texto[4] ¶
+>> "Last char  [-1]: " texto[-1] ¶
 ¶
 
-// ===== 8. STARTS WITH (comparison) =====
->> "--- 8. Starts With ---" ¶
-texto = "holamundo"
-prefix = "hola"
-prefix_len = prefix$#
-starts = texto$[0..4] == prefix
->> "Starts with 'hola': " starts ¶
+// ===== 8. STARTS / ENDS WITH (slice + compare) =====
+>> "--- 8. Starts / Ends With ---" ¶
+>> "Starts with 'hola': " (texto$[1..4] == "hola") ¶
+>> "Ends with 'undo':  " (texto$[6..9] == "undo") ¶
 ¶
 
-// ===== 9. ENDS WITH (comparison) =====
->> "--- 9. Ends With ---" ¶
-suffix = "undo"
-suffix_len = suffix$#
-texto_len = texto$#
-start_pos = texto_len - suffix_len
-ends = texto$[5..9] == suffix
->> "Ends with 'undo': " ends ¶
-¶
-
-// ===== 10. COUNT CHARACTER OCCURRENCES =====
->> "--- 10. Count Character Occurrences ---" ¶
-texto = "holamundo"
+// ===== 9. COUNT CHARACTER OCCURRENCES (loop) =====
+>> "--- 9. Count Occurrences ---" ¶
 target = 'o'
 count = 0
-
 @ char:texto {
     ? char == target {
-        count = count + 1
+        count++
     }
 }
-
 >> "Count of 'o' in 'holamundo': " count ¶
 ¶
 
-// ===== 11. FILTER (keep only vowels) =====
->> "--- 11. Filter (Keep Only Vowels) ---" ¶
-texto = "holamundo"
-vowels_str = "aeiou"
+// ===== 10. FILTER (keep only vowels) =====
+>> "--- 10. Filter (Keep Only Vowels) ---" ¶
+vowels = "aeiou"
 resultado = ""
-
 @ char:texto {
-    // Check if char is a vowel
-    is_vowel = #0
-    @ v:vowels_str {
-        ? char == v {
-            is_vowel = #1
-            @!
-        }
-    }
-
-    ? is_vowel {
-        resultado = resultado + char
+    ? vowels$? char {
+        resultado = resultado $++ char
     }
 }
-
 >> "Original: " texto ¶
 >> "Only vowels: " resultado ¶
 ¶
 
-// ===== 12. REVERSE STRING (manual) =====
->> "--- 12. Reverse String ---" ¶
-texto = "abc"
+// ===== 11. REVERSE STRING (loop) =====
+>> "--- 11. Reverse String ---" ¶
+fuente = "abc"
 reversed = ""
-chars = []
-
-// Collect chars in array
-@ char:texto {
-    chars = chars$+ char
+@ char:fuente {
+    reversed = ("" $++ char) $++ reversed
 }
-
-// Build reversed string
-len = chars$#
-i = len - 1
-
-@ i >= 0 {
-    reversed = reversed + chars[i]
-    i = i - 1
-}
-
->> "Original: " texto ¶
+>> "Original: " fuente ¶
 >> "Reversed: " reversed ¶
 ¶
 
-// ===== 13. UPPERCASE SIMULATION (char codes) =====
->> "--- 13. Case Conversion (example pattern) ---" ¶
-// Note: Zymbol doesn't have built-in uppercase/lowercase
-// This shows the pattern using base conversion
-letra_min = 'a'
-letra_may = 'A'
->> "Lowercase 'a': " letra_min ¶
->> "Uppercase 'A': " letra_may ¶
->> "(Full conversion would require char code arithmetic)" ¶
+// ===== 12. REPEAT ($*) =====
+>> "--- 12. Repeat ($*) ---" ¶
+>> "Line: " ("=" $* 20) ¶
+>> "Sep:  " ("-" $* 10) ¶
 ¶
 
-// ===== 14. SUBSTRING REPLACEMENT =====
->> "--- 14. Replace Substring ---" ¶
-original = "holamundo"
-// Replace "mun" (indices 4-7) with "ban"
-resultado = original$[0..4] + "ban" + original$[7..]
->> "Original: " original ¶
->> "Replace 'mun' with 'ban': " resultado ¶
-¶
-
-// ===== 15. JOIN ARRAY TO STRING =====
->> "--- 15. Join Array to String ---" ¶
+// ===== 13. JOIN ARRAY TO STRING (loop) =====
+>> "--- 13. Join Array to String ---" ¶
 words = ["Hello", "beautiful", "world"]
-separator = " "
 joined = ""
 count = 0
 total = words$#
-
 @ word:words {
-    joined = joined + word
-    count = count + 1
+    joined = joined $++ word
+    count++
     ? count < total {
-        joined = joined + separator
+        joined = joined $++ " "
     }
 }
-
 >> "Joined: " joined ¶
-¶
-
-// ===== 16. TRIM (remove spaces from ends) =====
->> "--- 16. Trim Spaces (simplified) ---" ¶
-texto = "  hello  "
->> "Original: '" texto "'" ¶
->> "(Manual trim would require finding first/last non-space)" ¶
->> "Trimmed result would be: 'hello'" ¶
 ¶
 
 >> "========================================" ¶

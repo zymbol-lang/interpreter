@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.0.5-informational?style=flat-square"/>
+  <img src="https://img.shields.io/badge/version-v0.0.6-informational?style=flat-square"/>
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square"/>
   <img src="https://img.shields.io/badge/status-active-brightgreen?style=flat-square"/>
@@ -138,7 +138,7 @@ zymbol build program.zy -o myprogram --release
 | Multi-dim index | `arr[i>j]` (scalar), `arr[p;q]` (flat), `arr[[g];[g]]` (structured) |
 | Pipe | `\|>` with `_` placeholder |
 | Errors | `!?` (try), `:!` (catch), `:>` (finally), `$!` (is error), `$!!` (propagate) |
-| Modules | `#` (declare), `#>` (export), `<#` (import), `<=` (alias), `::` (call), `.` (access) |
+| Modules | `#` (declare), `#>` (export), `<#` (import), `=>` (alias / re-export rename), `::` (call), `.` (access) |
 | Types | `#1`/`#0` (bool), `'c'` (char), `"s"` (string), `x#?` (type metadata) |
 | Casts | `##.expr` (→Float), `###expr` (→Int round), `##!expr` (→Int truncate) |
 | Format | `#.N\|x\|` (round), `#!N\|x\|` (truncate), `#,\|x\|` (comma sep), `#^\|x\|` (scientific) |
@@ -447,7 +447,7 @@ Korean, Hebrew, or Mandarin without any changes to the original:
 
 ```zymbol
 // Consumer in Greek — never reads the original Spanish source
-<# ./matematicas/ελληνικά <= μαθ
+<# ./matematicas/ελληνικά => μαθ
 >> μαθ::προσθέτω(10, 5) ¶    // → 15
 >> μαθ.ΠΙ ¶                   // → 3.14159
 ```
@@ -501,8 +501,9 @@ cargo test
 bash tests/scripts/vm_compare.sh
 ```
 
-Current status: **717 unit tests passing** across all crates.  
-VM parity: **436/436 PASS** (436 golden-file pairs; `@vm-skip` files excluded).
+Current status: **820 tests passing** via `cargo test` (0 failed, 0 ignored).  
+VM parity: **478/478 PASS** (478 files, 0 `@vm-skip` — all TUI/input tests now run in both TW and VM).  
+Golden files: **464/464 PASS** via `expected_compare.sh` (includes 8 TUI + 8 input category tests).
 
 ---
 
@@ -511,10 +512,10 @@ VM parity: **436/436 PASS** (436 golden-file pairs; `@vm-skip` files excluded).
 Each release milestone is stress-tested by building a non-trivial program entirely in Zymbol.
 Bugs discovered during construction feed back directly into the language.
 
-The four projects below also serve as cross-language proof: each is written in a different
-natural language (English, Mandarin Chinese, Spanish, and Klingon pIqaD), demonstrating that
-Zymbol's keyword-free design is genuinely language-neutral — no flags, no special modes, no
-translation layer at the syntax level.
+The projects below also serve as cross-language proof: each is written in a different
+natural language (English, Mandarin Chinese, Spanish, Klingon pIqaD, and Spanish again
+for scientific computing), demonstrating that Zymbol's keyword-free design is genuinely
+language-neutral — no flags, no special modes, no translation layer at the syntax level.
 
 ### Summary
 
@@ -524,6 +525,7 @@ translation layer at the syntax level.
 | [ZyAudit](https://github.com/zymbol-lang/zy-ZyAudit) | **v0.0.4** | 中文 (Mandarin) | CJK identifiers as first-class citizens, named tuples, HOF pipeline, `$~~` replace |
 | [Serpiente](https://github.com/zymbol-lang/zy-Serpiente) | **v0.0.5** | Español | TUI primitives, register VM, hot-definition `°`, tuple equality, labeled loops |
 | [Hov veS](https://github.com/zymbol-lang/zyKlingonGalaxy) | **v0.0.5** | pIqaD (Klingon) | Multi-module orchestration, Galaxian formation AI, delta rendering, dual projectiles, 3-language i18n |
+| [Zofía](https://github.com/zymbol-lang/zy-Zofia) | **v0.0.6** | Español | Scientific computing, transformer AI from scratch, `^` float exponents, global `:=` scope fix, `#.N\|x\|` formatting |
 
 ---
 
@@ -672,6 +674,68 @@ mIS = (nS1 + nS2 * 1009 + nS3 * 6271) % 2147483647
 
 ---
 
+### Zofía — v0.0.6 · Español (scientific computing)
+
+Transformer AI encoder built from scratch in Zymbol — tensors, gradients, attention,
+and positional encoding, all in pure Zymbol with no external math library.
+The project is designed as an educational resource for Spanish-speaking learners:
+every identifier, comment, and document is in Spanish, with English references
+to the academic literature inline.
+
+Zofía is the primary driver of v0.0.6. Building it exposed two language issues
+that were fixed during development:
+
+- **Global `:=` scope** — constants declared at script level were invisible inside
+  function bodies. Fixed in `functions_lambda.rs`: constants from the saved
+  `const_vars_stack` are now injected into each fresh function call scope.
+- **Float formatting** — `#.4|x|` (round) and `#!4|x|` (truncate) were already
+  in the EBNF but unverified; confirmed working, closing GAP-Z004.
+
+Discovery: `^` already handles float exponents internally via `f64::powf`, making
+`sqrt(x) = x ^ 0.5` and `exp(x) = E ^ x` work natively — reducing the planned
+`std/matematica` module to only `sin`, `cos`, and `ln`.
+
+```zymbol
+// Zofía — sigmoide, softmax, and positional encoding in pure Zymbol
+PI := 3.14159265358979323846
+E  := 2.71828182845904523536
+
+sigmoide(x) {
+    fx = ##. x
+    <~ 1.0 / (1.0 + E ^ (0.0 - fx))
+}
+
+seno(x) {
+    fx = ##. x
+    @ fx > PI  { fx -= 2.0 * PI }
+    @ fx < 0.0 - PI { fx += 2.0 * PI }
+    suma = fx
+    pot = fx
+    fact = 1.0
+    signo = -1.0
+    @ n : 1..14 {
+        en = ##. n
+        pot = pot * fx * fx
+        fact = fact * (2.0 * en) * (2.0 * en + 1.0)
+        suma += signo * pot / fact
+        signo = 0.0 - signo
+    }
+    <~ suma
+}
+
+codificacion_posicional(pos, dim, i) {
+    fp = ##. pos
+    fd = ##. dim
+    fi = ##. i
+    ?? (i % 2 == 0) {
+        #1 => seno(fp / (10000.0 ^ (2.0 * fi / fd)))
+        _  => coseno(fp / (10000.0 ^ (2.0 * (fi - 1.0) / fd)))
+    }
+}
+```
+
+---
+
 ## Project Layout
 
 ```
@@ -680,7 +744,7 @@ interpreter/
 ├── zymbol-lang.ebnf     # Formal grammar (EBNF, v3.0.0)
 ├── install-zymbol.sh    # Install script
 ├── crates/              # Rust source crates
-├── tests/               # End-to-end test suite (424 golden pairs, 441 .zy files)
+├── tests/               # End-to-end test suite (478 vm-compare files; 464 golden .expected pairs)
 ├── docs/                # Extended documentation
 ├── LICENSE
 ├── LICENSE-AGPL-3.0     # AGPL-3.0 (interpreter source)

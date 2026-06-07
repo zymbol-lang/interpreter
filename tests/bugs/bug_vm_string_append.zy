@@ -1,0 +1,59 @@
+// BUG-006 regression (fixed v0.0.5): VM ArrayPush instruction crashed with
+// "expected Array, got String" when the LEFT operand of `$+` was a String.
+//
+// Root cause: zymbol-compiler always emits ArrayPush for CollectionAppend ($+)
+// regardless of operand type. The VM's ArrayPush handler only covered
+// Value::Array and Value::Tuple — any other type hit the default arm and
+// raised a TypeError.
+//
+// The tree-walker was unaffected because it evaluates $+ dynamically and
+// branches on the left-operand type at runtime.
+//
+// Discovered in klingon/HUD.zy — int-to-pIqaD converter prepended digits
+// left-to-right with `s = d $+ s` where both d and s are Strings.
+//
+// Fix: added Value::String arm to ArrayPush fast-path and slow-path handlers
+// in crates/zymbol-vm/src/lib.rs — concatenates the right-hand value's
+// string representation to the string register.
+
+// 1. Prepend: string on both sides (the original HUD.zy pattern)
+s = ""
+s = "b" $+ s
+s = "a" $+ s
+>> s ¶
+
+// 2. Append: string $+ string (same operator, symmetric)
+t = "hello"
+t = t $+ " world"
+>> t ¶
+
+// 3. String $+ char
+u = "hola"
+u = u $+ '!'
+>> u ¶
+
+// 4. Build digit string right-to-left (exact HUD.__() pattern)
+build_rev(n) {
+    ? n == 0 { <~ "" }
+    s = ""
+    @:lup {
+        ? n == 0 { @:lup! }
+        r = n % 10
+        d = "{r}"
+        s = d $+ s
+        n = n / 10
+    }
+    <~ s
+}
+
+>> build_rev(0) ¶
+>> build_rev(7) ¶
+>> build_rev(42) ¶
+>> build_rev(123) ¶
+
+// 5. Mixed: array $+ elem still works (no regression)
+arr = [10, 20]
+arr = arr $+ 30
+>> arr[1] ¶
+>> arr[2] ¶
+>> arr[3] ¶

@@ -37,5 +37,5 @@ x = (Objet: "Value") // Object:Value
 x = ƒ(5) // Call function to verify reassignment worked
 >> x ¶
 
-x = "ƒ(a)\{ <~ a + 1 \}; x = ƒ(5) = " + x
+x = "ƒ(a)\{ <~ a + 1 \}; x = ƒ(5) = " x
 >> x ¶

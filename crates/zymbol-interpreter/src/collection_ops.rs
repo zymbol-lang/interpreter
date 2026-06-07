@@ -246,12 +246,36 @@ impl<W: Write> Interpreter<W> {
 
     /// Evaluate collection update operator: collection[index]$~ value
     pub(crate) fn eval_collection_update(&mut self, op: &CollectionUpdateExpr) -> Result<Value> {
-        // The target must be an IndexExpr
+        // Deep update path: arr[i>j>k]$~ val
+        if let Expr::DeepIndex(di) = &*op.target {
+            // Evaluate all step indices (ranges not supported for update)
+            let mut indices: Vec<i64> = Vec::with_capacity(di.path.steps.len());
+            for step in &di.path.steps {
+                if step.range_end.is_some() {
+                    return Err(RuntimeError::Generic {
+                        message: "deep update ($~) does not support ranges in the path".to_string(),
+                        span: op.span,
+                    });
+                }
+                match self.eval_expr(&step.index)? {
+                    Value::Int(n) => indices.push(n),
+                    other => return Err(RuntimeError::Generic {
+                        message: format!("deep update index must be integer, got {:?}", other),
+                        span: op.span,
+                    }),
+                }
+            }
+            let root = self.eval_expr(&di.array)?;
+            let new_val = self.eval_expr(&op.value)?;
+            return deep_update_value(root, &indices, new_val, op.span);
+        }
+
+        // Single-level update path: arr[i]$~ val or tuple["campo"]$~ val
         let index_expr = match &*op.target {
             Expr::Index(idx) => idx,
             _ => {
                 return Err(RuntimeError::Generic {
-                    message: "update operator ($~) requires an indexed expression like arr[0]$~ value"
+                    message: "update operator ($~) requires an indexed expression like arr[i]$~ val or arr[i>j]$~ val"
                         .to_string(),
                     span: op.span,
                 });
@@ -263,49 +287,46 @@ impl<W: Write> Interpreter<W> {
         let index_value = self.eval_expr(&index_expr.index)?;
         let new_value = self.eval_expr(&op.value)?;
 
-        // Extract index as integer
-        let index = match index_value {
-            Value::Int(n) => n,
-            _ => {
+        // Resolve 1-based or negative integer index to a 0-based usize.
+        let resolve_int = |index: i64, len: usize, span: zymbol_span::Span| -> Result<usize> {
+            if index == 0 {
                 return Err(RuntimeError::Generic {
-                    message: format!("update index must be an integer, got {:?}", index_value),
-                    span: op.span,
-                })
+                    message: "index 0 is invalid — Zymbol uses 1-based indexing".to_string(),
+                    span,
+                });
             }
+            let i = if index < 0 { len as i64 + index } else { index - 1 };
+            if i < 0 || i as usize >= len {
+                return Err(RuntimeError::Generic {
+                    message: format!("index out of bounds: index {} for collection of length {}", index, len),
+                    span,
+                });
+            }
+            Ok(i as usize)
         };
 
         match collection {
             Value::Array(mut arr) => {
-                let len = arr.len();
-                let i = if index == 0 {
-                    return Err(RuntimeError::Generic {
-                        message: "index 0 is invalid — Zymbol uses 1-based indexing".to_string(),
+                let index = match index_value {
+                    Value::Int(n) => n,
+                    _ => return Err(RuntimeError::Generic {
+                        message: format!("array update index must be an integer, got {:?}", index_value),
                         span: op.span,
-                    });
-                } else if index < 0 {
-                    let i = len as i64 + index;
-                    if i < 0 || i as usize >= len {
-                        return Err(RuntimeError::Generic {
-                            message: format!("index out of bounds: index {} for array of length {}", index, len),
-                            span: op.span,
-                        });
-                    }
-                    i as usize
-                } else {
-                    let i = (index - 1) as usize;
-                    if i >= len {
-                        return Err(RuntimeError::Generic {
-                            message: format!("index out of bounds: index {} for array of length {}", index, len),
-                            span: op.span,
-                        });
-                    }
-                    i
+                    }),
                 };
-                // Create a new array with the value updated (immutability)
+                let len = arr.len();
+                let i = resolve_int(index, len, op.span)?;
                 arr[i] = new_value;
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
+                let index = match index_value {
+                    Value::Int(n) => n,
+                    _ => return Err(RuntimeError::Generic {
+                        message: format!("tuple update index must be an integer, got {:?}", index_value),
+                        span: op.span,
+                    }),
+                };
                 let len = tup.len();
                 let i = if index == 0 {
                     return Err(RuntimeError::Generic {
@@ -335,9 +356,42 @@ impl<W: Write> Interpreter<W> {
                 tup[i] = new_value;
                 Ok(Value::Tuple(tup))
             }
+            Value::NamedTuple(mut fields) => {
+                match index_value {
+                    Value::Int(n) => {
+                        let len = fields.len();
+                        let i = resolve_int(n, len, op.span)?;
+                        fields[i].1 = new_value;
+                        Ok(Value::NamedTuple(fields))
+                    }
+                    Value::String(name) => {
+                        for (field_name, field_value) in &mut fields {
+                            if *field_name == name {
+                                *field_value = new_value;
+                                return Ok(Value::NamedTuple(fields));
+                            }
+                        }
+                        let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                        Err(RuntimeError::Generic {
+                            message: format!(
+                                "named tuple has no field '{}'. Available: {}",
+                                name, available.join(", ")
+                            ),
+                            span: op.span,
+                        })
+                    }
+                    _ => Err(RuntimeError::Generic {
+                        message: format!(
+                            "named tuple update index must be an integer or field name (string), got {:?}",
+                            index_value
+                        ),
+                        span: op.span,
+                    }),
+                }
+            }
             _ => Err(RuntimeError::Generic {
                 message: format!(
-                    "cannot update {:?} - only arrays and tuples support update",
+                    "cannot update {:?} - only arrays, tuples, and named tuples support $~",
                     collection
                 ),
                 span: op.span,
@@ -1010,5 +1064,82 @@ fn natural_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         (Value::Bool(x), Value::Bool(y))     => Some(x.cmp(y)),
         _ => None,
     }
+}
+
+/// Perform a pure functional deep update: set the element at `indices` path to `new_val`.
+/// Called by eval_collection_update for `arr[i>j>k]$~ val`.
+fn deep_update_value(
+    col: Value,
+    indices: &[i64],
+    new_val: Value,
+    span: zymbol_span::Span,
+) -> Result<Value> {
+    if indices.is_empty() {
+        return Ok(new_val);
+    }
+    let idx = indices[0];
+    let sub = get_at_idx(&col, idx, span)?;
+    let updated_sub = deep_update_value(sub, &indices[1..], new_val, span)?;
+    set_at_idx(col, idx, updated_sub, span)
+}
+
+/// Read element at 1-based (or negative) integer index from any indexable Value.
+fn get_at_idx(col: &Value, index: i64, span: zymbol_span::Span) -> Result<Value> {
+    let (len, get_fn): (usize, Box<dyn Fn(usize) -> Value>) = match col {
+        Value::Array(arr)  => (arr.len(), Box::new(|i| arr[i].clone())),
+        Value::Tuple(tup)  => (tup.len(), Box::new(|i| tup[i].clone())),
+        Value::NamedTuple(fields) => (fields.len(), Box::new(|i| fields[i].1.clone())),
+        other => return Err(RuntimeError::Generic {
+            message: format!("cannot index into {:?} during deep update", other),
+            span,
+        }),
+    };
+    let i = resolve_idx(index, len, span)?;
+    Ok(get_fn(i))
+}
+
+/// Return a new Value with the element at 1-based (or negative) integer index replaced.
+fn set_at_idx(col: Value, index: i64, new_val: Value, span: zymbol_span::Span) -> Result<Value> {
+    match col {
+        Value::Array(mut arr) => {
+            let len = arr.len();
+            let i = resolve_idx(index, len, span)?;
+            arr[i] = new_val;
+            Ok(Value::Array(arr))
+        }
+        Value::Tuple(mut tup) => {
+            let len = tup.len();
+            let i = resolve_idx(index, len, span)?;
+            tup[i] = new_val;
+            Ok(Value::Tuple(tup))
+        }
+        Value::NamedTuple(mut fields) => {
+            let len = fields.len();
+            let i = resolve_idx(index, len, span)?;
+            fields[i].1 = new_val;
+            Ok(Value::NamedTuple(fields))
+        }
+        other => Err(RuntimeError::Generic {
+            message: format!("cannot update {:?} during deep update", other),
+            span,
+        }),
+    }
+}
+
+fn resolve_idx(index: i64, len: usize, span: zymbol_span::Span) -> Result<usize> {
+    if index == 0 {
+        return Err(RuntimeError::Generic {
+            message: "index 0 is invalid — Zymbol uses 1-based indexing".to_string(),
+            span,
+        });
+    }
+    let i = if index < 0 { len as i64 + index } else { index - 1 };
+    if i < 0 || i as usize >= len {
+        return Err(RuntimeError::Generic {
+            message: format!("index out of bounds: {} for collection of length {}", index, len),
+            span,
+        });
+    }
+    Ok(i as usize)
 }
 

@@ -21,6 +21,7 @@ tests/
 ├── strings/             # String operators: $/, $++, #|x|, format, precision
 ├── analysis/            # Static analysis (unused vars, circular imports)
 ├── tui/                 # TUI / terminal primitives tests (@~, >>!, >>?, >>~, <<|, >>|)
+├── input/               # Input statement tests (<<, << #|n|); each .zy has a companion .input file
 ├── gaps/                # Language gap regression tests — one test per GAP documented in ZethyCLICLI/GAPS.md
 ├── bugs/                # Bug regression tests — one test per BUG; must never regress
 └── scripts/             # Test runner scripts and benchmarks
@@ -69,6 +70,7 @@ in code that previously worked correctly.
 | `bug_output_pos_cross_line.zy` | BUG-S01 | Consecutive `>>` in function body each produce independent output lines |
 | `bug_else_underscore.zy` | BUG-S02 | `_` unconditional else and `_?` conditional else-if parse and execute correctly |
 | `bug_vm_tuple_equality.zy` | BUG-005 | VM tuple `==`/`<>` — recursive element-wise comparison (was always `#0`) |
+| `bug_vm_string_append.zy` | BUG-006 | VM `$+` with String left-operand — concatenation instead of crash (`ArrayPush` now handles `Value::String`) |
 
 Top-level `.zy` + `.expected` pairs cover cross-cutting scenarios (scope, error handling, memory model).
 
@@ -105,7 +107,7 @@ Output:
 
 ### 2. Tree-walker vs VM parity — `vm_compare.sh`
 
-Runs every `.zy` file under `tests/` twice (tree-walker and `--vm`) and reports divergences. Use this to track VM feature parity.
+Runs every `.zy` file under `tests/` twice (tree-walker and `--vm`) and reports divergences. Use this to track VM feature parity. If a companion `.input` file exists alongside the `.zy` file, it is piped as stdin to both runs automatically.
 
 ```bash
 bash tests/scripts/vm_compare.sh
@@ -117,6 +119,14 @@ bash tests/scripts/vm_compare.sh
 - Interpreter warnings (lines starting with `[warn]`) are stripped before comparison.
 - One `.expected` per `.zy`; both share the same base name and directory.
 - Comments in `.zy` files document the expected value inline (`// 42`) as a cross-check for readers.
+
+## `.zy` + `.input` Convention
+
+For tests that exercise `<<` (input statements), a companion `.input` file provides the stdin content:
+
+- Named identically to the `.zy` file with the `.input` extension (`02_numeric.zy` → `02_numeric.input`).
+- Content is piped as stdin by both `expected_compare.sh` and `vm_compare.sh` automatically.
+- Without an `.input` file, the test runs without stdin (any `<<` would block and timeout).
 
 ## Adding a New Test
 
@@ -142,8 +152,9 @@ bash tests/scripts/vm_compare.sh
 | `output` | 6 | `>>` `¶` formatting `#,\|x\|` `#^\|x\|` precision `#.N\|x\|` |
 | `safe_access` | 6 | `$?` `$!` `$!!` error propagation |
 | `strings` | 16 | `$/` split, `$++` concat-build, `$*` repeat, `#\|x\|` Unicode eval, format |
-| `tui` | 7 | `@~` sleep, `>>!` clear, `>>?` size, `>>~` positioned, `<<\|` key, `>>|` TUI block |
-| `gaps` | 20 | Language gap regressions (GAP-001–GAP-003, GAP-S1–GAP-S4, G7–G21) |
-| `bugs` | 16 | Bug regressions (BUG-001–BUG-005, BUG-S01–BUG-S02, BUG-NEW-01–02) |
+| `tui` | 8 | `@~` sleep, `>>!` clear, `>>?` size, `>>~` positioned (single, multiple, multichar), `<<\|` key, `>>|` TUI block |
+| `input` | 8 | `<<` basic, `<< #\|n\|` numeric cast (int/float), multiple inputs, whitespace trim, prompt display, conditional, loop |
+| `gaps` | 33 | Language gap regressions (GAP-001–GAP-003, GAP-S1–GAP-S4, G7–G21, GAP-Z008–Z009) |
+| `bugs` | 19 | Bug regressions (BUG-001–BUG-007, BUG-S01–BUG-S02) |
 
-Total: **424** golden-file test pairs (`.expected` files).
+Total: **464** golden-file test pairs (`.expected` files).

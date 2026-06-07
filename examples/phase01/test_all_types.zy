@@ -46,8 +46,9 @@ falso = #0
 >> "6. ARRAY TYPE:" ¶
 numeros = [1, 2, 3, 4, 5]
 >> "  numeros = " numeros ¶
-mixto = [1, "texto", #1, 'X']
->> "  mixto = " mixto ¶
+// Arrays are homogeneous; use a tuple to hold mixed-type values
+mixto = (1, "texto", #1, 'X')
+>> "  mixto (tuple) = " mixto ¶
 ¶
 
 >> "=== ALL TYPES TESTED ===" ¶

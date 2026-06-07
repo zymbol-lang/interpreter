@@ -33,7 +33,7 @@ tests/i18n/
 
 **Usage:**
 ```zymbol
-<# ./matematicas/module <= mat
+<# ./matematicas/module => mat
 result = mat::sumar(10, 5)
 ```
 
@@ -53,7 +53,7 @@ result = mat::sumar(10, 5)
 
 **Usage:**
 ```zymbol
-<# ./matematicas/ko <= 수학
+<# ./matematicas/ko => 수학
 결과 = 수학::더하다(10, 5)
 ```
 
@@ -73,7 +73,7 @@ result = mat::sumar(10, 5)
 
 **Usage:**
 ```zymbol
-<# ./matematicas/el <= μαθ
+<# ./matematicas/el => μαθ
 αποτέλεσμα = μαθ::προσθέτω(10, 5)
 ```
 
@@ -93,7 +93,7 @@ result = mat::sumar(10, 5)
 
 **Usage:**
 ```zymbol
-<# ./matematicas/he <= מתמטיקה
+<# ./matematicas/he => מתמטיקה
 תוצאה = מתמטיקה::חיבור(10, 5)
 ```
 

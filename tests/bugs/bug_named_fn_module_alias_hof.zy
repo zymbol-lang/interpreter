@@ -1,0 +1,38 @@
+// BUG-008 (GAP-Z009 regression): Named functions that use module aliases (e.g. mat::sqrt)
+// lost their import_aliases when passed as first-class values to higher-order functions.
+// Lambdas did not have this problem because they took a fast path in eval_lambda_call.
+//
+// Root cause: take_call_state() cleared import_aliases. For named functions passed as HOF
+// values, this erased the module context before the function body could use it.
+// The saved.import_aliases restoration was insufficient because intermediate HOF calls
+// could overwrite the aliases before the named function executed.
+//
+// Reproduction: define a named function that references a module alias, pass it as a
+// value to another function, and invoke it from inside that function.
+//
+// Expected: named function executes successfully using its captured module aliases
+// Actual:   "undefined module alias: 'mat'" (before fix)
+//
+// Fix: FunctionValue gained field `module_aliases: HashMap<String, PathBuf>` captured
+//      at func_def_to_value (definition time). In eval_lambda_call, is_named_fn=true
+//      restores import_aliases from the function snapshot, not from the caller.
+<# std/math => mat
+
+// Función nombrada que usa un alias de módulo internamente
+raiz(x) { <~ mat::sqrt(x) }
+
+// HOF que aplica f a cada elemento de una lista
+aplicar(f, lista) { <~ lista$> v -> f(v) }
+
+// Caso 1 — función nombrada pasada directamente como valor a HOF
+resultado = aplicar(raiz, [4.0, 9.0, 16.0, 25.0])
+>> resultado ¶
+
+// Caso 2 — función nombrada almacenada en variable y luego pasada
+fn_ref = raiz
+resultado2 = aplicar(fn_ref, [1.0, 100.0])
+>> resultado2 ¶
+
+// Caso 3 — función nombrada en pipeline encadenado (anidamiento de HOFs)
+duplicar(x) { <~ x * 2.0 }
+>> [9.0, 16.0]$> raiz $> duplicar ¶

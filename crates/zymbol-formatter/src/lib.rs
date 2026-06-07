@@ -459,6 +459,8 @@ fn find_resync_point(
     }
 
     // Look through formatted lines starting from fmt_start for any that match an orig_token
+    // (range loop kept: fmt_idx is the returned result, an enumerate rewrite is less clear)
+    #[allow(clippy::needless_range_loop)]
     for fmt_idx in fmt_start..formatted_lines.len().min(fmt_start + LOOKAHEAD * 3) {
         let normalized_fmt = normalize_code(formatted_lines[fmt_idx]);
         if normalized_fmt.is_empty() {

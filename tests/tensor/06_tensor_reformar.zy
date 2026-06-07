@@ -1,0 +1,16 @@
+// Test: aplanar, reformar, crear_desde_lista
+<# ./tensor => t
+
+// aplanar [[1,2],[3,4]] -> [1,2,3,4]
+m = [[1.0, 2.0], [3.0, 4.0]]
+>> t::aplanar(m) ¶
+
+// reformar vector [1..6] como [2,3]
+v = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+t::imprimir(t::reformar(v, [2, 3]))
+
+// reformar la misma lista como [3,2]
+t::imprimir(t::reformar(v, [3, 2]))
+
+// crear_desde_lista
+t::imprimir(t::crear_desde_lista([10.0, 20.0, 30.0, 40.0], [2, 2]))

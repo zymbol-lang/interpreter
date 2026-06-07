@@ -1,0 +1,10 @@
+// Test: tan, asin, acos, atan, atan2
+<# std/math => mat
+
+>> mat::tan(0) ¶
+>> #.6|mat::tan(1)| ¶
+>> #.6|mat::atan(1)| ¶
+>> #.6|mat::atan2(1, 1)| ¶
+>> mat::asin(0) ¶
+>> mat::acos(1) ¶
+>> #.6|mat::asin(1)| ¶

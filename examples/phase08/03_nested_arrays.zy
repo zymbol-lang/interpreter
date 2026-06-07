@@ -7,25 +7,25 @@
 matriz = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
 >> "Matrix: " matriz ¶
 
-// Access rows
-fila1 = matriz[0]
+// Access rows (1-based)
+fila1 = matriz[1]
 >> "First row: " fila1 ¶
 
-fila2 = matriz[1]
+fila2 = matriz[2]
 >> "Second row: " fila2 ¶
 
 ¶
 >> "=== Access Individual Elements ===" ¶
 
-// Chained indexing for matrix elements
-elemento00 = matriz[0][0]
->> "Element [0][0]: " elemento00 ¶
+// Chained indexing for matrix elements (1-based)
+elemento11 = matriz[1][1]
+>> "Element [1][1]: " elemento11 ¶
 
-elemento12 = matriz[1][2]
->> "Element [1][2]: " elemento12 ¶
+elemento23 = matriz[2][3]
+>> "Element [2][3]: " elemento23 ¶
 
-elemento22 = matriz[2][2]
->> "Element [2][2]: " elemento22 ¶
+elemento33 = matriz[3][3]
+>> "Element [3][3]: " elemento33 ¶
 
 ¶
 >> "=== Iterate over Matrix ===" ¶
@@ -41,12 +41,12 @@ elemento22 = matriz[2][2]
 ¶
 >> "=== Table Data ===" ¶
 
-// Represent table data with arrays
-personas = [["Alice", 25], ["Bob", 30], ["Charlie", 35]]
+// Represent table rows as tuples (mixed String + Int)
+personas = [("Alice", 25), ("Bob", 30), ("Charlie", 35)]
 
 >> "People table:" ¶
 @ persona:personas {
-    nombre = persona[0]
-    edad = persona[1]
+    nombre = persona[1]
+    edad = persona[2]
     >> "  " nombre " - " edad " years old" ¶
 }

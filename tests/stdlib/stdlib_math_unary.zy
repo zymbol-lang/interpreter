@@ -1,0 +1,13 @@
+// Test: std/math unary functions
+<# std/math => mat
+
+>> mat::sqrt(4.0) ¶
+>> mat::exp(0.0) ¶
+>> mat::ln(1.0) ¶
+>> mat::sin(0.0) ¶
+>> mat::cos(0.0) ¶
+>> mat::abs(-3) ¶
+>> mat::abs(-2.5) ¶
+>> mat::floor(2.9) ¶
+>> mat::ceil(2.1) ¶
+>> mat::round(2.5) ¶

@@ -296,6 +296,8 @@ pub struct Compiler {
     /// Source of named functions: name → (param_names, body_statements).
     /// Used to recompile named functions as closures when they capture outer variables.
     fn_source: HashMap<String, (Vec<String>, Vec<Statement>)>,
+    /// Builtin function IDs: "alias::func" → builtin_id (for std/math, std/random).
+    builtin_map: HashMap<String, u16>,
 }
 
 impl Compiler {
@@ -319,6 +321,7 @@ impl Compiler {
             global_var_inits: Vec::new(),
             known_module_aliases: HashSet::new(),
             fn_source: HashMap::new(),
+            builtin_map: HashMap::new(),
         };
 
         // Process imports first — register module functions as "alias::func"
@@ -400,6 +403,29 @@ impl Compiler {
     /// registering exported ones as `alias::func_name` in function_index.
     /// Also handles: circular import detection, nested sub-imports, and re-exports.
     fn compile_import(&mut self, import: &zymbol_ast::ImportStmt, base_dir: &Path) -> Result<(), CompileError> {
+        // Detect stdlib modules (std/math, std/random) — no file needed.
+        if import.path.parent_levels == 0 {
+            let module_key = import.path.components.join("/");
+            if let Some(entries) = stdlib_builtin_entries(&module_key) {
+                let alias = import.alias.clone();
+                for (func_name, builtin_id) in entries {
+                    self.builtin_map.insert(format!("{}::{}", alias, func_name), builtin_id);
+                }
+                if module_key == "std/math" {
+                    self.module_constants.insert(
+                        format!("{}.PI", alias),
+                        ModuleConst::Float(std::f64::consts::PI),
+                    );
+                    self.module_constants.insert(
+                        format!("{}.E", alias),
+                        ModuleConst::Float(std::f64::consts::E),
+                    );
+                }
+                self.known_module_aliases.insert(alias);
+                return Ok(());
+            }
+        }
+
         // Build file path from import path components
         let mut path = base_dir.to_path_buf();
         for _ in 0..import.path.parent_levels {
@@ -604,6 +630,11 @@ impl Compiler {
             if let Some(&idx) = self.function_index.get(&src_qualified) {
                 let dst_qualified = format!("{}::{}", alias, public_name);
                 self.function_index.insert(dst_qualified, idx);
+            }
+            // Propagate stdlib builtin re-exports (e.g., i18n adapter modules)
+            if let Some(&bid) = self.builtin_map.get(&src_qualified) {
+                let dst_qualified = format!("{}::{}", alias, public_name);
+                self.builtin_map.insert(dst_qualified, bid);
             }
         }
         for (src_alias, item_name, public_name) in &reexport_consts {
@@ -1061,11 +1092,11 @@ impl Compiler {
         // Four cases: infinite, while, range for-each, array for-each
         if lp.iterator_var.is_some() {
             // Check if iterable is a Range or an array/expression
-            let is_range = lp.iterable.as_ref().map_or(false, |e| matches!(e.as_ref(), Expr::Range(_)));
+            let is_range = lp.iterable.as_ref().is_some_and(|e| matches!(e.as_ref(), Expr::Range(_)));
             if is_range {
-                return self.compile_range_loop(lp, ctx);
+                self.compile_range_loop(lp, ctx)
             } else {
-                return self.compile_foreach_loop(lp, ctx);
+                self.compile_foreach_loop(lp, ctx)
             }
         } else if lp.condition.is_some() {
             // Detect TIMES loop: condition is a literal Int → repeat N times
@@ -1092,7 +1123,7 @@ impl Compiler {
     ) -> Result<(), CompileError> {
         let n = if let Some(cond) = lp.condition.as_ref() {
             if let Expr::Literal(lit) = cond.as_ref() {
-                if let Literal::Int(n) = lit.value { n as i64 } else { 0 }
+                if let Literal::Int(n) = lit.value { n } else { 0 }
             } else { 0 }
         } else { 0 };
 
@@ -2053,6 +2084,27 @@ impl Compiler {
         call: &zymbol_ast::FunctionCallExpr,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
+        // Check builtin FIRST so stdlib calls (std/math, std/random, i18n re-exports) are
+        // handled before the "module does not export function" RaiseError path fires.
+        let maybe_builtin_id = match call.callable.as_ref() {
+            Expr::MemberAccess(ma) => {
+                if let Expr::Identifier(obj) = ma.object.as_ref() {
+                    let qualified = format!("{}::{}", obj.name, ma.field);
+                    self.builtin_map.get(&qualified).copied()
+                } else { None }
+            }
+            _ => None,
+        };
+        if let Some(builtin_id) = maybe_builtin_id {
+            let mut arg_regs = Vec::with_capacity(call.arguments.len());
+            for arg in &call.arguments {
+                arg_regs.push(self.compile_expr(arg, ctx)?);
+            }
+            let dst = ctx.alloc_temp()?;
+            ctx.emit(Instruction::CallBuiltin(dst, builtin_id, arg_regs));
+            return Ok(dst);
+        }
+
         // Check if the callable is a known static function name or a module call (alias::func)
         let maybe_func_idx = match call.callable.as_ref() {
             Expr::Identifier(id) => self.function_index.get(&id.name)
@@ -2144,7 +2196,7 @@ impl Compiler {
     fn eval_const_expr(expr: &Expr) -> Option<ModuleConst> {
         match expr {
             Expr::Literal(lit) => match &lit.value {
-                Literal::Int(n) => Some(ModuleConst::Int(*n as i64)),
+                Literal::Int(n) => Some(ModuleConst::Int(*n)),
                 Literal::Float(f) => Some(ModuleConst::Float(*f)),
                 Literal::String(s) | Literal::InterpolatedString(s) => Some(ModuleConst::String(s.replace('\x01', "{").replace('\x02', "}"))),
                 Literal::Bool(b) => Some(ModuleConst::Bool(*b)),
@@ -2153,7 +2205,7 @@ impl Compiler {
             Expr::Unary(un) if un.op == UnaryOp::Neg => {
                 if let Expr::Literal(lit) = un.operand.as_ref() {
                     match &lit.value {
-                        Literal::Int(n) => Some(ModuleConst::Int(-(*n as i64))),
+                        Literal::Int(n) => Some(ModuleConst::Int(-*n)),
                         Literal::Float(f) => Some(ModuleConst::Float(-f)),
                         _ => None,
                     }
@@ -3253,6 +3305,7 @@ impl Compiler {
 /// - ConcatBuild(var, ...)      → HotNeutral::String (neutral = "")
 /// - Binary(Mul|Div, var, _)   → HotNeutral::IntOne  (neutral = 1, multiplicative identity)
 /// - Everything else            → HotNeutral::Int     (neutral = 0)
+///
 /// HotInit is a conditional init: only sets the register if it currently holds Unit,
 /// so it is safe to emit inside a loop body (no-op after the first iteration).
 fn hot_neutral_instr(value: &Expr, var_name: &str, dst: Reg) -> Instruction {
@@ -3316,11 +3369,10 @@ fn collect_free_in_expr(
 ) {
     match expr {
         Expr::Identifier(id) => {
-            if !locals.contains(&id.name) && outer_ctx.register_map.contains_key(&id.name) {
-                if seen.insert(id.name.clone()) {
+            if !locals.contains(&id.name) && outer_ctx.register_map.contains_key(&id.name)
+                && seen.insert(id.name.clone()) {
                     free.push(id.name.clone());
                 }
-            }
         }
         Expr::Binary(b) => {
             collect_free_in_expr(&b.left, locals, outer_ctx, seen, free);
@@ -3661,9 +3713,7 @@ fn collect_free_in_stmts(
 
             Statement::Sleep(s) => collect_free_in_expr(&s.duration, locals, outer_ctx, seen, free),
             Statement::OutputPos(op) => {
-                for slot in &op.slots {
-                    if let Some(expr) = slot { collect_free_in_expr(expr, locals, outer_ctx, seen, free); }
-                }
+                for expr in op.slots.iter().flatten() { collect_free_in_expr(expr, locals, outer_ctx, seen, free); }
                 for item in &op.items { collect_free_in_expr(item, locals, outer_ctx, seen, free); }
             }
             Statement::TuiBlock(tb) => {
@@ -3760,6 +3810,44 @@ fn eliminate_dead_code(instructions: Vec<Instruction>, old_num_regs: u16) -> (Ve
     (new_instructions, num_registers)
 }
 
+/// Return the (function_name, builtin_id) pairs for a known stdlib module path,
+/// or None if the path is not a stdlib module.
+fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16)>> {
+    use zymbol_bytecode::builtins as B;
+    match module_key {
+        "std/math" => Some(vec![
+            ("sqrt",    B::SQRT),
+            ("exp",     B::EXP),
+            ("ln",      B::LN),
+            ("log",     B::LOG),
+            ("pow",     B::POW),
+            ("sin",     B::SIN),
+            ("cos",     B::COS),
+            ("tan",     B::TAN),
+            ("asin",    B::ASIN),
+            ("acos",    B::ACOS),
+            ("atan",    B::ATAN),
+            ("atan2",   B::ATAN2),
+            ("tanh",    B::TANH),
+            ("sinh",    B::SINH),
+            ("cosh",    B::COSH),
+            ("sigmoid", B::SIGMOID),
+            ("abs",     B::ABS),
+            ("max",     B::MAX),
+            ("min",     B::MIN),
+            ("floor",   B::FLOOR),
+            ("ceil",    B::CEIL),
+            ("round",   B::ROUND),
+        ]),
+        "std/random" => Some(vec![
+            ("entero",   B::RAND_ENTERO),
+            ("rango",    B::RAND_RANGO),
+            ("peso_f64", B::RAND_PESO_F64),
+        ]),
+        _ => None,
+    }
+}
+
 /// Return the highest register index referenced in `instructions`, if any.
 fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
     let mut max: Option<u16> = None;
@@ -3854,6 +3942,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             | Instruction::ClearScreen | Instruction::EnterTui | Instruction::ExitTui => {}
             Instruction::LoadCliArgs(dst) => upd(*dst),
             Instruction::HotInit(dst, _) => upd(*dst),
+            Instruction::CallBuiltin(dst, _, args) => { upd(*dst); for &r in args { upd(r); } }
         }
     }
     max

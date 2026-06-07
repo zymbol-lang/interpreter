@@ -78,15 +78,15 @@ File: `matematicas/ko.zy`
 ```zymbol
 # .matematicas_ko
 #> {
-    mat::sumar <= 더하다
-    mat::restar <= 빼다
-    mat::multiplicar <= 곱하다
-    mat::dividir <= 나누다
-    mat.PI <= 파이
-    mat.E <= 이
+    mat::sumar => 더하다
+    mat::restar => 빼다
+    mat::multiplicar => 곱하다
+    mat::dividir => 나누다
+    mat.PI => 파이
+    mat.E => 이
 }
 
-<# ./module <= mat
+<# ./module => mat
 ```
 
 **Note:** The `.` prefix in `# .matematicas_ko` indicates this file is in the `matematicas/` folder. Without the dot, `matematicas_ko` could be ambiguous (is it a file `matematicas_ko.zy` or `matematicas/ko.zy`?).
@@ -96,7 +96,7 @@ File: `matematicas/ko.zy`
 File: `app_coreano.zy`
 
 ```zymbol
-<# ./matematicas/ko <= 수학
+<# ./matematicas/ko => 수학
 
 결과 = 수학::더하다(10, 5)    // Calls matematicas::sumar(10, 5)
 원주율 = 수학.파이             // Accesses matematicas.PI
@@ -171,9 +171,9 @@ module_name/
 
 **Import pattern:**
 ```zymbol
-<# ./module_name/ko <= alias    // Korean translation
-<# ./module_name/el <= alias    // Greek translation
-<# ./module_name/module <= alias // Original module
+<# ./module_name/ko => alias    // Korean translation
+<# ./module_name/el => alias    // Greek translation
+<# ./module_name/module => alias // Original module
 ```
 
 ## Benefits
@@ -207,24 +207,24 @@ French translation template (`my_module/fr.zy`):
 ```zymbol
 # fr
 #> {
-    orig::function1 <= fonction1
-    orig::function2 <= fonction2
-    orig.CONSTANT <= CONSTANTE
+    orig::function1 => fonction1
+    orig::function2 => fonction2
+    orig.CONSTANT => CONSTANTE
 }
 
-<# ./module <= orig
+<# ./module => orig
 ```
 
 Usage:
 ```zymbol
-<# ./my_module/fr <= mon_module
+<# ./my_module/fr => mon_module
 mon_module::fonction1()
 ```
 
 ## Technical Details
 
 - **Syntax**: Uses `::` for functions, `.` for constants
-- **Re-export**: `alias::item <= new_name`
+- **Re-export**: `alias::item => new_name`
 - **Extension**: All files use `.zy` extension
 - **Module System**: v1.1.0 with re-export support
 - **Implementation**: 100% functional (Lexer, Parser, Interpreter)

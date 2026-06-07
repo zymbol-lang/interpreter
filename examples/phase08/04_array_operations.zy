@@ -24,8 +24,8 @@ promedio = total / contador
 >> "Average: " promedio ¶
 
 // Find min and max
-minimo = datos[0]
-maximo = datos[0]
+minimo = datos[1]
+maximo = datos[1]
 @ n:datos {
     ? n < minimo {
         minimo = n
@@ -73,10 +73,9 @@ contador_a = 0
 fib = [0, 1]
 >> "Starting: " fib ¶
 
-// We need to manually build since we can't append yet
-// For now, just iterate and show first elements
+// Show the two seed elements, then compute the rest iteratively
 >> "Fibonacci sequence:" ¶
->> fib[0] " " fib[1] " " ¶
+>> fib[1] " " fib[2] " " ¶
 
 // Calculate next 8 numbers
 a = 0

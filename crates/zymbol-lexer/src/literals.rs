@@ -518,12 +518,14 @@ mod tests {
     // ── Float normalization ───────────────────────────────────────────────────
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 is a float-lexing fixture, not π
     fn devanagari_float() {
         // ३.१४ → 3.14
         assert_eq!(lex_first("३.१४"), TokenKind::Float(3.14));
     }
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 is a float-lexing fixture, not π
     fn ascii_float_unchanged() {
         assert_eq!(lex_first("3.14"), TokenKind::Float(3.14));
     }

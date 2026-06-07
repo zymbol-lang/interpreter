@@ -1,0 +1,2 @@
+// >>~ with a multi-character string: all chars must follow the escape
+>>~ (4, 7) > "hello"

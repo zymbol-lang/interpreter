@@ -13,6 +13,7 @@
 
 mod zy_str;
 pub use zy_str::ZyStr;
+mod stdlib_builtins;
 
 use zymbol_intrinsics as intrinsics;
 
@@ -142,18 +143,36 @@ impl Value {
 
     fn type_name(&self) -> &'static str {
         match self {
-            Value::Int(_) => "Int",
-            Value::Float(_) => "Float",
-            Value::String(_) => "String",
-            Value::Char(_) => "Char",
-            Value::Bool(_) => "Bool",
-            Value::Array(_) => "Array",
-            Value::Tuple(_) => "Tuple",
-            Value::NamedTuple(_) => "Tuple",
-            Value::Function(_, _) => "Function",
+            Value::Int(_)           => "Int",
+            Value::Float(_)         => "Float",
+            Value::String(_)        => "String",
+            Value::Char(_)          => "Char",
+            Value::Bool(_)          => "Bool",
+            Value::Array(_)         => "Array",
+            Value::Tuple(_)         => "Tuple",
+            Value::NamedTuple(_)    => "Tuple",
+            Value::Function(_, _)   => "Function",
             Value::Closure(_, _, _) => "Function",
-            Value::Unit => "Unit",
-            Value::Error(_) => "Error",
+            Value::Unit             => "Unit",
+            Value::Error(_)         => "Error",
+        }
+    }
+
+    /// Returns the Zymbol symbolic type name used in stdlib error messages.
+    pub fn zymbol_type_name(&self) -> &'static str {
+        match self {
+            Value::Int(_)           => "###",
+            Value::Float(_)         => "##.",
+            Value::String(_)        => "##\"",
+            Value::Char(_)          => "##'",
+            Value::Bool(_)          => "##?",
+            Value::Array(_)         => "##[]",
+            Value::Tuple(_)         => "##()",
+            Value::NamedTuple(_)    => "##(name:)",
+            Value::Function(_, _)   => "##fn",
+            Value::Closure(_, _, _) => "##fn",
+            Value::Unit             => "##_",
+            Value::Error(_)         => "##!",
         }
     }
 
@@ -205,6 +224,9 @@ struct FrameInfo {
     /// Error state — allocated only when a try block is active (None for normal calls)
     error: Option<Box<FrameError>>,
     /// Output param writeback — None for most functions (saves 24 bytes)
+    // Box is intentional: keeps `Option` at 8 bytes (vs 24 for a bare Vec) in the
+    // common None case. The extra allocation only happens on the rare write path.
+    #[allow(clippy::box_collection)]
     writeback: Option<Box<Vec<(usize, Reg)>>>,
 }
 
@@ -598,39 +620,79 @@ impl<W: Write> VM<W> {
                     unsafe { *self.value_stack.get_unchecked_mut(base + dst as usize) = v; }
                 }
 
-                // ── Integer arithmetic ──────────────────────────────────────
+                // ── Integer arithmetic — dynamic dispatch for Float registers ──
+                // The compiler selects AddInt/etc. for registers of Unknown static type
+                // (e.g., from ArrayGet). At runtime we fall back to Float arithmetic
+                // when either operand is Float, matching tree-walker behaviour.
                 &Instruction::AddInt(dst, a, b) => {
-                    let (va, vb) = (ri!(a), ri!(b));
-                    wreg!(dst, Value::Int(va.wrapping_add(vb)));
+                    if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
+                    || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
+                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa + fb));
+                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(va.wrapping_add(vb))); }
                 }
                 &Instruction::SubInt(dst, a, b) => {
-                    let (va, vb) = (ri!(a), ri!(b));
-                    wreg!(dst, Value::Int(va.wrapping_sub(vb)));
+                    if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
+                    || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
+                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa - fb));
+                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(va.wrapping_sub(vb))); }
                 }
                 &Instruction::MulInt(dst, a, b) => {
-                    let (va, vb) = (ri!(a), ri!(b));
-                    wreg!(dst, Value::Int(va.wrapping_mul(vb)));
+                    if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
+                    || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
+                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa * fb));
+                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(va.wrapping_mul(vb))); }
                 }
                 &Instruction::DivInt(dst, a, b) => {
-                    let (va, vb) = (ri!(a), ri!(b));
-                    if vb == 0 { raise!(VmError::DivisionByZero); }
-                    wreg!(dst, Value::Int(va / vb));
+                    if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
+                    || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
+                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa / fb));
+                    } else {
+                        let (va, vb) = (ri!(a), ri!(b));
+                        if vb == 0 { raise!(VmError::DivisionByZero); }
+                        wreg!(dst, Value::Int(va / vb));
+                    }
                 }
                 &Instruction::ModInt(dst, a, b) => {
-                    let (va, vb) = (ri!(a), ri!(b));
-                    if vb == 0 { raise!(VmError::DivisionByZero); }
-                    wreg!(dst, Value::Int(va % vb));
+                    if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
+                    || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
+                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa % fb));
+                    } else {
+                        let (va, vb) = (ri!(a), ri!(b));
+                        if vb == 0 { raise!(VmError::DivisionByZero); }
+                        wreg!(dst, Value::Int(va % vb));
+                    }
                 }
                 &Instruction::PowInt(dst, a, b) => {
-                    let (va, vb) = (ri!(a), ri!(b));
-                    wreg!(dst, Value::Int(if vb < 0 { 0 } else { va.wrapping_pow(vb as u32) }));
+                    if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
+                    || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
+                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa.powf(fb)));
+                    } else {
+                        let (va, vb) = (ri!(a), ri!(b));
+                        wreg!(dst, Value::Int(if vb < 0 { 0 } else { va.wrapping_pow(vb as u32) }));
+                    }
                 }
-                &Instruction::NegInt(dst, src) => { let v = ri!(src); wreg!(dst, Value::Int(-v)); }
+                &Instruction::NegInt(dst, src) => {
+                    if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
+                        let v = rf!(src); wreg!(dst, Value::Float(-v));
+                    } else { let v = ri!(src); wreg!(dst, Value::Int(-v)); }
+                }
 
                 // ── Integer immediate variants ──────────────────────────────
-                &Instruction::AddIntImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Int(v.wrapping_add(imm as i64))); }
-                &Instruction::SubIntImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Int(v.wrapping_sub(imm as i64))); }
-                &Instruction::MulIntImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Int(v.wrapping_mul(imm as i64))); }
+                &Instruction::AddIntImm(dst, src, imm) => {
+                    if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
+                        let v = rf!(src); wreg!(dst, Value::Float(v + imm as f64));
+                    } else { let v = ri!(src); wreg!(dst, Value::Int(v.wrapping_add(imm as i64))); }
+                }
+                &Instruction::SubIntImm(dst, src, imm) => {
+                    if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
+                        let v = rf!(src); wreg!(dst, Value::Float(v - imm as f64));
+                    } else { let v = ri!(src); wreg!(dst, Value::Int(v.wrapping_sub(imm as i64))); }
+                }
+                &Instruction::MulIntImm(dst, src, imm) => {
+                    if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
+                        let v = rf!(src); wreg!(dst, Value::Float(v * imm as f64));
+                    } else { let v = ri!(src); wreg!(dst, Value::Int(v.wrapping_mul(imm as i64))); }
+                }
                 &Instruction::CmpEqImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v == imm as i64)); }
                 &Instruction::CmpNeImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v != imm as i64)); }
                 &Instruction::CmpLtImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v  < imm as i64)); }
@@ -842,8 +904,8 @@ impl<W: Write> VM<W> {
                     self.frame_stack.push(FrameInfo {
                         base: new_base as u32,
                         ip: 0,
-                        chunk_idx: func_idx as u32,
-                        return_reg: dst as u16,
+                        chunk_idx: func_idx,
+                        return_reg: dst,
                         catch_ip: u32::MAX,
                         try_depth: 0,
                         error: None,
@@ -891,7 +953,7 @@ impl<W: Write> VM<W> {
 
                     // Update frame metadata (same base, new chunk)
                     let frame = self.frame_stack.last_mut().unwrap();
-                    frame.chunk_idx = func_idx as u32;
+                    frame.chunk_idx = func_idx;
 
                     ip = 0;
                     chunk_idx = func_idx as usize;
@@ -971,6 +1033,17 @@ impl<W: Write> VM<W> {
                     match unsafe { self.value_stack.get_unchecked_mut(base + arr_reg as usize) } {
                         Value::Array(rc_arr) => Rc::make_mut(rc_arr).push(val),
                         Value::Tuple(rc_tup) => Rc::make_mut(rc_tup).push(val),
+                        Value::String(s) => {
+                            // $+ on string: d $+ s → string concatenation
+                            use std::fmt::Write as _;
+                            let mut buf = s.clone().try_into_string();
+                            match val {
+                                Value::String(r) => buf.push_str(r.as_str()),
+                                Value::Char(c) => buf.push(c),
+                                other => { let _ = write!(buf, "{}", other); }
+                            }
+                            *s = ZyStr::new(buf);
+                        }
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
                     }
                 }
@@ -1020,10 +1093,14 @@ impl<W: Write> VM<W> {
                     self.reg_set(dst, val);
                 }
                 &Instruction::ArraySet(arr_reg, idx_reg, val_reg) => {
-                    let idx = self.as_int(idx_reg)?;
                     let val = self.reg_get(val_reg).clone();
+                    let idx_val = self.reg_get(idx_reg).clone();
                     match &mut self.value_stack[base + arr_reg as usize] {
                         Value::Array(rc_arr) => {
+                            let idx = match idx_val {
+                                Value::Int(n) => n,
+                                other => raise!(VmError::TypeError { expected: "Int", got: other.type_name().to_string() }),
+                            };
                             let arr = Rc::make_mut(rc_arr);
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
@@ -1031,6 +1108,27 @@ impl<W: Write> VM<W> {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
                             }
                             arr[i as usize] = val;
+                        }
+                        Value::NamedTuple(rc_fields) => {
+                            let fields = Rc::make_mut(rc_fields);
+                            match idx_val {
+                                Value::Int(idx) => {
+                                    let i = if idx == 0 { raise!(VmError::IndexZero);
+                                    } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
+                                    if i < 0 || i as usize >= fields.len() {
+                                        raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
+                                    }
+                                    fields[i as usize].1 = val;
+                                }
+                                Value::String(name) => {
+                                    if let Some(f) = fields.iter_mut().find(|(k, _)| k == name.as_str()) {
+                                        f.1 = val;
+                                    } else {
+                                        raise!(VmError::Generic(format!("named tuple has no field '{}'", name.as_str())));
+                                    }
+                                }
+                                other => raise!(VmError::TypeError { expected: "Int or String", got: other.type_name().to_string() }),
+                            }
                         }
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
                     }
@@ -1752,8 +1850,8 @@ impl<W: Write> VM<W> {
                     self.frame_stack.push(FrameInfo {
                         base: new_base as u32,
                         ip: 0,
-                        chunk_idx: func_idx as u32,
-                        return_reg: dst as u16,
+                        chunk_idx: func_idx,
+                        return_reg: dst,
                         catch_ip: u32::MAX,
                         try_depth: 0,
                         error: None,
@@ -1763,6 +1861,18 @@ impl<W: Write> VM<W> {
                     base = new_base;
                     ip = 0;
                     chunk_idx = func_idx as usize;
+                }
+
+                // ── Stdlib builtin call ───────────────────────────────────────
+                Instruction::CallBuiltin(dst, builtin_id, arg_regs) => {
+                    let dst = *dst;
+                    let builtin_id = *builtin_id;
+                    let args: Vec<Value> = arg_regs.iter()
+                        .map(|&r| unsafe { self.value_stack.get_unchecked(base + r as usize).clone() })
+                        .collect();
+                    let result = crate::stdlib_builtins::call(builtin_id, args)
+                        .map_err(VmError::Generic)?;
+                    wreg!(dst, result);
                 }
 
                 // ── Array higher-order ops ────────────────────────────────────
@@ -1865,7 +1975,7 @@ impl<W: Write> VM<W> {
                     let mut items = arr;
                     if func_reg == u16::MAX {
                         // Natural order
-                        items.sort_by(|a, b| vm_natural_cmp(a, b));
+                        items.sort_by(vm_natural_cmp);
                         if !ascending {
                             items.reverse();
                         }
@@ -2073,7 +2183,7 @@ impl<W: Write> VM<W> {
                 // ── Try/catch ─────────────────────────────────────────────────
                 &Instruction::TryBegin(catch_label) => {
                     let frame = self.frame_stack.last_mut().unwrap();
-                    frame.catch_ip = catch_label as u32;
+                    frame.catch_ip = catch_label;
                     frame.try_depth += 1;
                 }
                 Instruction::TryEnd(_) => {
@@ -2258,7 +2368,7 @@ impl<W: Write> VM<W> {
                             match event::read() {
                                 Ok(Event::Key(KeyEvent { code, .. })) => break vm_map_key_code(code),
                                 Ok(_) => continue,
-                                Err(_) => break '\0', // non-TTY: no input available
+                                Err(e) => return Err(VmError::Generic(e.to_string())),
                             }
                         }
                     } else if event::poll(std::time::Duration::ZERO).unwrap_or(false) {
@@ -2492,33 +2602,56 @@ impl<W: Write> VM<W> {
                     w!(dst, v);
                 }
                 &Instruction::AddInt(dst, a, b) => {
-                    if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
+                    let is_fl = matches!(r!(a), Value::Float(_)) || matches!(r!(b), Value::Float(_));
+                    if is_fl {
+                        let fa = match r!(a) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
+                        let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
+                        w!(dst, Value::Float(fa + fb));
+                    } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
                         let res = va.wrapping_add(*vb); w!(dst, Value::Int(res));
                     }
                 }
                 &Instruction::SubInt(dst, a, b) => {
-                    if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
+                    let is_fl = matches!(r!(a), Value::Float(_)) || matches!(r!(b), Value::Float(_));
+                    if is_fl {
+                        let fa = match r!(a) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
+                        let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
+                        w!(dst, Value::Float(fa - fb));
+                    } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
                         let res = va.wrapping_sub(*vb); w!(dst, Value::Int(res));
                     }
                 }
                 &Instruction::MulInt(dst, a, b) => {
-                    if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
+                    let is_fl = matches!(r!(a), Value::Float(_)) || matches!(r!(b), Value::Float(_));
+                    if is_fl {
+                        let fa = match r!(a) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
+                        let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
+                        w!(dst, Value::Float(fa * fb));
+                    } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
                         let res = va.wrapping_mul(*vb); w!(dst, Value::Int(res));
                     }
                 }
                 &Instruction::ModInt(dst, a, b) => {
-                    if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
+                    let is_fl = matches!(r!(a), Value::Float(_)) || matches!(r!(b), Value::Float(_));
+                    if is_fl {
+                        let fa = match r!(a) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
+                        let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
+                        if fb != 0.0 { w!(dst, Value::Float(fa % fb)); }
+                    } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
                         if *vb != 0 { w!(dst, Value::Int(va % vb)); }
                     }
                 }
                 &Instruction::AddIntImm(dst, src, imm) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Int(v.wrapping_add(imm as i64))); }
+                    if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v + imm as f64)); }
+                    else if let Value::Int(v) = r!(src) { w!(dst, Value::Int(v.wrapping_add(imm as i64))); }
                 }
                 &Instruction::SubIntImm(dst, src, imm) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Int(v.wrapping_sub(imm as i64))); }
+                    if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v - imm as f64)); }
+                    else if let Value::Int(v) = r!(src) { w!(dst, Value::Int(v.wrapping_sub(imm as i64))); }
                 }
                 &Instruction::MulIntImm(dst, src, imm) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Int(v.wrapping_mul(imm as i64))); }
+                    if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v * imm as f64)); }
+                    else if let Value::Int(v) = r!(src) { w!(dst, Value::Int(v.wrapping_mul(imm as i64))); }
                 }
                 &Instruction::CmpEqImm(dst, src, imm) => {
                     if let Value::Int(v) = r!(src) { w!(dst, Value::Bool(*v == imm as i64)); }
@@ -2554,8 +2687,8 @@ impl<W: Write> VM<W> {
                     let v = r!(src).is_truthy(); w!(dst, Value::Bool(!v));
                 }
                 &Instruction::Jump(label) => { ip = label as usize; }
-                &Instruction::JumpIf(cond, label) => { if r!(cond).is_truthy() { ip = label as usize; } }
-                &Instruction::JumpIfNot(cond, label) => { if !r!(cond).is_truthy() { ip = label as usize; } }
+                &Instruction::JumpIf(cond, label) if r!(cond).is_truthy() => { ip = label as usize; }
+                &Instruction::JumpIfNot(cond, label) if !r!(cond).is_truthy() => { ip = label as usize; }
                 &Instruction::ConcatStr(dst, a, b) => {
                     let result = if dst == a && a != b {
                         let left = std::mem::replace(
@@ -2664,6 +2797,14 @@ impl<W: Write> VM<W> {
                     let result = self.call_callable(callable, args, program, 0, chunk_idx)?;
                     self.value_stack[base + dst as usize] = result;
                 }
+                Instruction::CallBuiltin(dst, builtin_id, arg_regs) => {
+                    let args: Vec<Value> = arg_regs.iter()
+                        .map(|&r| self.value_stack[base + r as usize].clone())
+                        .collect();
+                    let result = crate::stdlib_builtins::call(*builtin_id, args)
+                        .map_err(VmError::Generic)?;
+                    self.value_stack[base + *dst as usize] = result;
+                }
                 &Instruction::CmpLt(dst, a, b) => {
                     let res = match (r!(a), r!(b)) {
                         (Value::Int(x), Value::Int(y))       => x < y,
@@ -2761,6 +2902,16 @@ impl<W: Write> VM<W> {
                     match &mut self.value_stack[base + arr_reg as usize] {
                         Value::Array(rc) => Rc::make_mut(rc).push(val),
                         Value::Tuple(rc) => Rc::make_mut(rc).push(val),
+                        Value::String(s) => {
+                            use std::fmt::Write as _;
+                            let mut buf = s.clone().try_into_string();
+                            match val {
+                                Value::String(r) => buf.push_str(r.as_str()),
+                                Value::Char(c) => buf.push(c),
+                                other => { let _ = write!(buf, "{}", other); }
+                            }
+                            *s = ZyStr::new(buf);
+                        }
                         _ => {}
                     }
                 }
@@ -3125,7 +3276,7 @@ impl<W: Write> VM<W> {
                     };
                     let mut items = arr;
                     if func_reg == u16::MAX {
-                        items.sort_by(|a, b| vm_natural_cmp(a, b));
+                        items.sort_by(vm_natural_cmp);
                         if !ascending { items.reverse(); }
                     } else {
                         let callable = self.value_stack[base + func_reg as usize].clone();

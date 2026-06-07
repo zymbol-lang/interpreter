@@ -1,0 +1,10 @@
+// Test: std/math constants PI and E
+<# std/math => mat
+
+pi = mat.PI
+e  = mat.E
+
+>> (pi > 3.14159) ¶
+>> (pi < 3.14160) ¶
+>> (e > 2.71828) ¶
+>> (e < 2.71829) ¶

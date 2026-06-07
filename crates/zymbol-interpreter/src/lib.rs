@@ -33,6 +33,7 @@ mod arithmetic_ops;
 mod functions_lambda;
 mod expr_eval;
 mod index_nav;
+mod stdlib;
 
 pub(crate) use modules::LoadedModule;
 
@@ -79,14 +80,32 @@ enum ControlFlow {
     Return(Option<Value>),
 }
 
-/// Function definition
-#[derive(Debug, Clone)]
-struct FunctionDef {
-    parameters: Vec<zymbol_ast::Parameter>,
-    body: zymbol_ast::Block,
-    /// Path of the module where this function was defined.
-    /// Used to restore the correct scope when a function is called through a re-export adapter.
-    origin_module_path: Option<PathBuf>,
+/// Function definition — Zymbol source function or native Rust function.
+#[derive(Clone)]
+enum FunctionDef {
+    Zymbol {
+        parameters: Vec<zymbol_ast::Parameter>,
+        body: zymbol_ast::Block,
+        /// Path of the module where this function was defined.
+        /// Used to restore the correct scope when a function is called through a re-export adapter.
+        origin_module_path: Option<PathBuf>,
+    },
+    Native {
+        name:  &'static str,
+        arity: i8,  // expected argument count; -1 = variadic
+        func:  fn(Vec<Value>, zymbol_span::Span) -> Result<Value>,
+    },
+}
+
+impl std::fmt::Debug for FunctionDef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FunctionDef::Zymbol { parameters, .. } =>
+                write!(f, "FunctionDef::Zymbol({})", parameters.len()),
+            FunctionDef::Native { name, arity, .. } =>
+                write!(f, "FunctionDef::Native({}, arity={})", name, arity),
+        }
+    }
 }
 
 
@@ -165,6 +184,9 @@ pub struct FunctionValue {
     /// True when this value was created from a named FunctionDecl used as a first-class value.
     /// Named functions may complete their block without <~ and return Unit (unlike block lambdas).
     pub is_named_fn: bool,
+    /// Module aliases captured at definition time for named functions.
+    /// Empty for anonymous lambdas — they inherit aliases from the fast path in eval_lambda_call.
+    pub module_aliases: std::collections::HashMap<String, std::path::PathBuf>,
 }
 
 impl PartialEq for FunctionValue {
@@ -253,6 +275,22 @@ impl Value {
                 format!("({})", contents)
             }
             _ => self.to_display_string(),
+        }
+    }
+
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Value::Int(_)        => "###",
+            Value::Float(_)      => "##.",
+            Value::String(_)     => "##\"",
+            Value::Char(_)       => "##'",
+            Value::Bool(_)       => "##?",
+            Value::Array(_)      => "##[]",
+            Value::Tuple(_)      => "##()",
+            Value::NamedTuple(_) => "##(name:)",
+            Value::Function(_)   => "##fn",
+            Value::Error(_)      => "##!",
+            Value::Unit          => "##_",
         }
     }
 
@@ -787,6 +825,32 @@ impl<W: Write> Interpreter<W> {
         self.cli_args = Some(args_values);
     }
 
+    /// Reset interpreter scope: clears all variables, functions, and aliases.
+    /// Keeps the output writer and any already-loaded modules.
+    pub fn reset_scope(&mut self) {
+        self.scope_stack.clear();
+        self.scope_stack.push(HashMap::new());
+        self.mutable_vars_stack.clear();
+        self.mutable_vars_stack.push(HashSet::new());
+        self.const_vars_stack.clear();
+        self.const_vars_stack.push(HashSet::new());
+        self.functions.clear();
+        self.dead_variables.clear();
+        self.import_aliases.clear();
+        self.loading_modules.clear();
+        self.loop_scope_depths.clear();
+        self.has_any_const = false;
+        self.has_control_flow = false;
+        self.control_flow = ControlFlow::None;
+        self.statement_index = 0;
+        self.tco_pending = false;
+        self.tco_args.clear();
+        self.current_function = None;
+        self.numeral_mode = 0x0030;
+        self.tui_depth = 0;
+        self.try_depth = 0;
+    }
+
     /// Execute a single line of code (for REPL)
     /// Returns the value of the last expression if any
     pub fn execute_line(&mut self, source: &str) -> Result<Option<Value>> {
@@ -968,8 +1032,7 @@ impl<W: Write> Interpreter<W> {
             Statement::Break(break_stmt) => self.execute_break(break_stmt),
             Statement::Continue(continue_stmt) => self.execute_continue(continue_stmt),
             Statement::FunctionDecl(func_decl) => {
-                // Store function definition
-                let func_def = FunctionDef {
+                let func_def = FunctionDef::Zymbol {
                     parameters: func_decl.parameters.clone(),
                     body: func_decl.body.clone(),
                     origin_module_path: self.current_file.clone(),

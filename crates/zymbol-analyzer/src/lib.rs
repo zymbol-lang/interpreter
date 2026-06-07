@@ -237,6 +237,15 @@ impl Analyzer {
         module_path: &zymbol_ast::ModulePath,
         from_file: &Path,
     ) -> Option<PathBuf> {
+        // Stdlib imports (bare path, first component "std") resolve to a
+        // synthetic path so the filesystem check is bypassed.
+        if Self::is_stdlib_path(module_path) {
+            return Some(PathBuf::from(format!(
+                "__stdlib__/{}",
+                module_path.components.join("/")
+            )));
+        }
+
         let from_dir = from_file.parent()?;
         let mut resolved = from_dir.to_path_buf();
 
@@ -256,6 +265,12 @@ impl Analyzer {
         resolved.set_extension("zy");
 
         Some(resolved)
+    }
+
+    fn is_stdlib_path(path: &zymbol_ast::ModulePath) -> bool {
+        !path.is_relative
+            && !path.is_absolute
+            && path.components.first().map(|s| s == "std").unwrap_or(false)
     }
 
     /// Internal helper to resolve import alias from path
@@ -511,8 +526,9 @@ impl Analyzer {
 
             match resolved {
                 Some(resolved_path) => {
-                    // Check if the module exists
-                    if !resolved_path.exists() {
+                    // Stdlib synthetic paths are always valid — skip filesystem check.
+                    let is_stdlib = resolved_path.starts_with("__stdlib__");
+                    if !is_stdlib && !resolved_path.exists() {
                         diagnostics.push(lsp_types::Diagnostic {
                             range: diagnostics::span_to_range(&import.span),
                             severity: Some(lsp_types::DiagnosticSeverity::ERROR),

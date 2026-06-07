@@ -67,11 +67,11 @@ sumar(a, b) {
 # .matematicas_ko
 
 #> {
-    mat::sumar <= 더하다
-    mat.PI <= 파이
+    mat::sumar => 더하다
+    mat.PI => 파이
 }
 
-<# ./module <= mat
+<# ./module => mat
 ```
 
 **Interpretation:**
@@ -251,8 +251,8 @@ game_engine/
 
 **Usage:**
 ```zymbol
-<# ./physics/module <= physics
-<# ./graphics/renderer <= gfx
+<# ./physics/module => physics
+<# ./graphics/renderer => gfx
 
 physics::init()
 gfx::render_frame()

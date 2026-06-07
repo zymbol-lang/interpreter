@@ -1,8 +1,10 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **v0.0.2** — interpreter feature-complete, dual execution modes,
-> 243/246 VM parity tests passing (3 failures: HTTP client + CLI args not yet in VM).
-> Collection API v0.0.2 + destructuring. **1-based indexing** across all collections.
+> Current status: **v0.0.6 (released 2026-06-07)** — all planned features shipped.
+> Highlights: `FatArrow` `=>` maps-to operator, bytecode-embedded standalones (~60% smaller),
+> VM `<<` input parity (`ReadLine`), `std/math` + `std/random` stdlib, typed test wildcards,
+> and the GAP-Z009 / BUG-007 / TUI fixes (see `IMPL_V006.md`).
+> Validation: 478/478 VM-parity tests PASS (0 SKIP). Next: see `IMPL_V007.md`.
 
 ---
 
@@ -21,7 +23,7 @@
 | Input `<<` with prompt | ✅ |
 | CLI args capture `><` | ✅ |
 | Control flow: `?` / `_?` / `_` | ✅ |
-| Match `??` (literal, range, guard `_?`, wildcard) | ✅ |
+| Match `??` (literal, range, comparison `< expr`, ident/containment, list, wildcard) | ✅ |
 | All loop forms: infinite, while, for-each, range | ✅ |
 | Range step and reverse range | ✅ |
 | Labeled loops with `@!` / `@>` | ✅ |
@@ -78,8 +80,8 @@
 
 | Suite | Status |
 |-------|--------|
-| 94 E2E tests (47 tree-walker + 47 VM) | ✅ PASS |
-| VM parity check (vm_compare.sh) | ✅ 159/159 PASS |
+| Unit + integration (`cargo test`) | ✅ 820 passed, 0 failed, 4 ignored |
+| VM parity check (`vm_compare.sh`) | ✅ 478/478 PASS (0 SKIP) |
 | RosettaStone i18n suite (105 languages) | ✅ PASS |
 
 ---
@@ -93,14 +95,18 @@ They are documented in the manual as known limitations.
 
 | Gap | Description | Workaround |
 |-----|-------------|------------|
-| **Match multi-value arms** | `1, 2 : "low"` syntax not parsed | Use guard: `_? n == 1 \|\| n == 2 : "low"` |
-| **Match identifier binding** | `n : n * 2` pattern not supported | Use guard or extract value before match |
-| **Module constant access** | `alias.CONST` fails at runtime | Use getter function: `alias::get_CONST()` |
-| **HOF with lambda variable** | `arr$> fn` where `fn` is a variable | Wrap: `arr$> (x -> fn(x))` |
-| **Named functions as values** | `f = myFunc` fails | Wrap: `f = x -> myFunc(x)` |
-| **CLI args in VM mode** | `><` capture not implemented in VM | Use tree-walker for CLI arg programs |
-| **`$!!` from lambdas** | Error propagation only works in named functions | Wrap lambda body in a named function |
-| **`do-while ~>`** | Post-condition loop syntax defined in EBNF, not parsed | Infinite loop with `@!` break at end |
+| **Match multi-value arms** | `1, 2 => "low"` (one arm, several values) not parsed — `[NI02]` | Repeat the value across separate arms |
+| **Match identifier binding** | `pattern as name` binding syntax — `[NI03]` | Extract the value before the match |
+| **`$!!` from lambdas** | Error propagation only works in named functions — `[NI04]` | Wrap lambda body in a named function |
+| **`do-while ~>`** | Post-condition loop `[NI01]` — not parsed | Infinite loop with `@!` break at end |
+| **Dict / map literal** | `[NI05]` — no `key: value` collection literal | Use named tuples, or arrays of `(k, v)` pairs |
+
+> **Resolved since this table was first written** (verified against `crates/` + `tests/`):
+> module constant access `alias.CONST` (see REFERENCE.md L4), named functions as
+> first-class values (`f = myFunc`) and as HOF references (`arr$> myFunc`)
+> (`tests/analysis/p0a_named_fn_firstclass.zy`, GAP-Z009), and `><` CLI-args capture
+> in VM mode (`LoadCliArgs`). Match guard patterns `_?` were **removed**, not added
+> (EBNF `[D03]`/`[R05]`).
 
 ### Static Analyzer False Positives
 
@@ -119,9 +125,8 @@ They are documented in the manual as known limitations.
 
 #### Fix known language gaps
 
-- **Match multi-value arms**: extend parser to accept `val1, val2 : expr` arm syntax
-- **Match identifier binding**: extend AST to support `ident : body` pattern
-- **Module constant access**: fix `alias.CONST` lookup in module scope resolver
+- **Match multi-value arms**: extend parser to accept `val1, val2 => expr` arm syntax
+- **Match identifier binding**: extend AST to support `pattern as name` binding
 
 #### Fix static analyzer false positives
 
@@ -132,7 +137,6 @@ They are documented in the manual as known limitations.
 
 #### VM completeness
 
-- **CLI args capture `><`** in VM mode (parity with tree-walker)
 - **Module system in VM**: full parity with tree-walker for `<#` imports
 - **Format expressions in VM**: `e|x|`, `c|x|` full parity (`#.N|x|` already working)
 
@@ -189,7 +193,6 @@ intermediate representation handed off to the native code compiler.
 
 - **Array type inference relaxation**: allow mixed-type arrays with dynamic dispatch
   (currently requires homogeneous element types)
-- **Module constants via `.`**: complete the `alias.CONST` access path
 - **`$!!` error propagation from lambdas**: currently limited to named functions; extend
   to propagate through the lambda's call frame to its immediate caller
 - **`do-while ~>` post-condition loop**: implement EBNF rule `block ~> expr`; parser
@@ -220,15 +223,16 @@ maximum performance or deployment without the Zymbol runtime.
 
 Built-in modules accessible via `<#`:
 
-| Module | Description |
-|--------|-------------|
-| `std/io` | File read/write, path utilities |
-| `std/math` | sqrt, floor, ceil, sin, cos, log, etc. |
-| `std/string` | Advanced string utilities |
-| `std/time` | Timestamps, duration, formatting |
-| `std/net` | HTTP client (basic) |
-| `std/json` | JSON parse and serialize |
-| `std/env` | Environment variables, OS info |
+| Module | Description | Status |
+|--------|-------------|--------|
+| `std/math` | `sqrt exp ln log pow sin cos abs max min floor ceil round` + `PI E` | ✅ v0.0.6 |
+| `std/random` | `entero rango peso_f64` (xoshiro256++) | ✅ v0.0.6 |
+| `std/io` | File read/write, path utilities | planned |
+| `std/env` | Environment variables, OS info | planned |
+| `std/json` | JSON parse and serialize | planned |
+| `std/net` | HTTP client (basic) | planned |
+| `std/string` | Advanced string utilities | planned |
+| `std/time` | Timestamps, duration, formatting | planned |
 
 #### Package Manager
 
@@ -265,6 +269,128 @@ Both are addressed by the Cranelift JIT milestone.
 
 ---
 
+## v0.0.6 Roadmap — Refinement & Scientific Stdlib
+
+> **Focus:** polish of existing features + stdlib foundation for scientific computing.
+> Primary drivers: general depuration + **Zofía** (first scientific computing project
+> in Zymbol — tensors, neural networks, transformer encoder from scratch).
+> Zofía's `HALLAZGOS.md` is the living gap tracker that feeds this milestone.
+> No new syntax in core language — improvements are additive.
+
+### Depuration (polish)
+
+| Item | Area | Description |
+|------|------|-------------|
+| Error suggestions | Diagnostics | `"undefined 'funciom'"` → `help: did you mean 'funcion'?` |
+| `zymbol check` exit code | CLI | Non-zero exit on warnings — enables CI pipelines |
+| REPL persistent history | REPL | Persist `~/.zymbol_history` across sessions |
+| `--quiet` flag | CLI | Suppress startup banner — clean output in scripts |
+| `--time` flag | CLI | Print execution time — `zymbol run --time file.zy` |
+| `--no-color` flag | CLI | Disable ANSI output — for piped output / log files |
+| LSP module completion | LSP | Autocomplete module names in `<#` and `alias::` calls |
+| VM: remaining parity | VM | Cover the 5% gaps exposed by Zofía's tensor operations |
+
+### New Features (driven by Zofía HALLAZGOS)
+
+#### ✅ `std/math` — mathematical functions  ← GAP-Z001, GAP-Z002  **[DONE]**
+
+Shipped in v0.0.6. Names follow the international standard (C / Python / Rust).
+For localized names use the i18n three-layer pattern — re-export under the
+target language's names (see `Zofia/modulos/matematica_std.zy` for the Spanish adapter).
+
+```zymbol
+<# std/math => mat
+
+mat::sqrt(x)          -- raíz cuadrada
+mat::exp(x)           -- e^x
+mat::ln(x)            -- logaritmo natural
+mat::log(x)           -- logaritmo natural (alias)
+mat::log(x, base)     -- logaritmo en base arbitraria
+mat::pow(base, exp)   -- base^exp  (Float)
+mat::sin(x)           -- seno (radianes)
+mat::cos(x)           -- coseno (radianes)
+mat::abs(x)           -- |x|  (Int→Int, Float→Float)
+mat::max(a, b)        -- máximo escalar
+mat::min(a, b)        -- mínimo escalar
+mat::floor(x)         -- entero inferior
+mat::ceil(x)          -- entero superior
+mat::round(x)         -- redondeo al más cercano
+mat.PI                -- 3.141592653589793
+mat.E                 -- 2.718281828459045
+```
+
+- **Int → Float promotion:** `mat::sqrt(4)` → `2.0` — all functions accept `###`.
+- **Implementation:** `crates/zymbol-interpreter/src/stdlib/math.rs` — thin Rust
+  wrappers over `f64` stdlib methods. `enum FunctionDef::Native` dispatch. No new syntax.
+- **Tests:** `interpreter/tests/stdlib/stdlib_math_*.zy` (6 test files, all passing).
+
+#### ✅ `std/random` — pseudo-random number generation  ← GAP-Z003  **[DONE]**
+
+Shipped in v0.0.6. Uses xoshiro256++ with thread-local state, auto-seeded from
+`SystemTime` on first call. No seed object needed from Zymbol's perspective.
+
+```zymbol
+<# std/random => rnd
+
+rnd::entero(min, max)  -- Int en [min, max]  (uniforme)
+rnd::rango(n)          -- Int en [0, n-1]    (uniforme)
+rnd::peso_f64()        -- Float en [-0.1, 0.1]  (inicialización de pesos NN)
+```
+
+- **Implementation:** `crates/zymbol-interpreter/src/stdlib/random.rs`.
+- **Tests:** `interpreter/tests/stdlib/stdlib_random_*.zy` (3 test files, all passing).
+
+#### Float formatting in `>>`  ← GAP-Z004, IDEA-Z002
+
+Zofía's tensor printer outputs `0.3333333333333333` — unreadable for
+educational output. A format modifier on `>>`:
+
+```zymbol
+>> x :#4    -- 4 decimal places: "0.3333"
+>> x :#2e   -- scientific notation 2 dec: "3.33e-01"
+>> x :#0    -- integer truncation: "0"
+```
+
+Applies only to numeric values. Ignored for strings/booleans/etc.
+
+#### ~~`$@` functional map operator~~  ← IDEA-Z003  **[DISCARDED]**
+
+Redundant with the existing `$>` map operator, which already covers every
+use case identified in Zofía:
+
+```zymbol
+resultado = vec$> relu_escalar          -- referencia a función nombrada
+resultado = vec$> (v -> mat::exp(v))    -- lambda inline
+exps      = vec$> (v -> mat::exp(v))    -- softmax step 1
+```
+
+Adding `$@` would be duplicate syntax with no benefit. Discarded.
+
+#### Typed input constraints  ← IDEA-Z004
+
+Restrict `<<` at the operator level — invalid characters rejected on keypress,
+no manual validation code needed. Uses existing Zymbol type symbols (no English
+letters — language-agnostic):
+
+```zymbol
+<< :###4    "Capas (1–99): "      -- integer, up to 4 digits
+<< :+###4   "Dimensión: "         -- positive integer, up to 4 digits
+<< :+##.4   "Tasa aprendizaje: "  -- positive decimal, up to 4 decimal places
+<< :##"30   "Etiqueta: "          -- text, max 30 chars
+```
+
+### Zofía integration checkpoints
+
+| Zofía Phase | Unblocked by | Estado |
+|-------------|-------------|--------|
+| Fase 1 — tensor | Depuration items (float format) | pendiente |
+| Fase 2 — grad | No new Zymbol features needed | pendiente |
+| Fase 3 — activacion | `std/math` (`exp`, `log`) | ✅ desbloqueado |
+| Fase 4 — atencion | `std/math` (`sqrt`) | ✅ desbloqueado |
+| Fase 5 — transformador | `std/math` (`sin`, `cos`, `pow`) + `std/random` (`peso_f64`) | ✅ desbloqueado |
+
+---
+
 ## Version History
 
 | Version | Milestone | Description |
@@ -277,3 +403,7 @@ Both are addressed by the Cranelift JIT milestone.
 | Sprint 5D–5D+ | VM memory | `sizeof(Value)` 40→16 bytes, string pool, slim frames |
 | Sprint 5I | Language complete | Indexed assign, comma concat, guard patterns, range step, BaseConvert, labeled loops |
 | v0.0.2 | Collection API + destructuring | `$+[i]` `$-` `$--` `$-[i]` `$-[i..j]` `$??` `$^+` `$^-`, negative indices normalized, destructuring assignment |
+| v0.0.3 | i18n + safe access | Unicode grapheme clusters, safe access `?.`, null coalescing |
+| v0.0.4 | Module system + REPL | Full module import/export, circular import detection, REPL improvements |
+| v0.0.5 | TUI + VM parity | `>>|` `>>~` `>>!` `>>?` `<<\|` `@~`, `$*` string repeat, tuple equality VM, LSP `<<\|` fix, text styles `>>~(,,BKS,fg,bg)` |
+| **v0.0.6** | **Refinement + Scientific Stdlib** | `std/math` (sqrt/exp/ln/log/pow/sin/cos/abs/max/min/floor/ceil/round + PI/E), `std/random` (xoshiro256++), stdlib infrastructure (`enum FunctionDef`, `load_stdlib_module`, semantic suppression), 9 stdlib tests — **driven by Zofía**; float formatting + typed input pending |

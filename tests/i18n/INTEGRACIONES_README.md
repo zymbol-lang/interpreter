@@ -58,7 +58,7 @@ post_json(url, json_data) {
 ### Ejemplo de Uso: Consumir API Pública
 
 ```zymbol
-<# ./matematicas/http <= http
+<# ./matematicas/http => http
 
 // Obtener datos de API
 url = "https://api.github.com/users/octocat"
@@ -89,7 +89,7 @@ respuesta = http::post_json(webhook_url, payload)
 #### 1. Monitoreo de Servicios
 
 ```zymbol
-<# ./matematicas/http <= http
+<# ./matematicas/http => http
 
 // URLs a monitorear
 urls = [
@@ -179,7 +179,7 @@ query(db, sql) {
 ### Ejemplo de Uso
 
 ```zymbol
-<# ./matematicas/db_sqlite <= db
+<# ./matematicas/db_sqlite => db
 
 database = "mi_app.db"
 tabla = "configuracion"
@@ -342,8 +342,8 @@ filtrados = <\ grep {buscar} {archivo_csv} \>
 ### Backup Automatizado
 
 ```zymbol
-<# ./matematicas/fecha_hora <= fecha
-<# ./matematicas/sistema <= sys
+<# ./matematicas/fecha_hora => fecha
+<# ./matematicas/sistema => sys
 
 // Obtener fecha para nombre de backup
 fecha_actual = fecha::fecha_actual()
@@ -375,8 +375,8 @@ ruta_remota = "/var/backups/"
 ### Monitor de Salud del Sistema
 
 ```zymbol
-<# ./matematicas/sistema <= sys
-<# ./matematicas/fecha_hora <= fecha
+<# ./matematicas/sistema => sys
+<# ./matematicas/fecha_hora => fecha
 
 >> "=== Reporte de Salud del Sistema ===" ¶
 >> "Generado: " fecha::fecha_hora_completa() ¶
@@ -408,8 +408,8 @@ uptime = <\ uptime \>
 ```zymbol
 // Pipeline: API → Procesamiento → Base de Datos → Notificación
 
-<# ./matematicas/http <= http
-<# ./matematicas/db_sqlite <= db
+<# ./matematicas/http => http
+<# ./matematicas/db_sqlite => db
 
 >> "=== Pipeline de Datos ===" ¶
 
