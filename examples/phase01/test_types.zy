@@ -44,8 +44,9 @@ strings = ["uno", "dos", "tres"]
 >> "  strings = " strings ¶
 bools = [#1, #0, #1]
 >> "  bools = " bools ¶
-mixto = [1, "texto", #1, 42, "otro"]
->> "  mixto = " mixto ¶
+// Arrays are homogeneous; use a tuple to hold mixed-type values
+mixto = (1, "texto", #1, 42, "otro")
+>> "  mixto (tuple) = " mixto ¶
 vacio_arr = []
 >> "  vacio_arr = " vacio_arr ¶
 anidado = [[1, 2], [3, 4], [5, 6]]

@@ -43,7 +43,7 @@ contador = 0
 >> "=== Find Maximum ===" ¶
 
 nums = [45, 23, 89, 12, 67, 34]
-maximo = nums[0]
+maximo = nums[1]
 @ n:nums {
     ? n > maximo {
         maximo = n

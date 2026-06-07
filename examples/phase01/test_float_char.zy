@@ -1,6 +1,5 @@
 // Float and Char Data Types Demo
 // This example demonstrates Float and Char literals in Zymbol-Lang
-// NOTE: Arithmetic operations with Float are not yet implemented in the interpreter
 
 >> "=== FLOAT EXAMPLES ===" ¶
 ¶
@@ -60,9 +59,9 @@ quote = '\''
 >> "=== MIXED TYPES ===" ¶
 ¶
 
-// Array with mixed types
-mixed = [42, 3.14, "text", 'A', #1]
->> "Mixed array: " mixed ¶
+// Arrays are homogeneous; use a tuple to hold mixed-type values
+mixed = (42, 3.14, "text", 'A', #1)
+>> "Mixed tuple: " mixed ¶
 
 // Float and int are different types
 int_value = 5

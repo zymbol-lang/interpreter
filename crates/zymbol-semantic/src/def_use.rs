@@ -625,9 +625,7 @@ impl DefUseAnalyzer {
             }
 
             Statement::OutputPos(op) => {
-                for slot in &op.slots {
-                    if let Some(expr) = slot { self.analyze_expr(expr, node_index); }
-                }
+                for expr in op.slots.iter().flatten() { self.analyze_expr(expr, node_index); }
                 for item in &op.items {
                     self.analyze_expr(item, node_index);
                 }

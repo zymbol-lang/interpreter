@@ -8,6 +8,7 @@ pub struct LineResult {
     /// Characters printed via `>>` / `¶` during this call.
     pub output: String,
     /// Repr of the returned expression value (None for statements or Unit).
+    #[allow(dead_code)] // test scaffolding: available for value-asserting tests
     pub value: Option<String>,
     /// Error message if execution failed.
     pub error: Option<String>,
@@ -80,6 +81,7 @@ impl ReplTestHarness {
     }
 
     /// Convenience: run a line and return its expression-value repr.
+    #[allow(dead_code)] // test scaffolding: available for value-asserting tests
     pub fn value(&mut self, code: &str) -> Option<String> {
         self.run_line(code).value
     }

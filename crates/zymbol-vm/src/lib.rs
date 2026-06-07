@@ -224,6 +224,9 @@ struct FrameInfo {
     /// Error state — allocated only when a try block is active (None for normal calls)
     error: Option<Box<FrameError>>,
     /// Output param writeback — None for most functions (saves 24 bytes)
+    // Box is intentional: keeps `Option` at 8 bytes (vs 24 for a bare Vec) in the
+    // common None case. The extra allocation only happens on the rare write path.
+    #[allow(clippy::box_collection)]
     writeback: Option<Box<Vec<(usize, Reg)>>>,
 }
 
@@ -901,8 +904,8 @@ impl<W: Write> VM<W> {
                     self.frame_stack.push(FrameInfo {
                         base: new_base as u32,
                         ip: 0,
-                        chunk_idx: func_idx as u32,
-                        return_reg: dst as u16,
+                        chunk_idx: func_idx,
+                        return_reg: dst,
                         catch_ip: u32::MAX,
                         try_depth: 0,
                         error: None,
@@ -950,7 +953,7 @@ impl<W: Write> VM<W> {
 
                     // Update frame metadata (same base, new chunk)
                     let frame = self.frame_stack.last_mut().unwrap();
-                    frame.chunk_idx = func_idx as u32;
+                    frame.chunk_idx = func_idx;
 
                     ip = 0;
                     chunk_idx = func_idx as usize;
@@ -1847,8 +1850,8 @@ impl<W: Write> VM<W> {
                     self.frame_stack.push(FrameInfo {
                         base: new_base as u32,
                         ip: 0,
-                        chunk_idx: func_idx as u32,
-                        return_reg: dst as u16,
+                        chunk_idx: func_idx,
+                        return_reg: dst,
                         catch_ip: u32::MAX,
                         try_depth: 0,
                         error: None,
@@ -1972,7 +1975,7 @@ impl<W: Write> VM<W> {
                     let mut items = arr;
                     if func_reg == u16::MAX {
                         // Natural order
-                        items.sort_by(|a, b| vm_natural_cmp(a, b));
+                        items.sort_by(vm_natural_cmp);
                         if !ascending {
                             items.reverse();
                         }
@@ -2180,7 +2183,7 @@ impl<W: Write> VM<W> {
                 // ── Try/catch ─────────────────────────────────────────────────
                 &Instruction::TryBegin(catch_label) => {
                     let frame = self.frame_stack.last_mut().unwrap();
-                    frame.catch_ip = catch_label as u32;
+                    frame.catch_ip = catch_label;
                     frame.try_depth += 1;
                 }
                 Instruction::TryEnd(_) => {
@@ -2684,8 +2687,8 @@ impl<W: Write> VM<W> {
                     let v = r!(src).is_truthy(); w!(dst, Value::Bool(!v));
                 }
                 &Instruction::Jump(label) => { ip = label as usize; }
-                &Instruction::JumpIf(cond, label) => { if r!(cond).is_truthy() { ip = label as usize; } }
-                &Instruction::JumpIfNot(cond, label) => { if !r!(cond).is_truthy() { ip = label as usize; } }
+                &Instruction::JumpIf(cond, label) if r!(cond).is_truthy() => { ip = label as usize; }
+                &Instruction::JumpIfNot(cond, label) if !r!(cond).is_truthy() => { ip = label as usize; }
                 &Instruction::ConcatStr(dst, a, b) => {
                     let result = if dst == a && a != b {
                         let left = std::mem::replace(
@@ -3273,7 +3276,7 @@ impl<W: Write> VM<W> {
                     };
                     let mut items = arr;
                     if func_reg == u16::MAX {
-                        items.sort_by(|a, b| vm_natural_cmp(a, b));
+                        items.sort_by(vm_natural_cmp);
                         if !ascending { items.reverse(); }
                     } else {
                         let callable = self.value_stack[base + func_reg as usize].clone();

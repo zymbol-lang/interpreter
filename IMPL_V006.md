@@ -629,9 +629,9 @@ constructs beyond the separator token.
 
 ---
 
-## ✅ Conclusion — v0.0.6 IN PROGRESS
+## ✅ Conclusion — v0.0.6 RELEASED (2026-06-07)
 
-All features in this plan are implemented. Release pending final QA pass and version bump.
+All features in this plan are implemented and shipped. QA pass complete; version bumped to 0.0.6.
 
 | # | Feature | Status |
 |---|---------|--------|
@@ -644,5 +644,5 @@ All features in this plan are implemented. Release pending final QA pass and ver
 | 6 | TUI-FIX-01 `<<` inside `>>|` freezes terminal | ✅ complete — raw-mode suspend/restore |
 | 7 | TUI-FIX-02 `>>|` cursor not at (1,1) on entry | ✅ complete — `MoveTo(0,0)` after alternate screen |
 
-Test coverage at time of writing: **466 / 466 E2E files; 463 PASS + 3 `@vm-skip`**.
+Test coverage at release: **478 / 478 E2E files PASS (0 SKIP)**; `cargo test` **820 passed, 0 failed, 4 ignored**.
 Validated by `bash tests/scripts/vm_compare.sh` (0 FAIL).

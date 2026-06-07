@@ -425,7 +425,7 @@ impl<W: Write> Interpreter<W> {
                 // Rebind parameters to tco_args
                 // Move tco_args into params (no clone — QW8 semantics for TCO)
                 let tco_args = std::mem::take(&mut self.tco_args);
-                for (param, val) in parameters.iter().zip(tco_args.into_iter()) {
+                for (param, val) in parameters.iter().zip(tco_args) {
                     self.set_variable(&param.name, val);
                 }
                 // Clear the Return control flow set by the TCO trigger

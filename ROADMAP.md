@@ -1,9 +1,10 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **v0.0.6 (in progress)** — stdlib infrastructure complete.
-> `std/math` (13 functions + PI, E) and `std/random` (xoshiro256++) shipped.
-> Semantic analyzer updated. 9 stdlib tests passing.
-> Remaining v0.0.6 items: float formatting, typed input, depuration polish.
+> Current status: **v0.0.6 (released 2026-06-07)** — all planned features shipped.
+> Highlights: `FatArrow` `=>` maps-to operator, bytecode-embedded standalones (~60% smaller),
+> VM `<<` input parity (`ReadLine`), `std/math` + `std/random` stdlib, typed test wildcards,
+> and the GAP-Z009 / BUG-007 / TUI fixes (see `IMPL_V006.md`).
+> Validation: 478/478 VM-parity tests PASS (0 SKIP). Next: see `IMPL_V007.md`.
 
 ---
 
@@ -79,8 +80,8 @@
 
 | Suite | Status |
 |-------|--------|
-| Unit + integration (`cargo test`) | ✅ 778 passed, 0 failed, 4 ignored |
-| VM parity check (`vm_compare.sh`) | ✅ 463/463 PASS (466 files, 3 vm-skip) |
+| Unit + integration (`cargo test`) | ✅ 820 passed, 0 failed, 4 ignored |
+| VM parity check (`vm_compare.sh`) | ✅ 478/478 PASS (0 SKIP) |
 | RosettaStone i18n suite (105 languages) | ✅ PASS |
 
 ---

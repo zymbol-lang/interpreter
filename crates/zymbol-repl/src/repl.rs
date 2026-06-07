@@ -77,7 +77,7 @@ impl Repl {
         if let Some(ref path) = self.history_path {
             let lines: Vec<&str> = self.editor.get_history();
             // File stores oldest-first so that add_to_history re-inserts in correct order.
-            let content: String = lines.iter().rev().map(|s| *s).collect::<Vec<_>>().join("\n");
+            let content: String = lines.iter().rev().copied().collect::<Vec<_>>().join("\n");
             let _ = std::fs::write(path, content);
         }
     }

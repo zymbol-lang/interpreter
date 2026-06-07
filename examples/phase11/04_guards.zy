@@ -1,59 +1,48 @@
-// Phase 11: Pattern Guards
-// Demonstrates pattern matching with guard conditions
+// Phase 11: Classification — comparison patterns vs. conditional guards
+// Zymbol's match (??) supports comparison patterns `< expr` for threshold
+// classification. Arbitrary boolean guards (e.g. modulo tests) are not match
+// patterns — use ? / _? / _ for those.
 
->> "=== Pattern Guards ===" ¶
+>> "=== Comparison Patterns (< expr) ===" ¶
 
-// Guard on literal pattern
-number = 10
-even_or_odd = ?? number {
-    _ ? number % 2 == 0 => "Even number"
-    _ ? number % 2 == 1 => "Odd number"
-    _ => "Not a number"
-}
-
->> "Number " number " is: " even_or_odd ¶
-
-// Guard on range with additional condition
-value = 25
-category = ?? value {
-    0..50   ? value % 5 == 0 => "Multiple of 5 in low range"
-    0..50   => "Low range"
-    51..100 ? value % 10 == 0 => "Multiple of 10 in high range"
-    51..100 => "High range"
-    _ => "Out of range"
-}
-
->> "Value " value " category: " category ¶
-
-// Guard for value classification
-num = 15
-classification = ?? num {
-    _ ? num > 10  => "High"
-    _ ? num > 0   => "Low but positive"
-    _ ? num == 0  => "Zero"
-    _ => "Unknown"
-}
-
->> "Number " num " is: " classification ¶
-
-// Multiple guards on same value
+// Threshold classification with comparison patterns (first match wins)
 score = 95
 performance = ?? score {
-    _ ? score >= 90 => "Excellent"
-    _ ? score >= 80 => "Good"
-    _ ? score >= 70 => "Fair"
-    _ ? score >= 60 => "Pass"
-    _ => "Fail"
+    < 60 => "Fail"
+    < 70 => "Pass"
+    < 80 => "Fair"
+    < 90 => "Good"
+    _    => "Excellent"
 }
-
 >> "Score " score " performance: " performance ¶
 
-// Guards with boolean patterns
-flag = #1
-result = ?? flag {
-    #1 ? #1 => "True and condition true"
-    #0 ? #0 => "False and condition false"
-    _ => "Other"
+num = 15
+classification = ?? num {
+    < 1  => "Zero or negative"
+    < 11 => "Low but positive"
+    _    => "High"
 }
+>> "Number " num " is: " classification ¶
 
->> "Flag result: " result ¶
+¶
+>> "=== Range and List Patterns ===" ¶
+
+// Range patterns for bounded categories
+value = 25
+category = ?? value {
+    0..50   => "Low range"
+    51..100 => "High range"
+    _       => "Out of range"
+}
+>> "Value " value " category: " category ¶
+
+¶
+>> "=== Conditional Guards (? / _?) ===" ¶
+
+// Modulo tests are not match patterns — use if/else-if instead
+number = 10
+? number % 2 == 0 {
+    >> "Number " number " is: Even number" ¶
+} _ {
+    >> "Number " number " is: Odd number" ¶
+}

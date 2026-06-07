@@ -847,7 +847,7 @@ impl Lexer {
         }
 
         // Check for °identifier prefix (pre-hot: anchor to scope above nearest @)
-        if ch == '°' && self.peek().map_or(false, Self::is_ident_start) {
+        if ch == '°' && self.peek().is_some_and(Self::is_ident_start) {
             self.advance(); // consume °
             let ident_start = self.position();
             let token = self.lex_identifier(ident_start);

@@ -1,7 +1,9 @@
 // ===== BASE CONVERSION EXPRESSIONS DEMONSTRATION =====
-// Tridirectional conversion: char ↔ int ↔ text
+// The base operators 0b|x| 0o|x| 0d|x| 0x|x| take a number or char and
+// return its TEXT representation in that base (a String). For example
+// 0x|65| → "0x0041". They are one-directional: value → base-string.
 
->> "=== 1. CHAR → TEXT (Display character codes) ===" ¶
+>> "=== 1. CHAR → BASE STRINGS (character codes) ===" ¶
 letra = 'A'
 >> "Character: " letra ¶
 >> "  Binary:      " 0b|letra| ¶
@@ -17,72 +19,33 @@ emoji = '😀'
 >> "  Unicode (dec): " 0d|emoji| ¶
 ¶
 
->> "=== 2. INT → CHAR (Create chars from codes) ===" ¶
+>> "=== 2. INT → BASE STRINGS ===" ¶
 codigo_A = 65
-char_A = 0x|codigo_A|
->> "Code " codigo_A " → Char: " char_A ¶
+>> "Number " codigo_A " in each base:" ¶
+>> "  Binary:      " 0b|codigo_A| ¶
+>> "  Octal:       " 0o|codigo_A| ¶
+>> "  Decimal:     " 0d|codigo_A| ¶
+>> "  Hexadecimal: " 0x|codigo_A| ¶
+¶
 
 codigo_emoji = 128512
-char_emoji = 0x|codigo_emoji|
->> "Code " codigo_emoji " → Emoji: " char_emoji ¶
+>> "Number " codigo_emoji " (hex): " 0x|codigo_emoji| ¶
 ¶
 
->> "=== 3. TEXT → CHAR (Parse strings to chars) ===" ¶
-// Hexadecimal string to char
-hex_41 = "41"
-char_from_hex = 0x|hex_41|
->> "Hex string '" hex_41 "' → Char: " char_from_hex ¶
-
-// Binary string to char
-bin_1000001 = "1000001"
-char_from_bin = 0b|bin_1000001|
->> "Binary string '" bin_1000001 "' → Char: " char_from_bin ¶
-
-// Decimal string to char
-dec_65 = "65"
-char_from_dec = 0d|dec_65|
->> "Decimal string '" dec_65 "' → Char: " char_from_dec ¶
-¶
-
->> "=== 4. ASCII TABLE GENERATOR ===" ¶
->> "First 10 printable ASCII characters:" ¶
+>> "=== 3. ASCII TABLE GENERATOR ===" ¶
+>> "First 10 printable ASCII codes in multiple bases:" ¶
 @ i:65..74 {
-    char_val = 0d|i|
-    >> "  ASCII " i ": " char_val
-    >> "  [Bin: " 0b|char_val| ", Hex: " 0x|char_val| "]" ¶
+    >> "  Code " i ": [Bin: " 0b|i| ", Oct: " 0o|i| ", Hex: " 0x|i| "]" ¶
 }
 ¶
 
->> "=== 5. TEACHING NUMERIC SYSTEMS ===" ¶
+>> "=== 4. TEACHING NUMERIC SYSTEMS ===" ¶
 ch = 'Z'
 >> "The character 'Z' in different bases:" ¶
->> "  Binary (base 2):  " 0b|ch| ¶
->> "  Octal (base 8):   " 0o|ch| ¶
->> "  Decimal (base 10):" 0d|ch| ¶
->> "  Hex (base 16):    " 0x|ch| ¶
-¶
-
->> "=== 6. ROUND-TRIP CONVERSIONS ===" ¶
-original = 'X'
->> "Original char: " original ¶
-
-// char → text → char
-hex_text = 0x|original|
->> "  Convert to hex text: " hex_text ¶
-restored = 0x|hex_text|
->> "  Parse back to char: " restored ¶
->> "  Match: " ? original == restored { >> "#1" } _ { >> "#0" } ¶
-¶
-
->> "=== 7. UNICODE EMOJIS ===" ¶
-// Create emojis from Unicode codes
-smile = 0x|128512|      // U+1F600
-rocket = 0x|128640|     // U+1F680
-check = 0x|9989|        // U+2705
-
->> "Emojis from codes: " smile " " rocket " " check ¶
->> "Rocket code (hex): " 0x|rocket| ¶
->> "Rocket code (dec): " 0d|rocket| ¶
+>> "  Binary (base 2):   " 0b|ch| ¶
+>> "  Octal (base 8):    " 0o|ch| ¶
+>> "  Decimal (base 10): " 0d|ch| ¶
+>> "  Hex (base 16):     " 0x|ch| ¶
 ¶
 
 >> "=== ALL TESTS PASSED! ===" ¶

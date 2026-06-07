@@ -109,7 +109,7 @@ mod tests {
         let one  = char::from_u32(0x0967).unwrap(); // १
         let zero = char::from_u32(0x0966).unwrap(); // ०
         let expected: String = std::iter::once(one)
-            .chain(std::iter::repeat(zero).take(6))
+            .chain(std::iter::repeat_n(zero, 6))
             .collect();
         assert_eq!(to_numeral_int(1_000_000, 0x0966), expected);
     }
@@ -117,12 +117,14 @@ mod tests {
     // ── to_numeral_float ──────────────────────────────────────────────────────
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 is a numeral-formatting fixture, not π
     fn float_ascii_passthrough() {
         assert_eq!(to_numeral_float(3.14, ASCII_BASE), "3.14");
         assert_eq!(to_numeral_float(-0.5, ASCII_BASE), "-0.5");
     }
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 is a numeral-formatting fixture, not π
     fn float_devanagari() {
         assert_eq!(to_numeral_float(3.14, 0x0966), "३.१४");
     }

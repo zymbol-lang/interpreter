@@ -7,7 +7,7 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
-## [Unreleased]
+## [0.0.6] — 2026-06-07
 
 ### Changed (Breaking)
 
@@ -146,7 +146,7 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
   `EnterAlternateScreen`. Some terminals inherit the main-screen cursor position, causing the
   first `<<` prompt or `>>~` output to appear at arbitrary rows.
 
-### Test suite — [Unreleased]
+### Test suite — [0.0.6]
 
 | Suite | Result |
 |-------|--------|
@@ -856,7 +856,8 @@ Initial release — Zymbol-Lang interpreter v5I.
 
 ---
 
-[Unreleased]: https://github.com/zymbol-lang/zymbol/compare/v0.0.5...HEAD
+[Unreleased]: https://github.com/zymbol-lang/zymbol/compare/v0.0.6...HEAD
+[0.0.6]: https://github.com/zymbol-lang/zymbol/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/zymbol-lang/zymbol/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/zymbol-lang/zymbol/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/zymbol-lang/zymbol/compare/v0.0.2...v0.0.3

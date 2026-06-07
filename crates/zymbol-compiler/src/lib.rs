@@ -1092,11 +1092,11 @@ impl Compiler {
         // Four cases: infinite, while, range for-each, array for-each
         if lp.iterator_var.is_some() {
             // Check if iterable is a Range or an array/expression
-            let is_range = lp.iterable.as_ref().map_or(false, |e| matches!(e.as_ref(), Expr::Range(_)));
+            let is_range = lp.iterable.as_ref().is_some_and(|e| matches!(e.as_ref(), Expr::Range(_)));
             if is_range {
-                return self.compile_range_loop(lp, ctx);
+                self.compile_range_loop(lp, ctx)
             } else {
-                return self.compile_foreach_loop(lp, ctx);
+                self.compile_foreach_loop(lp, ctx)
             }
         } else if lp.condition.is_some() {
             // Detect TIMES loop: condition is a literal Int → repeat N times
@@ -1123,7 +1123,7 @@ impl Compiler {
     ) -> Result<(), CompileError> {
         let n = if let Some(cond) = lp.condition.as_ref() {
             if let Expr::Literal(lit) = cond.as_ref() {
-                if let Literal::Int(n) = lit.value { n as i64 } else { 0 }
+                if let Literal::Int(n) = lit.value { n } else { 0 }
             } else { 0 }
         } else { 0 };
 
@@ -2196,7 +2196,7 @@ impl Compiler {
     fn eval_const_expr(expr: &Expr) -> Option<ModuleConst> {
         match expr {
             Expr::Literal(lit) => match &lit.value {
-                Literal::Int(n) => Some(ModuleConst::Int(*n as i64)),
+                Literal::Int(n) => Some(ModuleConst::Int(*n)),
                 Literal::Float(f) => Some(ModuleConst::Float(*f)),
                 Literal::String(s) | Literal::InterpolatedString(s) => Some(ModuleConst::String(s.replace('\x01', "{").replace('\x02', "}"))),
                 Literal::Bool(b) => Some(ModuleConst::Bool(*b)),
@@ -2205,7 +2205,7 @@ impl Compiler {
             Expr::Unary(un) if un.op == UnaryOp::Neg => {
                 if let Expr::Literal(lit) = un.operand.as_ref() {
                     match &lit.value {
-                        Literal::Int(n) => Some(ModuleConst::Int(-(*n as i64))),
+                        Literal::Int(n) => Some(ModuleConst::Int(-*n)),
                         Literal::Float(f) => Some(ModuleConst::Float(-f)),
                         _ => None,
                     }
@@ -3305,6 +3305,7 @@ impl Compiler {
 /// - ConcatBuild(var, ...)      → HotNeutral::String (neutral = "")
 /// - Binary(Mul|Div, var, _)   → HotNeutral::IntOne  (neutral = 1, multiplicative identity)
 /// - Everything else            → HotNeutral::Int     (neutral = 0)
+///
 /// HotInit is a conditional init: only sets the register if it currently holds Unit,
 /// so it is safe to emit inside a loop body (no-op after the first iteration).
 fn hot_neutral_instr(value: &Expr, var_name: &str, dst: Reg) -> Instruction {
@@ -3368,11 +3369,10 @@ fn collect_free_in_expr(
 ) {
     match expr {
         Expr::Identifier(id) => {
-            if !locals.contains(&id.name) && outer_ctx.register_map.contains_key(&id.name) {
-                if seen.insert(id.name.clone()) {
+            if !locals.contains(&id.name) && outer_ctx.register_map.contains_key(&id.name)
+                && seen.insert(id.name.clone()) {
                     free.push(id.name.clone());
                 }
-            }
         }
         Expr::Binary(b) => {
             collect_free_in_expr(&b.left, locals, outer_ctx, seen, free);
@@ -3713,9 +3713,7 @@ fn collect_free_in_stmts(
 
             Statement::Sleep(s) => collect_free_in_expr(&s.duration, locals, outer_ctx, seen, free),
             Statement::OutputPos(op) => {
-                for slot in &op.slots {
-                    if let Some(expr) = slot { collect_free_in_expr(expr, locals, outer_ctx, seen, free); }
-                }
+                for expr in op.slots.iter().flatten() { collect_free_in_expr(expr, locals, outer_ctx, seen, free); }
                 for item in &op.items { collect_free_in_expr(item, locals, outer_ctx, seen, free); }
             }
             Statement::TuiBlock(tb) => {

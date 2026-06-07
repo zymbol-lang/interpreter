@@ -28,3 +28,10 @@ zymbol-lsp = { path = "../zymbol-lsp" }
 clap.workspace = true
 anyhow.workspace = true
 tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+# CLI integration tests spawn the `zymbol` binary. `CARGO_BIN_EXE_zymbol` is only
+# exported to integration tests of the crate that declares the binary, so
+# `cli_repl.rs` must live here rather than in zymbol-repl.
+assert_cmd = "2"
+predicates = "3"

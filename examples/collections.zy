@@ -4,7 +4,7 @@
 numbers = [1, 2, 3, 4, 5]
 >> "Array: " numbers ¶
 >> "Length: " (numbers$#) ¶
->> "First: " numbers[0] ¶
+>> "First: " numbers[1] ¶
 
 // Append to array
 numbers = numbers$+ 6
@@ -28,13 +28,13 @@ matrix = [
 }
 
 >> ¶
->> "Element at [1][2]: " matrix[1][2] ¶
+>> "Element at [2][3]: " matrix[2][3] ¶
 
 // Tuples
 point = (10, 20)
 >> ¶
 >> "Point: " point ¶
->> "X: " point[0] ", Y: " point[1] ¶
+>> "X: " point[1] ", Y: " point[2] ¶
 
 person = ("Alice", 25, #1)
 >> ¶
