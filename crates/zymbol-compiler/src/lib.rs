@@ -403,7 +403,7 @@ impl Compiler {
     /// registering exported ones as `alias::func_name` in function_index.
     /// Also handles: circular import detection, nested sub-imports, and re-exports.
     fn compile_import(&mut self, import: &zymbol_ast::ImportStmt, base_dir: &Path) -> Result<(), CompileError> {
-        // Detect stdlib modules (std/math, std/random) — no file needed.
+        // Detect stdlib modules (std/math, std/random, std/json, std/io, std/net) — no file needed.
         if import.path.parent_levels == 0 {
             let module_key = import.path.components.join("/");
             if let Some(entries) = stdlib_builtin_entries(&module_key) {
@@ -3843,6 +3843,25 @@ fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16)>> 
             ("entero",   B::RAND_ENTERO),
             ("rango",    B::RAND_RANGO),
             ("peso_f64", B::RAND_PESO_F64),
+        ]),
+        "std/json" => Some(vec![
+            ("decode", B::JSON_DECODE),
+            ("encode", B::JSON_ENCODE),
+        ]),
+        "std/io" => Some(vec![
+            ("read",   B::IO_READ),
+            ("write",  B::IO_WRITE),
+            ("append", B::IO_APPEND),
+            ("exists", B::IO_EXISTS),
+            ("delete", B::IO_DELETE),
+            ("list",   B::IO_LIST),
+            ("mkdir",  B::IO_MKDIR),
+        ]),
+        "std/net" => Some(vec![
+            ("get",       B::NET_GET),
+            ("post",      B::NET_POST),
+            ("post_json", B::NET_POST_JSON),
+            ("head",      B::NET_HEAD),
         ]),
         _ => None,
     }

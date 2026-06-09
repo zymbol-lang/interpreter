@@ -8,7 +8,10 @@ use crate::modules::LoadedModule;
 use crate::Value;
 use std::collections::HashMap;
 
+mod io;
+mod json;
 mod math;
+mod net;
 mod random;
 
 /// Build a `LoadedModule` for the requested stdlib path.
@@ -32,6 +35,33 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
         "std/random" => Some(LoadedModule {
             name: "std/random".to_string(),
             functions: random::register(),
+            all_functions: HashMap::new(),
+            constants: HashMap::new(),
+            all_variables: HashMap::new(),
+            import_aliases: HashMap::new(),
+            loaded_modules_refs: HashMap::new(),
+        }),
+        "std/json" => Some(LoadedModule {
+            name: "std/json".to_string(),
+            functions: json::register(),
+            all_functions: HashMap::new(),
+            constants: HashMap::new(),
+            all_variables: HashMap::new(),
+            import_aliases: HashMap::new(),
+            loaded_modules_refs: HashMap::new(),
+        }),
+        "std/io" => Some(LoadedModule {
+            name: "std/io".to_string(),
+            functions: io::register(),
+            all_functions: HashMap::new(),
+            constants: HashMap::new(),
+            all_variables: HashMap::new(),
+            import_aliases: HashMap::new(),
+            loaded_modules_refs: HashMap::new(),
+        }),
+        "std/net" => Some(LoadedModule {
+            name: "std/net".to_string(),
+            functions: net::register(),
             all_functions: HashMap::new(),
             constants: HashMap::new(),
             all_variables: HashMap::new(),

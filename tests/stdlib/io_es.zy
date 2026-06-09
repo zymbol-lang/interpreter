@@ -1,0 +1,10 @@
+# io_es {
+    <# std/io => _io
+
+    #> {
+        _io::write  => escribir
+        _io::read   => leer
+        _io::exists => existe
+        _io::delete => borrar
+    }
+}

@@ -351,6 +351,22 @@ pub mod builtins {
     pub const RAND_ENTERO:   u16 = 100;
     pub const RAND_RANGO:    u16 = 101;
     pub const RAND_PESO_F64: u16 = 102;
+    // std/json functions
+    pub const JSON_DECODE:   u16 = 200;
+    pub const JSON_ENCODE:   u16 = 201;
+    // std/io functions
+    pub const IO_READ:       u16 = 300;
+    pub const IO_WRITE:      u16 = 301;
+    pub const IO_APPEND:     u16 = 302;
+    pub const IO_EXISTS:     u16 = 303;
+    pub const IO_DELETE:     u16 = 304;
+    pub const IO_LIST:       u16 = 305;
+    pub const IO_MKDIR:      u16 = 306;
+    // std/net functions
+    pub const NET_GET:       u16 = 400;
+    pub const NET_POST:      u16 = 401;
+    pub const NET_POST_JSON: u16 = 402;
+    pub const NET_HEAD:      u16 = 403;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
