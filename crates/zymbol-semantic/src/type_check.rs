@@ -1597,6 +1597,22 @@ impl TypeChecker {
                         }
                         return ret_type;
                     }
+
+                    // Callable is a bare identifier that is not a known function.
+                    // It is only valid if it names a variable holding a lambda, a
+                    // module alias, or a hot identifier; otherwise the function
+                    // does not exist (e.g. calling `cos(x)` without `math::cos`).
+                    if self.env.lookup_var(&ident.name).is_none()
+                        && !self.module_aliases.contains(&ident.name)
+                        && !ident.hot
+                    {
+                        self.errors.push(
+                            Diagnostic::error(format!("undefined function: '{}'", ident.name))
+                                .with_span(call.span)
+                                .with_help("functions must be defined before use, or imported with a module alias (e.g. `math::cos`)")
+                        );
+                        return ZymbolType::Unknown;
+                    }
                 }
                 ZymbolType::Any
             }
