@@ -1,0 +1,11 @@
+// 01 — Simplest GET: fetch JSON, decode it, read one field.
+// API: catfact.ninja (no auth) — returns {"fact": "...", "length": N}
+<# std/net => net
+<# std/json => json
+
+raw = net::get("https://catfact.ninja/fact")
+data = json::decode(raw)
+
+>> "Random cat fact:" ¶
+>> data.fact ¶
+>> "(" data.length " chars)" ¶

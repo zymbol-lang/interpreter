@@ -1,0 +1,12 @@
+# apis_es {
+    // i18n three-layer adapter: re-export std/net + std/json under Spanish names.
+    <# std/net => _net
+    <# std/json => _json
+
+    #> {
+        _net::get       => obtener
+        _net::post_json => enviar_json
+        _json::decode   => decodificar
+        _json::encode   => codificar
+    }
+}

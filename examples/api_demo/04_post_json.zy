@@ -1,0 +1,14 @@
+// 04 — Build JSON, POST it, decode the echoed response (net + json roundtrip).
+// API: httpbin.org/post (no auth) — echoes the request body back under "json".
+<# std/net => net
+<# std/json => json
+
+// build the request body from a Zymbol value
+payload = json::encode((user: "ada", score: 42))
+>> "Sending: " payload ¶
+
+resp = json::decode(net::post_json("https://httpbin.org/post", payload))
+
+// httpbin returns the parsed body under the "json" key
+>> "Server echoed user:  " resp.json.user ¶
+>> "Server echoed score: " resp.json.score ¶
