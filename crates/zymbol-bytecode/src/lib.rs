@@ -249,10 +249,11 @@ pub enum Instruction {
     QueryTerminalSize(Reg),
     /// <<| var / <<|? var — read one key → Value::Char in dst; blocking flag
     ReadKey(Reg, bool),
-    /// << var / << "prompt" var / << #|var| — read a line from stdin → store in dst
+    /// << var / << "prompt" var / << #|var| / << <typespec> "prompt" var
+    /// read a line from stdin → store in dst.
     /// prompt_reg: Some(r) = print register r as prompt before reading; None = no prompt
-    /// numeric: true = apply parse_numeric_string (Int/Float, fallback String)
-    ReadLine(Reg, Option<Reg>, bool),
+    /// kind: how to validate/coerce the line (and whether to re-prompt). See `InputKind`.
+    ReadLine(Reg, Option<Reg>, InputKind),
     /// >>~ pos > items — positioned output (pos tuple in r_pos, items in Vec<Reg>)
     PrintAt(Reg, Vec<Reg>),
     /// >>| { } — enter alternate screen + raw mode
@@ -290,6 +291,26 @@ pub enum BuildPart {
     Lit(StrIdx),
     /// A register whose value gets to_string()'d
     Reg(Reg),
+}
+
+/// How a `ReadLine` should validate and coerce the line it reads. Mirrors the
+/// tree-walker's `InputCast`; the typed variants re-prompt until the input is valid.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum InputKind {
+    /// Store the trimmed line verbatim as a String.
+    Raw,
+    /// Legacy `#|var|`: parse to Int/Float, falling back to String.
+    Numeric,
+    /// `##.` — any valid floating-point number → Float.
+    Float,
+    /// `##.(total, decimals)` — fixed-format decimal → Float.
+    Decimal { total: u32, decimals: u32 },
+    /// `###` / `###(n)` — integer with at most `max_digits` digits → Int.
+    Int { max_digits: Option<u32> },
+    /// `##"` / `##"(n)` — string of at most `max` characters → String.
+    Text { max: Option<u32> },
+    /// `##'` — exactly one character → Char.
+    Char,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -20,7 +20,7 @@ use zymbol_lexer::StringPart;
 use zymbol_ast::Pattern;
 use zymbol_ast::BasePrefix;
 use zymbol_ast::CastKind;
-use zymbol_bytecode::{BuildPart, Chunk, CompiledProgram, FuncIdx, Instruction, Label, Reg, StrIdx};
+use zymbol_bytecode::{BuildPart, Chunk, CompiledProgram, FuncIdx, InputKind, Instruction, Label, Reg, StrIdx};
 use zymbol_common::{BinaryOp, Literal, UnaryOp};
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -827,8 +827,17 @@ impl Compiler {
                     }
                 };
 
-                let numeric = input.cast == InputCast::Numeric;
-                ctx.emit(Instruction::ReadLine(dst, prompt_reg, numeric));
+                let kind = match &input.cast {
+                    InputCast::String => InputKind::Raw,
+                    InputCast::Numeric => InputKind::Numeric,
+                    InputCast::Float => InputKind::Float,
+                    InputCast::Decimal { total, decimals } =>
+                        InputKind::Decimal { total: *total, decimals: *decimals },
+                    InputCast::Int { max_digits } => InputKind::Int { max_digits: *max_digits },
+                    InputCast::Text { max } => InputKind::Text { max: *max },
+                    InputCast::Char => InputKind::Char,
+                };
+                ctx.emit(Instruction::ReadLine(dst, prompt_reg, kind));
                 Ok(())
             }
             Statement::Try(ts) => self.compile_try(ts, ctx),

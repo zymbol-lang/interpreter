@@ -1,0 +1,3 @@
+// Typed input: integer with at most 4 digits → Int
+<< ###(4) "Cantidad: " n
+>> "n=" n " +1=" (n + 1) ¶

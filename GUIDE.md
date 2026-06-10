@@ -4,8 +4,13 @@
 > `zymbol run` (tree-walker) and `zymbol run --vm` (register VM).
 > If a construct is not documented here, it may not be implemented.
 
-**Interpreter version**: v0.0.5
-**Test coverage**: 436/436 golden-file pairs; `@vm-skip` files excluded from VM parity
+**Interpreter version**: v0.0.7
+**Test coverage**: golden-file pairs verified on both engines (`vm_compare`); `@vm-skip` files excluded from VM parity
+
+**New in v0.0.7**: typed/validated input (`<< ##.(5,2) "p" var`, see [§3 Input](#input-)) and
+native standard-library modules `std/json`, `std/io`, `std/net` (see
+[§17 Standard Library Modules](#standard-library-modules-std)). v0.0.6 added `std/math` and
+`std/random`.
 
 See also: [REFERENCE.md](REFERENCE.md) — limitations, error taxonomy, symbol table  
 See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar, coverage status, TW/VM internals
@@ -362,7 +367,35 @@ ok = a == b
 << name                        // read into variable (no prompt)
 << "Enter name: " name         // with prompt string
 << "Hello {name}: " response   // interpolated prompt
+<< #|n|                        // numeric: parse to Int/Float, else String
 ```
+
+#### Typed / validated input
+
+A type marker placed **before** the prompt constrains and converts the value at read
+time. The markers reuse the cast symbols, with an optional size in parentheses, and the
+target variable comes **last**: `<< <typespec> "prompt" var`. On invalid input the prompt
+is shown again (it re-prompts until the value is valid); end-of-input aborts.
+
+```zymbol
+<< ##.(5,2) "Decimal: " monto   // Float, ≤5 total digits, ≤2 decimals (e.g. 999.99)
+<< ##.      "Float: "   f        // Float, any valid number
+<< ###(4)   "Entero: "  n        // Int, ≤4 digits (max 9999)
+<< ###      "Entero: "  k        // Int, any size
+<< ##"(20)  "Texto: "   s        // String, ≤20 characters
+<< ##'      "Char: "    c        // exactly one character → Char
+```
+
+| Typespec | Reads | Validates | Type |
+|---|---|---|---|
+| `##.` | free float | parses as a number | `Float` |
+| `##.(T,D)` | decimal | ≤T digits total, ≤D decimals, no exponent | `Float` |
+| `###` / `###(N)` | integer | integer; `(N)` caps digit count | `Int` |
+| `##"` / `##"(N)` | text | `(N)` caps character count | `String` |
+| `##'` | one character | length must be exactly 1 | `Char` |
+
+Both engines (tree-walker and `--vm`) validate identically. A leading sign is allowed for
+`###`/`##.` and does not count toward the digit budget.
 
 ### CLI Arguments
 
@@ -2585,6 +2618,65 @@ Use `::` to re-export a function imported from another module, and `.` to re-exp
     // ...
 }
 ```
+
+### Standard Library Modules (`std/*`)
+
+Zymbol ships native modules written in Rust, consumed through the **same** module system —
+import a `std/<name>` path with an alias, then call `alias::func(...)`. No filesystem lookup,
+no new syntax. They work in both engines (tree-walker and `--vm`).
+
+```zymbol
+<# std/math => m
+<# std/json => j
+
+>> m::sqrt(2.0) ¶              // → 1.4142135623730951
+>> m.PI ¶                      // → 3.141592653589793 (exported constant)
+datos = j::decode("[1,2,3]")  // JSON text → Array
+>> datos ¶                    // → [1, 2, 3]
+```
+
+Because native functions live in the same table as user functions, they re-export through
+the i18n pattern with no special handling:
+
+```zymbol
+# json_es {
+    <# std/json => _j
+    #> {
+        _j::decode => decodificar
+        _j::encode => codificar
+    }
+}
+```
+
+| Module | Functions | Since |
+|--------|-----------|-------|
+| `std/math` | `sqrt` `exp` `ln` `log` `pow` `abs` `ceil` `floor` `round` `min` `max` `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `sinh` `cosh` `tanh` `sigmoid` · constants `PI`, `E` | v0.0.6 |
+| `std/random` | `entero` `rango` `peso_f64` | v0.0.6 |
+| `std/json` | `decode(text)` `encode(value)` | v0.0.7 |
+| `std/io` | `read` `write` `append` `exists` `delete` `list` `mkdir` | v0.0.7 |
+| `std/net` | `get` `post` `post_json` `head` | v0.0.7 |
+
+**Error convention.** Type/arity mistakes raise a hard `RuntimeError` (the program is
+malformed). Recoverable environmental failures — file not found, network timeout, malformed
+JSON — come back as a **soft `Error` value** (`##IO(...)`, `##Network(...)`, `##Parse(...)`)
+that you test with `$!` or catch with `!?`, rather than aborting:
+
+```zymbol
+<# std/io => io
+txt = io::read("no-existe.txt")
+? txt$! {
+    >> "no se pudo leer" ¶          // soft error captured, no crash
+} _ {
+    >> txt ¶
+}
+```
+
+`std/net` is synchronous (no async). `get`/`post`/`post_json` accept an optional trailing
+`headers` argument — an array of 2-element `(String, String)` tuples — to reach authenticated
+APIs. JSON object ↔ `NamedTuple` (key order preserved), JSON array ↔ `Array`, null ↔ `Unit`.
+
+> When writing JSON **literals** in source, escape `{` as `\{` (an unescaped `{` starts string
+> interpolation). JSON read from a file or the network needs no escaping.
 
 ---
 

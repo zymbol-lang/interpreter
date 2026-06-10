@@ -23,7 +23,7 @@ use std::mem;
 use std::rc::Rc;
 
 use thiserror::Error;
-use zymbol_bytecode::{BuildPart, Chunk, CompiledProgram, FuncIdx, Instruction, Reg};
+use zymbol_bytecode::{BuildPart, Chunk, CompiledProgram, FuncIdx, InputKind, Instruction, Reg};
 use zymbol_lexer::digit_blocks::digit_value;
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -352,6 +352,99 @@ fn cmp_direct(va: &Value, vb: &Value) -> i32 {
         }
         _ => 1,
     }
+}
+
+/// Human-readable description of what an `InputKind` expects (for re-prompt hints and
+/// the EOF error). Kept in sync with the tree-walker's `describe_input_cast`.
+fn vm_describe_input_kind(kind: &InputKind) -> String {
+    match kind {
+        InputKind::Raw | InputKind::Text { max: None } => "text".to_string(),
+        InputKind::Numeric | InputKind::Float => "a number".to_string(),
+        InputKind::Decimal { total, decimals } => format!(
+            "a number with up to {} digits and {} decimals", total, decimals
+        ),
+        InputKind::Int { max_digits: Some(n) } => format!("an integer of up to {} digits", n),
+        InputKind::Int { max_digits: None } => "an integer".to_string(),
+        InputKind::Text { max: Some(n) } => format!("text of up to {} characters", n),
+        InputKind::Char => "a single character".to_string(),
+    }
+}
+
+/// Validate a trimmed input line against an `InputKind`, producing the typed VM value
+/// or `Err(hint)`. Mirrors the tree-walker's `validate_input` so both engines agree.
+fn vm_validate_input(s: &str, kind: &InputKind) -> Result<Value, String> {
+    match kind {
+        InputKind::Raw => Ok(Value::String(ZyStr::new(s.to_string()))),
+        InputKind::Numeric => {
+            if let Ok(i) = s.parse::<i64>() {
+                Ok(Value::Int(i))
+            } else if let Ok(f) = s.parse::<f64>() {
+                Ok(Value::Float(f))
+            } else if let Some(norm) = normalize_unicode_digits(s) {
+                if let Ok(i) = norm.parse::<i64>() { Ok(Value::Int(i)) }
+                else if let Ok(f) = norm.parse::<f64>() { Ok(Value::Float(f)) }
+                else { Ok(Value::String(ZyStr::new(s.to_string()))) }
+            } else {
+                Ok(Value::String(ZyStr::new(s.to_string())))
+            }
+        }
+        InputKind::Float => s.parse::<f64>()
+            .map(Value::Float)
+            .map_err(|_| vm_describe_input_kind(kind)),
+        InputKind::Decimal { total, decimals } => vm_validate_decimal(s, *total, *decimals)
+            .map(Value::Float)
+            .ok_or_else(|| vm_describe_input_kind(kind)),
+        InputKind::Int { max_digits } => vm_validate_int(s, *max_digits)
+            .map(Value::Int)
+            .ok_or_else(|| vm_describe_input_kind(kind)),
+        InputKind::Text { max } => {
+            let too_long = matches!(max, Some(n) if s.chars().count() > *n as usize);
+            if too_long { Err(vm_describe_input_kind(kind)) }
+            else { Ok(Value::String(ZyStr::new(s.to_string()))) }
+        }
+        InputKind::Char => {
+            let mut it = s.chars();
+            match (it.next(), it.next()) {
+                (Some(c), None) => Ok(Value::Char(c)),
+                _ => Err(vm_describe_input_kind(kind)),
+            }
+        }
+    }
+}
+
+/// Parse `s` as an integer with at most `max_digits` digits (ignoring a leading sign).
+fn vm_validate_int(s: &str, max_digits: Option<u32>) -> Option<i64> {
+    let n: i64 = s.parse().ok()?;
+    if let Some(maxd) = max_digits {
+        if s.chars().filter(|c| c.is_ascii_digit()).count() > maxd as usize {
+            return None;
+        }
+    }
+    Some(n)
+}
+
+/// Parse `s` as a fixed-format decimal (optional sign, digits, at most one `.`,
+/// at most `decimals` fractional and `total` overall digits; no scientific notation).
+fn vm_validate_decimal(s: &str, total: u32, decimals: u32) -> Option<f64> {
+    let value: f64 = s.parse().ok()?;
+    let body = s.strip_prefix(['+', '-']).unwrap_or(s);
+    let mut int_digits = 0u32;
+    let mut frac_digits = 0u32;
+    let mut seen_dot = false;
+    for c in body.chars() {
+        if c == '.' {
+            if seen_dot { return None; }
+            seen_dot = true;
+        } else if c.is_ascii_digit() {
+            if seen_dot { frac_digits += 1; } else { int_digits += 1; }
+        } else {
+            return None;
+        }
+    }
+    if frac_digits > decimals || int_digits + frac_digits > total {
+        return None;
+    }
+    Some(value)
 }
 
 fn normalize_unicode_digits(s: &str) -> Option<String> {
@@ -2382,44 +2475,43 @@ impl<W: Write> VM<W> {
                     wreg!(dst, Value::Char(ch));
                 }
 
-                &Instruction::ReadLine(dst, prompt_reg, numeric) => {
+                Instruction::ReadLine(dst, prompt_reg, kind) => {
                     use std::io::{BufRead, Write};
-                    // Show prompt if present
-                    if let Some(pr) = prompt_reg {
-                        print!("{}", rreg!(pr));
-                        std::io::stdout().flush().ok();
-                    }
-                    // Inside TUI block: disable raw mode + show cursor so user can type
                     let in_tui = !tui_stack.is_empty();
-                    if in_tui {
-                        crossterm::terminal::disable_raw_mode().ok();
-                        crossterm::execute!(std::io::stdout(), crossterm::cursor::Show).ok();
-                    }
-                    let mut line = String::new();
-                    std::io::stdin().lock().read_line(&mut line).ok();
-                    if in_tui {
-                        crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide).ok();
-                        if let Err(e) = crossterm::terminal::enable_raw_mode() {
-                            raise!(VmError::Generic(format!("input: failed to restore raw mode: {}", e)));
+                    // Read / validate / re-prompt loop (mirrors the tree-walker). An empty
+                    // raw line means EOF (a typed blank line is "\n"); EOF aborts so a failed
+                    // constraint cannot spin forever on a closed pipe.
+                    let value = loop {
+                        if let Some(pr) = prompt_reg {
+                            print!("{}", rreg!(*pr));
+                            std::io::stdout().flush().ok();
                         }
-                    }
-                    let trimmed = line.trim().to_string();
-                    let value = if numeric {
-                        if let Ok(i) = trimmed.parse::<i64>() {
-                            Value::Int(i)
-                        } else if let Ok(f) = trimmed.parse::<f64>() {
-                            Value::Float(f)
-                        } else if let Some(norm) = normalize_unicode_digits(&trimmed) {
-                            if let Ok(i) = norm.parse::<i64>() { Value::Int(i) }
-                            else if let Ok(f) = norm.parse::<f64>() { Value::Float(f) }
-                            else { Value::String(ZyStr::new(trimmed)) }
-                        } else {
-                            Value::String(ZyStr::new(trimmed))
+                        if in_tui {
+                            crossterm::terminal::disable_raw_mode().ok();
+                            crossterm::execute!(std::io::stdout(), crossterm::cursor::Show).ok();
                         }
-                    } else {
-                        Value::String(ZyStr::new(trimmed))
+                        let mut line = String::new();
+                        std::io::stdin().lock().read_line(&mut line).ok();
+                        if in_tui {
+                            crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide).ok();
+                            if let Err(e) = crossterm::terminal::enable_raw_mode() {
+                                raise!(VmError::Generic(format!("input: failed to restore raw mode: {}", e)));
+                            }
+                        }
+                        if line.is_empty() {
+                            raise!(VmError::Generic(format!(
+                                "end of input while waiting for {}", vm_describe_input_kind(kind)
+                            )));
+                        }
+                        match vm_validate_input(line.trim(), kind) {
+                            Ok(v) => break v,
+                            Err(hint) => {
+                                println!("  ({})", hint);
+                                std::io::stdout().flush().ok();
+                            }
+                        }
                     };
-                    wreg!(dst, value);
+                    wreg!(*dst, value);
                 }
 
                 Instruction::PrintAt(r_pos, item_regs) => {

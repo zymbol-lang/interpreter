@@ -1,0 +1,3 @@
+// Re-prompts on invalid input: 12345 exceeds 4 digits, then 99 is accepted
+<< ###(4) "N: " n
+>> "n=" n ¶

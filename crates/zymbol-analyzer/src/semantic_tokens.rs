@@ -175,6 +175,8 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
         | TokenKind::HashHashDot     // ##.
         | TokenKind::HashHashHash    // ###
         | TokenKind::HashHashBang    // ##!
+        | TokenKind::HashHashQuote   // ##"
+        | TokenKind::HashHashApos    // ##'
         | TokenKind::BaseBinary      // 0b
         | TokenKind::BaseOctal       // 0o
         | TokenKind::BaseDecimal     // 0d
@@ -372,6 +374,7 @@ fn token_length(kind: &TokenKind) -> u32 {
         TokenKind::HashComma | TokenKind::HashCaret => 2, // #, or #^ (two-char tokens)
         TokenKind::HashHashDot | TokenKind::HashHashBang => 3, // ##. or ##! (three-char)
         TokenKind::HashHashHash => 3, // ### (three-char)
+        TokenKind::HashHashQuote | TokenKind::HashHashApos => 3, // ##" or ##' (three-char)
         TokenKind::BashOpen => 2,   // <\
         TokenKind::BashClose => 2,  // \>
         TokenKind::ExecuteCommand(path) => (path.len() + 4) as u32, // +4 for </ and />

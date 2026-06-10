@@ -20,14 +20,19 @@ impl Parser {
     }
 
     /// Parse input statement:
-    ///   << variable           — store raw string
-    ///   << #|variable|        — store as numeric (int/float)
+    ///   << variable                — store raw string
+    ///   << #|variable|             — store as numeric (int/float)
     ///   << "prompt" variable
     ///   << "prompt" #|variable|
+    ///   << <typespec> "prompt" var — typed/validated input (re-prompts until valid)
+    ///       where <typespec> ∈ { ##. , ##.(t,d) , ### , ###(n) , ##"(n) , ##' }
     pub(crate) fn parse_input(&mut self) -> Result<Statement, Diagnostic> {
         let start_span = self.advance().span; // consume <<
 
-        // Optional string prompt: << "prompt" ...
+        // Optional leading typespec cast: ##. / ##.(t,d) / ### / ###(n) / ##"(n) / ##'
+        let typespec = self.parse_input_typespec()?;
+
+        // Optional string prompt: << [typespec] "prompt" ...
         let prompt = if matches!(self.peek().kind, TokenKind::String(_) | TokenKind::StringInterpolated(_)) {
             let token = self.advance();
             match &token.kind {
@@ -41,13 +46,11 @@ impl Parser {
             None
         };
 
-        // Detect optional cast: #|variable| (NumericEval)
-        let cast = if matches!(self.peek().kind, TokenKind::HashPipe) {
+        // Legacy `#|variable|` numeric cast — only when no typespec was given.
+        let legacy_numeric = typespec.is_none() && matches!(self.peek().kind, TokenKind::HashPipe);
+        if legacy_numeric {
             self.advance(); // consume #|
-            InputCast::Numeric
-        } else {
-            InputCast::String
-        };
+        }
 
         // Parse variable name
         let var_token = self.peek().clone();
@@ -59,12 +62,12 @@ impl Parser {
             _ => {
                 return Err(Diagnostic::error("expected variable name in input statement")
                     .with_span(var_token.span)
-                    .with_help("input syntax: << var  or  << #|var|  or  << \"prompt\" var"));
+                    .with_help("input syntax: << var  |  << #|var|  |  << \"prompt\" var  |  << ##.(5,2) \"prompt\" var"));
             }
         };
 
-        // If numeric cast, consume closing `|`
-        if cast == InputCast::Numeric {
+        // If legacy numeric cast, consume closing `|`
+        if legacy_numeric {
             let pipe_tok = self.peek().clone();
             if !matches!(pipe_tok.kind, TokenKind::Pipe) {
                 return Err(Diagnostic::error("expected '|' to close #|variable|")
@@ -74,8 +77,103 @@ impl Parser {
             self.advance(); // consume |
         }
 
+        let cast = match typespec {
+            Some(c) => c,
+            None if legacy_numeric => InputCast::Numeric,
+            None => InputCast::String,
+        };
+
         let span = start_span.to(&var_token.span);
         Ok(Statement::Input(Input::new(variable, prompt, cast, span)))
+    }
+
+    /// Parse an optional input typespec immediately after `<<`:
+    ///   ##.        → Float
+    ///   ##.(t,d)   → Decimal { total: t, decimals: d }
+    ///   ###  / ###(n)  → Int { max_digits }
+    ///   ##!  / ##!(n)  → Int { max_digits }   (truncate alias, same parse)
+    ///   ##"  / ##"(n)  → Text { max }
+    ///   ##'        → Char
+    /// Returns `Ok(None)` when the next token is not a typespec.
+    fn parse_input_typespec(&mut self) -> Result<Option<InputCast>, Diagnostic> {
+        let cast = match self.peek().kind {
+            TokenKind::HashHashDot => {
+                self.advance(); // consume ##.
+                if matches!(self.peek().kind, TokenKind::LParen) {
+                    let (total, decimals) = self.parse_two_uint_args()?;
+                    InputCast::Decimal { total, decimals }
+                } else {
+                    InputCast::Float
+                }
+            }
+            TokenKind::HashHashHash | TokenKind::HashHashBang => {
+                self.advance(); // consume ### / ##!
+                InputCast::Int { max_digits: self.parse_opt_one_uint_arg()? }
+            }
+            TokenKind::HashHashQuote => {
+                self.advance(); // consume ##"
+                InputCast::Text { max: self.parse_opt_one_uint_arg()? }
+            }
+            TokenKind::HashHashApos => {
+                self.advance(); // consume ##'
+                InputCast::Char
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(cast))
+    }
+
+    /// Parse an optional single unsigned-int argument in parentheses: `(N)`.
+    /// Returns `None` when no `(` follows.
+    fn parse_opt_one_uint_arg(&mut self) -> Result<Option<u32>, Diagnostic> {
+        if !matches!(self.peek().kind, TokenKind::LParen) {
+            return Ok(None);
+        }
+        self.advance(); // consume (
+        let n = self.expect_uint_arg()?;
+        self.expect_rparen()?;
+        Ok(Some(n))
+    }
+
+    /// Parse a required two unsigned-int arguments in parentheses: `(A, B)`.
+    fn parse_two_uint_args(&mut self) -> Result<(u32, u32), Diagnostic> {
+        self.advance(); // consume (  (caller already checked it)
+        let a = self.expect_uint_arg()?;
+        let comma = self.peek().clone();
+        if !matches!(comma.kind, TokenKind::Comma) {
+            return Err(Diagnostic::error("expected ',' between the two size arguments")
+                .with_span(comma.span)
+                .with_help("decimal typespec syntax: ##.(total, decimals)"));
+        }
+        self.advance(); // consume ,
+        let b = self.expect_uint_arg()?;
+        self.expect_rparen()?;
+        Ok((a, b))
+    }
+
+    /// Consume one non-negative integer literal as `u32`.
+    fn expect_uint_arg(&mut self) -> Result<u32, Diagnostic> {
+        let tok = self.peek().clone();
+        match tok.kind {
+            TokenKind::Integer(n) if n >= 0 => {
+                self.advance();
+                Ok(n as u32)
+            }
+            _ => Err(Diagnostic::error("expected a non-negative integer size argument")
+                .with_span(tok.span)
+                .with_help("input typespec sizes are non-negative integers, e.g. ##.(5,2) or ###(4)")),
+        }
+    }
+
+    /// Consume a closing `)`.
+    fn expect_rparen(&mut self) -> Result<(), Diagnostic> {
+        let tok = self.peek().clone();
+        if !matches!(tok.kind, TokenKind::RParen) {
+            return Err(Diagnostic::error("expected ')' to close the size argument list")
+                .with_span(tok.span));
+        }
+        self.advance(); // consume )
+        Ok(())
     }
 
     /// Parse output statement: >> expr

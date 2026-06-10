@@ -1,0 +1,3 @@
+// Typed input: text bounded to 20 characters → String
+<< ##"(20) "Nombre: " s
+>> "s=" s ¶

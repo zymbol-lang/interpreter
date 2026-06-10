@@ -200,7 +200,12 @@ primary_item   = grouped_expr | literal | identifier | function_call
 (* ¶ = pilcrow U+00B6 or \\ (double backslash) *)
 newline_stmt   = ( "¶" | "\\\\" ) ;
 
-input_stmt     = "<<" , [ string_literal ] , identifier ;
+input_stmt     = "<<" , [ input_typespec ] , [ string_literal ] , identifier
+               | "<<" , [ string_literal ] , "#|" , identifier , "|" ;  (* legacy numeric *)
+input_typespec = "##." , [ "(" , uint , "," , uint , ")" ]   (* Float / Decimal *)
+               | ( "###" | "##!" ) , [ "(" , uint , ")" ]     (* Int, optional max digits *)
+               | "##\"" , [ "(" , uint , ")" ]                 (* String, optional max chars *)
+               | "##'" ;                                       (* Char *)
 
 cli_args_capture = "><" , identifier ;   (* tree-walker only *)
 
