@@ -30,6 +30,18 @@ pub struct NamedTupleExpr {
     pub span: Span,
 }
 
+/// Grouped (parenthesized) expression: (expr)
+///
+/// Semantically transparent — it evaluates to its inner expression. It exists
+/// so the formatter can reproduce the parentheses the user wrote; the parser
+/// used to discard them. Consumers that match on expression shape should look
+/// through it via [`Expr::unwrap_group`].
+#[derive(Debug, Clone)]
+pub struct GroupExpr {
+    pub expr: Box<Expr>,
+    pub span: Span,
+}
+
 // Implementations
 
 impl ArrayLiteralExpr {
@@ -47,6 +59,12 @@ impl TupleExpr {
 impl NamedTupleExpr {
     pub fn new(fields: Vec<(String, Expr)>, span: Span) -> Self {
         Self { fields, span }
+    }
+}
+
+impl GroupExpr {
+    pub fn new(expr: Box<Expr>, span: Span) -> Self {
+        Self { expr, span }
     }
 }
 

@@ -62,6 +62,8 @@ pub enum InputPrompt {
 #[derive(Debug, Clone)]
 pub struct Newline {
     pub span: Span,
+    /// `true` when written as `\\`, `false` when written as `¶`
+    pub backslash: bool,
 }
 
 /// Clear screen statement: >>!
@@ -109,7 +111,9 @@ impl Input {
 }
 
 impl Newline {
-    pub fn new(span: Span) -> Self { Self { span } }
+    pub fn new(span: Span) -> Self { Self { span, backslash: false } }
+
+    pub fn new_backslash(span: Span) -> Self { Self { span, backslash: true } }
 }
 
 impl ClearScreen {

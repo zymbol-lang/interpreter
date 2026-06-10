@@ -131,7 +131,7 @@ impl<W: Write> Interpreter<W> {
     /// Handles both module constants (module.CONSTANT) and named tuple fields (tuple.field)
     pub(crate) fn eval_member_access(&mut self, member: &zymbol_ast::MemberAccessExpr) -> Result<Value> {
         // Check if the object is a module alias (for module.CONSTANT access)
-        if let Expr::Identifier(id) = member.object.as_ref() {
+        if let Expr::Identifier(id) = member.object.unwrap_group() {
             if let Some(module_path) = self.import_aliases.get(&id.name) {
                 // This is a module constant access
                 let module = self.loaded_modules.get(module_path).ok_or_else(|| {

@@ -54,6 +54,7 @@
 //! end of the line they appear on. Block comments (/* */) are preserved inline.
 
 mod config;
+mod gate;
 mod output;
 mod visitor;
 
@@ -78,6 +79,11 @@ pub enum FormatError {
     /// Parser errors occurred during parsing
     #[error("parser errors: {0}")]
     ParserError(String),
+
+    /// The formatted output would not be token/shape equivalent to the
+    /// source. The input file is left unchanged. See `gate` module.
+    #[error("safety gate: {0}")]
+    SafetyGate(String),
 }
 
 /// Comment extracted from source, with its position
@@ -190,6 +196,9 @@ pub fn format_with_config(source: &str, config: FormatterConfig) -> Result<Strin
 
     // Now merge comments back into formatted output
     let result = merge_comments(source, &formatted, &comments, &original_lines);
+
+    // Safety gate: never return output that is not equivalent to the source.
+    gate::verify(source, &program, &result).map_err(FormatError::SafetyGate)?;
 
     Ok(result)
 }

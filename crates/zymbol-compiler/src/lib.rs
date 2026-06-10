@@ -746,8 +746,8 @@ impl Compiler {
             Statement::Return(r) => {
                 // TCO: if `<~ f(args)` where f is the current function → TailCall
                 if let Some(val) = &r.value {
-                    if let Expr::FunctionCall(call) = val.as_ref() {
-                        if let Expr::Identifier(id) = call.callable.as_ref() {
+                    if let Expr::FunctionCall(call) = val.unwrap_group() {
+                        if let Expr::Identifier(id) = call.callable.unwrap_group() {
                             if id.name == ctx.name {
                                 if let Some(&func_idx) = self.function_index.get(&id.name) {
                                     let mut arg_regs = Vec::with_capacity(call.arguments.len());
@@ -928,7 +928,7 @@ impl Compiler {
     ) -> Result<(), CompileError> {
         // Optimise: arr = arr$+ elem → ArrayPush in-place (O(1), no clone)
         if let Expr::CollectionAppend(ca) = value {
-            if let Expr::Identifier(ident) = ca.collection.as_ref() {
+            if let Expr::Identifier(ident) = ca.collection.unwrap_group() {
                 if ident.name == name {
                     // Hot/pre_hot RHS self-ref (arr = arr°$+ i  or  arr = °arr$+ i):
                     // initialize to [] on first use
@@ -1101,7 +1101,7 @@ impl Compiler {
         // Four cases: infinite, while, range for-each, array for-each
         if lp.iterator_var.is_some() {
             // Check if iterable is a Range or an array/expression
-            let is_range = lp.iterable.as_ref().is_some_and(|e| matches!(e.as_ref(), Expr::Range(_)));
+            let is_range = lp.iterable.as_ref().is_some_and(|e| matches!(e.unwrap_group(), Expr::Range(_)));
             if is_range {
                 self.compile_range_loop(lp, ctx)
             } else {
@@ -1109,7 +1109,8 @@ impl Compiler {
             }
         } else if lp.condition.is_some() {
             // Detect TIMES loop: condition is a literal Int → repeat N times
-            let cond = lp.condition.as_ref().unwrap().as_ref();
+            // (look through user parens: `@(3)` parses as Group(Literal(3)))
+            let cond = lp.condition.as_ref().unwrap().unwrap_group();
             let is_literal_times = matches!(cond, Expr::Literal(lit) if matches!(lit.value, Literal::Int(_)));
             // Dynamic times: condition is an identifier (variable holding an Int count)
             let is_dynamic_times = matches!(cond, Expr::Identifier(_));
@@ -1131,7 +1132,7 @@ impl Compiler {
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
         let n = if let Some(cond) = lp.condition.as_ref() {
-            if let Expr::Literal(lit) = cond.as_ref() {
+            if let Expr::Literal(lit) = cond.unwrap_group() {
                 if let Literal::Int(n) = lit.value { n } else { 0 }
             } else { 0 }
         } else { 0 };
@@ -1279,7 +1280,7 @@ impl Compiler {
         let iterable = lp.iterable.as_ref().unwrap();
 
         // Expect `iterable` to be a Range expression: start..end
-        let (start_expr, end_expr, step_expr_opt) = match iterable.as_ref() {
+        let (start_expr, end_expr, step_expr_opt) = match iterable.unwrap_group() {
             Expr::Range(r) => (&r.start, &r.end, r.step.as_deref()),
             // Array for-each — Fase 4C
             _ => {
@@ -1432,6 +1433,8 @@ impl Compiler {
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
         match expr {
+            // Grouping parens are transparent
+            Expr::Group(group) => self.compile_expr(&group.expr, ctx),
             Expr::Literal(lit) => self.compile_literal(lit, ctx),
             Expr::Identifier(id) => {
                 if let Ok(r) = ctx.get_reg(&id.name) {
@@ -1549,7 +1552,7 @@ impl Compiler {
             Expr::TypeMetadata(tm) => {
                 // If the inner expr is an undefined identifier, treat as Unit (##_ type)
                 // This matches tree-walker behavior: nonexistent#? → ("##_", 0, Unit)
-                let r = if let Expr::Identifier(id) = tm.expr.as_ref() {
+                let r = if let Expr::Identifier(id) = tm.expr.unwrap_group() {
                     if ctx.get_reg(&id.name).is_err() && !self.global_consts.contains_key(&id.name) {
                         let tmp = ctx.alloc_temp()?;
                         ctx.emit(Instruction::LoadUnit(tmp));
@@ -1917,7 +1920,7 @@ impl Compiler {
 
         // IMM fast path: right operand is a small integer literal
         // Eliminates a LoadInt + temp register for common patterns like `n - 1`, `n <= 1`
-        if let Expr::Literal(lit) = bin.right.as_ref() {
+        if let Expr::Literal(lit) = bin.right.unwrap_group() {
             if let Literal::Int(imm) = lit.value {
                 if (i32::MIN as i64..=i32::MAX as i64).contains(&imm) {
                     let imm = imm as i32;
@@ -2095,9 +2098,9 @@ impl Compiler {
     ) -> Result<Reg, CompileError> {
         // Check builtin FIRST so stdlib calls (std/math, std/random, i18n re-exports) are
         // handled before the "module does not export function" RaiseError path fires.
-        let maybe_builtin_id = match call.callable.as_ref() {
+        let maybe_builtin_id = match call.callable.unwrap_group() {
             Expr::MemberAccess(ma) => {
-                if let Expr::Identifier(obj) = ma.object.as_ref() {
+                if let Expr::Identifier(obj) = ma.object.unwrap_group() {
                     let qualified = format!("{}::{}", obj.name, ma.field);
                     self.builtin_map.get(&qualified).copied()
                 } else { None }
@@ -2115,12 +2118,12 @@ impl Compiler {
         }
 
         // Check if the callable is a known static function name or a module call (alias::func)
-        let maybe_func_idx = match call.callable.as_ref() {
+        let maybe_func_idx = match call.callable.unwrap_group() {
             Expr::Identifier(id) => self.function_index.get(&id.name)
                 .or_else(|| self.module_scope.get(&id.name))
                 .copied(),
             Expr::MemberAccess(ma) => {
-                if let Expr::Identifier(obj) = ma.object.as_ref() {
+                if let Expr::Identifier(obj) = ma.object.unwrap_group() {
                     // Module call: obj::func → look up "obj::func" in function_index
                     let qualified = format!("{}::{}", obj.name, ma.field);
                     self.function_index.get(&qualified).copied()
@@ -2134,8 +2137,8 @@ impl Compiler {
         // If call target is an unresolved module call (alias::func not exported),
         // emit a RaiseError so the VM produces the correct runtime message.
         if maybe_func_idx.is_none() {
-            if let Expr::MemberAccess(ma) = call.callable.as_ref() {
-                if let Expr::Identifier(obj) = ma.object.as_ref() {
+            if let Expr::MemberAccess(ma) = call.callable.unwrap_group() {
+                if let Expr::Identifier(obj) = ma.object.unwrap_group() {
                     if self.known_module_aliases.contains(&obj.name) {
                         let msg = format!("module '{}' does not export function '{}'", obj.name, ma.field);
                         let idx = self.intern_string(&msg);
@@ -2167,7 +2170,7 @@ impl Compiler {
                 for (i, is_out) in out_flags.iter().enumerate() {
                     if *is_out && i < call.arguments.len() {
                         // The arg register IS the caller's variable register (for identifiers)
-                        if matches!(&call.arguments[i], Expr::Identifier(_)) {
+                        if matches!(call.arguments[i].unwrap_group(), Expr::Identifier(_)) {
                             pairs.push((i as u16, arg_regs[i]));
                         }
                     }
@@ -2212,7 +2215,7 @@ impl Compiler {
                 Literal::Char(c) => Some(ModuleConst::Char(*c)),
             },
             Expr::Unary(un) if un.op == UnaryOp::Neg => {
-                if let Expr::Literal(lit) = un.operand.as_ref() {
+                if let Expr::Literal(lit) = un.operand.unwrap_group() {
                     match &lit.value {
                         Literal::Int(n) => Some(ModuleConst::Int(-*n)),
                         Literal::Float(f) => Some(ModuleConst::Float(-f)),
@@ -2291,7 +2294,7 @@ impl Compiler {
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
         // Check if this is a module constant access (alias.CONST_NAME)
-        if let Expr::Identifier(obj) = ma.object.as_ref() {
+        if let Expr::Identifier(obj) = ma.object.unwrap_group() {
             let key = format!("{}.{}", obj.name, ma.field);
             if let Some(mc) = self.module_constants.get(&key).cloned() {
                 let dst = ctx.alloc_temp()?;
@@ -2398,11 +2401,11 @@ impl Compiler {
                 }
                 Pattern::Range(start, end_expr, _) => {
                     // Range pattern: lo..hi
-                    let lo = if let Expr::Literal(l) = start.as_ref() {
+                    let lo = if let Expr::Literal(l) = start.unwrap_group() {
                         if let Literal::Int(n) = l.value { n }
                         else { return Err(CompileError::Unsupported("non-int range in match".into())); }
                     } else { return Err(CompileError::Unsupported("dynamic range in match".into())); };
-                    let hi = if let Expr::Literal(l) = end_expr.as_ref() {
+                    let hi = if let Expr::Literal(l) = end_expr.unwrap_group() {
                         if let Literal::Int(n) = l.value { n }
                         else { return Err(CompileError::Unsupported("non-int range in match".into())); }
                     } else { return Err(CompileError::Unsupported("dynamic range in match".into())); };
@@ -2725,7 +2728,7 @@ impl Compiler {
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
         // cu.target is an IndexExpr: arr[idx]
-        if let Expr::Index(idx_expr) = cu.target.as_ref() {
+        if let Expr::Index(idx_expr) = cu.target.unwrap_group() {
             let r_arr = self.compile_expr(&idx_expr.array, ctx)?;
             let r_idx = self.compile_expr(&idx_expr.index, ctx)?;
             let r_val = self.compile_expr(&cu.value, ctx)?;
@@ -3320,7 +3323,7 @@ impl Compiler {
 fn hot_neutral_instr(value: &Expr, var_name: &str, dst: Reg) -> Instruction {
     use zymbol_bytecode::HotNeutral;
     if let Expr::CollectionAppend(ca) = value {
-        if let Expr::Identifier(id) = ca.collection.as_ref() {
+        if let Expr::Identifier(id) = ca.collection.unwrap_group() {
             if id.name == var_name {
                 return Instruction::HotInit(dst, HotNeutral::Array);
             }
@@ -3330,14 +3333,14 @@ fn hot_neutral_instr(value: &Expr, var_name: &str, dst: Reg) -> Instruction {
         if bin.op == BinaryOp::Concat {
             return Instruction::HotInit(dst, HotNeutral::String);
         }
-        if let Expr::Identifier(id) = bin.left.as_ref() {
+        if let Expr::Identifier(id) = bin.left.unwrap_group() {
             if id.name == var_name && matches!(bin.op, BinaryOp::Mul | BinaryOp::Div) {
                 return Instruction::HotInit(dst, HotNeutral::IntOne);
             }
         }
     }
     if let Expr::ConcatBuild(cb) = value {
-        if let Expr::Identifier(id) = cb.base.as_ref() {
+        if let Expr::Identifier(id) = cb.base.unwrap_group() {
             if id.name == var_name {
                 return Instruction::HotInit(dst, HotNeutral::String);
             }
@@ -3377,6 +3380,8 @@ fn collect_free_in_expr(
     free: &mut Vec<String>,
 ) {
     match expr {
+        // Grouping parens are transparent
+        Expr::Group(group) => collect_free_in_expr(&group.expr, locals, outer_ctx, seen, free),
         Expr::Identifier(id) => {
             if !locals.contains(&id.name) && outer_ctx.register_map.contains_key(&id.name)
                 && seen.insert(id.name.clone()) {

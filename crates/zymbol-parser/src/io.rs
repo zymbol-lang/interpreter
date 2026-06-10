@@ -6,7 +6,7 @@
 //! - Newline statements: ¶ OR \\
 //! - CLI args capture: >< variable
 
-use zymbol_ast::{ClearScreen, CliArgsCaptureStmt, Expr, IdentifierExpr, Input, InputCast, InputPrompt, KeyInput, LiteralExpr, Newline, Output, OutputPos, TuiBlock};
+use zymbol_ast::{ClearScreen, CliArgsCaptureStmt, Expr, Input, InputCast, InputPrompt, KeyInput, LiteralExpr, Newline, Output, OutputPos, TuiBlock};
 use zymbol_common::Literal;
 use zymbol_error::Diagnostic;
 use zymbol_lexer::{StringPart, TokenKind};
@@ -15,8 +15,13 @@ use crate::{Parser, Statement};
 impl Parser {
     /// Parse newline statement: ¶ or \\
     pub(crate) fn parse_newline(&mut self) -> Result<Statement, Diagnostic> {
-        let span = self.advance().span; // consume ¶ or \\
-        Ok(Statement::Newline(Newline::new(span)))
+        let token = self.advance(); // consume ¶ or \\
+        let stmt = if matches!(token.kind, TokenKind::Backslash2) {
+            Newline::new_backslash(token.span)
+        } else {
+            Newline::new(token.span)
+        };
+        Ok(Statement::Newline(stmt))
     }
 
     /// Parse input statement:
@@ -201,28 +206,27 @@ impl Parser {
 
             match &token.kind {
                 TokenKind::StringInterpolated(parts) => {
-                    // Expand interpolated string to multiple expressions
+                    // Keep the interpolated string as ONE literal (same as in
+                    // expression context, lib.rs primary parsing) so the
+                    // formatter can reprint exactly what the user wrote. The
+                    // interpreter/VM resolve `{var}` at runtime and produce
+                    // the same concatenation the old per-part expansion did.
                     parser.advance(); // consume interpolated string
-                    let mut expanded = Vec::new();
-
+                    let mut reconstructed = String::new();
                     for part in parts {
                         match part {
-                            StringPart::Text(text) => {
-                                expanded.push(Expr::Literal(LiteralExpr::new(
-                                    Literal::String(text.clone()),
-                                    token.span,
-                                )));
-                            }
-                            StringPart::Variable(var_name) => {
-                                expanded.push(Expr::Identifier(IdentifierExpr::new(
-                                    var_name.clone(),
-                                    token.span,
-                                )));
+                            StringPart::Text(t) => reconstructed.push_str(t),
+                            StringPart::Variable(v) => {
+                                reconstructed.push('{');
+                                reconstructed.push_str(v);
+                                reconstructed.push('}');
                             }
                         }
                     }
-
-                    Ok(expanded)
+                    Ok(vec![Expr::Literal(LiteralExpr::new(
+                        Literal::InterpolatedString(reconstructed),
+                        token.span,
+                    ))])
                 }
                 _ => {
                     // Use parse_output_item() to handle Haskell-style output:

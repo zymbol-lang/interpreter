@@ -16,12 +16,12 @@ fn rhs_has_hot_self_ref(expr: &zymbol_ast::Expr, name: &str) -> bool {
     use zymbol_ast::Expr;
     match expr {
         Expr::CollectionAppend(op) => {
-            if let Expr::Identifier(id) = op.collection.as_ref() {
+            if let Expr::Identifier(id) = op.collection.unwrap_group() {
                 (id.hot || id.pre_hot) && id.name == name
             } else { false }
         }
         Expr::Binary(bin) => {
-            if let Expr::Identifier(id) = bin.left.as_ref() {
+            if let Expr::Identifier(id) = bin.left.unwrap_group() {
                 (id.hot || id.pre_hot) && id.name == name
             } else { false }
         }
@@ -112,7 +112,7 @@ impl<W: Write> Interpreter<W> {
         // Check if this is a for-each loop
         if let (Some(iterator_var), Some(iterable_expr)) = (&loop_stmt.iterator_var, &loop_stmt.iterable) {
             // B5: Fast path for integer ranges — avoid Vec allocation
-            if let Expr::Range(range_expr) = &**iterable_expr {
+            if let Expr::Range(range_expr) = iterable_expr.unwrap_group() {
                 let start_val = self.eval_expr(&range_expr.start)?;
                 let end_val = self.eval_expr(&range_expr.end)?;
                 let step = if let Some(step_expr) = &range_expr.step {

@@ -235,11 +235,19 @@ impl Parser {
 
         let span = start.to(&end_span);
 
-        Ok(Expr::Lambda(zymbol_ast::LambdaExpr {
+        let lambda = Expr::Lambda(zymbol_ast::LambdaExpr {
             params,
             body,
             span,
-        }))
+        });
+
+        // `(x -> expr)` — the outer parens are user grouping, not lambda
+        // syntax; preserve them so the formatter can reprint them.
+        if has_closing_paren {
+            Ok(Expr::Group(zymbol_ast::GroupExpr::new(Box::new(lambda), span)))
+        } else {
+            Ok(lambda)
+        }
     }
 
     /// Parse a lambda expression OR a bare identifier used as a function reference.

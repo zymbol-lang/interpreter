@@ -651,6 +651,9 @@ impl VariableAnalyzer {
     /// Analyze an expression to find variable usages
     fn analyze_expr(&mut self, expr: &Expr) {
         match expr {
+            // Grouping parens are transparent
+            Expr::Group(group) => self.analyze_expr(&group.expr),
+
             Expr::Identifier(ident) => {
                 // This is a variable usage
                 self.use_variable(&ident.name, ident.span);

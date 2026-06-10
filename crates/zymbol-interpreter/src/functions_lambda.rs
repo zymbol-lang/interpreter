@@ -145,7 +145,7 @@ impl<W: Write> Interpreter<W> {
     /// Evaluate a function call
     pub(crate) fn eval_function_call(&mut self, call: &zymbol_ast::FunctionCallExpr) -> Result<Value> {
         // Determine what we're calling based on the callable expression
-        match call.callable.as_ref() {
+        match call.callable.unwrap_group() {
             // Simple identifier: could be lambda variable or traditional function
             Expr::Identifier(ident) => {
                 // Check if it's a lambda stored in a variable
@@ -171,7 +171,7 @@ impl<W: Write> Interpreter<W> {
             // Member access: could be module::function or object.method (only module supported)
             Expr::MemberAccess(member) => {
                 // Check if it's a module function call: module.function
-                if let Expr::Identifier(module_ident) = member.object.as_ref() {
+                if let Expr::Identifier(module_ident) = member.object.unwrap_group() {
                     let module_alias = &module_ident.name;
                     let func_name = &member.field;
 
@@ -478,7 +478,7 @@ impl<W: Write> Interpreter<W> {
             let mut updates = Vec::new();
             for (i, param) in parameters.iter().enumerate() {
                 if matches!(param.kind, ParameterKind::Output) {
-                    if let Expr::Identifier(ident) = &arguments[i] {
+                    if let Expr::Identifier(ident) = arguments[i].unwrap_group() {
                         let value = self.get_variable(&param.name).cloned().unwrap_or(Value::Unit);
                         updates.push((ident.name.clone(), value));
                     }
@@ -525,6 +525,8 @@ fn collect_refs_in_expr(
     refs: &mut HashSet<String>,
 ) {
     match expr {
+        // Grouping parens are transparent
+        Expr::Group(group) => collect_refs_in_expr(&group.expr, locals, refs),
         Expr::Identifier(id) => {
             if !locals.contains(id.name.as_str()) {
                 refs.insert(id.name.clone());

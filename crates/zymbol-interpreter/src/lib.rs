@@ -1051,8 +1051,8 @@ impl<W: Write> Interpreter<W> {
                     // When detected: evaluate args, store in tco_args, set tco_pending = true,
                     // and set Return so the call frame unwinds cleanly into the TCO loop.
                     if self.try_depth == 0 {
-                        if let Expr::FunctionCall(call) = expr.as_ref() {
-                            if let Expr::Identifier(callee) = call.callable.as_ref() {
+                        if let Expr::FunctionCall(call) = expr.unwrap_group() {
+                            if let Expr::Identifier(callee) = call.callable.unwrap_group() {
                                 if let Some(cur_fn) = self.current_function.as_deref() {
                                     if callee.name == cur_fn {
                                         // Evaluate all arguments eagerly
@@ -1076,7 +1076,7 @@ impl<W: Write> Interpreter<W> {
                     // (finally could reference the variable), move instead of clone — O(1).
                     // Skip take_variable for output params — writeback still needs the value.
                     if self.try_depth == 0 {
-                        if let Expr::Identifier(ident) = expr.as_ref() {
+                        if let Expr::Identifier(ident) = expr.unwrap_group() {
                             if !self.current_output_params.contains(&ident.name) {
                                 if let Some(v) = self.take_variable(&ident.name) {
                                     self.set_control_flow(ControlFlow::Return(Some(v)));
@@ -1215,6 +1215,8 @@ impl<W: Write> Interpreter<W> {
     /// Evaluate an expression
     fn eval_expr(&mut self, expr: &Expr) -> Result<Value> {
         match expr {
+            // Grouping parens are transparent
+            Expr::Group(group) => self.eval_expr(&group.expr),
             Expr::Literal(lit) => self.eval_literal(lit),
             Expr::Identifier(ident) => self.eval_identifier(ident),
             Expr::Binary(binary) => self.eval_binary(binary),

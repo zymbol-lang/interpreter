@@ -21,7 +21,22 @@ use zymbol_ast::{
     DeepIndexExpr, FlatExtractExpr, StructuredExtractExpr,
     NavStep, NavPath, ExtractGroup,
 };
+use zymbol_ast::AssignSugar;
+use zymbol_ast::InputCast;
 use zymbol_ast::PipeExpr;
+
+/// Surface token for a compound-assignment operator (`+=`, `-=`, …).
+fn compound_op_str(op: BinaryOp) -> Option<&'static str> {
+    match op {
+        BinaryOp::Add => Some("+="),
+        BinaryOp::Sub => Some("-="),
+        BinaryOp::Mul => Some("*="),
+        BinaryOp::Div => Some("/="),
+        BinaryOp::Mod => Some("%="),
+        BinaryOp::Pow => Some("^="),
+        _ => None,
+    }
+}
 use zymbol_common::{BinaryOp, Literal, UnaryOp};
 use zymbol_lexer::StringPart;
 
@@ -78,16 +93,19 @@ impl<'a> FormatVisitor<'a> {
         // Format statements
         let mut prev_was_function = false;
         let mut prev_was_newline = false;
+        let mut prev_stmt: Option<&Statement> = None;
         for (i, stmt) in program.statements.iter().enumerate() {
             let is_function = matches!(stmt, Statement::FunctionDecl(_));
             let is_newline = matches!(stmt, Statement::Newline(_));
+            let join_output = Self::joins_previous_output(prev_stmt, stmt);
 
-            if i > 0 && (is_function || prev_was_function) && !is_newline {
+            if i > 0 && (is_function || prev_was_function) && !is_newline && !join_output {
                 self.output.newline();
             }
 
-            // Join ¶ onto the previous line only when prev wasn't already a ¶
-            if is_newline && i > 0 && !prev_was_newline {
+            // Join ¶ onto the previous line (only when prev wasn't already a ¶),
+            // and chained outputs that shared a source line: `>> a >> b`
+            if (is_newline && i > 0 && !prev_was_newline) || join_output {
                 self.output.backspace_newline();
                 self.output.space();
             }
@@ -97,6 +115,7 @@ impl<'a> FormatVisitor<'a> {
 
             prev_was_function = is_function;
             prev_was_newline = is_newline;
+            prev_stmt = Some(stmt);
         }
 
         if in_module {
@@ -106,15 +125,36 @@ impl<'a> FormatVisitor<'a> {
         }
     }
 
-    /// Format an export block
+    /// Format an export block, reprinting the user's optional `,` separators
+    /// and keeping single-line blocks (`#> { add, PI }`) on one line.
     fn format_export_block(&mut self, block: &ExportBlock) {
+        let comma_after = |i: usize| block.commas.get(i).copied().unwrap_or(false);
+
+        if block.span.start.line == block.span.end.line {
+            self.output.write("#> { ");
+            for (i, item) in block.items.iter().enumerate() {
+                if i > 0 {
+                    self.output.write(" ");
+                }
+                self.format_export_item(item);
+                if comma_after(i) {
+                    self.output.write(",");
+                }
+            }
+            self.output.write(" }");
+            return;
+        }
+
         self.output.write("#>");
         self.output.open_brace();
         self.output.newline();
         self.output.indent();
 
-        for item in &block.items {
+        for (i, item) in block.items.iter().enumerate() {
             self.format_export_item(item);
+            if comma_after(i) {
+                self.output.write(",");
+            }
             self.output.newline();
         }
 
@@ -186,7 +226,9 @@ impl<'a> FormatVisitor<'a> {
             Statement::Break(brk) => self.format_break(brk),
             Statement::Continue(cont) => self.format_continue(cont),
             Statement::Try(try_stmt) => self.format_try(try_stmt),
-            Statement::Newline(_) => self.output.write("¶"),
+            Statement::Newline(nl) => {
+                self.output.write(if nl.backslash { "\\\\" } else { "¶" })
+            }
             Statement::FunctionDecl(decl) => self.format_function_decl(decl),
             Statement::Return(ret) => self.format_return(ret),
             Statement::Match(match_expr) => {
@@ -251,9 +293,79 @@ impl<'a> FormatVisitor<'a> {
         }
     }
 
-    /// Format an assignment statement
+    /// Format an assignment statement, reprinting the surface form the user
+    /// wrote (`x += 1`, `x++`) from the parser's `sugar` record. The value
+    /// itself is always the desugared Binary, so when the sugar shape does not
+    /// match (defensive), fall back to plain `=` printing — the safety gate
+    /// rejects any unfaithful result.
     fn format_assignment(&mut self, assign: &Assignment) {
+        if assign.pre_hot {
+            self.output.write("°");
+        }
         self.output.write(&assign.name);
+        if assign.hot {
+            self.output.write("°");
+        }
+
+        match assign.sugar {
+            AssignSugar::Increment => {
+                self.output.write("++");
+                return;
+            }
+            AssignSugar::Decrement => {
+                self.output.write("--");
+                return;
+            }
+            AssignSugar::Compound(op) => {
+                if let Expr::Binary(bin) = &assign.value {
+                    if bin.op == op {
+                        if let Some(op_str) = compound_op_str(op) {
+                            self.output.write(" ");
+                            self.output.write(op_str);
+                            self.output.write(" ");
+                            self.format_expr(&bin.right);
+                            return;
+                        }
+                    }
+                }
+                // Shape mismatch — fall through to plain printing
+            }
+            AssignSugar::IndexedAssign => {
+                // name[i] = rhs   (value is CollectionUpdate{target: Index, value: rhs})
+                if let Expr::CollectionUpdate(cu) = &assign.value {
+                    if let Expr::Index(idx) = cu.target.as_ref() {
+                        self.output.write("[");
+                        self.format_expr(&idx.index);
+                        self.output.write("] = ");
+                        self.format_expr(&cu.value);
+                        return;
+                    }
+                }
+            }
+            AssignSugar::IndexedCompound(op) => {
+                // name[i] op= rhs (value is CollectionUpdate{target: Index,
+                //                  value: Binary{op, left: Index, right: rhs}})
+                if let Expr::CollectionUpdate(cu) = &assign.value {
+                    if let (Expr::Index(idx), Expr::Binary(bin)) =
+                        (cu.target.as_ref(), cu.value.as_ref())
+                    {
+                        if bin.op == op {
+                            if let Some(op_str) = compound_op_str(op) {
+                                self.output.write("[");
+                                self.format_expr(&idx.index);
+                                self.output.write("] ");
+                                self.output.write(op_str);
+                                self.output.write(" ");
+                                self.format_expr(&bin.right);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            AssignSugar::None => {}
+        }
+
         self.output.write(" = ");
         self.format_expr(&assign.value);
     }
@@ -325,9 +437,41 @@ impl<'a> FormatVisitor<'a> {
         self.output.write(&end.variable_name);
     }
 
-    /// Format an input statement
+    /// Format an input statement: `<< [typespec] ["prompt"] var` or `<< #|var|`
     fn format_input(&mut self, input: &Input) {
         self.output.write("<<");
+
+        // Typespec cast goes first, before the prompt (parser order)
+        match &input.cast {
+            InputCast::String | InputCast::Numeric => {}
+            InputCast::Float => {
+                self.output.space();
+                self.output.write("##.");
+            }
+            InputCast::Decimal { total, decimals } => {
+                self.output.space();
+                self.output.write(&format!("##.({},{})", total, decimals));
+            }
+            InputCast::Int { max_digits } => {
+                self.output.space();
+                match max_digits {
+                    Some(n) => self.output.write(&format!("###({})", n)),
+                    None => self.output.write("###"),
+                }
+            }
+            InputCast::Text { max } => {
+                self.output.space();
+                match max {
+                    Some(n) => self.output.write(&format!("##\"({})", n)),
+                    None => self.output.write("##\""),
+                }
+            }
+            InputCast::Char => {
+                self.output.space();
+                self.output.write("##'");
+            }
+        }
+
         if let Some(ref prompt) = input.prompt {
             self.output.space();
             match prompt {
@@ -341,8 +485,16 @@ impl<'a> FormatVisitor<'a> {
                 }
             }
         }
+
         self.output.space();
-        self.output.write(&input.variable);
+        if matches!(input.cast, InputCast::Numeric) {
+            // Legacy numeric form wraps the variable: `<< #|var|`
+            self.output.write("#|");
+            self.output.write(&input.variable);
+            self.output.write("|");
+        } else {
+            self.output.write(&input.variable);
+        }
     }
 
     /// Format an if statement
@@ -480,8 +632,9 @@ impl<'a> FormatVisitor<'a> {
                 self.output.write(&param.name);
             }
             ParameterKind::Mutable => {
-                self.output.write("~");
+                // Suffix form: `name~` (the parser only accepts the suffix)
                 self.output.write(&param.name);
+                self.output.write("~");
             }
             ParameterKind::Output => {
                 self.output.write(&param.name);
@@ -529,7 +682,9 @@ impl<'a> FormatVisitor<'a> {
             let mut prev_was_newline = false;
             while i < stmts.len() {
                 let is_newline = matches!(stmts[i], Statement::Newline(_));
-                if is_newline && i > 0 && !prev_was_newline {
+                let join_output = i > 0
+                    && Self::joins_previous_output(Some(&stmts[i - 1]), &stmts[i]);
+                if (is_newline && i > 0 && !prev_was_newline) || join_output {
                     self.output.backspace_newline();
                     self.output.space();
                 }
@@ -541,6 +696,17 @@ impl<'a> FormatVisitor<'a> {
 
             self.output.dedent();
             self.output.close_brace();
+        }
+    }
+
+    /// Chained outputs written on one source line (`>> a >> b ¶`) parse as
+    /// separate Output statements; keep them on one formatted line.
+    fn joins_previous_output(prev: Option<&Statement>, current: &Statement) -> bool {
+        match (prev, current) {
+            (Some(p @ Statement::Output(_)), Statement::Output(_)) => {
+                p.span().end.line == current.span().start.line
+            }
+            _ => false,
         }
     }
 
@@ -561,6 +727,12 @@ impl<'a> FormatVisitor<'a> {
     /// Format an expression
     pub fn format_expr(&mut self, expr: &Expr) {
         match expr {
+            // User-written grouping parens, preserved by the parser
+            Expr::Group(group) => {
+                self.output.write("(");
+                self.format_expr(&group.expr);
+                self.output.write(")");
+            }
             Expr::Literal(lit) => self.format_literal(lit),
             Expr::Identifier(ident) => self.format_identifier(ident),
             Expr::Binary(binary) => self.format_binary(binary),
@@ -673,7 +845,13 @@ impl<'a> FormatVisitor<'a> {
 
     /// Format an identifier expression
     fn format_identifier(&mut self, ident: &IdentifierExpr) {
+        if ident.pre_hot {
+            self.output.write("°");
+        }
         self.output.write(&ident.name);
+        if ident.hot {
+            self.output.write("°");
+        }
     }
 
     /// Format a binary expression
@@ -911,6 +1089,11 @@ impl<'a> FormatVisitor<'a> {
                 if i < tuple.elements.len() - 1 {
                     self.output.write(", ");
                 }
+            }
+            // 1-tuples need the trailing comma: (1,) — without it the source
+            // would re-parse as a grouped expression.
+            if tuple.elements.len() == 1 {
+                self.output.write(",");
             }
             self.output.write(")");
         }

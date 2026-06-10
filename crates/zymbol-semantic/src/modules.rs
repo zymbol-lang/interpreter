@@ -321,7 +321,7 @@ impl ModuleAnalyzer {
             Statement::LifetimeEnd(s) => ("lifetime end (\\)", s.span),
             Statement::DestructureAssign(s) => ("destructure assignment", s.span),
             Statement::Assignment(s) => {
-                if !matches!(s.value, Expr::Literal(_)) {
+                if !matches!(s.value.unwrap_group(), Expr::Literal(_)) {
                     return Some(SemanticError::ExecutableStatementInModule {
                         stmt_kind: "variable with non-literal initializer".to_string(),
                         span: s.value.span(),
@@ -330,7 +330,7 @@ impl ModuleAnalyzer {
                 return None;
             }
             Statement::ConstDecl(s) => {
-                if !matches!(s.value, Expr::Literal(_)) {
+                if !matches!(s.value.unwrap_group(), Expr::Literal(_)) {
                     return Some(SemanticError::ExecutableStatementInModule {
                         stmt_kind: "constant with non-literal initializer".to_string(),
                         span: s.value.span(),

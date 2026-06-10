@@ -20,6 +20,9 @@ pub struct ModuleDecl {
 #[derive(Debug, Clone)]
 pub struct ExportBlock {
     pub items: Vec<ExportItem>,
+    /// `commas[i]` is true when item `i` was followed by a `,` in the source
+    /// (commas are optional separators); used by the formatter for fidelity.
+    pub commas: Vec<bool>,
     pub span: Span,
 }
 
@@ -82,7 +85,12 @@ impl ModuleDecl {
 
 impl ExportBlock {
     pub fn new(items: Vec<ExportItem>, span: Span) -> Self {
-        Self { items, span }
+        let commas = vec![false; items.len()];
+        Self { items, commas, span }
+    }
+
+    pub fn with_commas(items: Vec<ExportItem>, commas: Vec<bool>, span: Span) -> Self {
+        Self { items, commas, span }
     }
 }
 

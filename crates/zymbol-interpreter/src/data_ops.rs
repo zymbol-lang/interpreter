@@ -130,7 +130,7 @@ impl<W: Write> Interpreter<W> {
     /// instead of throwing an error. This allows checking variable existence.
     pub(crate) fn eval_type_metadata(&mut self, op: &TypeMetadataExpr) -> Result<Value> {
         // Special handling for identifiers - check if variable exists
-        let value = if let Expr::Identifier(ident) = &*op.expr {
+        let value = if let Expr::Identifier(ident) = op.expr.unwrap_group() {
             // Try to get variable safely
             match self.get_variable(&ident.name) {
                 Some(v) => v.clone(),

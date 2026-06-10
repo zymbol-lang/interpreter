@@ -140,7 +140,7 @@ impl ControlFlowGraph {
         for (index, stmt) in statements.iter().enumerate() {
             let node_id = cfg.add_node(CfgNode::Statement {
                 stmt_index: index,
-                span: *stmt.span(),
+                span: stmt.span(),
             });
 
             // Connect previous node to this one
@@ -276,7 +276,7 @@ impl<'a> CfgBuilder<'a> {
         self.stmt_counter += 1;
         self.cfg.add_node(CfgNode::Statement {
             stmt_index: index,
-            span: *stmt.span(),
+            span: stmt.span(),
         })
     }
 
@@ -608,41 +608,6 @@ fn empty_span() -> Span {
 impl Default for ControlFlowGraph {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// Helper trait to get span from Statement
-trait Spannable {
-    fn span(&self) -> &Span;
-}
-
-impl Spannable for Statement {
-    fn span(&self) -> &Span {
-        match self {
-            Statement::Output(s) => &s.span,
-            Statement::Assignment(s) => &s.span,
-            Statement::ConstDecl(s) => &s.span,
-            Statement::DestructureAssign(s) => &s.span,
-            Statement::LifetimeEnd(s) => &s.span,
-            Statement::Input(s) => &s.span,
-            Statement::If(s) => &s.span,
-            Statement::Loop(s) => &s.span,
-            Statement::Break(s) => &s.span,
-            Statement::Continue(s) => &s.span,
-            Statement::Try(s) => &s.span,
-            Statement::Newline(s) => &s.span,
-            Statement::FunctionDecl(s) => &s.span,
-            Statement::Return(s) => &s.span,
-            Statement::Match(s) => &s.span,
-            Statement::Expr(s) => &s.span,
-            Statement::CliArgsCapture(s) => &s.span,
-            Statement::SetNumeralMode { span, .. } => span,
-            Statement::Sleep(s) => &s.span,
-            Statement::ClearScreen(s) => &s.span,
-            Statement::KeyInput(s) => &s.span,
-            Statement::OutputPos(s) => &s.span,
-            Statement::TuiBlock(s) => &s.span,
-        }
     }
 }
 

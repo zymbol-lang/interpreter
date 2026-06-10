@@ -432,7 +432,7 @@ impl Parser {
                     ));
                 }
                 TokenKind::LParen => {
-                    if matches!(expr, Expr::Literal(_)) { break; }
+                    if matches!(expr.unwrap_group(), Expr::Literal(_)) { break; }
                     if self.peek().span.start.line != expr.span().end.line { break; }
                     self.advance();
                     let mut arguments = Vec::new();
@@ -522,7 +522,7 @@ impl Parser {
                     // A '(' on a new line starts a new statement (e.g. destructure pattern),
                     // not a chained call.
                     // Literals (strings, numbers, bools, chars) are never callable.
-                    if matches!(expr, Expr::Literal(_)) {
+                    if matches!(expr.unwrap_group(), Expr::Literal(_)) {
                         break;
                     }
                     if self.peek().span.start.line != expr.span().end.line {

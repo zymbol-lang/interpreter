@@ -14,7 +14,7 @@ use std::io::Write;
 fn hot_neutral_from_value(value: &Expr, name: &str) -> Value {
     match value {
         Expr::CollectionAppend(op) => {
-            if let Expr::Identifier(ident) = op.collection.as_ref() {
+            if let Expr::Identifier(ident) = op.collection.unwrap_group() {
                 if ident.name == name {
                     return Value::Array(Vec::new());
                 }
@@ -25,7 +25,7 @@ fn hot_neutral_from_value(value: &Expr, name: &str) -> Value {
         Expr::Binary(bin)
             if matches!(bin.op, BinaryOp::Mul | BinaryOp::Div) =>
         {
-            if let Expr::Identifier(ident) = bin.left.as_ref() {
+            if let Expr::Identifier(ident) = bin.left.unwrap_group() {
                 if ident.name == name {
                     return Value::Int(1);
                 }
@@ -68,7 +68,7 @@ impl<W: Write> Interpreter<W> {
             // Fast path: x = arr[i] — clone only the element, not the whole array
             // Avoids O(n) array clone when reading a single element by index.
             Expr::Index(idx) => {
-                if let Expr::Identifier(arr_ident) = idx.array.as_ref() {
+                if let Expr::Identifier(arr_ident) = idx.array.unwrap_group() {
                     let index_val = self.eval_expr(&idx.index)?;
                     if let Value::Int(i) = &index_val {
                         if *i > 0 {
@@ -94,7 +94,7 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             Expr::CollectionAppend(op) => {
-                if let Expr::Identifier(ident) = op.collection.as_ref() {
+                if let Expr::Identifier(ident) = op.collection.unwrap_group() {
                     if ident.name == assign.name {
                         let element = self.eval_expr(&op.element)?;
                         // Hot/pre_hot RHS: auto-init on first use.
@@ -128,7 +128,7 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             Expr::CollectionRemoveAt(op) => {
-                if let Expr::Identifier(ident) = op.collection.as_ref() {
+                if let Expr::Identifier(ident) = op.collection.unwrap_group() {
                     if ident.name == assign.name {
                         let index_val = self.eval_expr(&op.index)?;
                         if let Value::Int(i) = &index_val {
@@ -149,8 +149,8 @@ impl<W: Write> Interpreter<W> {
             // Fast path: arr = arr[i]$~ v — update single element in-place, no array clone
             // O(1) vs O(n) clone when the LHS variable matches the collection being updated.
             Expr::CollectionUpdate(op) => {
-                if let Expr::Index(idx) = op.target.as_ref() {
-                    if let Expr::Identifier(ident) = idx.array.as_ref() {
+                if let Expr::Index(idx) = op.target.unwrap_group() {
+                    if let Expr::Identifier(ident) = idx.array.unwrap_group() {
                         if ident.name == assign.name {
                             // Tuples are immutable — indexed assignment is forbidden
                             match self.get_variable(&assign.name) {
@@ -186,7 +186,7 @@ impl<W: Write> Interpreter<W> {
             // B12: fast path for x = x OP y (integer/float arithmetic self-assign).
             // Avoids Value::clone() of LHS and full eval_expr dispatch for simple loops.
             Expr::Binary(bin) => {
-                if let Expr::Identifier(lhs_ident) = bin.left.as_ref() {
+                if let Expr::Identifier(lhs_ident) = bin.left.unwrap_group() {
                     if lhs_ident.name == assign.name {
                         let rhs_val = self.eval_expr(&bin.right)?;
                         // Int fast path
