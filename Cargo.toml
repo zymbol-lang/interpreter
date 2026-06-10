@@ -20,10 +20,6 @@ members = [
     "crates/zymbol-vm",
     "crates/zymbol-compiler",
     "crates/zymbol-intrinsics",
-    # Uncomment as you create each crate:
-    # "crates/zymbol-codegen",
-    # "crates/zymbol-runtime",
-    # "crates/zymbol-stdlib",
 ]
 
 [workspace.package]
@@ -31,7 +27,7 @@ version = "0.0.6"
 edition = "2021"
 license = "AGPL-3.0-only"
 authors = ["Zymbol-Lang Contributors"]
-repository = "https://github.com/your-username/zymbol-lang"
+repository = "https://github.com/zymbol-lang/interpreter"
 
 [workspace.dependencies]
 # Internal crates
@@ -42,16 +38,12 @@ zymbol-ast = { path = "crates/zymbol-ast" }
 zymbol-lexer = { path = "crates/zymbol-lexer" }
 zymbol-parser = { path = "crates/zymbol-parser" }
 zymbol-semantic = { path = "crates/zymbol-semantic" }
-zymbol-ir = { path = "crates/zymbol-ir" }
-zymbol-codegen = { path = "crates/zymbol-codegen" }
 zymbol-interpreter = { path = "crates/zymbol-interpreter" }
 zymbol-bytecode = { path = "crates/zymbol-bytecode" }
 zymbol-vm = { path = "crates/zymbol-vm" }
 zymbol-compiler = { path = "crates/zymbol-compiler" }
 zymbol-intrinsics = { path = "crates/zymbol-intrinsics" }
 zymbol-standalone = { path = "crates/zymbol-standalone" }
-zymbol-runtime = { path = "crates/zymbol-runtime" }
-zymbol-stdlib = { path = "crates/zymbol-stdlib" }
 zymbol-analyzer = { path = "crates/zymbol-analyzer" }
 zymbol-formatter = { path = "crates/zymbol-formatter" }
 zymbol-repl = { path = "crates/zymbol-repl" }
