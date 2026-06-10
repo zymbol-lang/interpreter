@@ -8,6 +8,7 @@ use crate::modules::LoadedModule;
 use crate::Value;
 use std::collections::HashMap;
 
+mod db;
 mod io;
 mod json;
 mod math;
@@ -62,6 +63,15 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
         "std/net" => Some(LoadedModule {
             name: "std/net".to_string(),
             functions: net::register(),
+            all_functions: HashMap::new(),
+            constants: HashMap::new(),
+            all_variables: HashMap::new(),
+            import_aliases: HashMap::new(),
+            loaded_modules_refs: HashMap::new(),
+        }),
+        "std/db" => Some(LoadedModule {
+            name: "std/db".to_string(),
+            functions: db::register(),
             all_functions: HashMap::new(),
             constants: HashMap::new(),
             all_variables: HashMap::new(),

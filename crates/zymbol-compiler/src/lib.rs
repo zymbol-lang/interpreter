@@ -3872,6 +3872,23 @@ fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16)>> 
             ("post_json", B::NET_POST_JSON),
             ("head",      B::NET_HEAD),
         ]),
+        "std/db" => Some(vec![
+            ("connect",      B::DB_CONNECT),
+            ("disconnect",   B::DB_DISCONNECT),
+            ("exec",         B::DB_EXEC),
+            ("query",        B::DB_QUERY),
+            ("query_one",    B::DB_QUERY_ONE),
+            ("query_value",  B::DB_QUERY_VALUE),
+            ("tx",           B::DB_TX),
+            ("begin",        B::DB_BEGIN),
+            ("commit",       B::DB_COMMIT),
+            ("rollback",     B::DB_ROLLBACK),
+            ("savepoint",    B::DB_SAVEPOINT),
+            ("release",      B::DB_RELEASE),
+            ("rollback_to",  B::DB_ROLLBACK_TO),
+            ("exec_script",  B::DB_EXEC_SCRIPT),
+            ("table_exists", B::DB_TABLE_EXISTS),
+        ]),
         _ => None,
     }
 }

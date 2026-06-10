@@ -113,7 +113,7 @@ impl std::fmt::Debug for FunctionDef {
 /// Represents a runtime error that can be caught with try-catch
 #[derive(Debug, Clone, PartialEq)]
 pub struct ErrorValue {
-    /// Error type: "IO", "Network", "Parse", "Index", "Type", "Div", "_" (generic)
+    /// Error type: "IO", "Network", "DB", "Parse", "Index", "Type", "Div", "_" (generic)
     pub error_type: String,
     /// Error message
     pub message: String,
@@ -135,6 +135,11 @@ impl ErrorValue {
     /// Create an IO error
     pub fn io(message: impl Into<String>) -> Self {
         Self::new("IO", message)
+    }
+
+    /// Create a DB (database / ODBC) error
+    pub fn db(message: impl Into<String>) -> Self {
+        Self::new("DB", message)
     }
 
     /// Create an Index error (out of bounds)

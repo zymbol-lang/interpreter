@@ -1,0 +1,29 @@
+// Test: std/db transactions — atomic batch (tx), low-level begin/commit, and a
+// savepoint partial rollback. Requires the SQLite ODBC driver (Driver={SQLite3}).
+<# std/db => db
+
+ruta = "Driver={SQLite3};Database=/tmp/zy_test_db_tx.db;"
+db::connect("c", ruta)
+db::exec("c", "DROP TABLE IF EXISTS cuentas")
+db::exec("c", "CREATE TABLE cuentas(id INTEGER PRIMARY KEY, saldo REAL)")
+
+// atomic batch commits both rows
+db::tx("c", [
+    ("INSERT INTO cuentas(id, saldo) VALUES(?, ?)", (1, 100.0)),
+    ("INSERT INTO cuentas(id, saldo) VALUES(?, ?)", (2, 50.0))
+])
+>> db::query_value("c", "SELECT COUNT(*) FROM cuentas") ¶
+
+// low-level transaction with a savepoint: the -10 on id=1 commits,
+// the "set id=2 to 0" is rolled back to the savepoint.
+db::begin("c")
+db::exec("c", "UPDATE cuentas SET saldo = saldo - ? WHERE id = ?", (10.0, 1))
+db::savepoint("c", "sp1")
+db::exec("c", "UPDATE cuentas SET saldo = 0 WHERE id = ?", (2,))
+db::rollback_to("c", "sp1")
+db::commit("c")
+
+>> db::query_value("c", "SELECT saldo FROM cuentas WHERE id = ?", (1,)) ¶
+>> db::query_value("c", "SELECT saldo FROM cuentas WHERE id = ?", (2,)) ¶
+
+db::disconnect("c")

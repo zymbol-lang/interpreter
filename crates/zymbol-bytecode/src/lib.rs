@@ -388,6 +388,22 @@ pub mod builtins {
     pub const NET_POST:      u16 = 401;
     pub const NET_POST_JSON: u16 = 402;
     pub const NET_HEAD:      u16 = 403;
+    // std/db functions (vendor-neutral via ODBC)
+    pub const DB_CONNECT:      u16 = 500;
+    pub const DB_DISCONNECT:   u16 = 501;
+    pub const DB_EXEC:         u16 = 502;
+    pub const DB_QUERY:        u16 = 503;
+    pub const DB_QUERY_ONE:    u16 = 504;
+    pub const DB_QUERY_VALUE:  u16 = 505;
+    pub const DB_TX:           u16 = 506;
+    pub const DB_BEGIN:        u16 = 507;
+    pub const DB_COMMIT:       u16 = 508;
+    pub const DB_ROLLBACK:     u16 = 509;
+    pub const DB_SAVEPOINT:    u16 = 510;
+    pub const DB_RELEASE:      u16 = 511;
+    pub const DB_ROLLBACK_TO:  u16 = 512;
+    pub const DB_EXEC_SCRIPT:  u16 = 513;
+    pub const DB_TABLE_EXISTS: u16 = 514;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
