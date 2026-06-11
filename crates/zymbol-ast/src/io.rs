@@ -86,6 +86,8 @@ pub struct KeyInput {
 pub struct OutputPos {
     pub slots: Vec<Option<crate::Expr>>,  // [fila, col, BKS, fg, bg] — up to 5, None = absent
     pub items: Vec<crate::Expr>,
+    /// `false` for the bare-variable form `>>~ pos > items` (no parens)
+    pub parenthesized: bool,
     pub span: Span,
 }
 
@@ -128,7 +130,11 @@ impl KeyInput {
 
 impl OutputPos {
     pub fn new(slots: Vec<Option<crate::Expr>>, items: Vec<crate::Expr>, span: Span) -> Self {
-        Self { slots, items, span }
+        Self { slots, items, parenthesized: true, span }
+    }
+
+    pub fn new_bare(slots: Vec<Option<crate::Expr>>, items: Vec<crate::Expr>, span: Span) -> Self {
+        Self { slots, items, parenthesized: false, span }
     }
 }
 

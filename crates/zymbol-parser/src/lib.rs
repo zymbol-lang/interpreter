@@ -670,15 +670,16 @@ impl Parser {
                 if self.is_lambda_start() {
                     self.parse_lambda()?
                 } else {
-                    // Grouped expression
-                    self.advance(); // consume (
+                    // Grouped expression — preserve the user's parens
+                    let lparen = self.advance(); // consume (
                     let inner = self.parse_expr()?;
                     if !matches!(self.peek().kind, TokenKind::RParen) {
                         return Err(Diagnostic::error("expected ')' after expression")
                             .with_span(self.peek().span));
                     }
-                    self.advance(); // consume )
-                    inner
+                    let rparen = self.advance(); // consume )
+                    let span = lparen.span.to(&rparen.span);
+                    Expr::Group(zymbol_ast::GroupExpr::new(Box::new(inner), span))
                 }
             }
             TokenKind::Ident(_) => {

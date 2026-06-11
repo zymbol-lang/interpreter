@@ -50,9 +50,14 @@
 //!
 //! # Comment Preservation
 //!
-//! Comments are preserved during formatting. Line comments (//) are kept at the
-//! end of the line they appear on. Block comments (/* */) are preserved inline.
+//! Comments are re-emitted by source position (span interleaving, see the
+//! `comments` module): trailing `//` comments stay on their line, standalone
+//! comments keep their own line at the surrounding indent, and block comments
+//! move as a unit. A safety gate (see the `gate` module) verifies that the
+//! output is token-equivalent to the source — including the comment count —
+//! and returns an error instead of ever emitting corrupted output.
 
+mod comments;
 mod config;
 mod gate;
 mod output;
@@ -60,12 +65,12 @@ mod visitor;
 
 pub use config::FormatterConfig;
 
-use std::collections::HashMap;
 use thiserror::Error;
-use zymbol_lexer::{Lexer, Token, TokenKind};
+use zymbol_lexer::Lexer;
 use zymbol_parser::Parser;
 use zymbol_span::FileId;
 
+use comments::CommentStream;
 use output::OutputBuilder;
 use visitor::FormatVisitor;
 
@@ -84,49 +89,6 @@ pub enum FormatError {
     /// source. The input file is left unchanged. See `gate` module.
     #[error("safety gate: {0}")]
     SafetyGate(String),
-}
-
-/// Comment extracted from source, with its position
-#[derive(Debug, Clone)]
-struct Comment {
-    content: String,
-    is_block: bool,
-    #[allow(dead_code)]
-    line: u32,
-}
-
-/// Extract comments from token stream, organized by line number
-fn extract_comments(tokens: &[Token]) -> HashMap<u32, Vec<Comment>> {
-    let mut comments: HashMap<u32, Vec<Comment>> = HashMap::new();
-
-    for token in tokens {
-        match &token.kind {
-            TokenKind::LineComment(content) => {
-                let comment = Comment {
-                    content: content.clone(),
-                    is_block: false,
-                    line: token.span.start.line,
-                };
-                comments.entry(token.span.start.line).or_default().push(comment);
-            }
-            TokenKind::BlockComment(content) => {
-                let comment = Comment {
-                    content: content.clone(),
-                    is_block: true,
-                    line: token.span.start.line,
-                };
-                comments.entry(token.span.start.line).or_default().push(comment);
-            }
-            _ => {}
-        }
-    }
-
-    comments
-}
-
-/// Build a map of original source lines for reference
-fn build_line_map(source: &str) -> Vec<&str> {
-    source.lines().collect()
 }
 
 /// Format Zymbol source code with default configuration
@@ -176,9 +138,8 @@ pub fn format_with_config(source: &str, config: FormatterConfig) -> Result<Strin
         return Err(FormatError::LexerError(error_msgs.join("; ")));
     }
 
-    // Extract comments from token stream
-    let comments = extract_comments(&tokens);
-    let original_lines = build_line_map(source);
+    // Collect comments (span-ordered) before the parser consumes the tokens
+    let comments = CommentStream::from_tokens(&tokens);
 
     // Parse the tokens (parser skips comment tokens)
     let parser = Parser::new(tokens);
@@ -187,465 +148,17 @@ pub fn format_with_config(source: &str, config: FormatterConfig) -> Result<Strin
         FormatError::ParserError(error_msgs.join("; "))
     })?;
 
-    // Format the AST
+    // Format the AST, interleaving comments by source position
     let mut output = OutputBuilder::new(config);
-    let mut visitor = FormatVisitor::new(&mut output);
+    let mut visitor = FormatVisitor::new(&mut output, comments);
     visitor.format_program(&program);
 
-    let formatted = output.finish();
-
-    // Now merge comments back into formatted output
-    let result = merge_comments(source, &formatted, &comments, &original_lines);
+    let result = output.finish();
 
     // Safety gate: never return output that is not equivalent to the source.
     gate::verify(source, &program, &result).map_err(FormatError::SafetyGate)?;
 
     Ok(result)
-}
-
-/// Merge comments and blank lines from original source into formatted output
-fn merge_comments(
-    original: &str,
-    formatted: &str,
-    comments: &HashMap<u32, Vec<Comment>>,
-    original_lines: &[&str],
-) -> String {
-    // Fast path: if no comments, no blank lines, and no desugar-sensitive ops, return as-is
-    if comments.is_empty()
-        && !original.contains("\n\n")
-        && !has_standalone_comments(original_lines)
-        && !has_desugar_ops(original)
-    {
-        return formatted.to_string();
-    }
-
-    let formatted_lines: Vec<&str> = formatted.lines().collect();
-    let mut result = String::new();
-    let mut fmt_idx = 0;
-    // Number of consecutive code lines that failed to match (used for re-sync)
-    let mut consecutive_failures = 0;
-    // Leading whitespace of the last successfully matched formatted line.
-    // Used to re-indent comments that appear inside blocks.
-    let mut current_indent = String::new();
-
-    let mut orig_idx = 0;
-    let mut in_block_comment = false;
-    // Indentation width of the opening /* line in the original source.
-    // Used to strip that prefix from continuation lines so all lines of the
-    // comment move together when re-indented (spec §9.3).
-    let mut block_comment_orig_indent = 0usize;
-    while orig_idx < original_lines.len() {
-        let orig_line = original_lines[orig_idx];
-        let line_num = (orig_idx + 1) as u32;
-        let trimmed = orig_line.trim();
-
-        // Track multi-line block comment state
-        if !in_block_comment && trimmed.contains("/*") {
-            // Check if the block comment also closes on the same line
-            let after_open = trimmed.find("/*").map(|i| &trimmed[i+2..]).unwrap_or("");
-            if !after_open.contains("*/") {
-                // Opening line of a multi-line block comment: re-indent to current block
-                // level and record original indentation so continuation lines move with it.
-                in_block_comment = true;
-                block_comment_orig_indent = orig_line.len() - orig_line.trim_start().len();
-                result.push_str(&current_indent);
-                result.push_str(trimmed);
-                result.push('\n');
-                orig_idx += 1;
-                continue;
-            }
-            // Single-line block comment (/* ... */ on one line) — fall through to normal processing
-        } else if in_block_comment {
-            // Continuation/closing line: strip the original opening indent and apply
-            // current_indent so all lines of the block comment move together (spec §9.3).
-            let stripped = if orig_line.len() >= block_comment_orig_indent
-                && orig_line[..block_comment_orig_indent].trim().is_empty()
-            {
-                &orig_line[block_comment_orig_indent..]
-            } else {
-                orig_line.trim_start()
-            };
-            result.push_str(&current_indent);
-            result.push_str(stripped);
-            result.push('\n');
-            if trimmed.contains("*/") {
-                in_block_comment = false;
-            }
-            orig_idx += 1;
-            continue;
-        }
-
-        // Case 1: Blank line — preserve, but collapse multiple consecutive ones to one
-        if trimmed.is_empty() {
-            if !result.ends_with("\n\n") {
-                result.push('\n');
-            }
-            orig_idx += 1;
-            continue;
-        }
-
-        // Case 2: Comment-only line — re-indent using the NEXT upcoming formatted code line.
-        // Using the last-matched line's indent (current_indent) is wrong when a comment
-        // appears after a closing } — the indent would still reflect the block interior.
-        let code_part = extract_code_part(orig_line);
-        if code_part.trim().is_empty() {
-            let upcoming_indent = formatted_lines[fmt_idx..]
-                .iter()
-                .find(|l| !l.trim().is_empty())
-                .map(|l| &l[..l.len() - l.trim_start().len()])
-                .unwrap_or("");
-            result.push_str(upcoming_indent);
-            result.push_str(trimmed);
-            result.push('\n');
-            orig_idx += 1;
-            continue;
-        }
-
-        // Case 3: Code line — find matching formatted line(s)
-        let normalized_orig = normalize_code(&code_part);
-
-        // Re-sync: if fmt_idx is stuck after several failures, scan ahead in formatted lines
-        // to find any line that matches one of the next few original code lines. This handles
-        // the formatter collapsing multi-line blocks to inline (e.g. `? (x) {\n body\n}` → `? x { body }`).
-        if consecutive_failures >= 3 {
-            if let Some(new_fmt_idx) = find_resync_point(
-                original_lines, orig_idx,
-                &formatted_lines, fmt_idx,
-            ) {
-                // Output all formatted lines we're jumping over (they represent reformatted code)
-                while fmt_idx < new_fmt_idx {
-                    let skipped = formatted_lines[fmt_idx];
-                    if !skipped.trim().is_empty() {
-                        result.push_str(skipped);
-                        result.push('\n');
-                    }
-                    fmt_idx += 1;
-                }
-                consecutive_failures = 0;
-            }
-        }
-
-        let mut found = false;
-        while fmt_idx < formatted_lines.len() {
-            let fmt_line = formatted_lines[fmt_idx];
-            let normalized_fmt = normalize_code(fmt_line);
-
-            if normalized_fmt.is_empty() {
-                fmt_idx += 1;
-                continue;
-            }
-
-            let (matched, paren_stripped, is_desugar) = code_contains(&normalized_orig, &normalized_fmt);
-
-            if matched {
-                // Track indentation from the formatted line regardless of desugar.
-                // If this line opens a block (ends with `{`), peek ahead so comments
-                // inside the block get the inner indentation, not the opener's indent.
-                let trimmed_fmt = fmt_line.trim_end();
-                let indent_source = if trimmed_fmt.ends_with('{') {
-                    formatted_lines[fmt_idx + 1..].iter()
-                        .find(|l| !l.trim().is_empty())
-                        .copied()
-                        .unwrap_or(fmt_line)
-                } else {
-                    fmt_line
-                };
-                let leading = indent_source.len() - indent_source.trim_start().len();
-                current_indent = " ".repeat(leading);
-
-                if is_desugar {
-                    // Preserve original syntax (p++, x+=5, etc.) — spec §10
-                    result.push_str(&current_indent);
-                    result.push_str(code_part.trim());
-                } else {
-                    result.push_str(fmt_line);
-                }
-
-                let remaining = if paren_stripped || is_desugar {
-                    String::new()
-                } else {
-                    normalized_orig.replacen(&normalized_fmt, "", 1)
-                };
-
-                if remaining.is_empty() || !has_more_code_in_format(&formatted_lines, fmt_idx + 1, &remaining) {
-                    append_comments(&mut result, comments, line_num);
-                }
-                result.push('\n');
-                fmt_idx += 1;
-                found = true;
-                consecutive_failures = 0;
-
-                if remaining.is_empty() {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-
-        if !found {
-            consecutive_failures += 1;
-            // Don't output the unmatched original — the formatted output already covers it.
-            // (Outputting the original would create duplicate / un-formatted code.)
-            // We still preserve any trailing comment that was on this line.
-            let has_trailing_comment = comments.contains_key(&line_num);
-            if has_trailing_comment {
-                // Emit the original code (without its embedded comment) so the comment
-                // can be re-attached exactly once via append_comments.
-                // Using `trimmed` here would include the comment text already, causing
-                // append_comments to duplicate it.
-                result.push_str(code_part.trim());
-                append_comments(&mut result, comments, line_num);
-                result.push('\n');
-            }
-            // else: silently skip — the formatted output already represents this code
-        }
-
-        orig_idx += 1;
-    }
-
-    // Output any remaining formatted lines (those not matched to any original line)
-    while fmt_idx < formatted_lines.len() {
-        let fmt_line = formatted_lines[fmt_idx];
-        if !fmt_line.trim().is_empty() {
-            result.push_str(fmt_line);
-            result.push('\n');
-        }
-        fmt_idx += 1;
-    }
-
-    // Ensure single trailing newline
-    while result.ends_with("\n\n") {
-        result.pop();
-    }
-    if !result.is_empty() && !result.ends_with('\n') {
-        result.push('\n');
-    }
-
-    result
-}
-
-/// Append inline comments (trailing // or /* */) from `comments` for `line_num` into `result`.
-fn append_comments(result: &mut String, comments: &HashMap<u32, Vec<Comment>>, line_num: u32) {
-    if let Some(line_comments) = comments.get(&line_num) {
-        for comment in line_comments {
-            if comment.is_block {
-                result.push_str(" /*");
-                result.push_str(&comment.content);
-                result.push_str("*/");
-            } else {
-                result.push_str(" //");
-                result.push_str(&comment.content);
-            }
-        }
-    }
-}
-
-/// Scan ahead in both original and formatted lines to find the next alignment point.
-/// Returns a new fmt_idx such that formatted_lines[fmt_idx] matches one of the upcoming
-/// original code lines (within a lookahead window).
-fn find_resync_point(
-    original_lines: &[&str],
-    orig_start: usize,
-    formatted_lines: &[&str],
-    fmt_start: usize,
-) -> Option<usize> {
-    const LOOKAHEAD: usize = 20;
-
-    // Collect normalized forms of the next LOOKAHEAD original code lines
-    let orig_tokens: Vec<String> = original_lines[orig_start..]
-        .iter()
-        .take(LOOKAHEAD)
-        .filter_map(|line| {
-            let code = extract_code_part(line);
-            let norm = normalize_code(&code);
-            if norm.is_empty() { None } else { Some(norm) }
-        })
-        .collect();
-
-    if orig_tokens.is_empty() {
-        return None;
-    }
-
-    // Look through formatted lines starting from fmt_start for any that match an orig_token
-    // (range loop kept: fmt_idx is the returned result, an enumerate rewrite is less clear)
-    #[allow(clippy::needless_range_loop)]
-    for fmt_idx in fmt_start..formatted_lines.len().min(fmt_start + LOOKAHEAD * 3) {
-        let normalized_fmt = normalize_code(formatted_lines[fmt_idx]);
-        if normalized_fmt.is_empty() {
-            continue;
-        }
-        for orig_tok in &orig_tokens {
-            let (matched, _, _) = code_contains(orig_tok, &normalized_fmt);
-            if matched {
-                return Some(fmt_idx);
-            }
-        }
-    }
-
-    None
-}
-
-/// Check if there are standalone comment lines
-fn has_standalone_comments(lines: &[&str]) -> bool {
-    lines.iter().any(|line| {
-        let trimmed = line.trim();
-        !trimmed.is_empty() && (trimmed.starts_with("//") || trimmed.starts_with("/*"))
-    })
-}
-
-/// Returns true if source contains any operator that the parser desugarizes (p++, x+=5, etc.)
-fn has_desugar_ops(source: &str) -> bool {
-    source.contains("++") || source.contains("--")
-        || source.contains("+=") || source.contains("-=")
-        || source.contains("*=") || source.contains("/=")
-        || source.contains("%=") || source.contains("^=")
-}
-
-/// Normalize code for matching (remove all whitespace)
-fn normalize_code(line: &str) -> String {
-    line.chars().filter(|c| !c.is_whitespace()).collect()
-}
-
-/// Remove parentheses from a normalized string for loose matching.
-/// Used to match `?(expr){...}` with `?expr{...}` when the formatter
-/// removes redundant outer parentheses from conditions.
-fn strip_parens(s: &str) -> String {
-    s.chars().filter(|c| *c != '(' && *c != ')').collect()
-}
-
-/// Check whether a normalized formatted line matches within a normalized original line.
-/// Returns (matched, is_paren_stripped_match, is_desugar_match).
-/// A desugar match means fmt is the parser-expanded form of orig (e.g. `p++` → `p=p+1`),
-/// so the caller should emit the ORIGINAL line to preserve the user's syntax.
-fn code_contains(orig: &str, fmt: &str) -> (bool, bool, bool) {
-    if orig.contains(fmt) {
-        return (true, false, false);
-    }
-    // Fallback: strip parens to handle formatter removing redundant outer parens
-    let orig_s = strip_parens(orig);
-    let fmt_s = strip_parens(fmt);
-    if !fmt_s.is_empty() && orig_s.contains(&fmt_s) {
-        return (true, true, false);
-    }
-    // Desugar check: p++ → p=p+1, x+=5 → x=x+5 (parser expands these before AST)
-    if is_desugar_of(orig, fmt) {
-        return (true, false, true);
-    }
-    // Forward-merge: orig ends with `}` and fmt starts with orig.
-    // Handles the formatter joining `!? { body }` + `:! { ... }` (or `:> { ... }`) onto
-    // one line when the user wrote them on separate lines, and similarly for `} _ {` else
-    // or any other construct where the formatter appends more after a closing `}`.
-    // paren_stripped=true signals the caller to treat remaining as empty so the next
-    // original line (the `:!`/`:>`/`_` part) is silently consumed as already covered.
-    if !orig.is_empty() && orig.ends_with('}') && fmt.starts_with(orig) {
-        return (true, true, false);
-    }
-    (false, false, false)
-}
-
-/// Returns true when `fmt` is the AST-desugared form of `orig`.
-/// Covers: p++ → p=p+1, p-- → p=p-1, x+=rhs → x=x+rhs, etc.
-fn is_desugar_of(orig: &str, fmt: &str) -> bool {
-    // p++ → p=p+1
-    if let Some(name) = orig.strip_suffix("++") {
-        if !name.is_empty() {
-            return fmt == format!("{}={}+1", name, name);
-        }
-    }
-    // p-- → p=p-1
-    if let Some(name) = orig.strip_suffix("--") {
-        if !name.is_empty() {
-            return fmt == format!("{0}={0}-1", name);
-        }
-    }
-    // x+=rhs → x=x+rhs  (and -, *, /, %, ^)
-    for (op_sym, op_ch) in &[("+=", "+"), ("-=", "-"), ("*=", "*"), ("/=", "/"), ("%=", "%"), ("^=", "^")] {
-        if let Some(pos) = orig.find(op_sym) {
-            let name = &orig[..pos];
-            let rhs  = &orig[pos + op_sym.len()..];
-            if !name.is_empty() && !rhs.is_empty() {
-                let expected = format!("{0}={0}{1}{2}", name, op_ch, rhs);
-                if fmt == expected {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Check if remaining code exists in subsequent formatted lines
-fn has_more_code_in_format(lines: &[&str], start_idx: usize, remaining: &str) -> bool {
-    for line in &lines[start_idx..] {
-        let normalized = normalize_code(line);
-        if remaining.starts_with(&normalized) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Extract the code part of a line (everything before comments)
-fn extract_code_part(line: &str) -> String {
-    // Extract code by removing both line comments (//) and block comments (/* */)
-    let mut in_string = false;
-    let mut string_char = '"';
-    let chars: Vec<char> = line.chars().collect();
-    let mut result = String::new();
-    let mut i = 0;
-
-    while i < chars.len() {
-        let c = chars[i];
-
-        if !in_string && (c == '"' || c == '\'') {
-            in_string = true;
-            string_char = c;
-            result.push(c);
-            i += 1;
-            continue;
-        }
-
-        if in_string {
-            result.push(c);
-            if c == '\\' && i + 1 < chars.len() {
-                i += 1;
-                result.push(chars[i]);
-                i += 1;
-                continue;
-            }
-            if c == string_char {
-                in_string = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        // Check for line comment //
-        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
-            // Rest of line is comment, stop here
-            break;
-        }
-
-        // Check for block comment /*
-        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
-            // Skip until */
-            i += 2;
-            while i + 1 < chars.len() {
-                if chars[i] == '*' && chars[i + 1] == '/' {
-                    i += 2;
-                    break;
-                }
-                i += 1;
-            }
-            continue;
-        }
-
-        result.push(c);
-        i += 1;
-    }
-
-    result
 }
 
 /// Check if source code is already formatted according to the configuration
@@ -905,14 +418,6 @@ mod tests {
         // This should fail parsing
         let result = format("? { }");  // Missing condition
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_extract_code_part() {
-        assert_eq!(extract_code_part("x = 5 // comment"), "x = 5 ");
-        assert_eq!(extract_code_part("x = 5"), "x = 5");
-        assert_eq!(extract_code_part("// only comment"), "");
-        assert_eq!(extract_code_part("x = \"//not a comment\""), "x = \"//not a comment\"");
     }
 
     #[test]

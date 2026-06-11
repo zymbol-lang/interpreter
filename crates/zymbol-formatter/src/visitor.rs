@@ -25,6 +25,8 @@ use zymbol_ast::AssignSugar;
 use zymbol_ast::InputCast;
 use zymbol_ast::PipeExpr;
 
+use crate::comments::{Comment, CommentStream};
+
 /// Surface token for a compound-assignment operator (`+=`, `-=`, …).
 fn compound_op_str(op: BinaryOp) -> Option<&'static str> {
     match op {
@@ -45,12 +47,85 @@ use crate::output::OutputBuilder;
 /// AST visitor that formats Zymbol code
 pub struct FormatVisitor<'a> {
     output: &'a mut OutputBuilder,
+    /// Source comments in span order, consumed as statements are emitted.
+    comments: CommentStream,
+    /// Source end-line of the last emitted statement or comment; drives
+    /// blank-line preservation (gap > 1 in the source → one blank line).
+    last_src_line: u32,
+    /// The last emitted line ended with a trailing `// comment` — joining
+    /// anything onto it would swallow the joined token into the comment.
+    last_had_trailing: bool,
 }
 
 impl<'a> FormatVisitor<'a> {
     /// Create a new format visitor
-    pub fn new(output: &'a mut OutputBuilder) -> Self {
-        Self { output }
+    pub fn new(output: &'a mut OutputBuilder, comments: CommentStream) -> Self {
+        Self { output, comments, last_src_line: 0, last_had_trailing: false }
+    }
+
+    // ── Comment emission (span-ordered; replaces the old merge_comments) ────
+
+    /// Write one comment (no trailing newline). Block-comment continuation
+    /// lines lose the opening line's original indentation and inherit the
+    /// current indent from the OutputBuilder (spec §9.3).
+    fn emit_comment(&mut self, c: &Comment) {
+        if !c.is_block {
+            self.output.write("//");
+            self.output.write(&c.text);
+            return;
+        }
+        self.output.write("/*");
+        let strip = c.start_col.saturating_sub(1) as usize;
+        let mut first = true;
+        for line in c.text.split('\n') {
+            if first {
+                self.output.write(line);
+                first = false;
+            } else {
+                self.output.newline();
+                let mut rest = line;
+                for _ in 0..strip {
+                    match rest.strip_prefix(' ') {
+                        Some(r) => rest = r,
+                        None => break,
+                    }
+                }
+                self.output.write(rest);
+            }
+        }
+        self.output.write("*/");
+    }
+
+    /// Emit every standalone comment that starts before `line`, preserving
+    /// one blank line where the source had a gap.
+    fn flush_comments_before(&mut self, line: u32) {
+        while let Some(c) = self.comments.next_before_line(line) {
+            if self.last_src_line > 0 && c.start_line > self.last_src_line + 1 {
+                self.output.newline();
+            }
+            self.emit_comment(&c);
+            self.output.newline();
+            self.last_src_line = c.end_line;
+        }
+    }
+
+    /// Emit comments trailing on `end_line` (call after the statement text,
+    /// before its newline).
+    fn emit_trailing_comments(&mut self, end_line: u32) {
+        self.last_had_trailing = false;
+        while let Some(c) = self.comments.next_on_line(end_line) {
+            self.output.write(" ");
+            self.emit_comment(&c);
+            self.last_src_line = self.last_src_line.max(c.end_line);
+            if !c.is_block {
+                self.last_had_trailing = true;
+            }
+        }
+    }
+
+    /// One blank line when the source had one or more blank lines before `line`.
+    fn blank_gap_before(&self, line: u32) -> bool {
+        self.last_src_line > 0 && line > self.last_src_line + 1
     }
 
     /// Format an entire program
@@ -58,15 +133,21 @@ impl<'a> FormatVisitor<'a> {
         let in_module = program.module_decl.is_some();
 
         if let Some(ref module_decl) = program.module_decl {
+            // Header comments above `# name {`
+            self.flush_comments_before(module_decl.span.start.line);
             self.output.write("# ");
             self.output.write(&module_decl.name);
             self.output.open_brace();
             self.output.newline();
             self.output.indent();
+            self.last_src_line = module_decl.span.start.line;
 
             // Imports first (as they appear in source), then export block
             for import in &program.imports {
+                self.flush_comments_before(import.span.start.line);
                 self.format_import(import);
+                self.last_src_line = import.span.end.line;
+                self.emit_trailing_comments(import.span.end.line);
                 self.output.newline();
             }
 
@@ -74,21 +155,26 @@ impl<'a> FormatVisitor<'a> {
                 if !program.imports.is_empty() {
                     self.output.newline();
                 }
+                self.flush_comments_before(export_block.span.start.line);
                 self.format_export_block(export_block);
+                self.last_src_line = export_block.span.end.line;
+                self.emit_trailing_comments(export_block.span.end.line);
                 self.output.newline();
             }
         } else {
             // Non-module file: imports at top level
             for import in &program.imports {
+                self.flush_comments_before(import.span.start.line);
                 self.format_import(import);
+                self.last_src_line = import.span.end.line;
+                self.emit_trailing_comments(import.span.end.line);
                 self.output.newline();
             }
         }
 
-        // Add blank line after imports (non-module) or after export block (module)
-        if !in_module && !program.imports.is_empty() && !program.statements.is_empty() {
-            self.output.newline();
-        }
+        // Blank line after imports comes from source-gap preservation below
+        // (an unconditional blank here would stack with the gap blank and
+        // break idempotence).
 
         // Format statements
         let mut prev_was_function = false;
@@ -99,18 +185,28 @@ impl<'a> FormatVisitor<'a> {
             let is_newline = matches!(stmt, Statement::Newline(_));
             let join_output = Self::joins_previous_output(prev_stmt, stmt);
 
-            if i > 0 && (is_function || prev_was_function) && !is_newline && !join_output {
-                self.output.newline();
-            }
-
             // Join ¶ onto the previous line (only when prev wasn't already a ¶),
-            // and chained outputs that shared a source line: `>> a >> b`
-            if (is_newline && i > 0 && !prev_was_newline) || join_output {
+            // and chained outputs that shared a source line: `>> a >> b`.
+            // Never join onto a line that ends in a `//` comment.
+            let join = ((is_newline && i > 0 && !prev_was_newline) || join_output)
+                && !self.last_had_trailing;
+
+            if join {
                 self.output.backspace_newline();
                 self.output.space();
+            } else {
+                let line = stmt.span().start.line;
+                self.flush_comments_before(line);
+                // Blank line: preserved source gap, or §5.3 around functions
+                let func_blank = i > 0 && (is_function || prev_was_function) && !is_newline;
+                if self.blank_gap_before(line) || func_blank {
+                    self.output.newline();
+                }
             }
 
             self.format_statement(stmt);
+            self.last_src_line = stmt.span().end.line;
+            self.emit_trailing_comments(stmt.span().end.line);
             self.output.newline();
 
             prev_was_function = is_function;
@@ -119,9 +215,23 @@ impl<'a> FormatVisitor<'a> {
         }
 
         if in_module {
+            // Comments between the last statement and the module's closing }
+            if let Some(ref module_decl) = program.module_decl {
+                self.flush_comments_before(module_decl.span.end.line);
+            }
             self.output.dedent();
             self.output.close_brace();
             self.output.newline();
+        }
+
+        // End-of-file flush: comments after the last statement
+        for c in self.comments.drain_rest() {
+            if self.last_src_line > 0 && c.start_line > self.last_src_line + 1 {
+                self.output.newline();
+            }
+            self.emit_comment(&c);
+            self.output.newline();
+            self.last_src_line = c.end_line;
         }
     }
 
@@ -256,14 +366,23 @@ impl<'a> FormatVisitor<'a> {
                 }
             }
             Statement::OutputPos(op) => {
-                self.output.write(">>~ (");
-                let mut first = true;
-                for slot in &op.slots {
-                    if !first { self.output.write(", "); }
-                    first = false;
-                    if let Some(expr) = slot { self.format_expr(expr); }
+                if op.parenthesized {
+                    self.output.write(">>~ (");
+                    let mut first = true;
+                    for slot in &op.slots {
+                        if !first { self.output.write(", "); }
+                        first = false;
+                        if let Some(expr) = slot { self.format_expr(expr); }
+                    }
+                    self.output.write(") >");
+                } else {
+                    // Bare-variable form: >>~ pos > items
+                    self.output.write(">>~ ");
+                    if let Some(Some(expr)) = op.slots.first() {
+                        self.format_expr(expr);
+                    }
+                    self.output.write(" >");
                 }
-                self.output.write(") >");
                 for item in &op.items {
                     self.output.write(" ");
                     self.format_expr(item);
@@ -667,8 +786,12 @@ impl<'a> FormatVisitor<'a> {
         let config = self.output.config().clone();
         let single_stmt = block.statements.len() == 1;
         let is_simple = single_stmt && self.is_simple_statement(&block.statements[0]);
+        // A block holding a comment must stay multi-line so the comment has a home
+        let has_comment = self
+            .comments
+            .has_within(block.span.start.line, block.span.end.line);
 
-        if config.inline_single_statement && is_simple {
+        if config.inline_single_statement && is_simple && !has_comment {
             self.output.write(" { ");
             self.format_statement(&block.statements[0]);
             self.output.write(" }");
@@ -676,6 +799,7 @@ impl<'a> FormatVisitor<'a> {
             self.output.open_brace();
             self.output.newline();
             self.output.indent();
+            self.last_src_line = self.last_src_line.max(block.span.start.line);
 
             let stmts = &block.statements;
             let mut i = 0;
@@ -684,15 +808,28 @@ impl<'a> FormatVisitor<'a> {
                 let is_newline = matches!(stmts[i], Statement::Newline(_));
                 let join_output = i > 0
                     && Self::joins_previous_output(Some(&stmts[i - 1]), &stmts[i]);
-                if (is_newline && i > 0 && !prev_was_newline) || join_output {
+                let join = ((is_newline && i > 0 && !prev_was_newline) || join_output)
+                    && !self.last_had_trailing;
+                if join {
                     self.output.backspace_newline();
                     self.output.space();
+                } else {
+                    let line = stmts[i].span().start.line;
+                    self.flush_comments_before(line);
+                    if self.blank_gap_before(line) {
+                        self.output.newline();
+                    }
                 }
                 self.format_statement(&stmts[i]);
+                self.last_src_line = stmts[i].span().end.line;
+                self.emit_trailing_comments(stmts[i].span().end.line);
                 self.output.newline();
                 prev_was_newline = is_newline;
                 i += 1;
             }
+
+            // Comments between the last statement and the closing }
+            self.flush_comments_before(block.span.end.line);
 
             self.output.dedent();
             self.output.close_brace();
@@ -1220,19 +1357,15 @@ impl<'a> FormatVisitor<'a> {
         self.output.write("]");
     }
 
-    fn path_has_ranges(path: &NavPath) -> bool {
-        path.steps.iter().any(|s| s.range_end.is_some())
-    }
-
     fn format_flat_extract(&mut self, fe: &FlatExtractExpr) {
         self.format_expr(&fe.array);
-        if fe.paths.len() == 1 && Self::path_has_ranges(&fe.paths[0]) {
-            // Range-based extract uses single brackets: arr[i>a..b]
+        if fe.paths.len() == 1 && !fe.double_bracket {
+            // Single-bracket spelling: arr[i>a..b]
             self.output.write("[");
             self.format_nav_path(&fe.paths[0]);
             self.output.write("]");
         } else if fe.paths.len() == 1 {
-            // Explicit double-bracket extract: arr[[path]]
+            // Explicit double-bracket spelling: arr[[path]]
             self.output.write("[[");
             self.format_nav_path(&fe.paths[0]);
             self.output.write("]]");
@@ -1326,9 +1459,18 @@ impl<'a> FormatVisitor<'a> {
         self.output.indent();
 
         for case in &match_expr.cases {
+            self.flush_comments_before(case.span.start.line);
+            if self.blank_gap_before(case.span.start.line) {
+                self.output.newline();
+            }
             self.format_match_case(case);
+            self.last_src_line = case.span.end.line;
+            self.emit_trailing_comments(case.span.end.line);
             self.output.newline();
         }
+
+        // Comments between the last arm and the closing }
+        self.flush_comments_before(match_expr.span.end.line);
 
         self.output.dedent();
         self.output.close_brace();
@@ -1556,9 +1698,9 @@ impl<'a> FormatVisitor<'a> {
 
     /// Format a lambda expression
     fn format_lambda(&mut self, lambda: &LambdaExpr) {
-        if lambda.params.len() == 1 {
-            self.output.write(&lambda.params[0]);
-        } else {
+        // `(a, b) -> e` vs `a, b -> e` (the latter occurs inside a grouped
+        // lambda `(a, b -> e)`) — reprint the user's form.
+        if lambda.params_parenthesized {
             self.output.write("(");
             for (i, param) in lambda.params.iter().enumerate() {
                 self.output.write(param);
@@ -1567,6 +1709,13 @@ impl<'a> FormatVisitor<'a> {
                 }
             }
             self.output.write(")");
+        } else {
+            for (i, param) in lambda.params.iter().enumerate() {
+                self.output.write(param);
+                if i < lambda.params.len() - 1 {
+                    self.output.write(", ");
+                }
+            }
         }
 
         self.output.write(" -> ");
@@ -1638,7 +1787,13 @@ impl<'a> FormatVisitor<'a> {
     /// Format execute expression
     fn format_execute(&mut self, exec: &ExecuteExpr) {
         self.output.write("</");
-        self.output.write(&exec.path);
+        if exec.quoted {
+            self.output.write("\"");
+            self.output.write(&exec.path);
+            self.output.write("\"");
+        } else {
+            self.output.write(&exec.path);
+        }
         self.output.write("/>");
     }
 

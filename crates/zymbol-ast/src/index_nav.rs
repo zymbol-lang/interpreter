@@ -55,6 +55,10 @@ pub struct DeepIndexExpr {
 pub struct FlatExtractExpr {
     pub array: Box<Expr>,
     pub paths: Vec<NavPath>,
+    /// `true` for the `arr[[path]]` spelling, `false` for `arr[i>a..b]` /
+    /// `arr[p ; q]` — same semantics, recorded so the formatter reprints
+    /// the user's bracket form.
+    pub double_bracket: bool,
     pub span: Span,
 }
 

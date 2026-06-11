@@ -338,7 +338,8 @@ impl Parser {
     pub(crate) fn parse_output_pos(&mut self) -> Result<Statement, Diagnostic> {
         let start_span = self.advance().span; // consume >>~
 
-        let slots: Vec<Option<Expr>> = if matches!(self.peek().kind, TokenKind::LParen) {
+        let parenthesized = matches!(self.peek().kind, TokenKind::LParen);
+        let slots: Vec<Option<Expr>> = if parenthesized {
             self.parse_sparse_pos_tuple()?
         } else if matches!(self.peek().kind, TokenKind::Ident(_)) {
             // Variable evaluated at runtime as dense tuple
@@ -360,7 +361,8 @@ impl Parser {
         let gt_span = self.advance().span; // consume >
         let items = self.parse_output_items_same_line(gt_span.start.line)?;
         let end_span = items.last().map(|e| e.span()).unwrap_or(gt_span);
-        Ok(Statement::OutputPos(OutputPos::new(slots, items, start_span.to(&end_span))))
+        let ctor = if parenthesized { OutputPos::new } else { OutputPos::new_bare };
+        Ok(Statement::OutputPos(ctor(slots, items, start_span.to(&end_span))))
     }
 
     /// Parse sparse position tuple: (slot0, slot1, slot2, slot3, slot4)

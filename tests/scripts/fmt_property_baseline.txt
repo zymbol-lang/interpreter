@@ -1,9 +1,0 @@
-P1 examples/phase06/10_times_with_break.zy
-P1 examples/phase07/05_break_continue.zy
-P1 tests/collections/22_sort_custom.zy
-P1 tests/collections/32_destructure_extended.zy
-P1 tests/gaps/gap_output_pos_sparse.zy
-P1 tests/i18n/test_execute.zy
-P1 tests/index_nav/complex_3d.zy
-P1 tests/lambdas/13_pipe_paren.zy
-P1 tests/v0.0.4_review/nav_range_last_step.zy

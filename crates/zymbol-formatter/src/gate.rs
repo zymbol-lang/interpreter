@@ -33,11 +33,18 @@ pub fn verify(
     original_program: &Program,
     formatted: &str,
 ) -> Result<(), String> {
-    // G1 — token equivalence
-    let orig_tokens = significant_tokens(original_src)
+    // G1 — token equivalence (G4: comment counts must also survive)
+    let (orig_tokens, orig_comments) = significant_tokens(original_src)
         .map_err(|e| format!("internal: original source stopped lexing: {e}"))?;
-    let fmt_tokens = significant_tokens(formatted)
+    let (fmt_tokens, fmt_comments) = significant_tokens(formatted)
         .map_err(|e| format!("formatted output no longer lexes: {e}"))?;
+
+    if orig_comments != fmt_comments {
+        return Err(format!(
+            "comment count changed: source has {orig_comments} comments, formatted output has \
+             {fmt_comments} (file left unchanged)"
+        ));
+    }
 
     if orig_tokens != fmt_tokens {
         let idx = orig_tokens
@@ -81,30 +88,31 @@ pub fn verify(
     Ok(())
 }
 
-/// Lex `src` and return its token kinds minus trivia.
+/// Lex `src` and return its token kinds minus trivia, plus the comment count.
 ///
 /// Note: `TokenKind::Newline` is the *semantic* `¶` token (physical line
 /// breaks never become tokens), so it must NOT be filtered — dropping a `¶`
-/// changes program output. Only comments, `;` separators and EOF are layout.
-fn significant_tokens(src: &str) -> Result<Vec<TokenKind>, String> {
+/// changes program output. Only comments, `;` separators and EOF are layout,
+/// and comments are counted separately so G4 can verify none were lost.
+fn significant_tokens(src: &str) -> Result<(Vec<TokenKind>, usize), String> {
     let lexer = Lexer::new(src, FileId(0));
     let (tokens, errors) = lexer.tokenize();
     if !errors.is_empty() {
         return Err(errors[0].message.clone());
     }
-    Ok(tokens
+    let mut comment_count = 0usize;
+    let significant = tokens
         .into_iter()
         .map(|t| t.kind)
         .filter(|k| {
-            !matches!(
-                k,
-                TokenKind::LineComment(_)
-                    | TokenKind::BlockComment(_)
-                    | TokenKind::Semicolon
-                    | TokenKind::Eof
-            )
+            if matches!(k, TokenKind::LineComment(_) | TokenKind::BlockComment(_)) {
+                comment_count += 1;
+                return false;
+            }
+            !matches!(k, TokenKind::Semicolon | TokenKind::Eof)
         })
-        .collect())
+        .collect();
+    Ok((significant, comment_count))
 }
 
 fn describe(kind: &TokenKind) -> String {

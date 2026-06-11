@@ -7,6 +7,52 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
+## [Unreleased] — v0.0.7
+
+### Added
+
+**`std/db` — vendor-neutral database access via ODBC**
+- `connect/disconnect`, `exec`, `query/query_one/query_value`, `tx`,
+  `begin/commit/rollback`, savepoints, `exec_script`, `table_exists`;
+  Spanish i18n adapter (`db_es`). Full VM parity (builtin ids 500–514).
+- Zymbol bundles no engine: the OS supplies the per-engine ODBC driver
+  (validated live against SQLite and PostgreSQL with the same program).
+
+**Formatter property harness** (`tests/scripts/fmt_property.sh`)
+- Verifies P1 reparse, P2 idempotence, P3 runtime-output equality and
+  P4 comment preservation over every `.zy` in `tests/` + `examples/`;
+  `--baseline` mode gates CI on regressions.
+
+**Typed/validated input via cast typespecs** (`<< ##.(5,2) "prompt" var`)
+- Re-prompts until input matches the typespec (TW + VM parity).
+
+### Changed
+
+**Formatter redesign — fail-closed and faithful**
+- A safety gate (token equivalence, reparse, statement shape, comment
+  count) refuses to emit non-equivalent output: `zymbol fmt` can no
+  longer corrupt a file.
+- The parser now preserves user parentheses (`Expr::Group`), assignment
+  sugar (`+=`, `++`, `--`, indexed forms), `¶` vs `\\`, input typespecs,
+  export-block commas and bracket forms, so the formatter reprints
+  exactly what was written.
+- Comments are re-emitted by source position (span interleaving); the
+  old line-matching merge pass — the source of code-duplication bugs —
+  was removed entirely.
+- `FORMATTER_RULES.md` rewritten to match the enforced contract.
+
+### Fixed
+
+- `zymbol fmt` corrupted hot-def assignments (`total° += 10` became
+  `total = total + 10`), dropped typed-input casts, stripped user
+  parentheses (often breaking the program), moved the mutable-param
+  marker (`num~` → `~num`) and could duplicate code while re-merging
+  comments. All of these now format faithfully or fail closed.
+- Workspace metadata: real repository URL, ghost crate entries removed.
+- Security: `bytes` 1.11.0 → 1.11.1 (RUSTSEC-2026-0007).
+
+---
+
 ## [0.0.6] — 2026-06-07
 
 ### Changed (Breaking)

@@ -133,6 +133,7 @@ impl Parser {
             return Ok(Expr::FlatExtract(FlatExtractExpr {
                 array: Box::new(base_expr),
                 paths: first_group.paths,
+                double_bracket: true,
                 span,
             }));
         }
@@ -213,6 +214,7 @@ impl Parser {
             return Ok(Expr::FlatExtract(FlatExtractExpr {
                 array: Box::new(base_expr),
                 paths,
+                double_bracket: false,
                 span,
             }));
         }
@@ -245,6 +247,7 @@ impl Parser {
             return Ok(Expr::FlatExtract(FlatExtractExpr {
                 array: Box::new(base_expr),
                 paths: vec![first_path],
+                double_bracket: false,
                 span,
             }));
         }

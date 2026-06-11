@@ -27,8 +27,10 @@ impl Parser {
                 .with_help("execute syntax: </ path.zy />"));
         }
 
-        // Strip surrounding quotes if user wrote </ "path.zy" />
-        let path = if path.starts_with('"') && path.ends_with('"') && path.len() > 1 {
+        // Strip surrounding quotes if user wrote </ "path.zy" /> (recorded
+        // so the formatter can reprint the quoted form)
+        let quoted = path.starts_with('"') && path.ends_with('"') && path.len() > 1;
+        let path = if quoted {
             path[1..path.len() - 1].to_string()
         } else {
             path
@@ -36,6 +38,7 @@ impl Parser {
 
         Ok(Expr::Execute(ExecuteExpr {
             path,
+            quoted,
             span: token.span,
         }))
     }
