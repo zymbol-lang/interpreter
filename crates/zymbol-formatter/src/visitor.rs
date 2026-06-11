@@ -128,6 +128,19 @@ impl<'a> FormatVisitor<'a> {
         self.last_src_line > 0 && line > self.last_src_line + 1
     }
 
+    /// Emit the module export block like a statement: comments before it,
+    /// source-gap blank line, trailing comments, newline.
+    fn emit_export_block_stmt(&mut self, eb: &ExportBlock) {
+        self.flush_comments_before(eb.span.start.line);
+        if self.blank_gap_before(eb.span.start.line) {
+            self.output.newline();
+        }
+        self.format_export_block(eb);
+        self.last_src_line = eb.span.end.line;
+        self.emit_trailing_comments(eb.span.end.line);
+        self.output.newline();
+    }
+
     /// Format an entire program
     pub fn format_program(&mut self, program: &Program) {
         let in_module = program.module_decl.is_some();
@@ -151,16 +164,9 @@ impl<'a> FormatVisitor<'a> {
                 self.output.newline();
             }
 
-            if let Some(ref export_block) = module_decl.export_block {
-                if !program.imports.is_empty() {
-                    self.output.newline();
-                }
-                self.flush_comments_before(export_block.span.start.line);
-                self.format_export_block(export_block);
-                self.last_src_line = export_block.span.end.line;
-                self.emit_trailing_comments(export_block.span.end.line);
-                self.output.newline();
-            }
+            // The export block is NOT printed here: it is emitted in source
+            // order relative to the module's statements (see the loop below),
+            // because modules may declare constants before `#> { ... }`.
         } else {
             // Non-module file: imports at top level
             for import in &program.imports {
@@ -176,11 +182,23 @@ impl<'a> FormatVisitor<'a> {
         // (an unconditional blank here would stack with the gap blank and
         // break idempotence).
 
+        // Export block pending emission at its source position
+        let mut pending_export = program
+            .module_decl
+            .as_ref()
+            .and_then(|m| m.export_block.as_ref());
+
         // Format statements
         let mut prev_was_function = false;
         let mut prev_was_newline = false;
         let mut prev_stmt: Option<&Statement> = None;
         for (i, stmt) in program.statements.iter().enumerate() {
+            if let Some(eb) = pending_export {
+                if eb.span.start.line < stmt.span().start.line {
+                    self.emit_export_block_stmt(eb);
+                    pending_export = None;
+                }
+            }
             let is_function = matches!(stmt, Statement::FunctionDecl(_));
             let is_newline = matches!(stmt, Statement::Newline(_));
             let join_output = Self::joins_previous_output(prev_stmt, stmt);
@@ -212,6 +230,11 @@ impl<'a> FormatVisitor<'a> {
             prev_was_function = is_function;
             prev_was_newline = is_newline;
             prev_stmt = Some(stmt);
+        }
+
+        // Export block after every statement (or module with no statements)
+        if let Some(eb) = pending_export {
+            self.emit_export_block_stmt(eb);
         }
 
         if in_module {

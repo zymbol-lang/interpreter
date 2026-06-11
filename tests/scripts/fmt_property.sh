@@ -82,8 +82,9 @@ for file in "${FILES[@]}"; do
         continue
     fi
 
-    fmt1="$("$ZYMBOL" fmt "$file" 2>"$WORK/err")"
-    if [[ -s "$WORK/err" ]]; then
+    # fmt output goes straight to a file: command substitution would drop
+    # NUL bytes (TUI sources legitimately contain them in char literals)
+    if ! "$ZYMBOL" fmt "$file" > "$WORK/fmt1" 2>"$WORK/err"; then
         # Formatter refused a valid file — count as a P1-class failure.
         FAILURES+=("P1 $rel")
         echo -e "  ${RED}FAIL${RESET}  $rel  ${RED}[fmt error: $(head -c 120 "$WORK/err" | tr -d '\n')]${RESET}"
@@ -93,15 +94,15 @@ for file in "${FILES[@]}"; do
     file_failed=false
 
     # P2 — idempotence (via stdin, no swap needed)
-    fmt2="$(printf '%s\n' "$fmt1" | "$ZYMBOL" fmt - 2>/dev/null)"
-    if [[ "$(printf '%s\n' "$fmt1")" != "$(printf '%s\n' "$fmt2")" ]]; then
+    "$ZYMBOL" fmt - < "$WORK/fmt1" > "$WORK/fmt2" 2>/dev/null
+    if ! cmp -s "$WORK/fmt1" "$WORK/fmt2"; then
         FAILURES+=("P2 $rel"); file_failed=true
         echo -e "  ${RED}FAIL${RESET}  $rel  ${RED}[P2 not idempotent]${RESET}"
     fi
 
     # P4 — comment token counts
-    c1=$(grep -o '//' "$file" | wc -l);  c2=$(printf '%s\n' "$fmt1" | grep -o '//' | wc -l)
-    b1=$(grep -o '/\*' "$file" | wc -l); b2=$(printf '%s\n' "$fmt1" | grep -o '/\*' | wc -l)
+    c1=$(grep -ao '//' "$file" | wc -l);  c2=$(grep -ao '//' "$WORK/fmt1" | wc -l)
+    b1=$(grep -ao '/\*' "$file" | wc -l); b2=$(grep -ao '/\*' "$WORK/fmt1" | wc -l)
     if [[ "$c1" -ne "$c2" || "$b1" -ne "$b2" ]]; then
         FAILURES+=("P4 $rel"); file_failed=true
         echo -e "  ${RED}FAIL${RESET}  $rel  ${RED}[P4 comments //:$c1->$c2 /*:$b1->$b2]${RESET}"
@@ -115,7 +116,7 @@ for file in "${FILES[@]}"; do
 
     CURF="$file"
     cp "$file" "$WORK/cur"
-    printf '%s\n' "$fmt1" > "$file"
+    cp "$WORK/fmt1" "$file"
 
     if ! "$ZYMBOL" check "$file" >/dev/null 2>&1; then
         FAILURES+=("P1 $rel"); file_failed=true
@@ -126,7 +127,7 @@ for file in "${FILES[@]}"; do
             # Nondeterminism guard: rerun the original before blaming fmt.
             cp "$WORK/cur" "$file"
             o1b="$(run_file "$file")"
-            printf '%s\n' "$fmt1" > "$file"
+            cp "$WORK/fmt1" "$file"
             if [[ "$o1" != "$o1b" ]]; then
                 SKIP=$((SKIP + 1)); SKIPPED+=("$rel (nondeterministic output)")
             else
