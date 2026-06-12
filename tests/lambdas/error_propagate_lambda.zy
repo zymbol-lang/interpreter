@@ -1,0 +1,28 @@
+// Regression test for former limitation L13 (REFERENCE.md): `$!!` inside a
+// lambda was documented as a silent no-op that did not propagate. Verified
+// 2026-06-12: it propagates the error as an early return to the lambda's
+// caller — identical semantics to named functions, in both engines.
+
+<# std/io => io
+
+e = io::read("/no/existe.txt")   // soft ##IO error value
+
+// Block lambda: $!! returns the error early, skipping the normal return
+h1 = (x -> { x$!! <~ "ok-bloque" })
+>> (h1(e))$! ¶                   // → #1 (the error came through)
+>> h1("sano") ¶                  // → ok-bloque
+
+// Expression lambda
+h2 = (x -> x$!!)
+>> (h2(e))$! ¶                   // → #1
+>> h2("sano") ¶                  // → sano (non-error passes through)
+
+// Named function (reference behavior — must match the lambdas)
+hf(x) { x$!! <~ "ok-fn" }
+>> (hf(e))$! ¶                   // → #1
+>> hf("sano") ¶                  // → ok-fn
+
+// Inside a HOF: non-error elements flow normally
+vals = ["a", "b"]
+m = vals$> (x -> { x$!! <~ x })
+>> m ¶                           // → [a, b]

@@ -203,6 +203,15 @@ impl PartialEq for FunctionValue {
 impl Value {
     /// Convert value to displayable string
     pub fn to_display_string(&self) -> String {
+        // Standalone Unit prints as nothing, but INSIDE a collection it must be
+        // visible — `[1, , 3]` reads like a typo. Both engines render nested
+        // Unit as `()` (the VM always did; the tree-walker since 2026-06-12).
+        fn nested(v: &Value) -> String {
+            match v {
+                Value::Unit => "()".to_string(),
+                other => other.to_display_string(),
+            }
+        }
         match self {
             Value::String(s) => s.clone(),
             Value::Int(n) => n.to_string(),
@@ -212,7 +221,7 @@ impl Value {
             Value::Array(elements) => {
                 let contents = elements
                     .iter()
-                    .map(|v| v.to_display_string())
+                    .map(nested)
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{}]", contents)
@@ -220,7 +229,7 @@ impl Value {
             Value::Tuple(elements) => {
                 let contents = elements
                     .iter()
-                    .map(|v| v.to_display_string())
+                    .map(nested)
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", contents)
@@ -228,7 +237,7 @@ impl Value {
             Value::NamedTuple(fields) => {
                 let contents = fields
                     .iter()
-                    .map(|(name, value)| format!("{}: {}", name, value.to_display_string()))
+                    .map(|(name, value)| format!("{}: {}", name, nested(value)))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", contents)

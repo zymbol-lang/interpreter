@@ -12,8 +12,11 @@ x = 42
 [x, _] = [77, 999]
 >> x ¶
 
-// L14: destructuring silently overwrites :=  (known implementation gap)
+// L14 (fixed): destructuring into a `:=` constant is now a semantic error —
+// covered by tests/errors/semantic/const_destructure_overwrite.zy.
+// Destructuring into regular variables (above) remains the supported path.
 limit := 100
-[limit, extra] = [200, 300]
+[nuevo, extra] = [200, 300]
 >> limit ¶
+>> nuevo ¶
 >> extra ¶

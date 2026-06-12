@@ -2727,18 +2727,46 @@ impl Compiler {
         cu: &zymbol_ast::CollectionUpdateExpr,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
-        // cu.target is an IndexExpr: arr[idx]
-        if let Expr::Index(idx_expr) = cu.target.unwrap_group() {
-            let r_arr = self.compile_expr(&idx_expr.array, ctx)?;
-            let r_idx = self.compile_expr(&idx_expr.index, ctx)?;
-            let r_val = self.compile_expr(&cu.value, ctx)?;
-            // In-place update: copy arr, then set
-            let dst = ctx.alloc_temp()?;
-            ctx.emit(Instruction::CopyReg(dst, r_arr));
-            ctx.emit(Instruction::ArraySet(dst, r_idx, r_val));
-            Ok(dst)
-        } else {
-            Err(CompileError::Unsupported("collection update on non-index expr".into()))
+        match cu.target.unwrap_group() {
+            // Single-level: arr[i]$~ val, t[i]$~ val, nt["field"]$~ val.
+            // Routed through DeepSet (not ArraySet) because $~ is the functional
+            // update and must also accept positional tuples, which the mutating
+            // ArraySet path rejects (tuple immutability for `t[i] = val`).
+            Expr::Index(idx_expr) => {
+                // Same evaluation order as the tree-walker: collection, index, value
+                let r_arr = self.compile_expr(&idx_expr.array, ctx)?;
+                let r_idx = self.compile_expr(&idx_expr.index, ctx)?;
+                let r_path = ctx.alloc_temp()?;
+                ctx.emit(Instruction::NewArray(r_path));
+                ctx.emit(Instruction::ArrayPush(r_path, r_idx));
+                let r_val = self.compile_expr(&cu.value, ctx)?;
+                let dst = ctx.alloc_temp()?;
+                ctx.emit(Instruction::CopyReg(dst, r_arr));
+                ctx.emit(Instruction::DeepSet(dst, r_path, r_val));
+                Ok(dst)
+            }
+            // Deep: arr[i>j>…]$~ val
+            Expr::DeepIndex(di) => {
+                // Same evaluation order as the tree-walker: step indices, root, value
+                let r_path = ctx.alloc_temp()?;
+                ctx.emit(Instruction::NewArray(r_path));
+                for step in &di.path.steps {
+                    if step.range_end.is_some() {
+                        return Err(CompileError::Unsupported(
+                            "deep update ($~) does not support ranges in the path".into(),
+                        ));
+                    }
+                    let r_i = self.compile_expr(&step.index, ctx)?;
+                    ctx.emit(Instruction::ArrayPush(r_path, r_i));
+                }
+                let r_root = self.compile_expr(&di.array, ctx)?;
+                let r_val = self.compile_expr(&cu.value, ctx)?;
+                let dst = ctx.alloc_temp()?;
+                ctx.emit(Instruction::CopyReg(dst, r_root));
+                ctx.emit(Instruction::DeepSet(dst, r_path, r_val));
+                Ok(dst)
+            }
+            _ => Err(CompileError::Unsupported("collection update on non-index expr".into())),
         }
     }
 
@@ -3939,7 +3967,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::MakeClosure(d, _, caps) => { upd(*d); for &c in caps { upd(c); } }
             Instruction::NewArray(d) => upd(*d),
             Instruction::ArrayPush(a, e) => { upd(*a); upd(*e); }
-            Instruction::ArrayGet(d, a, i) | Instruction::ArraySet(d, a, i) => { upd(*d); upd(*a); upd(*i); }
+            Instruction::ArrayGet(d, a, i) | Instruction::ArraySet(d, a, i)
+            | Instruction::DeepSet(d, a, i) => { upd(*d); upd(*a); upd(*i); }
             Instruction::ArrayRemove(d, a) | Instruction::ArrayRemoveValue(d, a)
             | Instruction::ArrayRemoveAll(d, a) | Instruction::ArrayRemoveRange(d, a) => { upd(*d); upd(*a); }
             Instruction::ArrayInsert(d, i, v) => { upd(*d); upd(*i); upd(*v); }

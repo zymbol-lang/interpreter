@@ -271,6 +271,16 @@ pub enum Instruction {
     /// dst = Array of CLI arguments passed after the script path (argv[1..])
     LoadCliArgs(Reg),
 
+    // ── Functional update ($~) ───────────────────────────────────────────
+    /// Functional update through an index path: dst holds a copy of the root
+    /// collection; idx_path holds an Array of step indices (Int for arrays,
+    /// tuples, and named tuples; String for a named-tuple field name).
+    /// Walks the path, replaces the addressed element with val, and leaves the
+    /// new collection in dst. Handles Array, Tuple, and NamedTuple at every
+    /// level — mirrors the tree-walker's `$~` semantics (arr[i]$~, t[i]$~,
+    /// nt["field"]$~, and deep arr[i>j>…]$~).
+    DeepSet(Reg, Reg, Reg), // (dst_root, idx_path, val)
+
     // ── Halt ─────────────────────────────────────────────────────────────
     Halt,
 }

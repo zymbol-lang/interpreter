@@ -739,6 +739,16 @@ impl TypeChecker {
                     }
                 };
                 for name in names {
+                    // Destructuring into a `:=` constant is an ERROR (former
+                    // limitation L14: it used to silently overwrite the constant).
+                    if self.env.is_constant(&name) {
+                        self.errors.push(
+                            Diagnostic::error(format!("cannot reassign constant '{}'", name))
+                                .with_span(d.span)
+                                .with_help("constants declared with ':=' cannot be modified — use a different name in the destructuring pattern")
+                        );
+                        continue;
+                    }
                     self.env.define_var(&name, ZymbolType::Any);
                 }
             }

@@ -1,0 +1,6 @@
+// Former limitation L14 (REFERENCE.md): destructuring into a `:=` constant
+// silently overwrote it. Now a semantic error, same as direct reassignment.
+
+limit := 100
+[limit, _extra] = [200, 300]
+>> limit ¶

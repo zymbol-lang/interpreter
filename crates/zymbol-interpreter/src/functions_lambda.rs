@@ -81,9 +81,11 @@ impl<W: Write> Interpreter<W> {
                     let value = std::mem::replace(&mut arg_values[i], Value::Unit);
                     self.set_variable_new(param, value);
                 }
-                let result = self.eval_expr(expr)?;
+                // Pop the scope on the error path too, or the lambda's params
+                // leak into the caller's scope view (L16 family).
+                let result = self.eval_expr(expr);
                 self.pop_scope();
-                return Ok(result);
+                return result;
             }
         }
 
@@ -112,34 +114,36 @@ impl<W: Write> Interpreter<W> {
 
         // QW1: execute_block_no_scope avoids the extra push_scope/pop_scope that
         // execute_block would add — take_call_state already created scope[0].
+        // L16 fix: compute the result WITHOUT early `?` returns — the caller's
+        // scope_stack was swapped out by take_call_state, so every exit path
+        // (including errors) must run restore_call_state or the caller's
+        // variables vanish after a caught error.
         let is_named = func.is_named_fn;
-        let result = match &func.body {
-            zymbol_ast::LambdaBody::Expr(expr) => {
-                self.eval_expr(expr)?
-            }
-            zymbol_ast::LambdaBody::Block(block) => {
-                self.execute_block_no_scope(block)?;
-                match std::mem::replace(&mut self.control_flow, ControlFlow::None) {
+        let result: Result<Value> = match &func.body {
+            zymbol_ast::LambdaBody::Expr(expr) => self.eval_expr(expr),
+            zymbol_ast::LambdaBody::Block(block) => match self.execute_block_no_scope(block) {
+                Err(e) => Err(e),
+                Ok(()) => match std::mem::replace(&mut self.control_flow, ControlFlow::None) {
                     ControlFlow::Return(val) => {
                         self.has_control_flow = false;
-                        val.unwrap_or(Value::Unit)
+                        Ok(val.unwrap_or(Value::Unit))
                     }
                     _ => {
                         if is_named {
-                            Value::Unit
+                            Ok(Value::Unit)
                         } else {
-                            return Err(RuntimeError::Generic {
+                            Err(RuntimeError::Generic {
                                 message: "block lambda must use <~ to return value".to_string(),
                                 span: *span,
-                            });
+                            })
                         }
                     }
-                }
-            }
+                },
+            },
         };
 
         self.restore_call_state(saved);
-        Ok(result)
+        result
     }
 
     /// Evaluate a function call
@@ -418,7 +422,19 @@ impl<W: Write> Interpreter<W> {
         // QW1: execute_block_no_scope — take_call_state already owns scope[0] (params).
         // QW17: TCO loop — if tco_pending is set after execution, rebind params and restart.
         let return_value = 'tco: loop {
-            self.execute_block_no_scope(body)?;
+            if let Err(e) = self.execute_block_no_scope(body) {
+                // L16 fix: the caller's scope_stack was swapped out by
+                // take_call_state — restore the full caller state before
+                // propagating, or every outer variable vanishes after the
+                // error is caught by an enclosing `!?`.
+                self.current_function = prev_fn;
+                self.current_output_params = prev_output_params;
+                self.restore_call_state(saved);
+                if let Some(caller_functions) = saved_functions {
+                    self.functions = caller_functions;
+                }
+                return Err(e);
+            }
 
             if self.tco_pending {
                 self.tco_pending = false;

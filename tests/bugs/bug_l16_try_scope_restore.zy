@@ -1,0 +1,45 @@
+// Regression test for former limitation L16 (REFERENCE.md): when a function
+// called inside !? failed at runtime, the caller's scope was corrupted — every
+// outer variable became undefined after the !? block (tree-walker), and the
+// :! clause did not even fire (VM: the catch only checked the top frame).
+// Now: the error is caught in the calling frame and the outer scope survives.
+
+base = 10
+saludo = "hola"
+
+adder(n) { <~ n + base }   // 'base' is not visible in the isolated fn scope
+
+!? {
+    _x = adder(5)          // fails: 'base' undefined inside adder
+} :! {
+    >> "caught" ¶
+}
+
+// Outer scope must be intact after the caught error
+>> base ¶
+>> saludo ¶
+
+// Error two frames deep: outer() calls inner(), inner fails at runtime
+// (division by zero), the catch in the outermost frame still fires
+inner(n) { <~ 10 / n }
+outer(n) { <~ inner(n) }
+
+!? {
+    _y = outer(0)
+} :! {
+    >> "caught deep" ¶
+}
+>> base ¶
+
+// Typed catch across frames: index error raised inside a called function
+toma(arr) { <~ arr[99] }
+!? {
+    _z = toma([1, 2, 3])
+} :! ##Index {
+    >> "caught index" ¶
+}
+>> saludo ¶
+
+// Normal calls still work after all the caught failures
+suma(a, b) { <~ a + b }
+>> suma(base, 5) ¶
