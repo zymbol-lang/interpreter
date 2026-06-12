@@ -13,3 +13,6 @@ zymbol-lexer.workspace = true
 zymbol-parser.workspace = true
 zymbol-span.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+bincode.workspace = true
