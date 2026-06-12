@@ -370,7 +370,7 @@ impl<W: Write> Interpreter<W> {
             // module's variables so module-level constants (:=) and mutable state are visible.
             // Main-script functions have origin_module_path = Some(main.zy) which is NOT in
             // loaded_modules, so injection is safely skipped for script-level calls.
-            if let Some(ref origin_path) = origin_module_path {
+            if let Some(origin_path) = origin_module_path {
                 if let Some(module) = self.loaded_modules.get(origin_path).cloned() {
                     for (name, value) in &module.all_variables {
                         self.set_variable(name, value.clone());

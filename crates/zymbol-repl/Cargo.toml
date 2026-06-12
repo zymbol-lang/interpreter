@@ -11,10 +11,10 @@ zymbol-parser.workspace = true
 zymbol-interpreter.workspace = true
 zymbol-error.workspace = true
 zymbol-span.workspace = true
-crossterm = "0.28"
-arboard = "3.4"
+crossterm.workspace = true
+arboard.workspace = true
 unicode-width = "0.2"
-dirs = "5"
+dirs = "6"
 
 [dev-dependencies]
 assert_cmd = "2"

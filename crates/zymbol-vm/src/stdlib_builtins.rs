@@ -464,9 +464,9 @@ fn parse_headers(arg: Option<Value>, fname: &str) -> Result<Vec<(String, String)
     }
 }
 
-fn response_to_value(resp: Result<ureq::Response, ureq::Error>) -> Value {
+fn response_to_value(resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Value {
     match resp {
-        Ok(resp) => match resp.into_string() {
+        Ok(mut resp) => match resp.body_mut().read_to_string() {
             Ok(body) => Value::String(ZyStr::new(body)),
             Err(e) => net_err(e.to_string()),
         },
@@ -483,7 +483,7 @@ fn net_get(args: Vec<Value>) -> Result<Value, String> {
     let headers = parse_headers(it.next(), "net::get")?;
     let mut req = ureq::get(url.as_str());
     for (k, v) in &headers {
-        req = req.set(k, v);
+        req = req.header(k, v);
     }
     Ok(response_to_value(req.call()))
 }
@@ -493,11 +493,11 @@ fn net_post(args: Vec<Value>) -> Result<Value, String> {
     match (it.next(), it.next()) {
         (Some(Value::String(url)), Some(Value::String(body))) => {
             let headers = parse_headers(it.next(), "net::post")?;
-            let mut req = ureq::post(url.as_str()).set("Content-Type", "text/plain");
+            let mut req = ureq::post(url.as_str()).header("Content-Type", "text/plain");
             for (k, v) in &headers {
-                req = req.set(k, v);
+                req = req.header(k, v);
             }
-            Ok(response_to_value(req.send_string(body.as_str())))
+            Ok(response_to_value(req.send(body.as_str())))
         }
         _ => Err("net::post: expected (String, String)".into()),
     }
@@ -508,11 +508,11 @@ fn net_post_json(args: Vec<Value>) -> Result<Value, String> {
     match (it.next(), it.next()) {
         (Some(Value::String(url)), Some(Value::String(body))) => {
             let headers = parse_headers(it.next(), "net::post_json")?;
-            let mut req = ureq::post(url.as_str()).set("Content-Type", "application/json");
+            let mut req = ureq::post(url.as_str()).header("Content-Type", "application/json");
             for (k, v) in &headers {
-                req = req.set(k, v);
+                req = req.header(k, v);
             }
-            Ok(response_to_value(req.send_string(body.as_str())))
+            Ok(response_to_value(req.send(body.as_str())))
         }
         _ => Err("net::post_json: expected (String, String)".into()),
     }
