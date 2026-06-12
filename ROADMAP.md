@@ -1,10 +1,11 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **v0.0.6 (released 2026-06-07)** — all planned features shipped.
-> Highlights: `FatArrow` `=>` maps-to operator, bytecode-embedded standalones (~60% smaller),
-> VM `<<` input parity (`ReadLine`), `std/math` + `std/random` stdlib, typed test wildcards,
-> and the GAP-Z009 / BUG-007 / TUI fixes (see `IMPL_V006.md`).
-> Validation: 478/478 VM-parity tests PASS (0 SKIP). Next: see `IMPL_V007.md`.
+> Current status: **v0.0.7 (released 2026-06-12)** — all planned features shipped.
+> Highlights: native stdlib expansion (`std/json`, `std/io`, `std/net`, `std/db` via
+> ODBC), typed/validated input (`<< ##.(5,2) "p" var`), fail-closed formatter,
+> `DeepSet` VM parity for every `$~` form, the L14/L16 error-handling fixes,
+> LSP↔check diagnostic parity, and Rust edition 2024 (see `IMPL_V007.md`).
+> Validation: 505/505 VM-parity tests PASS (0 SKIP), 833 unit tests.
 
 ---
 

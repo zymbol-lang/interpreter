@@ -1,5 +1,10 @@
 # Implementation Plan — v0.0.7 Standard Library Expansion
 
+> **Status: RELEASED in v0.0.7 (2026-06-12).** All in-scope modules shipped with
+> full TW+VM parity (`std/json`, `std/io`, `std/net`, plus `std/db` — see
+> `DESIGN_STD_DB.md`); `std/env` dropped by design. Kept as the architecture
+> reference for adding future stdlib modules.
+
 Native stdlib modules built in Rust, consumed transparently through the existing
 module system (`<# std/<name> => alias`, `alias::func(...)`). No new syntax.
 
