@@ -182,26 +182,16 @@ impl DiagnosticPipeline {
                     if let Some(base_dir) = path.parent() {
                         let mut module_analyzer =
                             zymbol_semantic::ModuleAnalyzer::new(base_dir);
-                        // analyze() returns its errors AND keeps them in
-                        // diagnostics() — dedup so the editor shows one
-                        // squiggle per finding (the CLI prints both copies).
-                        let mut module_diags: Vec<lsp_types::Diagnostic> = Vec::new();
+                        // analyze() drains its findings into the Err; only
+                        // validate_exports findings remain in diagnostics().
                         if let Err(module_errors) = module_analyzer.analyze(program, &path) {
                             for err in &module_errors {
-                                module_diags.push(to_lsp_diagnostic(err));
+                                lsp_diagnostics.push(to_lsp_diagnostic(err));
                             }
                         }
                         module_analyzer.validate_exports(program, &path);
                         for diag in module_analyzer.diagnostics() {
-                            module_diags.push(to_lsp_diagnostic(diag));
-                        }
-                        let mut seen: Vec<(lsp_types::Range, String)> = Vec::new();
-                        for d in module_diags {
-                            let key = (d.range, d.message.clone());
-                            if !seen.contains(&key) {
-                                seen.push(key);
-                                lsp_diagnostics.push(d);
-                            }
+                            lsp_diagnostics.push(to_lsp_diagnostic(diag));
                         }
                     }
                 }

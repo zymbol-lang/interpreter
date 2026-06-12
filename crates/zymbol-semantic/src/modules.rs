@@ -298,7 +298,10 @@ impl ModuleAnalyzer {
         if self.diagnostics.is_empty() {
             Ok(())
         } else {
-            Err(self.diagnostics.clone())
+            // Drain — callers print the Err contents and later print
+            // `diagnostics()` (for validate_exports findings); retaining the
+            // same entries in both channels made every error appear twice.
+            Err(std::mem::take(&mut self.diagnostics))
         }
     }
 
