@@ -208,9 +208,9 @@ when integral else `Float`. Tuples encode as arrays; functions/errors encode as 
 
 Naming: `decode`/`encode` (symmetric inverse pair), not `parse`/`encode`.
 
-Known display divergence: a JSON `null` decoded into an `Array` renders as empty in the
-tree-walker and `()` in the VM (a pre-existing `Unit`-in-array display difference, not a
-json bug). Tests avoid printing it directly.
+Display note: a JSON `null` decoded into a collection renders as `()` in both engines
+(unified 2026-06-12 — previously the tree-walker printed an empty hole; see
+`tests/collections/unit_display_nested.zy`).
 
 ---
 

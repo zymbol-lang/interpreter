@@ -8,7 +8,7 @@
 **Test coverage**: golden-file pairs verified on both engines (`vm_compare`); `@vm-skip` files excluded from VM parity
 
 **New in v0.0.7**: typed/validated input (`<< ##.(5,2) "p" var`, see [§3 Input](#input-)) and
-native standard-library modules `std/json`, `std/io`, `std/net` (see
+native standard-library modules `std/json`, `std/io`, `std/net`, `std/db` (see
 [§17 Standard Library Modules](#standard-library-modules-std)). v0.0.6 added `std/math` and
 `std/random`.
 
@@ -406,7 +406,7 @@ Both engines (tree-walker and `--vm`) validate identically. A leading sign is al
 // → [one, two, three]
 ```
 
-> **Note**: `><` capture only works in tree-walker mode.
+`><` works in both engines (tree-walker and `--vm`).
 
 ---
 
@@ -1681,7 +1681,16 @@ arr[3] *= 2
 arr2 = arr[2]$~ 0
 >> arr ¶    // → [15, 99, 60, 40, 50]  (unchanged)
 >> arr2 ¶   // → [15, 0, 60, 40, 50]
+
+// Deep functional update — nav path [i>j>…] selects a nested element
+m  = [[1, 2], [3, 4]]
+m2 = m[1>2]$~ 99
+>> m ¶      // → [[1, 2], [3, 4]]   (unchanged)
+>> m2 ¶     // → [[1, 99], [3, 4]]
 ```
+
+> The deep form works in both engines (compiled to the `DeepSet` instruction in the
+> VM). Ranges (`..`) are not supported in a `$~` path — only scalar steps.
 
 > **Value semantics**: assigning an array to a new variable creates an independent
 > copy. Modifying one does not affect the other:
@@ -1791,7 +1800,9 @@ f()
 >> x ¶        // 999  — outer x unchanged
 ```
 
-> **Known limitation (L14)**: Destructuring does not verify constant immutability. Assigning into a name previously declared with `:=` will silently overwrite it instead of raising an error. See §20 L14.
+> **Constants are protected**: destructuring into a name declared with `:=` is a
+> semantic error (`cannot reassign constant`), the same as direct reassignment.
+> Use a different name in the pattern.
 
 All patterns are matched positionally (arrays, positional tuples) or by field name (named tuples).
 
@@ -2048,13 +2059,23 @@ t2 = t[2]$~ 999
 >> t2 ¶    // → (10, 999, 30)  ← new tuple
 ```
 
-For named tuples, rebuild them explicitly:
+Named tuples support `$~` too (v0.0.6), addressed by 1-based position **or by
+field-name string** (useful when the field is chosen at runtime):
 
 ```zymbol
 person = (name: "Alice", age: 25)
-older  = (name: person.name, age: 26)
->> person.age ¶    // → 25
+older  = person["age"]$~ 26       // by field name
+upper  = person[1]$~ "ALICE"      // by position (1-based; negative allowed)
+>> person.age ¶    // → 25   ← original unchanged
 >> older.age ¶     // → 26
+>> upper.name ¶    // → ALICE
+```
+
+Rebuilding explicitly remains valid when several fields change at once:
+
+```zymbol
+person = (name: "Alice", age: 25)
+other  = (name: person.name, age: 26)
 ```
 
 > **Constants vs immutability**: `:=` makes the *variable binding* constant (the name
@@ -2349,6 +2370,7 @@ r6 = 7 |> (x -> x * factor)
 | `##Type` | Type mismatch |
 | `##Parse` | Data parsing failure |
 | `##Network` | Network errors |
+| `##DB` | Database errors (`std/db`) |
 | `##_` | Generic catch-all |
 
 ```zymbol
@@ -2374,8 +2396,9 @@ is_err = x$!
 
 ### `$!!` — Propagate Error to Caller
 
-> **⚠ Known limitation**: `$!!` is only supported inside **named functions**. Using it
-> inside a lambda does not propagate to the lambda's caller. See [L13](#l13----from-lambdas-not-supported).
+If the value is an error, `$!!` returns it **early** to the caller (the rest of the
+body never runs); if it is not an error, execution continues. Works identically in
+named functions and lambdas, in both engines:
 
 ```zymbol
 process(value) {
@@ -2384,6 +2407,9 @@ process(value) {
     }
     <~ value * 2
 }
+
+// Same semantics inside a lambda:
+handler = (x -> { x$!! <~ "ok" })   // error in → error out; otherwise "ok"
 ```
 
 ### Nested Try Blocks
@@ -2655,11 +2681,12 @@ the i18n pattern with no special handling:
 | `std/json` | `decode(text)` `encode(value)` | v0.0.7 |
 | `std/io` | `read` `write` `append` `exists` `delete` `list` `mkdir` | v0.0.7 |
 | `std/net` | `get` `post` `post_json` `head` | v0.0.7 |
+| `std/db` | `connect` `disconnect` `exec` `query` `query_one` `query_value` `tx` `begin` `commit` `rollback` `savepoint` `release` `rollback_to` `exec_script` `table_exists` | v0.0.7 |
 
 **Error convention.** Type/arity mistakes raise a hard `RuntimeError` (the program is
 malformed). Recoverable environmental failures — file not found, network timeout, malformed
-JSON — come back as a **soft `Error` value** (`##IO(...)`, `##Network(...)`, `##Parse(...)`)
-that you test with `$!` or catch with `!?`, rather than aborting:
+JSON, SQL errors — come back as a **soft `Error` value** (`##IO(...)`, `##Network(...)`,
+`##Parse(...)`, `##DB(...)`) that you test with `$!` or catch with `!?`, rather than aborting:
 
 ```zymbol
 <# std/io => io
@@ -2677,6 +2704,39 @@ APIs. JSON object ↔ `NamedTuple` (key order preserved), JSON array ↔ `Array`
 
 > When writing JSON **literals** in source, escape `{` as `\{` (an unescaped `{` starts string
 > interpolation). JSON read from a file or the network needs no escaping.
+
+#### `std/db` — vendor-neutral database access (ODBC)
+
+Zymbol bundles **no database engine**: `std/db` speaks **ODBC**, and the OS supplies the
+per-engine driver (SQLite, PostgreSQL, MySQL, MS SQL Server, …). The API is identical
+across engines — only the connection string changes. SQLite and PostgreSQL are validated
+end-to-end in v0.0.7.
+
+```zymbol
+<# std/db => db
+
+db::connect("c", "Driver={SQLite3};Database=/tmp/demo.db;")
+db::exec("c", "CREATE TABLE socios(cod INTEGER PRIMARY KEY, nombre TEXT)")
+db::exec("c", "INSERT INTO socios(cod, nombre) VALUES(?, ?)", (1, "O'Brien & Co."))
+
+fila = db::query_one("c", "SELECT cod, nombre FROM socios WHERE cod = ?", (1,))
+>> fila.nombre ¶                                        // → O'Brien & Co.
+>> db::query_value("c", "SELECT COUNT(*) FROM socios") ¶  // → 1
+db::disconnect("c")
+```
+
+- **Connection registry**: `connect(name, conn_string)` registers a named connection;
+  every other function takes that name as its first argument.
+- **Parameter binding**: `exec`/`query`/`query_one`/`query_value` take an optional trailing
+  positional-tuple of parameters bound to `?` placeholders — quotes in data are safe by
+  construction (no SQL injection by string concatenation).
+- **Rows are `NamedTuple`s** keyed by column name; `query` returns an array of rows,
+  `query_one` a single row (or soft error), `query_value` a single scalar.
+- **Transactions**: `tx(name, batch)` runs an array of `(sql, params)` tuples atomically;
+  low-level `begin`/`commit`/`rollback` plus nested `savepoint`/`release`/`rollback_to`.
+- **Utilities**: `exec_script` (multi-statement SQL), `table_exists`.
+- SQL failures return a **soft `##DB(...)` error** (testable with `$!`, catchable with
+  `!? … :! ##DB`); wrong argument types abort hard, like every stdlib module.
 
 ---
 

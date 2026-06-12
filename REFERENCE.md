@@ -2,7 +2,7 @@
 
 Complete lookup reference: known limitations, error taxonomy, and symbol table.
 
-**Interpreter version**: v0.0.5
+**Interpreter version**: v0.0.7
 
 See also: [GUIDE.md](GUIDE.md) — full language guide with examples  
 See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar and internals
@@ -30,19 +30,18 @@ Limitations are classified in two categories:
 
 ---
 
-### L1 — Postfix operators directly in `>>` *(implementation gap)*
+### ~~L1 — Postfix operators directly in `>>`~~ Fixed
 
-**Symptom**: `>> "len=" arr$# ¶` → parser error (`DollarHash unexpected`).
-
-Postfix operators (`$#`, `$?`, `$!`, `#?`, `$[..]`) are not recognized as items
-in `>>` juxtaposition.
+Postfix operators (`$#`, `$?`, `#?`, …) are now accepted as items in `>>`
+juxtaposition (verified on both engines in v0.0.7):
 
 ```zymbol
->> (arr$#) ¶         // ✅ wrap in parentheses
-n = arr$#            // ✅ intermediate variable
->> "len=" n ¶
->> "has=" (arr$? 3) ¶
+arr = [1, 2, 3]
+>> "len=" arr$# ¶      // ✅ → len=3
+>> "has=" arr$? 2 ¶    // ✅ → has=#1
 ```
+
+Parentheses remain valid and are still useful for grouping: `>> (arr$? 3) ¶`.
 
 ### ~~L3 — Module alias.CONST does not work~~ Fixed
 
@@ -105,9 +104,9 @@ Multi-value arms are supported via list containment patterns:
 
 ```zymbol
 ?? y {
-    [1, 2] : "low"
-    _      : "other"
-}  // ✅
+    [1, 2] => "low"
+    _      => "other"
+}  // ✅ (arm separator is `=>` since v0.0.6)
 ```
 
 ### L8 — ~~Negative array indices: WT vs VM behavior differs~~ Fixed in v0.0.2
@@ -120,12 +119,13 @@ arr = [10, 20, 30, 40, 50]
 >> arr[-2] ¶    // → 40
 ```
 
-### L9 — False positive warnings *(implementation gap)*
+### ~~L9 — False positive warnings~~ Fixed
 
-| Warning | Cause | Action |
-|---------|-------|--------|
-| `unused variable 'x'` when `x` is used in `"{x}"` interpolation | Static analyzer does not track interpolation usage | Ignore |
-| `unused variable 'x'` when `x` is used in `<\ bash {x} \>` | Analyzer does not track BashExec variable usage | Ignore, or prefix with `_`: `_x` and `{_x}` |
+The analyzer now tracks variable usage inside string interpolation (`"{x}"`) and
+inside BashExec commands (both `<\ "ls {x}" \>` interpolation and juxtaposed
+items `<\ "cat " x \>`) — no false "unused variable" warnings (verified 2026-06-12).
+Regression test: `tests/errors/semantic/no_false_positive_unused.zy` (`zymbol check`
+must stay clean).
 
 ### ~~L10 — Collection operators cannot be chained~~ Fixed in v0.0.4
 
@@ -147,37 +147,33 @@ arr = base$+ (other$#)$+ 0    // appends length of other, then 0
 
 ---
 
-### L12 — `do-while` (`~>`) not implemented *(implementation gap)*
+### L12 — `do-while` (`~>`) *(dismissed 2026-06-12)*
 
-A post-condition loop (execute body at least once, then repeat) is defined in the EBNF
-but not yet implemented.
+A post-condition loop will **not** be implemented. The infinite loop with a trailing
+break is the idiomatic form, and coining `~>` for it would add a symbol without
+demonstrated need (SYMBOLS.md: "a new symbol enters the grammar reluctantly"):
 
 ```zymbol
-// ❌ Not implemented:
-// { body } ~> condition
-
-// ✅ Workaround — infinite loop with break at the end:
+// ✅ The idiom — body runs at least once:
 @ {
-    // body runs at least once
     body_here()
     ? !condition { @! }
 }
 ```
 
-### L13 — `$!!` from lambdas not supported *(implementation gap)*
+### ~~L13 — `$!!` from lambdas not supported~~ Fixed
 
-`$!!` error propagation only works inside **named functions**. Placing it inside a
-lambda does not propagate to the lambda's caller.
+`$!!` inside a lambda propagates the error as an early return to the lambda's
+caller — identical semantics to named functions, in both engines (verified
+2026-06-12; the old "silent no-op" description was stale):
 
 ```zymbol
-// ❌ Inside lambda — propagation does not reach outer caller:
-handler = x -> { x$!! }
-
-// ✅ Wrap the logic in a named function:
-handle(x) {
-    x$!!
-}
+handler = (x -> { x$!! <~ "ok" })
+r = handler(err_value)    // r is the error — "ok" never evaluates
+? r$! { >> "handle it" ¶ }
 ```
+
+Regression test: `tests/lambdas/error_propagate_lambda.zy` (TW == VM parity).
 
 ### L11 — Arrays must be homogeneous *(by design)*
 
@@ -212,67 +208,51 @@ The design distinction maps cleanly: **arrays = typed sequences**, **named tuple
 
 ---
 
-### L14 — Destructuring does not enforce constant immutability *(implementation gap)*
+### ~~L14 — Destructuring does not enforce constant immutability~~ Fixed in v0.0.7
 
-Destructuring a pattern that includes a name previously declared with `:=` silently overwrites the constant instead of raising an error:
-
-```zymbol
-limit := 100        // constant
-[limit, extra] = [200, 300]
->> limit ¶          // 200 — constant was silently overwritten ⚠
-```
-
-**By design or implementation gap?** Implementation gap — the constant-check path in the interpreter is not reached during destructuring. A future fix should detect `:=`-declared names in the destructuring pattern and raise a semantic error.
-
-**Workaround**: Use distinct names for destructuring targets if you need to preserve a constant in the same scope:
+Destructuring into a `:=` constant is now a **semantic error**, consistent with direct
+reassignment (`limit = 200`):
 
 ```zymbol
 limit := 100
-[new_limit, extra] = [200, 300]
->> limit ¶          // 100  — original constant preserved
+[limit, extra] = [200, 300]
+// error: cannot reassign constant 'limit'
+// help: constants declared with ':=' cannot be modified — use a different
+//       name in the destructuring pattern
 ```
 
-### L16 — `!?` corrupts outer scope when a function fails with "undefined variable" *(implementation gap)*
+Destructuring into regular variables (including re-binding existing `=` variables)
+is unchanged. Regression test: `tests/errors/semantic/const_destructure_overwrite.zy`.
 
-When a named function is called inside `!?` and fails because it references an outer variable (which is inaccessible in direct-call isolated scope), the error recovery corrupts the caller's scope — **all outer variables become undefined** after the `!?` block completes.
+### ~~L16 — `!?` corrupts outer scope when a function fails~~ Fixed in v0.0.7
+
+When a named function called inside `!?` failed at runtime, the caller's scope was
+corrupted — all outer variables became undefined after the `!?` block (tree-walker),
+and in the VM the `:!` clause did not even fire for errors raised inside called
+functions. Both are fixed:
+
+- **Tree-walker**: every error exit path of a function/lambda call now restores the
+  caller's scope state before propagating (previously the early `?` return skipped
+  `restore_call_state`, leaving the function's isolated scope in place).
+- **VM**: `raise!` now unwinds the frame stack to the nearest ancestor frame with an
+  active catch, popping callee frames and their registers, instead of only checking
+  the top frame.
 
 ```zymbol
 base = 10
-adder(n) { <~ n + base }   // references 'base' — inaccessible on direct call
+adder(n) { <~ n + base }   // 'base' is not visible in the isolated fn scope
 
 !? {
-    adder(5)               // fails: undefined variable 'base'
+    _x = adder(5)          // fails: 'base' undefined inside adder
 } :! {
-    >> "caught" ¶          // executes correctly in TW
+    >> "caught" ¶          // fires in BOTH engines
 }
 
->> base ¶                  // ⚠ runtime error: undefined variable 'base'
-                           //   outer scope was corrupted
+>> base ¶                  // → 10  — outer scope intact
 ```
 
-**Both modes are affected** but differently:
-- **Tree-walker**: `:!` fires correctly, but all outer variables are gone afterward.
-- **VM**: `:!` does not even execute; outer scope is also corrupted.
-
-**Root cause hypothesis**: the scope snapshot taken on entering `!?` is restored incorrectly when the error originates inside the function's isolated scope — the interpreter unwinds past the outer scope's variable bindings.
-
-**Trigger condition**: specifically a function referencing an outer variable, called directly inside `!?`. Errors from other sources (index out of bounds, division by zero, etc.) do **not** cause this corruption:
-
-```zymbol
-base = 10
-!? { dummy = [1][99] } :! { }
->> base ¶    // → 10  (scope intact — unrelated error does not corrupt)
-```
-
-**Workaround**: never call functions that reference outer variables directly inside `!?`. Use a wrapper that converts the error before entering the try block, or restructure to avoid the direct call pattern:
-
-```zymbol
-base = 10
-adder(n) { <~ n + base }
-
-// Workaround: call outside !?, catch the result
-result = adder(base)       // works when base is captured via f = adder
-```
+Works for errors raised at any call depth (typed catches included). Regression test:
+`tests/bugs/bug_l16_try_scope_restore.zy` (TW == VM parity).
 
 ---
 
@@ -311,6 +291,7 @@ Error [line N]: module 'mod' is private
 
 **Common triggers:**
 - Reference to an undefined variable or function
+- Calling an undefined function (bare-identifier calls are statically checked since v0.0.7)
 - Accessing a private module from outside
 - Circular imports
 
@@ -353,6 +334,31 @@ Runtime errors carry a **kind** (e.g., `##Index`, `##Div`, `##Type`) and a **mes
 
 ---
 
+### Soft Errors from the Standard Library (v0.0.7)
+
+`std/json`, `std/io`, `std/net`, and `std/db` distinguish two failure channels:
+
+- **Hard `RuntimeError`** — programmer mistakes (wrong argument type or count). The
+  program is malformed; execution aborts as usual.
+- **Soft `Error` value** — recoverable environmental failures (file not found, network
+  timeout, malformed JSON, SQL error). The function **returns** an error value instead of
+  aborting; test it with `$!`, propagate it with `$!!`, or catch it with `!? … :! ##Kind`.
+
+| Kind | Returned by |
+|------|-------------|
+| `##Parse(...)` | `json::decode` / `json::encode` on malformed data |
+| `##IO(...)` | `std/io` functions on filesystem failure |
+| `##Network(...)` | `std/net` functions on HTTP/connection failure |
+| `##DB(...)` | `std/db` functions on SQL/ODBC failure |
+
+```zymbol
+<# std/io => io
+txt = io::read("missing.txt")
+? txt$! { >> "could not read" ¶ }
+```
+
+---
+
 ### Fail-safe Operations
 
 Some operations are intentionally **fail-safe**: they never raise a runtime error; instead, they return a neutral value on failure.
@@ -377,12 +383,20 @@ Fail-safe operations are distinguished from error-handling by the absence of any
 | `:=` | Constant | `PI := 3.14` |
 | `>>` | Output | `>> "hello" ¶` |
 | `<<` | Input | `<< "prompt: " var` |
+| `<< <typespec>` | Typed/validated input (v0.0.7) | `<< ##.(5,2) "p: " v`, `<< ###(4) "n: " n`, `<< ##"(20) "s: " s`, `<< ##' "c: " c` |
+| `@~` | Sleep (ms) | `@~ 500` |
+| `>>!` | Clear screen | `>>!` |
+| `>>?` | Query terminal size | `[H, W] = >>?` |
+| `>>~` | Positioned/styled output | `>>~ (5, 10) > "text"` |
+| `<<\|` | Blocking key input | `<<\| k` |
+| `<<\|?` | Non-blocking key input | `<<\|? k` |
+| `>>\|` | TUI block (alternate screen + raw mode) | `>>\| { ... }` |
 | `¶` / `\\` | Newline in output | `>> msg ¶` |
 | `?` | If | `? x > 0 { }` |
 | `_?` | Else-if | `_? x < 0 { }` |
 | `_` | Else / wildcard | `_{ }` |
-| `??` | Match | `?? x { pat : val }` |
-| `[p, q]` | Match list pattern | `?? arr { [_, _] : ... }` |
+| `??` | Match | `?? x { pat => val }` |
+| `[p, q]` | Match list pattern | `?? arr { [_, _] => ... }` |
 | `@` | Loop (while) | `@ cond { }` |
 | `@` | Loop (times) | `@ N { }` — repeats exactly N times when N is a positive Int |
 | `@` | Loop (infinite) | `@ { }` |
@@ -404,6 +418,8 @@ Fail-safe operations are distinguished from error-handling by the absence of any
 | `arr[i] = val` | Direct element update (arrays only) | `arr[2] = 99` |
 | `arr[i] += val` | Compound element update (arrays only) | `arr[1] += 5` |
 | `arr[i]$~` | Functional update — returns new collection | `arr[2]$~ 99` |
+| `arr[i>j]$~` | Deep functional update (nested) | `m[1>2]$~ 99` |
+| `nt[i]$~` / `nt["f"]$~` | Named-tuple update by index or field name | `p["y"]$~ 42` |
 | `arr[i>j]` | Scalar deep access (row i, col j) | `m[2>3]` → `6` |
 | `arr[i>j>k]` | Scalar deep access depth 3+ | `cubo[1>2>1]` |
 | `arr[(e)>j]` | Computed first step | `m[(n)>(n)]` |
@@ -426,6 +442,7 @@ Fail-safe operations are distinguished from error-handling by the absence of any
 | `$~~[p:r]` | String replace | `s$~~["o":"0"]` |
 | `$/` | String split by char or substring | `"a,b" $/ ','` |
 | `$++` | ConcatBuild — append to string or array | `"x=" $++ n flag` |
+| `$*` | String repeat | `"=" $* 20` |
 | `!?` | Try | `!? { } :! { }` |
 | `:!` | Catch | `:! ##Div { }` |
 | `:>` | Finally | `:> { }` |
@@ -455,6 +472,7 @@ Fail-safe operations are distinguished from error-handling by the absence of any
 | `#d0d9#` | Numeral mode switch | `#०९#` (Devanagari), `#09#` (reset) |
 | `++` / `--` | Increment / decrement | `x++` |
 | `+=` `-=` `*=` `/=` `%=` `^=` | Compound assignment | `x += 5` |
+| `x°` / `°x` | Hot definition — auto-init to neutral value on first use | `°sum += item` |
 
 ---
 

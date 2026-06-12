@@ -1,8 +1,8 @@
 (*
   Zymbol-Lang EBNF Grammar
-  Version:    3.0.0
-  Generated:  2026-05-12
-  Sprint:     v0.0.5
+  Version:    3.1.0
+  Generated:  2026-06-12
+  Sprint:     v0.0.7
   Test counts: authoritative via the test suite, not this header.
     E2E / VM parity:  bash tests/scripts/vm_compare.sh
     Unit tests:       cargo test
@@ -14,6 +14,20 @@
 
   Supersedes: zymbol-lang.ebnf v2.5.0 (aspirational, several inaccuracies)
   Deprecated: _staging/docs/GRAMMAR_VERIFIED.ebnf v2.1.0
+
+  Changes in 3.1.0 (sprint v0.0.7) — all verified against the parser:
+  [C01] input_stmt gains optional typed/validated typespec:
+        << ##.(T,D) | ##. | ###(N) | ### | ##"(N) | ##" | ##'  before the prompt (v0.0.7)
+  [C02] loop_head: while (@ cond) and times (@ N) loop specs were missing
+        from 3.0.0 — added (both predate v0.0.5; grammar omission only)
+  [C03] export_item: local rename  name => public_name  added (FatArrow, v0.0.6)
+  [C04] collection_update generalized: arr[i]$~, named_tuple["field"]$~ and
+        deep  arr[i>j>…]$~  — all forms run in BOTH engines (VM: DeepSet
+        instruction). Ranges (..) are not allowed in a $~ path.
+  [C05] hot °name corrected: valid as RHS expression too, not only LHS
+  [C06] No new syntax for the v0.0.6/v0.0.7 stdlib (std/math, std/random,
+        std/json, std/io, std/net, std/db) — consumed via existing
+        import_stmt (<# std/name => alias) and module calls (alias::fn)
 
   Key divergences vs v2.5.0:
   [D01] Module is a closed block: # name { ... }  (not a standalone declaration)
@@ -113,7 +127,7 @@ export_block = "#>" , "{" , export_item , { "," , export_item } , "}" ;
   pulls a function or constant from an imported module, optionally renamed with =>.
 *)
 export_item =
-    identifier                                   (* export local declaration *)
+    identifier , [ "=>" , identifier ]           (* export local declaration, optional rename (v0.0.6) *)
   | identifier , "::" , identifier , [ "=>" , identifier ]   (* re-export module fn *)
   | identifier , "." , identifier , [ "=>" , identifier ]    (* re-export module const *)
   ;
@@ -252,11 +266,24 @@ terminal_size_expr = ">>?" ;
 (*
   Standard string input (stores raw string in variable).
   Numeric cast input  << #|var|  reads and immediately converts to int/float.  [D06]
+  Typed/validated input (v0.0.7): an input_typespec BEFORE the prompt constrains
+  and converts the value at read time; invalid input re-prompts until valid,
+  end-of-input aborts.  [C01]
   Optional prompt string is printed before waiting for input.
 *)
 input_stmt =
-    "<<" , [ prompt_string ] , ( identifier | "#|" , identifier , "|" )
+    "<<" , [ input_typespec ] , [ prompt_string ] , identifier
+  | "<<" , [ prompt_string ] , "#|" , identifier , "|"     (* legacy numeric cast *)
   ;
+
+input_typespec =
+    "##." , [ "(" , uint , "," , uint , ")" ]   (* Float; (T,D) = max total digits, max decimals *)
+  | "###" , [ "(" , uint , ")" ]                (* Int; (N) = max digit count *)
+  | '##"' , [ "(" , uint , ")" ]                (* String; (N) = max character count *)
+  | "##'"                                       (* exactly one character -> Char *)
+  ;
+
+uint = digit , { digit } ;
 
 prompt_string = string_literal | interpolated_string ;
 
@@ -350,6 +377,8 @@ try_stmt =
 
 (*
   Infinite loop: @ { body }
+  While loop:   @ cond { body }       (Bool expr, re-evaluated each iteration)
+  Times loop:   @ n { body }          (Int expr > 0, evaluated ONCE -> n executions)
   For-each: @ item : iterable { body }
   For-range: @ i : start..end { body }  or  @ i : start..end:step { body }
   Labeled: @:label { body }   (the label token is @:identifier)
@@ -362,10 +391,15 @@ loop_stmt =
   ;
 
 loop_head =
-    ( "@" | loop_label ) , [ loop_binding ]
+    ( "@" | loop_label ) , [ loop_spec ]
   ;
 
 loop_label = "@:" , identifier ;    (* lexed as a single AtColonLabel token *)
+
+loop_spec =
+    loop_binding         (* for-each / for-range:  item : iterable *)
+  | expr                 (* Bool -> while; positive Int -> times  [C02] *)
+  ;
 
 loop_binding = identifier , ":" , expr ;    (* item : iterable *)
 
@@ -699,10 +733,17 @@ collection_remove_positional =
   ;
 
 (*
-  collection_update — requires an already-indexed LHS: arr[i]$~ value
-  The  $~  token is only valid when the left-hand expression is an index expr.
+  collection_update — requires an already-indexed LHS; returns a NEW collection.  [C04]
+  The  $~  token is only valid when the left-hand expression is an index expr:
+    arr[i]$~ val           — array element (1-based, negative allowed)
+    tuple[i]$~ val         — positional/named tuple by index
+    nt["field"]$~ val      — named tuple by field-name string (v0.0.6)
+    arr[i>j>…]$~ val       — deep update through a nav path (scalar steps only;
+                             ranges (..) are not allowed in a $~ path)
 *)
-collection_update = index_expr , "$~" , expr ;
+collection_update = ( index_expr | nav_index_expr ) , "$~" , expr ;
+index_expr     = postfix_expr , "[" , expr , "]" ;
+nav_index_expr = postfix_expr , nav_index ;
 
 (*
   collection_slice — arr$[start..end]  or  arr$[start:count]
@@ -1020,8 +1061,10 @@ id_continue = letter | digit | "_" | unicode_symbol_char ;
     name°   — postfix hot  (HotIdent token):  lexed as a single token
     °name   — prefix hot   (PreHotIdent token):  also a single token
 
-  name°  is valid as an expression or assignment LHS.
-  °name  is ONLY valid as an assignment LHS (write-back anchor notation).
+  Both forms are valid as an expression (RHS) or as an assignment LHS.  [C05]
+    name°  anchors to the nearest enclosing @ scope (dies with the loop).
+    °name  anchors to the scope ABOVE the nearest @ (survives the loop) —
+           e.g.  total = °total + item  inside a loop.
 *)
 hot_identifier = identifier , "°" | "°" , identifier ;
 
@@ -1056,6 +1099,10 @@ block_comment = "/*" , { block_comment | (* any character *) } , "*/" ;
 
   INPUT
     <<          string input
+    << ##.      typed input: Float        (##.(T,D) decimal-validated)   (v0.0.7)
+    << ###      typed input: Int          (###(N) max digits)            (v0.0.7)
+    << ##"      typed input: String       (##"(N) max chars)             (v0.0.7)
+    << ##'      typed input: Char (exactly one character)                (v0.0.7)
     <<|         blocking key input
     <<|?        non-blocking key input
 
@@ -1128,9 +1175,13 @@ block_comment = "/*" , { block_comment | (* any character *) } , "*/" ;
   The following constructs appear in earlier EBNF drafts or ROADMAP but are
   NOT present in the current parser:
 
-  [NI01] Post-condition loop  ~>  (planned in ROADMAP)
+  [NI01] Post-condition loop  ~>  — DISMISSED 2026-06-12: will not be
+         implemented; the idiom is an infinite loop with a trailing break
+         ( @ { body  ? !cond { @! } } ). The  ~>  symbol remains unoccupied.
   [NI02] Match multi-value arms  pattern => (a, b)  — single value only
-  [NI03] Match binding  pattern as name  — no binding syntax in match
+         (list containment  [a, b] => v  covers the use case since v0.0.4)
+  [NI03] Match binding  pattern as name  — DISMISSED 2026-06-12: will not be
+         implemented; bind the value before the match instead.
   [NI04] Lambda $!!  as a standalone HOF  — $!! is postfix on an expr, not HOF
   [NI05] Dict / map literals  #{ key: val }  — not in current lexer or parser
   [NI06] First-class function composition  :.  — not implemented
