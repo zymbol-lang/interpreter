@@ -136,7 +136,17 @@ zymbol run --help
 - **Tree-walker**: canonical behavior, descriptive error messages, debugging
 - **VM**: production, ~1.1–1.5× faster than Python for most workloads
 
-Both modes produce **identical output** on 424/424 parity tests.
+Both modes produce **identical output** on the full parity suite
+(`bash tests/scripts/vm_compare.sh`; 505/505 as of v0.0.7).
+
+**Diagnostic tiers.** The same analyzers back every entry point, with one
+deliberate difference in coverage:
+
+| Tier | Reports |
+|------|---------|
+| `zymbol run` | Fatal errors (semantic + type) and usage warnings (unused variables, type mismatches) — then executes. Module problems surface at import time. |
+| `zymbol check` | Everything `run` reports **plus** static module analysis (E001/E002/E009, export validation) and ambiguous-lifetime warnings, without executing. |
+| LSP (editor) | Same findings as `check`, as you type. On files with parse errors the editor keeps analyzing the recovered AST (so it may show advisory warnings where `check` stops at the parse error). |
 
 ---
 

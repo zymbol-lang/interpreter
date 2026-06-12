@@ -92,6 +92,15 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
   L13: `$!!` inside lambdas propagates the error as an early return to the
   lambda's caller — identical to named functions, both engines (test:
   `tests/lambdas/error_propagate_lambda.zy`).
+- **LSP diagnostic parity with `zymbol check`** (audit over the full 521-file
+  corpus). The LSP pipeline now runs module analysis — E001 (name mismatch),
+  E002 (module not found), E009 (duplicate export) and export validation were
+  invisible in the editor — with findings deduplicated (the CLI prints each
+  twice). Ambiguous-lifetime severity raised from HINT to WARNING to match
+  `zymbol check`. Remaining intentional difference: on files with parse
+  errors the editor analyzes the recovered AST while `check` stops.
+  New audit tool: `cargo run -p zymbol-analyzer --example dump_diagnostics`.
+  Tests: `test_module_errors_in_pipeline`, `test_ambiguous_lifetime_is_warning`.
 - Workspace metadata: real repository URL, ghost crate entries removed.
 - Security: `bytes` 1.11.0 → 1.11.1 (RUSTSEC-2026-0007).
 
