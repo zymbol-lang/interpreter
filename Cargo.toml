@@ -39,10 +39,10 @@ zymbol-ast = { path = "crates/zymbol-ast" }
 zymbol-lexer = { path = "crates/zymbol-lexer" }
 zymbol-parser = { path = "crates/zymbol-parser" }
 zymbol-semantic = { path = "crates/zymbol-semantic" }
-zymbol-interpreter = { path = "crates/zymbol-interpreter" }
+zymbol-interpreter = { path = "crates/zymbol-interpreter", default-features = false }
 zymbol-bytecode = { path = "crates/zymbol-bytecode" }
-zymbol-vm = { path = "crates/zymbol-vm" }
-zymbol-compiler = { path = "crates/zymbol-compiler" }
+zymbol-vm = { path = "crates/zymbol-vm", default-features = false }
+zymbol-compiler = { path = "crates/zymbol-compiler", default-features = false }
 zymbol-intrinsics = { path = "crates/zymbol-intrinsics" }
 zymbol-standalone = { path = "crates/zymbol-standalone" }
 zymbol-analyzer = { path = "crates/zymbol-analyzer" }

@@ -8,6 +8,7 @@ use crate::modules::LoadedModule;
 use crate::Value;
 use std::collections::HashMap;
 
+#[cfg(feature = "db")]
 mod db;
 mod io;
 mod json;
@@ -69,6 +70,9 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
             import_aliases: HashMap::new(),
             loaded_modules_refs: HashMap::new(),
         }),
+        // Without the `db` feature this falls through to `None` → the standard
+        // module-not-found error (prebuilt static binaries exclude std/db).
+        #[cfg(feature = "db")]
         "std/db" => Some(LoadedModule {
             name: "std/db".to_string(),
             functions: db::register(),

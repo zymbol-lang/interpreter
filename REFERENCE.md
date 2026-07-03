@@ -254,6 +254,21 @@ adder(n) { <~ n + base }   // 'base' is not visible in the isolated fn scope
 Works for errors raised at any call depth (typed catches included). Regression test:
 `tests/bugs/bug_l16_try_scope_restore.zy` (TW == VM parity).
 
+### L17 — `std/db` not available in prebuilt Linux/macOS binaries *(by design)*
+
+`std/db` links against the system's ODBC driver manager, and the driver manager loads
+engine drivers with `dlopen` — impossible in the fully static Linux/aarch64 binaries,
+and a hard startup dependency (`libodbc.dylib`) that the macOS binaries refuse to
+impose. Those builds are compiled without the `db` cargo feature, so `<# std/db`
+reports **`module not found: std/db`**.
+
+Where `std/db` IS available:
+
+- **Windows prebuilt binaries** — ODBC is part of the OS (`odbc32.dll`).
+- **Any source build** — `cargo build --release` (the `db` feature is on by default).
+  Build-time prereq: `unixodbc-dev`; runtime prereq: `unixodbc` + the engine's ODBC
+  driver. To reproduce the prebuilt behavior use `--no-default-features`.
+
 ---
 
 ## 20b. Error Taxonomy

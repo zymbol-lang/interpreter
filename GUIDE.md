@@ -2738,6 +2738,13 @@ per-engine driver (SQLite, PostgreSQL, MySQL, MS SQL Server, …). The API is id
 across engines — only the connection string changes. SQLite and PostgreSQL are validated
 end-to-end in v0.0.7.
 
+> **Availability.** `std/db` requires linking against the system's ODBC driver manager,
+> which the prebuilt **Linux and macOS** binaries cannot do (the driver manager loads
+> engine drivers with `dlopen`, impossible in a fully static binary) — on those builds
+> `<# std/db` reports *module not found*. It **is** included in the Windows binaries
+> (ODBC ships with the OS) and in any source build (`cargo build --release`, default
+> `db` feature; needs `unixodbc-dev` at build time and `unixodbc` + a driver at runtime).
+
 ```zymbol
 <# std/db => db
 

@@ -3,15 +3,19 @@
 //! Mirrors the implementations in zymbol-interpreter/src/stdlib/, but without
 //! the interpreter dependency. Called from CallBuiltin instructions.
 
+#[cfg(feature = "db")]
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+#[cfg(feature = "db")]
 use base64::Engine as _;
+#[cfg(feature = "db")]
 use odbc_api::{
     handles::DataType, parameter::InputParameter, Connection, ConnectionOptions, Cursor,
     Environment, IntoParameter,
 };
+#[cfg(feature = "db")]
 use once_cell::sync::Lazy;
 use zymbol_bytecode::builtins as B;
 
@@ -594,9 +598,11 @@ fn net_head(args: Vec<Value>) -> Result<Value, String> {
 // and connection registry (separate from the tree-walker's); a program runs under
 // one engine at a time, so only one registry is ever used.
 
+#[cfg(feature = "db")]
 static DB_ODBC_ENV: Lazy<Result<Environment, String>> =
     Lazy::new(|| Environment::new().map_err(|e| e.to_string()));
 
+#[cfg(feature = "db")]
 fn db_env() -> Result<&'static Environment, String> {
     match &*DB_ODBC_ENV {
         Ok(e) => Ok(e),
@@ -604,23 +610,28 @@ fn db_env() -> Result<&'static Environment, String> {
     }
 }
 
+#[cfg(feature = "db")]
 struct DbConnEntry {
     conn: Connection<'static>,
     in_tx: bool,
 }
 
+#[cfg(feature = "db")]
 thread_local! {
     static VM_DB_CONNS: RefCell<HashMap<String, DbConnEntry>> = RefCell::new(HashMap::new());
 }
 
+#[cfg(feature = "db")]
 fn db_err(msg: impl Into<String>) -> Value {
     Value::Error(ZyStr::new(format!("##DB({})", msg.into())))
 }
 
+#[cfg(feature = "db")]
 fn db_odbc_err(e: odbc_api::Error) -> Value {
     db_err(e.to_string())
 }
 
+#[cfg(feature = "db")]
 fn db_with_conn<F>(name: &str, f: F) -> Value
 where
     F: FnOnce(&mut DbConnEntry) -> Value,
@@ -634,6 +645,7 @@ where
     })
 }
 
+#[cfg(feature = "db")]
 fn db_take_string(v: Option<Value>, what: &str) -> Result<String, String> {
     match v {
         Some(Value::String(s)) => Ok(s.as_str().to_string()),
@@ -641,6 +653,7 @@ fn db_take_string(v: Option<Value>, what: &str) -> Result<String, String> {
     }
 }
 
+#[cfg(feature = "db")]
 fn db_take_params(v: Option<Value>) -> Result<Vec<Value>, String> {
     match v {
         None => Ok(Vec::new()),
@@ -657,6 +670,7 @@ fn db_take_params(v: Option<Value>) -> Result<Vec<Value>, String> {
     }
 }
 
+#[cfg(feature = "db")]
 fn db_bind_params(params: Vec<Value>) -> Result<Vec<Box<dyn InputParameter>>, String> {
     let mut out: Vec<Box<dyn InputParameter>> = Vec::with_capacity(params.len());
     for p in params {
@@ -674,6 +688,7 @@ fn db_bind_params(params: Vec<Value>) -> Result<Vec<Box<dyn InputParameter>>, St
     Ok(out)
 }
 
+#[cfg(feature = "db")]
 fn db_is_binary(dt: &DataType) -> bool {
     matches!(
         dt,
@@ -681,6 +696,7 @@ fn db_is_binary(dt: &DataType) -> bool {
     )
 }
 
+#[cfg(feature = "db")]
 fn db_cell_from_text(text: String, dt: &DataType) -> Value {
     match dt {
         DataType::Integer
@@ -699,6 +715,7 @@ fn db_cell_from_text(text: String, dt: &DataType) -> Value {
     }
 }
 
+#[cfg(feature = "db")]
 fn db_rows_from_cursor(
     cursor: &mut impl Cursor,
     only_first: bool,
@@ -752,6 +769,7 @@ fn db_rows_from_cursor(
     Ok(rows)
 }
 
+#[cfg(feature = "db")]
 fn db_connect(args: Vec<Value>) -> Result<Value, String> {
     let mut it = args.into_iter();
     let name = db_take_string(it.next(), "name")?;
@@ -772,6 +790,7 @@ fn db_connect(args: Vec<Value>) -> Result<Value, String> {
     }
 }
 
+#[cfg(feature = "db")]
 fn db_disconnect(args: Vec<Value>) -> Result<Value, String> {
     let name = db_take_string(args.into_iter().next(), "name")?;
     VM_DB_CONNS.with(|c| {
@@ -780,6 +799,7 @@ fn db_disconnect(args: Vec<Value>) -> Result<Value, String> {
     Ok(Value::Unit)
 }
 
+#[cfg(feature = "db")]
 fn db_exec(args: Vec<Value>) -> Result<Value, String> {
     let mut it = args.into_iter();
     let name = db_take_string(it.next(), "name")?;
@@ -806,6 +826,7 @@ fn db_exec(args: Vec<Value>) -> Result<Value, String> {
     }))
 }
 
+#[cfg(feature = "db")]
 fn db_run_query(
     name: &str,
     sql: &str,
@@ -830,6 +851,7 @@ fn db_run_query(
     })
 }
 
+#[cfg(feature = "db")]
 fn db_query(args: Vec<Value>) -> Result<Value, String> {
     let mut it = args.into_iter();
     let name = db_take_string(it.next(), "name")?;
@@ -838,6 +860,7 @@ fn db_query(args: Vec<Value>) -> Result<Value, String> {
     Ok(db_run_query(&name, &sql, bound, false, false))
 }
 
+#[cfg(feature = "db")]
 fn db_query_one(args: Vec<Value>) -> Result<Value, String> {
     let mut it = args.into_iter();
     let name = db_take_string(it.next(), "name")?;
@@ -849,6 +872,7 @@ fn db_query_one(args: Vec<Value>) -> Result<Value, String> {
     })
 }
 
+#[cfg(feature = "db")]
 fn db_query_value(args: Vec<Value>) -> Result<Value, String> {
     let mut it = args.into_iter();
     let name = db_take_string(it.next(), "name")?;
@@ -865,6 +889,7 @@ fn db_query_value(args: Vec<Value>) -> Result<Value, String> {
     })
 }
 
+#[cfg(feature = "db")]
 fn db_tx(args: Vec<Value>) -> Result<Value, String> {
     let mut it = args.into_iter();
     let name = db_take_string(it.next(), "name")?;
@@ -917,6 +942,7 @@ fn db_tx(args: Vec<Value>) -> Result<Value, String> {
     }))
 }
 
+#[cfg(feature = "db")]
 fn db_begin(args: Vec<Value>) -> Result<Value, String> {
     let name = db_take_string(args.into_iter().next(), "name")?;
     Ok(db_with_conn(&name, |entry| {
@@ -933,6 +959,7 @@ fn db_begin(args: Vec<Value>) -> Result<Value, String> {
     }))
 }
 
+#[cfg(feature = "db")]
 fn db_commit(args: Vec<Value>) -> Result<Value, String> {
     let name = db_take_string(args.into_iter().next(), "name")?;
     Ok(db_with_conn(&name, |entry| {
@@ -946,6 +973,7 @@ fn db_commit(args: Vec<Value>) -> Result<Value, String> {
     }))
 }
 
+#[cfg(feature = "db")]
 fn db_rollback(args: Vec<Value>) -> Result<Value, String> {
     let name = db_take_string(args.into_iter().next(), "name")?;
     Ok(db_with_conn(&name, |entry| {
@@ -959,12 +987,14 @@ fn db_rollback(args: Vec<Value>) -> Result<Value, String> {
     }))
 }
 
+#[cfg(feature = "db")]
 fn db_valid_savepoint(sp: &str) -> bool {
     !sp.is_empty()
         && sp.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && sp.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+#[cfg(feature = "db")]
 fn db_savepoint_op(args: Vec<Value>, verb: &str) -> Result<Value, String> {
     let mut it = args.into_iter();
     let name = db_take_string(it.next(), "name")?;
@@ -981,6 +1011,7 @@ fn db_savepoint_op(args: Vec<Value>, verb: &str) -> Result<Value, String> {
     }))
 }
 
+#[cfg(feature = "db")]
 fn db_exec_script(args: Vec<Value>) -> Result<Value, String> {
     let mut it = args.into_iter();
     let name = db_take_string(it.next(), "name")?;
@@ -1010,6 +1041,7 @@ fn db_exec_script(args: Vec<Value>) -> Result<Value, String> {
     }))
 }
 
+#[cfg(feature = "db")]
 fn db_table_exists(args: Vec<Value>) -> Result<Value, String> {
     let mut it = args.into_iter();
     let name = db_take_string(it.next(), "name")?;
@@ -1069,6 +1101,14 @@ pub fn call(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
         B::NET_POST      => net_post(args),
         B::NET_POST_JSON => net_post_json(args),
         B::NET_HEAD      => net_head(args),
+        id if (B::DB_CONNECT..=B::DB_TABLE_EXISTS).contains(&id) => db_dispatch(id, args),
+        other => Err(format!("unknown builtin id {}", other)),
+    }
+}
+
+#[cfg(feature = "db")]
+fn db_dispatch(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
+    match builtin_id {
         B::DB_CONNECT      => db_connect(args),
         B::DB_DISCONNECT   => db_disconnect(args),
         B::DB_EXEC         => db_exec(args),
@@ -1084,6 +1124,13 @@ pub fn call(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
         B::DB_ROLLBACK_TO  => db_savepoint_op(args, "ROLLBACK TO"),
         B::DB_EXEC_SCRIPT  => db_exec_script(args),
         B::DB_TABLE_EXISTS => db_table_exists(args),
-        other => Err(format!("unknown builtin id {}", other)),
+        other => Err(format!("unknown db builtin id {}", other)),
     }
+}
+
+// Only reachable from bytecode produced by a `db`-enabled compiler (the no-db
+// compiler rejects `<# std/db` with module-not-found before emitting these ids).
+#[cfg(not(feature = "db"))]
+fn db_dispatch(_builtin_id: u16, _args: Vec<Value>) -> Result<Value, String> {
+    Err("std/db is not available in this build (compiled without ODBC support)".into())
 }

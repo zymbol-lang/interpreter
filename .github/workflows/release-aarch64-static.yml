@@ -30,7 +30,9 @@ jobs:
         run: cargo install cross --locked
 
       - name: Build static binary
-        run: cross build --release --target aarch64-unknown-linux-musl
+        # --no-default-features: static binaries exclude std/db (ODBC driver
+        # manager needs dlopen, impossible in a fully static musl binary).
+        run: cross build --release --no-default-features --target aarch64-unknown-linux-musl
 
       - name: Prepare asset
         run: |

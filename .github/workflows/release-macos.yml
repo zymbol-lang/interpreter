@@ -36,7 +36,9 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        # --no-default-features: prebuilt macOS binaries exclude std/db — linking
+        # ODBC would make libodbc.dylib (brew unixodbc) a hard startup requirement.
+        run: cargo build --release --no-default-features --target ${{ matrix.target }}
 
       - name: Prepare asset
         run: |

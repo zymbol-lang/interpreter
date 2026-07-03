@@ -138,6 +138,7 @@ impl ErrorValue {
     }
 
     /// Create a DB (database / ODBC) error
+    #[cfg(feature = "db")]
     pub fn db(message: impl Into<String>) -> Self {
         Self::new("DB", message)
     }
