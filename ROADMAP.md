@@ -1,6 +1,6 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **v0.0.7 (released 2026-06-12)** — all planned features shipped.
+> Current status: **v0.0.7 (released 2026-07-02)** — all planned features shipped.
 > Highlights: native stdlib expansion (`std/json`, `std/io`, `std/net`, `std/db` via
 > ODBC), typed/validated input (`<< ##.(5,2) "p" var`), fail-closed formatter,
 > `DeepSet` VM parity for every `$~` form, the L14/L16 error-handling fixes,
