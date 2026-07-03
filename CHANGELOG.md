@@ -11,6 +11,30 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ### Added
 
+**Native stdlib expansion — `std/json`, `std/io`, `std/net`**
+- `std/json`: `decode(text)` / `encode(value)` — JSON object ↔ `NamedTuple`
+  (key order preserved), array ↔ `Array`, `null` ↔ `Unit`. Soft `##Parse(...)`
+  on malformed data.
+- `std/json::decode_map(text, map)` — decodes **and** recursively renames
+  object keys per a `NamedTuple` map (field name = source key, String value =
+  new name), enabling **data-level i18n**: JSON keys from external APIs can be
+  read in the consumer's language. Keys absent from the map are kept verbatim;
+  an empty `()` map behaves like `decode`. Full VM parity (builtin id 202).
+  Test: `tests/stdlib/stdlib_json_decode_map.zy`.
+- `std/io`: `read`, `write`, `append`, `exists`, `delete`, `list`, `mkdir` —
+  soft `##IO(...)` on filesystem failure.
+- `std/net`: `get`, `post`, `post_json`, `head` (blocking HTTP, rustls TLS) —
+  soft `##Network(...)` on failure. `get`/`post`/`post_json` accept an optional
+  trailing `headers` argument: an array of `(name, value)` tuples.
+- All modules ship with full VM parity and Spanish i18n adapters; wrong
+  argument types are hard errors (see the REFERENCE.md error taxonomy).
+- Example projects under `examples/`: `api_demo/` (public REST APIs) and
+  `zethy_cli/` (AI assistant over `std/net` + `std/json` + `std/io`).
+
+**Static undefined-function detection at `check` time**
+- A bare-identifier call that is neither a known function, a variable, nor a
+  module alias is now a semantic error instead of failing at runtime.
+
 **`std/db` — vendor-neutral database access via ODBC**
 - `connect/disconnect`, `exec`, `query/query_one/query_value`, `tx`,
   `begin/commit/rollback`, savepoints, `exec_script`, `table_exists`;

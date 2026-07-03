@@ -3887,8 +3887,9 @@ fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16)>> 
             ("peso_f64", B::RAND_PESO_F64),
         ]),
         "std/json" => Some(vec![
-            ("decode", B::JSON_DECODE),
-            ("encode", B::JSON_ENCODE),
+            ("decode",     B::JSON_DECODE),
+            ("decode_map", B::JSON_DECODE_MAP),
+            ("encode",     B::JSON_ENCODE),
         ]),
         "std/io" => Some(vec![
             ("read",   B::IO_READ),

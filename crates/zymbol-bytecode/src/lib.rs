@@ -383,8 +383,9 @@ pub mod builtins {
     pub const RAND_RANGO:    u16 = 101;
     pub const RAND_PESO_F64: u16 = 102;
     // std/json functions
-    pub const JSON_DECODE:   u16 = 200;
-    pub const JSON_ENCODE:   u16 = 201;
+    pub const JSON_DECODE:     u16 = 200;
+    pub const JSON_ENCODE:     u16 = 201;
+    pub const JSON_DECODE_MAP: u16 = 202;
     // std/io functions
     pub const IO_READ:       u16 = 300;
     pub const IO_WRITE:      u16 = 301;

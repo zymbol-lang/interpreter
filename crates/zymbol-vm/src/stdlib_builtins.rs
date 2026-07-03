@@ -317,6 +317,67 @@ fn json_decode(args: Vec<Value>) -> Result<Value, String> {
     }
 }
 
+/// Build a source→target key-rename table from a NamedTuple map argument.
+fn build_rename_map(map: Value) -> Result<HashMap<String, String>, String> {
+    match map {
+        // An empty `()` (Unit) means "no renames" — decode_map behaves like decode.
+        Value::Unit => Ok(HashMap::new()),
+        Value::NamedTuple(pairs) => {
+            let mut table = HashMap::with_capacity(pairs.len());
+            for (src, dst) in pairs.iter() {
+                match dst {
+                    Value::String(name) => {
+                        table.insert(src.clone(), name.as_str().to_string());
+                    }
+                    _ => {
+                        return Err(format!(
+                            "json::decode_map: map value for '{}' must be a String (the new name)",
+                            src
+                        ))
+                    }
+                }
+            }
+            Ok(table)
+        }
+        _ => Err("json::decode_map: expected a NamedTuple map as the second argument".into()),
+    }
+}
+
+/// Recursively rename NamedTuple field names according to `table`, at any depth.
+fn rekey(value: Value, table: &HashMap<String, String>) -> Value {
+    match value {
+        Value::NamedTuple(pairs) => Value::NamedTuple(Rc::new(
+            pairs
+                .iter()
+                .map(|(k, v)| {
+                    let new_key = table.get(k).cloned().unwrap_or_else(|| k.clone());
+                    (new_key, rekey(v.clone(), table))
+                })
+                .collect(),
+        )),
+        Value::Array(items) => {
+            Value::Array(Rc::new(items.iter().map(|v| rekey(v.clone(), table)).collect()))
+        }
+        Value::Tuple(items) => {
+            Value::Tuple(Rc::new(items.iter().map(|v| rekey(v.clone(), table)).collect()))
+        }
+        other => other,
+    }
+}
+
+fn json_decode_map(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    let text = match it.next() {
+        Some(Value::String(text)) => text,
+        _ => return Err("json::decode_map: expected String as the first argument".into()),
+    };
+    let table = build_rename_map(it.next().unwrap_or(Value::Unit))?;
+    match serde_json::from_str::<serde_json::Value>(text.as_str()) {
+        Ok(v) => Ok(rekey(json_to_value(v), &table)),
+        Err(e) => Ok(Value::Error(ZyStr::new(format!("##Parse({})", e)))),
+    }
+}
+
 fn json_encode(args: Vec<Value>) -> Result<Value, String> {
     // Arity is validated by the compiler/dispatcher; one argument is guaranteed.
     let value = args.first().cloned().unwrap_or(Value::Unit);
@@ -995,6 +1056,7 @@ pub fn call(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
         B::RAND_RANGO    => rand_rango(args),
         B::RAND_PESO_F64 => rand_peso_f64(args),
         B::JSON_DECODE   => json_decode(args),
+        B::JSON_DECODE_MAP => json_decode_map(args),
         B::JSON_ENCODE   => json_encode(args),
         B::IO_READ       => io_read(args),
         B::IO_WRITE      => io_write(args),

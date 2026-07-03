@@ -20,7 +20,7 @@ same pattern in both execution engines.
 |------------|------------------------------------------------------|----|----|-------|
 | `std/math` | sqrt, exp, ln, log, pow, sin, cos, tan, …, round     | ✅ | ✅ | + constants `PI`, `E` |
 | `std/random` | entero, rango, peso_f64                            | ✅ | ✅ | |
-| `std/json` | `decode`, `encode`                                   | ✅ | ✅ | v0.0.7 |
+| `std/json` | `decode`, `decode_map`, `encode`                     | ✅ | ✅ | v0.0.7 — decode_map: recursive key rename (data i18n) |
 | `std/io`   | read, write, append, exists, delete, list, mkdir     | ✅ | ✅ | v0.0.7 |
 | `std/net`  | get, post, post_json, head                           | ✅ | ✅ | v0.0.7 |
 | `std/env`  | —                                                    | ❌ | ❌ | dropped — redundant (see below) |

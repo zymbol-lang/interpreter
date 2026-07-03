@@ -5,7 +5,7 @@
 > ODBC), typed/validated input (`<< ##.(5,2) "p" var`), fail-closed formatter,
 > `DeepSet` VM parity for every `$~` form, the L14/L16 error-handling fixes,
 > LSP↔check diagnostic parity, and Rust edition 2024 (see `IMPL_V007.md`).
-> Validation: 505/505 VM-parity tests PASS (0 SKIP), 833 unit tests.
+> Validation: 507/507 VM-parity tests PASS (0 SKIP), 833 unit tests.
 
 ---
 

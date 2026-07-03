@@ -137,7 +137,7 @@ zymbol run --help
 - **VM**: production, ~1.1–1.5× faster than Python for most workloads
 
 Both modes produce **identical output** on the full parity suite
-(`bash tests/scripts/vm_compare.sh`; 505/505 as of v0.0.7).
+(`bash tests/scripts/vm_compare.sh`; 507/507 as of v0.0.7).
 
 **Diagnostic tiers.** The same analyzers back every entry point, with one
 deliberate difference in coverage:
@@ -2688,7 +2688,7 @@ the i18n pattern with no special handling:
 |--------|-----------|-------|
 | `std/math` | `sqrt` `exp` `ln` `log` `pow` `abs` `ceil` `floor` `round` `min` `max` `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `sinh` `cosh` `tanh` `sigmoid` · constants `PI`, `E` | v0.0.6 |
 | `std/random` | `entero` `rango` `peso_f64` | v0.0.6 |
-| `std/json` | `decode(text)` `encode(value)` | v0.0.7 |
+| `std/json` | `decode(text)` `decode_map(text, map)` `encode(value)` | v0.0.7 |
 | `std/io` | `read` `write` `append` `exists` `delete` `list` `mkdir` | v0.0.7 |
 | `std/net` | `get` `post` `post_json` `head` | v0.0.7 |
 | `std/db` | `connect` `disconnect` `exec` `query` `query_one` `query_value` `tx` `begin` `commit` `rollback` `savepoint` `release` `rollback_to` `exec_script` `table_exists` | v0.0.7 |
@@ -2714,6 +2714,22 @@ APIs. JSON object ↔ `NamedTuple` (key order preserved), JSON array ↔ `Array`
 
 > When writing JSON **literals** in source, escape `{` as `\{` (an unescaped `{` starts string
 > interpolation). JSON read from a file or the network needs no escaping.
+
+**Data-level i18n with `decode_map`.** The re-export pattern translates *function names*, but
+the **keys** of decoded JSON come from the external API and stay in its language
+(`数据.candidates[1].content.parts[1].text`). `decode_map(text, map)` decodes **and** renames
+object keys recursively, at any depth, so the resulting structure reads in the consumer's
+language. The map is a `NamedTuple` whose field names are the source keys and whose String
+values are the new names; keys absent from the map are kept verbatim, and an empty `()` map
+makes `decode_map` behave like `decode`.
+
+```zymbol
+<# std/json => json
+
+datos = json::decode_map(respuesta,
+    (candidates: "候选", content: "内容", parts: "片段", text: "文本"))
+>> datos.候选[1].内容.片段[1].文本 ¶   // no English API key leaks into the logic
+```
 
 #### `std/db` — vendor-neutral database access (ODBC)
 

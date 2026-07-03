@@ -346,7 +346,7 @@ Runtime errors carry a **kind** (e.g., `##Index`, `##Div`, `##Type`) and a **mes
 
 | Kind | Returned by |
 |------|-------------|
-| `##Parse(...)` | `json::decode` / `json::encode` on malformed data |
+| `##Parse(...)` | `json::decode` / `json::decode_map` / `json::encode` on malformed data |
 | `##IO(...)` | `std/io` functions on filesystem failure |
 | `##Network(...)` | `std/net` functions on HTTP/connection failure |
 | `##DB(...)` | `std/db` functions on SQL/ODBC failure |

@@ -1,0 +1,3 @@
+// Test: std/json type error includes function name in message
+<# std/json => json
+json::decode_map("\{\"a\": 1\}", (a: 5))
