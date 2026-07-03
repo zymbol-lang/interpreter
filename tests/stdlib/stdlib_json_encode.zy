@@ -1,0 +1,12 @@
+// Test: std/json encode — scalars, collections, named tuple, roundtrip
+<# std/json => json
+
+>> json::encode(42) ¶
+>> json::encode(3.5) ¶
+>> json::encode("hi") ¶
+>> json::encode(#1) ¶
+>> json::encode([1, 2, 3]) ¶
+>> json::encode((nombre: "ada", edad: 36)) ¶
+
+// roundtrip: decode then re-encode preserves structure and key order
+>> json::encode(json::decode("\{\"a\": 1, \"b\": [2, 3]\}")) ¶

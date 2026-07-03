@@ -247,7 +247,7 @@ impl<W: Write> Interpreter<W> {
     /// Evaluate collection update operator: collection[index]$~ value
     pub(crate) fn eval_collection_update(&mut self, op: &CollectionUpdateExpr) -> Result<Value> {
         // Deep update path: arr[i>j>k]$~ val
-        if let Expr::DeepIndex(di) = &*op.target {
+        if let Expr::DeepIndex(di) = op.target.unwrap_group() {
             // Evaluate all step indices (ranges not supported for update)
             let mut indices: Vec<i64> = Vec::with_capacity(di.path.steps.len());
             for step in &di.path.steps {
@@ -271,7 +271,7 @@ impl<W: Write> Interpreter<W> {
         }
 
         // Single-level update path: arr[i]$~ val or tuple["campo"]$~ val
-        let index_expr = match &*op.target {
+        let index_expr = match op.target.unwrap_group() {
             Expr::Index(idx) => idx,
             _ => {
                 return Err(RuntimeError::Generic {

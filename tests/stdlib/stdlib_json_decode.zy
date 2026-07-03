@@ -1,0 +1,24 @@
+// Test: std/json decode — object to NamedTuple, arrays, scalar types
+<# std/json => json
+
+obj = json::decode("\{\"name\": \"ada\", \"age\": 36, \"score\": 9.5, \"active\": true\}")
+>> obj.name ¶
+>> obj.age ¶
+>> obj.score ¶
+>> obj.active ¶
+
+// nested array field + 1-based indexing
+data = json::decode("\{\"langs\": [\"rust\", \"zy\"]\}")
+>> data.langs ¶
+>> data.langs[1] ¶
+
+// top-level array of scalars
+arr = json::decode("[10, 20, 30]")
+>> arr ¶
+>> arr[2] ¶
+
+// null roundtrip (printed via encode to keep TW/VM display identical)
+>> json::encode(json::decode("[1, null, 3]")) ¶
+
+// malformed JSON -> soft Error value (catchable, not a hard abort)
+>> json::decode("\{bad") ¶

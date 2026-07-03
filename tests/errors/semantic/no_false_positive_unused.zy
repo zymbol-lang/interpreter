@@ -1,0 +1,23 @@
+// Regression test for former limitation L9 (REFERENCE.md): the analyzer used
+// to emit false-positive "unused variable" warnings for variables that ARE
+// used — only inside string interpolation, or only inside a BashExec command.
+// `zymbol check` on this file must stay clean: any warning is a regression.
+
+// Used only in string interpolation
+nombre = "Ana"
+>> "hola {nombre}" ¶
+
+// Used only in interpolation inside an assignment
+ciudad = "Lima"
+msg = "bienvenida a {ciudad}"
+>> msg ¶
+
+// Used only inside a BashExec command string interpolation
+dir = "/tmp"
+listado = <\ "ls {dir} | head -1" \>
+>> listado ¶
+
+// Used only as a juxtaposed BashExec item
+archivo = "/etc/hostname"
+contenido = <\ "cat " archivo \>
+>> contenido ¶

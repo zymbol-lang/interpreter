@@ -229,7 +229,7 @@ impl Parser {
         let start_span = target.span();
 
         // Target must be an IndexExpr (arr[i]) or DeepIndexExpr (arr[i>j>k])
-        if !matches!(target, Expr::Index(_) | Expr::DeepIndex(_)) {
+        if !matches!(target.unwrap_group(), Expr::Index(_) | Expr::DeepIndex(_)) {
             return Err(Diagnostic::error("collection update ($~) requires indexed expression")
                 .with_span(start_span)
                 .with_help("use: arr[i]$~ value  or  arr[i>j]$~ value"));

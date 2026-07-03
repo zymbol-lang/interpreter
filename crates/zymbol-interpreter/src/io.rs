@@ -51,66 +51,88 @@ impl<W: Write> Interpreter<W> {
 
     /// Execute input statement: << variable (with optional prompt)
     pub(crate) fn execute_input(&mut self, input: &Input) -> Result<()> {
-        // Display prompt through the interpreter's writer (handles raw mode via RawModeWriter)
-        if let Some(prompt) = &input.prompt {
-            let prompt_text = match prompt {
-                InputPrompt::Simple(s) => s.clone(),
-                InputPrompt::Interpolated(parts) => {
-                    let mut result = String::new();
-                    for part in parts {
-                        match part {
-                            StringPart::Text(text) => result.push_str(text),
-                            StringPart::Variable(var_name) => {
-                                if let Some(value) = self.get_variable(var_name) {
-                                    result.push_str(&value.to_display_string());
-                                } else {
-                                    return Err(RuntimeError::Generic {
-                                        message: format!(
-                                            "undefined variable in input prompt: '{}'",
-                                            var_name
-                                        ),
-                                        span: input.span,
-                                    });
-                                }
+        // Build the prompt text once; it is re-printed on every (re-)prompt.
+        let prompt_text = match &input.prompt {
+            None => String::new(),
+            Some(InputPrompt::Simple(s)) => s.clone(),
+            Some(InputPrompt::Interpolated(parts)) => {
+                let mut result = String::new();
+                for part in parts {
+                    match part {
+                        StringPart::Text(text) => result.push_str(text),
+                        StringPart::Variable(var_name) => {
+                            if let Some(value) = self.get_variable(var_name) {
+                                result.push_str(&value.to_display_string());
+                            } else {
+                                return Err(RuntimeError::Generic {
+                                    message: format!(
+                                        "undefined variable in input prompt: '{}'",
+                                        var_name
+                                    ),
+                                    span: input.span,
+                                });
                             }
                         }
                     }
-                    result
                 }
-            };
-            write!(self.output, "{}", prompt_text)?;
-            self.output.flush()?;
-        }
+                result
+            }
+        };
 
-        // Delegate reading to the injected input function.
-        // Inside a TUI block (raw mode active), temporarily disable raw mode and show the
-        // cursor so the user can type with echo and press Enter normally, then restore after.
-        if self.tui_depth > 0 {
-            crossterm::terminal::disable_raw_mode().map_err(|e| RuntimeError::Generic {
-                message: format!("input: failed to disable raw mode: {}", e),
-                span: input.span,
-            })?;
-            crossterm::execute!(std::io::stdout(), crossterm::cursor::Show).ok();
-        }
-        let line_result = (self.input_fn)();
-        if self.tui_depth > 0 {
-            crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide).ok();
-            crossterm::terminal::enable_raw_mode().map_err(|e| RuntimeError::Generic {
-                message: format!("input: failed to restore raw mode: {}", e),
-                span: input.span,
-            })?;
-        }
-        let line = line_result.map_err(|e| RuntimeError::Generic {
+        // Read / validate / re-prompt loop. The raw (untrimmed) line is empty *only*
+        // at EOF (a blank line the user typed comes back as "\n"); EOF aborts so a
+        // failed constraint cannot spin forever on a closed pipe.
+        loop {
+            if input.prompt.is_some() {
+                write!(self.output, "{}", prompt_text)?;
+                self.output.flush()?;
+            }
+
+            // Inside a TUI block (raw mode active), temporarily disable raw mode and show
+            // the cursor so the user can type with echo and press Enter, then restore.
+            if self.tui_depth > 0 {
+                crossterm::terminal::disable_raw_mode().map_err(|e| RuntimeError::Generic {
+                    message: format!("input: failed to disable raw mode: {}", e),
+                    span: input.span,
+                })?;
+                crossterm::execute!(std::io::stdout(), crossterm::cursor::Show).ok();
+            }
+            let line_result = (self.input_fn)();
+            if self.tui_depth > 0 {
+                crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide).ok();
+                crossterm::terminal::enable_raw_mode().map_err(|e| RuntimeError::Generic {
+                    message: format!("input: failed to restore raw mode: {}", e),
+                    span: input.span,
+                })?;
+            }
+            let line = line_result.map_err(|e| RuntimeError::Generic {
                 message: format!("input read error: {}", e),
                 span: input.span,
             })?;
 
-        let value = match input.cast {
-            InputCast::String  => Value::String(line.trim().to_string()),
-            InputCast::Numeric => parse_numeric_string(line.trim().to_string()),
-        };
-        self.set_variable(&input.variable, value);
-        Ok(())
+            // EOF: no constraint can be satisfied from here, abort instead of looping.
+            if line.is_empty() {
+                return Err(RuntimeError::Generic {
+                    message: format!(
+                        "end of input while waiting for {}",
+                        describe_input_cast(&input.cast)
+                    ),
+                    span: input.span,
+                });
+            }
+
+            match validate_input(line.trim(), &input.cast) {
+                Ok(value) => {
+                    self.set_variable(&input.variable, value);
+                    return Ok(());
+                }
+                Err(hint) => {
+                    // Re-prompt: show what was expected, then loop and ask again.
+                    writeln!(self.output, "  ({})", hint)?;
+                    self.output.flush()?;
+                }
+            }
+        }
     }
 
     /// Clear screen: >>!
@@ -275,6 +297,89 @@ fn map_key_code(code: crossterm::event::KeyCode) -> char {
     }
 }
 
+
+/// Human-readable description of what an input cast expects (used in re-prompt hints
+/// and the EOF error). Kept in sync with the VM's equivalent message in `stdlib`/`lib`.
+fn describe_input_cast(cast: &InputCast) -> String {
+    match cast {
+        InputCast::String | InputCast::Text { max: None } => "text".to_string(),
+        InputCast::Numeric | InputCast::Float => "a number".to_string(),
+        InputCast::Decimal { total, decimals } => format!(
+            "a number with up to {} digits and {} decimals", total, decimals
+        ),
+        InputCast::Int { max_digits: Some(n) } => format!("an integer of up to {} digits", n),
+        InputCast::Int { max_digits: None } => "an integer".to_string(),
+        InputCast::Text { max: Some(n) } => format!("text of up to {} characters", n),
+        InputCast::Char => "a single character".to_string(),
+    }
+}
+
+/// Validate a trimmed input line against a cast, producing the typed value or an
+/// `Err(hint)` describing what was expected (the caller re-prompts on `Err`).
+fn validate_input(s: &str, cast: &InputCast) -> std::result::Result<Value, String> {
+    match cast {
+        InputCast::String => Ok(Value::String(s.to_string())),
+        InputCast::Numeric => Ok(parse_numeric_string(s.to_string())),
+        InputCast::Float => s.parse::<f64>().map(Value::Float).map_err(|_| describe_input_cast(cast)),
+        InputCast::Decimal { total, decimals } => validate_decimal(s, *total, *decimals)
+            .map(Value::Float)
+            .ok_or_else(|| describe_input_cast(cast)),
+        InputCast::Int { max_digits } => validate_int(s, *max_digits)
+            .map(Value::Int)
+            .ok_or_else(|| describe_input_cast(cast)),
+        InputCast::Text { max } => {
+            let too_long = matches!(max, Some(n) if s.chars().count() > *n as usize);
+            if too_long { Err(describe_input_cast(cast)) } else { Ok(Value::String(s.to_string())) }
+        }
+        InputCast::Char => {
+            let mut it = s.chars();
+            match (it.next(), it.next()) {
+                (Some(c), None) => Ok(Value::Char(c)),
+                _ => Err(describe_input_cast(cast)),
+            }
+        }
+    }
+}
+
+/// Parse `s` as an integer with at most `max_digits` digits (ignoring an optional
+/// leading sign). Returns `None` if it is not an integer or exceeds the digit budget.
+fn validate_int(s: &str, max_digits: Option<u32>) -> Option<i64> {
+    let n: i64 = s.parse().ok()?;
+    if let Some(maxd) = max_digits {
+        let digits = s.chars().filter(|c| c.is_ascii_digit()).count();
+        if digits > maxd as usize {
+            return None;
+        }
+    }
+    Some(n)
+}
+
+/// Parse `s` as a fixed-format decimal: an optional sign, digits, at most one `.`,
+/// at most `decimals` fractional digits and at most `total` digits overall. Rejects
+/// scientific notation. Returns the value as `f64`, or `None` if any rule is broken.
+fn validate_decimal(s: &str, total: u32, decimals: u32) -> Option<f64> {
+    let value: f64 = s.parse().ok()?;
+    let body = s.strip_prefix(['+', '-']).unwrap_or(s);
+    let mut int_digits = 0u32;
+    let mut frac_digits = 0u32;
+    let mut seen_dot = false;
+    for c in body.chars() {
+        if c == '.' {
+            if seen_dot {
+                return None;
+            }
+            seen_dot = true;
+        } else if c.is_ascii_digit() {
+            if seen_dot { frac_digits += 1; } else { int_digits += 1; }
+        } else {
+            return None;
+        }
+    }
+    if frac_digits > decimals || int_digits + frac_digits > total {
+        return None;
+    }
+    Some(value)
+}
 
 #[cfg(test)]
 mod tests {

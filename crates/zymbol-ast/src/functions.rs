@@ -14,6 +14,11 @@ use crate::{Block, Expr};
 pub struct LambdaExpr {
     pub params: Vec<String>,  // Parameter names
     pub body: LambdaBody,      // Expression or block
+    /// `true` when the params were written with their own parens:
+    /// `(a, b) -> e` / `(x) -> e`. `false` for `x -> e` and for the bare
+    /// param list inside a grouped lambda `(a, b -> e)`. The formatter uses
+    /// this to reprint the exact form the user wrote.
+    pub params_parenthesized: bool,
     pub span: Span,
 }
 

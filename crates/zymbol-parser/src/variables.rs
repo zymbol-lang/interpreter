@@ -7,7 +7,7 @@
 //! - Increment/decrement: ++, --
 //! - Lifetime end: \variable (explicit destruction)
 
-use zymbol_ast::{Assignment, BinaryExpr, CollectionUpdateExpr, ConstDecl, DestructureAssign, DestructureItem, DestructurePattern, ErrorPropagateExpr, Expr, ExprStatement, IdentifierExpr, IndexExpr, LifetimeEnd, LiteralExpr, Statement};
+use zymbol_ast::{Assignment, AssignSugar, BinaryExpr, CollectionUpdateExpr, ConstDecl, DestructureAssign, DestructureItem, DestructurePattern, ErrorPropagateExpr, Expr, ExprStatement, IdentifierExpr, IndexExpr, LifetimeEnd, LiteralExpr, Statement};
 use zymbol_common::{BinaryOp, Literal};
 use zymbol_error::Diagnostic;
 use zymbol_lexer::TokenKind;
@@ -91,7 +91,7 @@ impl Parser {
                 span,
             ));
 
-            return Ok(Statement::Assignment(Assignment { name, value: update_expr, span, hot, pre_hot }));
+            return Ok(Statement::Assignment(Assignment { name, value: update_expr, span, hot, pre_hot, sugar: compound_op.map(AssignSugar::IndexedCompound).unwrap_or(AssignSugar::IndexedAssign) }));
         }
 
         let assign_token = self.peek();
@@ -126,7 +126,12 @@ impl Parser {
             ));
 
             let span = ident_token.span.to(&op_token.span);
-            return Ok(Statement::Assignment(Assignment { name, value: binary_expr, span, hot, pre_hot }));
+            let sugar = if matches!(op_token.kind, TokenKind::PlusPlus) {
+                AssignSugar::Increment
+            } else {
+                AssignSugar::Decrement
+            };
+            return Ok(Statement::Assignment(Assignment { name, value: binary_expr, span, hot, pre_hot, sugar }));
         }
 
         // Check for compound assignment (+=, -=, *=, /=, %=, ^=)
@@ -160,7 +165,14 @@ impl Parser {
             ));
 
             let span = ident_token.span.to(&binary_expr.span());
-            Ok(Statement::Assignment(Assignment { name, value: binary_expr, span, hot, pre_hot }))
+            Ok(Statement::Assignment(Assignment {
+                name,
+                value: binary_expr,
+                span,
+                hot,
+                pre_hot,
+                sugar: AssignSugar::Compound(op),
+            }))
         } else {
             // Regular assignment: name = expr [expr ...]
             // Juxtaposition concatenation: s = "hello" ' ' name " world"
@@ -168,7 +180,7 @@ impl Parser {
             let first = self.parse_expr()?;
             let value = self.parse_juxtapose_chain(first)?;
             let span = ident_token.span.to(&value.span());
-            Ok(Statement::Assignment(Assignment { name, value, span, hot, pre_hot }))
+            Ok(Statement::Assignment(Assignment { name, value, span, hot, pre_hot, sugar: AssignSugar::None }))
         }
     }
 
@@ -209,7 +221,7 @@ impl Parser {
             let same_line = next_tok.span.start.line == acc.span().end.line;
             let can_juxt = Self::can_juxtapose(&next_tok.kind)
                 || (matches!(next_tok.kind, TokenKind::LParen)
-                    && matches!(acc, Expr::Literal(_) | Expr::Binary(_)));
+                    && matches!(acc.unwrap_group(), Expr::Literal(_) | Expr::Binary(_)));
             if same_line && can_juxt {
                 let next_expr = self.parse_expr()?;
                 let span = acc.span().to(&next_expr.span());

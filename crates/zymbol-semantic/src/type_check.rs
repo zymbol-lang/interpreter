@@ -403,12 +403,12 @@ impl TypeChecker {
     fn rhs_has_pre_hot_self_ref(expr: &Expr, name: &str) -> bool {
         match expr {
             Expr::CollectionAppend(op) => {
-                if let Expr::Identifier(id) = op.collection.as_ref() {
+                if let Expr::Identifier(id) = op.collection.unwrap_group() {
                     id.pre_hot && id.name == name
                 } else { false }
             }
             Expr::Binary(bin) => {
-                if let Expr::Identifier(id) = bin.left.as_ref() {
+                if let Expr::Identifier(id) = bin.left.unwrap_group() {
                     id.pre_hot && id.name == name
                 } else { false }
             }
@@ -425,7 +425,7 @@ impl TypeChecker {
                     self.env.define_var(&assign.name, ZymbolType::Any);
                     // Warn for operators that remain vacuous even with their correct neutral
                     if let Expr::Binary(bin) = &assign.value {
-                        if let Expr::Identifier(lhs) = bin.left.as_ref() {
+                        if let Expr::Identifier(lhs) = bin.left.unwrap_group() {
                             if lhs.name == assign.name && bin.op == BinaryOp::Pow {
                                 self.warnings.push(
                                     Diagnostic::warning(format!(
@@ -739,6 +739,16 @@ impl TypeChecker {
                     }
                 };
                 for name in names {
+                    // Destructuring into a `:=` constant is an ERROR (former
+                    // limitation L14: it used to silently overwrite the constant).
+                    if self.env.is_constant(&name) {
+                        self.errors.push(
+                            Diagnostic::error(format!("cannot reassign constant '{}'", name))
+                                .with_span(d.span)
+                                .with_help("constants declared with ':=' cannot be modified — use a different name in the destructuring pattern")
+                        );
+                        continue;
+                    }
                     self.env.define_var(&name, ZymbolType::Any);
                 }
             }
@@ -980,7 +990,7 @@ impl TypeChecker {
             }
             Expr::FunctionCall(call) => {
                 // Get the expected parameter types from the function
-                if let Expr::Identifier(ident) = &*call.callable {
+                if let Expr::Identifier(ident) = call.callable.unwrap_group() {
                     if let Some((expected_params, _)) = self.env.lookup_function(&ident.name).cloned() {
                         for (i, arg) in call.arguments.iter().enumerate() {
                             if let Some(expected_type) = expected_params.get(i) {
@@ -1307,6 +1317,9 @@ impl TypeChecker {
     /// Infer the type of an expression
     fn infer_expr(&mut self, expr: &Expr) -> ZymbolType {
         match expr {
+            // Grouping parens are transparent
+            Expr::Group(group) => self.infer_expr(&group.expr),
+
             Expr::Literal(lit) => match &lit.value {
                 Literal::Int(_) => ZymbolType::Int,
                 Literal::Float(_) => ZymbolType::Float,
@@ -1515,7 +1528,7 @@ impl TypeChecker {
                     ZymbolType::String => ZymbolType::Char,
                     ZymbolType::Tuple(types) => {
                         // Try to get index as literal for static validation (indices are 1-based)
-                        if let Expr::Literal(lit) = &*index.index {
+                        if let Expr::Literal(lit) = index.index.unwrap_group() {
                             if let Literal::Int(i) = &lit.value {
                                 if *i > 0 {
                                     let idx = (*i as usize) - 1; // convert 1-based to 0-based
@@ -1565,7 +1578,7 @@ impl TypeChecker {
                     .collect();
 
                 // Try to get function signature
-                if let Expr::Identifier(ident) = &*call.callable {
+                if let Expr::Identifier(ident) = call.callable.unwrap_group() {
                     if let Some((param_types, ret_type)) = self.env.lookup_function(&ident.name).cloned() {
                         // Validate argument count
                         if arg_types.len() != param_types.len() {
@@ -1596,6 +1609,22 @@ impl TypeChecker {
                             }
                         }
                         return ret_type;
+                    }
+
+                    // Callable is a bare identifier that is not a known function.
+                    // It is only valid if it names a variable holding a lambda, a
+                    // module alias, or a hot identifier; otherwise the function
+                    // does not exist (e.g. calling `cos(x)` without `math::cos`).
+                    if self.env.lookup_var(&ident.name).is_none()
+                        && !self.module_aliases.contains(&ident.name)
+                        && !ident.hot
+                    {
+                        self.errors.push(
+                            Diagnostic::error(format!("undefined function: '{}'", ident.name))
+                                .with_span(call.span)
+                                .with_help("functions must be defined before use, or imported with a module alias (e.g. `math::cos`)")
+                        );
+                        return ZymbolType::Unknown;
                     }
                 }
                 ZymbolType::Any
@@ -1664,7 +1693,7 @@ impl TypeChecker {
                 // target is IndexExpr(collection[index]) — return the collection type,
                 // not the element type (which would cause false type-mismatch warnings
                 // on `arr[i] = val` desugared as `arr = arr[i]$~ val`).
-                if let Expr::Index(idx_expr) = op.target.as_ref() {
+                if let Expr::Index(idx_expr) = op.target.unwrap_group() {
                     self.infer_expr(&idx_expr.array)
                 } else {
                     self.infer_expr(&op.target)

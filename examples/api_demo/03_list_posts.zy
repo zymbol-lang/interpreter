@@ -1,0 +1,11 @@
+// 03 — Decode a JSON array and iterate it with @.
+// API: jsonplaceholder.typicode.com (no auth) — returns an array of post objects.
+<# std/net => net
+<# std/json => json
+
+posts = json::decode(net::get("https://jsonplaceholder.typicode.com/posts"))
+
+>> "Got " posts$# " posts. First 5 titles:" ¶
+@ p : posts[1..5] {
+    >> "  #" p.id " — " p.title ¶
+}

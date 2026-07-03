@@ -1,0 +1,16 @@
+// 05 — Graceful failure + Spanish API via i18n re-export.
+// Network failures come back as a soft Error VALUE (not a thrown error), so we
+// check them with the is-error operator `$!` instead of try-catch.
+<# ./apis_es => api
+
+// Happy path: real endpoint
+ok = api::decodificar(api::obtener("https://catfact.ninja/fact"))
+>> "Dato felino: " ok.fact ¶
+
+// Failure path: an invalid URL fails fast and returns an Error value
+resp = api::obtener("no-es-una-url")
+? resp$! {
+    >> "La petición falló (error suave, capturado sin reventar)" ¶
+} _ {
+    >> "Respuesta: " resp ¶
+}

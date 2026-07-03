@@ -54,8 +54,8 @@ impl<W: Write> Interpreter<W> {
         use zymbol_common::Literal;
         // QW15a: Identifier OP IntLiteral — most common in loops/conditions
         // Saves 2× eval_expr dispatch (~80ns) per binary expression
-        if let Expr::Identifier(lhs) = binary.left.as_ref() {
-            if let Expr::Literal(rlit) = binary.right.as_ref() {
+        if let Expr::Identifier(lhs) = binary.left.unwrap_group() {
+            if let Expr::Literal(rlit) = binary.right.unwrap_group() {
                 if let Literal::Int(rval) = &rlit.value {
                     if let Some(Value::Int(lval)) = self.get_variable(&lhs.name) {
                         let (l, r) = (*lval, *rval);
@@ -77,7 +77,7 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             // QW15b: Identifier OP Identifier — both Int
-            if let Expr::Identifier(rhs) = binary.right.as_ref() {
+            if let Expr::Identifier(rhs) = binary.right.unwrap_group() {
                 let lv = self.get_variable(&lhs.name).and_then(|v| if let Value::Int(n) = v { Some(*n) } else { None });
                 let rv = self.get_variable(&rhs.name).and_then(|v| if let Value::Int(n) = v { Some(*n) } else { None });
                 if let (Some(l), Some(r)) = (lv, rv) {
@@ -100,7 +100,7 @@ impl<W: Write> Interpreter<W> {
         }
         // Hot/pre_hot RHS: c = c°/°c + a — eval right first to infer neutral type, then init left
         if binary.op == BinaryOp::Add {
-            if let Expr::Identifier(ident) = binary.left.as_ref() {
+            if let Expr::Identifier(ident) = binary.left.unwrap_group() {
                 if (ident.hot || ident.pre_hot) && self.get_variable(&ident.name).is_none() {
                     let right_val = self.eval_expr(&binary.right)?;
                     let neutral = match &right_val {

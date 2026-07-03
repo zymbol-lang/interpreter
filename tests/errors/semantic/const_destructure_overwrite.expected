@@ -1,0 +1,6 @@
+error: cannot reassign constant 'limit'
+  --> tests/errors/semantic/const_destructure_overwrite.zy:5:1
+   5 |
+   5 | [limit, _extra] = [200, 300]
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  help: constants declared with ':=' cannot be modified — use a different name in the destructuring pattern

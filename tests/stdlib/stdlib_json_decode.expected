@@ -1,0 +1,10 @@
+ada
+36
+9.5
+#1
+[rust, zy]
+rust
+[10, 20, 30]
+20
+[1,null,3]
+##Parse(key must be a string at line 1 column 2)

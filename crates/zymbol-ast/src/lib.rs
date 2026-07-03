@@ -23,13 +23,13 @@ mod match_stmt;
 pub use match_stmt::{MatchCase, MatchExpr, Pattern};
 
 mod variables;
-pub use variables::{Assignment, ConstDecl, LifetimeEnd, DestructureAssign, DestructurePattern, DestructureItem};
+pub use variables::{Assignment, AssignSugar, ConstDecl, LifetimeEnd, DestructureAssign, DestructurePattern, DestructureItem};
 
 mod functions;
 pub use functions::{FunctionDecl, LambdaBody, LambdaExpr, Parameter, ParameterKind, ReturnStmt};
 
 mod collections;
-pub use collections::{ArrayLiteralExpr, NamedTupleExpr, TupleExpr};
+pub use collections::{ArrayLiteralExpr, GroupExpr, NamedTupleExpr, TupleExpr};
 
 mod collection_ops;
 pub use collection_ops::{
@@ -169,6 +169,8 @@ pub enum Expr {
     ArrayLiteral(ArrayLiteralExpr),
     /// Tuple expression: (expr1, expr2, ...) - positional tuple
     Tuple(TupleExpr),
+    /// Grouped (parenthesized) expression: (expr) — semantically transparent
+    Group(GroupExpr),
     /// Named tuple expression: (name: expr, name2: expr2, ...)
     NamedTuple(NamedTupleExpr),
     /// Member access expression: object.field
@@ -376,7 +378,50 @@ impl IndexExpr {
 
 
 
+impl Statement {
+    /// Get the span of a statement
+    pub fn span(&self) -> Span {
+        match self {
+            Statement::Output(s) => s.span,
+            Statement::Assignment(s) => s.span,
+            Statement::ConstDecl(s) => s.span,
+            Statement::DestructureAssign(s) => s.span,
+            Statement::LifetimeEnd(s) => s.span,
+            Statement::Input(s) => s.span,
+            Statement::If(s) => s.span,
+            Statement::Loop(s) => s.span,
+            Statement::Break(s) => s.span,
+            Statement::Continue(s) => s.span,
+            Statement::Try(s) => s.span,
+            Statement::Newline(s) => s.span,
+            Statement::FunctionDecl(s) => s.span,
+            Statement::Return(s) => s.span,
+            Statement::Match(s) => s.span,
+            Statement::Expr(s) => s.span,
+            Statement::CliArgsCapture(s) => s.span,
+            Statement::SetNumeralMode { span, .. } => *span,
+            Statement::Sleep(s) => s.span,
+            Statement::KeyInput(s) => s.span,
+            Statement::ClearScreen(s) => s.span,
+            Statement::OutputPos(s) => s.span,
+            Statement::TuiBlock(s) => s.span,
+        }
+    }
+}
+
 impl Expr {
+    /// Strip any number of grouping parentheses and return the inner
+    /// expression. Use this wherever code matches on expression *shape*
+    /// (e.g. "is the callable a lambda?"), so user parentheses stay
+    /// transparent: `(x -> x * 2)` must behave exactly like `x -> x * 2`.
+    pub fn unwrap_group(&self) -> &Expr {
+        let mut expr = self;
+        while let Expr::Group(group) = expr {
+            expr = &group.expr;
+        }
+        expr
+    }
+
     /// Get the span of an expression
     pub fn span(&self) -> Span {
         match self {
@@ -387,6 +432,7 @@ impl Expr {
             Expr::Range(range) => range.span,
             Expr::ArrayLiteral(arr) => arr.span,
             Expr::Tuple(tuple) => tuple.span,
+            Expr::Group(group) => group.span,
             Expr::NamedTuple(named_tuple) => named_tuple.span,
             Expr::MemberAccess(member) => member.span,
             Expr::Index(idx) => idx.span,

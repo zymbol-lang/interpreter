@@ -1,0 +1,3 @@
+// Typed input: a single character → Char
+<< ##' "Inicial: " c
+>> "c=" c ¶

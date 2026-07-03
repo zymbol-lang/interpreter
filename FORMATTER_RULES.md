@@ -1,9 +1,9 @@
 # Zymbol Formatter Rules (`zymbol fmt`)
 
-> **Design principle** — `zymbol fmt` is a *layout tool*, not a code transformer.
-> It adjusts whitespace, indentation, and brace placement. It never alters the
-> meaning of the program, never adds or removes tokens that change behavior, and
-> never rewrites expressions.
+> **Design principle** — `zymbol fmt` is a *layout tool*, not a code
+> transformer. It adjusts whitespace, indentation, and brace placement. It
+> never alters the meaning of a program — and since the safety-gate rework
+> this is **enforced mechanically**, not just promised.
 
 ---
 
@@ -16,39 +16,64 @@
 | A brace/block layout tool | A parenthesis adder or remover |
 | A comment and blank-line preserver | An optimizer or simplifier |
 
-**Analogy with `rustfmt`:**
-`rustfmt` enforces a single canonical style for Rust code — indentation, spacing,
-brace placement — but it **never changes the semantics** of any expression.
-`zymbol fmt` follows the same contract.
+**Analogy with `rustfmt`:** `rustfmt` enforces a single canonical style —
+indentation, spacing, brace placement — but never changes the semantics of any
+expression. `zymbol fmt` follows the same contract, with one addition: a
+built-in safety gate refuses to emit output that is not equivalent to the
+input (see §2.4).
 
 ---
 
 ## 2. Fundamental constraints
 
-### 2.1 Never change code
-The formatter **must not** add, remove, or reorder any token that carries meaning:
-- No parentheses added or removed
-- No operator changed (e.g., `$^` stays `$^`, not `$^+`)
-- No expression rewritten (e.g., `a, b -> x` stays as-is)
-- No argument lists invented (e.g., `|> f` stays `|> f`, not `|> f(_)`)
-- No trailing commas added to code that does not have them
-- No array literals expanded or collapsed beyond what the user wrote
+### 2.1 The token contract
+
+The formatted output must lex to **exactly the same significant token
+sequence** as the source. "Significant" excludes only:
+
+- comments (`//`, `/* */`) — preserved separately, see §9
+- `;` statement separators — `a; b` is reprinted as two lines
+- physical line breaks — layout is the formatter's job
+
+Everything else is untouchable. In particular:
+
+- **User parentheses are always preserved.** The parser keeps them in the AST
+  (`Expr::Group`), so `(a + b)`, `(x -> x * 2)`, `m[(i)>(j)]`, `(f)(x)` all
+  reprint exactly as written.
+- **The formatter never inserts parentheses** into code that parsed without
+  them.
+- Surface sugar reprints as written: `x += 1`, `x++`, `x--`, `arr[i] = v`,
+  `arr[i] += v` (recorded by the parser as `AssignSugar`), hot-def markers
+  `x°` / `°x`, mutable params `name~`, input typespecs (`##.(5,2)`, `###(n)`,
+  `##"`, `##'`, `#|var|`), interpolated strings `"a {b} c"`, `¶` vs `\\`,
+  1-tuples `(1,)`, single vs double bracket extraction (`arr[i>a..b]` vs
+  `arr[[path]]`), and export-block comma separators.
 
 ### 2.2 Never delete content
-The formatter **must preserve**:
-- Every `// line comment`, regardless of position (trailing or standalone)
-- Every `/* block comment */`, whether single-line or multi-line
-- Every blank line between statements (one blank line is preserved; multiple
-  consecutive blank lines may be collapsed to one — see §5.3)
+
+Every `//` and `/* */` comment in the source appears in the output (G4 in the
+safety gate enforces the count). Blank lines between statements are preserved:
+a gap of one or more blank lines in the source becomes exactly one blank line.
 
 ### 2.3 Idempotency
-Running `zymbol fmt` twice on the same file must produce identical output:
 
-```
-zymbol fmt file.zy --write
-zymbol fmt file.zy --write
-# No changes on second run
-```
+`zymbol fmt` twice produces the same output as once. The property test suite
+(`tests/scripts/fmt_property.sh`, property P2) enforces this over the whole
+corpus.
+
+### 2.4 The safety gate (fail closed)
+
+After producing output, the formatter verifies — inside
+`crates/zymbol-formatter/src/gate.rs` — that:
+
+- **G1**: the significant token stream is unchanged (§2.1),
+- **G2**: the output still parses,
+- **G3**: the statement tree has the same pre-order shape,
+- **G4**: the comment count is unchanged.
+
+On any mismatch `zymbol fmt` returns an error naming the first divergent
+token and **leaves the file untouched**. A formatter bug can therefore refuse
+to format a file, but it can never corrupt one.
 
 ---
 
@@ -57,344 +82,163 @@ zymbol fmt file.zy --write
 | Rule | Value |
 |------|-------|
 | Unit | 4 spaces (configurable via `--indent`) |
-| Tabs vs spaces | Spaces by default; `--tabs` for tab mode |
+| Tabs vs spaces | Spaces by default; tabs via config |
 | Level increase | Every block `{ }` opens a new level |
 | Level decrease | Closing `}` returns to previous level |
 
-The `}` that closes a block is always at the same indentation level as the
-statement that opened the block:
-
-```zy
-// Input (any indentation)
-? x > 0 {
->> "positive" ¶
-}
-
-// Output (normalized)
-? x > 0 {
-    >> "positive" ¶
-}
-```
+The `}` that closes a block sits at the same indentation level as the
+statement that opened it.
 
 ---
 
 ## 4. Spacing rules
 
 ### 4.1 Around assignment operators
-One space before and after `=`, `:=`, `+=`, `-=`, `*=`, `/=`, `%=`, `^=`:
-
-```zy
-x = 5           // ✓
-PI := 3.14159   // ✓
-count += 1      // ✓
-```
+One space before and after `=`, `:=`, `+=`, `-=`, `*=`, `/=`, `%=`, `^=`.
 
 ### 4.2 Around arithmetic and comparison operators
-One space before and after `+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `>`,
-`<=`, `>=`, `&&`, `||`:
+One space before and after `+`, `-`, `*`, `/`, `%`, `==`, `<>`, `<`, `>`,
+`<=`, `>=`, `&&`, `||`.
 
-```zy
-result = a + b * c      // ✓
-? x > 0 && y < 10 {    // ✓
-```
+> Note: Zymbol's not-equal operator is `<>`. The lexer intentionally rejects
+> `!=` with a hint to use `<>`.
 
-### 4.3 Around range operator
-**No spaces** around `..`:
+### 4.3 Range operator — **no spaces** around `..` (`1..10`, `arr$[2..5]`)
 
-```zy
-@ i:1..10 {     // ✓  (not  1 .. 10)
-arr$[2..5]      // ✓
-```
+### 4.4 Symbol operators attach to their left operand
+`$#`, `$+`, `$-`, `$--`, `$?`, `$??`, `$>`, `$|`, `$<`, `$^`, `$~~`, `$[`,
+`$++`, `$~`: no space before (`arr$#`). Exception: `$+` keeps a space after
+it (`result $+ element`).
 
-### 4.4 Symbol operators (no leading space)
-Collection and string operators attach directly to their left operand:
-`$#`, `$+`, `$-`, `$--`, `$?`, `$??`, `$>`, `$|`, `$<`, `$^`,
-`$~~`, `$[`, `$++`, `$~`:
+### 4.5 `::` — no spaces (`module::function()`)
 
-```zy
-arr$#           // ✓  (not  arr $#)
-arr$+ x         // ✓
-str$~~["\n":""] // ✓
-```
+### 4.6 Tuple field access `.` — no spaces (`point.x`)
 
-Exception: `$+` (append element) keeps a space after it:
+### 4.7 Lambda arrow `->` — one space each side
 
-```zy
-result = result $+ element   // ✓
-```
+### 4.8 Pipe `|>` — one space each side
 
-### 4.5 Namespace separator
-**No spaces** around `::`:
+### 4.9 Concatenation `$++` — one space before
 
-```zy
-module::function()   // ✓  (not  module :: function())
-```
-
-### 4.6 Tuple field access
-**No space** around `.`:
-
-```zy
-point.x   // ✓  (not  point . x)
-```
-
-### 4.7 Lambda arrow
-One space before and after `->`:
-
-```zy
-double = x -> x * 2          // ✓
-add = (a, b) -> a + b        // ✓
-```
-
-### 4.8 Pipe operator
-One space before and after `|>`:
-
-```zy
-result = 5 |> double   // ✓
-```
-
-### 4.9 Concatenation operator
-One space before `$++`:
-
-```zy
-greeting = "Hello" $++ name   // ✓
-```
-
-### 4.10 Output statement (`>>`)
-One space after `>>`, one space between items:
-
-```zy
->> "value: " x ¶   // ✓
-```
-
-The newline token `¶` is joined to the preceding token on the same line
-with one space:
-
-```zy
->> x ¶     // ✓  (not  >> x\n¶  on separate lines)
-```
+### 4.10 Output statement `>>`
+One space after `>>`, one space between items. The `¶` (or `\\`) token joins
+the preceding token on the same line — unless that line ends in a trailing
+`//` comment, in which case the `¶` keeps its own line. Chained outputs
+written on one source line (`>> a >> b ¶`) stay on one line.
 
 ---
 
 ## 5. Block and brace layout
 
-### 5.1 Opening brace — always same line
-The `{` always appears on the same line as the control structure:
+### 5.1 Opening brace — always on the same line as the construct
+### 5.2 `_` (else) and `_?` (else-if) — on the same line as the preceding `}`
 
-```zy
-? condition {        // ✓
-    ...
-}
-
-@ i:1..10 {         // ✓
-    ...
-}
-```
-
-### 5.2 Else / else-if — same line as closing brace
-`_` (else) and `_?` (else-if) appear on the same line as the preceding `}`:
-
-```zy
-? x > 0 {
-    >> "positive" ¶
-} _ {
-    >> "non-positive" ¶
-}
-```
-
-### 5.3 Blank lines between top-level declarations
-One blank line is inserted before and after every function declaration at
-the top level. All other blank lines in the source are preserved as-is.
-
-```zy
-x = 5
-
-add(a, b) {
-    <~ a + b
-}
-
-y = add(2, 3)
-```
+### 5.3 Blank lines
+One blank line is inserted before and after every top-level function
+declaration. Source blank-line gaps elsewhere are preserved as exactly one
+blank line (runs collapse).
 
 ### 5.4 Single-statement blocks (inline option)
-When `inline_single_statement = true` (default) and a block contains exactly
-one *simple* statement (assignment, output, break, continue, return), the
-formatter may place it on one line:
-
-```zy
-? found { @! }            // inline single break
-? x > 0 { >> "yes" ¶ }   // inline single output
-```
-
-Multi-statement blocks are always expanded to multiple lines.
-
-> **Note:** this is a *layout* change, not a code change. The semantics
-> are identical. Set `inline_single_statement = false` to disable.
+With `inline_single_statement = true` (default), a block holding exactly one
+*simple* statement (assignment, output, break, continue, return, expression)
+may collapse to one line: `? found { @! }`. A block that contains a comment
+never collapses — the comment needs a line of its own.
 
 ---
 
 ## 6. Match expressions (`??`)
-
-Each arm is one line: `pattern : value` or `pattern : { block }`.
-Arms are **not** aligned — no padding added to align the `:`.
-
-```zy
-?? cmd {
-    "start" : start_fn()
-    "stop" : stop_fn()
-    _ : show_error("unknown")
-}
-```
-
----
+Each arm is one line. Arms are not column-aligned.
 
 ## 7. Module files (`# name { }`)
-
-The module declaration header, imports, and export block follow the same
-indentation and brace rules as any other block:
-
-```zy
-# math {
-    <# ./util <= u
-
-    #> {
-        add
-        mul
-    }
-
-    add(a, b) { <~ a + b }
-    mul(a, b) { <~ a * b }
-}
-```
-
----
+Header, imports, and export block follow normal indentation rules. The export
+block reprints the user's optional `,` separators, and a single-line export
+block (`#> { add, PI }`) stays on one line.
 
 ## 8. Labeled loops
-
-Canonical form: `@:label`, `@:label!`, `@:label>` (colon between `@` and label):
-
-```zy
-@:outer {
-    count = count + 1
-    ? count >= 3 { @:outer! }
-}
-```
+Canonical form `@:label`, `@:label!`, `@:label>`.
 
 ---
 
 ## 9. Comments
 
+Comments are re-emitted by **source position** (span interleaving): the
+formatter walks the AST in source order and inserts each comment before the
+first statement that follows it, or at the end of the line it trails. The old
+line-matching merge pass is gone — comment placement can no longer duplicate
+or reorder code.
+
 ### 9.1 Trailing line comments
-A trailing `// comment` is kept on the same line as the code, separated by
-one space. Alignment padding (multiple spaces) in the original is collapsed
-to one space:
-
-```zy
-// Original:
-x = 5    // this is five
-
-// Formatted (same):
-x = 5 // this is five
-```
+Stay on their line, separated by one space; alignment padding collapses to
+one space.
 
 ### 9.2 Standalone line comments
-A `//` comment on its own line is preserved at its current indentation
-(re-indented to match the surrounding block level):
+Keep their own line and are re-indented to the surrounding block level.
 
-```zy
-? flag {
-    // this comment stays here
-    >> "yes" ¶
-}
-```
+### 9.3 Block comments
+Preserved in full. Continuation lines lose the opening line's original
+indentation and inherit the current block indentation, so the whole comment
+moves together.
 
-### 9.3 Block comments (`/* */`)
-Block comments — whether single-line or spanning multiple lines — are
-preserved in their entirety. The formatter does **not** inspect, reformat,
-or remove any content inside a block comment.
-
-```zy
-/*
-This whole block is untouched.
-x = old_code()   ← not executed, not reformatted
-*/
-```
+### 9.4 Known limitation
+A comment in the middle of a multi-line *expression* migrates to the nearest
+statement boundary. It is never lost (G4), but it can move.
 
 ---
 
-## 10. What the formatter does NOT change
+## 10. Known normalizations
 
-The following are explicitly out of scope. If the formatter currently
-changes any of these, it is a **bug**:
+These are the only intentional differences between input and output, besides
+whitespace:
 
-| Category | Examples |
-|----------|---------|
-| Parentheses | `(a + b)` must stay `(a + b)` |
-| Operator symbols | `$^` must not become `$^+` |
-| Lambda syntax | `a, b -> x` must not become `(a, b) -> x` |
-| Explicit placeholders | `f(_)` must not become `f` or vice-versa |
-| Array literals | `[1, 2, 3]` must not expand to multi-line if it fits |
-| Named tuple spacing | `(x: 1, y: 2)` — internal spacing not changed |
-| Trailing commas | No commas added to arrays/tuples that lack them |
-| Increment/decrement | `count++` must stay `count++`, not `count = count + 1` |
-| Compound assignment | `x += 1` must stay `x += 1` |
+| Normalization | Example |
+|---------------|---------|
+| `;`-separated statements split to lines | `a = 1; b = 2` → two lines |
+| Blank-line runs collapse to one | `\n\n\n` → `\n\n` |
+| Comment alignment padding collapses | `x = 5    // c` → `x = 5 // c` |
+| Blank line added around top-level functions | §5.3 |
+| `¶` join to the previous output line | §4.10 |
 
----
-
-## 11. Architectural limitation: parentheses and the AST
-
-`zymbol fmt` reconstructs source code from the AST. The Zymbol parser discards
-grouping parentheses when building the AST, so the formatter cannot always
-distinguish:
-
-```zy
-a + (b * c)   ← parens in source, same AST as below
-a + b * c     ← no parens in source
-```
-
-### What the formatter MAY add back
-
-In a small set of contexts, the Zymbol parser **requires** parentheses and
-without them the output would either fail to parse or change semantics.
-The formatter adds parens back in exactly these cases:
-
-| Context | Problem without parens | Formatter action |
-|---------|----------------------|-----------------|
-| `>> (x && y)` | `>> x && y` is a **parse error** (parser sees two items) | Add `(` `)` around `&&`/`\|\|` binary in `>>` |
-| `###(a / b)` | `###a / b` divides after cast, not before — **different result** | Add `(` `)` around binary operand of cast `###`/`##!`/`##.` |
-| `arr $+ (a * b)` | `arr $+ a * b` may bind `*` to `arr $+ a` — **different result** | Add `(` `)` around binary operand of `$+` |
-| `(expr)[i]` deep nav | `sort_expr[i]` attaches `[i]` to the lambda body — **different result** | Add `(` `)` around collection-operation base |
-| `arr[i>j]` multi-step nav | `arr[a+1>b]` parses `a + (1>b)` (comparison) — **wrong navigation** | Add `(` `)` around binary step index in multi-step path |
-
-All other paren changes are bugs. Specifically, the formatter must **never**:
-
-- Add parens around a simple identifier: `$> double` must stay `$> double`
-- Add parens around a lambda that already has its own parens
-- Remove parens from any expression the user wrote
-
-### What cannot be done without AST changes
-
-If the user writes `(a + b)` as a standalone group (not in any of the forced
-contexts above), the formatter cannot know the parens existed and will output
-`a + b`. This is a known limitation. The fix would require the parser to
-preserve a `GroupExpr` node.
+If `fmt` changes anything not in this table, it is a bug — and the safety
+gate will normally have refused to emit it.
 
 ---
 
-## 12. Configuration reference
+## 11. Configuration reference
 
 | Option | Default | CLI flag | Description |
 |--------|---------|----------|-------------|
 | `indent_size` | 4 | `--indent N` | Spaces per indent level |
-| `use_spaces` | true | `--tabs` | Use tabs instead of spaces |
-| `max_line_length` | 100 | `--line-length N` | Target line length |
-| `inline_single_statement` | true | `--no-inline` | Collapse single-stmt blocks |
+| `use_spaces` | true | — | Tabs via `FormatterConfig::with_tabs()` |
+| `max_line_length` | 100 | — | Target line length |
+| `max_inline_array_length` | — | — | Character budget for inline arrays |
+| `inline_single_statement` | true | — | Collapse single-stmt blocks (§5.4) |
 | `brace_same_line` | true | — | Opening brace placement |
+
+---
+
+## 12. Syntax coverage policy
+
+The formatter's `format_statement` / `format_expr` matches are **exhaustive**:
+adding a `Statement` or `Expr` variant fails compilation until the formatter
+learns to print it. This is deliberate.
+
+**Process rule:** a PR that adds parser syntax must, in the same PR:
+
+1. add the formatter arm (the compiler enforces this),
+2. make sure the parser records any surface form the AST would otherwise
+   lose (see `AssignSugar`, `Newline.backslash`, `FlatExtractExpr.double_bracket`,
+   `ExportBlock.commas`, `Expr::Group` for precedents),
+3. add at least one corpus file exercising the new syntax and keep
+   `tests/scripts/fmt_property.sh` green.
+
+The property harness runs P1 (reparse), P2 (idempotence), P3 (runtime output
+equality) and P4 (comment counts) over every `.zy` file in `tests/` and
+`examples/`; `--baseline` mode gates CI on regressions.
 
 ---
 
 ## 13. Non-goals (explicit)
 
-- **Linting** — detecting unused variables, type errors, etc. → use `zymbol check`
-- **Code style enforcement beyond layout** — naming conventions, idioms
-- **Auto-import or auto-fix** — the formatter never adds new imports
-- **Semantic analysis** — the formatter does not evaluate expressions
+- **Linting** — use `zymbol check`
+- **Style enforcement beyond layout** — naming conventions, idioms
+- **Auto-import or auto-fix** — the formatter never adds new code

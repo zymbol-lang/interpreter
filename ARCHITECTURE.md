@@ -3,7 +3,7 @@
 ## Overview
 
 Zymbol-Lang is a minimalist symbolic programming language with no keywords. This document
-describes the architecture of its Rust implementation: a workspace of 17 crates organized
+describes the architecture of its Rust implementation: a workspace of 18 crates organized
 by compilation phase, execution mode, and tooling.
 
 The interpreter supports two independent execution strategies:
@@ -28,9 +28,9 @@ The interpreter supports two independent execution strategies:
 
 ```
 interpreter/
-├── Cargo.toml                  # Workspace manifest (17 members)
+├── Cargo.toml                  # Workspace manifest (18 members)
 ├── Cargo.lock
-├── zymbol-lang.ebnf            # Formal grammar (EBNF) — v3.0.0, generated 2026-05-12
+├── zymbol-lang.ebnf            # Formal grammar (EBNF) — v3.1.0, generated 2026-06-12
 ├── install-zymbol.sh           # Install script
 ├── crates/
 │   ├── zymbol-span/            # Source position tracking
@@ -44,6 +44,7 @@ interpreter/
 │   ├── zymbol-bytecode/        # Bytecode instruction set
 │   ├── zymbol-compiler/        # AST → Bytecode compiler
 │   ├── zymbol-vm/              # Register-based virtual machine
+│   ├── zymbol-intrinsics/      # Unboxed string/collection intrinsics (VM fast paths)
 │   ├── zymbol-formatter/       # Code formatter
 │   ├── zymbol-analyzer/        # LSP analysis engine
 │   ├── zymbol-lsp/             # Language Server Protocol (tower-lsp)
@@ -173,6 +174,9 @@ struct Interpreter {
 - Closures: `capture_environment()` captures outer scope vars into `Rc<HashMap>`
 - Tail-call optimization (TCO): detects `<~ f(same_args)` and restarts without stack growth
 - Module system: file-based imports with alias resolution and circular dep detection
+- Native stdlib (`src/stdlib/`): `std/math`, `std/random` (v0.0.6); `std/json`, `std/io`,
+  `std/net`, `std/db` (v0.0.7). Each module registers `FunctionDef::Native` entries;
+  `std/*` import paths resolve in-process (no filesystem lookup)
 - Bash execution: `<\ command \>` captures stdout + stderr via `Command::output()`
 - Error handling: try/catch/finally with typed catch (`:! ##IO`, `:! ##Parse`, etc.)
 
@@ -218,16 +222,17 @@ Compiles `Program` AST to `CompiledProgram` bytecode.
 #### `zymbol-vm`
 Register-based virtual machine.
 
-**VM `Value` enum** (16 bytes via `Rc<T>` heap payloads, Sprint 5D):
+**VM `Value` enum** (16 bytes via `Rc<T>` heap payloads, Sprint 5D; `ZyStr` inline ≤7 bytes, Sprint 5G):
 ```rust
 enum Value {
     Int(i64), Float(f64), Bool(bool), Char(char), Unit,
-    Function(FuncIdx),
-    String(Rc<String>),
+    Function(FuncIdx, u8),
+    String(ZyStr),                       // inline for ≤ 7 bytes, heap Rc<String> otherwise
     Array(Rc<Vec<Value>>),
     Tuple(Rc<Vec<Value>>),
     NamedTuple(Rc<Vec<(String, Value)>>),
-    Closure(FuncIdx, Rc<Vec<Value>>),   // func + captured upvalues
+    Closure(FuncIdx, u8, Rc<Vec<Value>>),  // func + arity + captured upvalues
+    Error(ZyStr),                        // "##Kind(message)" — error-as-value flow
 }
 ```
 
@@ -256,7 +261,19 @@ struct VM {
 - Lazy `Box<FrameError>`: no allocation unless a catch is hit
 - Sentinel `catch_ip = Label::MAX` avoids per-instruction branch
 
-**Dependencies**: `zymbol-bytecode`
+**Stdlib builtins**: `stdlib_builtins.rs` dispatches `std/*` module calls by numeric
+builtin id resolved at compile time (math 0–, random 100–, json 200–, io 300–,
+net 400–, db 500–514), mirroring the tree-walker's native modules for full parity.
+
+**Dependencies**: `zymbol-bytecode`, `zymbol-intrinsics`
+
+#### `zymbol-intrinsics`
+Pure-Rust string/collection intrinsics operating on unboxed `&str`/primitive types —
+no `Value` boxing, no VM types. The VM unwraps `ZyStr` → `&str`, calls the intrinsic,
+and boxes the primitive result back. Keeps hot paths independently optimizable
+(SIMD, Aho-Corasick, …) without touching the VM.
+
+**Dependencies**: none
 
 ---
 

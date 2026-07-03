@@ -113,7 +113,7 @@ impl std::fmt::Debug for FunctionDef {
 /// Represents a runtime error that can be caught with try-catch
 #[derive(Debug, Clone, PartialEq)]
 pub struct ErrorValue {
-    /// Error type: "IO", "Network", "Parse", "Index", "Type", "Div", "_" (generic)
+    /// Error type: "IO", "Network", "DB", "Parse", "Index", "Type", "Div", "_" (generic)
     pub error_type: String,
     /// Error message
     pub message: String,
@@ -135,6 +135,11 @@ impl ErrorValue {
     /// Create an IO error
     pub fn io(message: impl Into<String>) -> Self {
         Self::new("IO", message)
+    }
+
+    /// Create a DB (database / ODBC) error
+    pub fn db(message: impl Into<String>) -> Self {
+        Self::new("DB", message)
     }
 
     /// Create an Index error (out of bounds)
@@ -198,6 +203,15 @@ impl PartialEq for FunctionValue {
 impl Value {
     /// Convert value to displayable string
     pub fn to_display_string(&self) -> String {
+        // Standalone Unit prints as nothing, but INSIDE a collection it must be
+        // visible — `[1, , 3]` reads like a typo. Both engines render nested
+        // Unit as `()` (the VM always did; the tree-walker since 2026-06-12).
+        fn nested(v: &Value) -> String {
+            match v {
+                Value::Unit => "()".to_string(),
+                other => other.to_display_string(),
+            }
+        }
         match self {
             Value::String(s) => s.clone(),
             Value::Int(n) => n.to_string(),
@@ -207,7 +221,7 @@ impl Value {
             Value::Array(elements) => {
                 let contents = elements
                     .iter()
-                    .map(|v| v.to_display_string())
+                    .map(nested)
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{}]", contents)
@@ -215,7 +229,7 @@ impl Value {
             Value::Tuple(elements) => {
                 let contents = elements
                     .iter()
-                    .map(|v| v.to_display_string())
+                    .map(nested)
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", contents)
@@ -223,7 +237,7 @@ impl Value {
             Value::NamedTuple(fields) => {
                 let contents = fields
                     .iter()
-                    .map(|(name, value)| format!("{}: {}", name, value.to_display_string()))
+                    .map(|(name, value)| format!("{}: {}", name, nested(value)))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", contents)
@@ -1046,8 +1060,8 @@ impl<W: Write> Interpreter<W> {
                     // When detected: evaluate args, store in tco_args, set tco_pending = true,
                     // and set Return so the call frame unwinds cleanly into the TCO loop.
                     if self.try_depth == 0 {
-                        if let Expr::FunctionCall(call) = expr.as_ref() {
-                            if let Expr::Identifier(callee) = call.callable.as_ref() {
+                        if let Expr::FunctionCall(call) = expr.unwrap_group() {
+                            if let Expr::Identifier(callee) = call.callable.unwrap_group() {
                                 if let Some(cur_fn) = self.current_function.as_deref() {
                                     if callee.name == cur_fn {
                                         // Evaluate all arguments eagerly
@@ -1071,7 +1085,7 @@ impl<W: Write> Interpreter<W> {
                     // (finally could reference the variable), move instead of clone — O(1).
                     // Skip take_variable for output params — writeback still needs the value.
                     if self.try_depth == 0 {
-                        if let Expr::Identifier(ident) = expr.as_ref() {
+                        if let Expr::Identifier(ident) = expr.unwrap_group() {
                             if !self.current_output_params.contains(&ident.name) {
                                 if let Some(v) = self.take_variable(&ident.name) {
                                     self.set_control_flow(ControlFlow::Return(Some(v)));
@@ -1210,6 +1224,8 @@ impl<W: Write> Interpreter<W> {
     /// Evaluate an expression
     fn eval_expr(&mut self, expr: &Expr) -> Result<Value> {
         match expr {
+            // Grouping parens are transparent
+            Expr::Group(group) => self.eval_expr(&group.expr),
             Expr::Literal(lit) => self.eval_literal(lit),
             Expr::Identifier(ident) => self.eval_identifier(ident),
             Expr::Binary(binary) => self.eval_binary(binary),

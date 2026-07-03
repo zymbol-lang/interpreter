@@ -1,10 +1,11 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **v0.0.6 (released 2026-06-07)** — all planned features shipped.
-> Highlights: `FatArrow` `=>` maps-to operator, bytecode-embedded standalones (~60% smaller),
-> VM `<<` input parity (`ReadLine`), `std/math` + `std/random` stdlib, typed test wildcards,
-> and the GAP-Z009 / BUG-007 / TUI fixes (see `IMPL_V006.md`).
-> Validation: 478/478 VM-parity tests PASS (0 SKIP). Next: see `IMPL_V007.md`.
+> Current status: **v0.0.7 (released 2026-07-02)** — all planned features shipped.
+> Highlights: native stdlib expansion (`std/json`, `std/io`, `std/net`, `std/db` via
+> ODBC), typed/validated input (`<< ##.(5,2) "p" var`), fail-closed formatter,
+> `DeepSet` VM parity for every `$~` form, the L14/L16 error-handling fixes,
+> LSP↔check diagnostic parity, and Rust edition 2024 (see `IMPL_V007.md`).
+> Validation: 507/507 VM-parity tests PASS (0 SKIP), 833 unit tests.
 
 ---
 
@@ -95,11 +96,16 @@ They are documented in the manual as known limitations.
 
 | Gap | Description | Workaround |
 |-----|-------------|------------|
-| **Match multi-value arms** | `1, 2 => "low"` (one arm, several values) not parsed — `[NI02]` | Repeat the value across separate arms |
-| **Match identifier binding** | `pattern as name` binding syntax — `[NI03]` | Extract the value before the match |
-| **`$!!` from lambdas** | Error propagation only works in named functions — `[NI04]` | Wrap lambda body in a named function |
-| **`do-while ~>`** | Post-condition loop `[NI01]` — not parsed | Infinite loop with `@!` break at end |
+| **Match multi-value arms** | `1, 2 => "low"` (one arm, several values) not parsed — `[NI02]` | List containment pattern: `[1, 2] => "low"` (v0.0.4) |
+| **Match identifier binding** | `pattern as name` — `[NI03]` — **dismissed 2026-06-12** | Extract the value before the match (the idiom) |
+| ~~**`$!!` from lambdas**~~ | **Resolved** — verified 2026-06-12: `$!!` propagates from lambdas identically to named functions (`tests/lambdas/error_propagate_lambda.zy`) | — |
+| **`do-while ~>`** | Post-condition loop `[NI01]` — **dismissed 2026-06-12** | Infinite loop with `@!` break at end (the idiom) |
 | **Dict / map literal** | `[NI05]` — no `key: value` collection literal | Use named tuples, or arrays of `(k, v)` pairs |
+
+> **Dismissed 2026-06-12** (validated with the language author): `do-while ~>` and
+> match identifier binding will NOT be implemented. Their workarounds are the
+> idiomatic forms, and coining new syntax for them violates the symbolic-minimalism
+> rule (SYMBOLS.md → "a new symbol enters the grammar reluctantly").
 
 > **Resolved since this table was first written** (verified against `crates/` + `tests/`):
 > module constant access `alias.CONST` (see REFERENCE.md L4), named functions as
@@ -126,12 +132,12 @@ They are documented in the manual as known limitations.
 #### Fix known language gaps
 
 - **Match multi-value arms**: extend parser to accept `val1, val2 => expr` arm syntax
-- **Match identifier binding**: extend AST to support `pattern as name` binding
+- ~~Match identifier binding~~ — dismissed 2026-06-12 (see gaps table above)
 
-#### Fix static analyzer false positives
+#### ~~Fix static analyzer false positives~~ Resolved
 
-- Track variable usage inside string interpolation expressions
-- Track variable usage inside BashExec template strings
+Verified 2026-06-12: variables used only inside string interpolation or BashExec
+no longer warn (regression test: `tests/errors/semantic/no_false_positive_unused.zy`).
 - Distinguish string split `/` from arithmetic `/` in type checker
 - Model `arr[i] = val` as a mutation rather than a type mismatch
 
@@ -193,10 +199,6 @@ intermediate representation handed off to the native code compiler.
 
 - **Array type inference relaxation**: allow mixed-type arrays with dynamic dispatch
   (currently requires homogeneous element types)
-- **`$!!` error propagation from lambdas**: currently limited to named functions; extend
-  to propagate through the lambda's call frame to its immediate caller
-- **`do-while ~>` post-condition loop**: implement EBNF rule `block ~> expr`; parser
-  and both interpreters (tree-walker + VM) need to handle the new AST node
 
 ### Long Term
 
@@ -227,10 +229,11 @@ Built-in modules accessible via `<#`:
 |--------|-------------|--------|
 | `std/math` | `sqrt exp ln log pow sin cos abs max min floor ceil round` + `PI E` | ✅ v0.0.6 |
 | `std/random` | `entero rango peso_f64` (xoshiro256++) | ✅ v0.0.6 |
-| `std/io` | File read/write, path utilities | planned |
-| `std/env` | Environment variables, OS info | planned |
-| `std/json` | JSON parse and serialize | planned |
-| `std/net` | HTTP client (basic) | planned |
+| `std/io` | `read write append exists delete list mkdir` — soft `##IO` errors | ✅ v0.0.7 |
+| `std/json` | `decode encode` — object↔NamedTuple, soft `##Parse` errors | ✅ v0.0.7 |
+| `std/net` | `get post post_json head` (sync, optional headers arg) — soft `##Network` errors | ✅ v0.0.7 |
+| `std/db` | Vendor-neutral DB access via ODBC (connect/exec/query/tx/savepoints) — soft `##DB` errors | ✅ v0.0.7 |
+| `std/env` | Environment variables, OS info | **dropped v0.0.7** — redundant: `<\ "printenv KEY" \>`, `><` (see `IMPL_V007.md`) |
 | `std/string` | Advanced string utilities | planned |
 | `std/time` | Timestamps, duration, formatting | planned |
 

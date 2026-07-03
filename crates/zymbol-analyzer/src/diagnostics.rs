@@ -166,6 +166,37 @@ impl DiagnosticPipeline {
                 lsp_diagnostics.push(to_lsp_diagnostic(type_diag));
             }
 
+            // Module analysis — same pass as `zymbol check` (E001 name
+            // mismatch, E002 module not found, E009 duplicate export, export
+            // validation). Resolving imported files needs a real filesystem
+            // path, so virtual documents without one skip this pass.
+            if program.module_decl.is_some() || !program.imports.is_empty() {
+                let path = crate::workspace::uri_to_path(&document.uri)
+                    .or_else(|| {
+                        // Plain paths (no file:// scheme) are used by tests
+                        // and tooling — accept them when they exist on disk.
+                        let p = std::path::PathBuf::from(document.uri.as_ref());
+                        p.exists().then_some(p)
+                    });
+                if let Some(path) = path {
+                    if let Some(base_dir) = path.parent() {
+                        let mut module_analyzer =
+                            zymbol_semantic::ModuleAnalyzer::new(base_dir);
+                        // analyze() drains its findings into the Err; only
+                        // validate_exports findings remain in diagnostics().
+                        if let Err(module_errors) = module_analyzer.analyze(program, &path) {
+                            for err in &module_errors {
+                                lsp_diagnostics.push(to_lsp_diagnostic(err));
+                            }
+                        }
+                        module_analyzer.validate_exports(program, &path);
+                        for diag in module_analyzer.diagnostics() {
+                            lsp_diagnostics.push(to_lsp_diagnostic(diag));
+                        }
+                    }
+                }
+            }
+
             // Def-use analysis for ambiguous lifetimes
             let cfg = zymbol_semantic::ControlFlowGraph::build_sequential(&program.statements);
             let mut def_use_analyzer = zymbol_semantic::DefUseAnalyzer::new();
@@ -188,7 +219,10 @@ impl DiagnosticPipeline {
 
                     lsp_diagnostics.push(lsp_types::Diagnostic {
                         range,
-                        severity: Some(DiagnosticSeverity::HINT),
+                        // WARNING to match `zymbol check`, which reports the
+                        // same finding as a warning (severity parity audit,
+                        // 2026-06-12).
+                        severity: Some(DiagnosticSeverity::WARNING),
                         code: Some(NumberOrString::String("ambiguous-lifetime".to_string())),
                         code_description: None,
                         source: Some("zymbol".to_string()),
@@ -297,5 +331,69 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains(&lsp_types::DiagnosticTag::UNNECESSARY));
+    }
+
+    /// Build a Document from a real corpus fixture (module analysis needs a
+    /// filesystem path to resolve imports).
+    fn doc_from_fixture(rel: &str) -> crate::document::Document {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(rel)
+            .canonicalize()
+            .expect("fixture exists");
+        let content = std::fs::read_to_string(&path).expect("read fixture");
+        crate::document::Document::new(
+            std::sync::Arc::from(format!("file://{}", path.display()).as_str()),
+            content,
+            0,
+            FileId(0),
+        )
+    }
+
+    /// Diagnostic-parity audit (2026-06-12): the LSP pipeline must surface the
+    /// same module errors as `zymbol check` — exactly once each.
+    #[test]
+    fn test_module_errors_in_pipeline() {
+        let cases = [
+            ("tests/errors/semantic/E001_mismatch_mod.zy", "E001"),
+            ("tests/errors/semantic/E002_mod_not_found.zy", "E002"),
+            ("tests/errors/semantic/E009_dup_export.zy", "E009"),
+        ];
+        for (fixture, code) in cases {
+            let doc = doc_from_fixture(fixture);
+            let diags = DiagnosticPipeline::collect(&doc);
+            let matches: Vec<_> = diags
+                .iter()
+                .filter(|d| d.message.starts_with(code))
+                .collect();
+            assert_eq!(
+                matches.len(),
+                1,
+                "{fixture}: expected exactly one {code} diagnostic, got {}",
+                matches.len()
+            );
+            assert_eq!(matches[0].severity, Some(DiagnosticSeverity::ERROR));
+        }
+    }
+
+    /// Diagnostic-parity audit (2026-06-12): ambiguous-lifetime findings carry
+    /// WARNING severity, matching `zymbol check`.
+    #[test]
+    fn test_ambiguous_lifetime_is_warning() {
+        let doc = crate::document::Document::new(
+            std::sync::Arc::from("untitled:lifetime"),
+            "@ i:1..3 {\n    >> i ¶\n    i = i + 1\n}\n".to_string(),
+            0,
+            FileId(0),
+        );
+        let diags = DiagnosticPipeline::collect(&doc);
+        let lifetime: Vec<_> = diags
+            .iter()
+            .filter(|d| d.message.contains("ambiguous lifetime"))
+            .collect();
+        assert!(!lifetime.is_empty(), "expected an ambiguous-lifetime diagnostic");
+        for d in lifetime {
+            assert_eq!(d.severity, Some(DiagnosticSeverity::WARNING));
+        }
     }
 }

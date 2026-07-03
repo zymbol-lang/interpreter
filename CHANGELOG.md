@@ -7,6 +7,133 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
+## [0.0.7] — 2026-07-02
+
+### Added
+
+**Native stdlib expansion — `std/json`, `std/io`, `std/net`**
+- `std/json`: `decode(text)` / `encode(value)` — JSON object ↔ `NamedTuple`
+  (key order preserved), array ↔ `Array`, `null` ↔ `Unit`. Soft `##Parse(...)`
+  on malformed data.
+- `std/json::decode_map(text, map)` — decodes **and** recursively renames
+  object keys per a `NamedTuple` map (field name = source key, String value =
+  new name), enabling **data-level i18n**: JSON keys from external APIs can be
+  read in the consumer's language. Keys absent from the map are kept verbatim;
+  an empty `()` map behaves like `decode`. Full VM parity (builtin id 202).
+  Test: `tests/stdlib/stdlib_json_decode_map.zy`.
+- `std/io`: `read`, `write`, `append`, `exists`, `delete`, `list`, `mkdir` —
+  soft `##IO(...)` on filesystem failure.
+- `std/net`: `get`, `post`, `post_json`, `head` (blocking HTTP, rustls TLS) —
+  soft `##Network(...)` on failure. `get`/`post`/`post_json` accept an optional
+  trailing `headers` argument: an array of `(name, value)` tuples.
+- All modules ship with full VM parity and Spanish i18n adapters; wrong
+  argument types are hard errors (see the REFERENCE.md error taxonomy).
+- Example projects under `examples/`: `api_demo/` (public REST APIs) and
+  `zethy_cli/` (AI assistant over `std/net` + `std/json` + `std/io`).
+
+**Static undefined-function detection at `check` time**
+- A bare-identifier call that is neither a known function, a variable, nor a
+  module alias is now a semantic error instead of failing at runtime.
+
+**`std/db` — vendor-neutral database access via ODBC**
+- `connect/disconnect`, `exec`, `query/query_one/query_value`, `tx`,
+  `begin/commit/rollback`, savepoints, `exec_script`, `table_exists`;
+  Spanish i18n adapter (`db_es`). Full VM parity (builtin ids 500–514).
+- Zymbol bundles no engine: the OS supplies the per-engine ODBC driver
+  (validated live against SQLite and PostgreSQL with the same program).
+
+**Formatter property harness** (`tests/scripts/fmt_property.sh`)
+- Verifies P1 reparse, P2 idempotence, P3 runtime-output equality and
+  P4 comment preservation over every `.zy` in `tests/` + `examples/`;
+  `--baseline` mode gates CI on regressions.
+
+**Typed/validated input via cast typespecs** (`<< ##.(5,2) "prompt" var`)
+- Re-prompts until input matches the typespec (TW + VM parity).
+
+**Deep functional update in the VM** (`arr[i>j>…]$~ val`)
+- New `DeepSet` bytecode instruction: walks an index path (Int steps; String for
+  a named-tuple field) and returns a new collection with the addressed element
+  replaced. Previously a VM compile error ("collection update on non-index expr").
+- All `$~` forms now route through `DeepSet`, which also fixes positional-tuple
+  update in the VM (`t[2]$~ 999` failed with "expected Array, got Tuple" while
+  the mutating `t[i] = val` correctly keeps rejecting tuples).
+- New parity test: `tests/collections/deep_update.zy` (2/3-level paths, negative
+  and computed indices, tuples, named-tuple nesting, `$~` inside a HOF lambda).
+
+### Changed
+
+**Nested `Unit` now displays as `()` in the tree-walker (engine display unification)**
+- A `Unit` inside an array, tuple, or named tuple rendered as an empty hole in
+  the tree-walker (`[1, , 3]`) but as `()` in the VM. Both engines now print
+  `[1, (), 3]` — the last known display divergence between engines. Standalone
+  `Unit` still prints nothing (both engines, unchanged). Affects e.g.
+  `json::decode` of JSON `null` inside arrays/objects.
+  Parity test: `tests/collections/unit_display_nested.zy`.
+
+**Dismissed (validated with the language author, 2026-06-12)**
+- `do-while ~>` (NI01) and match identifier binding (NI03) will NOT be
+  implemented: their workarounds are the idiomatic forms, and coining new
+  syntax for them violates the symbolic-minimalism rule. Marked as dismissed
+  in ROADMAP.md, REFERENCE.md (L12), IMPLEMENTATION.md, and the EBNF.
+
+**Formatter redesign — fail-closed and faithful**
+- A safety gate (token equivalence, reparse, statement shape, comment
+  count) refuses to emit non-equivalent output: `zymbol fmt` can no
+  longer corrupt a file.
+- The parser now preserves user parentheses (`Expr::Group`), assignment
+  sugar (`+=`, `++`, `--`, indexed forms), `¶` vs `\\`, input typespecs,
+  export-block commas and bracket forms, so the formatter reprints
+  exactly what was written.
+- Comments are re-emitted by source position (span interleaving); the
+  old line-matching merge pass — the source of code-duplication bugs —
+  was removed entirely.
+- `FORMATTER_RULES.md` rewritten to match the enforced contract.
+
+### Fixed
+
+- `zymbol fmt` corrupted hot-def assignments (`total° += 10` became
+  `total = total + 10`), dropped typed-input casts, stripped user
+  parentheses (often breaking the program), moved the mutable-param
+  marker (`num~` → `~num`) and could duplicate code while re-merging
+  comments. All of these now format faithfully or fail closed.
+- **L16 — `!?` corrupted the caller's scope when a called function failed.**
+  Tree-walker: every error exit of a function/lambda call now restores the
+  caller's state (`restore_call_state`) before propagating — previously the
+  early `?` return left the function's isolated scope in place, making every
+  outer variable undefined after the catch. VM: `raise!` now unwinds the
+  frame stack to the nearest ancestor frame with an active catch (popping
+  callee frames and registers) instead of only checking the top frame, so
+  `:!` fires for errors raised at any call depth. Regression test:
+  `tests/bugs/bug_l16_try_scope_restore.zy` (TW == VM).
+- **L14 — destructuring silently overwrote `:=` constants.** Now a semantic
+  error at `check` time ("cannot reassign constant"), consistent with direct
+  reassignment. Test: `tests/errors/semantic/const_destructure_overwrite.zy`.
+- Postfix operators in `>>` juxtaposition (former L1) covered by a new
+  regression test: `tests/bugs/regression_postfix_output.zy`.
+- **L9 and L13 verified already fixed; docs were stale.** L9: no more
+  false-positive "unused variable" warnings for variables used only in string
+  interpolation or BashExec (test: `tests/errors/semantic/no_false_positive_unused.zy`).
+  L13: `$!!` inside lambdas propagates the error as an early return to the
+  lambda's caller — identical to named functions, both engines (test:
+  `tests/lambdas/error_propagate_lambda.zy`).
+- **`zymbol check` printed every module error twice.** `ModuleAnalyzer::analyze`
+  returned its findings in the `Err` AND retained them in `diagnostics()`; both
+  channels were printed. `analyze` now drains its findings into the `Err`, so
+  `diagnostics()` only carries `validate_exports` results. E00x semantic
+  goldens regenerated (single occurrence per finding).
+- **LSP diagnostic parity with `zymbol check`** (audit over the full 521-file
+  corpus). The LSP pipeline now runs module analysis — E001 (name mismatch),
+  E002 (module not found), E009 (duplicate export) and export validation were
+  invisible in the editor. Ambiguous-lifetime severity raised from HINT to
+  WARNING to match `zymbol check`. Remaining intentional difference: on files
+  with parse errors the editor analyzes the recovered AST while `check` stops.
+  New audit tool: `cargo run -p zymbol-analyzer --example dump_diagnostics`.
+  Tests: `test_module_errors_in_pipeline`, `test_ambiguous_lifetime_is_warning`.
+- Workspace metadata: real repository URL, ghost crate entries removed.
+- Security: `bytes` 1.11.0 → 1.11.1 (RUSTSEC-2026-0007).
+
+---
+
 ## [0.0.6] — 2026-06-07
 
 ### Changed (Breaking)

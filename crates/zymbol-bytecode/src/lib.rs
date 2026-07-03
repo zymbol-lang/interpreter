@@ -249,10 +249,11 @@ pub enum Instruction {
     QueryTerminalSize(Reg),
     /// <<| var / <<|? var — read one key → Value::Char in dst; blocking flag
     ReadKey(Reg, bool),
-    /// << var / << "prompt" var / << #|var| — read a line from stdin → store in dst
+    /// << var / << "prompt" var / << #|var| / << <typespec> "prompt" var
+    /// read a line from stdin → store in dst.
     /// prompt_reg: Some(r) = print register r as prompt before reading; None = no prompt
-    /// numeric: true = apply parse_numeric_string (Int/Float, fallback String)
-    ReadLine(Reg, Option<Reg>, bool),
+    /// kind: how to validate/coerce the line (and whether to re-prompt). See `InputKind`.
+    ReadLine(Reg, Option<Reg>, InputKind),
     /// >>~ pos > items — positioned output (pos tuple in r_pos, items in Vec<Reg>)
     PrintAt(Reg, Vec<Reg>),
     /// >>| { } — enter alternate screen + raw mode
@@ -269,6 +270,16 @@ pub enum Instruction {
     // ── CLI args ─────────────────────────────────────────────────────────
     /// dst = Array of CLI arguments passed after the script path (argv[1..])
     LoadCliArgs(Reg),
+
+    // ── Functional update ($~) ───────────────────────────────────────────
+    /// Functional update through an index path: dst holds a copy of the root
+    /// collection; idx_path holds an Array of step indices (Int for arrays,
+    /// tuples, and named tuples; String for a named-tuple field name).
+    /// Walks the path, replaces the addressed element with val, and leaves the
+    /// new collection in dst. Handles Array, Tuple, and NamedTuple at every
+    /// level — mirrors the tree-walker's `$~` semantics (arr[i]$~, t[i]$~,
+    /// nt["field"]$~, and deep arr[i>j>…]$~).
+    DeepSet(Reg, Reg, Reg), // (dst_root, idx_path, val)
 
     // ── Halt ─────────────────────────────────────────────────────────────
     Halt,
@@ -290,6 +301,26 @@ pub enum BuildPart {
     Lit(StrIdx),
     /// A register whose value gets to_string()'d
     Reg(Reg),
+}
+
+/// How a `ReadLine` should validate and coerce the line it reads. Mirrors the
+/// tree-walker's `InputCast`; the typed variants re-prompt until the input is valid.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum InputKind {
+    /// Store the trimmed line verbatim as a String.
+    Raw,
+    /// Legacy `#|var|`: parse to Int/Float, falling back to String.
+    Numeric,
+    /// `##.` — any valid floating-point number → Float.
+    Float,
+    /// `##.(total, decimals)` — fixed-format decimal → Float.
+    Decimal { total: u32, decimals: u32 },
+    /// `###` / `###(n)` — integer with at most `max_digits` digits → Int.
+    Int { max_digits: Option<u32> },
+    /// `##"` / `##"(n)` — string of at most `max` characters → String.
+    Text { max: Option<u32> },
+    /// `##'` — exactly one character → Char.
+    Char,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -351,6 +382,39 @@ pub mod builtins {
     pub const RAND_ENTERO:   u16 = 100;
     pub const RAND_RANGO:    u16 = 101;
     pub const RAND_PESO_F64: u16 = 102;
+    // std/json functions
+    pub const JSON_DECODE:     u16 = 200;
+    pub const JSON_ENCODE:     u16 = 201;
+    pub const JSON_DECODE_MAP: u16 = 202;
+    // std/io functions
+    pub const IO_READ:       u16 = 300;
+    pub const IO_WRITE:      u16 = 301;
+    pub const IO_APPEND:     u16 = 302;
+    pub const IO_EXISTS:     u16 = 303;
+    pub const IO_DELETE:     u16 = 304;
+    pub const IO_LIST:       u16 = 305;
+    pub const IO_MKDIR:      u16 = 306;
+    // std/net functions
+    pub const NET_GET:       u16 = 400;
+    pub const NET_POST:      u16 = 401;
+    pub const NET_POST_JSON: u16 = 402;
+    pub const NET_HEAD:      u16 = 403;
+    // std/db functions (vendor-neutral via ODBC)
+    pub const DB_CONNECT:      u16 = 500;
+    pub const DB_DISCONNECT:   u16 = 501;
+    pub const DB_EXEC:         u16 = 502;
+    pub const DB_QUERY:        u16 = 503;
+    pub const DB_QUERY_ONE:    u16 = 504;
+    pub const DB_QUERY_VALUE:  u16 = 505;
+    pub const DB_TX:           u16 = 506;
+    pub const DB_BEGIN:        u16 = 507;
+    pub const DB_COMMIT:       u16 = 508;
+    pub const DB_ROLLBACK:     u16 = 509;
+    pub const DB_SAVEPOINT:    u16 = 510;
+    pub const DB_RELEASE:      u16 = 511;
+    pub const DB_ROLLBACK_TO:  u16 = 512;
+    pub const DB_EXEC_SCRIPT:  u16 = 513;
+    pub const DB_TABLE_EXISTS: u16 = 514;
 }
 
 #[derive(Debug, Serialize, Deserialize)]

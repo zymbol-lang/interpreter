@@ -1,0 +1,20 @@
+// Test: std/io write/read/append/exists/delete roundtrip + soft error
+<# std/io => io
+
+tmp = "/tmp/zy_io_rw_test.txt"
+
+// write -> read roundtrip
+io::write(tmp, "hello")
+>> io::read(tmp) ¶
+>> io::exists(tmp) ¶
+
+// append, then read concatenated
+io::append(tmp, " world")
+>> io::read(tmp) ¶
+
+// delete -> no longer exists
+io::delete(tmp)
+>> io::exists(tmp) ¶
+
+// reading a missing file returns a soft IO error (catchable), not a crash
+>> io::read("/tmp/zy_io_absent_zzz.txt") ¶

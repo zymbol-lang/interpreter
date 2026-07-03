@@ -98,6 +98,24 @@ stream moving in one direction. Modified with other symbols, they specify *what*
 the program. The second symbol specifies the *medium*: `<` (line), `|` (single char/gate),
 `#` (module namespace), `~` (function return channel), `\` (shell).
 
+#### Typed input — a cast marker on the read
+
+A cast symbol placed right after `<<` (before the prompt) constrains and converts the
+value as it is read, re-prompting until it is valid: `<< <typespec> "prompt" var`. This
+reuses the type/cast symbols rather than inventing new ones — the constraint *is* the
+type, with an optional size in parentheses.
+
+| Form | Reads → | Notes |
+|------|---------|-------|
+| `<< ##.(T,D) "p" v` | `Float` | decimal, ≤T digits total, ≤D after the point |
+| `<< ##. "p" v` | `Float` | any number |
+| `<< ###(N) "p" v` | `Int` | ≤N digits |
+| `<< ##"(N) "p" v` | `String` | ≤N characters |
+| `<< ##' "p" v` | `Char` | exactly one character |
+
+The size argument is the one concession to "named arguments" on an input flow; everything
+else stays pure symbol. Validated identically in the tree-walker and the VM.
+
 #### `<<|` vs `<<|?` — the blocking distinction
 
 | Form | Meaning | Returns |
@@ -379,6 +397,33 @@ Using `@~` outside a loop is a semantic error, same as `@!` outside a loop.
 
 ---
 
+## Symbol Changes in v0.0.6 and v0.0.7
+
+Neither version coined a new symbol — both extended existing ones, which is the
+intended mechanism of growth (see [Design Rules](#design-rules-for-new-operators)).
+
+**v0.0.6 — `=>` (FatArrow) unification.** `=>` became the single "maps to" separator
+across all three renaming contexts (breaking change):
+
+| Context | Before | Now |
+|---------|--------|-----|
+| match arm | `pattern : result` | `pattern => result` |
+| import alias | `<# path <= alias` | `<# path => alias` |
+| export rename | `#> { fn <= pub }` | `#> { fn => pub }` |
+
+**v0.0.7 — typed input reuses the cast symbols.** The input typespecs
+(`<< ##.(5,2) "p" v`, `<< ###(4)`, `<< ##"(20)`, `<< ##'`) are the existing `##` cast
+family placed before the prompt — a composition, not a new symbol. Note that `##"` and
+`##'` are newly *occupied combinations* (cast-to-String and cast-to-Char markers,
+valid only as input typespecs).
+
+**v0.0.7 — stdlib without symbols.** `std/json`, `std/io`, `std/net`, `std/db` are
+modules (`alias::func(...)`), not symbols, per the symbol-vs-module rubric: a *named
+operation on an addressed resource* (a path, a URL, a connection) is a module call;
+symbols are reserved for ambient process flows (`>>`, `<<`, `><`, `<\ \>`).
+
+---
+
 ## Occupied Symbol Combinations Reference
 
 Use this table when designing new operators to avoid conflicts.
@@ -394,6 +439,7 @@ Use this table when designing new operators to avoid conflicts.
 | Used | Meaning |
 |------|---------|
 | `<<` | read line (input) |
+| `<< ##.` / `<< ###` / `<< ##"` / `<< ##'` | typed/validated input (v0.0.7) |
 | `<<\|` | read key blocking |
 | `<<\|?` | read key non-blocking |
 
@@ -421,6 +467,7 @@ Use this table when designing new operators to avoid conflicts.
 | `<#` | import |
 | `#1` / `#0` | bool literals |
 | `##` | type symbols / casts |
+| `##"` / `##'` | input typespecs: String / Char (v0.0.7, only after `<<`) |
 | `#.N` | round |
 | `#!N` | truncate |
 | `#,` | comma format |

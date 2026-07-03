@@ -510,7 +510,7 @@ impl Parser {
                     // item, not a function call. Without this guard:
                     //   >> "label" (expr) ¶  →  FunctionCall("label", [expr])  →  runtime error
                     // Any non-literal expression may evaluate to a Function at runtime.
-                    let is_literal = matches!(&expr, Expr::Literal(_));
+                    let is_literal = matches!(expr.unwrap_group(), Expr::Literal(_));
                     if is_literal {
                         break;
                     }

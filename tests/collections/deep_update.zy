@@ -1,0 +1,41 @@
+// Test: deep functional update arr[i>j>…]$~ val (TW + VM parity via DeepSet).
+// Covers: 2-level and 3-level paths, negative indices, computed indices,
+// variable indices, original-unchanged semantics, nested tuples/named tuples,
+// and $~ inside a HOF lambda (exercises the VM's nested-call mini-loop).
+
+// 2-level matrix update
+m = [[1, 2], [3, 4]]
+m2 = m[1>2]$~ 99
+>> m ¶
+>> m2 ¶
+
+// 3-level cube update
+cubo = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
+c2 = cubo[2>1>2]$~ 0
+>> c2 ¶
+
+// Negative indices (count from the end at each level)
+n2 = m[-1>-1]$~ 77
+>> n2 ¶
+
+// Computed and variable indices in the path
+fila = 2
+col2 = m[(fila)>(3 - 2)]$~ 30
+>> col2 ¶
+
+// Single-level positional tuple update (functional — original untouched)
+t = (10, 20, 30)
+t2 = t[2]$~ 999
+>> t ¶
+>> t2 ¶
+
+// Deep update into an array nested inside a named tuple field (by position)
+reg = (id: 7, datos: [100, 200, 300])
+reg2 = reg[2>3]$~ 0
+>> reg2.datos ¶
+>> reg.datos ¶
+
+// $~ inside a map lambda
+filas = [[1, 1], [2, 2]]
+marcadas = filas$> (f -> f[2]$~ 9)
+>> marcadas ¶

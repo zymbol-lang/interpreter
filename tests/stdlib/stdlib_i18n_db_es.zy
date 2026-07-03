@@ -1,0 +1,16 @@
+// Test: std/db re-exported through a Spanish adapter module (i18n three-layer).
+// Requires the SQLite ODBC driver (Driver={SQLite3}).
+<# ./db_es => db
+
+ruta = "Driver={SQLite3};Database=/tmp/zy_test_db_i18n.db;"
+db::conectar("c", ruta)
+db::ejecutar("c", "DROP TABLE IF EXISTS items")
+db::ejecutar("c", "CREATE TABLE items(id INTEGER PRIMARY KEY, txt TEXT)")
+db::ejecutar("c", "INSERT INTO items(id, txt) VALUES(?, ?)", (1, "hola"))
+
+fila = db::consultar_una("c", "SELECT txt FROM items WHERE id = ?", (1,))
+>> fila.txt ¶
+>> db::consultar_valor("c", "SELECT COUNT(*) FROM items") ¶
+>> db::existe_tabla("c", "items") ¶
+
+db::desconectar("c")

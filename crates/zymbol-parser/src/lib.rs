@@ -432,7 +432,7 @@ impl Parser {
                     ));
                 }
                 TokenKind::LParen => {
-                    if matches!(expr, Expr::Literal(_)) { break; }
+                    if matches!(expr.unwrap_group(), Expr::Literal(_)) { break; }
                     if self.peek().span.start.line != expr.span().end.line { break; }
                     self.advance();
                     let mut arguments = Vec::new();
@@ -522,7 +522,7 @@ impl Parser {
                     // A '(' on a new line starts a new statement (e.g. destructure pattern),
                     // not a chained call.
                     // Literals (strings, numbers, bools, chars) are never callable.
-                    if matches!(expr, Expr::Literal(_)) {
+                    if matches!(expr.unwrap_group(), Expr::Literal(_)) {
                         break;
                     }
                     if self.peek().span.start.line != expr.span().end.line {
@@ -670,15 +670,16 @@ impl Parser {
                 if self.is_lambda_start() {
                     self.parse_lambda()?
                 } else {
-                    // Grouped expression
-                    self.advance(); // consume (
+                    // Grouped expression — preserve the user's parens
+                    let lparen = self.advance(); // consume (
                     let inner = self.parse_expr()?;
                     if !matches!(self.peek().kind, TokenKind::RParen) {
                         return Err(Diagnostic::error("expected ')' after expression")
                             .with_span(self.peek().span));
                     }
-                    self.advance(); // consume )
-                    inner
+                    let rparen = self.advance(); // consume )
+                    let span = lparen.span.to(&rparen.span);
+                    Expr::Group(zymbol_ast::GroupExpr::new(Box::new(inner), span))
                 }
             }
             TokenKind::Ident(_) => {

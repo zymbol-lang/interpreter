@@ -7,12 +7,13 @@
 > `std/math` unblocks Zofia Phases 3–5 (activations, attention, positional encoding).
 > `std/random` unblocks Zofia Phase 5 weight initialization.
 >
-> **Relationship with IMPL_V007.md:** IMPL_V007 documents `std/env`, `std/io`,
-> `std/json`, `std/net` using a parallel `NativeFn` field in `LoadedModule`.
-> This document uses a unified `enum FunctionDef` instead — one lookup path for
-> all functions regardless of origin. After this infrastructure is in place,
-> IMPL_V007's four modules are implemented as additional `register()` files
-> with no further architecture changes.
+> **Relationship with IMPL_V007.md:** this document established the unified
+> `enum FunctionDef` architecture (one lookup path for all functions regardless
+> of origin). IMPL_V007.md — since rewritten to match this real architecture —
+> documents the v0.0.7 modules built on top of it: `std/json`, `std/io`,
+> `std/net` (and `std/db`, see `DESIGN_STD_DB.md`), each an additional
+> `register()` file with no further architecture changes. `std/env` was
+> dropped as redundant (see IMPL_V007.md §Symbol vs module).
 
 ---
 

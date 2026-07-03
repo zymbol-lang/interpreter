@@ -21,7 +21,24 @@ use zymbol_ast::{
     DeepIndexExpr, FlatExtractExpr, StructuredExtractExpr,
     NavStep, NavPath, ExtractGroup,
 };
+use zymbol_ast::AssignSugar;
+use zymbol_ast::InputCast;
 use zymbol_ast::PipeExpr;
+
+use crate::comments::{Comment, CommentStream};
+
+/// Surface token for a compound-assignment operator (`+=`, `-=`, …).
+fn compound_op_str(op: BinaryOp) -> Option<&'static str> {
+    match op {
+        BinaryOp::Add => Some("+="),
+        BinaryOp::Sub => Some("-="),
+        BinaryOp::Mul => Some("*="),
+        BinaryOp::Div => Some("/="),
+        BinaryOp::Mod => Some("%="),
+        BinaryOp::Pow => Some("^="),
+        _ => None,
+    }
+}
 use zymbol_common::{BinaryOp, Literal, UnaryOp};
 use zymbol_lexer::StringPart;
 
@@ -30,12 +47,98 @@ use crate::output::OutputBuilder;
 /// AST visitor that formats Zymbol code
 pub struct FormatVisitor<'a> {
     output: &'a mut OutputBuilder,
+    /// Source comments in span order, consumed as statements are emitted.
+    comments: CommentStream,
+    /// Source end-line of the last emitted statement or comment; drives
+    /// blank-line preservation (gap > 1 in the source → one blank line).
+    last_src_line: u32,
+    /// The last emitted line ended with a trailing `// comment` — joining
+    /// anything onto it would swallow the joined token into the comment.
+    last_had_trailing: bool,
 }
 
 impl<'a> FormatVisitor<'a> {
     /// Create a new format visitor
-    pub fn new(output: &'a mut OutputBuilder) -> Self {
-        Self { output }
+    pub fn new(output: &'a mut OutputBuilder, comments: CommentStream) -> Self {
+        Self { output, comments, last_src_line: 0, last_had_trailing: false }
+    }
+
+    // ── Comment emission (span-ordered; replaces the old merge_comments) ────
+
+    /// Write one comment (no trailing newline). Block-comment continuation
+    /// lines lose the opening line's original indentation and inherit the
+    /// current indent from the OutputBuilder (spec §9.3).
+    fn emit_comment(&mut self, c: &Comment) {
+        if !c.is_block {
+            self.output.write("//");
+            self.output.write(&c.text);
+            return;
+        }
+        self.output.write("/*");
+        let strip = c.start_col.saturating_sub(1) as usize;
+        let mut first = true;
+        for line in c.text.split('\n') {
+            if first {
+                self.output.write(line);
+                first = false;
+            } else {
+                self.output.newline();
+                let mut rest = line;
+                for _ in 0..strip {
+                    match rest.strip_prefix(' ') {
+                        Some(r) => rest = r,
+                        None => break,
+                    }
+                }
+                self.output.write(rest);
+            }
+        }
+        self.output.write("*/");
+    }
+
+    /// Emit every standalone comment that starts before `line`, preserving
+    /// one blank line where the source had a gap.
+    fn flush_comments_before(&mut self, line: u32) {
+        while let Some(c) = self.comments.next_before_line(line) {
+            if self.last_src_line > 0 && c.start_line > self.last_src_line + 1 {
+                self.output.newline();
+            }
+            self.emit_comment(&c);
+            self.output.newline();
+            self.last_src_line = c.end_line;
+        }
+    }
+
+    /// Emit comments trailing on `end_line` (call after the statement text,
+    /// before its newline).
+    fn emit_trailing_comments(&mut self, end_line: u32) {
+        self.last_had_trailing = false;
+        while let Some(c) = self.comments.next_on_line(end_line) {
+            self.output.write(" ");
+            self.emit_comment(&c);
+            self.last_src_line = self.last_src_line.max(c.end_line);
+            if !c.is_block {
+                self.last_had_trailing = true;
+            }
+        }
+    }
+
+    /// One blank line when the source had one or more blank lines before `line`.
+    fn blank_gap_before(&self, line: u32) -> bool {
+        self.last_src_line > 0 && line > self.last_src_line + 1
+    }
+
+    /// Emit the module export block like a statement: comments before it,
+    /// source-gap blank line, trailing comments, newline.
+    fn emit_export_block_stmt(&mut self, eb: &ExportBlock) {
+        self.flush_comments_before(eb.span.start.line);
+        if self.blank_gap_before(eb.span.start.line) {
+            self.output.newline();
+        }
+        self.format_export_block(eb);
+        self.last_src_line = eb.span.end.line;
+        self.emit_trailing_comments(eb.span.end.line);
+        self.output.newline();
     }
 
     /// Format an entire program
@@ -43,78 +146,148 @@ impl<'a> FormatVisitor<'a> {
         let in_module = program.module_decl.is_some();
 
         if let Some(ref module_decl) = program.module_decl {
+            // Header comments above `# name {`
+            self.flush_comments_before(module_decl.span.start.line);
             self.output.write("# ");
             self.output.write(&module_decl.name);
             self.output.open_brace();
             self.output.newline();
             self.output.indent();
+            self.last_src_line = module_decl.span.start.line;
 
             // Imports first (as they appear in source), then export block
             for import in &program.imports {
+                self.flush_comments_before(import.span.start.line);
                 self.format_import(import);
+                self.last_src_line = import.span.end.line;
+                self.emit_trailing_comments(import.span.end.line);
                 self.output.newline();
             }
 
-            if let Some(ref export_block) = module_decl.export_block {
-                if !program.imports.is_empty() {
-                    self.output.newline();
-                }
-                self.format_export_block(export_block);
-                self.output.newline();
-            }
+            // The export block is NOT printed here: it is emitted in source
+            // order relative to the module's statements (see the loop below),
+            // because modules may declare constants before `#> { ... }`.
         } else {
             // Non-module file: imports at top level
             for import in &program.imports {
+                self.flush_comments_before(import.span.start.line);
                 self.format_import(import);
+                self.last_src_line = import.span.end.line;
+                self.emit_trailing_comments(import.span.end.line);
                 self.output.newline();
             }
         }
 
-        // Add blank line after imports (non-module) or after export block (module)
-        if !in_module && !program.imports.is_empty() && !program.statements.is_empty() {
-            self.output.newline();
-        }
+        // Blank line after imports comes from source-gap preservation below
+        // (an unconditional blank here would stack with the gap blank and
+        // break idempotence).
+
+        // Export block pending emission at its source position
+        let mut pending_export = program
+            .module_decl
+            .as_ref()
+            .and_then(|m| m.export_block.as_ref());
 
         // Format statements
         let mut prev_was_function = false;
         let mut prev_was_newline = false;
+        let mut prev_stmt: Option<&Statement> = None;
         for (i, stmt) in program.statements.iter().enumerate() {
+            if let Some(eb) = pending_export {
+                if eb.span.start.line < stmt.span().start.line {
+                    self.emit_export_block_stmt(eb);
+                    pending_export = None;
+                }
+            }
             let is_function = matches!(stmt, Statement::FunctionDecl(_));
             let is_newline = matches!(stmt, Statement::Newline(_));
+            let join_output = Self::joins_previous_output(prev_stmt, stmt);
 
-            if i > 0 && (is_function || prev_was_function) && !is_newline {
-                self.output.newline();
-            }
+            // Join ¶ onto the previous line (only when prev wasn't already a ¶),
+            // and chained outputs that shared a source line: `>> a >> b`.
+            // Never join onto a line that ends in a `//` comment.
+            let join = ((is_newline && i > 0 && !prev_was_newline) || join_output)
+                && !self.last_had_trailing;
 
-            // Join ¶ onto the previous line only when prev wasn't already a ¶
-            if is_newline && i > 0 && !prev_was_newline {
+            if join {
                 self.output.backspace_newline();
                 self.output.space();
+            } else {
+                let line = stmt.span().start.line;
+                self.flush_comments_before(line);
+                // Blank line: preserved source gap, or §5.3 around functions
+                let func_blank = i > 0 && (is_function || prev_was_function) && !is_newline;
+                if self.blank_gap_before(line) || func_blank {
+                    self.output.newline();
+                }
             }
 
             self.format_statement(stmt);
+            self.last_src_line = stmt.span().end.line;
+            self.emit_trailing_comments(stmt.span().end.line);
             self.output.newline();
 
             prev_was_function = is_function;
             prev_was_newline = is_newline;
+            prev_stmt = Some(stmt);
+        }
+
+        // Export block after every statement (or module with no statements)
+        if let Some(eb) = pending_export {
+            self.emit_export_block_stmt(eb);
         }
 
         if in_module {
+            // Comments between the last statement and the module's closing }
+            if let Some(ref module_decl) = program.module_decl {
+                self.flush_comments_before(module_decl.span.end.line);
+            }
             self.output.dedent();
             self.output.close_brace();
             self.output.newline();
         }
+
+        // End-of-file flush: comments after the last statement
+        for c in self.comments.drain_rest() {
+            if self.last_src_line > 0 && c.start_line > self.last_src_line + 1 {
+                self.output.newline();
+            }
+            self.emit_comment(&c);
+            self.output.newline();
+            self.last_src_line = c.end_line;
+        }
     }
 
-    /// Format an export block
+    /// Format an export block, reprinting the user's optional `,` separators
+    /// and keeping single-line blocks (`#> { add, PI }`) on one line.
     fn format_export_block(&mut self, block: &ExportBlock) {
+        let comma_after = |i: usize| block.commas.get(i).copied().unwrap_or(false);
+
+        if block.span.start.line == block.span.end.line {
+            self.output.write("#> { ");
+            for (i, item) in block.items.iter().enumerate() {
+                if i > 0 {
+                    self.output.write(" ");
+                }
+                self.format_export_item(item);
+                if comma_after(i) {
+                    self.output.write(",");
+                }
+            }
+            self.output.write(" }");
+            return;
+        }
+
         self.output.write("#>");
         self.output.open_brace();
         self.output.newline();
         self.output.indent();
 
-        for item in &block.items {
+        for (i, item) in block.items.iter().enumerate() {
             self.format_export_item(item);
+            if comma_after(i) {
+                self.output.write(",");
+            }
             self.output.newline();
         }
 
@@ -186,7 +359,9 @@ impl<'a> FormatVisitor<'a> {
             Statement::Break(brk) => self.format_break(brk),
             Statement::Continue(cont) => self.format_continue(cont),
             Statement::Try(try_stmt) => self.format_try(try_stmt),
-            Statement::Newline(_) => self.output.write("¶"),
+            Statement::Newline(nl) => {
+                self.output.write(if nl.backslash { "\\\\" } else { "¶" })
+            }
             Statement::FunctionDecl(decl) => self.format_function_decl(decl),
             Statement::Return(ret) => self.format_return(ret),
             Statement::Match(match_expr) => {
@@ -214,14 +389,23 @@ impl<'a> FormatVisitor<'a> {
                 }
             }
             Statement::OutputPos(op) => {
-                self.output.write(">>~ (");
-                let mut first = true;
-                for slot in &op.slots {
-                    if !first { self.output.write(", "); }
-                    first = false;
-                    if let Some(expr) = slot { self.format_expr(expr); }
+                if op.parenthesized {
+                    self.output.write(">>~ (");
+                    let mut first = true;
+                    for slot in &op.slots {
+                        if !first { self.output.write(", "); }
+                        first = false;
+                        if let Some(expr) = slot { self.format_expr(expr); }
+                    }
+                    self.output.write(") >");
+                } else {
+                    // Bare-variable form: >>~ pos > items
+                    self.output.write(">>~ ");
+                    if let Some(Some(expr)) = op.slots.first() {
+                        self.format_expr(expr);
+                    }
+                    self.output.write(" >");
                 }
-                self.output.write(") >");
                 for item in &op.items {
                     self.output.write(" ");
                     self.format_expr(item);
@@ -251,9 +435,79 @@ impl<'a> FormatVisitor<'a> {
         }
     }
 
-    /// Format an assignment statement
+    /// Format an assignment statement, reprinting the surface form the user
+    /// wrote (`x += 1`, `x++`) from the parser's `sugar` record. The value
+    /// itself is always the desugared Binary, so when the sugar shape does not
+    /// match (defensive), fall back to plain `=` printing — the safety gate
+    /// rejects any unfaithful result.
     fn format_assignment(&mut self, assign: &Assignment) {
+        if assign.pre_hot {
+            self.output.write("°");
+        }
         self.output.write(&assign.name);
+        if assign.hot {
+            self.output.write("°");
+        }
+
+        match assign.sugar {
+            AssignSugar::Increment => {
+                self.output.write("++");
+                return;
+            }
+            AssignSugar::Decrement => {
+                self.output.write("--");
+                return;
+            }
+            AssignSugar::Compound(op) => {
+                if let Expr::Binary(bin) = &assign.value {
+                    if bin.op == op {
+                        if let Some(op_str) = compound_op_str(op) {
+                            self.output.write(" ");
+                            self.output.write(op_str);
+                            self.output.write(" ");
+                            self.format_expr(&bin.right);
+                            return;
+                        }
+                    }
+                }
+                // Shape mismatch — fall through to plain printing
+            }
+            AssignSugar::IndexedAssign => {
+                // name[i] = rhs   (value is CollectionUpdate{target: Index, value: rhs})
+                if let Expr::CollectionUpdate(cu) = &assign.value {
+                    if let Expr::Index(idx) = cu.target.as_ref() {
+                        self.output.write("[");
+                        self.format_expr(&idx.index);
+                        self.output.write("] = ");
+                        self.format_expr(&cu.value);
+                        return;
+                    }
+                }
+            }
+            AssignSugar::IndexedCompound(op) => {
+                // name[i] op= rhs (value is CollectionUpdate{target: Index,
+                //                  value: Binary{op, left: Index, right: rhs}})
+                if let Expr::CollectionUpdate(cu) = &assign.value {
+                    if let (Expr::Index(idx), Expr::Binary(bin)) =
+                        (cu.target.as_ref(), cu.value.as_ref())
+                    {
+                        if bin.op == op {
+                            if let Some(op_str) = compound_op_str(op) {
+                                self.output.write("[");
+                                self.format_expr(&idx.index);
+                                self.output.write("] ");
+                                self.output.write(op_str);
+                                self.output.write(" ");
+                                self.format_expr(&bin.right);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            AssignSugar::None => {}
+        }
+
         self.output.write(" = ");
         self.format_expr(&assign.value);
     }
@@ -325,9 +579,41 @@ impl<'a> FormatVisitor<'a> {
         self.output.write(&end.variable_name);
     }
 
-    /// Format an input statement
+    /// Format an input statement: `<< [typespec] ["prompt"] var` or `<< #|var|`
     fn format_input(&mut self, input: &Input) {
         self.output.write("<<");
+
+        // Typespec cast goes first, before the prompt (parser order)
+        match &input.cast {
+            InputCast::String | InputCast::Numeric => {}
+            InputCast::Float => {
+                self.output.space();
+                self.output.write("##.");
+            }
+            InputCast::Decimal { total, decimals } => {
+                self.output.space();
+                self.output.write(&format!("##.({},{})", total, decimals));
+            }
+            InputCast::Int { max_digits } => {
+                self.output.space();
+                match max_digits {
+                    Some(n) => self.output.write(&format!("###({})", n)),
+                    None => self.output.write("###"),
+                }
+            }
+            InputCast::Text { max } => {
+                self.output.space();
+                match max {
+                    Some(n) => self.output.write(&format!("##\"({})", n)),
+                    None => self.output.write("##\""),
+                }
+            }
+            InputCast::Char => {
+                self.output.space();
+                self.output.write("##'");
+            }
+        }
+
         if let Some(ref prompt) = input.prompt {
             self.output.space();
             match prompt {
@@ -341,8 +627,16 @@ impl<'a> FormatVisitor<'a> {
                 }
             }
         }
+
         self.output.space();
-        self.output.write(&input.variable);
+        if matches!(input.cast, InputCast::Numeric) {
+            // Legacy numeric form wraps the variable: `<< #|var|`
+            self.output.write("#|");
+            self.output.write(&input.variable);
+            self.output.write("|");
+        } else {
+            self.output.write(&input.variable);
+        }
     }
 
     /// Format an if statement
@@ -480,8 +774,9 @@ impl<'a> FormatVisitor<'a> {
                 self.output.write(&param.name);
             }
             ParameterKind::Mutable => {
-                self.output.write("~");
+                // Suffix form: `name~` (the parser only accepts the suffix)
                 self.output.write(&param.name);
+                self.output.write("~");
             }
             ParameterKind::Output => {
                 self.output.write(&param.name);
@@ -514,8 +809,12 @@ impl<'a> FormatVisitor<'a> {
         let config = self.output.config().clone();
         let single_stmt = block.statements.len() == 1;
         let is_simple = single_stmt && self.is_simple_statement(&block.statements[0]);
+        // A block holding a comment must stay multi-line so the comment has a home
+        let has_comment = self
+            .comments
+            .has_within(block.span.start.line, block.span.end.line);
 
-        if config.inline_single_statement && is_simple {
+        if config.inline_single_statement && is_simple && !has_comment {
             self.output.write(" { ");
             self.format_statement(&block.statements[0]);
             self.output.write(" }");
@@ -523,24 +822,51 @@ impl<'a> FormatVisitor<'a> {
             self.output.open_brace();
             self.output.newline();
             self.output.indent();
+            self.last_src_line = self.last_src_line.max(block.span.start.line);
 
             let stmts = &block.statements;
             let mut i = 0;
             let mut prev_was_newline = false;
             while i < stmts.len() {
                 let is_newline = matches!(stmts[i], Statement::Newline(_));
-                if is_newline && i > 0 && !prev_was_newline {
+                let join_output = i > 0
+                    && Self::joins_previous_output(Some(&stmts[i - 1]), &stmts[i]);
+                let join = ((is_newline && i > 0 && !prev_was_newline) || join_output)
+                    && !self.last_had_trailing;
+                if join {
                     self.output.backspace_newline();
                     self.output.space();
+                } else {
+                    let line = stmts[i].span().start.line;
+                    self.flush_comments_before(line);
+                    if self.blank_gap_before(line) {
+                        self.output.newline();
+                    }
                 }
                 self.format_statement(&stmts[i]);
+                self.last_src_line = stmts[i].span().end.line;
+                self.emit_trailing_comments(stmts[i].span().end.line);
                 self.output.newline();
                 prev_was_newline = is_newline;
                 i += 1;
             }
 
+            // Comments between the last statement and the closing }
+            self.flush_comments_before(block.span.end.line);
+
             self.output.dedent();
             self.output.close_brace();
+        }
+    }
+
+    /// Chained outputs written on one source line (`>> a >> b ¶`) parse as
+    /// separate Output statements; keep them on one formatted line.
+    fn joins_previous_output(prev: Option<&Statement>, current: &Statement) -> bool {
+        match (prev, current) {
+            (Some(p @ Statement::Output(_)), Statement::Output(_)) => {
+                p.span().end.line == current.span().start.line
+            }
+            _ => false,
         }
     }
 
@@ -561,6 +887,12 @@ impl<'a> FormatVisitor<'a> {
     /// Format an expression
     pub fn format_expr(&mut self, expr: &Expr) {
         match expr {
+            // User-written grouping parens, preserved by the parser
+            Expr::Group(group) => {
+                self.output.write("(");
+                self.format_expr(&group.expr);
+                self.output.write(")");
+            }
             Expr::Literal(lit) => self.format_literal(lit),
             Expr::Identifier(ident) => self.format_identifier(ident),
             Expr::Binary(binary) => self.format_binary(binary),
@@ -673,7 +1005,13 @@ impl<'a> FormatVisitor<'a> {
 
     /// Format an identifier expression
     fn format_identifier(&mut self, ident: &IdentifierExpr) {
+        if ident.pre_hot {
+            self.output.write("°");
+        }
         self.output.write(&ident.name);
+        if ident.hot {
+            self.output.write("°");
+        }
     }
 
     /// Format a binary expression
@@ -912,6 +1250,11 @@ impl<'a> FormatVisitor<'a> {
                     self.output.write(", ");
                 }
             }
+            // 1-tuples need the trailing comma: (1,) — without it the source
+            // would re-parse as a grouped expression.
+            if tuple.elements.len() == 1 {
+                self.output.write(",");
+            }
             self.output.write(")");
         }
     }
@@ -1037,19 +1380,15 @@ impl<'a> FormatVisitor<'a> {
         self.output.write("]");
     }
 
-    fn path_has_ranges(path: &NavPath) -> bool {
-        path.steps.iter().any(|s| s.range_end.is_some())
-    }
-
     fn format_flat_extract(&mut self, fe: &FlatExtractExpr) {
         self.format_expr(&fe.array);
-        if fe.paths.len() == 1 && Self::path_has_ranges(&fe.paths[0]) {
-            // Range-based extract uses single brackets: arr[i>a..b]
+        if fe.paths.len() == 1 && !fe.double_bracket {
+            // Single-bracket spelling: arr[i>a..b]
             self.output.write("[");
             self.format_nav_path(&fe.paths[0]);
             self.output.write("]");
         } else if fe.paths.len() == 1 {
-            // Explicit double-bracket extract: arr[[path]]
+            // Explicit double-bracket spelling: arr[[path]]
             self.output.write("[[");
             self.format_nav_path(&fe.paths[0]);
             self.output.write("]]");
@@ -1143,9 +1482,18 @@ impl<'a> FormatVisitor<'a> {
         self.output.indent();
 
         for case in &match_expr.cases {
+            self.flush_comments_before(case.span.start.line);
+            if self.blank_gap_before(case.span.start.line) {
+                self.output.newline();
+            }
             self.format_match_case(case);
+            self.last_src_line = case.span.end.line;
+            self.emit_trailing_comments(case.span.end.line);
             self.output.newline();
         }
+
+        // Comments between the last arm and the closing }
+        self.flush_comments_before(match_expr.span.end.line);
 
         self.output.dedent();
         self.output.close_brace();
@@ -1373,9 +1721,9 @@ impl<'a> FormatVisitor<'a> {
 
     /// Format a lambda expression
     fn format_lambda(&mut self, lambda: &LambdaExpr) {
-        if lambda.params.len() == 1 {
-            self.output.write(&lambda.params[0]);
-        } else {
+        // `(a, b) -> e` vs `a, b -> e` (the latter occurs inside a grouped
+        // lambda `(a, b -> e)`) — reprint the user's form.
+        if lambda.params_parenthesized {
             self.output.write("(");
             for (i, param) in lambda.params.iter().enumerate() {
                 self.output.write(param);
@@ -1384,6 +1732,13 @@ impl<'a> FormatVisitor<'a> {
                 }
             }
             self.output.write(")");
+        } else {
+            for (i, param) in lambda.params.iter().enumerate() {
+                self.output.write(param);
+                if i < lambda.params.len() - 1 {
+                    self.output.write(", ");
+                }
+            }
         }
 
         self.output.write(" -> ");
@@ -1455,7 +1810,13 @@ impl<'a> FormatVisitor<'a> {
     /// Format execute expression
     fn format_execute(&mut self, exec: &ExecuteExpr) {
         self.output.write("</");
-        self.output.write(&exec.path);
+        if exec.quoted {
+            self.output.write("\"");
+            self.output.write(&exec.path);
+            self.output.write("\"");
+        } else {
+            self.output.write(&exec.path);
+        }
         self.output.write("/>");
     }
 

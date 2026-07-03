@@ -15,13 +15,29 @@ pub struct Output {
     pub span: Span,
 }
 
-/// Type conversion applied to the raw string after reading input.
+/// Type conversion (and validation) applied to the raw string after reading input.
+///
+/// The typed variants (`Float`/`Decimal`/`Int`/`Text`/`Char`) come from the input
+/// typespec syntax `<< <typespec> "prompt" var`, where `<typespec>` reuses the cast
+/// symbols: `##.` Float, `###` Int, `##"` String, `##'` Char, with an optional size
+/// constraint in parentheses. They re-prompt until the input is valid.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InputCast {
-    /// Store as raw `String` (default).
+    /// Store as raw `String` (default): `<< var`.
     String,
     /// Apply `#|...|` numeric eval: parse to `Int` or `Float`, fall back to `String`.
     Numeric,
+    /// `##.` — any valid floating-point number → `Float`.
+    Float,
+    /// `##.(total, decimals)` — decimal with at most `total` digits overall and at
+    /// most `decimals` fractional digits → `Float`.
+    Decimal { total: u32, decimals: u32 },
+    /// `###` (max_digits None) or `###(N)` — integer with at most N digits → `Int`.
+    Int { max_digits: Option<u32> },
+    /// `##"` (max None) or `##"(N)` — string of at most N characters → `String`.
+    Text { max: Option<u32> },
+    /// `##'` — exactly one character → `Char`.
+    Char,
 }
 
 /// Input statement: << variable  OR  << #|variable|
@@ -46,6 +62,8 @@ pub enum InputPrompt {
 #[derive(Debug, Clone)]
 pub struct Newline {
     pub span: Span,
+    /// `true` when written as `\\`, `false` when written as `¶`
+    pub backslash: bool,
 }
 
 /// Clear screen statement: >>!
@@ -68,6 +86,8 @@ pub struct KeyInput {
 pub struct OutputPos {
     pub slots: Vec<Option<crate::Expr>>,  // [fila, col, BKS, fg, bg] — up to 5, None = absent
     pub items: Vec<crate::Expr>,
+    /// `false` for the bare-variable form `>>~ pos > items` (no parens)
+    pub parenthesized: bool,
     pub span: Span,
 }
 
@@ -93,7 +113,9 @@ impl Input {
 }
 
 impl Newline {
-    pub fn new(span: Span) -> Self { Self { span } }
+    pub fn new(span: Span) -> Self { Self { span, backslash: false } }
+
+    pub fn new_backslash(span: Span) -> Self { Self { span, backslash: true } }
 }
 
 impl ClearScreen {
@@ -108,7 +130,11 @@ impl KeyInput {
 
 impl OutputPos {
     pub fn new(slots: Vec<Option<crate::Expr>>, items: Vec<crate::Expr>, span: Span) -> Self {
-        Self { slots, items, span }
+        Self { slots, items, parenthesized: true, span }
+    }
+
+    pub fn new_bare(slots: Vec<Option<crate::Expr>>, items: Vec<crate::Expr>, span: Span) -> Self {
+        Self { slots, items, parenthesized: false, span }
     }
 }
 

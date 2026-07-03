@@ -5,8 +5,31 @@
 //! - Constant declaration: name := expr (immutable)
 //! - Lifetime end: \variable (explicit destruction)
 
+use zymbol_common::BinaryOp;
 use zymbol_span::Span;
 use crate::Expr;
+
+/// Surface syntax the parser desugared into a plain assignment.
+///
+/// `value` always holds the desugared expression (e.g. `x + 1` for `x += 1`),
+/// so the interpreter, compiler and analyses never need to look at this field.
+/// The formatter uses it to reprint exactly what the user wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AssignSugar {
+    /// Plain `name = expr`
+    #[default]
+    None,
+    /// Compound assignment `name op= expr` (e.g. `+=`, `*=`)
+    Compound(BinaryOp),
+    /// `name++`
+    Increment,
+    /// `name--`
+    Decrement,
+    /// Indexed assignment `name[i] = expr` (desugared to CollectionUpdate)
+    IndexedAssign,
+    /// Indexed compound assignment `name[i] op= expr`
+    IndexedCompound(BinaryOp),
+}
 
 /// Assignment statement: name = expr
 #[derive(Debug, Clone)]
@@ -18,6 +41,8 @@ pub struct Assignment {
     pub hot: bool,
     /// `°x op= n` — anchor to the scope above the nearest enclosing `@`
     pub pre_hot: bool,
+    /// Surface form this assignment was written in (`+=`, `++`, …)
+    pub sugar: AssignSugar,
 }
 
 /// Constant declaration: name := expr (immutable)
@@ -37,15 +62,15 @@ pub struct LifetimeEnd {
 
 impl Assignment {
     pub fn new(name: String, value: Expr, span: Span) -> Self {
-        Self { name, value, span, hot: false, pre_hot: false }
+        Self { name, value, span, hot: false, pre_hot: false, sugar: AssignSugar::None }
     }
 
     pub fn new_hot(name: String, value: Expr, span: Span) -> Self {
-        Self { name, value, span, hot: true, pre_hot: false }
+        Self { name, value, span, hot: true, pre_hot: false, sugar: AssignSugar::None }
     }
 
     pub fn new_pre_hot(name: String, value: Expr, span: Span) -> Self {
-        Self { name, value, span, hot: false, pre_hot: true }
+        Self { name, value, span, hot: false, pre_hot: true, sugar: AssignSugar::None }
     }
 }
 

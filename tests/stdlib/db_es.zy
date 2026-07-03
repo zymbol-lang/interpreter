@@ -1,0 +1,21 @@
+# db_es {
+    <# std/db => _db
+
+    #> {
+        _db::connect      => conectar
+        _db::disconnect   => desconectar
+        _db::exec         => ejecutar
+        _db::query        => consultar
+        _db::query_one    => consultar_una
+        _db::query_value  => consultar_valor
+        _db::tx           => transaccion
+        _db::begin        => iniciar
+        _db::commit       => confirmar
+        _db::rollback     => revertir
+        _db::savepoint    => punto_guardado
+        _db::release      => liberar
+        _db::rollback_to  => revertir_a
+        _db::exec_script  => ejecutar_script
+        _db::table_exists => existe_tabla
+    }
+}

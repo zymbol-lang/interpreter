@@ -271,6 +271,10 @@ pub enum TokenKind {
     HashHashHash,
     /// ##! (cast to Int truncating: ##!expr)
     HashHashBang,
+    /// ##" (String type marker — currently only as an input typespec: << ##"(N) ...)
+    HashHashQuote,
+    /// ##' (Char type marker — currently only as an input typespec: << ##' ...)
+    HashHashApos,
 
     // Delimiters
     /// { (left brace)
@@ -725,6 +729,16 @@ impl Lexer {
                         self.advance(); // consume second #
                         self.advance(); // consume !
                         return Token::new(TokenKind::HashHashBang, self.span(start));
+                    } else if third == Some('"') {
+                        self.advance(); // consume first #
+                        self.advance(); // consume second #
+                        self.advance(); // consume "
+                        return Token::new(TokenKind::HashHashQuote, self.span(start));
+                    } else if third == Some('\'') {
+                        self.advance(); // consume first #
+                        self.advance(); // consume second #
+                        self.advance(); // consume '
+                        return Token::new(TokenKind::HashHashApos, self.span(start));
                     }
                     // unrecognized ##X — fall through to emit lone Hash
                 }

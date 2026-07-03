@@ -177,7 +177,7 @@ impl Parser {
     /// Returns true if `expr` is a pure literal value (int, float, string, bool, char).
     /// Module-level constants and variables must be initialized with literals only.
     fn is_literal_expr(expr: &Expr) -> bool {
-        matches!(expr, Expr::Literal(_))
+        matches!(expr.unwrap_group(), Expr::Literal(_))
     }
 
     /// Parse export block: #> { items }
@@ -201,13 +201,17 @@ impl Parser {
 
         // Parse export items
         let mut items = Vec::new();
+        let mut commas = Vec::new();
         while !matches!(self.peek().kind, TokenKind::RBrace) && !self.is_at_end() {
             items.push(self.parse_export_item()?);
 
-            // Consume optional comma or semicolon
+            // Consume optional comma or semicolon, recording commas so the
+            // formatter can reprint the user's separators faithfully
+            let has_comma = matches!(self.peek().kind, TokenKind::Comma);
             if matches!(self.peek().kind, TokenKind::Comma | TokenKind::Semicolon) {
                 self.advance();
             }
+            commas.push(has_comma);
         }
 
         // Consume }
@@ -219,7 +223,7 @@ impl Parser {
         self.advance(); // consume }
 
         let span = start_token.span.to(&end_token.span);
-        Ok(ExportBlock::new(items, span))
+        Ok(ExportBlock::with_commas(items, commas, span))
     }
 
     /// Parse export item: own_item, alias::func, alias.CONST, or renamed

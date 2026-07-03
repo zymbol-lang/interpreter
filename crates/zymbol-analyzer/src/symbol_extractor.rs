@@ -393,6 +393,9 @@ impl SymbolExtractor {
     /// Extract symbols from an expression (for lambda assignments)
     fn extract_from_expr(&mut self, expr: &Expr) {
         match expr {
+            // Grouping parens are transparent
+            Expr::Group(group) => self.extract_from_expr(&group.expr),
+
             Expr::Lambda(lambda) => {
                 // Lambda parameters could be tracked separately if needed
                 match &lambda.body {

@@ -648,6 +648,9 @@ impl DefUseAnalyzer {
     /// Analyze an expression for variable uses
     fn analyze_expr(&mut self, expr: &Expr, node_index: usize) {
         match expr {
+            // Grouping parens are transparent
+            Expr::Group(group) => self.analyze_expr(&group.expr, node_index),
+
             Expr::Identifier(ident) => {
                 // This is a read
                 let chain = self.chains.entry(ident.name.clone()).or_insert_with(|| {

@@ -3,9 +3,19 @@
 //! Mirrors the implementations in zymbol-interpreter/src/stdlib/, but without
 //! the interpreter dependency. Called from CallBuiltin instructions.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use base64::Engine as _;
+use odbc_api::{
+    handles::DataType, parameter::InputParameter, Connection, ConnectionOptions, Cursor,
+    Environment, IntoParameter,
+};
+use once_cell::sync::Lazy;
 use zymbol_bytecode::builtins as B;
 
-use crate::Value;
+use crate::{Value, ZyStr};
 
 #[inline]
 fn as_f64(v: &Value) -> Option<f64> {
@@ -250,6 +260,772 @@ fn rand_peso_f64(_args: Vec<Value>) -> Result<Value, String> {
     Ok(Value::Float(((xoshiro_next() % 201) as f64 - 100.0) / 1000.0))
 }
 
+// ── std/json ───────────────────────────────────────────────────────────────────
+//
+// Mirrors zymbol-interpreter/src/stdlib/json.rs. Malformed JSON and encode
+// failures are returned as soft `Value::Error` (catchable), not as `Err`.
+
+/// Convert a serde_json value into a VM value.
+fn json_to_value(v: serde_json::Value) -> Value {
+    match v {
+        serde_json::Value::Null => Value::Unit,
+        serde_json::Value::Bool(b) => Value::Bool(b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else {
+                Value::Float(n.as_f64().unwrap_or(f64::NAN))
+            }
+        }
+        serde_json::Value::String(s) => Value::String(ZyStr::new(s)),
+        serde_json::Value::Array(arr) => {
+            Value::Array(Rc::new(arr.into_iter().map(json_to_value).collect()))
+        }
+        serde_json::Value::Object(map) => Value::NamedTuple(Rc::new(
+            map.into_iter().map(|(k, v)| (k, json_to_value(v))).collect(),
+        )),
+    }
+}
+
+/// Convert a VM value into a serde_json value.
+/// Tuples encode as arrays; named tuples as objects. Functions/errors become null.
+fn value_to_json(v: &Value) -> serde_json::Value {
+    match v {
+        Value::Unit => serde_json::Value::Null,
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Int(i) => serde_json::json!(i),
+        Value::Float(f) => serde_json::json!(f),
+        Value::String(s) => serde_json::Value::String(s.as_str().to_string()),
+        Value::Char(c) => serde_json::Value::String(c.to_string()),
+        Value::Array(arr) | Value::Tuple(arr) => {
+            serde_json::Value::Array(arr.iter().map(value_to_json).collect())
+        }
+        Value::NamedTuple(pairs) => serde_json::Value::Object(
+            pairs.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect(),
+        ),
+        Value::Function(..) | Value::Closure(..) | Value::Error(_) => serde_json::Value::Null,
+    }
+}
+
+fn json_decode(args: Vec<Value>) -> Result<Value, String> {
+    match args.into_iter().next() {
+        Some(Value::String(text)) => match serde_json::from_str::<serde_json::Value>(text.as_str()) {
+            Ok(v) => Ok(json_to_value(v)),
+            Err(e) => Ok(Value::Error(ZyStr::new(format!("##Parse({})", e)))),
+        },
+        _ => Err("json::decode: expected String".into()),
+    }
+}
+
+/// Build a source→target key-rename table from a NamedTuple map argument.
+fn build_rename_map(map: Value) -> Result<HashMap<String, String>, String> {
+    match map {
+        // An empty `()` (Unit) means "no renames" — decode_map behaves like decode.
+        Value::Unit => Ok(HashMap::new()),
+        Value::NamedTuple(pairs) => {
+            let mut table = HashMap::with_capacity(pairs.len());
+            for (src, dst) in pairs.iter() {
+                match dst {
+                    Value::String(name) => {
+                        table.insert(src.clone(), name.as_str().to_string());
+                    }
+                    _ => {
+                        return Err(format!(
+                            "json::decode_map: map value for '{}' must be a String (the new name)",
+                            src
+                        ))
+                    }
+                }
+            }
+            Ok(table)
+        }
+        _ => Err("json::decode_map: expected a NamedTuple map as the second argument".into()),
+    }
+}
+
+/// Recursively rename NamedTuple field names according to `table`, at any depth.
+fn rekey(value: Value, table: &HashMap<String, String>) -> Value {
+    match value {
+        Value::NamedTuple(pairs) => Value::NamedTuple(Rc::new(
+            pairs
+                .iter()
+                .map(|(k, v)| {
+                    let new_key = table.get(k).cloned().unwrap_or_else(|| k.clone());
+                    (new_key, rekey(v.clone(), table))
+                })
+                .collect(),
+        )),
+        Value::Array(items) => {
+            Value::Array(Rc::new(items.iter().map(|v| rekey(v.clone(), table)).collect()))
+        }
+        Value::Tuple(items) => {
+            Value::Tuple(Rc::new(items.iter().map(|v| rekey(v.clone(), table)).collect()))
+        }
+        other => other,
+    }
+}
+
+fn json_decode_map(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    let text = match it.next() {
+        Some(Value::String(text)) => text,
+        _ => return Err("json::decode_map: expected String as the first argument".into()),
+    };
+    let table = build_rename_map(it.next().unwrap_or(Value::Unit))?;
+    match serde_json::from_str::<serde_json::Value>(text.as_str()) {
+        Ok(v) => Ok(rekey(json_to_value(v), &table)),
+        Err(e) => Ok(Value::Error(ZyStr::new(format!("##Parse({})", e)))),
+    }
+}
+
+fn json_encode(args: Vec<Value>) -> Result<Value, String> {
+    // Arity is validated by the compiler/dispatcher; one argument is guaranteed.
+    let value = args.first().cloned().unwrap_or(Value::Unit);
+    match serde_json::to_string(&value_to_json(&value)) {
+        Ok(s) => Ok(Value::String(ZyStr::new(s))),
+        Err(e) => Ok(Value::Error(ZyStr::new(format!("##Parse({})", e)))),
+    }
+}
+
+// ── std/io ───────────────────────────────────────────────────────────────────
+//
+// Mirrors zymbol-interpreter/src/stdlib/io.rs. Filesystem failures are returned as
+// soft `Value::Error("##IO(...)")` (catchable); a wrong argument type is a hard `Err`.
+
+fn io_err(e: std::io::Error) -> Value {
+    Value::Error(ZyStr::new(format!("##IO({})", e)))
+}
+
+fn io_read(args: Vec<Value>) -> Result<Value, String> {
+    match args.into_iter().next() {
+        Some(Value::String(path)) => match std::fs::read_to_string(path.as_str()) {
+            Ok(content) => Ok(Value::String(ZyStr::new(content))),
+            Err(e) => Ok(io_err(e)),
+        },
+        _ => Err("io::read: expected String path".into()),
+    }
+}
+
+fn io_write(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    match (it.next(), it.next()) {
+        (Some(Value::String(path)), Some(Value::String(content))) => {
+            match std::fs::write(path.as_str(), content.as_str().as_bytes()) {
+                Ok(_) => Ok(Value::Unit),
+                Err(e) => Ok(io_err(e)),
+            }
+        }
+        _ => Err("io::write: expected (String, String)".into()),
+    }
+}
+
+fn io_append(args: Vec<Value>) -> Result<Value, String> {
+    use std::io::Write;
+    let mut it = args.into_iter();
+    match (it.next(), it.next()) {
+        (Some(Value::String(path)), Some(Value::String(content))) => {
+            match std::fs::OpenOptions::new().append(true).create(true).open(path.as_str()) {
+                Ok(mut f) => match f.write_all(content.as_str().as_bytes()) {
+                    Ok(_) => Ok(Value::Unit),
+                    Err(e) => Ok(io_err(e)),
+                },
+                Err(e) => Ok(io_err(e)),
+            }
+        }
+        _ => Err("io::append: expected (String, String)".into()),
+    }
+}
+
+fn io_exists(args: Vec<Value>) -> Result<Value, String> {
+    match args.into_iter().next() {
+        Some(Value::String(path)) => Ok(Value::Bool(std::path::Path::new(path.as_str()).exists())),
+        _ => Err("io::exists: expected String path".into()),
+    }
+}
+
+fn io_delete(args: Vec<Value>) -> Result<Value, String> {
+    match args.into_iter().next() {
+        Some(Value::String(path)) => {
+            let p = std::path::Path::new(path.as_str());
+            let result = if p.is_dir() {
+                std::fs::remove_dir_all(p)
+            } else {
+                std::fs::remove_file(p)
+            };
+            match result {
+                Ok(_) => Ok(Value::Unit),
+                Err(e) => Ok(io_err(e)),
+            }
+        }
+        _ => Err("io::delete: expected String path".into()),
+    }
+}
+
+fn io_list(args: Vec<Value>) -> Result<Value, String> {
+    match args.into_iter().next() {
+        Some(Value::String(path)) => match std::fs::read_dir(path.as_str()) {
+            Ok(entries) => {
+                let mut names = Vec::new();
+                for entry in entries.flatten() {
+                    names.push(Value::String(ZyStr::new(
+                        entry.file_name().to_string_lossy().into_owned(),
+                    )));
+                }
+                Ok(Value::Array(Rc::new(names)))
+            }
+            Err(e) => Ok(io_err(e)),
+        },
+        _ => Err("io::list: expected String path".into()),
+    }
+}
+
+fn io_mkdir(args: Vec<Value>) -> Result<Value, String> {
+    match args.into_iter().next() {
+        Some(Value::String(path)) => match std::fs::create_dir_all(path.as_str()) {
+            Ok(_) => Ok(Value::Unit),
+            Err(e) => Ok(io_err(e)),
+        },
+        _ => Err("io::mkdir: expected String path".into()),
+    }
+}
+
+// ── std/net ──────────────────────────────────────────────────────────────────
+//
+// Mirrors zymbol-interpreter/src/stdlib/net.rs. Network failures are returned as
+// soft `Value::Error("##Network(...)")` (catchable); a wrong argument type is a hard `Err`.
+
+fn net_err(msg: impl Into<String>) -> Value {
+    Value::Error(ZyStr::new(format!("##Network({})", msg.into())))
+}
+
+/// Parse the optional headers arg: Array of 2-element (String, String) tuples.
+fn parse_headers(arg: Option<Value>, fname: &str) -> Result<Vec<(String, String)>, String> {
+    let value = match arg {
+        None => return Ok(Vec::new()),
+        Some(v) => v,
+    };
+    let bad = || format!("{}: headers must be an Array of (String, String) tuples", fname);
+    match value {
+        Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                match item {
+                    Value::Tuple(pair) if pair.len() == 2 => match (&pair[0], &pair[1]) {
+                        (Value::String(k), Value::String(v)) => {
+                            out.push((k.as_str().to_string(), v.as_str().to_string()))
+                        }
+                        _ => return Err(bad()),
+                    },
+                    _ => return Err(bad()),
+                }
+            }
+            Ok(out)
+        }
+        _ => Err(bad()),
+    }
+}
+
+fn response_to_value(resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Value {
+    match resp {
+        Ok(mut resp) => match resp.body_mut().read_to_string() {
+            Ok(body) => Value::String(ZyStr::new(body)),
+            Err(e) => net_err(e.to_string()),
+        },
+        Err(e) => net_err(e.to_string()),
+    }
+}
+
+fn net_get(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    let url = match it.next() {
+        Some(Value::String(u)) => u,
+        _ => return Err("net::get: expected String url".into()),
+    };
+    let headers = parse_headers(it.next(), "net::get")?;
+    let mut req = ureq::get(url.as_str());
+    for (k, v) in &headers {
+        req = req.header(k, v);
+    }
+    Ok(response_to_value(req.call()))
+}
+
+fn net_post(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    match (it.next(), it.next()) {
+        (Some(Value::String(url)), Some(Value::String(body))) => {
+            let headers = parse_headers(it.next(), "net::post")?;
+            let mut req = ureq::post(url.as_str()).header("Content-Type", "text/plain");
+            for (k, v) in &headers {
+                req = req.header(k, v);
+            }
+            Ok(response_to_value(req.send(body.as_str())))
+        }
+        _ => Err("net::post: expected (String, String)".into()),
+    }
+}
+
+fn net_post_json(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    match (it.next(), it.next()) {
+        (Some(Value::String(url)), Some(Value::String(body))) => {
+            let headers = parse_headers(it.next(), "net::post_json")?;
+            let mut req = ureq::post(url.as_str()).header("Content-Type", "application/json");
+            for (k, v) in &headers {
+                req = req.header(k, v);
+            }
+            Ok(response_to_value(req.send(body.as_str())))
+        }
+        _ => Err("net::post_json: expected (String, String)".into()),
+    }
+}
+
+fn net_head(args: Vec<Value>) -> Result<Value, String> {
+    match args.into_iter().next() {
+        Some(Value::String(url)) => Ok(Value::Bool(ureq::head(url.as_str()).call().is_ok())),
+        _ => Err("net::head: expected String url".into()),
+    }
+}
+
+// ── std/db ─────────────────────────────────────────────────────────────────────
+//
+// Mirrors zymbol-interpreter/src/stdlib/db.rs. Vendor-neutral database access via
+// ODBC. Runtime/SQL failures are soft `Value::Error("##DB(...)")` (catchable); a
+// wrong argument type is a hard `Err`. This crate keeps its own ODBC environment
+// and connection registry (separate from the tree-walker's); a program runs under
+// one engine at a time, so only one registry is ever used.
+
+static DB_ODBC_ENV: Lazy<Result<Environment, String>> =
+    Lazy::new(|| Environment::new().map_err(|e| e.to_string()));
+
+fn db_env() -> Result<&'static Environment, String> {
+    match &*DB_ODBC_ENV {
+        Ok(e) => Ok(e),
+        Err(msg) => Err(msg.clone()),
+    }
+}
+
+struct DbConnEntry {
+    conn: Connection<'static>,
+    in_tx: bool,
+}
+
+thread_local! {
+    static VM_DB_CONNS: RefCell<HashMap<String, DbConnEntry>> = RefCell::new(HashMap::new());
+}
+
+fn db_err(msg: impl Into<String>) -> Value {
+    Value::Error(ZyStr::new(format!("##DB({})", msg.into())))
+}
+
+fn db_odbc_err(e: odbc_api::Error) -> Value {
+    db_err(e.to_string())
+}
+
+fn db_with_conn<F>(name: &str, f: F) -> Value
+where
+    F: FnOnce(&mut DbConnEntry) -> Value,
+{
+    VM_DB_CONNS.with(|c| {
+        let mut map = c.borrow_mut();
+        match map.get_mut(name) {
+            Some(entry) => f(entry),
+            None => db_err(format!("unknown connection '{}'", name)),
+        }
+    })
+}
+
+fn db_take_string(v: Option<Value>, what: &str) -> Result<String, String> {
+    match v {
+        Some(Value::String(s)) => Ok(s.as_str().to_string()),
+        _ => Err(format!("db: expected String {}", what)),
+    }
+}
+
+fn db_take_params(v: Option<Value>) -> Result<Vec<Value>, String> {
+    match v {
+        None => Ok(Vec::new()),
+        Some(Value::Tuple(items)) | Some(Value::Array(items)) => Ok(items.as_ref().clone()),
+        Some(
+            s @ (Value::Int(_)
+            | Value::Float(_)
+            | Value::String(_)
+            | Value::Bool(_)
+            | Value::Char(_)
+            | Value::Unit),
+        ) => Ok(vec![s]),
+        Some(_) => Err("db: params must be a Tuple, Array, or scalar".into()),
+    }
+}
+
+fn db_bind_params(params: Vec<Value>) -> Result<Vec<Box<dyn InputParameter>>, String> {
+    let mut out: Vec<Box<dyn InputParameter>> = Vec::with_capacity(params.len());
+    for p in params {
+        let boxed: Box<dyn InputParameter> = match p {
+            Value::Int(i) => Box::new(i.into_parameter()),
+            Value::Float(f) => Box::new(f.into_parameter()),
+            Value::Bool(b) => Box::new((if b { 1i64 } else { 0i64 }).into_parameter()),
+            Value::String(s) => Box::new(s.as_str().to_string().into_parameter()),
+            Value::Char(c) => Box::new(c.to_string().into_parameter()),
+            Value::Unit => Box::new(Option::<String>::None.into_parameter()),
+            other => return Err(format!("db: cannot bind {} as a parameter", other.zymbol_type_name())),
+        };
+        out.push(boxed);
+    }
+    Ok(out)
+}
+
+fn db_is_binary(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Binary { .. } | DataType::Varbinary { .. } | DataType::LongVarbinary { .. }
+    )
+}
+
+fn db_cell_from_text(text: String, dt: &DataType) -> Value {
+    match dt {
+        DataType::Integer
+        | DataType::SmallInt
+        | DataType::BigInt
+        | DataType::TinyInt
+        | DataType::Bit => text
+            .parse::<i64>()
+            .map(Value::Int)
+            .unwrap_or_else(|_| Value::String(ZyStr::new(text))),
+        DataType::Real | DataType::Double | DataType::Float { .. } => text
+            .parse::<f64>()
+            .map(Value::Float)
+            .unwrap_or_else(|_| Value::String(ZyStr::new(text))),
+        _ => Value::String(ZyStr::new(text)),
+    }
+}
+
+fn db_rows_from_cursor(
+    cursor: &mut impl Cursor,
+    only_first: bool,
+    single_col: bool,
+) -> Result<Vec<Value>, Value> {
+    let names: Vec<String> = cursor
+        .column_names()
+        .map_err(db_odbc_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_odbc_err)?;
+    let ncols = names.len() as u16;
+    let mut types: Vec<DataType> = Vec::with_capacity(names.len());
+    for col in 1..=ncols {
+        types.push(cursor.col_data_type(col).map_err(db_odbc_err)?);
+    }
+
+    let mut rows: Vec<Value> = Vec::new();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(mut row) = cursor.next_row().map_err(db_odbc_err)? {
+        let mut fields: Vec<(String, Value)> = Vec::with_capacity(names.len());
+        let take_cols = if single_col { 1 } else { ncols };
+        for idx in 0..take_cols {
+            let col = idx + 1;
+            let dt = &types[idx as usize];
+            let value = if db_is_binary(dt) {
+                buf.clear();
+                let not_null = row.get_binary(col, &mut buf).map_err(db_odbc_err)?;
+                if !not_null {
+                    Value::Unit
+                } else {
+                    Value::String(ZyStr::new(
+                        base64::engine::general_purpose::STANDARD.encode(&buf),
+                    ))
+                }
+            } else {
+                buf.clear();
+                let not_null = row.get_text(col, &mut buf).map_err(db_odbc_err)?;
+                if !not_null {
+                    Value::Unit
+                } else {
+                    db_cell_from_text(String::from_utf8_lossy(&buf).into_owned(), dt)
+                }
+            };
+            fields.push((names[idx as usize].clone(), value));
+        }
+        rows.push(Value::NamedTuple(Rc::new(fields)));
+        if only_first {
+            break;
+        }
+    }
+    Ok(rows)
+}
+
+fn db_connect(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    let name = db_take_string(it.next(), "name")?;
+    let conn_str = db_take_string(it.next(), "connection string")?;
+    let env = match db_env() {
+        Ok(e) => e,
+        Err(msg) => return Ok(db_err(msg)),
+    };
+    match env.connect_with_connection_string(&conn_str, ConnectionOptions::default()) {
+        Ok(conn) => {
+            VM_DB_CONNS.with(|c| {
+                c.borrow_mut()
+                    .insert(name, DbConnEntry { conn, in_tx: false })
+            });
+            Ok(Value::Unit)
+        }
+        Err(e) => Ok(db_odbc_err(e)),
+    }
+}
+
+fn db_disconnect(args: Vec<Value>) -> Result<Value, String> {
+    let name = db_take_string(args.into_iter().next(), "name")?;
+    VM_DB_CONNS.with(|c| {
+        c.borrow_mut().remove(&name);
+    });
+    Ok(Value::Unit)
+}
+
+fn db_exec(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    let name = db_take_string(it.next(), "name")?;
+    let sql = db_take_string(it.next(), "sql")?;
+    let bound = db_bind_params(db_take_params(it.next())?)?;
+    Ok(db_with_conn(&name, |entry| {
+        let mut stmt = match entry.conn.preallocate() {
+            Ok(s) => s,
+            Err(e) => return db_odbc_err(e),
+        };
+        let outcome: Result<(), odbc_api::Error> = {
+            let res = if bound.is_empty() {
+                stmt.execute(&sql, ())
+            } else {
+                stmt.execute(&sql, bound.as_slice())
+            };
+            res.map(|_| ())
+        };
+        if let Err(e) = outcome {
+            return db_odbc_err(e);
+        }
+        let n = stmt.row_count().ok().flatten().unwrap_or(0);
+        Value::Int(n as i64)
+    }))
+}
+
+fn db_run_query(
+    name: &str,
+    sql: &str,
+    bound: Vec<Box<dyn InputParameter>>,
+    only_first: bool,
+    single_col: bool,
+) -> Value {
+    db_with_conn(name, |entry| {
+        let res = if bound.is_empty() {
+            entry.conn.execute(sql, (), None)
+        } else {
+            entry.conn.execute(sql, bound.as_slice(), None)
+        };
+        match res {
+            Ok(Some(mut cursor)) => match db_rows_from_cursor(&mut cursor, only_first, single_col) {
+                Ok(rows) => Value::Array(Rc::new(rows)),
+                Err(e) => e,
+            },
+            Ok(None) => Value::Array(Rc::new(Vec::new())),
+            Err(e) => db_odbc_err(e),
+        }
+    })
+}
+
+fn db_query(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    let name = db_take_string(it.next(), "name")?;
+    let sql = db_take_string(it.next(), "sql")?;
+    let bound = db_bind_params(db_take_params(it.next())?)?;
+    Ok(db_run_query(&name, &sql, bound, false, false))
+}
+
+fn db_query_one(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    let name = db_take_string(it.next(), "name")?;
+    let sql = db_take_string(it.next(), "sql")?;
+    let bound = db_bind_params(db_take_params(it.next())?)?;
+    Ok(match db_run_query(&name, &sql, bound, true, false) {
+        Value::Array(rows) => rows.first().cloned().unwrap_or(Value::Unit),
+        other => other,
+    })
+}
+
+fn db_query_value(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    let name = db_take_string(it.next(), "name")?;
+    let sql = db_take_string(it.next(), "sql")?;
+    let bound = db_bind_params(db_take_params(it.next())?)?;
+    Ok(match db_run_query(&name, &sql, bound, true, true) {
+        Value::Array(rows) => match rows.first() {
+            Some(Value::NamedTuple(fields)) => {
+                fields.first().map(|(_, v)| v.clone()).unwrap_or(Value::Unit)
+            }
+            _ => Value::Unit,
+        },
+        other => other,
+    })
+}
+
+fn db_tx(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    let name = db_take_string(it.next(), "name")?;
+    let statements = match it.next() {
+        Some(Value::Array(items)) => items.as_ref().clone(),
+        _ => return Err("db::tx: statements must be an Array".into()),
+    };
+
+    let mut prepared: Vec<(String, Vec<Box<dyn InputParameter>>)> =
+        Vec::with_capacity(statements.len());
+    for st in statements {
+        match st {
+            Value::Tuple(pair) if pair.len() == 2 => {
+                let sql = match &pair[0] {
+                    Value::String(s) => s.as_str().to_string(),
+                    _ => return Err("db::tx: each statement is (String sql, Array params)".into()),
+                };
+                let params = db_take_params(Some(pair[1].clone()))?;
+                prepared.push((sql, db_bind_params(params)?));
+            }
+            _ => return Err("db::tx: each statement must be a (sql, params) tuple".into()),
+        }
+    }
+
+    Ok(db_with_conn(&name, |entry| {
+        if let Err(e) = entry.conn.set_autocommit(false) {
+            return db_odbc_err(e);
+        }
+        for (sql, bound) in &prepared {
+            let res = if bound.is_empty() {
+                entry.conn.execute(sql, (), None)
+            } else {
+                entry.conn.execute(sql, bound.as_slice(), None)
+            };
+            if let Err(e) = res {
+                let _ = entry.conn.rollback();
+                let _ = entry.conn.set_autocommit(true);
+                return db_odbc_err(e);
+            }
+        }
+        let result = match entry.conn.commit() {
+            Ok(_) => Value::Unit,
+            Err(e) => {
+                let _ = entry.conn.rollback();
+                db_odbc_err(e)
+            }
+        };
+        let _ = entry.conn.set_autocommit(true);
+        result
+    }))
+}
+
+fn db_begin(args: Vec<Value>) -> Result<Value, String> {
+    let name = db_take_string(args.into_iter().next(), "name")?;
+    Ok(db_with_conn(&name, |entry| {
+        if entry.in_tx {
+            return db_err("transaction already active (use savepoints to nest)");
+        }
+        match entry.conn.set_autocommit(false) {
+            Ok(_) => {
+                entry.in_tx = true;
+                Value::Unit
+            }
+            Err(e) => db_odbc_err(e),
+        }
+    }))
+}
+
+fn db_commit(args: Vec<Value>) -> Result<Value, String> {
+    let name = db_take_string(args.into_iter().next(), "name")?;
+    Ok(db_with_conn(&name, |entry| {
+        let result = match entry.conn.commit() {
+            Ok(_) => Value::Unit,
+            Err(e) => db_odbc_err(e),
+        };
+        let _ = entry.conn.set_autocommit(true);
+        entry.in_tx = false;
+        result
+    }))
+}
+
+fn db_rollback(args: Vec<Value>) -> Result<Value, String> {
+    let name = db_take_string(args.into_iter().next(), "name")?;
+    Ok(db_with_conn(&name, |entry| {
+        let result = match entry.conn.rollback() {
+            Ok(_) => Value::Unit,
+            Err(e) => db_odbc_err(e),
+        };
+        let _ = entry.conn.set_autocommit(true);
+        entry.in_tx = false;
+        result
+    }))
+}
+
+fn db_valid_savepoint(sp: &str) -> bool {
+    !sp.is_empty()
+        && sp.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && sp.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn db_savepoint_op(args: Vec<Value>, verb: &str) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    let name = db_take_string(it.next(), "name")?;
+    let sp = db_take_string(it.next(), "savepoint name")?;
+    if !db_valid_savepoint(&sp) {
+        return Ok(db_err(format!("invalid savepoint name '{}'", sp)));
+    }
+    let sql = format!("{} {}", verb, sp);
+    Ok(db_with_conn(&name, |entry| {
+        match entry.conn.execute(&sql, (), None) {
+            Ok(_) => Value::Unit,
+            Err(e) => db_odbc_err(e),
+        }
+    }))
+}
+
+fn db_exec_script(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    let name = db_take_string(it.next(), "name")?;
+    let script = db_take_string(it.next(), "sql")?;
+    let statements: Vec<String> = script
+        .split(';')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    Ok(db_with_conn(&name, |entry| {
+        if let Err(e) = entry.conn.set_autocommit(false) {
+            return db_odbc_err(e);
+        }
+        for stmt in &statements {
+            if let Err(e) = entry.conn.execute(stmt, (), None) {
+                let _ = entry.conn.rollback();
+                let _ = entry.conn.set_autocommit(true);
+                return db_odbc_err(e);
+            }
+        }
+        let result = match entry.conn.commit() {
+            Ok(_) => Value::Unit,
+            Err(e) => db_odbc_err(e),
+        };
+        let _ = entry.conn.set_autocommit(true);
+        result
+    }))
+}
+
+fn db_table_exists(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    let name = db_take_string(it.next(), "name")?;
+    let table = db_take_string(it.next(), "table")?;
+    Ok(db_with_conn(&name, |entry| {
+        match entry.conn.tables("", "", &table, "") {
+            Ok(mut iter) => match iter.next() {
+                Some(Ok(_)) => Value::Bool(true),
+                Some(Err(e)) => db_odbc_err(e),
+                None => Value::Bool(false),
+            },
+            Err(e) => db_odbc_err(e),
+        }
+    }))
+}
+
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
 pub fn call(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
@@ -279,6 +1055,35 @@ pub fn call(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
         B::RAND_ENTERO   => rand_entero(args),
         B::RAND_RANGO    => rand_rango(args),
         B::RAND_PESO_F64 => rand_peso_f64(args),
+        B::JSON_DECODE   => json_decode(args),
+        B::JSON_DECODE_MAP => json_decode_map(args),
+        B::JSON_ENCODE   => json_encode(args),
+        B::IO_READ       => io_read(args),
+        B::IO_WRITE      => io_write(args),
+        B::IO_APPEND     => io_append(args),
+        B::IO_EXISTS     => io_exists(args),
+        B::IO_DELETE     => io_delete(args),
+        B::IO_LIST       => io_list(args),
+        B::IO_MKDIR      => io_mkdir(args),
+        B::NET_GET       => net_get(args),
+        B::NET_POST      => net_post(args),
+        B::NET_POST_JSON => net_post_json(args),
+        B::NET_HEAD      => net_head(args),
+        B::DB_CONNECT      => db_connect(args),
+        B::DB_DISCONNECT   => db_disconnect(args),
+        B::DB_EXEC         => db_exec(args),
+        B::DB_QUERY        => db_query(args),
+        B::DB_QUERY_ONE    => db_query_one(args),
+        B::DB_QUERY_VALUE  => db_query_value(args),
+        B::DB_TX           => db_tx(args),
+        B::DB_BEGIN        => db_begin(args),
+        B::DB_COMMIT       => db_commit(args),
+        B::DB_ROLLBACK     => db_rollback(args),
+        B::DB_SAVEPOINT    => db_savepoint_op(args, "SAVEPOINT"),
+        B::DB_RELEASE      => db_savepoint_op(args, "RELEASE"),
+        B::DB_ROLLBACK_TO  => db_savepoint_op(args, "ROLLBACK TO"),
+        B::DB_EXEC_SCRIPT  => db_exec_script(args),
+        B::DB_TABLE_EXISTS => db_table_exists(args),
         other => Err(format!("unknown builtin id {}", other)),
     }
 }

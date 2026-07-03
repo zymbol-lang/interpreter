@@ -1,0 +1,14 @@
+// Regression test for former limitation L1 (REFERENCE.md): postfix operators
+// ($#, $?, #?) used directly as items in >> juxtaposition. Previously a parser
+// error ("DollarHash unexpected"); now valid in both engines.
+
+arr = [1, 2, 3]
+>> "len=" arr$# ¶
+>> "has2=" arr$? 2 ¶
+>> "has9=" arr$? 9 ¶
+
+s = "hola"
+>> "slen=" s$# ¶
+
+// Parenthesized forms keep working
+>> "plen=" (arr$#) ¶

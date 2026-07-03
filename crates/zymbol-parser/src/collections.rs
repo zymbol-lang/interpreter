@@ -6,7 +6,7 @@
 //! - Named tuples: (name: value, name2: value2)
 //! - Grouped expressions: (expr)
 
-use zymbol_ast::{ArrayLiteralExpr, Expr, NamedTupleExpr, TupleExpr};
+use zymbol_ast::{ArrayLiteralExpr, Expr, GroupExpr, NamedTupleExpr, TupleExpr};
 use zymbol_error::Diagnostic;
 use zymbol_lexer::TokenKind;
 use crate::Parser;
@@ -154,16 +154,19 @@ impl Parser {
                 let span = lparen_token.span.to(&rparen_token.span);
                 Ok(Expr::Tuple(TupleExpr::new(elements, span)))
             } else {
-                // It's a grouped expression - just return the expression
+                // It's a grouped expression — wrap it so the formatter can
+                // reproduce the user's parentheses (Expr::Group is
+                // semantically transparent everywhere else).
                 let rparen_token = self.peek().clone();
                 if !matches!(rparen_token.kind, TokenKind::RParen) {
                     return Err(Diagnostic::error("expected ')' to close grouped expression")
                         .with_span(rparen_token.span)
                         .with_help("grouped expressions must be enclosed in parentheses: (expr)"));
                 }
-                self.advance(); // consume )
+                let rparen_token = self.advance(); // consume )
 
-                Ok(first_expr)
+                let span = lparen_token.span.to(&rparen_token.span);
+                Ok(Expr::Group(GroupExpr::new(Box::new(first_expr), span)))
             }
         }
     }
@@ -237,10 +240,18 @@ mod tests {
     fn test_parse_single_element_grouping() {
         let program = parse("x = (42)").expect("should parse");
         match &program.statements[0] {
-            Statement::Assignment(assign) => match &assign.value {
-                Expr::Literal(_) => {}, // Should be literal, not tuple
-                _ => panic!("Expected literal, not tuple"),
-            },
+            Statement::Assignment(assign) => {
+                // (42) is a Group preserving the user's parens, not a tuple;
+                // unwrap_group() must see through to the literal.
+                match &assign.value {
+                    Expr::Group(_) => {}
+                    _ => panic!("Expected group, not tuple"),
+                }
+                match assign.value.unwrap_group() {
+                    Expr::Literal(_) => {}
+                    _ => panic!("Expected literal inside group"),
+                }
+            }
             _ => panic!("Expected assignment"),
         }
     }

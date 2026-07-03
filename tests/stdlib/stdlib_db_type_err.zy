@@ -1,0 +1,5 @@
+// Test: std/db type error includes a clear message. Wrong argument type is a
+// hard error (programmer mistake), caught before any ODBC call — so this test
+// is fully offline and needs no driver, matching stdlib_net_type_err.
+<# std/db => db
+db::connect(42, "x")

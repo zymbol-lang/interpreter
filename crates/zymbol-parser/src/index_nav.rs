@@ -7,7 +7,7 @@
 //! - Computed indices:      arr[(expr)>(expr)]
 
 use zymbol_ast::{
-    DeepIndexExpr, ExtractGroup, Expr, FlatExtractExpr, IdentifierExpr,
+    DeepIndexExpr, ExtractGroup, Expr, FlatExtractExpr, GroupExpr, IdentifierExpr,
     IndexExpr, LiteralExpr, NavPath, NavStep, StructuredExtractExpr,
 };
 use zymbol_common::Literal;
@@ -133,6 +133,7 @@ impl Parser {
             return Ok(Expr::FlatExtract(FlatExtractExpr {
                 array: Box::new(base_expr),
                 paths: first_group.paths,
+                double_bracket: true,
                 span,
             }));
         }
@@ -213,6 +214,7 @@ impl Parser {
             return Ok(Expr::FlatExtract(FlatExtractExpr {
                 array: Box::new(base_expr),
                 paths,
+                double_bracket: false,
                 span,
             }));
         }
@@ -245,6 +247,7 @@ impl Parser {
             return Ok(Expr::FlatExtract(FlatExtractExpr {
                 array: Box::new(base_expr),
                 paths: vec![first_path],
+                double_bracket: false,
                 span,
             }));
         }
@@ -328,8 +331,11 @@ impl Parser {
                         .with_span(close.span)
                         .with_help("computed indices: arr[(expr)>(expr)]"));
                 }
-                self.advance(); // consume `)`
-                Ok(Box::new(expr))
+                let close = self.advance(); // consume `)`
+                // Preserve the user's parens (required syntax for computed
+                // indices) so the formatter reprints them.
+                let span = token.span.to(&close.span);
+                Ok(Box::new(Expr::Group(GroupExpr::new(Box::new(expr), span))))
             }
             _ => Err(Diagnostic::error(
                 "expected index: integer, variable, or (expression)",

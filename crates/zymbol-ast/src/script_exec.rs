@@ -11,6 +11,8 @@ use crate::Expr;
 #[derive(Debug, Clone)]
 pub struct ExecuteExpr {
     pub path: String,  // Path to .zy file to execute
+    /// `true` when the user wrote the path in quotes: </ "path.zy" />
+    pub quoted: bool,
     pub span: Span,
 }
 

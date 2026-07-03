@@ -1,0 +1,12 @@
+// 02 — Parse several fields from a real JSON object.
+// API: api.github.com public user endpoint (no auth at low volume).
+<# std/net => net
+<# std/json => json
+
+u = json::decode(net::get("https://api.github.com/users/zymbol-lang"))
+
+>> "Login:   " u.login ¶
+>> "Name:    " u.name ¶
+>> "Company: " u.company ¶
+>> "Repos:   " u.public_repos ¶
+>> "Followers: " u.followers ¶

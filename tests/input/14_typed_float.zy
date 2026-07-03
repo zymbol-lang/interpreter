@@ -1,0 +1,3 @@
+// Typed input: free floating-point number → Float
+<< ##. "Flotante: " f
+>> "f=" f ¶
