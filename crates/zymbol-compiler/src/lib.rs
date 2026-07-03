@@ -3906,6 +3906,9 @@ fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16)>> 
             ("post_json", B::NET_POST_JSON),
             ("head",      B::NET_HEAD),
         ]),
+        // Without the `db` feature this falls through to `None` → module-not-found
+        // at `<# std/db`, matching the tree-walker (see zymbol-interpreter stdlib).
+        #[cfg(feature = "db")]
         "std/db" => Some(vec![
             ("connect",      B::DB_CONNECT),
             ("disconnect",   B::DB_DISCONNECT),

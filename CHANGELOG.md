@@ -41,6 +41,10 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
   Spanish i18n adapter (`db_es`). Full VM parity (builtin ids 500–514).
 - Zymbol bundles no engine: the OS supplies the per-engine ODBC driver
   (validated live against SQLite and PostgreSQL with the same program).
+- Availability: included in Windows prebuilt binaries (ODBC ships with the
+  OS) and in source builds (default `db` cargo feature). The prebuilt
+  Linux/macOS binaries are compiled without it — the ODBC driver manager
+  needs `dlopen`, impossible in a fully static binary (REFERENCE.md L17).
 
 **Formatter property harness** (`tests/scripts/fmt_property.sh`)
 - Verifies P1 reparse, P2 idempotence, P3 runtime-output equality and

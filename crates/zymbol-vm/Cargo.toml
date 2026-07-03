@@ -13,6 +13,12 @@ thiserror.workspace = true
 crossterm = { workspace = true }
 serde_json = { workspace = true }
 ureq = { workspace = true }
-odbc-api = { workspace = true }
-base64 = { workspace = true }
-once_cell = { workspace = true }
+odbc-api = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+once_cell = { workspace = true, optional = true }
+
+[features]
+default = ["db"]
+# std/db builtins (ODBC). Mirrors zymbol-interpreter's `db` feature; disabled
+# in prebuilt static binaries (the ODBC driver manager needs dlopen).
+db = ["dep:odbc-api", "dep:base64", "dep:once_cell"]

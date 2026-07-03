@@ -14,5 +14,11 @@ zymbol-parser.workspace = true
 zymbol-span.workspace = true
 thiserror.workspace = true
 
+[features]
+default = ["db"]
+# Registers the std/db builtin ids at `<# std/db` compile time. Pure cfg flag
+# (no extra deps); mirrors the `db` feature of zymbol-interpreter/zymbol-vm.
+db = []
+
 [dev-dependencies]
 bincode.workspace = true

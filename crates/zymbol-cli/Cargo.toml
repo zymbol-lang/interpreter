@@ -29,6 +29,12 @@ clap.workspace = true
 anyhow.workspace = true
 tokio = { version = "1", features = ["full"] }
 
+[features]
+default = ["db"]
+# std/db (ODBC) in both engines. Build with `--no-default-features` for a
+# fully static binary (ODBC needs dlopen; see REFERENCE.md).
+db = ["zymbol-interpreter/db", "zymbol-vm/db", "zymbol-compiler/db"]
+
 [dev-dependencies]
 # CLI integration tests spawn the `zymbol` binary. `CARGO_BIN_EXE_zymbol` is only
 # exported to integration tests of the crate that declares the binary, so

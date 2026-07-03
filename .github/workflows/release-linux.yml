@@ -52,7 +52,10 @@ jobs:
             zstd ${{ matrix.cross_linker_pkg }}
 
       - name: Build GNU binary
-        run: cargo build --release --target ${{ matrix.rust_target }}
+        # --no-default-features: prebuilt Linux binaries exclude std/db — ODBC links
+        # against system libodbc (undeclared package dependency) and the driver
+        # manager needs dlopen, impossible in the static builds below.
+        run: cargo build --release --no-default-features --target ${{ matrix.rust_target }}
 
       - name: Expose binary at target/release/ for build-packages.sh
         run: |
@@ -94,7 +97,7 @@ jobs:
         if: matrix.use_cross == false
         run: |
           RUSTFLAGS="-C target-feature=+crt-static" \
-            cargo build --release --target ${{ matrix.musl_target }}
+            cargo build --release --no-default-features --target ${{ matrix.musl_target }}
           install -m755 \
             "target/${{ matrix.musl_target }}/release/zymbol" \
             "packaging/dist/zymbol_lang_v${VERSION}_${{ matrix.arch }}_linux"
@@ -103,7 +106,7 @@ jobs:
         if: matrix.use_cross == true
         run: |
           cargo install cross --locked
-          cross build --release --target ${{ matrix.musl_target }}
+          cross build --release --no-default-features --target ${{ matrix.musl_target }}
           install -m755 \
             "target/${{ matrix.musl_target }}/release/zymbol" \
             "packaging/dist/zymbol_lang_v${VERSION}_${{ matrix.arch }}_linux"
