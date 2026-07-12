@@ -7,6 +7,74 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
+## [0.0.8] — Unreleased
+
+Memory-model debt release: every divergence found by the design-vs-implementation
+audit in [MEMORY_MODEL.md](MEMORY_MODEL.md) (findings MM-1 … MM-9) is resolved.
+All fixes verified with TW/VM parity (514/514) and golden tests (498/498).
+
+### Fixed
+
+**MM-1 — `x°`/`°x` inside a function called from a `@` loop panicked the tree-walker**
+- `loop_scope_depths` (the anchor indices for hot definitions) is now saved and
+  restored across call boundaries in `SavedCallState`. Inside a function with no
+  loops of its own, hot definitions anchor to the function scope, as documented.
+- Regression test: `tests/bugs/bug_mm1_hot_def_fn_scope.zy` (TW == VM).
+
+**MM-2 — module-state mutations made by intra-module calls were lost (TW)**
+- Write-back now runs for every module frame (both `alias::` calls and bare-name
+  intra-module calls) and is **diff-based**: only keys whose value changed
+  relative to the injected snapshot are persisted, so an outer frame can no
+  longer clobber a nested call's write-back with its stale copy.
+- Same-module nested calls inject the caller's live values (not the stale store)
+  and refresh the caller's copies on return, so sequential reads/writes across
+  intra-module call chains are consistent.
+- Parameters named like module variables shadow them and are excluded from
+  write-back.
+- Regression test: `tests/bugs/bug_mm2_module_state_helper.zy` (TW == VM).
+
+**MM-3 — `\ x` inside a function poisoned the caller's same-named variable (TW)**
+- `dead_variables` is now frame-local (saved/restored in `SavedCallState`);
+  destroying a name inside a callee no longer raises a false
+  `use after destruction` on the caller's variable.
+- Regression test: `tests/bugs/bug_mm3_destroy_frame_local.zy` (TW == VM).
+
+**MM-4 — modules loaded at runtime skipped semantic analysis**
+- `zymbol run` now applies the same semantic gate as the entry file when
+  importing a module — in **both** engines (tree-walker `load_module` and VM
+  `compile_import`). A module whose function reassigns a `:=` constant fails at
+  import time with a semantic error instead of executing with split-brain state.
+- Defense in depth: module constants are re-marked `const` inside module
+  function frames, so reassignment is a runtime error even if static analysis
+  is bypassed.
+- Regression test: `tests/bugs/bug_mm4_module_const_guard.zy` (TW == VM,
+  identical error text).
+
+**MM-9 — root-scope constants vanished at call depth ≥ 2 (TW)**
+- Constants declared with `:=` at the top level of a script are now recorded in
+  a global constant table that is not swapped by call frames: they resolve at
+  any call depth, through recursion and lambda frames, and stay immutable
+  everywhere (`is_const` consults the table). Module frames do not see script
+  constants (module isolation preserved). Constants declared inside blocks or
+  function bodies remain lexically scoped; block-local constants are still
+  forwarded (and now re-marked) one frame at a time.
+- A parameter may shadow a forwarded constant — it stays assignable.
+- Regression test: `tests/bugs/bug_mm9_const_call_depth.zy` (TW == VM).
+
+### Documented
+
+- **MM-5**: constants pierce function isolation by design (GUIDE §9 note).
+- **MM-6**: the `@ var:` iterator reuses a pre-existing outer variable of the
+  same name; the leftover value after the loop is engine-specific — do not rely
+  on it (GUIDE §8 note; REFERENCE L24).
+- **MM-7**: `x°`/`°x` run in both engines — the stale "tree-walker only /
+  `@vm-skip`" note was removed from the GUIDE.
+- **MM-8**: module state identity is per file path — several aliases to the
+  same module share one state (GUIDE §17 note). The VM currently gives each
+  alias its own copy (REFERENCE L23, open).
+
+---
+
 ## [0.0.7] — 2026-07-02
 
 ### Added

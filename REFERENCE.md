@@ -269,6 +269,62 @@ Where `std/db` IS available:
   Build-time prereq: `unixodbc-dev`; runtime prereq: `unixodbc` + the engine's ODBC
   driver. To reproduce the prebuilt behavior use `--no-default-features`.
 
+### ~~L18 — `x°`/`°x` inside a function called from a `@` loop panics~~ Fixed in v0.0.8
+
+The caller's loop anchors leaked into the callee frame (`loop_scope_depths` was not
+saved across the call boundary), so a hot definition inside the function indexed a
+scope that no longer existed — index-out-of-bounds panic in the tree-walker. Now the
+anchors are frame-local: inside a function with no `@` of its own, `x°`/`°x` anchor to
+the function scope (MEMORY_MODEL.md MM-1). Regression test:
+`tests/bugs/bug_mm1_hot_def_fn_scope.zy` (TW == VM).
+
+### ~~L19 — Module-state mutations by intra-module calls were lost~~ Fixed in v0.0.8
+
+In the tree-walker, only the frame called directly via `alias::` wrote module state
+back; a private helper's mutation was discarded, and the outer frame then clobbered
+the store with its stale copy. Write-back now runs for every module frame and is
+diff-based (only changed keys persist), same-module nested calls see the caller's live
+values, and the caller's copies are refreshed on return (MEMORY_MODEL.md MM-2).
+Regression test: `tests/bugs/bug_mm2_module_state_helper.zy` (TW == VM).
+
+### ~~L20 — `\ x` inside a function poisoned the caller's same-named variable~~ Fixed in v0.0.8
+
+The destroyed-names set was global, so `\ x` inside a callee made the caller's own `x`
+raise a false `use after destruction`. The set is now saved/restored per call frame
+(MEMORY_MODEL.md MM-3). Regression test: `tests/bugs/bug_mm3_destroy_frame_local.zy`.
+
+### ~~L21 — Modules loaded at runtime skipped semantic analysis~~ Fixed in v0.0.8
+
+`zymbol run` only lexed + parsed imported modules, so semantic-only violations inside
+module functions (e.g. reassigning a `:=` module constant) executed silently, leaving
+split-brain state (`alias.CONST` stale vs. mutated function view). Both engines now run
+the full semantic gate (VariableAnalyzer + TypeChecker) at import time, and module
+constants are re-marked `const` inside module frames as a runtime backstop
+(MEMORY_MODEL.md MM-4). Regression test: `tests/bugs/bug_mm4_module_const_guard.zy`.
+
+### ~~L22 — Root-scope constants vanished at call depth ≥ 2~~ Fixed in v0.0.8
+
+The tree-walker forwarded constants only one frame deep, so any function-calling-
+function chain (including recursion and lambda frames) lost them at depth ≥ 2 even
+though semantic analysis accepted the program. Top-level `:=` constants now live in a
+global table not swapped by call frames: visible and immutable at any depth; module
+frames still never see script constants (MEMORY_MODEL.md MM-9). Regression test:
+`tests/bugs/bug_mm9_const_call_depth.zy` (TW == VM).
+
+### L23 — VM: each import alias gets its own module state copy *(open)*
+
+In the tree-walker, module state identity is per file path — two aliases to the same
+module share one state (by design, GUIDE §17). The VM compiles per-alias state, so
+`a::increment()` is invisible through `b::get_value()`. Workaround: import each module
+under a single alias per program. (MEMORY_MODEL.md MM-10.)
+
+### L24 — Leftover loop-iterator value differs between engines *(open)*
+
+When `@ i:1..3 { }` reuses a pre-declared outer `i` (GUIDE §8), the value left after
+the loop differs: the tree-walker leaves the last executed value (`3`), the VM leaves
+the first out-of-range value (`4`). Do not rely on the leftover value.
+(MEMORY_MODEL.md MM-11.)
+
 ---
 
 ## 20b. Error Taxonomy

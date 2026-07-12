@@ -478,6 +478,38 @@ impl Compiler {
             ))
         })?;
 
+        // MM-4: same semantic gate as the tree-walker's load_module — a module
+        // that reassigns constants or violates scope rules must not compile.
+        // The message uses the non-canonical path to match the tree-walker's
+        // error text (engine parity).
+        {
+            let mut analyzer = zymbol_semantic::VariableAnalyzer::new();
+            let _warnings = analyzer.analyze(&module_prog);
+            let mut semantic_errors: Vec<zymbol_error::Diagnostic> =
+                analyzer.semantic_errors().to_vec();
+            let mut type_checker = zymbol_semantic::TypeChecker::new();
+            semantic_errors.extend(type_checker.check_errors(&module_prog));
+            if !semantic_errors.is_empty() {
+                let disp_path = path.display().to_string();
+                let detail: Vec<String> = semantic_errors.iter().map(|d| {
+                    let loc = d.span
+                        .map(|s| format!("{}:{}:{}", disp_path, s.start.line, s.start.column))
+                        .unwrap_or_else(|| disp_path.clone());
+                    let mut msg = format!("  {}: {}", loc, d.message);
+                    if let Some(help) = &d.help {
+                        msg.push_str(&format!("\n    help: {}", help));
+                    }
+                    msg
+                }).collect();
+                return Err(CompileError::ModuleParse(format!(
+                    "{} semantic error(s) in '{}'\n{}",
+                    semantic_errors.len(),
+                    disp_path,
+                    detail.join("\n")
+                )));
+            }
+        }
+
         let module_base_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
         // Recursively process sub-imports of the module (for nested imports like i18n modules)

@@ -402,6 +402,18 @@ pub struct Interpreter<W: Write> {
     /// before invoking this function.  The default implementation reads from stdin.
     /// Override in the REPL to temporarily exit raw mode while the user types.
     pub(crate) input_fn: Box<dyn FnMut() -> std::io::Result<String>>,
+    /// MM-9: constants declared with `:=` at the root scope of top-level code.
+    /// NOT swapped by take_call_state — visible inside script functions at any
+    /// call depth (including through lambda frames). Module function frames do
+    /// not consult this table: modules only see their own state.
+    global_consts: HashMap<String, Value>,
+    /// MM-2: path of the module whose function frame is currently executing
+    /// (None = script code). Saved/restored across call boundaries; used to
+    /// sync module state between nested calls into the same module.
+    pub(crate) current_module_path: Option<PathBuf>,
+    /// MM-9: call-frame depth — 0 while executing top-level statements.
+    /// Distinguishes the root scope from a function frame's bottom scope.
+    call_depth: usize,
 }
 
 impl<W: Write> Interpreter<W> {
@@ -480,6 +492,12 @@ impl<W: Write> Interpreter<W> {
                 return Some(value);
             }
         }
+        // MM-9: root-scope constants are globally visible in script code
+        // regardless of call depth. Module frames skip the fallback —
+        // modules only see their own state.
+        if self.current_module_path.is_none() {
+            return self.global_consts.get(name);
+        }
         None
     }
 
@@ -547,7 +565,12 @@ impl<W: Write> Interpreter<W> {
     /// Check if a variable is a constant in any scope.
     #[inline(always)]
     pub(crate) fn is_const(&self, name: &str) -> bool {
-        if !self.has_any_const { return false; }  // B8: short-circuit
+        // B8: short-circuit
+        if !self.has_any_const && self.global_consts.is_empty() { return false; }
+        // MM-9: root-scope constants stay immutable at any call depth
+        if self.current_module_path.is_none() && self.global_consts.contains_key(name) {
+            return true;
+        }
         for const_set in self.const_vars_stack.iter().rev() {
             if const_set.contains(name) {
                 return true;
@@ -577,11 +600,41 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Mark a variable as constant in the current scope
-    fn mark_const(&mut self, name: String) {
+    pub(crate) fn mark_const(&mut self, name: String) {
         self.has_any_const = true;  // B8: activate flag
         if let Some(current_const_set) = self.const_vars_stack.last_mut() {
             current_const_set.insert(name);
         }
+    }
+
+    /// Remove a const mark from every scope of the current frame.
+    /// Used when binding a parameter whose name shadows a forwarded constant —
+    /// the parameter must stay assignable inside the function body.
+    pub(crate) fn unmark_const(&mut self, name: &str) {
+        if !self.has_any_const { return; }
+        for const_set in self.const_vars_stack.iter_mut() {
+            const_set.remove(name);
+        }
+    }
+
+    /// True while executing a top-level statement in the root scope
+    /// (not inside any function/lambda frame and not inside a block).
+    pub(crate) fn is_root_scope(&self) -> bool {
+        self.call_depth == 0 && self.scope_stack.len() == 1
+    }
+
+    /// MM-9: record a root-scope constant in the global table.
+    pub(crate) fn record_global_const(&mut self, name: String, value: Value) {
+        self.global_consts.insert(name, value);
+    }
+
+    /// Names declared as constants in the root scope. Captured by module
+    /// loading so module constants stay immutable inside module functions.
+    pub(crate) fn root_const_names(&self) -> HashSet<String> {
+        let mut names: HashSet<String> =
+            self.const_vars_stack.first().cloned().unwrap_or_default();
+        names.extend(self.global_consts.keys().cloned());
+        names
     }
 
     /// Check if a variable is mutable in any scope
@@ -623,7 +676,16 @@ impl<W: Write> Interpreter<W> {
             const_vars_stack: std::mem::take(&mut self.const_vars_stack),
             import_aliases: std::mem::take(&mut self.import_aliases),
             has_any_const: self.has_any_const,
+            // MM-1: loop anchors index into the caller's scope_stack — they must
+            // not leak into the callee frame or x°/°x would write out of bounds.
+            loop_scope_depths: std::mem::take(&mut self.loop_scope_depths),
+            // MM-3: destroyed names are frame-local — a `\ x` inside the callee
+            // must not poison the caller's own `x`.
+            dead_variables: std::mem::take(&mut self.dead_variables),
+            // MM-2: module context is frame-local.
+            current_module_path: self.current_module_path.take(),
         };
+        self.call_depth += 1;
         // B10: reuse pooled Vec for scope_stack
         let mut fresh_scope_vec = self.scope_vec_pool.pop().unwrap_or_default();
         let map = self.scope_map_pool.pop().unwrap_or_else(|| HashMap::with_capacity(4));
@@ -648,6 +710,10 @@ impl<W: Write> Interpreter<W> {
         let mut fn_const = std::mem::replace(&mut self.const_vars_stack, saved.const_vars_stack);
         self.import_aliases = saved.import_aliases;
         self.has_any_const = saved.has_any_const;
+        self.loop_scope_depths = saved.loop_scope_depths;      // MM-1
+        self.dead_variables = saved.dead_variables;            // MM-3
+        self.current_module_path = saved.current_module_path;  // MM-2
+        self.call_depth = self.call_depth.saturating_sub(1);
 
         // Pool scope_stack components
         for mut map in fn_scope_vec.drain(..) {
@@ -674,11 +740,14 @@ impl<W: Write> Interpreter<W> {
 
 /// Interpreter state saved across a function/lambda call boundary (used by B2).
 pub(crate) struct SavedCallState {
-    scope_stack: Vec<HashMap<String, Value>>,
+    pub(crate) scope_stack: Vec<HashMap<String, Value>>,
     mutable_vars_stack: Vec<HashSet<String>>,
-    const_vars_stack: Vec<HashSet<String>>,
-    import_aliases: HashMap<String, std::path::PathBuf>,
+    pub(crate) const_vars_stack: Vec<HashSet<String>>,
+    pub(crate) import_aliases: HashMap<String, std::path::PathBuf>,
     has_any_const: bool,
+    loop_scope_depths: Vec<usize>,
+    dead_variables: HashSet<String>,
+    pub(crate) current_module_path: Option<PathBuf>,
 }
 
 fn default_input_fn() -> Box<dyn FnMut() -> std::io::Result<String>> {
@@ -725,6 +794,9 @@ impl Interpreter<std::io::Stdout> {
             current_output_params: std::collections::HashSet::new(),
             numeral_mode: numeral_mode::ASCII_BASE,
             input_fn: default_input_fn(),
+            global_consts: HashMap::new(),
+            current_module_path: None,
+            call_depth: 0,
         }
     }
 }
@@ -772,6 +844,9 @@ impl<W: Write> Interpreter<W> {
             current_output_params: std::collections::HashSet::new(),
             numeral_mode: numeral_mode::ASCII_BASE,
             input_fn: default_input_fn(),
+            global_consts: HashMap::new(),
+            current_module_path: None,
+            call_depth: 0,
         }
     }
 
@@ -806,6 +881,10 @@ impl<W: Write> Interpreter<W> {
 
     /// Destroy a variable immediately (remove from all scopes and mark as dead)
     fn destroy_variable(&mut self, var_name: &str) {
+        // A destroyed root constant must not resurrect through the global table.
+        if !self.global_consts.is_empty() {
+            self.global_consts.remove(var_name);
+        }
         // Remove from all scopes (search from innermost to outermost)
         for scope in self.scope_stack.iter_mut().rev() {
             if scope.remove(var_name).is_some() {
@@ -864,6 +943,9 @@ impl<W: Write> Interpreter<W> {
         self.numeral_mode = 0x0030;
         self.tui_depth = 0;
         self.try_depth = 0;
+        self.global_consts.clear();
+        self.current_module_path = None;
+        self.call_depth = 0;
     }
 
     /// Execute a single line of code (for REPL)

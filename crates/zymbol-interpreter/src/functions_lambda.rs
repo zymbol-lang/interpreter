@@ -331,63 +331,94 @@ impl<W: Write> Interpreter<W> {
             scope.reserve(parameters.len());
         }
 
-        // If this is a module function call, restore module's execution context.
-        // BUG-01: also swap self.functions with the module's full function table so that
-        // intra-module calls (private or exported) resolve correctly inside the function body.
-        // G17 fix: for script-level functions (module_info = None), restore the caller's
-        // import_aliases so that module calls (ollama::fn, ui::fn, etc.) resolve correctly.
-        // take_call_state() clears import_aliases — without this, alias lookups fail silently.
-        // BUG-001 fix: if the function was defined in a different module than the one being
-        // called through (re-export adapter), load context from the origin module instead.
-        let saved_functions = if let Some((_, module_path)) = &module_info {
-            let effective_path: &std::path::PathBuf = origin_module_path
+        // Determine the module whose state this frame executes against (MM-2):
+        // - alias:: calls carry module_info (re-export adapters redirect via
+        //   origin_module_path — BUG-001);
+        // - bare-name intra-module calls (private helpers, exported siblings)
+        //   carry only origin_module_path.
+        // Main-script functions have origin_module_path = Some(main.zy), which is
+        // NOT in loaded_modules, so they resolve to None (script path below).
+        let module_ctx_path: Option<std::path::PathBuf> = if let Some((_, module_path)) = &module_info {
+            Some(origin_module_path.as_ref().unwrap_or(module_path).clone())
+        } else {
+            origin_module_path
                 .as_ref()
-                .unwrap_or(module_path);
-            if let Some(module) = self.loaded_modules.get(effective_path).cloned() {
+                .filter(|p| self.loaded_modules.contains_key(p.as_path()))
+                .cloned()
+        };
+
+        // Snapshot of the module values injected into this frame. The write-back
+        // below diffs against it, so keys this frame never modified cannot
+        // clobber changes written back by nested calls (MM-2).
+        let mut injected_module_vars: HashMap<String, Value> = HashMap::new();
+
+        // If this is a module function call, restore the module's execution context.
+        // BUG-01: alias:: calls also swap self.functions with the module's full
+        // function table so intra-module calls resolve correctly inside the body.
+        // G17 fix: script-level functions inherit the caller's import_aliases so
+        // module calls (ollama::fn, ui::fn, etc.) resolve correctly.
+        let saved_functions = if let Some(ctx_path) = &module_ctx_path {
+            if let Some(module) = self.loaded_modules.get(ctx_path).cloned() {
+                // MM-2: on a same-module nested call the caller's frame holds
+                // fresher values than the store (its own write-back has not run
+                // yet) — inject the caller's live copies instead of stale ones.
+                let same_module_caller =
+                    saved.current_module_path.as_deref() == Some(ctx_path.as_path());
                 for (name, value) in &module.all_variables {
-                    self.set_variable(name, value.clone());
+                    let live = if same_module_caller {
+                        lookup_in_scopes(&saved.scope_stack, name)
+                            .cloned()
+                            .unwrap_or_else(|| value.clone())
+                    } else {
+                        value.clone()
+                    };
+                    injected_module_vars.insert(name.clone(), live.clone());
+                    self.set_variable(name, live);
+                }
+                // MM-4 runtime guard: module constants stay immutable inside
+                // module function bodies even when static analysis was skipped.
+                for const_name in &module.const_names {
+                    self.mark_const(const_name.clone());
                 }
                 self.import_aliases = module.import_aliases.clone();
-                // Swap in the module's complete function table; save caller's table
-                Some(std::mem::replace(&mut self.functions, module.all_functions.clone()))
+                self.current_module_path = Some(ctx_path.clone());
+                if module_info.is_some() {
+                    // Swap in the module's complete function table; save caller's table
+                    Some(std::mem::replace(&mut self.functions, module.all_functions.clone()))
+                } else {
+                    // Intra-module call: table already swapped by the outer alias:: call
+                    None
+                }
             } else {
                 None
             }
         } else {
-            // Script-level or intra-module function call (no explicit alias:: prefix).
+            // Script-level function call (no module context).
             // Inherit caller's import aliases so module calls (alias::fn()) resolve correctly.
             self.import_aliases = saved.import_aliases.clone();
-            // Inject script-level constants (:=) into the function's fresh isolated scope.
-            // Constants are globally scoped by design — any := defined before the call site
-            // must be visible inside function bodies. Regular variables (=) remain caller-scoped.
-            // saved.const_vars_stack[i] names the constants in saved.scope_stack[i]; we inject
-            // all of them so nested call chains (A calls B calls C) propagate constants correctly.
+            // Forward constants (:=) visible in the caller's frame into the fresh
+            // isolated scope, and re-mark them (MM-9) so the next frame in the
+            // chain forwards them again. Root-scope constants additionally resolve
+            // through global_consts at any depth; this loop covers block-local
+            // constants declared before the call site.
             for (scope, const_set) in saved.scope_stack.iter().zip(saved.const_vars_stack.iter()) {
                 for const_name in const_set {
                     if let Some(value) = scope.get(const_name) {
                         self.set_variable(const_name, value.clone());
+                        self.mark_const(const_name.clone());
                     }
                 }
             }
-            // Intra-module call: if the function was defined inside a loaded module (e.g., a
-            // private helper called from another function in the same module), inject that
-            // module's variables so module-level constants (:=) and mutable state are visible.
-            // Main-script functions have origin_module_path = Some(main.zy) which is NOT in
-            // loaded_modules, so injection is safely skipped for script-level calls.
-            if let Some(origin_path) = origin_module_path {
-                if let Some(module) = self.loaded_modules.get(origin_path).cloned() {
-                    for (name, value) in &module.all_variables {
-                        self.set_variable(name, value.clone());
-                    }
-                }
-            }
-            None  // function table unchanged — already set to module's all_functions by outer call
+            None
         };
 
         // QW8: move values out of arg_values instead of cloning
         // set_variable_new: skip scope-stack scan for Normal params (fresh isolated scope)
         for (i, param) in parameters.iter().enumerate() {
             let arg_value = std::mem::replace(&mut arg_values[i], Value::Unit);
+            // A parameter may shadow a forwarded constant of the same name —
+            // it must stay assignable inside the body (MM-9).
+            self.unmark_const(&param.name);
             match param.kind {
                 ParameterKind::Normal => {
                     self.set_variable_new(&param.name, arg_value);
@@ -462,27 +493,34 @@ impl<W: Write> Interpreter<W> {
         self.current_function = prev_fn;
         self.current_output_params = prev_output_params;
 
-        // MODULE STATE WRITE-BACK: persist changes to module-level variables back to LoadedModule.
-        // Only keys that existed in all_variables at module load time are written back.
-        // Function parameters and locally-declared variables are excluded automatically —
-        // they were not in all_variables, so they are not candidates for write-back.
-        // This implements private mutable module state: variables declared with `=` at module
-        // level persist across calls but are never directly accessible from outside the module.
-        if let Some((_, module_path)) = &module_info {
-            // Step 1: collect keys (drops the immutable borrow immediately)
-            let module_keys: Vec<String> = self.loaded_modules
-                .get(module_path)
-                .map(|m| m.all_variables.keys().cloned().collect())
-                .unwrap_or_default();
-            // Step 2: read current scope values for those keys
-            let writeback: Vec<(String, Value)> = module_keys
-                .iter()
-                .filter_map(|key| self.get_variable(key).map(|val| (key.clone(), val.clone())))
-                .collect();
-            // Step 3: write back to module (separate mut borrow)
-            if let Some(module) = self.loaded_modules.get_mut(module_path) {
-                for (key, val) in writeback {
-                    module.all_variables.insert(key, val);
+        // MODULE STATE WRITE-BACK (MM-2): persist module-level mutations back to the
+        // LoadedModule store. Runs for every module frame — alias:: calls and
+        // bare-name intra-module calls alike. Only keys whose value actually
+        // changed relative to the injected snapshot are written, so an outer
+        // frame that never touched a key cannot clobber a nested call's
+        // write-back with its stale copy. Parameters are excluded: a parameter
+        // named like a module variable shadows it and must not corrupt state.
+        // This implements private mutable module state: variables declared with
+        // `=` at module level persist across calls but are never directly
+        // accessible from outside the module.
+        let mut module_state_updates: Vec<(String, Value)> = Vec::new();
+        if let Some(ctx_path) = &module_ctx_path {
+            for (key, injected_val) in &injected_module_vars {
+                if parameters.iter().any(|p| p.name == *key) {
+                    continue;
+                }
+                // Missing key: moved out by a `<~ key` return — reads don't mutate.
+                if let Some(current) = self.get_variable(key) {
+                    if current != injected_val {
+                        module_state_updates.push((key.clone(), current.clone()));
+                    }
+                }
+            }
+            if !module_state_updates.is_empty() {
+                if let Some(module) = self.loaded_modules.get_mut(ctx_path) {
+                    for (key, val) in &module_state_updates {
+                        module.all_variables.insert(key.clone(), val.clone());
+                    }
                 }
             }
         }
@@ -508,6 +546,17 @@ impl<W: Write> Interpreter<W> {
             self.restore_call_state(saved);
         }
 
+        // MM-2: a same-module caller still holds the pre-call copies of the keys
+        // this frame just wrote back — refresh them so subsequent reads in the
+        // caller observe the new module state.
+        if !module_state_updates.is_empty()
+            && self.current_module_path.as_deref() == module_ctx_path.as_deref()
+        {
+            for (key, val) in module_state_updates {
+                self.set_variable(&key, val);
+            }
+        }
+
         // BUG-01: restore caller's function table after module function execution
         if let Some(caller_functions) = saved_functions {
             self.functions = caller_functions;
@@ -515,6 +564,11 @@ impl<W: Write> Interpreter<W> {
 
         Ok(return_value)
     }
+}
+
+/// Look up a name in a saved scope stack, innermost scope first.
+fn lookup_in_scopes<'a>(scopes: &'a [HashMap<String, Value>], name: &str) -> Option<&'a Value> {
+    scopes.iter().rev().find_map(|scope| scope.get(name))
 }
 
 // ── Free-variable collection for efficient closure capture ────────────────────

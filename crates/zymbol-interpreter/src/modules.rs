@@ -6,7 +6,7 @@
 //! - Import processing and alias registration
 //! - Export table extraction
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -35,6 +35,10 @@ pub(crate) struct LoadedModule {
     /// Module's loaded modules (for function execution context)
     #[allow(dead_code)]
     pub(crate) loaded_modules_refs: HashMap<PathBuf, ()>, // Just to track dependencies
+    /// Names declared with := at the module top level (MM-4).
+    /// Marked const inside module function frames so constants stay immutable
+    /// at runtime even if static analysis was bypassed.
+    pub(crate) const_names: HashSet<String>,
 }
 
 impl<W: Write> Interpreter<W> {
@@ -171,6 +175,35 @@ impl<W: Write> Interpreter<W> {
             ))
         })?;
 
+        // MM-4: modules loaded at runtime must pass the same semantic analysis
+        // as the entry file — otherwise constant reassignment and scope
+        // violations inside module functions execute silently. Hard errors
+        // block the import; warnings are suppressed (the module author sees
+        // them via `zymbol check <module>.zy`).
+        let mut analyzer = zymbol_semantic::VariableAnalyzer::new();
+        let _warnings = analyzer.analyze(&program);
+        let mut semantic_errors: Vec<zymbol_error::Diagnostic> = analyzer.semantic_errors().to_vec();
+        let mut type_checker = zymbol_semantic::TypeChecker::new();
+        semantic_errors.extend(type_checker.check_errors(&program));
+        if !semantic_errors.is_empty() {
+            let detail: Vec<String> = semantic_errors.iter().map(|d| {
+                let loc = d.span
+                    .map(|s| format!("{}:{}:{}", file_path.display(), s.start.line, s.start.column))
+                    .unwrap_or_else(|| file_path.display().to_string());
+                let mut msg = format!("  {}: {}", loc, d.message);
+                if let Some(help) = &d.help {
+                    msg.push_str(&format!("\n    help: {}", help));
+                }
+                msg
+            }).collect();
+            return Err(RuntimeError::ParseError(format!(
+                "{} semantic error(s) in '{}'\n{}",
+                semantic_errors.len(),
+                file_path.display(),
+                detail.join("\n")
+            )));
+        }
+
         // Create a new interpreter for the module with a buffer to capture output
         let mut module_interp = Interpreter::with_output(Vec::new());
         module_interp.set_current_file(file_path);
@@ -183,6 +216,9 @@ impl<W: Write> Interpreter<W> {
 
         // Store ALL module variables for function execution context
         let all_module_variables = module_interp.get_all_variables();
+        // MM-4: capture which module-level names are constants so module
+        // function frames re-mark them at injection time.
+        let module_const_names = module_interp.root_const_names();
         // Store module's import context
         let module_import_aliases = module_interp.import_aliases.clone();
         let module_loaded_refs: HashMap<PathBuf, ()> = module_interp.loaded_modules.keys()
@@ -211,6 +247,7 @@ impl<W: Write> Interpreter<W> {
             all_variables: all_module_variables,
             import_aliases: module_import_aliases,
             loaded_modules_refs: module_loaded_refs,
+            const_names: module_const_names,
         };
 
         // If there's an export block, only export listed items

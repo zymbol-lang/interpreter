@@ -536,6 +536,20 @@ active = #1
 \ x                 // releases x from current scope
 ```
 
+### Constant Scope
+
+Constants follow the same lexical rules as variables, with one deliberate
+exception — **top-level constants are global**:
+
+- A `:=` declared at the top level of a script is visible **everywhere** in
+  that script: inside any function at any call depth, through recursion and
+  lambda frames (v0.0.8 — previously the tree-walker lost them at call
+  depth ≥ 2). It stays immutable everywhere.
+- A `:=` declared inside a block dies when the block ends, like a variable.
+- Redeclaring a constant visible in the current scope is an error.
+- Module code never sees the importing script's constants — modules only see
+  their own state (see section 17).
+
 ### Compound Assignment Operators
 
 ```zymbol
@@ -765,7 +779,11 @@ x° *= 7    // outside any loop → global scope → x = 7
 **Semantic warnings** — emitted but not errors:
 - `x° ^= 2` — hot-def power: always `0` on first use
 
-> Both `x°` and `°x` are tree-walker only. Add `@vm-skip` to files that use them.
+> Both `x°` and `°x` work in **both engines** (tree-walker and `--vm`).
+> Inside a function that contains no `@` loop of its own, they anchor to the
+> function's scope — the variable dies when the function returns, even when the
+> function is called from inside a caller's loop (fixed in v0.0.8; previously
+> this panicked the tree-walker).
 
 ---
 
@@ -1040,6 +1058,27 @@ fruits = ["apple", "pear", "grape"]
 }
 ```
 
+### The Iterator Variable and Outer Variables
+
+The iterator of `@ var:iterable` lives in the loop's scope and disappears when
+the loop ends — **unless a variable with the same name already exists outside**.
+In that case the loop reuses (and overwrites) the outer variable, which then
+survives the loop:
+
+```zymbol
+@ i:1..3 { >> i ¶ }
+// >> i ¶            // ❌ semantic error: 'i' does not exist here
+
+i = 99
+@ i:1..3 { >> i ¶ }
+>> i ¶               // the outer i was overwritten by the loop
+```
+
+> ⚠ The leftover value after the loop is **engine-specific** (the tree-walker
+> leaves the last executed value; the VM leaves the first out-of-range value —
+> see REFERENCE L24). Do not rely on it: read the value you need inside the
+> loop, or use a different name for the iterator.
+
 ### Range Loop (inclusive on both ends)
 
 ```zymbol
@@ -1217,6 +1256,16 @@ test() {
 
 >> test() ¶    // → 42
 ```
+
+> **Exception — constants pierce the isolation.** Top-level `:=` constants are
+> globally scoped by design: they are readable (never writable) inside any
+> function, at any call depth. See "Constant Scope" in section 4.
+>
+> ```zymbol
+> PI := 3.14
+> area(r) { <~ r * r * PI }   // ✓ PI is visible; r * r * PI works
+> >> area(2) ¶                 // → 12.56
+> ```
 
 Functions used **as first-class values** capture the scope at the point of assignment (like lambdas):
 
@@ -2558,6 +2607,12 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 
 **E013** is raised whenever an executable statement appears at the module top-level. Function bodies are unrestricted — the limitation only applies to the module block itself.
 
+> Since v0.0.8, importing a module also runs the full **semantic analysis** on
+> it (both engines): reassigning a module constant or violating scope rules
+> inside a module function fails at import time with a semantic error. Module
+> constants are additionally protected at runtime — reassignment from a module
+> function is a runtime error even if static analysis was bypassed.
+
 ### Visibility Model
 
 | Declaration | Exported in `#>` | External access | Persists across calls |
@@ -2566,6 +2621,15 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 | `count = 0` | no (excluded even if listed) | ✗ error | **yes — write-back** |
 | `fn()` | yes | `alias::fn()` | — |
 | `private_fn()` | no | ✗ error | — |
+
+**Module state identity is per file path**: importing the same module file
+several times — even under different aliases, even from different importers —
+shares **one** state. Two aliases to `./counter` increment the same counter.
+(The VM currently gives each alias its own copy — REFERENCE L23.)
+
+Since v0.0.8, mutations made by **intra-module calls** persist too: an exported
+function may delegate state changes to a private helper, and the calling frame
+observes the helper's mutation immediately after the call.
 
 **Private mutable state** (`=` variables) persists between calls and is only reachable through exported getter/setter functions:
 

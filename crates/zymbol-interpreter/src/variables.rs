@@ -259,6 +259,13 @@ impl<W: Write> Interpreter<W> {
         // Evaluate the constant's value
         let value = self.eval_expr(&const_decl.value)?;
 
+        // MM-9: a := at the root scope of top-level code is globally scoped —
+        // record it so functions resolve it at any call depth. Constants
+        // declared inside blocks or function bodies stay lexically scoped.
+        if self.is_root_scope() {
+            self.record_global_const(const_decl.name.clone(), value.clone());
+        }
+
         // Store in variables and mark as constant
         self.set_variable(&const_decl.name, value);
         self.mark_const(const_decl.name.clone());

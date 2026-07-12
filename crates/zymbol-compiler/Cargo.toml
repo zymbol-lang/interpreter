@@ -12,6 +12,8 @@ zymbol-common.workspace = true
 zymbol-lexer.workspace = true
 zymbol-parser.workspace = true
 zymbol-span.workspace = true
+zymbol-semantic = { path = "../zymbol-semantic" }
+zymbol-error.workspace = true
 thiserror.workspace = true
 
 [features]

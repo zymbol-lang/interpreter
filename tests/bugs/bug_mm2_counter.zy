@@ -1,0 +1,20 @@
+// Module used by bug_mm2_module_state_helper.zy
+// MM-2 (fixed v0.0.8): module-state mutations made by intra-module (bare-name)
+// calls must persist, and the calling frame must observe them after the call.
+
+# bug_mm2_counter {
+    #> { bump_via_helper, bump_and_read, get_value }
+
+    count = 0
+
+    do_bump() { count = count + 10 }
+
+    bump_via_helper() { do_bump() }
+
+    bump_and_read() {
+        do_bump()
+        <~ count
+    }
+
+    get_value() { <~ count }
+}

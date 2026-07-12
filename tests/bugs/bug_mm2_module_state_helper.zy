@@ -1,0 +1,12 @@
+// MM-2 (fixed v0.0.8): a private helper that mutates module state must persist
+// the change (write-back runs for intra-module frames, diff-based so outer
+// frames cannot clobber it) — see bug_mm2_counter.zy.
+
+<# ./bug_mm2_counter => c
+
+c::bump_via_helper()
+>> c::get_value() ¶
+
+r = c::bump_and_read()
+>> r ¶
+>> c::get_value() ¶
