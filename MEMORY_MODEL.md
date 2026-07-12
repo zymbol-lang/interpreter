@@ -1,12 +1,12 @@
 # Zymbol Memory Model — Design vs. Implementation Audit
 
-> **Version audited: v0.0.7 — 2026-07-12. Resolved in v0.0.8** (branch `v0.0.8`):
-> every red finding (MM-1, MM-2, MM-3, MM-4, MM-9) is **fixed** and every doc gap
-> (MM-5, MM-6, MM-7, MM-8) is documented in the GUIDE. The audit narrative below is
-> kept as written against v0.0.7 — each affected section carries a **v0.0.8** note
-> describing the new behavior. Promoted to `REFERENCE.md` as L18–L22 (fixed) and
-> L23–L24 (new open VM findings MM-10/MM-11). Regression tests:
-> `tests/bugs/bug_mm*.zy` (TW == VM parity).
+> **Version audited: v0.0.7 — 2026-07-12. Fully resolved in v0.0.8** (branch
+> `v0.0.8`): every bug finding (MM-1, MM-2, MM-3, MM-4, MM-9, and the VM findings
+> MM-10, MM-11 discovered during verification) is **fixed**, and every doc gap
+> (MM-5, MM-6, MM-7, MM-8) is documented in the GUIDE. The audit narrative below
+> is kept as written against v0.0.7 — each affected section carries a **v0.0.8**
+> note describing the new behavior. Promoted to `REFERENCE.md` as L18–L24 (all
+> fixed). Regression tests: `tests/bugs/bug_mm*.zy` (TW == VM parity).
 >
 > Design sources: `GUIDE.md` §4 (Variables and Constants), §9 (Functions), §10/10b
 > (Lambdas, Capture Semantics), §17 (Modules); `REFERENCE.md` §20 (Known Limitations).
@@ -380,8 +380,8 @@ which works transparently since capture reads any visible scope.
 | **MM-7** | 🟡 Doc conflict | `°` × VM | GUIDE said `x°`/`°x` are "tree-walker only, add `@vm-skip`"; IMPLEMENTATION.md marks them ✅/✅; the VM executes them. | 📘 **Resolved** — stale GUIDE note replaced; both engines supported (514/514 parity, 0 skips) |
 | **MM-8** | 🟢 Info | Modules | Module state identity is per file path: multiple aliases share one `LoadedModule`. Exported constants are copied at load time. | 📘 **Documented** — GUIDE §17; VM divergence tracked as MM-10 / L23 |
 | **MM-9** | 🔴 Bug | Constants × nested calls | In the tree-walker, a global constant vanished at call depth ≥ 2 (injected copies were not re-marked const). | ✅ **Fixed** — root-scope constants live in a global table not swapped by frames; REFERENCE L22 |
-| **MM-10** | 🟠 Open (VM) | Modules × VM | The VM gives each import alias its own module state copy; the tree-walker shares one state per file path. | ⏳ **Open** — REFERENCE L23; workaround: one alias per module per program |
-| **MM-11** | 🟡 Open (VM) | Loops × VM | Leftover iterator value after a loop that reuses an outer variable differs: TW leaves the last executed value, VM the first out-of-range value. | ⏳ **Open** — REFERENCE L24; documented as "do not rely on it" |
+| **MM-10** | 🟠 Bug (VM) | Modules × VM | The VM gave each import alias its own module state copy; the tree-walker shares one state per file path. | ✅ **Fixed** — compiler caches compiled modules by canonical path; aliases and diamond importers share chunks and global slots; REFERENCE L23 |
+| **MM-11** | 🟡 Bug (VM) | Loops × VM | Leftover iterator value after a loop that reuses an outer variable differed: TW leaves the last executed value, VM left the first out-of-range value (body writes could also alter iteration). | ✅ **Fixed** — VM range loops advance a hidden counter published to the named iterator per iteration; REFERENCE L24 |
 
 ## 10. Verified Behavior Matrix
 

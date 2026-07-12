@@ -10,8 +10,9 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 ## [0.0.8] — Unreleased
 
 Memory-model debt release: every divergence found by the design-vs-implementation
-audit in [MEMORY_MODEL.md](MEMORY_MODEL.md) (findings MM-1 … MM-9) is resolved.
-All fixes verified with TW/VM parity (514/514) and golden tests (498/498).
+audit in [MEMORY_MODEL.md](MEMORY_MODEL.md) is resolved — findings MM-1 … MM-9 plus
+the two VM parity bugs (MM-10, MM-11) discovered while verifying the fixes.
+All fixes verified with TW/VM parity (519/519) and golden tests (503/503).
 
 ### Fixed
 
@@ -50,6 +51,24 @@ All fixes verified with TW/VM parity (514/514) and golden tests (498/498).
 - Regression test: `tests/bugs/bug_mm4_module_const_guard.zy` (TW == VM,
   identical error text).
 
+**MM-10 / L23 — VM: each import alias got its own module state copy**
+- The VM compiler recompiled a module on every import, allocating fresh
+  global-variable slots per alias — two aliases to the same file (or a diamond
+  dependency) held divergent state. Compiled modules are now cached by
+  canonical file path: any later import binds its alias to the same chunks and
+  global slots, matching the tree-walker's per-path state identity.
+- Regression test: `tests/bugs/bug_mm10_alias_shared_state.zy` (two aliases +
+  diamond, TW == VM).
+
+**MM-11 / L24 — VM: leftover loop-iterator value diverged from the tree-walker**
+- VM range loops used the named iterator's register as the loop counter, so
+  after the loop it held the first out-of-range value (TW: last executed
+  value), and body writes to the iterator could alter the iteration. The VM
+  now advances a hidden counter and publishes it to the named variable at the
+  top of each iteration — leftover and body-write semantics match the
+  tree-walker in all range variants (step, reverse, break).
+- Regression test: `tests/bugs/bug_mm11_iterator_leftover.zy` (TW == VM).
+
 **MM-9 — root-scope constants vanished at call depth ≥ 2 (TW)**
 - Constants declared with `:=` at the top level of a script are now recorded in
   a global constant table that is not swapped by call frames: they resolve at
@@ -65,13 +84,12 @@ All fixes verified with TW/VM parity (514/514) and golden tests (498/498).
 
 - **MM-5**: constants pierce function isolation by design (GUIDE §9 note).
 - **MM-6**: the `@ var:` iterator reuses a pre-existing outer variable of the
-  same name; the leftover value after the loop is engine-specific — do not rely
-  on it (GUIDE §8 note; REFERENCE L24).
+  same name; the leftover value is the last executed iteration value in both
+  engines (GUIDE §8 note).
 - **MM-7**: `x°`/`°x` run in both engines — the stale "tree-walker only /
   `@vm-skip`" note was removed from the GUIDE.
 - **MM-8**: module state identity is per file path — several aliases to the
-  same module share one state (GUIDE §17 note). The VM currently gives each
-  alias its own copy (REFERENCE L23, open).
+  same module share one state in both engines (GUIDE §17 note).
 
 ---
 

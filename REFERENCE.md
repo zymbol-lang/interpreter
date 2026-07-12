@@ -311,19 +311,26 @@ global table not swapped by call frames: visible and immutable at any depth; mod
 frames still never see script constants (MEMORY_MODEL.md MM-9). Regression test:
 `tests/bugs/bug_mm9_const_call_depth.zy` (TW == VM).
 
-### L23 — VM: each import alias gets its own module state copy *(open)*
+### ~~L23 — VM: each import alias gets its own module state copy~~ Fixed in v0.0.8
 
-In the tree-walker, module state identity is per file path — two aliases to the same
-module share one state (by design, GUIDE §17). The VM compiles per-alias state, so
-`a::increment()` is invisible through `b::get_value()`. Workaround: import each module
-under a single alias per program. (MEMORY_MODEL.md MM-10.)
+The VM compiler recompiled a module on every import, allocating fresh global-variable
+slots per alias — so `a::increment()` was invisible through `b::get_value()`, and
+diamond dependencies (two modules importing the same third module) held divergent
+copies. The compiler now caches compiled modules by canonical file path: any later
+import — another alias or another importer — binds to the same chunks and global
+slots, matching the tree-walker's per-path state identity (GUIDE §17,
+MEMORY_MODEL.md MM-10). Regression test: `tests/bugs/bug_mm10_alias_shared_state.zy`
+(two aliases + diamond, TW == VM).
 
-### L24 — Leftover loop-iterator value differs between engines *(open)*
+### ~~L24 — Leftover loop-iterator value differs between engines~~ Fixed in v0.0.8
 
-When `@ i:1..3 { }` reuses a pre-declared outer `i` (GUIDE §8), the value left after
-the loop differs: the tree-walker leaves the last executed value (`3`), the VM leaves
-the first out-of-range value (`4`). Do not rely on the leftover value.
-(MEMORY_MODEL.md MM-11.)
+When `@ i:1..3 { }` reuses a pre-declared outer `i` (GUIDE §8), the VM left the first
+out-of-range value (`4`) while the tree-walker leaves the last executed value (`3`).
+The VM's range loops now advance a hidden counter and publish it to the named
+iterator at the top of each iteration — leftover value and body-write semantics
+(writes to the iterator inside the body cannot alter the iteration) match the
+tree-walker exactly (MEMORY_MODEL.md MM-11). Regression test:
+`tests/bugs/bug_mm11_iterator_leftover.zy` (7 variants, TW == VM).
 
 ---
 

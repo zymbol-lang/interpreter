@@ -252,6 +252,18 @@ impl FunctionCtx {
 // Module constant value (evaluated at compile time for module imports)
 // ──────────────────────────────────────────────────────────────────────────────
 
+/// Exported surface of a compiled module, recorded so later imports of the
+/// same file register a new alias without recompiling (L23/MM-10).
+#[derive(Clone, Default)]
+struct CompiledModuleExports {
+    /// public function name → chunk index (includes function re-exports)
+    functions: Vec<(String, FuncIdx)>,
+    /// public function name → builtin id (stdlib re-exports through this module)
+    builtins: Vec<(String, u16)>,
+    /// public constant name → value (includes constant re-exports)
+    constants: Vec<(String, ModuleConst)>,
+}
+
 #[derive(Clone)]
 enum ModuleConst {
     Int(i64),
@@ -296,6 +308,11 @@ pub struct Compiler {
     /// Source of named functions: name → (param_names, body_statements).
     /// Used to recompile named functions as closures when they capture outer variables.
     fn_source: HashMap<String, (Vec<String>, Vec<Statement>)>,
+    /// L23/MM-10: modules already compiled, keyed by canonical file path.
+    /// Re-importing the same file — under another alias or from another
+    /// importer — binds to the same chunks and global-variable slots, so
+    /// module state is shared per file path (tree-walker parity).
+    compiled_modules: HashMap<PathBuf, CompiledModuleExports>,
     /// Builtin function IDs: "alias::func" → builtin_id (for std/math, std/random).
     builtin_map: HashMap<String, u16>,
 }
@@ -321,6 +338,7 @@ impl Compiler {
             global_var_inits: Vec::new(),
             known_module_aliases: HashSet::new(),
             fn_source: HashMap::new(),
+            compiled_modules: HashMap::new(),
             builtin_map: HashMap::new(),
         };
 
@@ -438,6 +456,14 @@ impl Compiler {
 
         // Canonicalize for reliable circular import detection
         let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+
+        // L23/MM-10: the same module file compiles once — a later import (any
+        // alias, any importer) just binds the alias to the cached exports, so
+        // every alias shares the same chunks and global-variable slots.
+        if let Some(exports) = self.compiled_modules.get(&canonical).cloned() {
+            self.register_module_alias(&import.alias, &exports);
+            return Ok(());
+        }
 
         // Circular import detection — use module stem name to match WT message format
         if self.loading_stack.contains(&canonical) {
@@ -571,11 +597,13 @@ impl Compiler {
         // Mark this module alias as known (for private-function error detection)
         self.known_module_aliases.insert(alias.to_string());
 
-        // Register exported functions in function_index as "alias::public_name"
+        // Collect exported functions as (public_name → chunk idx).
+        // Alias-qualified registration happens once at the end via
+        // register_module_alias, shared with the compiled_modules cache path.
+        let mut exports = CompiledModuleExports::default();
         for (internal, public) in &own_func_exports {
             if let Some(&idx) = local_scope.get(internal) {
-                let qualified = format!("{}::{}", alias, public);
-                self.function_index.insert(qualified, idx);
+                exports.functions.push((public.clone(), idx));
             }
         }
 
@@ -650,8 +678,7 @@ impl Compiler {
             });
             if let Some(expr) = val_expr {
                 if let Some(mc) = Self::eval_const_expr(expr) {
-                    let key = format!("{}.{}", alias, public_name);
-                    self.module_constants.insert(key, mc);
+                    exports.constants.push((public_name.clone(), mc));
                 }
             }
         }
@@ -660,27 +687,44 @@ impl Compiler {
         for (src_alias, item_name, public_name) in &reexport_funcs {
             let src_qualified = format!("{}::{}", src_alias, item_name);
             if let Some(&idx) = self.function_index.get(&src_qualified) {
-                let dst_qualified = format!("{}::{}", alias, public_name);
-                self.function_index.insert(dst_qualified, idx);
+                exports.functions.push((public_name.clone(), idx));
             }
             // Propagate stdlib builtin re-exports (e.g., i18n adapter modules)
             if let Some(&bid) = self.builtin_map.get(&src_qualified) {
-                let dst_qualified = format!("{}::{}", alias, public_name);
-                self.builtin_map.insert(dst_qualified, bid);
+                exports.builtins.push((public_name.clone(), bid));
             }
         }
         for (src_alias, item_name, public_name) in &reexport_consts {
             let src_key = format!("{}.{}", src_alias, item_name);
             if let Some(mc) = self.module_constants.get(&src_key).cloned() {
-                let dst_key = format!("{}.{}", alias, public_name);
-                self.module_constants.insert(dst_key, mc);
+                exports.constants.push((public_name.clone(), mc));
             }
         }
+
+        // Register this alias and cache the exports so later imports of the
+        // same file share chunks and global slots (L23/MM-10).
+        self.register_module_alias(&alias, &exports);
+        self.compiled_modules.insert(canonical.clone(), exports);
 
         // Done with this module — remove from loading stack
         self.loading_stack.remove(&canonical);
 
         Ok(())
+    }
+
+    /// Bind an import alias to a compiled module's exported surface:
+    /// `alias::fn` → chunk idx / builtin id, `alias.CONST` → value.
+    fn register_module_alias(&mut self, alias: &str, exports: &CompiledModuleExports) {
+        for (public, idx) in &exports.functions {
+            self.function_index.insert(format!("{}::{}", alias, public), *idx);
+        }
+        for (public, bid) in &exports.builtins {
+            self.builtin_map.insert(format!("{}::{}", alias, public), *bid);
+        }
+        for (public, mc) in &exports.constants {
+            self.module_constants.insert(format!("{}.{}", alias, public), mc.clone());
+        }
+        self.known_module_aliases.insert(alias.to_string());
     }
 
     fn compile_function(&mut self, decl: &FunctionDecl) -> Result<Chunk, CompileError> {
@@ -1322,16 +1366,23 @@ impl Compiler {
             }
         };
 
-        // Allocate registers: r_i (iterator), r_end (inclusive bound), r_cmp, r_step, r_fwd
+        // Allocate registers: r_i (named iterator), r_cnt (hidden counter),
+        // r_end (inclusive bound), r_cmp, r_step, r_fwd.
+        // L24/MM-11 (tree-walker parity): the loop advances a HIDDEN counter and
+        // copies it into the named variable at the top of each iteration — so
+        // the leftover value after the loop is the last executed one (never the
+        // first out-of-range value), and body writes to the iterator variable
+        // cannot alter the iteration.
         let r_i = ctx.alloc_reg(iter_var)?;
+        let r_cnt = ctx.alloc_temp()?;
         let r_end = ctx.alloc_temp()?;
         let r_cmp = ctx.alloc_temp()?;
         let r_step = ctx.alloc_temp()?;
         let r_fwd = ctx.alloc_temp()?; // Bool: true = forward, false = reverse
 
-        // Initialize: r_i = start, r_end = end
+        // Initialize: r_cnt = start, r_end = end
         let r_start_tmp = self.compile_expr(start_expr, ctx)?;
-        ctx.emit(Instruction::CopyReg(r_i, r_start_tmp));
+        ctx.emit(Instruction::CopyReg(r_cnt, r_start_tmp));
         let r_end_tmp = self.compile_expr(end_expr, ctx)?;
         ctx.emit(Instruction::CopyReg(r_end, r_end_tmp));
 
@@ -1343,8 +1394,8 @@ impl Compiler {
             ctx.emit(Instruction::LoadInt(r_step, 1));
         }
 
-        // Detect direction: r_fwd = (r_i <= r_end)  → Bool
-        ctx.emit(Instruction::CmpLe(r_fwd, r_i, r_end));
+        // Detect direction: r_fwd = (r_cnt <= r_end)  → Bool
+        ctx.emit(Instruction::CmpLe(r_fwd, r_cnt, r_end));
 
         // Loop header: check exit condition using conditional branches
         // Range is INCLUSIVE: @ i:0..N → 0,1,...,N
@@ -1358,36 +1409,39 @@ impl Compiler {
         });
 
         // Exit check:
-        //   if r_fwd → exit when r_i > r_end
-        //   else     → exit when r_i < r_end
+        //   if r_fwd → exit when r_cnt > r_end
+        //   else     → exit when r_cnt < r_end
         // JumpIfNot r_fwd, check_rev
         let fwd_branch_patch = ctx.emit(Instruction::JumpIfNot(r_fwd, 0));
-        // Forward path: exit if r_i > r_end
-        ctx.emit(Instruction::CmpGt(r_cmp, r_i, r_end));
+        // Forward path: exit if r_cnt > r_end
+        ctx.emit(Instruction::CmpGt(r_cmp, r_cnt, r_end));
         let fwd_exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
         let skip_rev_patch = ctx.emit(Instruction::Jump(0)); // skip over reverse check
         // Reverse path:
         let check_rev_label = ctx.current_label();
         ctx.patch_jump(fwd_branch_patch, check_rev_label);
-        ctx.emit(Instruction::CmpLt(r_cmp, r_i, r_end));
+        ctx.emit(Instruction::CmpLt(r_cmp, r_cnt, r_end));
         let rev_exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
         let body_label = ctx.current_label();
         ctx.patch_jump(skip_rev_patch, body_label);
+
+        // Publish the counter into the named iterator variable (L24)
+        ctx.emit(Instruction::CopyReg(r_i, r_cnt));
 
         self.compile_block(&lp.body, ctx)?;
 
         // continue label = start of increment, so @> increments before re-checking
         let inc_label = ctx.current_label();
 
-        // Increment/decrement:
-        //   if r_fwd → r_i = r_i + r_step
-        //   else     → r_i = r_i - r_step
+        // Increment/decrement the hidden counter:
+        //   if r_fwd → r_cnt = r_cnt + r_step
+        //   else     → r_cnt = r_cnt - r_step
         let inc_fwd_patch = ctx.emit(Instruction::JumpIfNot(r_fwd, 0));
-        ctx.emit(Instruction::AddInt(r_i, r_i, r_step));
+        ctx.emit(Instruction::AddInt(r_cnt, r_cnt, r_step));
         let skip_sub_patch = ctx.emit(Instruction::Jump(0));
         let do_sub_label = ctx.current_label();
         ctx.patch_jump(inc_fwd_patch, do_sub_label);
-        ctx.emit(Instruction::SubInt(r_i, r_i, r_step));
+        ctx.emit(Instruction::SubInt(r_cnt, r_cnt, r_step));
         let after_inc_label = ctx.current_label();
         ctx.patch_jump(skip_sub_patch, after_inc_label);
 

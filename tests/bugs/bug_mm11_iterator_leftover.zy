@@ -1,0 +1,34 @@
+// MM-11 (fixed v0.0.8): the VM advances a hidden counter and publishes it to
+// the named iterator at the top of each iteration (tree-walker parity):
+// the leftover value after a loop that reuses an outer variable is the LAST
+// EXECUTED value (never the first out-of-range one), and body writes to the
+// iterator variable cannot alter the iteration.
+
+i = 0
+@ i:1..3 { }
+>> i ¶
+
+j = 0
+@ j:1..10:4 { }
+>> j ¶
+
+k = 0
+@ k:3..1 { }
+>> k ¶
+
+m = 0
+@ m:5..1:2 { }
+>> m ¶
+
+b = 0
+@ b:1..5 { ? b == 2 { @! } }
+>> b ¶
+
+suma = 0
+w = 0
+@ w:1..3 {
+    suma = suma + w
+    w = 100
+}
+>> suma ¶
+>> w ¶

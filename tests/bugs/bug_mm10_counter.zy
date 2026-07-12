@@ -1,0 +1,11 @@
+// Module used by bug_mm10_alias_shared_state.zy
+// MM-10 (fixed v0.0.8): module state identity is per file path in both engines.
+
+# bug_mm10_counter {
+    #> { increment, get_value }
+
+    count = 0
+
+    increment() { count = count + 1 }
+    get_value() { <~ count }
+}

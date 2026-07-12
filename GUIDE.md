@@ -1074,10 +1074,11 @@ i = 99
 >> i ¶               // the outer i was overwritten by the loop
 ```
 
-> ⚠ The leftover value after the loop is **engine-specific** (the tree-walker
-> leaves the last executed value; the VM leaves the first out-of-range value —
-> see REFERENCE L24). Do not rely on it: read the value you need inside the
-> loop, or use a different name for the iterator.
+> The leftover value is the **last executed** iteration value in both engines
+> (v0.0.8 — previously the VM left the first out-of-range value, REFERENCE
+> L24). Writes to the iterator variable inside the body do not alter the
+> iteration — the loop advances an internal counter. Still, prefer reading the
+> value you need inside the loop, or use a different name for the iterator.
 
 ### Range Loop (inclusive on both ends)
 
@@ -2623,9 +2624,9 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 | `private_fn()` | no | ✗ error | — |
 
 **Module state identity is per file path**: importing the same module file
-several times — even under different aliases, even from different importers —
-shares **one** state. Two aliases to `./counter` increment the same counter.
-(The VM currently gives each alias its own copy — REFERENCE L23.)
+several times — even under different aliases, even from different importers
+(diamond dependencies) — shares **one** state in both engines. Two aliases to
+`./counter` increment the same counter.
 
 Since v0.0.8, mutations made by **intra-module calls** persist too: an exported
 function may delegate state changes to a private helper, and the calling frame
