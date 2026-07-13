@@ -89,6 +89,9 @@ enum FunctionDef {
         /// Path of the module where this function was defined.
         /// Used to restore the correct scope when a function is called through a re-export adapter.
         origin_module_path: Option<PathBuf>,
+        /// Auto-free (v0.0.8): body statement index → variables destroyed
+        /// after that statement finishes normally (last-use analysis).
+        auto_free: HashMap<usize, Vec<String>>,
     },
     Native {
         name:  &'static str,
@@ -352,13 +355,11 @@ pub struct Interpreter<W: Write> {
     base_dir: PathBuf,
     /// CLI arguments passed to the script
     cli_args: Option<Vec<Value>>,
-    /// Destruction schedule: statement_index -> variables to destroy after execution
-    /// Populated by semantic analyzer's def-use chain analysis
+    /// Auto-free (v0.0.8): top-level statement index → variables to destroy
+    /// after that statement (last-use analysis, computed in `execute()`)
     destruction_schedule: HashMap<usize, Vec<String>>,
     /// Dead variables: variables that have been destroyed (for use-after-free detection)
     dead_variables: HashSet<String>,
-    /// Current statement index (for tracking which statement is executing)
-    statement_index: usize,
     /// Short-circuit flag: true if any const (:=) has been declared in this interpreter session
     has_any_const: bool,
     /// QW6: fast check — true if control_flow != None (avoids enum PartialEq on hot path)
@@ -414,6 +415,15 @@ pub struct Interpreter<W: Write> {
     /// MM-9: call-frame depth — 0 while executing top-level statements.
     /// Distinguishes the root scope from a function frame's bottom scope.
     call_depth: usize,
+    /// Auto-free (v0.0.8): names destroyed by the last-use schedule in the
+    /// CURRENT frame. Separate from `dead_variables` so an analyzer bug
+    /// surfaces as a distinctive internal error, never as a user-facing `\`
+    /// lifetime error. Frame-local (saved/restored in SavedCallState).
+    auto_dead_variables: HashSet<String>,
+    /// Auto-free (v0.0.8): program-wide exclusion set (hot names, constants,
+    /// free variables of value-used named functions, module bindings).
+    /// Computed once per `execute()`; consulted when registering functions.
+    auto_free_excluded: Rc<HashSet<String>>,
 }
 
 impl<W: Write> Interpreter<W> {
@@ -521,6 +531,9 @@ impl<W: Write> Interpreter<W> {
         if !self.dead_variables.is_empty() {
             self.dead_variables.remove(name);
         }
+        if !self.auto_dead_variables.is_empty() {
+            self.auto_dead_variables.remove(name);
+        }
         if let Some(scope) = self.scope_stack.last_mut() {
             scope.insert(name.to_string(), value);
         }
@@ -550,6 +563,9 @@ impl<W: Write> Interpreter<W> {
         // A new assignment after explicit destruction (`\var`) resurrects the variable.
         if !self.dead_variables.is_empty() {
             self.dead_variables.remove(name);
+        }
+        if !self.auto_dead_variables.is_empty() {
+            self.auto_dead_variables.remove(name);
         }
         for scope in self.scope_stack.iter_mut().rev() {
             if let Some(existing) = scope.get_mut(name) {
@@ -682,6 +698,7 @@ impl<W: Write> Interpreter<W> {
             // MM-3: destroyed names are frame-local — a `\ x` inside the callee
             // must not poison the caller's own `x`.
             dead_variables: std::mem::take(&mut self.dead_variables),
+            auto_dead_variables: std::mem::take(&mut self.auto_dead_variables),
             // MM-2: module context is frame-local.
             current_module_path: self.current_module_path.take(),
         };
@@ -712,6 +729,7 @@ impl<W: Write> Interpreter<W> {
         self.has_any_const = saved.has_any_const;
         self.loop_scope_depths = saved.loop_scope_depths;      // MM-1
         self.dead_variables = saved.dead_variables;            // MM-3
+        self.auto_dead_variables = saved.auto_dead_variables;  // auto-free
         self.current_module_path = saved.current_module_path;  // MM-2
         self.call_depth = self.call_depth.saturating_sub(1);
 
@@ -747,6 +765,7 @@ pub(crate) struct SavedCallState {
     has_any_const: bool,
     loop_scope_depths: Vec<usize>,
     dead_variables: HashSet<String>,
+    auto_dead_variables: HashSet<String>,
     pub(crate) current_module_path: Option<PathBuf>,
 }
 
@@ -776,7 +795,6 @@ impl Interpreter<std::io::Stdout> {
             cli_args: None,
             destruction_schedule: HashMap::new(),
             dead_variables: HashSet::new(),
-            statement_index: 0,
             has_any_const: false,
             has_control_flow: false,
             scope_map_pool: Vec::new(),
@@ -797,6 +815,8 @@ impl Interpreter<std::io::Stdout> {
             global_consts: HashMap::new(),
             current_module_path: None,
             call_depth: 0,
+            auto_dead_variables: HashSet::new(),
+            auto_free_excluded: Rc::new(HashSet::new()),
         }
     }
 }
@@ -826,7 +846,6 @@ impl<W: Write> Interpreter<W> {
             cli_args: None,
             destruction_schedule: HashMap::new(),
             dead_variables: HashSet::new(),
-            statement_index: 0,
             has_any_const: false,
             has_control_flow: false,
             scope_map_pool: Vec::new(),
@@ -847,6 +866,8 @@ impl<W: Write> Interpreter<W> {
             global_consts: HashMap::new(),
             current_module_path: None,
             call_depth: 0,
+            auto_dead_variables: HashSet::new(),
+            auto_free_excluded: Rc::new(HashSet::new()),
         }
     }
 
@@ -873,12 +894,6 @@ impl<W: Write> Interpreter<W> {
         self.base_dir = path.as_ref().to_path_buf();
     }
 
-    /// Set the destruction schedule from semantic analysis
-    /// Maps statement_index -> variables to destroy after that statement executes
-    pub fn set_destruction_schedule(&mut self, schedule: HashMap<usize, Vec<String>>) {
-        self.destruction_schedule = schedule;
-    }
-
     /// Destroy a variable immediately (remove from all scopes and mark as dead)
     fn destroy_variable(&mut self, var_name: &str) {
         // A destroyed root constant must not resurrect through the global table.
@@ -895,14 +910,45 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
+    /// Auto-free (v0.0.8): destroy a variable scheduled after its last use.
+    /// Invisible by design — the analyzer only schedules provably dead names.
+    /// Marked in `auto_dead_variables` (not `dead_variables`) so an analyzer
+    /// bug surfaces as a distinctive internal error.
+    fn auto_destroy_variable(&mut self, name: &str) {
+        // Defense in depth: constants are excluded by the analyzer already.
+        if self.is_const(name) {
+            return;
+        }
+        for scope in self.scope_stack.iter_mut().rev() {
+            if scope.remove(name).is_some() {
+                self.auto_dead_variables.insert(name.to_string());
+                return;
+            }
+        }
+    }
+
     /// Check if a variable has been destroyed (use-after-free detection)
     fn check_variable_alive(&self, var_name: &str, span: &Span) -> Result<()> {
-        if self.dead_variables.is_empty() { return Ok(()); }  // B8: short-circuit
+        // B8: short-circuit
+        if self.dead_variables.is_empty() && self.auto_dead_variables.is_empty() {
+            return Ok(());
+        }
         if self.dead_variables.contains(var_name) {
             return Err(RuntimeError::Generic {
                 message: format!(
                     "use after destruction: variable '{}' was destroyed after its last use",
                     var_name
+                ),
+                span: *span,
+            });
+        }
+        // Auto-free is invisible by design — reaching this error means the
+        // last-use analyzer scheduled a destruction too early.
+        if self.auto_dead_variables.contains(var_name) {
+            return Err(RuntimeError::Generic {
+                message: format!(
+                    "internal: use of '{}' after auto-destruction — this is a bug in the last-use analyzer, please report it (workaround: add a later `>> {}` mention or a `\\ {}` at the intended end of life)",
+                    var_name, var_name, var_name
                 ),
                 span: *span,
             });
@@ -936,7 +982,6 @@ impl<W: Write> Interpreter<W> {
         self.has_any_const = false;
         self.has_control_flow = false;
         self.control_flow = ControlFlow::None;
-        self.statement_index = 0;
         self.tco_pending = false;
         self.tco_args.clear();
         self.current_function = None;
@@ -946,6 +991,9 @@ impl<W: Write> Interpreter<W> {
         self.global_consts.clear();
         self.current_module_path = None;
         self.call_depth = 0;
+        self.auto_dead_variables.clear();
+        self.destruction_schedule.clear();
+        self.auto_free_excluded = Rc::new(HashSet::new());
     }
 
     /// Execute a single line of code (for REPL)
@@ -1092,22 +1140,53 @@ impl<W: Write> Interpreter<W> {
             self.load_import(import)?;
         }
 
-        // Reset statement index
-        self.statement_index = 0;
+        // Auto-free (v0.0.8): compute the program-wide exclusion set and the
+        // top-level destruction schedule. Function declarations executed below
+        // compute their own body schedules against the same exclusions.
+        // Invisible optimization — see zymbol_semantic::last_use.
+        self.auto_free_excluded = Rc::new(zymbol_semantic::auto_free_exclusions(program));
+        self.destruction_schedule =
+            zymbol_semantic::region_schedule(&program.statements, &[], &self.auto_free_excluded);
 
-        // Execute statements with auto-destruction
-        for statement in &program.statements {
+        // Execute statements with auto-destruction after each one's last uses
+        for (i, statement) in program.statements.iter().enumerate() {
             self.execute_statement(statement)?;
 
-            // Check if any variables should be destroyed after this statement
-            if let Some(vars_to_destroy) = self.destruction_schedule.get(&self.statement_index) {
+            // Pending control flow (shouldn't reach top level): teardown owns cleanup
+            if self.is_control_flow_pending() {
+                continue;
+            }
+            if let Some(vars_to_destroy) = self.destruction_schedule.get(&i) {
                 let vars = vars_to_destroy.clone();
                 for var_name in vars {
-                    self.destroy_variable(&var_name);
+                    self.auto_destroy_variable(&var_name);
                 }
             }
+        }
+        Ok(())
+    }
 
-            self.statement_index += 1;
+    /// Execute a function body applying its auto-free schedule (v0.0.8).
+    /// Destruction is skipped while control flow is pending — the frame or
+    /// loop teardown owns cleanup on return/break paths.
+    pub(crate) fn execute_body_scheduled(
+        &mut self,
+        block: &Block,
+        schedule: &HashMap<usize, Vec<String>>,
+    ) -> Result<()> {
+        if schedule.is_empty() {
+            return self.execute_block_no_scope(block);
+        }
+        for (i, statement) in block.statements.iter().enumerate() {
+            self.execute_statement(statement)?;
+            if self.is_control_flow_pending() {
+                break;
+            }
+            if let Some(names) = schedule.get(&i) {
+                for name in names {
+                    self.auto_destroy_variable(name);
+                }
+            }
         }
         Ok(())
     }
@@ -1129,10 +1208,31 @@ impl<W: Write> Interpreter<W> {
             Statement::Break(break_stmt) => self.execute_break(break_stmt),
             Statement::Continue(continue_stmt) => self.execute_continue(continue_stmt),
             Statement::FunctionDecl(func_decl) => {
+                // Auto-free (v0.0.8): schedule body locals and by-value params
+                // for destruction after their last use. Output/Mutable params
+                // participate in caller write-back — never freed early.
+                let mut excluded: HashSet<String> = (*self.auto_free_excluded).clone();
+                let mut param_candidates: Vec<String> = Vec::new();
+                for p in &func_decl.parameters {
+                    match p.kind {
+                        zymbol_ast::ParameterKind::Normal => {
+                            param_candidates.push(p.name.clone());
+                        }
+                        _ => {
+                            excluded.insert(p.name.clone());
+                        }
+                    }
+                }
+                let auto_free = zymbol_semantic::region_schedule(
+                    &func_decl.body.statements,
+                    &param_candidates,
+                    &excluded,
+                );
                 let func_def = FunctionDef::Zymbol {
                     parameters: func_decl.parameters.clone(),
                     body: func_decl.body.clone(),
                     origin_module_path: self.current_file.clone(),
+                    auto_free,
                 };
                 self.functions.insert(func_decl.name.clone(), Rc::new(func_def));
                 Ok(())

@@ -14,6 +14,45 @@ audit in [MEMORY_MODEL.md](MEMORY_MODEL.md) is resolved — findings MM-1 … MM
 the two VM parity bugs (MM-10, MM-11) discovered while verifying the fixes.
 All fixes verified with TW/VM parity (519/519) and golden tests (503/503).
 
+### Added
+
+**Automatic destruction at last use (auto-free) — both engines, always on**
+- A variable's memory is released right after the statement containing its
+  last use, instead of at scope end. Invisible by design: it never changes a
+  correct program's behavior — it only lowers peak memory (measured: a script
+  holding two sequential 30 MB strings peaks at ~64 MB instead of ~94 MB in
+  the tree-walker).
+- New purely lexical, conservative last-use analysis
+  (`zymbol_semantic::last_use`): a region is a flat statement sequence
+  (top-level program or a named function body); mentions are collected from
+  the whole statement subtree — nested blocks, loop bodies, lambda bodies
+  (capture happens at the statement containing the lambda), `{var}` string
+  interpolations (verbatim, mirroring the runtime resolver), and input
+  prompts. The `Expr` walker is exhaustive (no `_` arm), so future syntax
+  additions fail compilation until their mention rules are reviewed.
+- Never auto-freed (conservative exclusions): constants, hot names
+  (`x°`/`°x`), `_`-prefixed names, module-level bindings, output/mutable
+  parameters, and free variables of named functions used as first-class
+  values. Normal parameters and region-level locals are candidates.
+- Tree-walker: per-body schedules stored in `FunctionDef::Zymbol::auto_free`
+  and applied by `execute_body_scheduled`; destruction is skipped while
+  control flow is pending (frame/loop teardown owns those paths).
+  Auto-destroyed names live in a frame-local `auto_dead_variables` set: using
+  one (impossible in a correct program) raises a distinctive
+  `internal: use after auto-destruction` error — including from string
+  interpolation, which otherwise silently prints `{var}`.
+- VM: the compiler emits `LoadUnit` on the variable's register after its
+  last-use statement (same analysis, per module context). Known limitation:
+  expression temporaries may retain a value until their register is
+  overwritten, so the VM's peak-memory win is currently smaller than the
+  tree-walker's.
+- The previously dead wiring (`set_destruction_schedule`, `statement_index`)
+  was removed; `zymbol check`'s ambiguous-lifetime warnings (old def-use
+  analyzer) are unchanged.
+- Verified: 847 unit tests (12 new analyzer + 2 interpreter), 519/519 TW/VM
+  parity, 503/503 golden, 89/89 GUIDE examples, benchmark gate 14/14 with no
+  regressions.
+
 ### Fixed
 
 **MM-1 — `x°`/`°x` inside a function called from a `@` loop panicked the tree-walker**

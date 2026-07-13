@@ -419,5 +419,76 @@ result (see the regression tests in `tests/bugs/bug_mm*.zy`):
 
 ---
 
+## 11. Automatic Destruction at Last Use (auto-free, v0.0.8)
+
+The audit found the last-use destruction design half-built and disconnected
+(the old `DefUseAnalyzer` → `set_destruction_schedule` pipeline had no caller).
+v0.0.8 replaces it with a live implementation, **always on in both engines**,
+under one governing invariant: *a correct program can never observe it* — it
+only lowers peak memory.
+
+**Design decisions** (validated with the language owner): full scope
+(top-level + function bodies), invisible semantics with a distinctive internal
+error on analyzer bugs, both engines, always active.
+
+### The analysis — `zymbol_semantic::last_use`
+
+- **Region model**: a region is a flat statement sequence executed once, top
+  to bottom — the top-level program or a named function body. All repetition
+  (`@`) and branching (`?`, `??`, `!?`) live *inside* single region-level
+  statements, so destroying after the last-mentioning statement is temporally
+  after every possible use inside it. Nested blocks are not separate regions:
+  their locals already die at block end via scoping.
+- **Mentions** are collected from the entire statement subtree: nested blocks,
+  loop bodies, lambda bodies (capture-by-value happens at the statement
+  containing the lambda literal), `{var}` interpolations (full brace content,
+  verbatim — mirroring `interpolate_string`), input prompts, `\ var`, match
+  patterns. The `Expr` walker is exhaustive (no `_` arm): a new expression
+  variant fails compilation here until its mention rule is written.
+- **Candidates**: region-level creations (assignment, destructuring, `<<`,
+  `<<|`, `><`) plus a function's by-value parameters.
+- **Poisoned (never freed)**: constants, hot names (`x°`/`°x`), `_`-prefixed
+  names, output/mutable parameters (caller write-back), module-level bindings
+  (module state write-back protocol, MM-2), and free variables of named
+  functions used as first-class values (their bodies snapshot outer names at
+  the point of use — `f = adder` / HOF operands / pipe callables).
+
+### Runtime (tree-walker)
+
+- Schedules are computed once: the top-level schedule in `execute()`, each
+  function's in its `FunctionDecl` registration
+  (`FunctionDef::Zymbol::auto_free`), against the same program-wide exclusion
+  set. `execute_body_scheduled` applies them after each statement, skipping
+  while control flow is pending (frame/loop teardown owns those paths).
+- Destroyed names go to `auto_dead_variables` — frame-local (in
+  `SavedCallState`, per the MM-3 lesson) and separate from `\`'s
+  `dead_variables`: reaching one raises
+  `internal: use after auto-destruction … please report it` instead of the
+  user-facing lifetime error. String interpolation checks it too (a missing
+  interpolation variable otherwise degrades silently to literal `{var}`).
+  Reassignment resurrects, exactly like `\`.
+- Measured effect: two sequential 30 MB strings peak at ~64 MB instead of
+  ~94 MB (value freed before the second one is built).
+
+### Runtime (VM)
+
+The compiler runs the same analysis per region (main chunk, each function
+body — with each module's own exclusion set during `compile_import`) and emits
+`LoadUnit` on the variable's register after its last-use statement.
+
+> **Known limitation (VM)**: expression *temporaries* may retain a value until
+> their register is overwritten, so the VM's peak-memory win is currently
+> smaller than the tree-walker's. Freeing temporaries needs its own lifetime
+> tracking — future work; correctness is unaffected.
+
+### Invisibility evidence
+
+847 unit tests (12 analyzer + 2 interpreter integration), 519/519 TW/VM
+parity, 503/503 golden files, 89/89 GUIDE examples, formatter property harness
+clean, benchmark gate 14/14 (no regressions; several benchmarks improve from
+lower allocator pressure).
+
+---
+
 *Related docs: [GUIDE.md](GUIDE.md) · [REFERENCE.md](REFERENCE.md) ·
 [IMPLEMENTATION.md](IMPLEMENTATION.md) · [ARCHITECTURE.md](ARCHITECTURE.md)*

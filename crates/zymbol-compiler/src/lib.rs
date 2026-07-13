@@ -264,6 +264,17 @@ struct CompiledModuleExports {
     constants: Vec<(String, ModuleConst)>,
 }
 
+/// Auto-free (v0.0.8): overwrite each scheduled variable's register with Unit
+/// right after its last use, releasing the heap value it held. Names without
+/// a register (never materialized on this path) are skipped.
+fn emit_auto_free(ctx: &mut FunctionCtx, names: &[String]) {
+    for name in names {
+        if let Ok(reg) = ctx.get_reg(name) {
+            ctx.emit(Instruction::LoadUnit(reg));
+        }
+    }
+}
+
 #[derive(Clone)]
 enum ModuleConst {
     Int(i64),
@@ -308,6 +319,10 @@ pub struct Compiler {
     /// Source of named functions: name → (param_names, body_statements).
     /// Used to recompile named functions as closures when they capture outer variables.
     fn_source: HashMap<String, (Vec<String>, Vec<Statement>)>,
+    /// Auto-free (v0.0.8): program-wide exclusion set for the program (or
+    /// module) currently being compiled — names never freed early. Saved and
+    /// restored around module compilation.
+    auto_free_excluded: HashSet<String>,
     /// L23/MM-10: modules already compiled, keyed by canonical file path.
     /// Re-importing the same file — under another alias or from another
     /// importer — binds to the same chunks and global-variable slots, so
@@ -340,7 +355,13 @@ impl Compiler {
             fn_source: HashMap::new(),
             compiled_modules: HashMap::new(),
             builtin_map: HashMap::new(),
+            auto_free_excluded: HashSet::new(),
         };
+
+        // Auto-free (v0.0.8): same last-use analysis as the tree-walker.
+        // Computed before imports — compile_import swaps in each module's own
+        // exclusion set while compiling module function bodies.
+        compiler.auto_free_excluded = zymbol_semantic::auto_free_exclusions(program);
 
         // Process imports first — register module functions as "alias::func"
         if let Some(base) = base_dir {
@@ -401,11 +422,20 @@ impl Compiler {
             compiler.functions[idx] = chunk;
         }
 
-        // Compile main body
+        // Compile main body, freeing registers after each variable's last use
+        // (auto-free, v0.0.8 — mirrors the tree-walker's top-level schedule).
+        let main_schedule = zymbol_semantic::region_schedule(
+            &program.statements,
+            &[],
+            &compiler.auto_free_excluded,
+        );
         let mut ctx = FunctionCtx::new("<main>");
-        for stmt in &program.statements {
+        for (i, stmt) in program.statements.iter().enumerate() {
             if !matches!(stmt, Statement::FunctionDecl(_)) {
                 compiler.compile_stmt(stmt, &mut ctx)?;
+            }
+            if let Some(names) = main_schedule.get(&i) {
+                emit_auto_free(&mut ctx, names);
             }
         }
         let main_chunk = ctx.into_chunk(0);
@@ -645,6 +675,13 @@ impl Compiler {
         // Activate module_scope so compile_call finds private sibling functions
         let saved_module_scope = std::mem::replace(&mut self.module_scope, local_scope);
 
+        // Auto-free (v0.0.8): module function bodies use the module's own
+        // exclusion set (its module-level bindings are never freed early).
+        let saved_auto_free_excluded = std::mem::replace(
+            &mut self.auto_free_excluded,
+            zymbol_semantic::auto_free_exclusions(&module_prog),
+        );
+
         // Compile ALL function bodies (exported + private)
         for (i, name) in all_func_names.iter().enumerate() {
             let func_decl = module_prog.statements.iter().find_map(|s| {
@@ -662,6 +699,7 @@ impl Compiler {
 
         // Restore module_scope, global_consts, and remove this module's global var entries
         self.module_scope = saved_module_scope;
+        self.auto_free_excluded = saved_auto_free_excluded;
         self.global_consts = saved_global_consts;
         for name in &module_gvar_names {
             self.global_var_map.remove(name);
@@ -734,9 +772,34 @@ impl Compiler {
             ctx.alloc_reg(&param.name)?;
         }
         let num_params = decl.parameters.len() as u16;
+
+        // Auto-free (v0.0.8): free body locals and by-value params after their
+        // last use. Output/Mutable params feed the caller write-back — never
+        // freed early. Same analysis as the tree-walker (invisible).
+        let mut excluded = self.auto_free_excluded.clone();
+        let mut param_candidates: Vec<String> = Vec::new();
+        for p in &decl.parameters {
+            match p.kind {
+                zymbol_ast::ParameterKind::Normal => param_candidates.push(p.name.clone()),
+                _ => {
+                    excluded.insert(p.name.clone());
+                }
+            }
+        }
+        let schedule =
+            zymbol_semantic::region_schedule(&decl.body.statements, &param_candidates, &excluded);
+
         let prev_in_fn = self.in_function_body;
         self.in_function_body = true;
-        let result = self.compile_block(&decl.body, &mut ctx);
+        let result = (|| -> Result<(), CompileError> {
+            for (i, stmt) in decl.body.statements.iter().enumerate() {
+                self.compile_stmt(stmt, &mut ctx)?;
+                if let Some(names) = schedule.get(&i) {
+                    emit_auto_free(&mut ctx, names);
+                }
+            }
+            Ok(())
+        })();
         self.in_function_body = prev_in_fn;
         result?;
         // Implicit return Unit if no explicit <~

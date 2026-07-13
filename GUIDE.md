@@ -664,6 +664,39 @@ block. The compiler enforces this at the semantic analysis phase.
 
 This works for both regular and `_`-prefixed variables.
 
+### Variable Lifecycle
+
+The complete life of a variable, as implemented in both engines (v0.0.8):
+
+| Phase | When | Mechanism |
+|-------|------|-----------|
+| Birth | First assignment (`=`, destructuring, `<<`, `<<\|`, `><`) | Created in the innermost scope; if the name is visible in an outer scope, that variable is updated instead (no shadowing) |
+| Block death | Enclosing block ends | Scope popped; block-local variables released |
+| Frame death | Function returns | The whole call frame is released |
+| **Auto-free** | **Right after the statement containing its last use** | Last-use analysis releases the value early — see below |
+| Explicit death | `\ var` | Immediate destruction; reassignment resurrects the name |
+| Program end | Last statement | Everything remaining is released |
+
+**Automatic destruction at last use (auto-free)** — since v0.0.8, both engines
+release a variable's memory right after the last statement that mentions it,
+instead of waiting for its scope to end. This is an **invisible optimization**:
+it never changes what a correct program prints or returns — it only lowers peak
+memory (e.g. a large array processed early in a long script is reclaimed
+immediately after its last use).
+
+The analysis is deliberately conservative. A variable is **never** auto-freed
+when it is: a constant (`:=`), hot (`x°`/`°x`), `_`-prefixed, a module-level
+binding, an output/mutable parameter (`<~`/`~`), or a free variable of a named
+function that is used as a first-class value. Mentions inside string
+interpolations (`"{var}"`), lambda bodies, nested blocks, and loop bodies all
+count as uses. When in doubt, the variable simply lives until its scope ends,
+as before.
+
+> `\ var` remains the only *observable* destruction: using a variable after
+> `\` is a lifetime error. Auto-free never produces that error in a correct
+> program — if you ever see `internal: use after auto-destruction`, it is an
+> interpreter bug: please report it.
+
 ### String Interpolation
 
 Works in **any context** — assignments, arguments, array literals, etc.:

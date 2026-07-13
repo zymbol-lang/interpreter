@@ -297,7 +297,7 @@ impl<W: Write> Interpreter<W> {
         }
 
         // Zymbol function: destructure the enum — unreachable arm is dead code after the guard above.
-        let FunctionDef::Zymbol { parameters, body, origin_module_path } = func_def.as_ref() else {
+        let FunctionDef::Zymbol { parameters, body, origin_module_path, auto_free } = func_def.as_ref() else {
             unreachable!()
         };
 
@@ -453,7 +453,7 @@ impl<W: Write> Interpreter<W> {
         // QW1: execute_block_no_scope — take_call_state already owns scope[0] (params).
         // QW17: TCO loop — if tco_pending is set after execution, rebind params and restart.
         let return_value = 'tco: loop {
-            if let Err(e) = self.execute_block_no_scope(body) {
+            if let Err(e) = self.execute_body_scheduled(body, auto_free) {
                 // L16 fix: the caller's scope_stack was swapped out by
                 // take_call_state — restore the full caller state before
                 // propagating, or every outer variable vanishes after the
