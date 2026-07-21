@@ -173,6 +173,12 @@ impl<W: Write> Interpreter<W> {
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
+            // Int/Float promotion, matching compare_values. Without it `==` was
+            // the only comparison that did not promote: `##.0 >= 0` and
+            // `##.0 <= 0` were both #1 while `##.0 == 0` was #0, and the two
+            // values print identically, so the disagreement was invisible.
+            (Value::Int(a), Value::Float(b)) => (*a as f64 - b).abs() < f64::EPSILON,
+            (Value::Float(a), Value::Int(b)) => (a - *b as f64).abs() < f64::EPSILON,
             (Value::Char(a), Value::Char(b)) => a == b,
             (Value::Array(a), Value::Array(b)) => {
                 a.len() == b.len() && a.iter().zip(b).all(|(x, y)| Self::values_equal_static(x, y))
@@ -268,5 +274,53 @@ impl<W: Write> Interpreter<W> {
                 ),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod equality_tests {
+    use super::*;
+
+    // HLZ-003 — `==` promotes Int and Float, matching what `<`, `>`, `<=` and
+    // `>=` already did through compare_values. Before the fix `##.0 == 0` was
+    // false while `##.0 >= 0` and `##.0 <= 0` were both true, and both values
+    // print identically, so the contradiction never showed on screen.
+
+    fn eq(a: Value, b: Value) -> bool {
+        Interpreter::<Vec<u8>>::values_equal_static(&a, &b)
+    }
+
+    #[test]
+    fn int_and_float_of_the_same_value_are_equal() {
+        assert!(eq(Value::Int(0), Value::Float(0.0)));
+        assert!(eq(Value::Float(0.0), Value::Int(0)));
+        assert!(eq(Value::Int(20), Value::Float(20.0)));
+        assert!(eq(Value::Float(-3.0), Value::Int(-3)));
+    }
+
+    #[test]
+    fn different_values_stay_different_across_types() {
+        assert!(!eq(Value::Int(1), Value::Float(2.0)));
+        assert!(!eq(Value::Float(1.5), Value::Int(1)));
+    }
+
+    #[test]
+    fn ordering_and_equality_agree() {
+        // The property that was violated: a >= b && a <= b implies a == b.
+        let a = Value::Float(7.0);
+        let b = Value::Int(7);
+        assert!(eq(a.clone(), b.clone()));
+    }
+
+    #[test]
+    fn same_type_equality_is_unchanged() {
+        assert!(eq(Value::Int(5), Value::Int(5)));
+        assert!(!eq(Value::Int(5), Value::Int(6)));
+        assert!(eq(Value::Float(2.5), Value::Float(2.5)));
+        assert!(eq(
+            Value::String("a".to_string()),
+            Value::String("a".to_string())
+        ));
+        assert!(!eq(Value::Int(1), Value::String("1".to_string())));
     }
 }

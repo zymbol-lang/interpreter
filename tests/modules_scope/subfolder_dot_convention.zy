@@ -1,0 +1,8 @@
+// HLZ-004 / HLZ-002 / HLZ-005 — subdirectory modules, computed indices,
+// and a './../' import path.
+<# ./hlz/hondo/nieto => n
+
+m = [10, 20, 30, 40, 50, 60]
+>> "en(2,1)=" (n::en(m, 3, 2, 1)) ¶
+>> "en(1,3)=" (n::en(m, 3, 1, 3)) ¶
+>> "plano=" (n::plano(3, 2, 2)) ¶

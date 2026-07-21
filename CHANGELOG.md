@@ -55,6 +55,97 @@ All fixes verified with TW/VM parity (519/519) and golden tests (503/503).
 
 ### Fixed
 
+**Findings from the zy-GO validation project (HLZ-001 … HLZ-009)**
+
+Building [zy-GO](https://github.com/zymbol-lang/zy-GO) — a Go/囲碁 game whose
+engine is 13 modules across four subdirectories — surfaced nine divergences.
+Six were bugs, two were diagnostics that named neither cause nor fix, and one
+was a documentation table that sent readers to write a TUI that could not
+respond to the cursor keys.
+
+**HLZ-001 — a module constant could not carry a sign**
+- `NAME := -1` inside a module body was rejected as E013 "initializer must be a
+  literal": a signed number parses as unary minus applied to a literal, which is
+  an expression node, but `-1` is a constant, not a computation.
+- Both the parser gate and the semantic defence-in-depth gate now accept a
+  signed literal, and they share the same rule so they cannot drift apart.
+- Regression: `tests/modules_scope/out_param_module.zy`, plus unit tests in
+  `zymbol-semantic` for the accepted and still-rejected forms.
+
+**HLZ-002 — an index computed from parameters was rejected as Float**
+- `arr[(r - 1) * n + c]` inside a function failed analysis with "array index
+  must be Int, got Float", though every operand is an integer at runtime.
+- Cause: a parameter used in arithmetic was constrained to `Numeric`, and
+  `Numeric` resolved to `Float` — asserting more than was known.
+- New `ZymbolType::Number` means "Int or Float, undetermined": accepted as an
+  array index, compatible with Int and Float and with nothing else. The static
+  error for passing a String to a function that adds to its parameter is
+  preserved, and now reads "expects Number" rather than the inaccurate
+  "expects Float".
+- Regression: `tests/modules_scope/subfolder_dot_convention.zy`.
+
+**HLZ-003 — `==` was the only comparison that did not promote Int and Float**
+- `##.0 == 0` was `#0` while `##.0 >= 0` and `##.0 <= 0` were both `#1`. Since
+  the two values print identically, the contradiction was invisible: a failing
+  assertion read "expected 0, got 0".
+- `values_equal` in the tree-walker now promotes, as `compare_values` already
+  did. The VM's `cmp_direct` already promoted, so `==` was also a silent engine
+  divergence; `Value::equals` and the `CmpEqImm`/`CmpNeImm` fast and slow paths
+  are aligned too — a Float subject in `?? 3.0 { 3 => … }` used to raise a type
+  error in one and leave the destination register unwritten in the other.
+- Regression: `tests/arithmetic/int_float_equality.zy` (TW == VM), plus unit
+  tests in `zymbol-interpreter`.
+
+**HLZ-004 — the documented dot convention was rejected by `check` and the LSP**
+- `# .folder_file` in `folder/file.zy` is the convention in
+  `tests/i18n/DOT_CONVENTION.md`. Validation stripped the leading dot and then
+  compared the whole remaining name against the file stem, so `.core_board` was
+  measured against `board` and every subdirectory module failed E001.
+- The dotted form now compares against `<parent>_<stem>`. `zymbol run` had
+  always accepted these modules; `check` and the LSP rejected them, which made
+  `zymbol check` unusable on any project organised in folders — 11 of zy-GO's
+  13 modules.
+- Regression: `tests/modules_scope/subfolder_dot_convention.zy` and four unit
+  tests, including a multi-byte folder name.
+
+**HLZ-005 — `./../x` failed with a diagnostic that explained nothing**
+- The old message was "expected module path" followed by "unexpected token:
+  Slash". The spelling stays rejected on purpose: the AST records only
+  `parent_levels`, so `./../x` and `../x` are indistinguishable once parsed and
+  the formatter's token-stream safety gate would refuse any file using it. What
+  was wrong was the diagnostic, which now names the fix.
+- Regression: `tests/errors/parser/parent_path_alias.zy`.
+
+**HLZ-006 — GUIDE.md documented the wrong arrow keys**
+- §3b said `<<|` returns `'U'`, `'D'`, `'L'`, `'R'`. It returns the arrow
+  glyphs `'↑'`, `'↓'`, `'←'`, `'→'`. Following the guide produced a TUI that
+  drew correctly and ignored the cursor keys, with no error to read, because
+  the key fell through to the default match arm. `serpiente/logica.zy` has
+  matched on the glyphs since v0.0.5.
+- Corrected, with a note that this leaves every ASCII letter free for commands.
+
+**HLZ-008 — the VM silently dropped output parameters of module functions**
+- `alias::f(x<~)` compiled without a `SetupOutputWriteback`: the caller's
+  variable was never updated. No error, no warning, just the original value.
+- `compile_import` reserved chunk slots for module functions but never
+  registered their output-param flags, which only happened for the main
+  program's own functions.
+- Consequence downstream was an out-of-bounds crash far from the cause, because
+  a board passed as `局面<~` silently never changed. It is why zy-GO shipped
+  tree-walker only.
+- Regression: `tests/modules_scope/out_param_module.zy` (TW == VM).
+
+**HLZ-009 — the VM could not slice a String inside a module function**
+- `s$[3..]` raised "expected Array, Tuple, or NamedTuple, got String". The
+  `ArraySlice` instruction handled the three collection types but not String,
+  and it was only reached when the subject was a runtime value rather than a
+  literal the compiler could fold — so the gap appeared inside module functions
+  and nowhere else.
+- Regression: `tests/modules_scope/out_param_module.zy`.
+
+With HLZ-008 and HLZ-009 fixed, all six zy-GO test suites pass under `--vm` as
+well as the tree-walker.
+
 **MM-1 — `x°`/`°x` inside a function called from a `@` loop panicked the tree-walker**
 - `loop_scope_depths` (the anchor indices for hot definitions) is now saved and
   restored across call boundaries in `SavedCallState`. Inside a function with no

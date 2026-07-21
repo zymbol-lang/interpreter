@@ -9,6 +9,7 @@
 use zymbol_ast::{Expr, ExportBlock, ExportItem, ImportStmt, ItemType, ModuleDecl, ModulePath, Statement};
 use zymbol_error::Diagnostic;
 use zymbol_lexer::TokenKind;
+use zymbol_common::UnaryOp;
 
 use crate::Parser;
 
@@ -174,10 +175,22 @@ impl Parser {
         Ok((module_decl, imports, statements))
     }
 
-    /// Returns true if `expr` is a pure literal value (int, float, string, bool, char).
-    /// Module-level constants and variables must be initialized with literals only.
+    /// Returns true if `expr` is a pure literal value (int, float, string, bool, char),
+    /// optionally carrying a sign. Module-level constants and variables must be
+    /// initialized with literals only.
+    ///
+    /// A signed number parses as unary minus applied to a literal, which is an
+    /// expression node — but `-1` is a constant, not a computation, and rejecting
+    /// it left no way to write a negative constant in a module at all.
     fn is_literal_expr(expr: &Expr) -> bool {
-        matches!(expr.unwrap_group(), Expr::Literal(_))
+        match expr.unwrap_group() {
+            Expr::Literal(_) => true,
+            Expr::Unary(u) => {
+                matches!(u.op, UnaryOp::Neg | UnaryOp::Pos)
+                    && matches!(u.operand.unwrap_group(), Expr::Literal(_))
+            }
+            _ => false,
+        }
     }
 
     /// Parse export block: #> { items }
@@ -448,6 +461,16 @@ impl Parser {
             if matches!(self.peek().kind, TokenKind::Slash) {
                 self.advance(); // consume /
                 parent_levels = 0;
+                // `./../x` names the same file as `../x`, but the AST records
+                // only `parent_levels`, so the two spellings are indistinguishable
+                // once parsed — the formatter would rewrite one into the other and
+                // its token-stream safety gate would (rightly) refuse the file.
+                // One canonical spelling, and a diagnostic that says which:
+                if matches!(self.peek().kind, TokenKind::DotDot) {
+                    return Err(Diagnostic::error("'./../' is not a module path")
+                        .with_span(self.peek().span)
+                        .with_help("write '../' to go up one level: <# ../shared/lib => alias"));
+                }
             } else {
                 return Err(Diagnostic::error("expected '/' after '.'")
                     .with_span(self.peek().span));

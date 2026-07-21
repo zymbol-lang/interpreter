@@ -494,13 +494,17 @@ Special keys are mapped to single-character symbols:
 
 | Key | Value |
 |-----|-------|
-| Arrow Up | `'U'` |
-| Arrow Down | `'D'` |
-| Arrow Left | `'L'` |
-| Arrow Right | `'R'` |
+| Arrow Up | `'↑'` (U+2191) |
+| Arrow Down | `'↓'` (U+2193) |
+| Arrow Left | `'←'` (U+2190) |
+| Arrow Right | `'→'` (U+2192) |
 | Enter | `'\n'` |
 | Escape | `'\x1b'` |
 | Other | the character as-is |
+
+> The arrows come back as the arrow glyphs themselves, not as letters. Match
+> them directly — `? k == '↑' { }` — and note that this leaves every ASCII
+> letter free for commands, uppercase included.
 
 ### TUI Block — `>>|`
 

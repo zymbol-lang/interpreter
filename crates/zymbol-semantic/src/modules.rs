@@ -13,6 +13,7 @@ use thiserror::Error;
 use zymbol_ast::{Expr, ExportItem, ImportStmt, ItemType, ModuleDecl, ModulePath, Program, Statement};
 use zymbol_error::Diagnostic;
 use zymbol_span::{Position, Span};
+use zymbol_common::UnaryOp;
 
 /// Semantic validation errors
 #[derive(Debug, Error)]
@@ -324,7 +325,7 @@ impl ModuleAnalyzer {
             Statement::LifetimeEnd(s) => ("lifetime end (\\)", s.span),
             Statement::DestructureAssign(s) => ("destructure assignment", s.span),
             Statement::Assignment(s) => {
-                if !matches!(s.value.unwrap_group(), Expr::Literal(_)) {
+                if !Self::is_literal_init(&s.value) {
                     return Some(SemanticError::ExecutableStatementInModule {
                         stmt_kind: "variable with non-literal initializer".to_string(),
                         span: s.value.span(),
@@ -333,7 +334,7 @@ impl ModuleAnalyzer {
                 return None;
             }
             Statement::ConstDecl(s) => {
-                if !matches!(s.value.unwrap_group(), Expr::Literal(_)) {
+                if !Self::is_literal_init(&s.value) {
                     return Some(SemanticError::ExecutableStatementInModule {
                         stmt_kind: "constant with non-literal initializer".to_string(),
                         span: s.value.span(),
@@ -354,6 +355,22 @@ impl ModuleAnalyzer {
         })
     }
 
+    /// A module-level initializer must be a literal, optionally signed.
+    ///
+    /// `-1` parses as unary minus applied to a literal — an expression node,
+    /// but a constant all the same. This mirrors `Parser::is_literal_expr`;
+    /// the two checks are deliberate defence in depth and must agree.
+    fn is_literal_init(expr: &Expr) -> bool {
+        match expr.unwrap_group() {
+            Expr::Literal(_) => true,
+            Expr::Unary(u) => {
+                matches!(u.op, UnaryOp::Neg | UnaryOp::Pos)
+                    && matches!(u.operand.unwrap_group(), Expr::Literal(_))
+            }
+            _ => false,
+        }
+    }
+
     /// Validate that module name matches filename
     pub(crate) fn validate_module_name(
         &self,
@@ -365,13 +382,33 @@ impl ModuleAnalyzer {
             .and_then(|s| s.to_str())
             .unwrap_or("");
 
-        // Strip leading dot from module name (subdirectory convention: # .name)
+        // Two forms are accepted (see tests/i18n/DOT_CONVENTION.md):
+        //
+        //   # name          → name.zy at the same level
+        //   # .folder_file  → folder/file.zy
+        //
+        // The dotted form names the *whole path* of the module, not just
+        // its file, so it must be compared against `<parent>_<stem>` —
+        // comparing it against the stem alone rejected every subdirectory
+        // module the convention exists to support.
+        let expected = match module_decl.name.strip_prefix('.') {
+            Some(_) => {
+                let parent = file_path
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                format!("{parent}_{file_stem}")
+            }
+            None => file_stem.to_string(),
+        };
+
         let declared = module_decl.name.strip_prefix('.').unwrap_or(&module_decl.name);
 
-        if declared != file_stem {
+        if declared != expected {
             return Err(SemanticError::ModuleNameMismatch {
                 module_name: module_decl.name.clone(),
-                file_name: file_stem.to_string(),
+                file_name: expected,
                 span: module_decl.span,
             });
         }
@@ -752,6 +789,120 @@ mod tests {
             result.unwrap_err(),
             SemanticError::ModuleNameMismatch { .. }
         ));
+    }
+
+    // ---- HLZ-004: the dot convention names folder_file --------------
+
+    #[test]
+    fn test_dot_convention_subfolder_matches() {
+        let analyzer = ModuleAnalyzer::new("/tmp");
+        let module_decl = ModuleDecl::new(
+            ".core_board".to_string(),
+            None,
+            create_test_span(),
+        );
+
+        let result =
+            analyzer.validate_module_name(&module_decl, Path::new("/tmp/core/board.zy"));
+        assert!(
+            result.is_ok(),
+            "'# .core_board' must be accepted in core/board.zy"
+        );
+    }
+
+    #[test]
+    fn test_dot_convention_multibyte_folder() {
+        // The folder name is two CJK characters — the comparison must be by
+        // name, not by any assumption about its length in bytes or chars.
+        let analyzer = ModuleAnalyzer::new("/tmp");
+        let module_decl = ModuleDecl::new(
+            ".表示_文字".to_string(),
+            None,
+            create_test_span(),
+        );
+
+        let result =
+            analyzer.validate_module_name(&module_decl, Path::new("/tmp/表示/文字.zy"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_dot_convention_wrong_folder_rejected() {
+        let analyzer = ModuleAnalyzer::new("/tmp");
+        let module_decl = ModuleDecl::new(
+            ".other_board".to_string(),
+            None,
+            create_test_span(),
+        );
+
+        let result =
+            analyzer.validate_module_name(&module_decl, Path::new("/tmp/core/board.zy"));
+        assert!(
+            result.is_err(),
+            "the folder part of the name must still be checked"
+        );
+    }
+
+    #[test]
+    fn test_dot_convention_bare_stem_rejected() {
+        // '# .board' in core/board.zy is not the documented convention:
+        // the dotted form must name the folder too.
+        let analyzer = ModuleAnalyzer::new("/tmp");
+        let module_decl =
+            ModuleDecl::new(".board".to_string(), None, create_test_span());
+
+        let result =
+            analyzer.validate_module_name(&module_decl, Path::new("/tmp/core/board.zy"));
+        assert!(result.is_err());
+    }
+
+    // ---- HLZ-001: module initializers may carry a sign ---------------
+
+    #[test]
+    fn test_signed_literal_is_a_valid_module_initializer() {
+        use zymbol_ast::{LiteralExpr, UnaryExpr};
+        use zymbol_common::{Literal, UnaryOp};
+
+        let lit = Expr::Literal(LiteralExpr {
+            value: Literal::Int(1),
+            span: create_test_span(),
+        });
+        let neg = Expr::Unary(UnaryExpr {
+            op: UnaryOp::Neg,
+            operand: Box::new(lit),
+            span: create_test_span(),
+        });
+
+        assert!(
+            ModuleAnalyzer::is_literal_init(&neg),
+            "-1 is a constant, not a computation"
+        );
+    }
+
+    #[test]
+    fn test_computed_expression_is_still_rejected() {
+        use zymbol_ast::{BinaryExpr, LiteralExpr};
+        use zymbol_common::{BinaryOp, Literal};
+
+        let a = Expr::Literal(LiteralExpr {
+            value: Literal::Int(1),
+            span: create_test_span(),
+        });
+        let b = Expr::Literal(LiteralExpr {
+            value: Literal::Int(2),
+            span: create_test_span(),
+        });
+        let sum = Expr::Binary(BinaryExpr {
+            op: BinaryOp::Add,
+            left: Box::new(a),
+            right: Box::new(b),
+            span: create_test_span(),
+        });
+
+        assert!(
+            !ModuleAnalyzer::is_literal_init(&sum),
+            "1 + 2 is a computation and must stay rejected"
+        );
     }
 
     #[test]

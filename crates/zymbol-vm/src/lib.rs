@@ -181,6 +181,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,
+            // Int/Float promotion, to match the ordering comparisons and the
+            // tree-walker. See zymbol-interpreter::values_equal_static.
+            (Value::Int(a), Value::Float(b)) => (*a as f64) == *b,
+            (Value::Float(a), Value::Int(b)) => *a == (*b as f64),
             (Value::String(a), Value::String(b)) => a.as_ref() == b.as_ref(),
             (Value::Char(a), Value::Char(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
@@ -331,6 +335,18 @@ fn vm_fmt_scientific_truncate(num: f64, n: u32) -> String {
 }
 
 #[inline(always)]
+/// Numeric equality against an integer immediate, promoting Float like every
+/// other comparison does. `?? 3.0 { 3 => … }` compiles to CmpEqImm, so without
+/// this a Float subject raised a type error in the fast path and silently left
+/// the destination register unwritten in the slow one.
+fn num_eq_imm(v: &Value, imm: i64) -> Option<bool> {
+    match v {
+        Value::Int(n) => Some(*n == imm),
+        Value::Float(f) => Some(*f == imm as f64),
+        _ => None,
+    }
+}
+
 fn cmp_direct(va: &Value, vb: &Value) -> i32 {
     use std::cmp::Ordering;
     fn ord(o: Ordering) -> i32 { match o { Ordering::Less => -1, Ordering::Equal => 0, Ordering::Greater => 1 } }
@@ -800,8 +816,18 @@ impl<W: Write> VM<W> {
                         let v = rf!(src); wreg!(dst, Value::Float(v * imm as f64));
                     } else { let v = ri!(src); wreg!(dst, Value::Int(v.wrapping_mul(imm as i64))); }
                 }
-                &Instruction::CmpEqImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v == imm as i64)); }
-                &Instruction::CmpNeImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v != imm as i64)); }
+                &Instruction::CmpEqImm(dst, src, imm) => {
+                    match num_eq_imm(rreg!(src), imm as i64) {
+                        Some(r) => wreg!(dst, Value::Bool(r)),
+                        None => wreg!(dst, Value::Bool(false)),
+                    }
+                }
+                &Instruction::CmpNeImm(dst, src, imm) => {
+                    match num_eq_imm(rreg!(src), imm as i64) {
+                        Some(r) => wreg!(dst, Value::Bool(!r)),
+                        None => wreg!(dst, Value::Bool(true)),
+                    }
+                }
                 &Instruction::CmpLtImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v  < imm as i64)); }
                 &Instruction::CmpLeImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v <= imm as i64)); }
                 &Instruction::CmpGtImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v  > imm as i64)); }
@@ -2042,7 +2068,20 @@ impl<W: Write> VM<W> {
                             let hi_norm = hi_norm.min(fields.len()).max(lo_norm);
                             Value::NamedTuple(Rc::new(fields[lo_norm..hi_norm].to_vec()))
                         }
-                        other => raise!(VmError::TypeError { expected: "Array, Tuple, or NamedTuple", got: other.type_name().to_string() }),
+                        // Strings slice too. The tree-walker has always allowed
+                        // `s$[3..]`; the VM only reached this instruction when
+                        // the subject was a runtime value rather than a literal
+                        // the compiler could fold, which is why the gap showed
+                        // up inside module functions and nowhere else.
+                        Value::String(rc_s) => {
+                            let chars: Vec<char> = rc_s.chars().collect();
+                            let len = chars.len() as i64;
+                            let lo_norm = (if lo == 0 { 0i64 } else if lo < 0 { len + lo } else { lo - 1 }).max(0).min(len) as usize;
+                            let hi_norm = (if hi < 0 { len + hi + 1 } else { hi }).max(0).min(len) as usize;
+                            let hi_norm = hi_norm.max(lo_norm);
+                            Value::String(ZyStr::new(chars[lo_norm..hi_norm].iter().collect()))
+                        }
+                        other => raise!(VmError::TypeError { expected: "Array, Tuple, NamedTuple, or String", got: other.type_name().to_string() }),
                     };
                     self.reg_set(dst, result);
                 }
@@ -2772,10 +2811,12 @@ impl<W: Write> VM<W> {
                     else if let Value::Int(v) = r!(src) { w!(dst, Value::Int(v.wrapping_mul(imm as i64))); }
                 }
                 &Instruction::CmpEqImm(dst, src, imm) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Bool(*v == imm as i64)); }
+                    let res = num_eq_imm(r!(src), imm as i64).unwrap_or(false);
+                    w!(dst, Value::Bool(res));
                 }
                 &Instruction::CmpNeImm(dst, src, imm) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Bool(*v != imm as i64)); }
+                    let res = !num_eq_imm(r!(src), imm as i64).unwrap_or(false);
+                    w!(dst, Value::Bool(res));
                 }
                 &Instruction::CmpLtImm(dst, src, imm) => {
                     if let Value::Int(v) = r!(src) { w!(dst, Value::Bool(*v < imm as i64)); }

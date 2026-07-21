@@ -1,0 +1,11 @@
+// HLZ-005 — '../x' from inside a subdirectory. The sibling spelling './../x'
+// is rejected on purpose: the AST records only parent_levels, so the two are
+// indistinguishable after parsing and the formatter could not reprint the
+// file faithfully. What was wrong was the diagnostic, not the rejection —
+// see errors/parser/parent_path_alias.zy for the message it gives now.
+<# ../hlz/salida => s
+
+a = s::nuevo(2)
+c = 0
+s::poner(a, 1, 5, c)
+>> "ruta ../ resuelta: " a "  c=" c ¶

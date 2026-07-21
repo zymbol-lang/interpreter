@@ -36,6 +36,14 @@ pub enum ZymbolType {
     Unit,
     /// Error type (for error values)
     Error,
+    /// Numeric but undetermined — Int or Float, not yet known.
+    ///
+    /// This is what "used in arithmetic" tells us about an untyped parameter.
+    /// Resolving that to Float asserted more than was known and produced false
+    /// positives (an index computed from parameters was rejected as Float);
+    /// resolving it to Unknown threw away too much and lost real diagnostics
+    /// (passing a String to a function that adds to its parameter).
+    Number,
     /// Unknown type (for inference)
     Unknown,
     /// Any type (for polymorphic operations)
@@ -68,14 +76,15 @@ impl ZymbolType {
             }
             ZymbolType::Unit => "Unit".to_string(),
             ZymbolType::Error => "Error".to_string(),
+            ZymbolType::Number => "Number".to_string(),
             ZymbolType::Unknown => "?".to_string(),
             ZymbolType::Any => "Any".to_string(),
         }
     }
 
-    /// Check if this type is numeric (Int or Float)
+    /// Check if this type is numeric (Int, Float, or undetermined numeric)
     pub fn is_numeric(&self) -> bool {
-        matches!(self, ZymbolType::Int | ZymbolType::Float)
+        matches!(self, ZymbolType::Int | ZymbolType::Float | ZymbolType::Number)
     }
 
     /// Check if two types are compatible for assignment
@@ -130,7 +139,12 @@ impl TypeConstraint {
     fn to_type(&self) -> ZymbolType {
         match self {
             TypeConstraint::Exact(t) => t.clone(),
-            TypeConstraint::Numeric => ZymbolType::Float, // Numeric-only params accept both Int and Float (Int→Float is compatible)
+            // "Used in arithmetic" says the parameter is a number; it does not
+            // say which. Float asserted more than was known — `arr[(r-1)*n+c]`
+            // was rejected as "index must be Int, got Float" though every
+            // operand is an integer at runtime — while Unknown would have
+            // thrown away the fact that it is numeric at all.
+            TypeConstraint::Numeric => ZymbolType::Number,
             TypeConstraint::Boolean => ZymbolType::Bool,
             TypeConstraint::CompatibleWith(t) => t.clone(),
             TypeConstraint::Unconstrained => ZymbolType::Any,
@@ -1254,10 +1268,14 @@ impl TypeChecker {
             // Exact match
             (a, b) if a == b => true,
             // Numeric types are bidirectionally compatible: Int→Float and Float→Int.
-            // Needed because Numeric-constrained params resolve to Float via to_type(),
-            // so arithmetic results (e.g. `a % b` where a::Numeric) carry Float type
-            // even when the runtime value is integral.
             (ZymbolType::Int, ZymbolType::Float) | (ZymbolType::Float, ZymbolType::Int) => true,
+            // Number means "Int or Float, undetermined", so it is compatible
+            // with either — and with nothing else. That is the whole point of
+            // having it: a parameter used in arithmetic still rejects a String.
+            (ZymbolType::Number, ZymbolType::Int)
+            | (ZymbolType::Number, ZymbolType::Float)
+            | (ZymbolType::Int, ZymbolType::Number)
+            | (ZymbolType::Float, ZymbolType::Number) => true,
             // Arrays are compatible if element types are compatible
             (ZymbolType::Array(a), ZymbolType::Array(b)) => Self::types_compatible_static(a, b),
             // Tuples are compatible if all elements are compatible
@@ -1510,9 +1528,17 @@ impl TypeChecker {
 
                 // Validate index type — Bool is excluded here intentionally:
                 // arr[bool_value] is a runtime error catchable by !? (BUG-NEW-02 fix)
+                // Number is accepted: it means "Int or Float, undetermined",
+                // and rejecting it would flag every index computed from an
+                // untyped parameter. A value that really is a Float at runtime
+                // is still caught there.
                 if !matches!(
                     index_type,
-                    ZymbolType::Int | ZymbolType::Bool | ZymbolType::Any | ZymbolType::Unknown
+                    ZymbolType::Int
+                        | ZymbolType::Bool
+                        | ZymbolType::Any
+                        | ZymbolType::Unknown
+                        | ZymbolType::Number
                 ) {
                     self.errors.push(
                         Diagnostic::error(format!(

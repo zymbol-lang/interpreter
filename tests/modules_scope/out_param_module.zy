@@ -1,0 +1,20 @@
+// HLZ-008 / HLZ-001 — output parameters across a module boundary.
+// Must produce identical output in the tree-walker and the VM.
+<# ./hlz/salida => s
+
+a = s::nuevo(4)
+hechos = 0
+s::poner(a, 2, 7, hechos)
+s::poner(a, 4, 9, hechos)
+
+>> "array=" a ¶
+>> "hechos=" hechos ¶
+
+total = 10
+s::sumar_en(total, 5)
+s::sumar_en(total, 5)
+>> "total=" total ¶
+
+>> "constante negativa=" (s.LIMITE) ¶
+>> "slice en modulo=" (s::cola("0d0065", 3)) ¶
+>> "slice completo=" (s::cola("abcdef", 1)) ¶

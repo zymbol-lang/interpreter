@@ -1,0 +1,21 @@
+[1m[31merror[39m[0m: './../' is not a module path
+  [1m[34m-->[39m[0m tests/errors/parser/parent_path_alias.zy:9:6
+[1m[34m   9[39m[0m [34m|[39m
+[1m[34m   9[39m[0m [34m|[39m <# ./../shared/lib => s
+[34m     |[39m [1m[31m     ^^[39m[0m
+  [1m[32mhelp:[39m[0m write '../' to go up one level: <# ../shared/lib => alias
+
+[1m[31merror[39m[0m: unexpected token: Slash
+  [1m[34m-->[39m[0m tests/errors/parser/parent_path_alias.zy:9:8
+[1m[34m   9[39m[0m [34m|[39m
+[1m[34m   9[39m[0m [34m|[39m <# ./../shared/lib => s
+[34m     |[39m [1m[31m       ^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+
+[1m[31merror[39m[0m: unexpected token: FatArrow
+  [1m[34m-->[39m[0m tests/errors/parser/parent_path_alias.zy:9:20
+[1m[34m   9[39m[0m [34m|[39m
+[1m[34m   9[39m[0m [34m|[39m <# ./../shared/lib => s
+[34m     |[39m [1m[31m                   ^^[39m[0m
+  [1m[32mhelp:[39m[0m expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\, or identifier)
+

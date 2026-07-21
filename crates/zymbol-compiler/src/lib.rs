@@ -624,6 +624,26 @@ impl Compiler {
             self.functions.push(Chunk::new(name.as_str()));
         }
 
+        // Register output-param flags for module functions, exactly as the main
+        // program's first pass does for its own. Without this, a call to
+        // `alias::f(x<~)` compiled with no SetupOutputWriteback and the caller's
+        // variable was silently never updated — no error, no warning, just the
+        // original value, diverging from the tree-walker (HLZ-008).
+        for stmt in &module_prog.statements {
+            if let Statement::FunctionDecl(decl) = stmt {
+                if let Some(&idx) = local_scope.get(&decl.name) {
+                    let out_flags: Vec<bool> = decl
+                        .parameters
+                        .iter()
+                        .map(|p| p.kind == zymbol_ast::ParameterKind::Output)
+                        .collect();
+                    if out_flags.iter().any(|&b| b) {
+                        self.output_param_map.insert(idx, out_flags);
+                    }
+                }
+            }
+        }
+
         // Mark this module alias as known (for private-function error detection)
         self.known_module_aliases.insert(alias.to_string());
 
