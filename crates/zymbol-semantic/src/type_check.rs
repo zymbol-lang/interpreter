@@ -93,6 +93,13 @@ impl ZymbolType {
             (ZymbolType::Any, _) | (_, ZymbolType::Any) => true,
             (ZymbolType::Unknown, _) | (_, ZymbolType::Unknown) => true,
             (ZymbolType::Int, ZymbolType::Float) | (ZymbolType::Float, ZymbolType::Int) => true,
+            // Number is "Int or Float, undetermined", so assigning either to a
+            // variable inferred as Number is not a mismatch — it is the value
+            // arriving and settling the question.
+            (ZymbolType::Number, ZymbolType::Int)
+            | (ZymbolType::Number, ZymbolType::Float)
+            | (ZymbolType::Int, ZymbolType::Number)
+            | (ZymbolType::Float, ZymbolType::Number) => true,
             (a, b) => a == b,
         }
     }
