@@ -1,0 +1,30 @@
+// HLZ-010 — a top-level constant inside a string interpolation, used
+// from within a function body.
+//
+// The VM compiled `"{K}"` by looking for a local register named K,
+// failing, and falling back to emitting the eight literal characters
+// `{K}`. Silently: no error, no warning, and only inside functions —
+// at the top level the same string worked, which is what made it
+// hard to see.
+//
+// It surfaced as a harness that played 64 games and wrote zero
+// records, because its output path was built as "{DIR}/game.kifu"
+// inside a function.
+DIR := "records"
+LIM := 42
+FLAG := #1
+SEP := '/'
+RATIO := 1.5
+
+ruta(n) { <~ "{DIR}/f{n}.txt" }
+mezcla() { <~ "n={LIM} f={FLAG} s={SEP} r={RATIO}" }
+directo() { <~ DIR }
+
+>> "top level:  {DIR}/x.txt" ¶
+>> "in fn:      " (ruta(1)) ¶
+>> "all types:  " (mezcla()) ¶
+>> "direct ref: " (directo()) ¶
+
+// A name that is genuinely unknown stays literal, in both engines.
+desconocido() { <~ "before {NOPE} after" }
+>> "unknown:    " (desconocido()) ¶

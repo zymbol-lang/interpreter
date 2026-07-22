@@ -3237,8 +3237,34 @@ impl Compiler {
                     // Get the register for the variable
                     if let Ok(r) = ctx.get_reg(&var_name) {
                         parts.push(BuildPart::Reg(r));
+                    } else if let Some(mc) = self.global_consts.get(&var_name).cloned() {
+                        // A top-level constant, which is in scope inside every
+                        // function body but has no local register. Without this
+                        // the name fell through to the literal-text branch and
+                        // `"{DIR}/f.txt"` compiled to the eight characters
+                        // `{DIR}` — silently, and only inside functions, and
+                        // only under the VM.
+                        let r = ctx.alloc_temp()?;
+                        let instr = match mc {
+                            ModuleConst::Int(n) => Instruction::LoadInt(r, n),
+                            ModuleConst::Float(f) => Instruction::LoadFloat(r, f),
+                            ModuleConst::String(s) => {
+                                let idx = self.intern_string(&s);
+                                Instruction::LoadStr(r, idx)
+                            }
+                            ModuleConst::Bool(b) => Instruction::LoadBool(r, b),
+                            ModuleConst::Char(c) => Instruction::LoadChar(r, c),
+                        };
+                        ctx.emit(instr);
+                        parts.push(BuildPart::Reg(r));
+                    } else if let Some(&gvar_idx) = self.global_var_map.get(&var_name) {
+                        // Module-level mutable state, same reasoning.
+                        let r = ctx.alloc_temp()?;
+                        ctx.emit(Instruction::LoadGlobal(r, gvar_idx));
+                        parts.push(BuildPart::Reg(r));
                     } else {
-                        // Variable not found — treat as literal text
+                        // Genuinely unknown — treat as literal text, which is
+                        // what the tree-walker does too.
                         let text = format!("{{{}}}", var_name);
                         let idx = self.intern_string(&text);
                         parts.push(BuildPart::Lit(idx));

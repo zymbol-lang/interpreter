@@ -1,0 +1,5 @@
+top level:  records/x.txt
+in fn:      records/f1.txt
+all types:  n=42 f=#1 s=/ r=1.5
+direct ref: records
+unknown:    before {NOPE} after

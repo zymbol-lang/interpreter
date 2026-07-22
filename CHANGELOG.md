@@ -135,6 +135,23 @@ respond to the cursor keys.
   tree-walker only.
 - Regression: `tests/modules_scope/out_param_module.zy` (TW == VM).
 
+**HLZ-010 — the VM turned an interpolated constant into literal text**
+
+- `"{DIR}/f.txt"` inside a function body compiled to the eight characters
+  `{DIR}/f.txt` under `--vm`. `compile_interpolated_string` looked the name up
+  in the local registers and, on failure, fell straight through to its
+  literal-text branch — never consulting `global_consts`, where every top-level
+  constant lives, nor `global_var_map`.
+- Silent, and scoped in a way that hid it: the same string at the top level
+  worked, and a direct `>> K` inside the same function worked. Only
+  interpolation, only inside a function, only under the VM.
+- Found by a benchmark harness that played sixty-four games and wrote zero
+  records, because its output path was built this way. `io::write` was handed
+  `{記録場所}/9路_0001.kifu`, failed softly, and said nothing.
+- Regression: `tests/modules_scope/interp_global_const.zy`, covering all five
+  constant types, module-level mutable state, and the genuinely-unknown name
+  that must stay literal in both engines.
+
 **HLZ-009 — the VM could not slice a String inside a module function**
 - `s$[3..]` raised "expected Array, Tuple, or NamedTuple, got String". The
   `ArraySlice` instruction handled the three collection types but not String,
