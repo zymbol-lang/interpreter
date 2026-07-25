@@ -255,9 +255,20 @@ impl Parser {
                 self.advance();
                 name
             }
+            // `<=` and `:` were the rename separators before v0.0.6 (see
+            // IMPLEMENTATION.md [D12]/[R03]). Documents and code written against
+            // those versions land here, on the separator rather than on the item
+            // that precedes it, so name the real cause instead of asking for an
+            // identifier the author already wrote.
+            TokenKind::Le | TokenKind::Colon => {
+                return Err(Diagnostic::error("legacy export rename separator")
+                    .with_span(first_token.span)
+                    .with_help("the rename separator is '=>': #> { alias::fn => new_name }"))
+            }
             _ => {
                 return Err(Diagnostic::error("expected identifier in export item")
-                    .with_span(first_token.span))
+                    .with_span(first_token.span)
+                    .with_help("export syntax: #> { own_fn, alias::fn => new_name, alias.CONST => NEW }"))
             }
         };
 

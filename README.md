@@ -759,7 +759,7 @@ interpreter/
 - [REFERENCE.md](./REFERENCE.md) — Known limitations, error taxonomy, complete symbol table
 - [IMPLEMENTATION.md](./IMPLEMENTATION.md) — EBNF grammar, coverage table, TW/VM internals
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — Interpreter architecture and performance benchmarks
-- [I18N.md](./I18N.md) — Multilingual code: writing and bridging libraries across natural languages
+- [I18N.md](./I18N.md) — Internationalization: multilingual code via re-export layers, and runtime text via dispatcher modules
 
 ---
 

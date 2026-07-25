@@ -299,6 +299,12 @@ well as the tree-walker.
 - A parameter may shadow a forwarded constant — it stays assignable.
 - Regression test: `tests/bugs/bug_mm9_const_call_depth.zy` (TW == VM).
 
+- **Legacy export separators now name themselves.** `<=` or `:` inside a `#> {}`
+  block reported `expected identifier in export item`, pointing at the separator
+  while asking for an identifier the author had already written. Both now produce
+  `legacy export rename separator` with a help line giving the `=>` form; the
+  generic case gained a help line too (`crates/zymbol-parser/src/modules.rs`).
+
 ### Documented
 
 - **MM-5**: constants pierce function isolation by design (GUIDE §9 note).
@@ -309,6 +315,28 @@ well as the tree-walker.
   `@vm-skip`" note was removed from the GUIDE.
 - **MM-8**: module state identity is per file path — several aliases to the
   same module share one state in both engines (GUIDE §17 note).
+
+**I18N.md rewritten.** The previous document was written against the pre-0.0.6
+`<=` alias syntax and none of its 35 examples parsed: the breaking change that
+introduced `=>` ([0.0.6], `feat(syntax)!`) updated the other reference documents
+but touched only one line of this one. It is preserved as
+[I18N_DEPRECATED.md](I18N_DEPRECATED.md) with a banner naming the cause; the new
+[I18N.md](I18N.md) covers both internationalization mechanisms — re-export layers
+for code (now including how to wrap `std/*` modules) and dispatcher modules for
+runtime text, which the old document never documented at all. Every code block in
+it is extracted to a clean tree and executed in both engines before publication.
+
+- **Keys belong in the base language.** The runtime-text section documents the
+  convention validated in zy-GO: i18n keys are concepts in the language the
+  program is written in, each carrying a domain prefix (`区画.アゲハマ`, never
+  plain `アゲハマ`). The prefix is what stops a key from ever equalling its own
+  translation, which is what keeps completeness decidable in the base language.
+- **GUIDE §Re-export**: the prose still said the rename separator was `:`, and a
+  note still warned about L3 (`alias.CONST`) after it had been fixed.
+- `tests/i18n/matematicas/` — the four module files declared `# .ελληνικά`
+  instead of `# .matematicas_ελληνικά`, so they failed `zymbol check` with E001
+  even though `zymbol run` executed them (the check does not reach modules
+  arrived at through an import).
 
 ---
 

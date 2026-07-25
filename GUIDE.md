@@ -2766,7 +2766,7 @@ pi = u.PI
 
 ### Re-export from Another Module
 
-Use `::` to re-export a function imported from another module, and `.` to re-export a constant. Place the `<#` import before `#>` so the alias is in scope. The re-export alias follows `:`:
+Use `::` to re-export a function imported from another module, and `.` to re-export a constant. Place the `<#` import before `#>` so the alias is in scope. The new public name follows `=>`:
 
 ```zymbol
 // math.zy
@@ -2782,7 +2782,8 @@ Use `::` to re-export a function imported from another module, and `.` to re-exp
 }
 ```
 
-> **Note**: Re-export of constants via `.` is subject to [L3](#l3----module-aliasconst-does-not-work).
+> **Note**: Re-export of constants via `.` works in both engines. The old L3 limitation
+> (`alias.CONST` failing analysis) was fixed — see REFERENCE.md.
 
 ### Subdirectory Module Convention
 
