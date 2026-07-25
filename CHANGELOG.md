@@ -337,6 +337,15 @@ it is extracted to a clean tree and executed in both engines before publication.
   instead of `# .matematicas_ελληνικά`, so they failed `zymbol check` with E001
   even though `zymbol run` executed them (the check does not reach modules
   arrived at through an import).
+- The Mandarin translation layer both I18N documents describe never existed:
+  `matematicas/中文.zy` and `中文_应用.zy` are now present with their golden
+  file, so the suite covers the four languages the pattern claims.
+- `tests/i18n/test_all_i18n.sh` invoked `app_coreano.zy`, `app_griego.zy` and
+  `app_hebreo.zy`, none of which exist under those names — the script had been
+  dead since the consumers were renamed. Rewritten around what
+  `expected_compare.sh` does *not* do: it runs `zymbol check` on every layer
+  (the gap that let E001 hide) and diffs the tree-walker against `--vm` for
+  every consumer.
 
 ---
 
