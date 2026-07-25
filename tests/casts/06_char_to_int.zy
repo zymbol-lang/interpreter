@@ -1,0 +1,28 @@
+// Test: ##! (ToIntTrunc) on a Char yields its Unicode code point.
+// This is the only direct Char→Int route in Zymbol, and it makes characters
+// classifiable by range (Char is not otherwise comparable or castable).
+
+>> ##!'A' ¶        // 65
+>> ##!'z' ¶        // 122
+>> ##!'0' ¶        // 48
+>> ##!' ' ¶        // 32
+>> ##!'あ' ¶       // 12354  (hiragana A)
+>> ##!'⚫' ¶       // 9899
+
+// Result type is Int
+r = ##!'A'
+meta = r#?
+>> meta[1] ¶       // ###
+
+// Iterating a string yields Chars; ##! turns each into its code point
+total = 0
+@ c:"ABC" {
+    total = total + ##!c
+}
+>> total ¶         // 65+66+67 = 198
+
+// Usable in a range classification (is 'M' an ASCII uppercase letter?)
+p = ##!'M'
+? p >= 65 && p <= 90 {
+    >> "upper" ¶
+}

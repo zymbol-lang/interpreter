@@ -113,8 +113,13 @@ impl<W: Write> Interpreter<W> {
             CastKind::ToIntTrunc => match value {
                 Value::Int(_) => Ok(value),
                 Value::Float(f) => Ok(Value::Int(f.trunc() as i64)),
+                // A Char casts to its Unicode code point. This is the only
+                // direct Char→Int route (the alternative was inverting a base
+                // literal and stripping its prefix), and it makes characters
+                // classifiable by range.
+                Value::Char(c) => Ok(Value::Int(c as u32 as i64)),
                 other => Err(RuntimeError::Generic {
-                    message: format!("##! requires a numeric value, got {}", value_type(other)),
+                    message: format!("##! requires a numeric value or Char, got {}", value_type(other)),
                     span: op.span,
                 }),
             },

@@ -53,6 +53,36 @@ All fixes verified with TW/VM parity (519/519) and golden tests (503/503).
   parity, 503/503 golden, 89/89 GUIDE examples, benchmark gate 14/14 with no
   regressions.
 
+**`std/term` — terminal display metrics (both engines)**
+
+- New stdlib module with five functions: `width`, `pad_left`, `pad_right`,
+  `center`, `truncate`. Width is measured in **terminal columns**, not grapheme
+  count — CJK ideographs, kana, hangul and most emoji occupy two columns each,
+  so `"手番"$#` is `2` but `term::width("手番")` is `4`.
+- The boundary is deliberate: `std/term` answers a question about the *screen*.
+  Everything that operates on a string's *content* — split (`$/`), slice
+  (`$[..]`), replace (`$~~`), repeat (`$*`), join, trim — is (or will be) a
+  language symbol and never enters this module. Naming it `term` rather than
+  `text` keeps that line visible.
+- Column widths come from the `unicode-width` tables over grapheme clusters
+  (`unicode-segmentation`), so a multi-code-point cluster is measured as one
+  unit and `truncate` never splits a wide glyph. `pad_*`/`center` pad with
+  spaces to an exact column count and leave already-wide strings untouched;
+  `center` gives a spare column to the right. Motivated by zy-GO, which carried
+  a hand-maintained ~40-range East Asian width table inside the game
+  (`表示/文字.zy`) — now replaced by this module.
+
+**`##!` on a `Char` yields its Unicode code point**
+
+- `##!'A'` is `65`, `##!'あ'` is `12354`. This is the only direct Char→Int
+  route (the previous workaround was inverting a base literal, `0d|c|`, and
+  stripping the `0d` prefix), and it makes characters classifiable by range —
+  `Char` is otherwise neither comparable nor castable. `###` is unchanged;
+  a Char has no fractional part, so only the truncating cast was extended.
+- Regression: `tests/casts/06_char_to_int.zy` and `tests/stdlib/stdlib_term.zy`
+  (both TW == VM), plus four unit tests over the pure width/pad/center/truncate
+  helpers.
+
 ### Fixed
 
 **Findings from the zy-GO validation project (HLZ-001 … HLZ-009)**
@@ -162,6 +192,48 @@ respond to the cursor keys.
 
 With HLZ-008 and HLZ-009 fixed, all six zy-GO test suites pass under `--vm` as
 well as the tree-walker.
+
+**HLZ-007 — juxtaposition stopped at the first delimiter**
+
+- Implicit concatenation only existed at statement level. `f(a " " b)`,
+  `[a " " b]` and `(a " " b)` were all parse errors, so any composed string
+  handed to a function needed an intermediate variable first.
+- The finding was originally filed against string interpolation (`"{t.field}"`
+  is rejected), but measuring zy-GO's side panel showed the interpolation limit
+  was not what cost anything: nearly every intermediate variable there holds a
+  *call*, not a field access, and no interpolation syntax would remove them.
+  Two walls stood next to each other — interpolation admits only identifiers,
+  and juxtaposition did not reach inside an argument list — and only the second
+  one was load-bearing.
+- Juxtaposition now works in call arguments, array elements, tuple elements and
+  grouped expressions, with the same same-line rule as at statement level. A
+  comma still separates arguments; a following `(` never continues the chain in
+  these positions, because there it is ambiguous with a lambda, a tuple and a
+  grouped expression.
+- Parser-only change: the AST node (`BinaryOp::Concat`) already existed, so the
+  tree-walker, the compiler, the VM and the formatter needed no changes.
+- Cost of the trade: `f(a b)` with a forgotten comma now concatenates instead of
+  raising a parse error.
+- Regression: `tests/strings/30_juxtaposition_delimited.zy` (TW == VM),
+  covering arguments, nesting, commas, arrays, tuples, groups, `$*` composition
+  and a lambda argument that must stay a lambda.
+
+**HLZ-011 — a variable used only as a range bound was reported as unused**
+
+- `total = xs$#` followed by `@ i:1..total { }` warned "unused variable
+  'total'" even though the loop reads it. `analyze_expr`'s `Expr::Range` arm was
+  a no-op, with a comment claiming the bounds were "literals/identifiers only" —
+  but `start`, `end` and `step` are full `Box<Expr>`, so any variable used only
+  as a bound never counted as a use.
+- The warning surfaced non-deterministically (it depended on how many other
+  variables shared the scope), which is why it hid: zy-GO's `設定描画` tripped it
+  while the structurally identical `助言描画` did not.
+- The arm now visits `start`, `end` and `step`. A genuinely unused variable
+  still warns.
+- Regression: `crates/zymbol-semantic/tests/underscore_semantics.rs`
+  (`test_variable_used_only_as_range_bound`,
+  `test_variable_used_as_range_start_and_step`,
+  `test_genuinely_unused_still_warns`).
 
 **MM-1 — `x°`/`°x` inside a function called from a `@` loop panicked the tree-walker**
 - `loop_scope_depths` (the anchor indices for hot definitions) is now saved and

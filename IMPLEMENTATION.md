@@ -105,6 +105,7 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 | `std/math`, `std/random` | ✅ | ✅ | v0.0.6 — native stdlib via `<# std/<name> => alias` |
 | `std/json`, `std/io`, `std/net` | ✅ | ✅ | v0.0.7 — soft `##Parse`/`##IO`/`##Network` errors |
 | `std/db` (ODBC, vendor-neutral) | ✅ | ✅ | v0.0.7 — soft `##DB` errors; builtin ids 500–514 |
+| `std/term` (terminal display metrics) | ✅ | ✅ | v0.0.8 — `width`/`pad_*`/`center`/`truncate`; columns via `unicode-width`; builtin ids 600–604 |
 | Static undefined-function detection at `check` time | ✅ | — | v0.0.7 — semantic phase (`zymbol-semantic/type_check.rs`) |
 | `do-while ~>` (post-cond loop) | ❌ | ❌ | **Dismissed 2026-06-12** — infinite loop + `@!` is the idiom; `~>` stays unoccupied |
 
@@ -145,8 +146,8 @@ The canonical grammar is maintained in `zymbol-lang.ebnf`; the copy below is rep
         deep  arr[i>j>…]$~  — all forms run in BOTH engines (VM: DeepSet
         instruction). Ranges (..) are not allowed in a $~ path.
   [C05] hot °name corrected: valid as RHS expression too, not only LHS
-  [C06] No new syntax for the v0.0.6/v0.0.7 stdlib (std/math, std/random,
-        std/json, std/io, std/net, std/db) — consumed via existing
+  [C06] No new syntax for the v0.0.6/v0.0.7/v0.0.8 stdlib (std/math, std/random,
+        std/json, std/io, std/net, std/db, std/term) — consumed via existing
         import_stmt (<# std/name => alias) and module calls (alias::fn)
 
   Key divergences vs v2.5.0:
@@ -689,7 +690,14 @@ lifetime_end = "\\" , identifier ;
 (*
   Juxtaposition concatenation: same-line adjacent primary values are implicitly
   concatenated (BinaryOp::Concat).  Works for strings, chars, numbers, identifiers.
-  Used by assignments, const declarations, and return statements.
+  Used by assignments, const declarations, and return statements, and — since
+  v0.0.8 — inside delimited positions: call arguments, array elements, tuple
+  elements and grouped expressions.
+
+  One difference between the two contexts: a following `(` may continue the
+  chain at statement level (when the accumulator is a literal or a binary
+  expression), but never inside a delimited position, where a parenthesis is
+  ambiguous with a lambda, a tuple and a grouped expression.
 *)
 juxtapose_chain = expr , { juxtapose_token } ;
 

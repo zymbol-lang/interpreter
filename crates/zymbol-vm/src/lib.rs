@@ -862,6 +862,8 @@ impl<W: Write> VM<W> {
                     let v = match rreg!(src) {
                         Value::Float(f) => f.trunc() as i64,
                         Value::Int(n)   => *n,
+                        // Char → its Unicode code point (matches the tree-walker).
+                        Value::Char(c)  => *c as u32 as i64,
                         other => raise!(VmError::CastError { op: "##!", got: other.type_name().to_string() }),
                     };
                     wreg!(dst, Value::Int(v));
@@ -3170,6 +3172,7 @@ impl<W: Write> VM<W> {
                     match r!(src) {
                         Value::Float(f) => { let v = f.trunc() as i64; w!(dst, Value::Int(v)); }
                         Value::Int(n)   => { let v = *n; w!(dst, Value::Int(v)); }
+                        Value::Char(c)  => { let v = *c as u32 as i64; w!(dst, Value::Int(v)); }
                         _ => {}
                     }
                 }

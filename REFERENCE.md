@@ -332,6 +332,29 @@ iterator at the top of each iteration — leftover value and body-write semantic
 tree-walker exactly (MEMORY_MODEL.md MM-11). Regression test:
 `tests/bugs/bug_mm11_iterator_leftover.zy` (7 variants, TW == VM).
 
+### ~~L25 — Juxtaposition did not work inside call arguments~~ Fixed in v0.0.8
+
+Implicit concatenation existed only at statement level, so `f(a " " b)`,
+`[a " " b]` and `(a " " b)` were parse errors and every composed string handed
+to a function needed an intermediate variable first. It now works in call
+arguments, array elements, tuple elements and grouped expressions. A comma
+still separates, and a following `(` never continues the chain in those
+positions (it is ambiguous with a lambda, a tuple and a grouped expression) —
+GUIDE §13. Found while building zy-GO, whose side panel spent six variables on
+nothing else. Regression test:
+`tests/strings/30_juxtaposition_delimited.zy` (TW == VM).
+
+### ~~L26 — Variable used only as a range bound warned "unused"~~ Fixed in v0.0.8
+
+`total = xs$#` followed by `@ i:1..total { }` reported `total` as an unused
+variable even though the loop header reads it. The unused-variable analyzer
+skipped the `start`/`end`/`step` expressions of a range, so a name used only as
+a bound never counted as a use. The warning was noisy rather than wrong (the
+program ran correctly), but it fired non-deterministically depending on how many
+other variables shared the scope. Fixed by analyzing the range bounds; a
+genuinely unused variable still warns. Found in zy-GO's `設定描画`. Regression:
+`crates/zymbol-semantic/tests/underscore_semantics.rs` (three cases).
+
 ---
 
 ## 20b. Error Taxonomy
@@ -532,7 +555,7 @@ Fail-safe operations are distinguished from error-handling by the absence of any
 | `#!N\|x\|` | Truncate N decimals | `#!2\|3.14159\|` |
 | `##.expr` | Cast to Float | `##.42` → `42` (Float) |
 | `###expr` | Cast to Int (rounding) | `###3.7` → `4` |
-| `##!expr` | Cast to Int (truncating) | `##!3.7` → `3` |
+| `##!expr` | Cast to Int (truncating); `Char` → code point | `##!3.7` → `3`, `##!'A'` → `65` |
 | `#,\|x\|` | Comma format | `#,\|1234567\|` |
 | `#^\|x\|` | Scientific notation | `#^\|12345.0\|` |
 | `0x`, `0b`, `0o`, `0d` | Base literals | `0x41` → `'A'` |

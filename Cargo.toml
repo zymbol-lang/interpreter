@@ -51,6 +51,7 @@ zymbol-repl = { path = "crates/zymbol-repl" }
 
 # Unicode handling
 unicode-segmentation = "1.12"
+unicode-width = "0.2"
 
 # Error handling
 thiserror = "2.0"

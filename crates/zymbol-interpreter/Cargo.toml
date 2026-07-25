@@ -13,6 +13,8 @@ zymbol-ast.workspace = true
 zymbol-lexer.workspace = true
 zymbol-parser.workspace = true
 zymbol-semantic = { path = "../zymbol-semantic" }
+unicode-width.workspace = true
+unicode-segmentation.workspace = true
 thiserror.workspace = true
 crossterm = { workspace = true }
 serde_json = { workspace = true }

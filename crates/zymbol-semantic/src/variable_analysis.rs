@@ -930,9 +930,15 @@ impl VariableAnalyzer {
                 }
             }
 
-            Expr::Range(_) => {
-                // Range expressions: start..end
-                // We could analyze start/end if they were Expr, but they're literals/identifiers only
+            Expr::Range(range) => {
+                // Range expressions: start..end:step. The bounds are full
+                // expressions, so a variable used only as a range bound
+                // (e.g. the `total` in `@ i:1..total`) counts as a use.
+                self.analyze_expr(&range.start);
+                self.analyze_expr(&range.end);
+                if let Some(step) = &range.step {
+                    self.analyze_expr(step);
+                }
             }
 
             // Execute expressions

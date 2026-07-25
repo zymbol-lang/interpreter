@@ -535,7 +535,7 @@ impl Parser {
 
                     if !matches!(self.peek().kind, TokenKind::RParen) {
                         loop {
-                            arguments.push(self.parse_expr()?);
+                            arguments.push(self.parse_expr_juxt()?);
 
                             if matches!(self.peek().kind, TokenKind::Comma) {
                                 self.advance(); // consume ,
@@ -929,7 +929,7 @@ impl Parser {
                     let mut arguments = Vec::new();
                     if !matches!(self.peek().kind, TokenKind::RParen) {
                         loop {
-                            arguments.push(self.parse_expr()?);
+                            arguments.push(self.parse_expr_juxt()?);
 
                             if matches!(self.peek().kind, TokenKind::Comma) {
                                 self.advance(); // consume ,
@@ -978,7 +978,7 @@ impl Parser {
 
                     if !matches!(self.peek().kind, TokenKind::RParen) {
                         loop {
-                            arguments.push(self.parse_expr()?);
+                            arguments.push(self.parse_expr_juxt()?);
 
                             if matches!(self.peek().kind, TokenKind::Comma) {
                                 self.advance(); // consume ,

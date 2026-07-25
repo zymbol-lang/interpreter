@@ -451,7 +451,7 @@ impl Compiler {
     /// registering exported ones as `alias::func_name` in function_index.
     /// Also handles: circular import detection, nested sub-imports, and re-exports.
     fn compile_import(&mut self, import: &zymbol_ast::ImportStmt, base_dir: &Path) -> Result<(), CompileError> {
-        // Detect stdlib modules (std/math, std/random, std/json, std/io, std/net) — no file needed.
+        // Detect stdlib modules (std/math, std/random, std/json, std/io, std/net, std/term) — no file needed.
         if import.path.parent_levels == 0 {
             let module_key = import.path.components.join("/");
             if let Some(entries) = stdlib_builtin_entries(&module_key) {
@@ -4100,6 +4100,13 @@ fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16)>> 
             ("post",      B::NET_POST),
             ("post_json", B::NET_POST_JSON),
             ("head",      B::NET_HEAD),
+        ]),
+        "std/term" => Some(vec![
+            ("width",     B::TERM_WIDTH),
+            ("pad_left",  B::TERM_PAD_LEFT),
+            ("pad_right", B::TERM_PAD_RIGHT),
+            ("center",    B::TERM_CENTER),
+            ("truncate",  B::TERM_TRUNCATE),
         ]),
         // Without the `db` feature this falls through to `None` → module-not-found
         // at `<# std/db`, matching the tree-walker (see zymbol-interpreter stdlib).

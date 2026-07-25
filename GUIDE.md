@@ -7,6 +7,10 @@
 **Interpreter version**: v0.0.7
 **Test coverage**: golden-file pairs verified on both engines (`vm_compare`); `@vm-skip` files excluded from VM parity
 
+**New in v0.0.8**: `std/term` (terminal display metrics — column-accurate `width`, padding
+and truncation) and `##!` on a `Char` (its Unicode code point). See
+[§17 Standard Library Modules](#standard-library-modules-std).
+
 **New in v0.0.7**: typed/validated input (`<< ##.(5,2) "p" var`, see [§3 Input](#input-)) and
 native standard-library modules `std/json`, `std/io`, `std/net`, `std/db` (see
 [§17 Standard Library Modules](#standard-library-modules-std)). v0.0.6 added `std/math` and
@@ -2305,6 +2309,38 @@ desc = "Hello {name}, you have {n} items"
 >> desc ¶
 ```
 
+Juxtaposition also works **inside** call arguments, array elements, tuple
+elements and grouped expressions — so a composed string can be handed straight
+to a function without an intermediate variable. A comma always separates;
+juxtaposition never swallows one:
+
+```zymbol
+name = "Alice"
+n = 42
+
+label(s) { <~ "[" s "]" }
+pair(a, b) { <~ a "/" b }
+
+// call arguments — no intermediate variable needed
+>> label("v" n) ¶                // → [v42]
+>> label(name " v" n) ¶          // → [Alice v42]
+>> label("<" label("v" n) ">") ¶ // → [<[v42]>]
+
+// the comma still separates: two arguments, not one
+>> pair("a" 1, "b" 2) ¶          // → a1/b2
+
+// array elements, grouped expressions and tuple elements
+lista = [name " one", "two " n]
+>> lista[1] ¶                    // → Alice one
+grupo = (name " v" n)
+>> grupo ¶                       // → Alice v42
+```
+
+One difference from statement level: a following `(` never continues the chain
+inside these positions, because there a parenthesis is ambiguous with a lambda,
+a tuple and a grouped expression. Bind it to a variable first, or reach for
+interpolation.
+
 ### Iterating Characters
 
 ```zymbol
@@ -2794,6 +2830,26 @@ the i18n pattern with no special handling:
 | `std/io` | `read` `write` `append` `exists` `delete` `list` `mkdir` | v0.0.7 |
 | `std/net` | `get` `post` `post_json` `head` | v0.0.7 |
 | `std/db` | `connect` `disconnect` `exec` `query` `query_one` `query_value` `tx` `begin` `commit` `rollback` `savepoint` `release` `rollback_to` `exec_script` `table_exists` | v0.0.7 |
+| `std/term` | `width` `pad_left` `pad_right` `center` `truncate` | v0.0.8 |
+
+**`std/term` — display width in terminal columns.** `width` counts **columns**, not
+graphemes: CJK ideographs, kana, hangul and most emoji take two columns each, so a
+framed panel drifts if you lay it out with `$#`. `width` accepts a String or a single
+`Char`; `pad_left`/`pad_right`/`center` pad with spaces to an exact column count (an
+already-wide string is returned untouched, and `center` gives a spare column to the
+right); `truncate` cuts to at most N columns without splitting a wide glyph.
+
+```zymbol
+<# std/term => t
+>> t::width("手番") ¶                  // → 4  (two columns each), while "手番"$# is 2
+>> "[" t::pad_right("go", 6) "]" ¶     // → [go    ]
+>> "[" t::center("go", 6) "]" ¶        // → [  go  ]
+>> "[" t::truncate("形勢判断", 4) "]" ¶ // → [形勢]  (never half a glyph)
+```
+
+This is a **screen** metric. Operating on a string's *content* — split, slice, replace,
+repeat — stays in the language's symbols (`$/`, `$[..]`, `$~~`, `$*`); `std/term` never
+duplicates them.
 
 **Error convention.** Type/arity mistakes raise a hard `RuntimeError` (the program is
 malformed). Recoverable environmental failures — file not found, network timeout, malformed
@@ -2988,10 +3044,22 @@ Three prefix operators convert between Int and Float:
 |----------|------|-----------|
 | `##.expr` | ToFloat | Converts Int or Float to Float |
 | `###expr` | ToIntRound | Converts Float to Int, rounding (half away from zero) |
-| `##!expr` | ToIntTrunc | Converts Float to Int, truncating toward zero |
+| `##!expr` | ToIntTrunc | Converts Float to Int truncating toward zero; a `Char` to its code point |
 
 > **Convention**: `##.` mirrors `#.N` (round/decimal), `##!` mirrors `#!N` (truncate).
 > `###` is a dedicated rounding cast with no decimal-precision argument.
+
+`##!` also accepts a `Char`, giving its Unicode code point — the only direct Char→Int
+route, and the way to classify a character by range (`Char` is otherwise neither
+comparable nor castable):
+
+```zymbol
+>> ##!'A' ¶      // → 65
+>> ##!'あ' ¶     // → 12354
+c = 'M'
+p = ##!c
+? p >= 65 && p <= 90 { >> "upper" ¶ }   // → upper
+```
 
 ```zymbol
 i = 42
