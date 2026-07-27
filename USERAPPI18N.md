@@ -209,10 +209,11 @@ mI'(n)      // 7 → "7" in English and Spanish, → ⟨pIqaD seven⟩ in Klingo
 
 The caller never has to know which locale is active, which is the whole point.
 
-> **Gotcha.** `"{x}"` interpolation requires the identifier to be alphanumeric, so
-> it rejects identifiers made of characters outside Unicode's `L*`/`N*` categories.
-> Japanese identifiers interpolate; Private Use Area ones (pIqaD) do not. Compose
-> with `$++` instead — `"Wave " $++ n " cleared"` — until that is fixed.
+> Interpolation accepts exactly what the lexer accepts as an identifier anywhere
+> else, so `"{⟨pIqaD name⟩}"` works like `"{整}"` does. Before v0.0.8 it used a
+> narrower rule and rejected anything outside Unicode's `L*`/`N*` categories,
+> which meant a program written in pIqaD had to compose with `$++` instead —
+> see HLZ-KL-001.
 
 ---
 
@@ -421,25 +422,22 @@ it mid-session from its own settings screen:
 描::全画面(状態)        // full redraw — every string is re-fetched
 ```
 
-> **Gotcha, and a nasty one.** A rotate-the-locale function is the obvious API
-> here, and the obvious shape for it is wrong:
->
-> ```zymbol
-> rotar() { … idioma_actual = siguiente  <~ idioma_actual }   // ✗
-> ```
->
-> In the tree-walker — the *default* engine — a module function that writes module
-> state **and** returns a value with `<~` loses the write. It returns the new
-> locale and leaves the old one in place, silently. The register VM gets it right,
-> which makes it easy to miss. Split it in two:
+> **Split the computation from the effect**, even though the language no longer
+> forces you to:
 >
 > ```zymbol
 > _siguiente() { … <~ lista[pos + 1] }   // pure: computes
 > rotar() { fijar(_siguiente()) }        // void: writes
 > ```
 >
-> Then have the gate walk the full cycle and assert it comes back to the first
-> locale. Filed as HLZ-SRP-001 in zy-Serpiente with a minimal repro.
+> The one-function version — write the state and return it — was silently wrong
+> before v0.0.8: the tree-walker dropped the write and returned the new value
+> anyway, while the register VM got it right (HLZ-SRP-001). It is fixed, but the
+> failure was invisible, so both projects kept the split rather than depend on
+> which binary a reader happens to have.
+>
+> Either way, **have the gate walk the full rotation** and assert it comes back to
+> the first locale. That check is what caught it.
 
 Two rules:
 

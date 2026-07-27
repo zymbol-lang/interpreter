@@ -388,7 +388,13 @@ impl Lexer {
     /// Check if a character can start an identifier
     /// Allows: Unicode letters, underscore, and any non-operator Unicode character
     /// Excludes: digits (can't start with digit), whitespace, and known operators
-    fn is_ident_start(ch: char) -> bool {
+    ///
+    /// Public because this is the single definition of what an identifier is.
+    /// Every other place that needed to recognise one — string interpolation,
+    /// the unused-variable analysis, the LSP's word-at-cursor — used to carry
+    /// its own narrower copy based on `is_alphanumeric`, which silently
+    /// excluded scripts the lexer accepts (Private Use Area glyphs, emoji).
+    pub fn is_ident_start(ch: char) -> bool {
         // Allow underscore
         if ch == '_' {
             return true;
@@ -408,7 +414,9 @@ impl Lexer {
 
     /// Check if a character can continue an identifier
     /// More permissive: allows letters, digits, underscore, and Unicode symbols
-    fn is_ident_continue(ch: char) -> bool {
+    ///
+    /// Public for the same reason as `is_ident_start`.
+    pub fn is_ident_continue(ch: char) -> bool {
         // Allow alphanumeric and underscore
         if ch.is_alphanumeric() || ch == '_' {
             return true;

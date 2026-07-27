@@ -919,7 +919,16 @@ impl VariableAnalyzer {
                                 self.use_variable(&var_name, lit.span);
                             }
                         } else if in_var {
-                            if ch.is_alphanumeric() || ch == '_' {
+                            // Same identifier rule as the lexer. A narrower one
+                            // here reported "unused variable" for names the
+                            // interpolation does resolve — pIqaD and emoji
+                            // identifiers, which are not is_alphanumeric.
+                            let ok = if var_name.is_empty() {
+                                zymbol_lexer::Lexer::is_ident_start(ch)
+                            } else {
+                                zymbol_lexer::Lexer::is_ident_continue(ch)
+                            };
+                            if ok {
                                 var_name.push(ch);
                             } else {
                                 // Non-identifier char inside {…} — not a variable reference

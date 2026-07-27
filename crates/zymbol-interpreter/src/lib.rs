@@ -391,9 +391,15 @@ pub struct Interpreter<W: Write> {
     pub(crate) tco_pending: bool,
     /// TCO args: the rebound argument values for the tail call restart.
     pub(crate) tco_args: Vec<Value>,
-    /// QW13 fix: output param names of the current function.
-    /// MoveOrClone (take_variable) must NOT be used for output params — writeback needs the value.
-    pub(crate) current_output_params: std::collections::HashSet<String>,
+    /// Names the MoveOrClone optimisation in `Statement::Return` must NOT move
+    /// out of scope, because something after the return still needs to read them:
+    ///   - output parameters (QW13), whose writeback copies the value to the caller;
+    ///   - module state variables (MM-2), whose write-back diffs the frame's final
+    ///     value against the injected snapshot. `<~ v` used to move `v` out, the
+    ///     write-back then found nothing, and the mutation was silently dropped —
+    ///     a module function that wrote state *and* returned a value lost the write
+    ///     in the tree-walker while the VM kept it.
+    pub(crate) move_guard_names: std::collections::HashSet<String>,
     /// Active output numeral system (block base codepoint).
     /// Default: 0x0030 (ASCII). Changed by #<d0><d9># statements.
     /// Applies only to >> numeric outputs; does not affect to_display_string().
@@ -809,7 +815,7 @@ impl Interpreter<std::io::Stdout> {
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),
-            current_output_params: std::collections::HashSet::new(),
+            move_guard_names: std::collections::HashSet::new(),
             numeral_mode: numeral_mode::ASCII_BASE,
             input_fn: default_input_fn(),
             global_consts: HashMap::new(),
@@ -860,7 +866,7 @@ impl<W: Write> Interpreter<W> {
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),
-            current_output_params: std::collections::HashSet::new(),
+            move_guard_names: std::collections::HashSet::new(),
             numeral_mode: numeral_mode::ASCII_BASE,
             input_fn: default_input_fn(),
             global_consts: HashMap::new(),
@@ -1266,10 +1272,12 @@ impl<W: Write> Interpreter<W> {
                     }
                     // MoveOrClone: if returning a bare identifier and not inside a try block
                     // (finally could reference the variable), move instead of clone — O(1).
-                    // Skip take_variable for output params — writeback still needs the value.
+                    // Names in move_guard_names are read again after the return —
+                    // output-param writeback and module-state write-back — so they
+                    // are cloned instead.
                     if self.try_depth == 0 {
                         if let Expr::Identifier(ident) = expr.unwrap_group() {
-                            if !self.current_output_params.contains(&ident.name) {
+                            if !self.move_guard_names.contains(&ident.name) {
                                 if let Some(v) = self.take_variable(&ident.name) {
                                     self.set_control_flow(ControlFlow::Return(Some(v)));
                                     return Ok(());

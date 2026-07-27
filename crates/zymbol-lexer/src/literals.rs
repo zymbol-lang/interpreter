@@ -83,7 +83,19 @@ impl Lexer {
                         break;
                     }
                     let var_ch = self.current_char();
-                    if var_ch.is_alphanumeric() || var_ch == '_' {
+                    // Accept exactly what the lexer accepts as an identifier
+                    // anywhere else. A narrower rule here (is_alphanumeric)
+                    // rejected identifiers the rest of the language allows:
+                    // kanji are category Lo and pass is_alphanumeric, but
+                    // Private Use Area glyphs — pIqaD, for one — are category
+                    // Co and do not, so a program whose identifiers were valid
+                    // everywhere else could not interpolate them.
+                    let ok = if var_name.is_empty() {
+                        Lexer::is_ident_start(var_ch)
+                    } else {
+                        Lexer::is_ident_continue(var_ch)
+                    };
+                    if ok {
                         var_name.push(var_ch);
                         self.advance();
                     } else {

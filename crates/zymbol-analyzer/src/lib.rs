@@ -1028,7 +1028,7 @@ impl Analyzer {
         }
 
         let mut start = end;
-        while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
+        while start > 0 && zymbol_lexer::Lexer::is_ident_continue(chars[start - 1]) {
             start -= 1;
         }
 
@@ -1334,13 +1334,18 @@ fn get_full_line_range(content: &str, line_num: u32) -> Option<lsp_types::Range>
 }
 
 /// Check if a string is a valid Zymbol identifier
+///
+/// Defers to the lexer so the LSP recognises exactly the identifiers the
+/// language accepts. The previous rule required `is_alphabetic` to start and
+/// `is_alphanumeric` to continue, which excluded emoji and Private Use Area
+/// names — a program written in pIqaD had no working hover or completion.
 fn is_valid_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
-        Some(c) if c.is_alphabetic() || c == '_' => {}
+        Some(c) if zymbol_lexer::Lexer::is_ident_start(c) => {}
         _ => return false,
     }
-    chars.all(|c| c.is_alphanumeric() || c == '_')
+    chars.all(zymbol_lexer::Lexer::is_ident_continue)
 }
 
 /// Convert LSP Position to byte offset in content
@@ -1392,7 +1397,7 @@ fn find_function_call_context(content: &str, offset: usize) -> Option<(String, u
     let func_name: String = before_paren
         .chars()
         .rev()
-        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .take_while(|c| zymbol_lexer::Lexer::is_ident_continue(*c))
         .collect::<String>()
         .chars()
         .rev()

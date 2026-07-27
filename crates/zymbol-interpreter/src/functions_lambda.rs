@@ -442,12 +442,19 @@ impl<W: Write> Interpreter<W> {
         let prev_fn = self.current_function.take();
         self.current_function = func_name.map(|s| s.to_string());
 
-        // QW13 fix: track output param names so MoveOrClone skips take_variable for them
-        let prev_output_params = std::mem::take(&mut self.current_output_params);
+        // MoveOrClone guard: names that must survive the return statement because
+        // something after it still reads them from this frame's scope.
+        //   - output params (QW13): the writeback loop below copies them out;
+        //   - module state (MM-2): the write-back below diffs them against the
+        //     injected snapshot, and a moved-out key looks like "never touched".
+        let prev_guard = std::mem::take(&mut self.move_guard_names);
         for param in parameters {
             if matches!(param.kind, ParameterKind::Output) {
-                self.current_output_params.insert(param.name.clone());
+                self.move_guard_names.insert(param.name.clone());
             }
+        }
+        for name in injected_module_vars.keys() {
+            self.move_guard_names.insert(name.clone());
         }
 
         // QW1: execute_block_no_scope — take_call_state already owns scope[0] (params).
@@ -459,7 +466,7 @@ impl<W: Write> Interpreter<W> {
                 // propagating, or every outer variable vanishes after the
                 // error is caught by an enclosing `!?`.
                 self.current_function = prev_fn;
-                self.current_output_params = prev_output_params;
+                self.move_guard_names = prev_guard;
                 self.restore_call_state(saved);
                 if let Some(caller_functions) = saved_functions {
                     self.functions = caller_functions;
@@ -491,7 +498,7 @@ impl<W: Write> Interpreter<W> {
         };
 
         self.current_function = prev_fn;
-        self.current_output_params = prev_output_params;
+        self.move_guard_names = prev_guard;
 
         // MODULE STATE WRITE-BACK (MM-2): persist module-level mutations back to the
         // LoadedModule store. Runs for every module frame — alias:: calls and

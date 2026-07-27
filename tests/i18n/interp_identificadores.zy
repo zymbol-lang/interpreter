@@ -1,0 +1,42 @@
+// Regression: string interpolation must accept every identifier the lexer
+// accepts elsewhere.
+//
+// The interpolation lexer validated names with is_alphanumeric(), which is
+// narrower than the identifier rule the rest of the language uses. Kanji are
+// Unicode category Lo and pass; Private Use Area glyphs are category Co and do
+// not. A program written in pIqaD — Klingon script, U+F8D0–F8FF — therefore had
+// identifiers that were valid everywhere except inside "{ }". Found in
+// zyKlingonGalaxy, where a locale had to render numbers as pIqaD digits.
+//
+// Scripts exercised: Latin, kanji, Hangul, Cyrillic, Greek, Devanagari,
+// pIqaD (PUA), an emoji, and a name carrying the Klingon apostrophe.
+
+<# ./interp_piqad => p
+
+n = 7
+
+// ASCII, and the underscore start
+ascii = "a"
+_guion = "b"
+>> "ascii={ascii} guion={_guion}" ¶
+
+// Unicode letters — these already worked, and must keep working
+整 = 1
+한 = 2
+привет = 3
+λόγος = 4
+नाम = 5
+>> "kanji={整} hangul={한} cirilico={привет} griego={λόγος} devanagari={नाम}" ¶
+
+// Private Use Area: pIqaD. Category Co — this is what used to be rejected.
+ = 10
+ = 11
+_ = 12
+>> "piqad={} apostrofo={} compuesto={_}" ¶
+
+// A symbol identifier outside the letter categories
+🌑 = 20
+>> "emoji={🌑}" ¶
+
+// Interpolation inside a module function, where the pIqaD case came from
+>> (p::mu(n)) ¶

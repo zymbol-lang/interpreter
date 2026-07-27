@@ -1,0 +1,9 @@
+// Module for interp_identificadores.zy — interpolation of pIqaD identifiers
+// inside a module function, which is where the failure was first hit: a locale
+// rendering a number in its own script.
+
+# interp_piqad {
+    #> { mu }
+
+    mu() { <~ "modulo={}" }
+}

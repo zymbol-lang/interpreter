@@ -1,0 +1,8 @@
+literal   ret=en estado=en
+indexado  ret=en estado=en
+local     ret=ko estado=ko
+sin_ret            estado=en
+delegado           estado=en
+otro      ret=42 estado=zh
+cuenta 123 total=3
+outparam  ret=ko out=7 estado=ko

@@ -85,6 +85,52 @@ All fixes verified with TW/VM parity (519/519) and golden tests (503/503).
 
 ### Fixed
 
+**Findings from the zy-Serpiente and zyKlingonGalaxy i18n rework (HLZ-SRP-001, HLZ-KL-001)**
+
+Rewriting the internationalization of the two older TUI games against
+[USERAPPI18N.md](USERAPPI18N.md) surfaced two divergences. Both were found by
+writing ordinary application code, and both were silent in one engine and
+correct in the other or correct nowhere.
+
+**HLZ-SRP-001 — a module function that wrote state and returned a value lost the write**
+- In the tree-walker, `f() { v = "en"  <~ v }` returned `"en"` and left the
+  module's `v` at its previous value. No error, no warning. The register VM was
+  correct, which made it easy to miss: a program tested under `--vm` behaved,
+  and the default engine did not.
+- Cause: the MoveOrClone optimisation in `Statement::Return` moves a returned
+  bare identifier out of scope instead of cloning it — O(1) for strings and
+  arrays. The module-state write-back then looked the key up, found nothing, and
+  read that as "this frame never touched it", so the mutation was dropped. Output
+  parameters were already excluded from the move for the same reason (QW13); module
+  state was not.
+- Fix: `current_output_params` becomes `move_guard_names` and now holds both
+  output parameters and the module variables injected into the frame. Both are
+  read again after the return, so both are cloned rather than moved.
+- The shape that triggered it is the natural one for a stateful API — "change
+  this and tell me how it came out": a counter, a cursor, a locale rotator.
+- Regression: `tests/modules_scope/mod_state_return.zy`, which writes state and
+  returns it as a literal, an indexed value, a local, an unrelated value, and
+  alongside an output parameter. It fails on the previous binary.
+
+**HLZ-KL-001 — string interpolation rejected identifiers the lexer accepts**
+- `"{x}"` validated the name with `is_alphanumeric()`, which is narrower than
+  the identifier rule used everywhere else. Kanji are Unicode category `Lo` and
+  passed; Private Use Area glyphs — pIqaD, the Klingon script zyKlingonGalaxy is
+  written in — are category `Co` and did not. A program whose identifiers were
+  valid in every other position could not interpolate them.
+- The same narrower rule had been copied into two more places, with two more
+  symptoms: the unused-variable analysis did not count an interpolation as a use
+  of such a name, so it warned about variables the program does read; and the LSP's
+  word-at-cursor and identifier-validity helpers did not recognise them, so hover
+  and completion did not work in such a program.
+- Fix: `Lexer::is_ident_start` and `Lexer::is_ident_continue` are now public and
+  are the single definition. The lexer's interpolation loop, the semantic
+  analyser's interpolation scan and the analyzer's three helpers all defer to
+  them.
+- Regression: `tests/i18n/interp_identificadores.zy` interpolates names in Latin,
+  kanji, Hangul, Cyrillic, Greek, Devanagari, pIqaD (including the Klingon
+  apostrophe) and an emoji, at top level and inside a module function.
+
 **Findings from the zy-GO validation project (HLZ-001 … HLZ-009)**
 
 Building [zy-GO](https://github.com/zymbol-lang/zy-GO) — a Go/囲碁 game whose

@@ -222,7 +222,21 @@ name = "Alice"
 >> "Hello, {name}!" ¶       // Hello, Alice!
 ```
 
-Only simple identifiers (letters, digits, `_`) are allowed inside braces. Expressions must be assigned to a variable first.
+Only a simple identifier is allowed inside the braces — expressions must be
+assigned to a variable first. "Identifier" means exactly what it means
+everywhere else in the language: any Unicode letter, `_`, and any non-operator
+symbol, including scripts outside the letter categories. A name written in
+kanji, in Hangul, in Private Use Area glyphs such as pIqaD, or with an emoji
+interpolates like any other.
+
+```zymbol
+整 = 7
+>> "kanji: {整}" ¶              // kanji: 7
+```
+
+> Before v0.0.8 this position used a narrower rule than the lexer's, so a
+> program whose identifiers were valid everywhere else could still fail to
+> interpolate them.
 
 ### Numeric Literals
 
