@@ -421,6 +421,26 @@ it mid-session from its own settings screen:
 描::全画面(状態)        // full redraw — every string is re-fetched
 ```
 
+> **Gotcha, and a nasty one.** A rotate-the-locale function is the obvious API
+> here, and the obvious shape for it is wrong:
+>
+> ```zymbol
+> rotar() { … idioma_actual = siguiente  <~ idioma_actual }   // ✗
+> ```
+>
+> In the tree-walker — the *default* engine — a module function that writes module
+> state **and** returns a value with `<~` loses the write. It returns the new
+> locale and leaves the old one in place, silently. The register VM gets it right,
+> which makes it easy to miss. Split it in two:
+>
+> ```zymbol
+> _siguiente() { … <~ lista[pos + 1] }   // pure: computes
+> rotar() { fijar(_siguiente()) }        // void: writes
+> ```
+>
+> Then have the gate walk the full cycle and assert it comes back to the first
+> locale. Filed as HLZ-SRP-001 in zy-Serpiente with a minimal repro.
+
 Two rules:
 
 - **Redraw everything, not the changed rows.** The new language has different
@@ -604,7 +624,7 @@ Run this against any Zymbol application that shows text to a user.
 | 6 | Every width goes through `std/term::width` | `$#` used on a string, or a hand-counted constant |
 | 7 | Frames are built from measured content | A row of a box typed as one literal with its padding |
 | 8 | Positions derive from measured widths | `AN / 2 - 7` |
-| 9 | Language is switchable inside the application | Locale fixed at launch only |
+| 9 | Language is switchable inside the application, at any point the user returns to | A locale selector shown once per session, or fixed at launch |
 | 10 | One entry point per language | Only the base language is discoverable |
 | 11 | A key catalogue exists and the dispatcher publishes it | Nothing to test against |
 | 12 | A gate walks catalogue × locales, in both engines | Missing translations found by users |
@@ -632,14 +652,21 @@ was written and what it looks like after the audit.
 | Composed messages | — → **2 per locale** | — → **2 per locale** | 3 per locale |
 | Widths | hand-counted → **`std/term`** | hand-counted → **`std/term`** | `std/term` |
 | Frames | literals → **measured** | literals → **measured** | measured |
-| Runtime switching | — | yes | yes |
-| Entry points | 1 → **2** | 1 | 4 |
+| Runtime switching | — → **`L`, any menu** | first screen → **`L`, any menu** | setup screen |
+| Entry points | 1 → **2** | 1 (+ a locale selector as its first screen) | 4 |
 | API layer | — | — | `api/english`, `api/espanol` |
-| Gate | — → **31 × 2** | — → **27 × 3** | 51 × 5 + 50 × 2 |
+| Gate | — → **31 × 2** | — → **27 × 3** | 51 × 5 + 50 × 3 |
+| Docs per language | 2 of 2 | **2 of 3** | **3 of 5** |
 
-Every gate runs in both engines. Keys carry a domain prefix in all three, and in
-each case they are written in the language the program itself is written in:
-Spanish for Serpiente, Klingon in pIqaD for Hov veS, Japanese for 囲碁.
+Every gate runs in both engines and every one of them walks the full locale
+rotation, which is what catches the trap in §7. Keys carry a domain prefix in all
+three, and in each case they are written in the language the program itself is
+written in: Spanish for Serpiente, Klingon in pIqaD for Hov veS, Japanese for 囲碁.
+
+The bold rows are where the checklist bit hardest, and the last one is the item
+still open in two of the three: **documentation lags the interface**. It is the
+cheapest item to skip and the easiest to forget, because nothing fails when you
+do. Both audits record it rather than pretend otherwise.
 
 **Serpiente** — had no i18n at all: about forty Spanish strings embedded in
 fixed-width boxes, and a score badge positioned by constants derived from the
