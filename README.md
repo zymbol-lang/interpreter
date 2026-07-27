@@ -760,6 +760,7 @@ interpreter/
 - [IMPLEMENTATION.md](./IMPLEMENTATION.md) — EBNF grammar, coverage table, TW/VM internals
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — Interpreter architecture and performance benchmarks
 - [I18N.md](./I18N.md) — Internationalization: multilingual code via re-export layers, and runtime text via dispatcher modules
+- [USERAPPI18N.md](./USERAPPI18N.md) — Building a multilingual application: measured layout, runtime language switching, per-language entry points, and the completeness gate
 
 ---
 
