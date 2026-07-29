@@ -14,4 +14,4 @@ zymbol-bytecode.workspace = true
 zymbol-compiler.workspace = true
 anyhow.workspace = true
 bincode.workspace = true
-tempfile = "3.13"
+tempfile.workspace = true

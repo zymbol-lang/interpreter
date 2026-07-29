@@ -1,0 +1,27 @@
+[package]
+name = "zymbol-package"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Zymbol Package (.zyp): manifest parsing, transitive-dependency closure, and portable ZIP archive read/write for Zymbol source projects"
+
+[dependencies]
+# Only the front end (lex + parse) is needed to walk imports — this crate never
+# compiles or executes Zymbol code, so it stays free of zymbol-semantic/-interpreter/
+# -compiler/-vm and their transitive deps (clap, tokio, odbc-api, ...). That keeps it
+# usable from a future package manager or the LSP without dragging in the CLI's world.
+zymbol-ast.workspace = true
+zymbol-span.workspace = true
+zymbol-lexer.workspace = true
+zymbol-parser.workspace = true
+
+zip.workspace = true
+toml.workspace = true
+semver.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

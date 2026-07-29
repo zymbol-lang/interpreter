@@ -20,6 +20,7 @@ members = [
     "crates/zymbol-vm",
     "crates/zymbol-compiler",
     "crates/zymbol-intrinsics",
+    "crates/zymbol-package",
 ]
 
 [workspace.package]
@@ -48,6 +49,7 @@ zymbol-standalone = { path = "crates/zymbol-standalone" }
 zymbol-analyzer = { path = "crates/zymbol-analyzer" }
 zymbol-formatter = { path = "crates/zymbol-formatter" }
 zymbol-repl = { path = "crates/zymbol-repl" }
+zymbol-package = { path = "crates/zymbol-package" }
 
 # Unicode handling
 unicode-segmentation = "1.12"
@@ -86,6 +88,13 @@ ureq = "3"
 odbc-api = "28"
 base64 = "0.22"
 once_cell = "1"
+
+# Zymbol Package (.zyp): portable source archives
+# default-features = false on `zip` skips bzip2/zstd/aes — only deflate is needed.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+toml = "0.8"
+semver = "1"
+tempfile = "3.13"
 
 [profile.dev]
 opt-level = 0

@@ -24,9 +24,11 @@ zymbol-vm.workspace = true
 zymbol-compiler.workspace = true
 zymbol-formatter.workspace = true
 zymbol-repl.workspace = true
+zymbol-package.workspace = true
 zymbol-lsp = { path = "../zymbol-lsp" }
 clap.workspace = true
 anyhow.workspace = true
+tempfile.workspace = true
 tokio = { version = "1", features = ["full"] }
 
 [features]
