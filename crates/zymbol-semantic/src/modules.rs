@@ -416,44 +416,20 @@ impl ModuleAnalyzer {
         Ok(())
     }
 
-    /// Resolve module path to absolute file path
+    /// Resolve module path to absolute file path.
+    ///
+    /// Delegates to `ModulePath::resolve_from`, the single source of truth shared with the
+    /// tree-walking interpreter and the VM compiler.
     pub(crate) fn resolve_module_path(
         &self,
         module_path: &ModulePath,
         current_file: &Path,
     ) -> Result<PathBuf, SemanticError> {
-        let mut resolved = if module_path.is_absolute {
-            // Absolute path: /foo/bar or ~/foo/bar
-            if module_path.home_relative {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-                PathBuf::from(home)
-            } else {
-                PathBuf::from("/")
-            }
-        } else {
-            // Relative path: ./foo or ../foo
-            let current_dir = current_file.parent().unwrap_or(&self.base_dir);
-            let mut base = current_dir.to_path_buf();
-            for _ in 0..module_path.parent_levels {
-                if !base.pop() {
-                    return Err(SemanticError::PathResolutionFailed {
-                        path: format!("{:?}", module_path.components),
-                        span: module_path.span,
-                    });
-                }
-            }
-            base
-        };
-
-        // Add path components
-        for component in &module_path.components {
-            resolved.push(component);
-        }
-
-        // Add .zy extension
-        resolved.set_extension("zy");
-
-        Ok(resolved)
+        let current_dir = current_file.parent().unwrap_or(&self.base_dir);
+        module_path.resolve_from(current_dir).ok_or_else(|| SemanticError::PathResolutionFailed {
+            path: format!("{:?}", module_path.components),
+            span: module_path.span,
+        })
     }
 
     /// Validate an import statement
@@ -497,9 +473,7 @@ impl ModuleAnalyzer {
     }
 
     fn is_stdlib_path(path: &ModulePath) -> bool {
-        !path.is_relative
-            && !path.is_absolute
-            && path.components.first().map(|s| s == "std").unwrap_or(false)
+        path.is_stdlib()
     }
 
     /// Check for circular dependencies using DFS

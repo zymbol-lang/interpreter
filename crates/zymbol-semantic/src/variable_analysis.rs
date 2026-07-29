@@ -635,6 +635,9 @@ impl VariableAnalyzer {
             Pattern::Ident(name, span) => {
                 self.use_variable(name, *span);
             }
+            Pattern::Or(alternatives, _) => {
+                for alt in alternatives { self.analyze_pattern(alt); }
+            }
         }
     }
 

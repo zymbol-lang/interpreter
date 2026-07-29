@@ -452,7 +452,11 @@ impl Compiler {
     /// Also handles: circular import detection, nested sub-imports, and re-exports.
     fn compile_import(&mut self, import: &zymbol_ast::ImportStmt, base_dir: &Path) -> Result<(), CompileError> {
         // Detect stdlib modules (std/math, std/random, std/json, std/io, std/net, std/term) — no file needed.
-        if import.path.parent_levels == 0 {
+        // `is_stdlib()` requires a bare path (no ./, ../, /, or ~/ prefix) whose first component
+        // is literally "std" — matching the tree-walker's and semantic analyzer's check. The old
+        // `parent_levels == 0` test was weaker: it also matched `./std/math` (parent_levels is 0
+        // for `./` too), which would wrongly treat a same-directory `std/` folder as the stdlib.
+        if import.path.is_stdlib() {
             let module_key = import.path.components.join("/");
             if let Some(entries) = stdlib_builtin_entries(&module_key) {
                 let alias = import.alias.clone();
@@ -474,15 +478,14 @@ impl Compiler {
             }
         }
 
-        // Build file path from import path components
-        let mut path = base_dir.to_path_buf();
-        for _ in 0..import.path.parent_levels {
-            path.pop();
-        }
-        for component in &import.path.components {
-            path.push(component);
-        }
-        path.set_extension("zy");
+        // Resolve via the single source of truth in zymbol-ast, which handles ./, ../, /abs
+        // and ~/home uniformly. This used to be reimplemented here and ignored
+        // is_absolute/home_relative entirely (always resolving against base_dir), so
+        // `<# /opt/lib/x => x` compiled to a different file under the VM than under the
+        // tree-walker. See ModulePath::resolve_from for the shared rule.
+        let path = import.path.resolve_from(base_dir).ok_or_else(|| {
+            CompileError::ModuleNotFound(format!("{}.zy", import.path.components.join("/")))
+        })?;
 
         // Canonicalize for reliable circular import detection
         let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
@@ -2512,20 +2515,90 @@ impl Compiler {
         let mut end_patches: Vec<usize> = Vec::new();
 
         for case in &m.cases {
-            match &case.pattern {
-                Pattern::Wildcard(_) => {
-                    // Compile body, store to dst, jump to end
-                    if let Some(val) = &case.value {
-                        let r = self.compile_expr(val, ctx)?;
-                        ctx.emit(Instruction::CopyReg(dst, r));
-                    } else if let Some(block) = &case.block {
-                        self.compile_block(block, ctx)?;
-                    }
-                    let j = ctx.emit_jump_placeholder();
-                    end_patches.push(j);
-                    break; // Wildcard is always last
+            if matches!(case.pattern, Pattern::Wildcard(_)) {
+                // Wildcard matches everything: compile body, store to dst, jump to end
+                if let Some(val) = &case.value {
+                    let r = self.compile_expr(val, ctx)?;
+                    ctx.emit(Instruction::CopyReg(dst, r));
+                } else if let Some(block) = &case.block {
+                    self.compile_block(block, ctx)?;
                 }
-                Pattern::Literal(lit, _) => {
+                let j = ctx.emit_jump_placeholder();
+                end_patches.push(j);
+                break; // Wildcard is always last
+            }
+
+            let (skip_patches, to_body_patches) =
+                self.emit_pattern_test(&case.pattern, r_sub, ctx)?;
+
+            // Body starts here — both the fall-through and the explicit
+            // "matched" jumps land on this label
+            let body_label = ctx.current_label();
+            for p in to_body_patches {
+                ctx.patch_jump(p, body_label);
+            }
+
+            if let Some(val) = &case.value {
+                let r = self.compile_expr(val, ctx)?;
+                ctx.emit(Instruction::CopyReg(dst, r));
+            } else if let Some(block) = &case.block {
+                self.compile_block(block, ctx)?;
+            }
+            let j = ctx.emit_jump_placeholder();
+            end_patches.push(j);
+
+            let next_case = ctx.current_label();
+            for p in skip_patches {
+                ctx.patch_jump(p, next_case);
+            }
+        }
+
+        let end_label = ctx.current_label();
+        for pos in end_patches {
+            ctx.patch_jump(pos, end_label);
+        }
+        Ok(dst)
+    }
+
+    /// Emit the runtime test for a single match pattern against `r_sub`.
+    ///
+    /// Contract: falling through past the emitted code means the pattern
+    /// matched, so the arm body must follow immediately. The two returned
+    /// placeholder lists are `(skips, to_body)`: `skips` must be patched to
+    /// the next case, `to_body` to the label where the arm body starts.
+    fn emit_pattern_test(
+        &mut self,
+        pattern: &Pattern,
+        r_sub: Reg,
+        ctx: &mut FunctionCtx,
+    ) -> Result<(Vec<usize>, Vec<usize>), CompileError> {
+        let mut skips: Vec<usize> = Vec::new();
+        let mut to_body: Vec<usize> = Vec::new();
+
+        match pattern {
+            Pattern::Wildcard(_) => {
+                // Always matches: nothing to emit, fall through to the body
+            }
+            Pattern::Or(alternatives, _) => {
+                // Test alternatives left to right; the first match jumps to the body
+                for (i, alt) in alternatives.iter().enumerate() {
+                    let (alt_skips, alt_to_body) = self.emit_pattern_test(alt, r_sub, ctx)?;
+                    to_body.extend(alt_to_body);
+
+                    if i + 1 < alternatives.len() {
+                        // Falling through means this alternative matched
+                        to_body.push(ctx.emit_jump_placeholder());
+                        let next_alt = ctx.current_label();
+                        for s in alt_skips {
+                            ctx.patch_jump(s, next_alt);
+                        }
+                    } else {
+                        // Last alternative: its failure skips the whole arm
+                        skips.extend(alt_skips);
+                    }
+                }
+            }
+            Pattern::Literal(lit, _) => {
                     let skip_patch = match lit {
                         zymbol_common::Literal::Int(n) => {
                             // Emit CmpEqImm + JumpIfNot
@@ -2556,17 +2629,7 @@ impl Compiler {
                         }
                         _ => ctx.emit_jump_placeholder(), // unsupported, always skip
                     };
-                    // Body
-                    if let Some(val) = &case.value {
-                        let r = self.compile_expr(val, ctx)?;
-                        ctx.emit(Instruction::CopyReg(dst, r));
-                    } else if let Some(block) = &case.block {
-                        self.compile_block(block, ctx)?;
-                    }
-                    let j = ctx.emit_jump_placeholder();
-                    end_patches.push(j);
-                    let next_case = ctx.current_label();
-                    ctx.patch_jump(skip_patch, next_case);
+                    skips.push(skip_patch);
                 }
                 Pattern::Range(start, end_expr, _) => {
                     // Range pattern: lo..hi
@@ -2581,18 +2644,7 @@ impl Compiler {
 
                     let body_label = (ctx.current_label() + 2) as Label;
                     ctx.emit(Instruction::MatchRange(r_sub, lo, hi, body_label));
-                    let skip_patch = ctx.emit_jump_placeholder();
-                    // Body
-                    if let Some(val) = &case.value {
-                        let r = self.compile_expr(val, ctx)?;
-                        ctx.emit(Instruction::CopyReg(dst, r));
-                    } else if let Some(block) = &case.block {
-                        self.compile_block(block, ctx)?;
-                    }
-                    let j = ctx.emit_jump_placeholder();
-                    end_patches.push(j);
-                    let next_case = ctx.current_label();
-                    ctx.patch_jump(skip_patch, next_case);
+                    skips.push(ctx.emit_jump_placeholder());
                 }
                 Pattern::Comparison(op, expr, _) => {
                     // Comparison pattern: implicit scrutinee op rhs
@@ -2610,17 +2662,7 @@ impl Compiler {
                         )),
                     };
                     ctx.emit(instr);
-                    let skip_patch = ctx.emit_jump_if_not_placeholder(r_cmp);
-                    if let Some(val) = &case.value {
-                        let r = self.compile_expr(val, ctx)?;
-                        ctx.emit(Instruction::CopyReg(dst, r));
-                    } else if let Some(block) = &case.block {
-                        self.compile_block(block, ctx)?;
-                    }
-                    let j = ctx.emit_jump_placeholder();
-                    end_patches.push(j);
-                    let next_case = ctx.current_label();
-                    ctx.patch_jump(skip_patch, next_case);
+                    skips.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                 }
                 Pattern::Ident(name, _) => {
                     // Load the variable; if array → containment, else → equality
@@ -2659,17 +2701,7 @@ impl Compiler {
                     // Merge point:
                     let merge_label = ctx.current_label();
                     ctx.patch_jump(patch_arr_skip, merge_label);
-                    let skip_patch = ctx.emit_jump_if_not_placeholder(r_cmp);
-                    if let Some(val) = &case.value {
-                        let r = self.compile_expr(val, ctx)?;
-                        ctx.emit(Instruction::CopyReg(dst, r));
-                    } else if let Some(block) = &case.block {
-                        self.compile_block(block, ctx)?;
-                    }
-                    let j = ctx.emit_jump_placeholder();
-                    end_patches.push(j);
-                    let next_case = ctx.current_label();
-                    ctx.patch_jump(skip_patch, next_case);
+                    skips.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                 }
                 Pattern::List(patterns, _) => {
                     // Runtime dual dispatch: structural for array scrutinee, containment for scalar
@@ -2773,37 +2805,15 @@ impl Compiler {
                     // No containment match → skip to next case
                     let patch_contain_no_match = ctx.emit_jump_placeholder();
 
-                    // === Body (shared by both paths) ===
-                    let body_label = ctx.current_label();
-                    ctx.patch_jump(patch_struct_to_body, body_label);
-                    for p in jump_to_body_patches {
-                        ctx.patch_jump(p, body_label);
-                    }
-
-                    if let Some(val) = &case.value {
-                        let r = self.compile_expr(val, ctx)?;
-                        ctx.emit(Instruction::CopyReg(dst, r));
-                    } else if let Some(block) = &case.block {
-                        self.compile_block(block, ctx)?;
-                    }
-                    let j = ctx.emit_jump_placeholder();
-                    end_patches.push(j);
-
-                    // Patch all "no match" skips to next case
-                    let next_case = ctx.current_label();
-                    for sp in struct_skip_patches {
-                        ctx.patch_jump(sp, next_case);
-                    }
-                    ctx.patch_jump(patch_contain_no_match, next_case);
+                    // Both paths reach the body through explicit jumps
+                    to_body.push(patch_struct_to_body);
+                    to_body.extend(jump_to_body_patches);
+                    skips.extend(struct_skip_patches);
+                    skips.push(patch_contain_no_match);
                 }
             }
-        }
 
-        let end_label = ctx.current_label();
-        for pos in end_patches {
-            ctx.patch_jump(pos, end_label);
-        }
-        Ok(dst)
+        Ok((skips, to_body))
     }
 
     // ── 4C: Statement::Match ─────────────────────────────────────────────────
@@ -3848,6 +3858,11 @@ fn collect_free_in_pattern(
         }
         zymbol_ast::Pattern::List(pats, _) => {
             for p in pats {
+                collect_free_in_pattern(p, locals, outer_ctx, seen, free);
+            }
+        }
+        zymbol_ast::Pattern::Or(alternatives, _) => {
+            for p in alternatives {
                 collect_free_in_pattern(p, locals, outer_ctx, seen, free);
             }
         }

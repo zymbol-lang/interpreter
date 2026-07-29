@@ -1,0 +1,44 @@
+// Regression: escape sequences inside CHARACTER literals ('\n', '\t', '\r', '\0') must
+// produce the escaped character, not the letter after the backslash.
+//
+// The web interpreter (web/zymbol.js) used to lex '\n' as the letter "n": readChar consumed
+// the backslash and then took the next character verbatim. Nothing caught it because every
+// existing test that used char literals used plain glyphs ('a', '↑'), and *string* literals
+// ("\n") have always handled escapes correctly. The visible symptom was that Enter did
+// nothing in TUI programs in the browser playground — arrow keys arrive as literal glyphs
+// and kept working, but Enter arrives as '\n' and silently fell through to the wildcard arm.
+//
+// The scrutinees below are deliberately built by indexing a *string* literal, whose escape
+// handling is a separate code path that always worked. Writing the scrutinee as a char
+// literal instead would make this test vacuous: a lexer that mis-reads '\n' the same way on
+// both sides of the comparison would still match, and prove nothing.
+
+nl   = "\n"[1]
+tab  = "\t"[1]
+bs   = "\\"[1]
+letn = "n"[1]
+
+?? nl {
+    '\n' => { >> "newline: char escape lexed correctly" ¶ }
+    'n'  => { >> "newline: BUG — '\\n' lexed as the letter n" ¶ }
+    _    => { >> "newline: BUG — matched nothing" ¶ }
+}
+
+?? tab {
+    '\t' => { >> "tab: char escape lexed correctly" ¶ }
+    't'  => { >> "tab: BUG — '\\t' lexed as the letter t" ¶ }
+    _    => { >> "tab: BUG — matched nothing" ¶ }
+}
+
+// The escaped character must stay distinct from the bare letter that follows the backslash.
+?? letn {
+    '\n' => { >> "letter n: BUG — matched the newline pattern" ¶ }
+    'n'  => { >> "letter n: stays distinct from the escape" ¶ }
+    _    => { >> "letter n: BUG — matched nothing" ¶ }
+}
+
+// Escapes whose value is the character itself.
+?? bs {
+    '\\' => { >> "backslash: escaped backslash works" ¶ }
+    _    => { >> "backslash: BUG" ¶ }
+}

@@ -45,10 +45,7 @@ impl<W: Write> Interpreter<W> {
     /// Load an import statement and register the module alias
     pub(crate) fn load_import(&mut self, import: &zymbol_ast::ImportStmt) -> Result<()> {
         // Intercept stdlib: bare path (not ./ or /) whose first component is "std"
-        if !import.path.is_relative
-            && !import.path.is_absolute
-            && import.path.components.first().map(|s| s == "std").unwrap_or(false)
-        {
+        if import.path.is_stdlib() {
             let module_key = import.path.components.join("/");
             return self.load_stdlib_module(&module_key, &import.alias);
         }
@@ -81,43 +78,22 @@ impl<W: Write> Interpreter<W> {
         Ok(())
     }
 
-    /// Resolve a module path to an absolute file path
+    /// Resolve a module path to an absolute file path.
+    ///
+    /// Delegates to `ModulePath::resolve_from`, the single source of truth shared with the
+    /// semantic analyzer and the VM compiler — see that method's doc comment for why the
+    /// three used to disagree.
     pub(crate) fn resolve_module_path(&self, module_path: &zymbol_ast::ModulePath) -> Result<PathBuf> {
-        let mut resolved = if module_path.is_absolute {
-            // Absolute path: /foo/bar or ~/foo/bar
-            if module_path.home_relative {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-                PathBuf::from(home)
-            } else {
-                PathBuf::from("/")
-            }
-        } else {
-            // Relative path: ./foo or ../foo — start from current file's directory
-            let current_dir = self
-                .current_file
-                .as_ref()
-                .and_then(|p| p.parent())
-                .unwrap_or(&self.base_dir);
-            let mut base = current_dir.to_path_buf();
-            for _ in 0..module_path.parent_levels {
-                if !base.pop() {
-                    return Err(RuntimeError::ModuleNotFound {
-                        path: format!("{:?}", module_path.components),
-                    });
-                }
-            }
-            base
-        };
+        // Relative path: ./foo or ../foo — start from current file's directory
+        let current_dir = self
+            .current_file
+            .as_ref()
+            .and_then(|p| p.parent())
+            .unwrap_or(&self.base_dir);
 
-        // Add path components
-        for component in &module_path.components {
-            resolved.push(component);
-        }
-
-        // Add .zy extension (Zymbol-Lang standard)
-        resolved.set_extension("zy");
-
-        Ok(resolved)
+        module_path.resolve_from(current_dir).ok_or_else(|| RuntimeError::ModuleNotFound {
+            path: format!("{:?}", module_path.components),
+        })
     }
 
     /// Load a module from file

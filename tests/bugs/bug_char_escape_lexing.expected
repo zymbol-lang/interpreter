@@ -1,0 +1,4 @@
+newline: char escape lexed correctly
+tab: char escape lexed correctly
+letter n: stays distinct from the escape
+backslash: escaped backslash works

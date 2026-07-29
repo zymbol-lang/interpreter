@@ -1,0 +1,12 @@
+p: pause
+P: pause
+q: quit
+Q: quit
+z: other
+yes -> affirmative
+YES -> affirmative
+no -> negative
+NO -> negative
+maybe -> unknown
+even
+three

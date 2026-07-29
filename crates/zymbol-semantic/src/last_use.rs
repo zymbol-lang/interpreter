@@ -112,6 +112,11 @@ fn scan_pattern(p: &Pattern, m: &mut Mentions) {
         Pattern::Comparison(_, expr, _) => scan_expr(expr, m),
         // Ident patterns compare against the named variable at runtime — a read.
         Pattern::Ident(name, _) => m.mention(name),
+        Pattern::Or(alternatives, _) => {
+            for alt in alternatives {
+                scan_pattern(alt, m);
+            }
+        }
     }
 }
 

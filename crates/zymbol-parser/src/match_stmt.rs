@@ -102,8 +102,35 @@ impl Parser {
         Ok(MatchExpr::new(scrutinee, cases, span))
     }
 
-    /// Parse pattern for match expressions
+    /// Parse pattern for match expressions, including `||` alternatives.
+    ///
+    /// `p1 || p2 || p3` matches when any alternative matches. Alternatives are
+    /// only recognised at the top level of an arm — inside a list pattern the
+    /// elements are primary patterns, so `[1, 2]` stays unambiguous.
     pub(crate) fn parse_pattern(&mut self) -> Result<Pattern, Diagnostic> {
+        let first = self.parse_pattern_primary()?;
+
+        if !matches!(self.peek().kind, TokenKind::Or) {
+            return Ok(first);
+        }
+
+        let start_span = first.span();
+        let mut alternatives = vec![first];
+
+        while matches!(self.peek().kind, TokenKind::Or) {
+            self.advance(); // consume ||
+            alternatives.push(self.parse_pattern_primary()?);
+        }
+
+        let end_span = alternatives
+            .last()
+            .expect("alternatives always contains the first pattern")
+            .span();
+        Ok(Pattern::Or(alternatives, start_span.to(&end_span)))
+    }
+
+    /// Parse a single (non-alternative) pattern
+    fn parse_pattern_primary(&mut self) -> Result<Pattern, Diagnostic> {
         let token = self.peek().clone();
 
         let pattern = match &token.kind {
@@ -209,7 +236,7 @@ impl Parser {
                 }
 
                 // Parse first pattern
-                patterns.push(self.parse_pattern()?);
+                patterns.push(self.parse_pattern_primary()?);
 
                 // Parse remaining patterns (comma-separated)
                 while matches!(self.peek().kind, TokenKind::Comma) {
@@ -220,7 +247,7 @@ impl Parser {
                         break;
                     }
 
-                    patterns.push(self.parse_pattern()?);
+                    patterns.push(self.parse_pattern_primary()?);
                 }
 
                 // Expect ]

@@ -994,6 +994,11 @@ impl DefUseAnalyzer {
                     use_type: UseType::Read,
                 });
             }
+            Pattern::Or(alternatives, _) => {
+                for alt in alternatives {
+                    self.analyze_pattern(alt, node_index);
+                }
+            }
         }
     }
 

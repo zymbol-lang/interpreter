@@ -1259,6 +1259,13 @@ impl TypeChecker {
             Pattern::Ident(_, _) => {
                 // Identifier patterns are resolved at runtime — accept any scrutinee type
             }
+
+            Pattern::Or(alternatives, _) => {
+                // Every alternative must be valid against the same scrutinee type
+                for alt in alternatives {
+                    self.check_pattern_type(alt, scrutinee_type);
+                }
+            }
         }
     }
 

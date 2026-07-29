@@ -213,6 +213,15 @@ impl<W: Write> Interpreter<W> {
                     }),
                 }
             }
+            Pattern::Or(alternatives, _) => {
+                // Alternatives are tested left to right; first match wins
+                for alt in alternatives {
+                    if let Some(true) = self.pattern_matches(alt, value)? {
+                        return Ok(Some(true));
+                    }
+                }
+                Ok(None)
+            }
         }
     }
 }

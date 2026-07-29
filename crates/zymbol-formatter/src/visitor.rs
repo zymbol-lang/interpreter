@@ -1546,6 +1546,14 @@ impl<'a> FormatVisitor<'a> {
             Pattern::Ident(name, _) => {
                 self.output.write(name);
             }
+            Pattern::Or(alternatives, _) => {
+                for (i, alt) in alternatives.iter().enumerate() {
+                    if i > 0 {
+                        self.output.write(" || ");
+                    }
+                    self.format_pattern(alt);
+                }
+            }
         }
     }
 

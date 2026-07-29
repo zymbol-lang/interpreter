@@ -41,6 +41,9 @@ pub enum Pattern {
     Comparison(BinaryOp, Box<Expr>, Span),
     /// Identifier pattern: variable — scalar equality or array containment at runtime
     Ident(String, Span),
+    /// Alternative pattern: p1 || p2 || p3 — matches if any alternative matches.
+    /// Alternatives are tested left to right; the first one that matches wins.
+    Or(Vec<Pattern>, Span),
 }
 
 impl MatchExpr {
@@ -89,6 +92,10 @@ impl Pattern {
         Pattern::Ident(name, span)
     }
 
+    pub fn or(alternatives: Vec<Pattern>, span: Span) -> Self {
+        Pattern::Or(alternatives, span)
+    }
+
     /// Get the span of a pattern
     pub fn span(&self) -> Span {
         match self {
@@ -98,6 +105,7 @@ impl Pattern {
             Pattern::Wildcard(span) => *span,
             Pattern::Comparison(_, _, span) => *span,
             Pattern::Ident(_, span) => *span,
+            Pattern::Or(_, span) => *span,
         }
     }
 }
