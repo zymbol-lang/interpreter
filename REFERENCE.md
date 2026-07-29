@@ -2,7 +2,7 @@
 
 Complete lookup reference: known limitations, error taxonomy, and symbol table.
 
-**Interpreter version**: v0.0.7
+**Interpreter version**: v0.0.8 (unreleased — `Cargo.toml` reads `0.0.8`, no tag yet)
 
 See also: [GUIDE.md](GUIDE.md) — full language guide with examples  
 See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar and internals
@@ -452,11 +452,65 @@ Runtime errors carry a **kind** (e.g., `##Index`, `##Div`, `##Type`) and a **mes
 | `##Network(...)` | `std/net` functions on HTTP/connection failure |
 | `##DB(...)` | `std/db` functions on SQL/ODBC failure |
 
+`std/term` (v0.0.8) has no soft-error channel: its five functions are pure measurements
+over a string and cannot fail environmentally.
+
 ```zymbol
 <# std/io => io
 txt = io::read("missing.txt")
 ? txt$! { >> "could not read" ¶ }
 ```
+
+---
+
+### Package Errors (`.zyp`, v0.0.8)
+
+These are **CLI-level** errors from `zymbol package` / `zymbol run pkg.zyp`, not values a
+Zymbol program can catch — they occur before (or instead of) any code running.
+
+| Condition | Message |
+|-----------|---------|
+| Archive missing or unreadable | `cannot open package '<path>': <cause>` |
+| No `zyp.toml` at the archive root | `zyp.toml not found in archive (expected at the archive root)` |
+| No `zyp.toml` in the packaged directory | `zyp.toml not found at <path> (pass a directory containing one, or use --script to synthesize one)` |
+| Malformed manifest | `invalid zyp.toml: <detail>` |
+| `--script NAME` doesn't exist | `no script named 'NAME' in this package` |
+| Several scripts, none `default = true`, none named | `no default script declared in zyp.toml, and none selected with --script (use --script <name>)` |
+| Two `[[script]]` entries share a `name` | `duplicate [[script]] name '<name>' in zyp.toml` |
+| More than one `default = true` | `more than one [[script]] is marked default = true: <names>` |
+| `engine` requirement not satisfied | `package '<name>' requires engine <req>, this interpreter is <current>` |
+| Unsafe path in a ZIP entry or `[[script]].path` | `unsafe path in package: '<p>' — paths must be relative and stay inside the package (no '..', no leading '/', no drive letter, no backslash)` |
+| Entry or total decompressed size over 100 MiB | `archive entry '<name>' is too large (exceeds the <n>-byte decompression limit)` |
+| A `[[script]]` that is a module file | `script '<name>' (<path>) is a module file (has a # module declaration) — modules are imported with <#, not run directly` |
+| Declared script absent from the archive | `script '<name>' is declared in zyp.toml as '<path>', but that file is not in the archive` |
+
+**Path containment**: a ZIP entry name and a `[[script]].path` obey one lexical rule — no
+`..` component, no absolute prefix, no backslash, no NUL, no Windows drive letter — enforced
+at manifest parse time, at extraction, and at write time.
+
+Everything the closure cannot resolve statically is a **warning**, not an error
+(`W001`–`W011`); see [GUIDE.md § Distributing a Multi-File Program](GUIDE.md#distributing-a-multi-file-program-zyp).
+
+---
+
+### Memory: Automatic Destruction at Last Use (v0.0.8)
+
+A variable's memory is released right after the statement containing its **last use**,
+rather than at scope end. This is on in both engines and **unobservable by design**: it
+never changes the behavior of a correct program, it only lowers peak memory.
+
+Never auto-freed (conservative exclusions): constants, hot names (`x°`/`°x`), `_`-prefixed
+names, module-level bindings, output/mutable parameters, and free variables of named
+functions used as first-class values.
+
+If an auto-destroyed name is ever read — impossible in a correct program — the tree-walker
+raises a distinctive `internal: use after auto-destruction` error rather than silently
+producing a wrong value. String interpolation reports it too, instead of printing `{var}`
+verbatim.
+
+**Known limitation (VM)**: `emit_auto_free` clears the *named* variable's register, but a
+temporary holding the same large value survives until its register is reused — so the VM's
+peak-memory win is smaller than the tree-walker's.
 
 ---
 
@@ -498,6 +552,7 @@ Fail-safe operations are distinguished from error-handling by the absence of any
 | `_` | Else / wildcard | `_{ }` |
 | `??` | Match | `?? x { pat => val }` |
 | `[p, q]` | Match list pattern | `?? arr { [_, _] => ... }` |
+| `p \|\| q` | Match or-pattern (alternatives) | `?? k { 'p' \|\| 'P' => ... }` |
 | `@` | Loop (while) | `@ cond { }` |
 | `@` | Loop (times) | `@ N { }` — repeats exactly N times when N is a positive Int |
 | `@` | Loop (infinite) | `@ { }` |

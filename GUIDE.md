@@ -4,12 +4,15 @@
 > `zymbol run` (tree-walker) and `zymbol run --vm` (register VM).
 > If a construct is not documented here, it may not be implemented.
 
-**Interpreter version**: v0.0.7
+**Interpreter version**: v0.0.8 (unreleased)
 **Test coverage**: golden-file pairs verified on both engines (`vm_compare`); `@vm-skip` files excluded from VM parity
 
 **New in v0.0.8**: `std/term` (terminal display metrics — column-accurate `width`, padding
-and truncation) and `##!` on a `Char` (its Unicode code point). See
-[§17 Standard Library Modules](#standard-library-modules-std).
+and truncation), `##!` on a `Char` (its Unicode code point), match or-patterns
+(`'p' || 'P' => …`, alternatives in one arm), `.zyp` packages
+([§ Distributing a Multi-File Program](#distributing-a-multi-file-program-zyp)), and
+automatic destruction at last use (auto-free — unobservable; it only lowers peak memory).
+See [§17 Standard Library Modules](#standard-library-modules-std).
 
 **New in v0.0.7**: typed/validated input (`<< ##.(5,2) "p" var`, see [§3 Input](#input-)) and
 native standard-library modules `std/json`, `std/io`, `std/net`, `std/db` (see
@@ -942,7 +945,7 @@ x = 7
 
 `??` is **pure pattern matching** — it does not evaluate boolean conditions (use `?`/`_?` for
 conditional branching). Six pattern types are available: Literal, Range, Comparison, Wildcard,
-Ident, and List.
+Ident, and List. Any of them can be combined with `||` into alternatives.
 
 ### Literal and Range Patterns
 
@@ -1052,6 +1055,63 @@ data = [10, 20, 30]
 }
 // → three elements
 ```
+
+### Or Patterns — Alternatives with `||`
+
+Any two patterns can be joined with `||`. The arm matches when **any** alternative matches;
+alternatives are tested left to right and the first one that matches wins.
+
+```zymbol
+key = 'P'
+?? key {
+    'p' || 'P' => { >> "pause" ¶ }
+    'q' || 'Q' => { >> "quit" ¶ }
+    _          => { >> "other" ¶ }
+}
+// → pause
+```
+
+Alternatives are not limited to literals — ranges, comparisons, idents and list patterns all
+combine freely, and an arm may chain three or more:
+
+```zymbol
+n = 25
+zone = ?? n {
+    1..10 || 20..30 => "in range"
+    0               => "zero"
+    _               => "outside"
+}
+>> zone ¶    // → in range
+
+v = 150
+state = ?? v {
+    < 0 || > 100 => "extreme"
+    _            => "normal"
+}
+>> state ¶    // → extreme
+
+d = 6
+kind = ?? d {
+    1 || 3 || 5 || 7 => "odd"
+    2 || 4 || 6 || 8 => "even"
+    _                => "out of range"
+}
+>> kind ¶    // → even
+
+cmd = ["build", "main.zy"]
+?? cmd {
+    ["run", _] || ["build", _] => { >> "known command" ¶ }
+    _                          => { >> "unknown command" ¶ }
+}
+// → known command
+```
+
+> **Note**: For a plain "scalar is one of these literals" test, the list pattern `['p', 'P']`
+> (containment, see above) is equivalent to `'p' || 'P'`. `||` is the more general form — it is
+> the only way to mix pattern *kinds* in a single arm.
+
+`||` binds only at the top level of an arm, so list elements stay unambiguous: `[1, 2]` is one
+list pattern, never two alternatives. To express alternatives inside a list, use a separate arm.
 
 > **⚠ Not implemented**: Identifier binding in patterns (`n => n * 2`).
 
@@ -2943,6 +3003,101 @@ db::disconnect("c")
 - **Utilities**: `exec_script` (multi-statement SQL), `table_exists`.
 - SQL failures return a **soft `##DB(...)` error** (testable with `$!`, catchable with
   `!? … :! ##DB`); wrong argument types abort hard, like every stdlib module.
+
+### Distributing a Multi-File Program (`.zyp`)
+
+A project with more than one script and shared modules (imports, `</ file.zy />` targets)
+can be packaged into a single portable `.zyp` archive — a ZIP of *source*, not a compiled
+binary. `zymbol build` is the separate, unrelated feature that produces a native
+executable; a `.zyp` still needs a `zymbol` binary to run it.
+
+```bash
+zymbol package DIR --script main.zy -o out.zyp   # write the archive
+zymbol package DIR --script main.zy --dry-run    # list the closure + warnings, write nothing
+zymbol run out.zyp                                # extract to a temp dir and run
+zymbol run out.zyp --script 囲碁 --tw             # pick an entry point and an engine
+```
+
+#### The manifest (`zyp.toml`)
+
+`DIR` needs a `zyp.toml` declaring one or more `[[script]]` entry points. Without one,
+`--script` synthesizes a manifest for the run and prints it so it can be saved for next
+time:
+
+```toml
+[package]
+name = "go"
+version = "1.2.0"
+engine = ">=0.0.8"   # semver REQUIREMENT — see the warning below
+mode = "vm"          # default engine for this package's scripts
+
+[[script]]
+name = "go"
+path = "go.zy"
+default = true
+desc = "English"
+
+[[script]]
+name = "囲碁"
+path = "囲碁.zy"
+desc = "日本語"
+```
+
+> **Always write `engine = ">=0.0.8"`, never a bare `"0.0.8"`.** A bare version is a *caret*
+> requirement, and pre-1.0 a caret matches only that exact version — `"0.0.8"` would refuse
+> to run on 0.0.9. `zymbol package` always synthesizes the `>=` form.
+
+`zymbol run` picks the script named by `--script`; failing that, the one marked
+`default = true`; failing that, the only entry if there is exactly one.
+
+#### What gets packaged
+
+Packaging is **strict about what it includes** and **permissive about what it can't
+resolve**. Starting from the declared scripts, the closure follows module imports and
+`</ file.zy />` targets. A `.zy` file that is neither listed nor reachable is never
+packaged — an unused file left in the directory stays out, and `--dry-run` says so (W008).
+
+Anything that cannot be resolved statically becomes a **warning, not a failure**, so
+`--dry-run` always produces something inspectable:
+
+| Code | Meaning |
+|------|---------|
+| `W001` | Absolute or `~`-relative import — not reproducible on another machine |
+| `W002` | An import resolves to a file that doesn't exist |
+| `W003` | `<\ shell \>` present — its arguments are arbitrary expressions, so any `.zy` it runs can't be traced |
+| `W004` | A module with `</ />` was reached from more than one entry, whose base directories differ |
+| `W005` | A `</ />` target doesn't exist on disk |
+| `W006` | The file has lex/parse errors — packaged anyway, but its own dependencies weren't traced |
+| `W007` | A dependency reached via `../` lives above the first entry's directory |
+| `W008` | `.zy` files in the entry's directory that nothing reaches — not packaged |
+| `W009` | `std/db` imported — never packaged (the stdlib is synthetic), but it needs an ODBC driver at run time |
+| `W010` | The archive exceeds the recommended size ceiling |
+| `W011` | The same file was reached through two different lexical paths |
+
+The one **hard error** is a `[[script]]` that turns out to be a module file: a package whose
+entry point can't run isn't permissive, it's broken.
+
+#### Running a package
+
+`zymbol run pkg.zyp` extracts to an ephemeral temp directory and runs from there — it
+**never `chdir`s**. This split is deliberate:
+
+- **Code** is read from the temp dir and disappears when the process exits.
+- **Data the script writes** does not. A `std/io` write to a relative path lands in your
+  real working directory, because it resolves against the process's actual cwd.
+
+Use `--keep-temp` to retain the extraction directory and print its path when debugging.
+
+A `.zyp` defaults to the **register VM**; loose `.zy` files still default to the
+tree-walker, so nothing changes for ordinary scripts. Precedence is
+`--tw` > `--vm` > manifest `mode` > VM.
+
+#### In the browser
+
+The web playground loads a `.zyp` directly: one tab per source file, named by full relative
+path (e.g. `核/盤.zy`), plus a script picker populated from the manifest. The archive
+carries a `zyp.json` alongside `zyp.toml` — the same manifest, pre-serialized — so the
+browser never has to parse TOML.
 
 ---
 

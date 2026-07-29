@@ -12,7 +12,12 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 Memory-model debt release: every divergence found by the design-vs-implementation
 audit in [MEMORY_MODEL.md](MEMORY_MODEL.md) is resolved — findings MM-1 … MM-9 plus
 the two VM parity bugs (MM-10, MM-11) discovered while verifying the fixes.
-All fixes verified with TW/VM parity (519/519) and golden tests (503/503).
+
+Measured on the branch: **894 unit tests**, **541/541 TW/VM parity**, **520/522 golden**.
+The two golden failures are stale hand-written `.expected` fixtures, not interpreter
+regressions — see [IMPL_V008.md](IMPL_V008.md) § E.1, which also records two other pieces
+of known debt: the formatter does not escape char/string literals inside match patterns
+(§ E.2), and five v0.0.8 fixes are not yet ported to the browser interpreter (§ E.3).
 
 ### Added
 
@@ -82,6 +87,91 @@ All fixes verified with TW/VM parity (519/519) and golden tests (503/503).
 - Regression: `tests/casts/06_char_to_int.zy` and `tests/stdlib/stdlib_term.zy`
   (both TW == VM), plus four unit tests over the pure width/pad/center/truncate
   helpers.
+
+**Match or-patterns — `p1 || p2` alternatives in a `??` arm (both engines)**
+
+- An arm's pattern can now be a `||`-separated chain: `'p' || 'P' => { ... }`
+  matches if any alternative matches. Alternatives are tested left to right
+  and the first one that matches wins.
+- Alternatives combine any pattern kind, not just literals — range, comparison,
+  ident and list patterns all mix freely in one arm: `1..10 || 20..30`,
+  `< 0 || > 100`, `1 || expected || 9`, `["run", _] || ["build", _]`.
+- New `Pattern::Or(Vec<Pattern>, Span)` variant
+  (`crates/zymbol-ast/src/match_stmt.rs`). `||` is recognised only at the top
+  level of an arm — list elements stay primary patterns, so `[1, 2]` is never
+  ambiguous with two alternatives.
+- Requested directly against `GO/対局.zy`, whose key-handling arms only
+  accepted the lowercase letter (`'p'`) and silently ignored the uppercase
+  one; `['p', 'P']` (list containment) already covered that one case, but had
+  no equivalent for non-literal patterns.
+- VM: `compile_match_expr` was refactored into a recursive
+  `emit_pattern_test` that returns `(skip_patches, to_body_patches)` instead
+  of emitting the arm body inline per pattern kind — the `Or` case chains
+  this helper across alternatives, patching the last one's failure to skip
+  the whole arm and every earlier one's success to jump to the body.
+- Mirrored in the browser interpreter (`web/zymbol.js`): `parseMatchPattern`
+  wraps `parseMatchPatternPrimary` with the same top-level-only `||` chaining,
+  and `matchPattern`'s new `'or'` case tests alternatives left to right.
+- Regression: `tests/match/16_or_pattern_basic.zy`,
+  `tests/match/17_or_pattern_mixed.zy`, `tests/match/18_or_pattern_block.zy`
+  (all TW == VM). Verified byte-identical against the JS mirror as well.
+
+**Zymbol Packages (`.zyp`) — one file for a multi-file program**
+
+- New `zymbol package` and `.zyp` support in `zymbol run`, backed by a new
+  `zymbol-package` crate. A `.zyp` is a ZIP archive of **source**, not a
+  compiled binary: `zyp.toml` (manifest), `zyp.json` (the same manifest
+  pre-serialized so the web playground never parses TOML), and the packaged
+  `.zy` tree under `src/`. Unrelated to `zymbol build`/`zymbol-standalone`,
+  which produces a native executable — neither feature depends on the other.
+
+  ```bash
+  zymbol package DIR --script main.zy -o out.zyp   # build the archive
+  zymbol package DIR --script main.zy --dry-run    # closure + warnings, writes nothing
+  zymbol run out.zyp                               # run it
+  zymbol run out.zyp --script 囲碁 --tw            # pick an entry, force an engine
+  ```
+
+- The manifest declares one or more `[[script]]` entries (`name`, `path`,
+  `default`, `desc`) and `package.engine`, a semver *requirement*. Always write
+  `engine = ">=0.0.8"`: a bare `"0.0.8"` is a caret requirement, which pre-1.0
+  matches only that exact version and would break on every patch release.
+  `zymbol package` always synthesizes the `>=` form.
+- **Closure computation is strict**: `compute_closure` walks module imports and
+  `</ file.zy />` targets from the declared scripts; a `.zy` file that is
+  neither listed nor reachable is never packaged. **Packaging is permissive**:
+  anything unresolvable statically — an absolute import, a `<\ shell \>`, a
+  parse error — becomes a warning (`W001`–`W011`) rather than a hard failure,
+  so `--dry-run` always produces something the author can inspect. The one hard
+  error is a `[[script]]` that turns out to be a module file: a package whose
+  entry point can't run isn't permissive, it's broken.
+- **`zymbol run pkg.zyp` extracts to an ephemeral temp dir and never `chdir`s.**
+  Code is read from the temp dir, but a script's own `std/io` writes (relative
+  paths) still land in the user's real working directory, because they resolve
+  against the process's actual cwd. That asymmetry is the point of ephemeral
+  extraction: the code is disposable, the data the script writes is not.
+  `--keep-temp` retains the directory and prints its path for debugging.
+- Default engine for a `.zyp` is the **VM**; loose `.zy` files still default to
+  the tree-walker, so nothing changes for existing scripts. Precedence:
+  `--tw` > `--vm` > manifest `mode` > VM.
+- Security: ZIP entry names and `[[script]].path` go through one lexical rule
+  (`path_safety`) — no `..`, no absolute prefix, no backslash, no NUL, no drive
+  letter — checked at manifest parse time, again at extraction, and once more at
+  write time. A `[[script]].path` of `../../elsewhere.zy` previously escaped the
+  extraction directory and got arbitrary source on the user's disk read and run.
+  Per-entry and total decompressed size are capped at 100 MiB against zip bombs.
+- The writer is deterministic: fixed 1980-01-01 timestamps and fixed entry
+  order, so the same source tree always produces a byte-identical archive and a
+  `.zyp` can be verified by hash.
+- Web: `web/zyp.js` reads the ZIP by hand (central directory +
+  `DecompressionStream('deflate-raw')`) — no bundler, no CDN, consistent with
+  `web/`'s no-build-step policy. Loading a `.zyp` in the playground opens one
+  tab per source file, named by full relative path (e.g. `核/盤.zy`), and shows
+  a script picker populated from the manifest.
+- Tests: `crates/zymbol-package/tests/roundtrip.rs` plus unit tests over
+  manifest validation, the pre-1.0 semver trap, path-traversal rejection, and
+  closure/warning behavior. `web/test_zyp.mjs` covers the browser reader and
+  module resolver against fixtures it builds itself.
 
 ### Fixed
 

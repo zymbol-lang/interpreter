@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.0.7-informational?style=flat-square"/>
+  <img src="https://img.shields.io/badge/version-v0.0.8-informational?style=flat-square"/>
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square"/>
   <img src="https://img.shields.io/badge/status-active-brightgreen?style=flat-square"/>
@@ -57,7 +57,7 @@ no new construct ever borrows a word from any natural language.
 - **Dual execution** — tree-walker interpreter and register-based VM (`--vm`)
 - **Full Unicode** — identifiers, strings, and numerals support any Unicode script
 - **First-class functions** — named functions as values, HOF arguments, and closures
-- **Pattern matching** — `??` with literals, ranges, comparisons, ident, and list patterns
+- **Pattern matching** — `??` with literals, ranges, comparisons, ident, list and or-patterns (`'p' || 'P'`)
 - **Multi-dimensional indexing** — `arr[i>j]`, flat/structured extraction, ranges on nav steps
 - **Destructuring** — `[a, *rest] = arr`, `(name: n, age: a) = tuple`
 - **Module system** — file-based imports with aliases, re-exports, and i18n translation layers
@@ -69,6 +69,9 @@ no new construct ever borrows a word from any natural language.
 - **LSP server** — diagnostics, go-to-definition, hover (VS Code extension available)
 - **Formatter** — built-in code formatter (`zymbol fmt`)
 - **Shell integration** — `<\ cmd \>` bash execution, `</ script.zy />` sub-script
+- **Standard library** — `std/math`, `std/random`, `std/io`, `std/json`, `std/net`, `std/db` (ODBC), `std/term` (display width)
+- **Packages** — `.zyp` archives bundle a multi-file program into one portable file (`zymbol package` / `zymbol run pkg.zyp`)
+- **Auto-free** — memory is released at a variable's last use, not at scope end; unobservable, lowers peak memory
 
 ---
 
@@ -116,7 +119,15 @@ zymbol fmt program.zy --write
 # Requires: Rust/Cargo installed, full repo checkout, and must be run from interpreter/.
 # See aprende_zymbol/avanzado/05_herramientas.md for full setup instructions.
 zymbol build program.zy -o myprogram --release
+
+# Bundle a multi-file project into one portable .zyp archive (source, not a binary)
+zymbol package myproject/ --script main.zy -o myproject.zyp
+zymbol run myproject.zyp
 ```
+
+> `build` and `package` are different things: `build` makes a native executable that embeds
+> the interpreter; `package` makes a `.zyp` archive of source that still needs a `zymbol`
+> binary to run — but works on any platform and stays readable.
 
 ---
 
@@ -458,7 +469,7 @@ See [I18N.md](./I18N.md) for the full three-layer pattern.
 
 ## Architecture
 
-The interpreter is a Rust workspace of 18 crates:
+The interpreter is a Rust workspace of 19 crates:
 
 ```
 Foundation:   zymbol-span  zymbol-error  zymbol-common  zymbol-intrinsics
@@ -467,7 +478,7 @@ Analysis:     zymbol-semantic
 Tree-walker:  zymbol-interpreter
 VM:           zymbol-bytecode  zymbol-compiler  zymbol-vm
 Tooling:      zymbol-formatter  zymbol-analyzer  zymbol-lsp
-              zymbol-repl  zymbol-standalone
+              zymbol-repl  zymbol-standalone  zymbol-package
 Entry point:  zymbol-cli
 ```
 
@@ -494,16 +505,27 @@ The VM is 4.4× faster than the tree-walker on `fib(35)`.
 ## Testing
 
 ```bash
-# Unit tests (all 18 crates)
+# Unit tests (all 19 crates)
 cargo test
 
 # Tree-walker vs VM parity check
 bash tests/scripts/vm_compare.sh
+
+# Golden expected-output tests
+bash tests/scripts/expected_compare.sh
+
+# Formatter property tests (reparse, idempotence, semantics, comments)
+bash tests/scripts/fmt_property.sh --baseline tests/scripts/fmt_property_baseline.txt
 ```
 
-Current status: **820 tests passing** via `cargo test` (0 failed, 0 ignored).  
-VM parity: **478/478 PASS** (478 files, 0 `@vm-skip` — all TUI/input tests now run in both TW and VM).  
-Golden files: **464/464 PASS** via `expected_compare.sh` (includes 8 TUI + 8 input category tests).
+Current status (v0.0.8): **894 tests passing** via `cargo test` (0 failed).  
+VM parity: **541/541 PASS**. One test carries `@vm-skip`
+(`tests/gaps/gap_key_input_type_check.zy`), by design — it is a `zymbol check` test that
+never executes.  
+Golden files: **520/522 PASS** via `expected_compare.sh`. The two failures are stale
+`.expected` fixtures, not interpreter regressions: both were hand-written with `warning:`
+and blank lines that the script's `strip_warnings` filter removes from actual output, so
+they compare unequal against output that is otherwise byte-identical.
 
 ---
 
@@ -740,11 +762,11 @@ codificacion_posicional(pos, dim, i) {
 
 ```
 interpreter/
-├── Cargo.toml           # Workspace (18 crates)
-├── zymbol-lang.ebnf     # Formal grammar (EBNF, v3.0.0)
+├── Cargo.toml           # Workspace (19 crates)
+├── zymbol-lang.ebnf     # Formal grammar (EBNF, v3.1.0)
 ├── install-zymbol.sh    # Install script
 ├── crates/              # Rust source crates
-├── tests/               # End-to-end test suite (478 vm-compare files; 464 golden .expected pairs)
+├── tests/               # End-to-end test suite (541 vm-compare files; 522 golden .expected pairs)
 ├── docs/                # Extended documentation
 ├── LICENSE
 ├── LICENSE-AGPL-3.0     # AGPL-3.0 (interpreter source)
@@ -761,6 +783,10 @@ interpreter/
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — Interpreter architecture and performance benchmarks
 - [I18N.md](./I18N.md) — Internationalization: multilingual code via re-export layers, and runtime text via dispatcher modules
 - [USERAPPI18N.md](./USERAPPI18N.md) — Building a multilingual application: measured layout, runtime language switching, per-language entry points, and the completeness gate
+- [MEMORY_MODEL.md](./MEMORY_MODEL.md) — Memory and scoping model: design vs implementation audit (findings MM-1 … MM-11)
+- [SYMBOLS.md](./SYMBOLS.md) — Symbol families, occupied combinations, and the rules a new operator must satisfy
+- [ROADMAP.md](./ROADMAP.md) — What's done, known gaps, and planned work
+- [CHANGELOG.md](./CHANGELOG.md) — Version history
 
 ---
 
