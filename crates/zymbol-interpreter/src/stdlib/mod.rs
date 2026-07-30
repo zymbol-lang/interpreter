@@ -102,3 +102,29 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
         _ => None,
     }
 }
+
+/// What a stdlib module registers: `(name, arity)` per function — arity `-1`
+/// means variadic — plus its constant names. `None` if the path is not a
+/// stdlib module in this build.
+///
+/// Exists so `zymbol_common::stdlib` — the export table the analyzer and
+/// `zymbol check` read — can be tested against what the tree-walker really
+/// registers, instead of the two drifting apart silently.
+pub fn registered_names(path: &str) -> Option<(Vec<(String, i32)>, Vec<String>)> {
+    let module = build_module(path)?;
+    let mut functions: Vec<(String, i32)> = module
+        .functions
+        .iter()
+        .map(|(name, def)| {
+            let arity: i32 = match def.as_ref() {
+                crate::FunctionDef::Native { arity, .. } => i32::from(*arity),
+                _ => 0,
+            };
+            (name.clone(), arity)
+        })
+        .collect();
+    let mut constants: Vec<String> = module.constants.keys().cloned().collect();
+    functions.sort();
+    constants.sort();
+    Some((functions, constants))
+}

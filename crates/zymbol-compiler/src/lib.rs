@@ -4064,7 +4064,10 @@ fn eliminate_dead_code(instructions: Vec<Instruction>, old_num_regs: u16) -> (Ve
 
 /// Return the (function_name, builtin_id) pairs for a known stdlib module path,
 /// or None if the path is not a stdlib module.
-fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16)>> {
+///
+/// Public so `zymbol_common::stdlib` — the export table the tooling reads — can
+/// be tested against what the VM actually implements.
+pub fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16)>> {
     use zymbol_bytecode::builtins as B;
     match module_key {
         "std/math" => Some(vec![

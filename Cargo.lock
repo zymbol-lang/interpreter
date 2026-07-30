@@ -3417,6 +3417,7 @@ dependencies = [
  "tempfile",
  "walkdir",
  "zymbol-ast",
+ "zymbol-common",
  "zymbol-error",
  "zymbol-lexer",
  "zymbol-parser",

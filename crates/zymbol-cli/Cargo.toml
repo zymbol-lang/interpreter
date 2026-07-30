@@ -43,3 +43,4 @@ db = ["zymbol-interpreter/db", "zymbol-vm/db", "zymbol-compiler/db"]
 # `cli_repl.rs` must live here rather than in zymbol-repl.
 assert_cmd = "2"
 predicates = "3"
+tempfile = "3"

@@ -4,6 +4,9 @@
 //! - Symbol interning for efficient identifier storage
 //! - Literal types (Int, Float, String, Char, Bool)
 //! - Operator types (Binary, Unary, Collection)
+//! - The `std/` export table (`stdlib`), shared by the engines and the tooling
+
+pub mod stdlib;
 
 use indexmap::IndexMap;
 use std::fmt;

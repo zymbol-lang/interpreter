@@ -355,6 +355,21 @@ other variables shared the scope. Fixed by analyzing the range bounds; a
 genuinely unused variable still warns. Found in zy-GO's `設定描画`. Regression:
 `crates/zymbol-semantic/tests/underscore_semantics.rs` (three cases).
 
+### ~~L27 — Misuse of a `std/` module reached run time unreported~~ Fixed in v0.0.8
+
+`std/` modules are native, with no file on disk for the tooling to read, so an
+alias bound to one was a blind spot: `math::inventada(2.0)`, `m::PI()` (calling a
+constant), `m.sin` (reading a function) and a typo in a re-export
+(`t::widht => ancho`, which silently breaks every caller of an i18n layer) all
+passed `zymbol check` and showed nothing in the editor. `zymbol_common::stdlib`
+now holds the export table — names plus arity, kept in step with both engines by
+`crates/zymbol-cli/tests/stdlib_parity.rs` — and `zymbol check` and the LSP both
+report through `zymbol_semantic::check_stdlib_access`, with a "did you mean" for
+near misses. A named-tuple field may share an alias's name (`resp.json.user`), so
+only a name that does not itself follow `.` or `::` is read as a module access.
+Regression: `crates/zymbol-semantic/src/stdlib_access.rs` (8 cases),
+`crates/zymbol-cli/tests/cli_check_stdlib.rs` (4 cases).
+
 ---
 
 ## 20b. Error Taxonomy

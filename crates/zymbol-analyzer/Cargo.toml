@@ -13,6 +13,7 @@ zymbol-lexer.workspace = true
 zymbol-parser.workspace = true
 zymbol-ast.workspace = true
 zymbol-semantic.workspace = true
+zymbol-common.workspace = true
 
 lsp-types = "0.94"
 dashmap = "6"

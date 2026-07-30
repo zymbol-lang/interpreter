@@ -980,7 +980,16 @@ impl<'a> FormatVisitor<'a> {
 
     /// Format a literal expression
     fn format_literal(&mut self, lit: &LiteralExpr) {
-        match &lit.value {
+        self.format_literal_value(&lit.value);
+    }
+
+    /// Write a literal's source form, escapes included.
+    ///
+    /// Patterns used to print literals through `Display`, which does not
+    /// escape: a match arm on `'\n'` came back out as a real newline inside
+    /// the quotes and the formatted file no longer lexed.
+    fn format_literal_value(&mut self, value: &Literal) {
+        match value {
             Literal::Int(n) => self.output.write(&n.to_string()),
             Literal::Float(f) => self.output.write(&format_float(*f)),
             Literal::String(s) | Literal::InterpolatedString(s) => {
@@ -1518,7 +1527,7 @@ impl<'a> FormatVisitor<'a> {
     fn format_pattern(&mut self, pattern: &Pattern) {
         match pattern {
             Pattern::Literal(lit, _) => {
-                self.output.write(&lit.to_string());
+                self.format_literal_value(lit);
             }
             Pattern::Range(start, end, _) => {
                 self.format_expr(start);
@@ -1955,6 +1964,23 @@ mod tests {
         assert_eq!(escape_char('a'), "a");
         assert_eq!(escape_char('\n'), "\\n");
         assert_eq!(escape_char('\''), "\\'");
+    }
+
+    /// Literals in a *pattern* went out through `Display`, which does not
+    /// escape, so `'\n'` came back as a real newline and the formatted file
+    /// stopped lexing (the safety gate caught it as a hard format failure).
+    #[test]
+    fn test_pattern_literals_keep_their_escapes() {
+        let src = "c = \"\\n\"[1]\n?? c {\n    '\\n' => { >> \"nl\" ¶ }\n    _ => { >> \"other\" ¶ }\n}\n";
+        let formatted = crate::format(src).expect("formatting must succeed");
+        assert!(
+            formatted.contains("'\\n'"),
+            "escape lost in pattern: {formatted}"
+        );
+        assert!(
+            !formatted.contains("'\n'"),
+            "raw newline written inside a char literal: {formatted}"
+        );
     }
 
     #[test]

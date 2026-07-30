@@ -35,6 +35,10 @@ mod expr_eval;
 mod index_nav;
 mod stdlib;
 
+/// What each `std/` module registers at run time — see
+/// [`stdlib::registered_names`]. Used to keep `zymbol_common::stdlib` honest.
+pub use stdlib::registered_names as stdlib_registered_names;
+
 pub(crate) use modules::LoadedModule;
 
 /// Runtime errors

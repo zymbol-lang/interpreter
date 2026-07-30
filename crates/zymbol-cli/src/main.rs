@@ -786,22 +786,113 @@ fn reject_if_module_file(script_name: &str, abs_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// What checking one file produced.
+struct FileCheck {
+    has_errors: bool,
+    /// Style warnings printed (only counted for the file named on the command line)
+    warnings: usize,
+    /// Non-stdlib imports, resolved to real paths, with the span of the import
+    imports: Vec<(PathBuf, zymbol_span::Span)>,
+}
+
+/// Path as the user would type it, for diagnostics.
+fn display_path(path: &Path) -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Check the whole program, not just the file named on the command line.
+///
+/// A module's errors only surfaced at run time before: `zymbol check main.zy`
+/// reported "No errors or warnings" while `main.zy`'s import target failed to
+/// parse. Imports are followed transitively (stdlib excluded — it isn't on
+/// disk) and each module is checked with the same rules as the entry file.
+/// Style warnings stay with the entry file: they are per-file advice, and
+/// checking a module directly still reports its own.
 fn check_file(path: PathBuf) -> Result<()> {
-    // Read source file
     let source = fs::read_to_string(&path)
         .with_context(|| format!("failed to read file: {}", path.display()))?;
 
-    // Setup source map
     let mut source_map = SourceMap::new();
-    let display_name = std::env::current_dir()
-        .ok()
-        .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| path.display().to_string());
-    let file_id = source_map.add_file(display_name, source.clone());
+    let entry = check_source(&path, &source, &mut source_map, true)?;
+    let mut has_errors = entry.has_errors;
+
+    // Walk the import graph depth-first so a cycle can be reported with the
+    // chain that produced it, the way the interpreter reports E004.
+    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    visited.insert(canonical(&path));
+    let mut stack: Vec<(PathBuf, zymbol_span::Span, PathBuf)> = entry
+        .imports
+        .into_iter()
+        .map(|(target, span)| (target, span, path.clone()))
+        .collect();
+    stack.reverse();
+
+    while let Some((module_path, import_span, importer)) = stack.pop() {
+        if !visited.insert(canonical(&module_path)) {
+            continue; // already checked through another import
+        }
+
+        let module_source = match fs::read_to_string(&module_path) {
+            Ok(s) => s,
+            Err(_) => {
+                // The importing file's own module analysis already reports an
+                // unreadable import as E002; nothing to add here.
+                continue;
+            }
+        };
+
+        let module = check_source(&module_path, &module_source, &mut source_map, false)?;
+        if module.has_errors {
+            eprintln!(
+                "  = note: reached from {} ({}:{})",
+                display_path(&importer),
+                import_span.start.line,
+                import_span.start.column
+            );
+            eprintln!();
+            has_errors = true;
+        }
+        for (target, span) in module.imports.into_iter().rev() {
+            stack.push((target, span, module_path.clone()));
+        }
+    }
+
+    if has_errors {
+        std::process::exit(1);
+    }
+
+    if entry.warnings > 0 {
+        println!("Checked with {} warning(s)", entry.warnings);
+    } else {
+        println!("No errors or warnings");
+    }
+    Ok(())
+}
+
+/// Absolute, symlink-free form of `path`, falling back to the path itself.
+fn canonical(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Check a single file. `report_warnings` prints style warnings (unused
+/// variables, ambiguous lifetimes); errors are always reported.
+fn check_source(
+    path: &Path,
+    source: &str,
+    source_map: &mut SourceMap,
+    report_warnings: bool,
+) -> Result<FileCheck> {
+    let file_id = source_map.add_file(display_path(path), source.to_string());
 
     // Lex
-    let lexer = Lexer::new(&source, file_id);
+    let lexer = Lexer::new(source, file_id);
     let (tokens, lex_diagnostics) = lexer.tokenize();
+    // Kept for the stdlib check below, which runs over tokens (the parser
+    // consumes the vector).
+    let tokens_for_stdlib = tokens.clone();
 
     let mut has_errors = false;
 
@@ -810,7 +901,7 @@ fn check_file(path: PathBuf) -> Result<()> {
         for diag in lex_diagnostics {
             bag.add(diag);
         }
-        bag.emit_all(&source_map);
+        bag.emit_all(source_map);
         has_errors = true;
     }
 
@@ -823,14 +914,23 @@ fn check_file(path: PathBuf) -> Result<()> {
             for diag in diagnostics {
                 bag.add(diag);
             }
-            bag.emit_all(&source_map);
-            // Exit early if parsing failed - can't run semantic analysis
-            std::process::exit(1);
+            bag.emit_all(source_map);
+            // Without an AST there is nothing further to analyse in this file,
+            // and no imports to follow.
+            return Ok(FileCheck {
+                has_errors: true,
+                warnings: 0,
+                imports: Vec::new(),
+            });
         }
     };
 
     if has_errors {
-        std::process::exit(1);
+        return Ok(FileCheck {
+            has_errors: true,
+            warnings: 0,
+            imports: Vec::new(),
+        });
     }
 
     // Run variable liveness analysis
@@ -844,12 +944,12 @@ fn check_file(path: PathBuf) -> Result<()> {
         for err in semantic_errors {
             bag.add(err.clone());
         }
-        bag.emit_all(&source_map);
+        bag.emit_all(source_map);
         has_errors = true;
     }
 
     // Report variable warnings (unused variables, write-only variables)
-    if !warnings.is_empty() {
+    if report_warnings && !warnings.is_empty() {
         eprintln!();
         for warning in &warnings {
             eprintln!("warning: {}", warning.message);
@@ -875,13 +975,16 @@ fn check_file(path: PathBuf) -> Result<()> {
         for err in type_errors {
             bag.add(err);
         }
-        bag.emit_all(&source_map);
+        bag.emit_all(source_map);
         has_errors = true;
     }
 
     // Report type warnings
     let mut type_warning_count = 0;
     for diag in type_checker.get_warnings() {
+        if !report_warnings {
+            continue;
+        }
         eprintln!("warning: {}", diag.message);
         if let Some(span) = &diag.span {
             eprintln!("  --> {}:{}:{}",
@@ -902,7 +1005,7 @@ fn check_file(path: PathBuf) -> Result<()> {
         let base_dir = path.parent().unwrap_or(std::path::Path::new("."));
         let mut module_analyzer = ModuleAnalyzer::new(base_dir);
 
-        if let Err(module_errors) = module_analyzer.analyze(&program, &path) {
+    if let Err(module_errors) = module_analyzer.analyze(&program, path) {
             for err in module_errors {
                 eprintln!("error: {}", err.message);
                 if let Some(span) = &err.span {
@@ -921,7 +1024,7 @@ fn check_file(path: PathBuf) -> Result<()> {
         }
 
         // Validate exports exist
-        module_analyzer.validate_exports(&program, &path);
+        module_analyzer.validate_exports(&program, path);
         for diag in module_analyzer.diagnostics() {
             eprintln!("error: {}", diag.message);
             if let Some(span) = &diag.span {
@@ -936,6 +1039,18 @@ fn check_file(path: PathBuf) -> Result<()> {
         }
     }
 
+    // Validate uses of std/ modules against their export table. Same function
+    // the LSP calls, so the editor and the CLI flag the same things.
+    let stdlib_diagnostics = zymbol_semantic::check_stdlib_access(&tokens_for_stdlib, &program.imports);
+    if !stdlib_diagnostics.is_empty() {
+        let mut bag = DiagnosticBag::new();
+        for diag in stdlib_diagnostics {
+            bag.add(diag);
+        }
+        bag.emit_all(source_map);
+        has_errors = true;
+    }
+
     // Run def-use analysis for lifetime detection
     let cfg = ControlFlowGraph::build_sequential(&program.statements);
     let mut def_use_analyzer = DefUseAnalyzer::new();
@@ -945,6 +1060,9 @@ fn check_file(path: PathBuf) -> Result<()> {
     let ambiguous_vars = def_use_analyzer.get_ambiguous_variables();
     let mut lifetime_warning_count = 0;
     for chain in &ambiguous_vars {
+        if !report_warnings {
+            break;
+        }
         if let Some(ambiguity) = &chain.ambiguity {
             let reason_str = match ambiguity.reason {
                 crate::AmbiguityReason::LoopVariant => "variable is modified inside a loop",
@@ -964,17 +1082,31 @@ fn check_file(path: PathBuf) -> Result<()> {
         }
     }
 
-    if has_errors {
-        std::process::exit(1);
-    }
+    // Collect the imports to follow. Stdlib modules have no file on disk, so
+    // `resolve_from` returns None for them and they drop out here.
+    let base_dir = path.parent().unwrap_or(std::path::Path::new("."));
+    let imports = program
+        .imports
+        .iter()
+        .filter_map(|import| {
+            import
+                .path
+                .resolve_from(base_dir)
+                .map(|resolved| (resolved, import.span))
+        })
+        .collect();
 
-    let total_warnings = warnings.len() + type_warning_count + lifetime_warning_count;
-    if total_warnings > 0 {
-        println!("Checked with {} warning(s)", total_warnings);
+    let total_warnings = if report_warnings {
+        warnings.len() + type_warning_count + lifetime_warning_count
     } else {
-        println!("No errors or warnings");
-    }
-    Ok(())
+        0
+    };
+
+    Ok(FileCheck {
+        has_errors,
+        warnings: total_warnings,
+        imports,
+    })
 }
 
 fn format_file(path: PathBuf, write: bool, check: bool, indent: usize) -> Result<()> {

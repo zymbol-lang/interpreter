@@ -197,6 +197,14 @@ impl DiagnosticPipeline {
                 }
             }
 
+            // Uses of std/ modules, checked against their export table — the
+            // same function `zymbol check` calls, so both agree.
+            for diag in
+                zymbol_semantic::check_stdlib_access(document.token_list(), &program.imports)
+            {
+                lsp_diagnostics.push(to_lsp_diagnostic(&diag));
+            }
+
             // Def-use analysis for ambiguous lifetimes
             let cfg = zymbol_semantic::ControlFlowGraph::build_sequential(&program.statements);
             let mut def_use_analyzer = zymbol_semantic::DefUseAnalyzer::new();

@@ -78,6 +78,16 @@ output using `owo-colors`, source context rendering with caret annotations.
 Shared types across all crates: symbol interning (`u32` IDs), `Literal` enum
 (`Int`, `Float`, `String`, `Char`, `Bool`), binary and unary operator types.
 
+Also holds `stdlib`: the export table for the `std/` modules (function names with
+their arity, constant names). `std/` has no file on disk — the tree-walker
+registers native functions and the compiler maps names to VM builtin ids, neither
+of which the tooling can read — so without this table `math::inventada(2.0)` passed
+every static check and only failed at run time. `zymbol_semantic::check_stdlib_access`
+reads it, and both `zymbol check` and the LSP call that one function, so they agree.
+`crates/zymbol-cli/tests/stdlib_parity.rs` fails if the table and the two engines
+disagree on a name or an arity: adding a stdlib function means touching the engine,
+the compiler's builtin table, and this list.
+
 **Dependencies**: none
 
 ---
@@ -303,8 +313,17 @@ pattern. Preserves comments. Enforces spacing rules: `x = 5` (spaces around `=`)
 LSP analysis engine decoupled from the language server.
 - `DocumentCache`: thread-safe document storage (`DashMap`)
 - `SymbolIndex`: 3-level definition lookup
-- `ModuleIndex`: cross-file export tracking
+- `ModuleIndex`: cross-file export tracking. Also records which modules do **not**
+  compile (parse or semantic errors), so a file importing one is told on its import
+  line (`module-has-errors`) instead of only finding out at run time — the editor's
+  counterpart to `zymbol check` following imports
 - `DiagnosticPipeline`: lexer → parser → semantic analysis per document
+
+A module's export list includes its re-exports (`alias::item => name`). Imports are
+registered before the export block is read, because a re-export resolves its source
+through the file's own alias map; doing it the other way round dropped every
+re-export on a file's first pass and made i18n layer modules (see `I18N.md`) look
+like they exported nothing.
 
 **Dependencies**: `zymbol-ast`, `zymbol-parser`, `zymbol-lexer`, `zymbol-semantic`,
 `zymbol-span`, `zymbol-error`
@@ -437,7 +456,7 @@ zymbol-cli       (all of the above) ──────────────�
 | `zymbol run PKG.zyp [--script NAME] [--tw\|--vm] [--keep-temp]` | Run a `.zyp` package. Extracts to an ephemeral temp dir and runs from there — never `chdir`s. Defaults to `--vm` (loose `.zy` files still default to the tree-walker); precedence is `--tw` > `--vm` > manifest `mode` > VM |
 | `zymbol package DIR [-o OUT.zyp] [--script NAME]... [--dry-run]` | Package source (+ its transitive dependency closure) into a portable `.zyp`. `--dry-run` prints the closure and warnings without writing the archive |
 | `zymbol build FILE -o OUT [--release]` | Package into standalone executable (bundles source + interpreter; not native compilation). Requires: Rust/Cargo installed, full repo checkout, run from `interpreter/` |
-| `zymbol check FILE` | Syntax and semantic check only |
+| `zymbol check FILE` | Syntax and semantic check of the whole program: the file **and every module it imports**, transitively. Errors in a module are reported at the module's own line, followed by `note: reached from <importer>`. Style warnings (unused variables, ambiguous lifetimes) stay with the file named on the command line |
 | `zymbol fmt FILE [--write] [--check] [--indent N]` | Format source code |
 | `zymbol repl` | Start interactive REPL |
 | `zymbol-lsp` | Start LSP server (stdio transport) |
