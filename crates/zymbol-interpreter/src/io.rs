@@ -62,7 +62,7 @@ impl<W: Write> Interpreter<W> {
                         StringPart::Text(text) => result.push_str(text),
                         StringPart::Variable(var_name) => {
                             if let Some(value) = self.get_variable(var_name) {
-                                result.push_str(&value.to_display_string());
+                                result.push_str(&self.format_value(&value));
                             } else {
                                 return Err(RuntimeError::Generic {
                                     message: format!(
@@ -206,7 +206,10 @@ impl<W: Write> Interpreter<W> {
                         execute!(std::io::stdout(), style::SetBackgroundColor(style::Color::AnsiValue(bg as u8))).ok();
                         colored = true;
                     }
-                    for item in &op.items { print!("{}", self.eval_expr(item)?.to_display_string()); }
+                    for item in &op.items {
+                        let v = self.eval_expr(item)?;
+                        print!("{}", self.format_value(&v));
+                    }
                     if styled || colored { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Reset)).ok(); }
                     std::io::stdout().flush().ok();
                     return Ok(());
@@ -255,7 +258,10 @@ impl<W: Write> Interpreter<W> {
             colored = true;
         }
 
-        for expr in &op.items { print!("{}", self.eval_expr(expr)?.to_display_string()); }
+        for expr in &op.items {
+            let v = self.eval_expr(expr)?;
+            print!("{}", self.format_value(&v));
+        }
 
         if styled || colored {
             execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Reset)).ok();

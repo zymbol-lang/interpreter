@@ -406,7 +406,10 @@ pub struct Interpreter<W: Write> {
     pub(crate) move_guard_names: std::collections::HashSet<String>,
     /// Active output numeral system (block base codepoint).
     /// Default: 0x0030 (ASCII). Changed by #<d0><d9># statements.
-    /// Applies only to >> numeric outputs; does not affect to_display_string().
+    /// Applies to every path that turns an Int/Float/Bool into displayed text:
+    /// `>>`, `>>~`, string interpolation, juxtaposition and `$++`. Only the bare
+    /// `Value::to_display_string()` (no numeral_mode field to read) stays ASCII —
+    /// every call site with `&self` access routes through the active mode instead.
     pub(crate) numeral_mode: u32,
     /// Called by `<<` (input) statements to read one line from the user.
     /// Receives no arguments; the prompt is printed by execute_input via self.output

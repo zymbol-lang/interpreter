@@ -44,7 +44,7 @@ impl<W: Write> Interpreter<W> {
                     let var_name: String = chars[start..end].iter().collect();
                     // Look up the variable; if not found, leave `{var}` as-is
                     let maybe_display = self.get_variable(&var_name)
-                        .map(|v| v.to_display_string());
+                        .map(|v| self.format_value(&v));
                     if let Some(display) = maybe_display {
                         result.push_str(&display);
                     } else {

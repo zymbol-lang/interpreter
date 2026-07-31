@@ -555,6 +555,21 @@ impl<W: Write> VM<W> {
         self.cli_args = args;
     }
 
+    /// Stringify a value under the active numeral mode.
+    ///
+    /// Mirrors `Value::to_string_repr()` except Int/Float/Bool map their digits
+    /// through `self.numeral_mode` — used by every string-building instruction
+    /// (ConcatStr, ConcatBuild, BuildStr, PrintAt) so `#d0d9#` reaches strings,
+    /// not just bare `>>`.
+    fn numeral_repr(&self, v: &Value) -> String {
+        match v {
+            Value::Int(n)   => numeral_int(*n, self.numeral_mode),
+            Value::Float(f) => numeral_float(*f, self.numeral_mode),
+            Value::Bool(b)  => numeral_bool(*b, self.numeral_mode),
+            other            => other.to_string_repr(),
+        }
+    }
+
     pub fn run(&mut self, program: &CompiledProgram) -> Result<(), VmError> {
         // Reset flat stack for this execution
         self.value_stack.clear();
@@ -871,7 +886,6 @@ impl<W: Write> VM<W> {
 
                 // ── String ops ──────────────────────────────────────────────
                 &Instruction::ConcatStr(dst, a, b) => {
-                    use std::fmt::Write as _;
                     // In-place buffer reuse: only valid when dst == a, so the left
                     // register is overwritten anyway. try_into_string reuses the heap
                     // buffer when Rc::strong_count == 1, avoiding O(N) allocs in loops.
@@ -891,18 +905,18 @@ impl<W: Write> VM<W> {
                             (Value::String(l), Value::Int(n)) => {
                                 let n = *n;
                                 let mut s = l.try_into_string();
-                                let _ = write!(s, "{}", n);
+                                s.push_str(&numeral_int(n, self.numeral_mode));
                                 s
                             }
                             (Value::String(l), Value::Float(f)) => {
                                 let f = *f;
                                 let mut s = l.try_into_string();
-                                let _ = write!(s, "{}", f);
+                                s.push_str(&numeral_float(f, self.numeral_mode));
                                 s
                             }
                             (l, r) => {
-                                let ls = l.to_string_repr();
-                                let rs = r.to_string_repr();
+                                let ls = self.numeral_repr(&l);
+                                let rs = self.numeral_repr(r);
                                 let mut s = String::with_capacity(ls.len() + rs.len());
                                 s.push_str(&ls);
                                 s.push_str(&rs);
@@ -920,24 +934,24 @@ impl<W: Write> VM<W> {
                             (Value::String(l), Value::Int(n)) => {
                                 let mut s = String::with_capacity(l.len() + 20);
                                 s.push_str(l.as_ref());
-                                let _ = write!(s, "{}", n);
+                                s.push_str(&numeral_int(*n, self.numeral_mode));
                                 s
                             }
                             (Value::Int(n), Value::String(r)) => {
                                 let mut s = String::with_capacity(20 + r.len());
-                                let _ = write!(s, "{}", n);
+                                s.push_str(&numeral_int(*n, self.numeral_mode));
                                 s.push_str(r.as_ref());
                                 s
                             }
                             (Value::String(l), Value::Float(f)) => {
                                 let mut s = String::with_capacity(l.len() + 24);
                                 s.push_str(l.as_ref());
-                                let _ = write!(s, "{}", f);
+                                s.push_str(&numeral_float(*f, self.numeral_mode));
                                 s
                             }
                             (l, r) => {
-                                let ls = l.to_string_repr();
-                                let rs = r.to_string_repr();
+                                let ls = self.numeral_repr(l);
+                                let rs = self.numeral_repr(r);
                                 let mut s = String::with_capacity(ls.len() + rs.len());
                                 s.push_str(&ls);
                                 s.push_str(&rs);
@@ -959,9 +973,10 @@ impl<W: Write> VM<W> {
                             Value::Array(Rc::new(new_arr))
                         }
                         other => {
-                            let mut s = other.to_string_repr();
+                            let mut s = self.numeral_repr(&other);
                             for &ir in item_regs {
-                                s.push_str(&rreg!(ir).to_string_repr());
+                                let part = self.numeral_repr(rreg!(ir));
+                                s.push_str(&part);
                             }
                             Value::String(ZyStr::new(s))
                         }
@@ -1949,7 +1964,10 @@ impl<W: Write> VM<W> {
                     for part in parts {
                         match part {
                             BuildPart::Lit(idx) => result.push_str(&program.string_pool[*idx as usize]),
-                            BuildPart::Reg(r) => result.push_str(&self.reg_get(*r).to_string_repr()),
+                            BuildPart::Reg(r) => {
+                                let part = self.numeral_repr(self.reg_get(*r));
+                                result.push_str(&part);
+                            }
                         }
                     }
                     self.reg_set(dst, Value::String(ZyStr::new(result)));
@@ -2606,7 +2624,7 @@ impl<W: Write> VM<W> {
                         colored = true;
                     }
                     for &r in item_regs {
-                        print!("{}", rreg!(r));
+                        print!("{}", self.numeral_repr(rreg!(r)));
                     }
                     if styled || colored {
                         crossterm::execute!(std::io::stdout(),
@@ -2864,8 +2882,8 @@ impl<W: Write> VM<W> {
                                 s
                             }
                             (l, r) => {
-                                let ls = l.to_string_repr();
-                                let rs = r.to_string_repr();
+                                let ls = self.numeral_repr(&l);
+                                let rs = self.numeral_repr(r);
                                 let mut s = String::with_capacity(ls.len() + rs.len());
                                 s.push_str(&ls);
                                 s.push_str(&rs);
@@ -2881,8 +2899,8 @@ impl<W: Write> VM<W> {
                                 s
                             }
                             (l, r) => {
-                                let ls = l.to_string_repr();
-                                let rs = r.to_string_repr();
+                                let ls = self.numeral_repr(l);
+                                let rs = self.numeral_repr(r);
                                 let mut s = String::with_capacity(ls.len() + rs.len());
                                 s.push_str(&ls);
                                 s.push_str(&rs);
@@ -2904,9 +2922,10 @@ impl<W: Write> VM<W> {
                             Value::Array(Rc::new(new_arr))
                         }
                         other => {
-                            let mut s = other.to_string_repr();
+                            let mut s = self.numeral_repr(&other);
                             for &ir in item_regs {
-                                s.push_str(&r!(ir).to_string_repr());
+                                let part = self.numeral_repr(r!(ir));
+                                s.push_str(&part);
                             }
                             Value::String(ZyStr::new(s))
                         }
@@ -3260,7 +3279,10 @@ impl<W: Write> VM<W> {
                     for part in parts {
                         match part {
                             zymbol_bytecode::BuildPart::Lit(idx) => result.push_str(&program.string_pool[*idx as usize]),
-                            zymbol_bytecode::BuildPart::Reg(reg) => result.push_str(&self.value_stack[base + *reg as usize].to_string_repr()),
+                            zymbol_bytecode::BuildPart::Reg(reg) => {
+                                let part = self.numeral_repr(&self.value_stack[base + *reg as usize]);
+                                result.push_str(&part);
+                            }
                         }
                     }
                     w!(dst, Value::String(ZyStr::new(result)));

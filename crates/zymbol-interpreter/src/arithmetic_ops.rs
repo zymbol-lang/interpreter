@@ -9,6 +9,7 @@
 
 use zymbol_common::BinaryOp;
 use zymbol_span::Span;
+use crate::numeral_mode::{to_numeral_int, to_numeral_float, to_numeral_bool};
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
 
@@ -44,9 +45,9 @@ impl<W: Write> Interpreter<W> {
         match v {
             Value::String(s) => Ok(s.clone()),
             Value::Char(c) => Ok(c.to_string()),
-            Value::Int(n) => Ok(n.to_string()),
-            Value::Float(f) => Ok(f.to_string()),
-            Value::Bool(b) => Ok(if *b { "#1" } else { "#0" }.to_string()),
+            Value::Int(n) => Ok(to_numeral_int(*n, self.numeral_mode)),
+            Value::Float(f) => Ok(to_numeral_float(*f, self.numeral_mode)),
+            Value::Bool(b) => Ok(to_numeral_bool(*b, self.numeral_mode)),
             _ => Err(RuntimeError::Generic {
                 message: format!("cannot juxtapose value of type {:?} in string context", v),
                 span: *span,

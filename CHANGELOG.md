@@ -221,6 +221,31 @@ correct in the other or correct nowhere.
   kanji, Hangul, Cyrillic, Greek, Devanagari, pIqaD (including the Klingon
   apostrophe) and an emoji, at top level and inside a module function.
 
+**Numeral mode (`#d0d9#`) did not reach interpolation, juxtaposition, `$++` or `>>~`**
+- `#०९#\n>> n ¶` printed Devanagari digits, but `#०९#\ny = "{n}"\n>> y ¶` still
+  printed ASCII — the same value, through a different route to the screen,
+  silently reverted to `0`–`9`. `Value::to_display_string()` (tree-walker) and
+  `to_string_repr()`/`Display` (VM) are the generic value-to-text conversions
+  used by string interpolation, juxtaposition (`"a" b`), `$++` and `>>~`; none
+  of them has a numeral-mode field to read, since numeral-mode awareness had
+  only ever been wired into `>>`'s own per-item formatting.
+- Surfaced rebuilding zyKlingonGalaxy's HUD renderer: every score/delay/wave
+  count is composed into a label string (`"H:" $+ mI'(n)`) that a generic
+  centered-list helper then draws with `>>~` — a hand-written digit-by-digit
+  pIqaD conversion existed specifically because no runtime path from a live
+  `Int` to displayed text respected the active script except bare `>>`.
+- Fix: every call site with `&self`/`&mut self` access to the active mode now
+  routes Int/Float/Bool through the same numeral-aware conversion `>>` uses
+  instead of the bare, context-free one — `value_to_concat_str` (juxtaposition
+  and `$++`, tree-walker), `interpolate_string`, both `execute_output_pos`
+  branches, and, in the VM, both copies each of `ConcatStr`, `ConcatBuild` and
+  `BuildStr`, plus `PrintAt`. `Value::to_display_string()`/`to_string_repr()`
+  themselves are unchanged (no interpreter context to read the mode from) —
+  the fix is at every place that had that context and wasn't using it.
+- Regression: `test_i18n_mode_affects_interpolation`,
+  `test_i18n_mode_affects_juxtaposition`, `test_i18n_mode_affects_concat_build`
+  and their `_vm` parity counterparts in `zymbol-interpreter/tests/e2e.rs`.
+
 **Findings from the zy-GO validation project (HLZ-001 … HLZ-009)**
 
 Building [zy-GO](https://github.com/zymbol-lang/zy-GO) — a Go/囲碁 game whose

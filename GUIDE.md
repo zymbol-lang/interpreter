@@ -3305,8 +3305,10 @@ dec = 0d|255|    // Int → decimal string → "0d0255"
 
 Zymbol can display numbers in any of **69 Unicode digit scripts** — Devanagari,
 Arabic-Indic, Thai, Klingon pIqaD, Mathematical Bold, LCD segments, and more.
-Numeral mode only affects **output** (`>>`); internal arithmetic always uses
-binary integers and IEEE-754 floats regardless of the active script.
+Numeral mode only affects how a value is turned into **displayed text** — `>>`,
+`>>~`, string interpolation, juxtaposition and `$++` all format Int/Float/Bool
+through the active script; internal arithmetic always uses binary integers and
+IEEE-754 floats regardless of the active script.
 
 ### Mode-Switch Token `#d0d9#`
 
@@ -3338,6 +3340,35 @@ n = 42
 #09#
 >> n ¶          // → 42  (back to ASCII)
 ```
+
+### Every String-Building Path, Not Just `>>`
+
+A number rarely stays on its own — it gets folded into a label, a HUD readout,
+a chat line. Interpolation, juxtaposition (`"a" b`) and `$++` all reach for the
+same numeral-aware conversion `>>` uses, so a number baked into a composed
+string still comes out in the active script:
+
+```zymbol
+#०९#
+n = 42
+
+y = "{n}"          // interpolation
+>> y ¶             // → ४२
+
+z = "n=" n         // juxtaposition (BinaryOp::Concat)
+>> z ¶             // → n=४२
+
+w = "n=" $++ n     // $++
+>> w ¶             // → n=४२
+
+>>~ (1, 1) > n     // positioned output
+```
+
+Only `Value::to_display_string()` itself — the bare, context-free conversion
+with no access to which mode is active — has no numeral awareness. Every
+runtime call site that turns a value into text goes through the active mode
+instead of that bare conversion, so there is no place left where a number
+silently reverts to ASCII while the mode is on.
 
 ### Boolean Output
 
@@ -3531,10 +3562,29 @@ ASCII `#` (U+0023). This means:
 
 ### Scope and Persistence
 
-- Mode is **file-local** — each file starts in ASCII mode.
+- Mode is **interpreter-global, not file-local** — a program starts in ASCII
+  mode, and a `#d0d9#` anywhere changes the mode for *everything* executed
+  afterwards, including the caller that imported the module which switched it.
+  Both engines agree on this.
 - Mode changes take effect **immediately** at the statement that contains
-  `#d0d9#` and persist until the next mode-switch in the same file.
-- Importing a module does not inherit or alter the caller's mode.
+  `#d0d9#` and persist until the next mode-switch — there is no implicit reset
+  at a file, module, or function boundary.
+- Therefore a module function that renders in a non-ASCII script **must reset
+  the mode itself**, or it silently reformats every number the rest of the
+  program prints:
+
+  ```zymbol
+  mI'(n) {
+      #<d0><d9>#        // activate the target script
+      s = "{n}"         // interpolation now renders in it
+      #09#              // MANDATORY: hand ASCII back to the caller
+      <~ s
+  }
+  ```
+
+  Without the `#09#` line, a caller doing `>> 120 ¶` after calling `mI'`
+  prints in the callee's script. This is what makes a per-locale number
+  formatter possible at all — see `Hol/tlhIngan.zy` in zyKlingonGalaxy.
 - The REPL respects the active mode: expression results are displayed in the
   currently active script.
 
@@ -3544,8 +3594,8 @@ ASCII `#` (U+0023). This means:
 | ---- | ------ |
 | Default mode | ASCII (`0`–`9`) |
 | Activation token | `#d0d9#` — zero and nine of any supported block |
-| Affected output | `>>` for Int, Float, Bool |
-| Unaffected | String content, Char, Array brackets, Tuple parentheses |
+| Affected output | `>>`, `>>~`, interpolation, juxtaposition, `$++` — for Int, Float, Bool |
+| Unaffected | String content itself, Char, Array brackets, Tuple parentheses |
 | Bool prefix | `#` always ASCII; digit adapts to active script |
 | Literals | Any script's digits valid as integer literals in source |
 | Float decimal point | Always ASCII `.` regardless of active mode |

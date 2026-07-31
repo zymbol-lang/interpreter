@@ -1322,6 +1322,68 @@ fn test_i18n_devanagari_bool_output_vm() {
     assert_eq!(run_vm(src).expect("VM"), run(src));
 }
 
+// ── Numeral mode also reaches string-building paths, not just bare >> ────────
+//
+// #d0d9# used to affect only `>>`'s own per-item formatting. Interpolation,
+// juxtaposition (BinaryOp::Concat) and $++ all stringified Int/Float/Bool via
+// Value::to_display_string()/to_string_repr(), which has no numeral_mode field
+// to read — so a number baked into a composed string (a HUD label, a chat
+// message) stayed ASCII even under an active non-ASCII mode. Fixed by routing
+// value_to_concat_str, interpolate_string and execute_output_pos through the
+// same numeral-aware conversion >> already used.
+
+#[test]
+fn test_i18n_mode_affects_interpolation() {
+    let src = "#०९#\nx = 42\ny = \"{x}\"\n>> y ¶\n";
+    assert_eq!(run(src), "४२\n");
+}
+
+#[test]
+fn test_i18n_mode_affects_juxtaposition() {
+    // "n=" x is BinaryOp::Concat (juxtaposition used as a value), not >>'s own
+    // per-item loop — isolates the string-building path from >>'s formatting.
+    let src = "#०९#\nx = 42\ny = \"n=\" x\n>> y ¶\n";
+    assert_eq!(run(src), "n=४२\n");
+}
+
+#[test]
+fn test_i18n_mode_affects_concat_build() {
+    let src = "#०९#\nx = 42\ny = \"n=\" $++ x\n>> y ¶\n";
+    assert_eq!(run(src), "n=४२\n");
+}
+
+// >>~ writes straight to the real process stdout (print!/crossterm::execute!),
+// bypassing the Interpreter's `self.output` writer that `run()` captures — so
+// its content can't be asserted through this in-process harness (pre-existing
+// limitation, same as test_output_pos_vm above). Verified manually instead:
+// `#⟨0⟩⟨9⟩#\n>>~ (1, 1) > 42\n` under `zymbol run` prints the Devanagari/pIqaD
+// digits at the moved cursor position, not "42". The VM-parity test below still
+// guards against the two engines diverging.
+
+#[test]
+fn test_i18n_mode_interpolation_vm() {
+    let src = "#०९#\nx = 42\ny = \"{x}\"\n>> y ¶\n";
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
+#[test]
+fn test_i18n_mode_juxtaposition_vm() {
+    let src = "#०९#\nx = 42\ny = \"n=\" x\n>> y ¶\n";
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
+#[test]
+fn test_i18n_mode_concat_build_vm() {
+    let src = "#०९#\nx = 42\ny = \"n=\" $++ x\n>> y ¶\n";
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
+#[test]
+fn test_i18n_mode_output_pos_vm() {
+    let src = "#०९#\n>>~ (1, 1) > 42\n";
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
 // ── Multi-dimensional indexing (index_nav) ────────────────────────────────
 
 #[test]
