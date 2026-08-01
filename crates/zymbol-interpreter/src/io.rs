@@ -9,25 +9,19 @@ use std::io::Write;
 use zymbol_ast::{ClearScreen, Input, InputCast, InputPrompt, KeyInput, Newline, Output, OutputPos, TuiBlock};
 use zymbol_span::Span;
 use zymbol_lexer::StringPart;
-use crate::numeral_mode::{to_numeral_int, to_numeral_float, to_numeral_bool};
-use crate::data_ops::parse_numeric_string;
+use crate::data_ops::{ascii_digits, parse_numeric_string};
 use crate::{Interpreter, Result, RuntimeError, Value};
 
 impl<W: Write> Interpreter<W> {
     /// Execute output statement: >> expr1 expr2 ...
     ///
     /// Numeric values (`Int`, `Float`, `Bool`) are rendered using the active
-    /// numeral mode; all other values use their standard display form.
+    /// numeral mode, nested ones included; all other values use their standard
+    /// display form.
     pub(crate) fn execute_output(&mut self, output: &Output) -> Result<()> {
-        let mode = self.numeral_mode;
         for expr in &output.exprs {
             let value = self.eval_expr(expr)?;
-            let s = match &value {
-                Value::Int(n)   => to_numeral_int(*n, mode),
-                Value::Float(f) => to_numeral_float(*f, mode),
-                Value::Bool(b)  => to_numeral_bool(*b, mode),
-                _               => value.to_display_string(),
-            };
+            let s = self.format_value(&value);
             write!(self.output, "{}", s)?;
         }
         // In TUI mode (raw mode active) stdout is line-buffered: text without \n stays
@@ -322,15 +316,19 @@ fn describe_input_cast(cast: &InputCast) -> String {
 
 /// Validate a trimmed input line against a cast, producing the typed value or an
 /// `Err(hint)` describing what was expected (the caller re-prompts on `Err`).
+///
+/// The numeric casts accept digits from any of the 69 supported scripts: an
+/// application that prints `४२` must also accept `४२` back, or its own user
+/// cannot type what the program just showed them.
 fn validate_input(s: &str, cast: &InputCast) -> std::result::Result<Value, String> {
     match cast {
         InputCast::String => Ok(Value::String(s.to_string())),
         InputCast::Numeric => Ok(parse_numeric_string(s.to_string())),
-        InputCast::Float => s.parse::<f64>().map(Value::Float).map_err(|_| describe_input_cast(cast)),
-        InputCast::Decimal { total, decimals } => validate_decimal(s, *total, *decimals)
+        InputCast::Float => ascii_digits(s).parse::<f64>().map(Value::Float).map_err(|_| describe_input_cast(cast)),
+        InputCast::Decimal { total, decimals } => validate_decimal(&ascii_digits(s), *total, *decimals)
             .map(Value::Float)
             .ok_or_else(|| describe_input_cast(cast)),
-        InputCast::Int { max_digits } => validate_int(s, *max_digits)
+        InputCast::Int { max_digits } => validate_int(&ascii_digits(s), *max_digits)
             .map(Value::Int)
             .ok_or_else(|| describe_input_cast(cast)),
         InputCast::Text { max } => {

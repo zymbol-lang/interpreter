@@ -1,0 +1,59 @@
+// Ordering comparisons: one rule, no second-class digit script
+//
+// `<`, `<=`, `>`, `>=` are:
+//   · numeric       when both sides are numbers — a string counts as a number
+//                   when `#|…|` would convert it, in any of the 69 scripts
+//   · lexicographic when both sides are non-numeric text
+//   · an error      when a number meets text that is not a number
+//
+// So `"१०" > "९"` asks what `"10" > "9"` asks: 10 against 9, not the order of
+// their code points. `"५" > 5` coerces exactly as `"5" > 5` does. Anything else
+// would make every script but ASCII second-class in its own language.
+//
+// Equality is deliberately outside the rule: `==` never coerces, so `"5" == 5`
+// and `"५" == 5` are both false — again, the same answer for both scripts.
+
+>> "--- numeric strings, ASCII digits ---" ¶
+>> ("10" > "9") ¶
+>> ("9" > "10") ¶
+>> ("5" > 5) ¶
+>> ("6" > 5) ¶
+>> (5 > "4") ¶
+>> ("1.5" > "1.4") ¶
+
+>> "--- numeric strings, Devanagari digits: same answers ---" ¶
+>> ("१०" > "९") ¶
+>> ("९" > "१०") ¶
+>> ("५" > 5) ¶
+>> ("६" > 5) ¶
+>> (5 > "४") ¶
+>> ("१.५" > "१.४") ¶
+
+>> "--- mixed scripts still compare as numbers ---" ¶
+>> ("४२" > "9") ¶
+>> ("42" > "९") ¶
+
+>> "--- <= and >= follow the same rule ---" ¶
+>> ("१०" >= "१०") ¶
+>> ("९" <= "१०") ¶
+
+>> "--- non-numeric text stays lexicographic ---" ¶
+>> ("abc" > "abd") ¶
+>> ("abd" > "abc") ¶
+
+>> "--- chars order by code point, bools #0 < #1 ---" ¶
+>> ('b' > 'a') ¶
+>> (#1 > #0) ¶
+
+>> "--- equality never coerces ---" ¶
+>> ("5" == 5) ¶
+>> ("५" == 5) ¶
+>> ("5" == "5") ¶
+
+#०९#
+
+>> "--- and the results themselves follow the active mode ---" ¶
+>> ("१०" > "९") ¶
+>> ("abc" > "abd") ¶
+
+#09#

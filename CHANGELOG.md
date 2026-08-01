@@ -246,6 +246,82 @@ correct in the other or correct nowhere.
   `test_i18n_mode_affects_juxtaposition`, `test_i18n_mode_affects_concat_build`
   and their `_vm` parity counterparts in `zymbol-interpreter/tests/e2e.rs`.
 
+**Numeral mode, audited: collections, the round trip, and the cost of the fix**
+
+An audit of the change above found three things it left undone. A fourth
+finding — that the mode also reaches text the program uses as *data* (file
+names, shell commands built by interpolation) — is **intended behaviour**, not a
+defect: `#d0d9#` states how this program writes numbers, and validating that is
+the developer's responsibility. It is now documented as such in GUIDE.md
+("Intent and Responsibility"), alongside the one exception: `json::encode` keeps
+emitting ASCII, because a serialization format has a grammar of its own.
+
+- **Collections still reverted to ASCII.** `>> [1, 2, 3] ¶` printed
+  `[1, 2, 3]` under an active mode while each element printed on its own came
+  out in the active script — the conversion applied the mode at the top level
+  only, so a number stopped following it by the mere fact of sitting in a list.
+  Fixed with `Value::to_display_string_in`/`to_repr_string_in` (tree-walker) and
+  `Value::to_display_in` (VM), recursive over arrays, tuples and named tuples,
+  used by `format_value`, `numeral_repr` and both `Print` branches. Brackets,
+  commas and separators stay ASCII.
+- **The digits did not come back.** `#|…|` normalized Unicode digits, but
+  `#.N|…|`, `#!N|…|`, `<<###`, `<<#.` and `<<#(n,d)` did not — a program could
+  render `१२०` and then refuse to read it, and a user could not type what the
+  program had just shown them. All numeric casts now normalize through
+  `ascii_digits` (a shared helper in each engine) before parsing. Non-numeric
+  strings are still rejected.
+- **The VM answered 0 where the tree-walker raised.** `#.1|"४२"|` was a runtime
+  error in the tree-walker and `0` in the VM; `c|…|`/`e|…|` on a non-number was
+  an error in one engine and `0.0` in the other. Both now fail, with the
+  tree-walker's message. (Found by the audit, present since before the numeral
+  work.)
+- **Performance regression from the original fix, removed.** Routing every
+  concatenation through `numeral_int` allocated an intermediate `String` even in
+  ASCII mode, costing ~8% on `"label" i` in a loop (3M iterations: VM 0.34 s →
+  0.37 s, tree-walker 0.750 s → 0.793 s). `map_ascii_digits` now takes its
+  buffer by value and the VM's hot concatenation paths write straight into the
+  destination when the mode is ASCII: back to 0.32–0.34 s / 0.75 s.
+- Also routed: the VM's `ReadLine` prompt, the last `print!` of a value that
+  still used `Display`.
+- Regression: `test_i18n_mode_reaches_array_elements`,
+  `…_tuple_elements`, `…_interpolated_array`, `…_array_elements_vm`,
+  `test_round_accepts_unicode_digits`, `test_trunc_accepts_unicode_digits`,
+  `test_round_accepts_unicode_digits_vm` and
+  `test_round_rejects_non_numeric_string_in_both_engines`; the web example
+  `examples/numerals/composed.zy` covers collections and the round trip in the
+  CLI↔JS parity run.
+**Ordering comparisons: one rule, and no second-class digit script**
+
+`? "5" > 5` coerced the string and answered `#0`; `? "४२" > 5` raised *cannot
+compare string '४२' with integer 5*. Same operator, same shape of operands, and
+the only difference was which script wrote the digits — either both are strings
+or both are numbers, anything else makes every script but ASCII a second-class
+citizen of its own language.
+
+- The rule, now the same in the tree-walker, the VM and the JS engine:
+  **numeric** when both sides are numbers, where a string counts as a number if
+  `#|…|` would convert it (digits from any of the 69 scripts);
+  **lexicographic** when both sides are non-numeric text; **an error** when a
+  number meets text that is not a number. Equality is deliberately excluded —
+  `==` still never coerces, so `"5" == 5` and `"५" == 5` are both `#0`.
+- The three engines had three implementations of ordering and disagreed *even in
+  ASCII*: `"5" > 5` was `#0` in the tree-walker and `#1` in the VM (whose
+  `cmp_direct` returned "greater" for every pair outside its table); `"10" > "9"`
+  was `#1` in the tree-walker and `#0` in the VM; and the VM's call-frame loop
+  had a third variant that answered `false` for everything but `Int`/`Int`.
+  `"४२" > "९"` was `#0` in both engines where `"10" > "9"` was `#1`.
+- Replaced by `cmp_order`/`cmp_order_error` (VM, used by both interpreter loops)
+  and the rewritten string arms of `compare_values` (tree-walker), with
+  `orderValues` mirroring them in `web/src/zymbol/zymbol.js`. Comparison errors
+  now carry the same text in every engine (the JS engine also stops calling the
+  operators `Lte`/`Gte`).
+- Also aligned: `'a' < 'b'` and `#0 < #1` were a VM feature and a tree-walker
+  error; both engines compare them now.
+- Regression: `test_order_numeric_string_any_script`,
+  `test_order_non_numeric_strings_stay_lexicographic`,
+  `test_order_number_against_text_is_an_error` and
+  `test_order_rule_is_identical_in_both_engines`.
+
 **Findings from the zy-GO validation project (HLZ-001 … HLZ-009)**
 
 Building [zy-GO](https://github.com/zymbol-lang/zy-GO) — a Go/囲碁 game whose

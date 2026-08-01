@@ -1,0 +1,40 @@
+// Numerals: what the program writes, the program can read back
+//
+// Rendering a number in a script is only half of it. Every numeric cast accepts
+// digits from any of the 69 supported scripts, so a value rendered under an
+// active mode parses back exactly like its ASCII twin: `#|…|`, `#.N|…|` and
+// `#!N|…|` all normalize before parsing.
+//
+// A string that is not a number at all is still rejected — that behaviour is
+// unchanged, and identical in both engines.
+
+>> "--- literals in a non-ASCII script, ASCII mode ---" ¶
+>> #|"४२"| ¶
+>> #.1|"४२"| ¶
+>> #!1|"४२.७८"| ¶
+>> #|"-४२"| ¶
+>> #|"३.५"| ¶
+
+>> "--- ASCII digits still behave the same ---" ¶
+>> #|"42"| ¶
+>> #.1|"42"| ¶
+>> #!1|"42.78"| ¶
+
+#०९#
+
+>> "--- the full round trip under an active mode ---" ¶
+n = 120
+s = "{n}"
+>> "rendered      " s ¶
+>> "read back     " #|s| ¶
+>> "rounded       " #.0|s| ¶
+
+// The value that came back is a number, not text: arithmetic works on it.
+back = #|s|
+>> "plus one      " (back + 1) ¶
+
+#09#
+
+>> "--- and in ASCII it is the same 120 ---" ¶
+>> back ¶
+>> (back * 2) ¶

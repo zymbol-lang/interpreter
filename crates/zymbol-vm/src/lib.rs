@@ -32,9 +32,11 @@ use zymbol_lexer::digit_blocks::digit_value;
 
 const ASCII_BASE: u32 = 0x0030;
 
-fn map_ascii_digits(s: &str, block_base: u32) -> String {
+/// Takes `s` by value so the ASCII fast-path hands the buffer straight back
+/// instead of re-allocating it (mirrors zymbol-interpreter::numeral_mode).
+fn map_ascii_digits(s: String, block_base: u32) -> String {
     if block_base == ASCII_BASE {
-        return s.to_string();
+        return s;
     }
     s.chars()
         .map(|ch| {
@@ -47,9 +49,33 @@ fn map_ascii_digits(s: &str, block_base: u32) -> String {
         .collect()
 }
 
-fn numeral_int(value: i64, base: u32) -> String { map_ascii_digits(&value.to_string(), base) }
-fn numeral_float(value: f64, base: u32) -> String { map_ascii_digits(&value.to_string(), base) }
+fn numeral_int(value: i64, base: u32) -> String { map_ascii_digits(value.to_string(), base) }
+fn numeral_float(value: f64, base: u32) -> String { map_ascii_digits(value.to_string(), base) }
 fn numeral_bool(value: bool, base: u32) -> String { format!("#{}", numeral_int(if value { 1 } else { 0 }, base)) }
+
+/// Append `n` to `s` in the active script. In ASCII mode — the default, and the
+/// path a `"label" i` concatenation inside a loop takes on every iteration — it
+/// formats straight into the existing buffer, with no intermediate String.
+#[inline]
+fn push_numeral_int(s: &mut String, n: i64, base: u32) {
+    use std::fmt::Write as _;
+    if base == ASCII_BASE {
+        let _ = write!(s, "{}", n);
+    } else {
+        s.push_str(&numeral_int(n, base));
+    }
+}
+
+/// `push_numeral_int` for floats.
+#[inline]
+fn push_numeral_float(s: &mut String, f: f64, base: u32) {
+    use std::fmt::Write as _;
+    if base == ASCII_BASE {
+        let _ = write!(s, "{}", f);
+    } else {
+        s.push_str(&numeral_float(f, base));
+    }
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Runtime Value
@@ -137,6 +163,39 @@ impl Value {
     fn to_string_repr(&self) -> String {
         match self {
             Value::String(s) => s.to_string(),
+            other => other.to_string(),
+        }
+    }
+
+    /// `to_string_repr` with every digit rendered in the numeral system
+    /// identified by `block_base` — collection elements included, since a
+    /// number does not stop being a number by sitting in a list.
+    ///
+    /// Mirrors `Value::to_display_string_in` in the tree-walker; the two must
+    /// agree character for character.
+    fn to_display_in(&self, block_base: u32) -> String {
+        match self {
+            Value::Int(n)   => numeral_int(*n, block_base),
+            Value::Float(f) => numeral_float(*f, block_base),
+            Value::Bool(b)  => numeral_bool(*b, block_base),
+            Value::String(s) => s.to_string(),
+            Value::Array(arr) => {
+                let contents: Vec<String> =
+                    arr.iter().map(|v| v.to_display_in(block_base)).collect();
+                format!("[{}]", contents.join(", "))
+            }
+            Value::Tuple(items) => {
+                let contents: Vec<String> =
+                    items.iter().map(|v| v.to_display_in(block_base)).collect();
+                format!("({})", contents.join(", "))
+            }
+            Value::NamedTuple(fields) => {
+                let contents: Vec<String> = fields
+                    .iter()
+                    .map(|(name, v)| format!("{}: {}", name, v.to_display_in(block_base)))
+                    .collect();
+                format!("({})", contents.join(", "))
+            }
             other => other.to_string(),
         }
     }
@@ -347,6 +406,87 @@ fn num_eq_imm(v: &Value, imm: i64) -> Option<bool> {
     }
 }
 
+/// Ordering comparison (`<`, `<=`, `>`, `>=`) — the single rule both engines use.
+///
+/// Numeric when *both* sides are numbers, where a string counts as a number if
+/// `#|…|` would convert it: digits from any of the 69 supported scripts, so
+/// `"४२" > "९"` compares 42 against 9 exactly as `"42" > "9"` does. Two
+/// non-numeric strings compare lexicographically. A number against a string
+/// that is not a number is `None` — the caller raises, matching the
+/// tree-walker's `compare_values`.
+///
+/// Equality (`==`, `!=`) deliberately does NOT go through here: `"5" == 5` is
+/// false in both engines and stays false.
+fn cmp_order(va: &Value, vb: &Value) -> Option<i32> {
+    use std::cmp::Ordering;
+    fn ord(o: Ordering) -> i32 { match o { Ordering::Less => -1, Ordering::Equal => 0, Ordering::Greater => 1 } }
+    fn as_int(s: &str) -> Option<i64> { ascii_digits(s.trim()).parse::<i64>().ok() }
+    fn as_f64(s: &str) -> Option<f64> { ascii_digits(s.trim()).parse::<f64>().ok() }
+    fn f_ord(x: f64, y: f64) -> i32 { ord(x.partial_cmp(&y).unwrap_or(Ordering::Equal)) }
+
+    match (va, vb) {
+        (Value::Int(x), Value::Int(y))     => Some(ord(x.cmp(y))),
+        (Value::Float(x), Value::Float(y)) => Some(f_ord(*x, *y)),
+        (Value::Int(x), Value::Float(y))   => Some(f_ord(*x as f64, *y)),
+        (Value::Float(x), Value::Int(y))   => Some(f_ord(*x, *y as f64)),
+        (Value::Char(x), Value::Char(y))   => Some(ord(x.cmp(y))),
+        (Value::Bool(x), Value::Bool(y))   => Some(ord(x.cmp(y))),
+        (Value::String(x), Value::String(y)) => {
+            match (as_int(x.as_str()), as_int(y.as_str())) {
+                (Some(a), Some(b)) => Some(ord(a.cmp(&b))),
+                _ => match (as_f64(x.as_str()), as_f64(y.as_str())) {
+                    (Some(a), Some(b)) => Some(f_ord(a, b)),
+                    _ => Some(ord(x.as_str().cmp(y.as_str()))),
+                },
+            }
+        }
+        (Value::String(s), Value::Int(i)) => match as_int(s.as_str()) {
+            Some(n) => Some(ord(n.cmp(i))),
+            None => as_f64(s.as_str()).map(|f| f_ord(f, *i as f64)),
+        },
+        (Value::Int(i), Value::String(s)) => match as_int(s.as_str()) {
+            Some(n) => Some(ord(i.cmp(&n))),
+            None => as_f64(s.as_str()).map(|f| f_ord(*i as f64, f)),
+        },
+        (Value::String(s), Value::Float(f)) => as_f64(s.as_str()).map(|n| f_ord(n, *f)),
+        (Value::Float(f), Value::String(s)) => as_f64(s.as_str()).map(|n| f_ord(*f, n)),
+        (Value::Tuple(x), Value::Tuple(y)) => {
+            if x.len() != y.len() { return Some(1); }
+            for (a, b) in x.iter().zip(y.iter()) {
+                match cmp_order(a, b) {
+                    Some(0) => continue,
+                    other => return other,
+                }
+            }
+            Some(0)
+        }
+        _ => None,
+    }
+}
+
+/// `cmp_order` for the call-frame interpreter loop, which has no `raise!` macro
+/// and propagates with `?`.
+fn ord_slow(va: &Value, vb: &Value, op: &str) -> Result<i32, VmError> {
+    cmp_order(va, vb).ok_or_else(|| VmError::Generic(cmp_order_error(va, vb, op)))
+}
+
+/// The tree-walker's message for an ordering comparison it refuses to make, so
+/// both engines fail with the same text.
+fn cmp_order_error(va: &Value, vb: &Value, op: &str) -> String {
+    match (va, vb) {
+        (Value::String(s), Value::Int(i)) =>
+            format!("cannot compare string '{}' with integer {} using operator '{}'", s.as_ref(), i, op),
+        (Value::Int(i), Value::String(s)) =>
+            format!("cannot compare integer {} with string '{}' using operator '{}'", i, s.as_ref(), op),
+        (Value::String(s), Value::Float(f)) =>
+            format!("cannot compare string '{}' with float {} using operator '{}'", s.as_ref(), f, op),
+        (Value::Float(f), Value::String(s)) =>
+            format!("cannot compare float {} with string '{}' using operator '{}'", f, s.as_ref(), op),
+        (a, b) =>
+            format!("cannot compare values with operator '{}': {} and {}", op, a.type_name(), b.type_name()),
+    }
+}
+
 fn cmp_direct(va: &Value, vb: &Value) -> i32 {
     use std::cmp::Ordering;
     fn ord(o: Ordering) -> i32 { match o { Ordering::Less => -1, Ordering::Equal => 0, Ordering::Greater => 1 } }
@@ -404,13 +544,13 @@ fn vm_validate_input(s: &str, kind: &InputKind) -> Result<Value, String> {
                 Ok(Value::String(ZyStr::new(s.to_string())))
             }
         }
-        InputKind::Float => s.parse::<f64>()
+        InputKind::Float => ascii_digits(s).parse::<f64>()
             .map(Value::Float)
             .map_err(|_| vm_describe_input_kind(kind)),
-        InputKind::Decimal { total, decimals } => vm_validate_decimal(s, *total, *decimals)
+        InputKind::Decimal { total, decimals } => vm_validate_decimal(&ascii_digits(s), *total, *decimals)
             .map(Value::Float)
             .ok_or_else(|| vm_describe_input_kind(kind)),
-        InputKind::Int { max_digits } => vm_validate_int(s, *max_digits)
+        InputKind::Int { max_digits } => vm_validate_int(&ascii_digits(s), *max_digits)
             .map(Value::Int)
             .ok_or_else(|| vm_describe_input_kind(kind)),
         InputKind::Text { max } => {
@@ -461,6 +601,20 @@ fn vm_validate_decimal(s: &str, total: u32, decimals: u32) -> Option<f64> {
         return None;
     }
     Some(value)
+}
+
+/// The ASCII form of a numeric string written in any of the 69 supported digit
+/// scripts (mirrors `zymbol_interpreter::data_ops::ascii_digits`): every numeric
+/// cast normalizes through this, so a number the program rendered under an
+/// active numeral mode parses back exactly like its ASCII twin.
+fn ascii_digits(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.is_ascii() {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    match normalize_unicode_digits(s) {
+        Some(normalized) => std::borrow::Cow::Owned(normalized),
+        None => std::borrow::Cow::Borrowed(s),
+    }
 }
 
 fn normalize_unicode_digits(s: &str) -> Option<String> {
@@ -557,17 +711,15 @@ impl<W: Write> VM<W> {
 
     /// Stringify a value under the active numeral mode.
     ///
-    /// Mirrors `Value::to_string_repr()` except Int/Float/Bool map their digits
-    /// through `self.numeral_mode` — used by every string-building instruction
-    /// (ConcatStr, ConcatBuild, BuildStr, PrintAt) so `#d0d9#` reaches strings,
-    /// not just bare `>>`.
+    /// Mirrors `Value::to_string_repr()` except every digit — including the ones
+    /// nested in arrays and tuples — maps through `self.numeral_mode`. Used by
+    /// every string-building instruction (ConcatStr, ConcatBuild, BuildStr,
+    /// PrintAt) so `#d0d9#` reaches strings, not just bare `>>`.
     fn numeral_repr(&self, v: &Value) -> String {
-        match v {
-            Value::Int(n)   => numeral_int(*n, self.numeral_mode),
-            Value::Float(f) => numeral_float(*f, self.numeral_mode),
-            Value::Bool(b)  => numeral_bool(*b, self.numeral_mode),
-            other            => other.to_string_repr(),
+        if self.numeral_mode == ASCII_BASE {
+            return v.to_string_repr();
         }
+        v.to_display_in(self.numeral_mode)
     }
 
     pub fn run(&mut self, program: &CompiledProgram) -> Result<(), VmError> {
@@ -683,6 +835,19 @@ impl<W: Write> VM<W> {
                 }
                 return Err(_err);
             }};
+        }
+
+        // Ordering comparison, raising the tree-walker's error when the two
+        // values are not comparable (a number against non-numeric text).
+        macro_rules! ord_or_raise {
+            ($a:expr, $b:expr, $op:expr) => {
+                match cmp_order(rreg!($a), rreg!($b)) {
+                    Some(r) => r,
+                    None => raise!(VmError::Generic(
+                        cmp_order_error(rreg!($a), rreg!($b), $op)
+                    )),
+                }
+            };
         }
 
         // TUI cleanup guards — dropped on any return path (Ok, Err, or panic).
@@ -905,13 +1070,13 @@ impl<W: Write> VM<W> {
                             (Value::String(l), Value::Int(n)) => {
                                 let n = *n;
                                 let mut s = l.try_into_string();
-                                s.push_str(&numeral_int(n, self.numeral_mode));
+                                push_numeral_int(&mut s, n, self.numeral_mode);
                                 s
                             }
                             (Value::String(l), Value::Float(f)) => {
                                 let f = *f;
                                 let mut s = l.try_into_string();
-                                s.push_str(&numeral_float(f, self.numeral_mode));
+                                push_numeral_float(&mut s, f, self.numeral_mode);
                                 s
                             }
                             (l, r) => {
@@ -934,19 +1099,19 @@ impl<W: Write> VM<W> {
                             (Value::String(l), Value::Int(n)) => {
                                 let mut s = String::with_capacity(l.len() + 20);
                                 s.push_str(l.as_ref());
-                                s.push_str(&numeral_int(*n, self.numeral_mode));
+                                push_numeral_int(&mut s, *n, self.numeral_mode);
                                 s
                             }
                             (Value::Int(n), Value::String(r)) => {
                                 let mut s = String::with_capacity(20 + r.len());
-                                s.push_str(&numeral_int(*n, self.numeral_mode));
+                                push_numeral_int(&mut s, *n, self.numeral_mode);
                                 s.push_str(r.as_ref());
                                 s
                             }
                             (Value::String(l), Value::Float(f)) => {
                                 let mut s = String::with_capacity(l.len() + 24);
                                 s.push_str(l.as_ref());
-                                s.push_str(&numeral_float(*f, self.numeral_mode));
+                                push_numeral_float(&mut s, *f, self.numeral_mode);
                                 s
                             }
                             (l, r) => {
@@ -1011,10 +1176,10 @@ impl<W: Write> VM<W> {
                 // ── Comparison ──────────────────────────────────────────────
                 &Instruction::CmpEq(dst, a, b) => { let r = cmp_direct(rreg!(a), rreg!(b)); wreg!(dst, Value::Bool(r == 0)); }
                 &Instruction::CmpNe(dst, a, b) => { let r = cmp_direct(rreg!(a), rreg!(b)); wreg!(dst, Value::Bool(r != 0)); }
-                &Instruction::CmpLt(dst, a, b) => { let r = cmp_direct(rreg!(a), rreg!(b)); wreg!(dst, Value::Bool(r  < 0)); }
-                &Instruction::CmpLe(dst, a, b) => { let r = cmp_direct(rreg!(a), rreg!(b)); wreg!(dst, Value::Bool(r <= 0)); }
-                &Instruction::CmpGt(dst, a, b) => { let r = cmp_direct(rreg!(a), rreg!(b)); wreg!(dst, Value::Bool(r  > 0)); }
-                &Instruction::CmpGe(dst, a, b) => { let r = cmp_direct(rreg!(a), rreg!(b)); wreg!(dst, Value::Bool(r >= 0)); }
+                &Instruction::CmpLt(dst, a, b) => { let r = ord_or_raise!(a, b, "Lt"); wreg!(dst, Value::Bool(r  < 0)); }
+                &Instruction::CmpLe(dst, a, b) => { let r = ord_or_raise!(a, b, "Le"); wreg!(dst, Value::Bool(r <= 0)); }
+                &Instruction::CmpGt(dst, a, b) => { let r = ord_or_raise!(a, b, "Gt"); wreg!(dst, Value::Bool(r  > 0)); }
+                &Instruction::CmpGe(dst, a, b) => { let r = ord_or_raise!(a, b, "Ge"); wreg!(dst, Value::Bool(r >= 0)); }
 
                 // ── Logical ─────────────────────────────────────────────────
                 &Instruction::And(dst, a, b) => { let (va, vb) = (rreg!(a).is_truthy(), rreg!(b).is_truthy()); wreg!(dst, Value::Bool(va && vb)); }
@@ -1164,7 +1329,9 @@ impl<W: Write> VM<W> {
                         Value::Bool(b)    => write!(self.output, "{}", numeral_bool(*b, mode))?,
                         Value::Char(c)    => write!(self.output, "{}", c)?,
                         Value::Unit       => {},
-                        other             => write!(self.output, "{}", other)?,
+                        // Arrays and tuples render their elements in the active
+                        // script too (Display would hand back ASCII digits).
+                        other             => write!(self.output, "{}", other.to_display_in(mode))?,
                     }
                 }
                 Instruction::PrintNewline => {
@@ -2439,7 +2606,14 @@ impl<W: Write> VM<W> {
                     let f = match self.reg_get(src) {
                         Value::Int(n) => *n as f64,
                         Value::Float(f) => *f,
-                        other => other.to_string().parse::<f64>().unwrap_or(0.0),
+                        other => match ascii_digits(other.to_string().trim()).parse::<f64>() {
+                            Ok(f) => f,
+                            // The tree-walker rejects a non-number here; returning
+                            // 0.0 silently made the two engines disagree.
+                            Err(_) => raise!(VmError::TypeError {
+                                expected: "number", got: other.type_name().to_string()
+                            }),
+                        },
                     };
                     let s = vm_fmt_thousands(f, prec_kind, prec_n);
                     self.reg_set(dst, Value::String(ZyStr::new(s)));
@@ -2448,7 +2622,12 @@ impl<W: Write> VM<W> {
                     let f = match self.reg_get(src) {
                         Value::Int(n) => *n as f64,
                         Value::Float(f) => *f,
-                        other => other.to_string().parse::<f64>().unwrap_or(0.0),
+                        other => match ascii_digits(other.to_string().trim()).parse::<f64>() {
+                            Ok(f) => f,
+                            Err(_) => raise!(VmError::TypeError {
+                                expected: "number", got: other.type_name().to_string()
+                            }),
+                        },
                     };
                     let s = vm_fmt_scientific(f, prec_kind, prec_n);
                     self.reg_set(dst, Value::String(ZyStr::new(s)));
@@ -2459,7 +2638,16 @@ impl<W: Write> VM<W> {
                     let f = match self.reg_get(src) {
                         Value::Int(n) => *n as f64,
                         Value::Float(f) => *f,
-                        Value::String(s) => s.as_ref().trim().parse::<f64>().unwrap_or(0.0),
+                        // Digits in any script (a number rendered under a numeral
+                        // mode rounds like its ASCII twin); a string that is not a
+                        // number at all is an error, as it is in the tree-walker —
+                        // it used to become 0.0 without a word.
+                        Value::String(s) => match ascii_digits(s.as_ref().trim()).parse::<f64>() {
+                            Ok(f) => f,
+                            Err(_) => raise!(VmError::Generic(format!(
+                                "cannot convert string '{}' to number for rounding", s.as_ref()
+                            ))),
+                        },
                         other => raise!(VmError::TypeError { expected: "number", got: other.type_name().to_string() }),
                     };
                     let m = 10_f64.powi(precision as i32);
@@ -2469,7 +2657,12 @@ impl<W: Write> VM<W> {
                     let f = match self.reg_get(src) {
                         Value::Int(n) => *n as f64,
                         Value::Float(f) => *f,
-                        Value::String(s) => s.as_ref().trim().parse::<f64>().unwrap_or(0.0),
+                        Value::String(s) => match ascii_digits(s.as_ref().trim()).parse::<f64>() {
+                            Ok(f) => f,
+                            Err(_) => raise!(VmError::Generic(format!(
+                                "cannot convert string '{}' to number for truncation", s.as_ref()
+                            ))),
+                        },
                         other => raise!(VmError::TypeError { expected: "number", got: other.type_name().to_string() }),
                     };
                     let m = 10_f64.powi(precision as i32);
@@ -2568,7 +2761,7 @@ impl<W: Write> VM<W> {
                     // constraint cannot spin forever on a closed pipe.
                     let value = loop {
                         if let Some(pr) = prompt_reg {
-                            print!("{}", rreg!(*pr));
+                            print!("{}", self.numeral_repr(rreg!(*pr)));
                             std::io::stdout().flush().ok();
                         }
                         if in_tui {
@@ -2857,9 +3050,7 @@ impl<W: Write> VM<W> {
                     let res = !r!(a).equals(r!(b)); w!(dst, Value::Bool(res));
                 }
                 &Instruction::CmpGt(dst, a, b) => {
-                    let res = match (r!(a), r!(b)) {
-                        (Value::Int(x), Value::Int(y)) => x > y, _ => false
-                    };
+                    let res = ord_slow(r!(a), r!(b), "Gt")? > 0;
                     w!(dst, Value::Bool(res));
                 }
                 &Instruction::Not(dst, src) => {
@@ -2986,36 +3177,15 @@ impl<W: Write> VM<W> {
                     self.value_stack[base + *dst as usize] = result;
                 }
                 &Instruction::CmpLt(dst, a, b) => {
-                    let res = match (r!(a), r!(b)) {
-                        (Value::Int(x), Value::Int(y))       => x < y,
-                        (Value::Float(x), Value::Float(y))   => x < y,
-                        (Value::Int(x), Value::Float(y))     => (*x as f64) < *y,
-                        (Value::Float(x), Value::Int(y))     => *x < (*y as f64),
-                        (Value::String(x), Value::String(y)) => x.as_ref() < y.as_ref(),
-                        _ => false,
-                    };
+                    let res = ord_slow(r!(a), r!(b), "Lt")? < 0;
                     w!(dst, Value::Bool(res));
                 }
                 &Instruction::CmpLe(dst, a, b) => {
-                    let res = match (r!(a), r!(b)) {
-                        (Value::Int(x), Value::Int(y))       => x <= y,
-                        (Value::Float(x), Value::Float(y))   => x <= y,
-                        (Value::Int(x), Value::Float(y))     => (*x as f64) <= *y,
-                        (Value::Float(x), Value::Int(y))     => *x <= (*y as f64),
-                        (Value::String(x), Value::String(y)) => x.as_ref() <= y.as_ref(),
-                        _ => false,
-                    };
+                    let res = ord_slow(r!(a), r!(b), "Le")? <= 0;
                     w!(dst, Value::Bool(res));
                 }
                 &Instruction::CmpGe(dst, a, b) => {
-                    let res = match (r!(a), r!(b)) {
-                        (Value::Int(x), Value::Int(y))       => x >= y,
-                        (Value::Float(x), Value::Float(y))   => x >= y,
-                        (Value::Int(x), Value::Float(y))     => (*x as f64) >= *y,
-                        (Value::Float(x), Value::Int(y))     => *x >= (*y as f64),
-                        (Value::String(x), Value::String(y)) => x.as_ref() >= y.as_ref(),
-                        _ => false,
-                    };
+                    let res = ord_slow(r!(a), r!(b), "Ge")? >= 0;
                     w!(dst, Value::Bool(res));
                 }
                 &Instruction::NamedTupleGet(dst, tuple_reg, field_idx) => {
@@ -3298,7 +3468,7 @@ impl<W: Write> VM<W> {
                         Value::Bool(b)    => { let _ = write!(self.output, "{}", numeral_bool(*b, mode)); }
                         Value::Char(c)    => { let _ = write!(self.output, "{}", c); }
                         Value::Unit       => {}
-                        other             => { let _ = write!(self.output, "{}", other); }
+                        other             => { let _ = write!(self.output, "{}", other.to_display_in(mode)); }
                     }
                 }
                 &Instruction::PrintNewline => { let _ = writeln!(self.output); }

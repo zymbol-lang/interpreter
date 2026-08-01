@@ -872,6 +872,28 @@ a > b     // greater than
 a >= b    // greater than or equal
 ```
 
+**Ordering (`<`, `<=`, `>`, `>=`) follows one rule:**
+
+- **Numeric** when *both* sides are numbers. A string counts as a number when
+  `#|…|` would convert it — digits from **any** of the 69 supported scripts:
+
+  ```zymbol
+  >> ("10" > "9") ¶      // #1 — 10 > 9, not codepoint order
+  >> ("१०" > "९") ¶      // #1 — same comparison, Devanagari digits
+  >> ("४२" > 5) ¶        // #1
+  >> ("५" > "४") ¶       // #1
+  ```
+
+  No script is privileged: whatever ASCII digits do, every other script does.
+- **Lexicographic** when both sides are non-numeric text (`"abc" < "abd"` → `#1`).
+- **An error** when a number meets text that is not a number
+  (`"abc" > 5` → *cannot compare string 'abc' with integer 5*).
+
+Chars compare by code point and Bools order `#0 < #1`.
+
+Equality is *not* part of this rule: `==` never coerces, so `"5" == 5` is `#0`
+in every engine, and so is `"५" == 5`.
+
 ### Logical
 
 ```zymbol
@@ -3362,13 +3384,67 @@ w = "n=" $++ n     // $++
 >> w ¶             // → n=४२
 
 >>~ (1, 1) > n     // positioned output
+
+>> [1, 2, 3] ¶     // → [१, २, ३]  (elements, not brackets)
+>> (7, 8) ¶        // → (७, ८)
 ```
+
+The mode reaches *inside* collections: a number does not stop being a number by
+sitting in a list. Brackets, parentheses, commas, the `-` sign and the decimal
+`.` stay ASCII — only digits change.
 
 Only `Value::to_display_string()` itself — the bare, context-free conversion
 with no access to which mode is active — has no numeral awareness. Every
 runtime call site that turns a value into text goes through the active mode
 instead of that bare conversion, so there is no place left where a number
 silently reverts to ASCII while the mode is on.
+
+### Intent and Responsibility
+
+`#d0d9#` is a statement about how *this program* writes numbers, and Zymbol
+takes it literally: the mode applies to text the program later uses as data, not
+only to text a human reads.
+
+```zymbol
+#०९#
+n = 42
+
+io::write("dato{n}.txt", "…")   // creates dato४२.txt — not dato42.txt
+r = <\ "echo {n}" \>            // runs: echo ४२
+b = ("{n}" == "42")             // #० — different strings, same number
+```
+
+This is intent, not a leak: the language does not second-guess which of your
+strings are labels and which are file names. What the mode never touches is a
+serialization format with its own grammar — `json::encode` always emits ASCII
+digits, so encoded data stays parseable by everything else.
+
+Two practical consequences, both the developer's to manage:
+
+- If a value must stay ASCII, build it while the mode is off (or hand ASCII back
+  with `#09#` first). Juxtaposing a raw `Int` into a `<\ … \>` command
+  (`<\ "echo " n \>`) also keeps ASCII: the shell path converts values itself.
+- Reading the digits back always works — see *Reading Numerals Back* below.
+
+### Reading Numerals Back
+
+Output and input are symmetric: every numeric cast accepts digits from any of
+the 69 supported scripts, so a program can re-read what it just printed and a
+user can type what they were just shown.
+
+```zymbol
+#०९#
+n = 120
+s = "{n}"          // ← "१२०"
+
+>> #|s| ¶          // → १२०  (parsed as the Int 120, rendered in the mode)
+>> #.0|s| ¶        // → १२०  (round: same normalization)
+<<### edad         // accepts ४२ and 42 alike
+```
+
+The `-` sign and the decimal `.` are read as ASCII, matching how they are
+written. A string that is not a number at all is still rejected — `#.1|"abc"|`
+raises `cannot convert string 'abc' to number for rounding` in both engines.
 
 ### Boolean Output
 
@@ -3594,11 +3670,13 @@ ASCII `#` (U+0023). This means:
 | ---- | ------ |
 | Default mode | ASCII (`0`–`9`) |
 | Activation token | `#d0d9#` — zero and nine of any supported block |
-| Affected output | `>>`, `>>~`, interpolation, juxtaposition, `$++` — for Int, Float, Bool |
-| Unaffected | String content itself, Char, Array brackets, Tuple parentheses |
+| Affected output | `>>`, `>>~`, interpolation, juxtaposition, `$++` — for Int, Float, Bool, including the ones inside arrays and tuples |
+| Unaffected | String content itself, Char, Array brackets, Tuple parentheses, commas, `json::encode` |
 | Bool prefix | `#` always ASCII; digit adapts to active script |
 | Literals | Any script's digits valid as integer literals in source |
+| Numeric casts | `#\|…\|`, `#.N\|…\|`, `#!N\|…\|`, `<<###`, `<<#.` read digits from any script |
 | Float decimal point | Always ASCII `.` regardless of active mode |
+| Text used as data | Follows the mode too (file names, shell commands) — intended, and the developer's to validate |
 | Reset to ASCII | `#09#` |
 
 ---

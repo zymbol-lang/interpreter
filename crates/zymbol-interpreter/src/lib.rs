@@ -209,27 +209,42 @@ impl PartialEq for FunctionValue {
 }
 
 impl Value {
-    /// Convert value to displayable string
+    /// Convert value to displayable string, in ASCII numerals.
+    ///
+    /// Callers with access to the active numeral mode should use
+    /// `Interpreter::format_value` (or `to_display_string_in`) instead — this
+    /// bare form is for contexts that have no interpreter to read the mode from.
     pub fn to_display_string(&self) -> String {
+        self.to_display_string_in(numeral_mode::ASCII_BASE)
+    }
+
+    /// Convert value to displayable string with every digit rendered in the
+    /// numeral system identified by `block_base`.
+    ///
+    /// The mode reaches *inside* collections: an array of Ints under `#०९#`
+    /// renders each element in Devanagari, because a number does not stop being
+    /// a number by sitting in a list. Brackets, commas, the `-` sign and the
+    /// decimal `.` stay ASCII; strings and chars are never touched.
+    pub fn to_display_string_in(&self, block_base: u32) -> String {
         // Standalone Unit prints as nothing, but INSIDE a collection it must be
         // visible — `[1, , 3]` reads like a typo. Both engines render nested
         // Unit as `()` (the VM always did; the tree-walker since 2026-06-12).
-        fn nested(v: &Value) -> String {
+        fn nested(v: &Value, block_base: u32) -> String {
             match v {
                 Value::Unit => "()".to_string(),
-                other => other.to_display_string(),
+                other => other.to_display_string_in(block_base),
             }
         }
         match self {
             Value::String(s) => s.clone(),
-            Value::Int(n) => n.to_string(),
-            Value::Float(f) => f.to_string(),
+            Value::Int(n) => numeral_mode::to_numeral_int(*n, block_base),
+            Value::Float(f) => numeral_mode::to_numeral_float(*f, block_base),
             Value::Char(c) => c.to_string(),
-            Value::Bool(b) => if *b { "#1" } else { "#0" }.to_string(),
+            Value::Bool(b) => numeral_mode::to_numeral_bool(*b, block_base),
             Value::Array(elements) => {
                 let contents = elements
                     .iter()
-                    .map(nested)
+                    .map(|v| nested(v, block_base))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{}]", contents)
@@ -237,7 +252,7 @@ impl Value {
             Value::Tuple(elements) => {
                 let contents = elements
                     .iter()
-                    .map(nested)
+                    .map(|v| nested(v, block_base))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", contents)
@@ -245,7 +260,7 @@ impl Value {
             Value::NamedTuple(fields) => {
                 let contents = fields
                     .iter()
-                    .map(|(name, value)| format!("{}: {}", name, nested(value)))
+                    .map(|(name, value)| format!("{}: {}", name, nested(value, block_base)))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", contents)
@@ -268,6 +283,11 @@ impl Value {
     /// type unambiguous — strings get `"..."`, chars get `'...'`, Unit shows
     /// as `()`.  Used by the REPL to display evaluated expression results.
     pub fn to_repr_string(&self) -> String {
+        self.to_repr_string_in(numeral_mode::ASCII_BASE)
+    }
+
+    /// Repr form rendered in the numeral system identified by `block_base`.
+    pub fn to_repr_string_in(&self, block_base: u32) -> String {
         match self {
             Value::String(s) => format!("\"{}\"", s),
             Value::Char(c)   => format!("'{}'", c),
@@ -275,7 +295,7 @@ impl Value {
             Value::Array(elements) => {
                 let contents = elements
                     .iter()
-                    .map(|v| v.to_repr_string())
+                    .map(|v| v.to_repr_string_in(block_base))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{}]", contents)
@@ -283,7 +303,7 @@ impl Value {
             Value::Tuple(elements) => {
                 let contents = elements
                     .iter()
-                    .map(|v| v.to_repr_string())
+                    .map(|v| v.to_repr_string_in(block_base))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", contents)
@@ -291,12 +311,12 @@ impl Value {
             Value::NamedTuple(fields) => {
                 let contents = fields
                     .iter()
-                    .map(|(name, v)| format!("{}: {}", name, v.to_repr_string()))
+                    .map(|(name, v)| format!("{}: {}", name, v.to_repr_string_in(block_base)))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", contents)
             }
-            _ => self.to_display_string(),
+            _ => self.to_display_string_in(block_base),
         }
     }
 
@@ -406,10 +426,14 @@ pub struct Interpreter<W: Write> {
     pub(crate) move_guard_names: std::collections::HashSet<String>,
     /// Active output numeral system (block base codepoint).
     /// Default: 0x0030 (ASCII). Changed by #<d0><d9># statements.
-    /// Applies to every path that turns an Int/Float/Bool into displayed text:
-    /// `>>`, `>>~`, string interpolation, juxtaposition and `$++`. Only the bare
-    /// `Value::to_display_string()` (no numeral_mode field to read) stays ASCII —
-    /// every call site with `&self` access routes through the active mode instead.
+    /// Applies to every path that turns an Int/Float/Bool into text — `>>`,
+    /// `>>~`, string interpolation, juxtaposition, `$++` and the elements nested
+    /// inside arrays and tuples. That includes text the program then uses as
+    /// data (a shell command, a file name): the mode is a statement of intent
+    /// about how this program writes numbers, and validating that is the
+    /// developer's responsibility. Only the bare `Value::to_display_string()`
+    /// (no numeral_mode field to read) stays ASCII — every call site with
+    /// `&self` access routes through the active mode instead.
     pub(crate) numeral_mode: u32,
     /// Called by `<<` (input) statements to read one line from the user.
     /// Receives no arguments; the prompt is printed by execute_input via self.output
@@ -1122,28 +1146,16 @@ impl<W: Write> Interpreter<W> {
 
     /// Format a value for display using the current active numeral mode.
     ///
-    /// Numeric types (`Int`, `Float`, `Bool`) are rendered in the active script.
-    /// All other types use their standard `to_display_string()` form.
+    /// Numeric types (`Int`, `Float`, `Bool`) are rendered in the active script,
+    /// including the ones nested inside arrays, tuples and named tuples.
     pub fn format_value(&self, value: &Value) -> String {
-        let mode = self.numeral_mode;
-        match value {
-            Value::Int(n)   => numeral_mode::to_numeral_int(*n, mode),
-            Value::Float(f) => numeral_mode::to_numeral_float(*f, mode),
-            Value::Bool(b)  => numeral_mode::to_numeral_bool(*b, mode),
-            _               => value.to_display_string(),
-        }
+        value.to_display_string_in(self.numeral_mode)
     }
 
     /// Repr form of `format_value`: numerals respect the active numeral mode,
     /// strings/chars are quoted, Unit shows as `()`.  Used by the REPL.
     pub fn format_value_repr(&self, value: &Value) -> String {
-        let mode = self.numeral_mode;
-        match value {
-            Value::Int(n)   => numeral_mode::to_numeral_int(*n, mode),
-            Value::Float(f) => numeral_mode::to_numeral_float(*f, mode),
-            Value::Bool(b)  => numeral_mode::to_numeral_bool(*b, mode),
-            _               => value.to_repr_string(),
-        }
+        value.to_repr_string_in(self.numeral_mode)
     }
 
     /// Execute a program

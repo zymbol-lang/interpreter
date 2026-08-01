@@ -1,0 +1,18 @@
+--- literals in a non-ASCII script, ASCII mode ---
+42
+42
+42.7
+-42
+3.5
+--- ASCII digits still behave the same ---
+42
+42
+42.7
+--- the full round trip under an active mode ---
+rendered      १२०
+read back     १२०
+rounded       १२०
+plus one      १२१
+--- and in ASCII it is the same 120 ---
+120
+240
