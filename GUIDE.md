@@ -4,7 +4,7 @@
 > `zymbol run` (tree-walker) and `zymbol run --vm` (register VM).
 > If a construct is not documented here, it may not be implemented.
 
-**Interpreter version**: v0.0.8 (unreleased)
+**Interpreter version**: v0.0.8
 **Test coverage**: golden-file pairs verified on both engines (`vm_compare`); `@vm-skip` files excluded from VM parity
 
 **New in v0.0.8**: `std/term` (terminal display metrics — column-accurate `width`, padding

@@ -7,17 +7,23 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
-## [0.0.8] — Unreleased
+## [0.0.8] — 2026-08-01
 
 Memory-model debt release: every divergence found by the design-vs-implementation
 audit in [MEMORY_MODEL.md](MEMORY_MODEL.md) is resolved — findings MM-1 … MM-9 plus
-the two VM parity bugs (MM-10, MM-11) discovered while verifying the fixes.
+the two VM parity bugs (MM-10, MM-11) discovered while verifying the fixes. Three
+validation projects written in Zymbol (zy-GO, zy-Serpiente, zyKlingonGalaxy) contributed
+the rest: HLZ-001 … HLZ-011, HLZ-SRP-001 and HLZ-KL-001 are findings from writing real
+applications, not from unit tests.
 
-Measured on the branch: **894 unit tests**, **541/541 TW/VM parity**, **520/522 golden**.
+Measured on the branch: **936 unit tests**, **544/544 TW/VM parity**, **523/525 golden**,
+formatter property suite **600 PASS / 0 FAIL** with no regressions against the baseline.
 The two golden failures are stale hand-written `.expected` fixtures, not interpreter
-regressions — see [IMPL_V008.md](IMPL_V008.md) § E.1, which also records two other pieces
-of known debt: the formatter does not escape char/string literals inside match patterns
-(§ E.2), and five v0.0.8 fixes are not yet ported to the browser interpreter (§ E.3).
+regressions — see [IMPL_V008.md](IMPL_V008.md) § E.1. The one remaining piece of known
+debt is § E.3: the browser interpreter is behind the Rust engines on **seven** cases — six
+v0.0.8 fixes with no counterpart there yet, plus one float-literal precision bug that
+predates this release and was only found once the playground's examples became real files
+on disk.
 
 ### Added
 
@@ -54,9 +60,10 @@ of known debt: the formatter does not escape char/string literals inside match p
 - The previously dead wiring (`set_destruction_schedule`, `statement_index`)
   was removed; `zymbol check`'s ambiguous-lifetime warnings (old def-use
   analyzer) are unchanged.
-- Verified: 847 unit tests (12 new analyzer + 2 interpreter), 519/519 TW/VM
-  parity, 503/503 golden, 89/89 GUIDE examples, benchmark gate 14/14 with no
-  regressions.
+- Verified when it landed: 847 unit tests (12 new analyzer + 2 interpreter),
+  519/519 TW/VM parity, 503/503 golden, 89/89 GUIDE examples, benchmark gate
+  14/14 with no regressions. (Counts at that commit — the release totals are in
+  the header above.)
 
 **`std/term` — terminal display metrics (both engines)**
 
@@ -109,9 +116,10 @@ of known debt: the formatter does not escape char/string literals inside match p
   of emitting the arm body inline per pattern kind — the `Or` case chains
   this helper across alternatives, patching the last one's failure to skip
   the whole arm and every earlier one's success to jump to the body.
-- Mirrored in the browser interpreter (`web/zymbol.js`): `parseMatchPattern`
-  wraps `parseMatchPatternPrimary` with the same top-level-only `||` chaining,
-  and `matchPattern`'s new `'or'` case tests alternatives left to right.
+- Mirrored in the browser interpreter (`web/src/zymbol/zymbol.js`):
+  `parseMatchPattern` wraps `parseMatchPatternPrimary` with the same
+  top-level-only `||` chaining, and `matchPattern`'s new `'or'` case tests
+  alternatives left to right.
 - Regression: `tests/match/16_or_pattern_basic.zy`,
   `tests/match/17_or_pattern_mixed.zy`, `tests/match/18_or_pattern_block.zy`
   (all TW == VM). Verified byte-identical against the JS mirror as well.
@@ -163,15 +171,49 @@ of known debt: the formatter does not escape char/string literals inside match p
 - The writer is deterministic: fixed 1980-01-01 timestamps and fixed entry
   order, so the same source tree always produces a byte-identical archive and a
   `.zyp` can be verified by hash.
-- Web: `web/zyp.js` reads the ZIP by hand (central directory +
+- Web: `web/src/zymbol/zyp.js` reads the ZIP by hand (central directory +
   `DecompressionStream('deflate-raw')`) — no bundler, no CDN, consistent with
-  `web/`'s no-build-step policy. Loading a `.zyp` in the playground opens one
-  tab per source file, named by full relative path (e.g. `核/盤.zy`), and shows
-  a script picker populated from the manifest.
+  `web/`'s no-build-step policy. Loading a `.zyp` in the playground **mounts**
+  the whole source tree (visible in the sidebar and to the module resolver,
+  named by full relative path, e.g. `packages/go/核/盤.zy`) but **opens only
+  one tab**, the default `[[script]]`; the manifest's scripts populate the
+  picker next to ▶ Run.
 - Tests: `crates/zymbol-package/tests/roundtrip.rs` plus unit tests over
   manifest validation, the pre-1.0 semver trap, path-traversal rejection, and
-  closure/warning behavior. `web/test_zyp.mjs` covers the browser reader and
-  module resolver against fixtures it builds itself.
+  closure/warning behavior. `web/tests/test_zyp.mjs` covers the browser reader
+  and module resolver against fixtures it builds itself.
+
+### Changed
+
+**One shared module-path resolution rule — `ModulePath::resolve_from`**
+
+- The tree-walker, the semantic analyzer and the VM compiler each carried their
+  own copy of "given this import and this importing file, which file is it?".
+  They agreed on the common case and diverged on the rest: `compile_import`
+  ignored `is_absolute` and `home_relative`, so `<# /abs/path => x` and
+  `<# ~/lib/x => x` resolved to a *different file* under `--vm` than under the
+  tree-walker — silently, because both paths existed in a normal checkout.
+- `ModulePath::resolve_from(&self, importer: &Path) -> PathBuf` is now the
+  single rule, and all three call it. Adding a path form (or changing how one
+  resolves) is one edit instead of three that can drift.
+- Found while adding `.zyp` packaging, which needed a fourth consumer of the
+  same rule for closure computation and would have inherited whichever copy it
+  was written against.
+- Regression: `tests/modules_scope/alias_shadowed_by_variable.zy` (TW == VM).
+
+**`zymbol check` now checks the whole program, not just the named file**
+
+- It followed no imports: a module that failed to parse or type-check was
+  invisible until run time, so `check` returning clean meant nothing for any
+  project organised in modules. It now walks imports transitively (stdlib
+  excluded, cycles cut) and reports each module's errors at the module's own
+  line, followed by `note: reached from <importer>`.
+- Style warnings (unused variables, ambiguous lifetimes) deliberately stay with
+  the file named on the command line — they are about the code you are editing,
+  not about its dependencies.
+- The LSP gets the same coverage through `ModuleIndex::set_module_errors`, plus
+  a new `module-has-errors` diagnostic on the import line, so a broken
+  dependency is visible in the editor at the place that pulls it in.
 
 ### Fixed
 
@@ -290,6 +332,7 @@ emitting ASCII, because a serialization format has a grammar of its own.
   `test_round_rejects_non_numeric_string_in_both_engines`; the web example
   `examples/numerals/composed.zy` covers collections and the round trip in the
   CLI↔JS parity run.
+
 **Ordering comparisons: one rule, and no second-class digit script**
 
 `? "5" > 5` coerced the string and answered `#0`; `? "४२" > 5` raised *cannot
@@ -321,6 +364,54 @@ citizen of its own language.
   `test_order_non_numeric_strings_stay_lexicographic`,
   `test_order_number_against_text_is_an_error` and
   `test_order_rule_is_identical_in_both_engines`.
+
+**Static-tooling audit: what `check` and the LSP could not see**
+
+Running the analyzer over the workspace's ~918 `.zy` files and diffing its
+diagnostics against `zymbol check` and against what actually happens at run time
+surfaced four divergences. The recursive `check` is filed under **Changed**
+above (it is new coverage, not a repaired behavior); the other three are bugs.
+The audit is repeatable: `crates/zymbol-analyzer/examples/lsp_scan.rs` prints
+the analyzer's diagnostics for a list of files.
+
+- **A re-export was dropped on the indexer's first pass.**
+  `index_background_module` registered a file's imports *after* reading its
+  export block — but a re-export (`alias::item => name`) resolves its source
+  through that same file's alias map, which did not exist yet. Every i18n layer
+  module therefore looked like it exported nothing: **33 false
+  `export-not-found` diagnostics** across serpiente, klingon_galaxy,
+  aprende_zymbol and api_demo, on code that runs correctly. Imports are now
+  registered first. Count after the fix: 0.
+- **`std/` modules were a blind spot for every static tool.** They have no file
+  on disk, so an alias bound to one was never validated: `math::inventada()`,
+  `m::PI()` (calling a constant), `m.sin` (reading a function as a value), and a
+  typo in a stdlib re-export (`t::widht => ancho`, which silently breaks every
+  caller of an i18n layer) all passed `zymbol check` in silence and showed
+  nothing in the editor. `zymbol_common::stdlib` is now the shared export table
+  — names plus arity — and both `check` and the LSP report through the single
+  `zymbol_semantic::check_stdlib_access`, with a "did you mean" for near
+  misses. A named-tuple field may legitimately share an alias's name
+  (`resp.json.user`), so only a name that does not itself follow `.` or `::` is
+  read as a module access.
+  `crates/zymbol-cli/tests/stdlib_parity.rs` fails if the table ever drifts from
+  what the tree-walker and the VM compiler actually implement, so the fix cannot
+  rot the way a hand-maintained list would. See REFERENCE.md L27.
+- **The formatter could not format a file with an escaped literal in a match
+  pattern.** `format_pattern`'s `Pattern::Literal` arm wrote `lit.to_string()`
+  — `Display`, which does not escape — while the *expression* path correctly
+  used `escape_char`/`escape_string`. So `'\n'` in an expression formatted fine
+  and `'\n'` in a `??` arm came back as a real newline between two quotes, which
+  no longer lexes. The fail-closed safety gate caught it every time and refused
+  to write (no file was ever corrupted), but that made `zymbol fmt` unusable on
+  any file with `'\n'`, `'\t'`, `'\r'`, `'\0'` or `'\\'` in a match arm — which
+  is exactly what key handling in a TUI program looks like. String patterns took
+  the same path. Both now route through the expression escaper.
+- Regression: `crates/zymbol-semantic/src/stdlib_access.rs` (8 cases),
+  `crates/zymbol-cli/tests/cli_check_stdlib.rs` (4 cases),
+  `crates/zymbol-cli/tests/stdlib_parity.rs`, and
+  `tests/bugs/bug_char_escape_lexing.zy`, which is in the formatter property
+  corpus — `fmt_property.sh` reported it as a P1 failure before the fix and
+  reports 0 failures after.
 
 **Findings from the zy-GO validation project (HLZ-001 … HLZ-009)**
 
@@ -1566,10 +1657,11 @@ Initial release — Zymbol-Lang interpreter v5I.
 
 ---
 
-[Unreleased]: https://github.com/zymbol-lang/zymbol/compare/v0.0.6...HEAD
-[0.0.6]: https://github.com/zymbol-lang/zymbol/compare/v0.0.5...v0.0.6
-[0.0.5]: https://github.com/zymbol-lang/zymbol/compare/v0.0.4...v0.0.5
-[0.0.4]: https://github.com/zymbol-lang/zymbol/compare/v0.0.3...v0.0.4
-[0.0.3]: https://github.com/zymbol-lang/zymbol/compare/v0.0.2...v0.0.3
-[0.0.2]: https://github.com/zymbol-lang/zymbol/compare/v0.0.1...v0.0.2
-[0.0.1]: https://github.com/zymbol-lang/zymbol/releases/tag/v0.0.1
+[0.0.8]: https://github.com/zymbol-lang/interpreter/compare/v0.0.7...v0.0.8
+[0.0.7]: https://github.com/zymbol-lang/interpreter/compare/v0.0.6...v0.0.7
+[0.0.6]: https://github.com/zymbol-lang/interpreter/compare/v0.0.5...v0.0.6
+[0.0.5]: https://github.com/zymbol-lang/interpreter/compare/v0.0.4...v0.0.5
+[0.0.4]: https://github.com/zymbol-lang/interpreter/compare/v0.0.3...v0.0.4
+[0.0.3]: https://github.com/zymbol-lang/interpreter/compare/v0.0.2...v0.0.3
+[0.0.2]: https://github.com/zymbol-lang/interpreter/compare/v0.0.1...v0.0.2
+[0.0.1]: https://github.com/zymbol-lang/interpreter/releases/tag/v0.0.1

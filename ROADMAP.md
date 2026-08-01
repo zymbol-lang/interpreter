@@ -1,12 +1,12 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **v0.0.8 (unreleased)** — a *debt* release, scoped by evidence rather
+> Current status: **v0.0.8** — a *debt* release, scoped by evidence rather
 > than by a feature wish list: the design-vs-implementation audit in `MEMORY_MODEL.md`
 > (MM-1 … MM-11) plus findings from three validation projects written in Zymbol
 > (zy-GO, zy-Serpiente, zyKlingonGalaxy). Highlights: auto-free (destruction at last use,
 > both engines), `std/term`, `##!` on `Char`, match or-patterns (`p1 || p2`), Zymbol
 > Packages (`.zyp`), and VM module-system parity. See `IMPL_V008.md`.
-> Validation: 541/541 VM-parity, 894 unit tests.
+> Validation: 544/544 VM-parity, 936 unit tests.
 >
 > Previously: **v0.0.7 (released 2026-07-02)** — native stdlib expansion (`std/json`,
 > `std/io`, `std/net`, `std/db` via ODBC), typed/validated input (`<< ##.(5,2) "p" var`),
@@ -92,11 +92,11 @@
 
 | Suite | Status |
 |-------|--------|
-| Unit + integration (`cargo test`) | ✅ 894 passed, 0 failed |
-| VM parity check (`vm_compare.sh`) | ✅ 541/541 PASS |
-| Golden files (`expected_compare.sh`) | ⚠️ 520/522 — two stale hand-written `.expected` fixtures, not interpreter regressions (see `IMPL_V008.md` § E.1) |
-| Formatter property suite (`fmt_property.sh`) | ⚠️ 1 new P1 failure vs. baseline — the formatter does not escape char/string literals in match patterns (see `IMPL_V008.md` § E.2) |
-| JS mirror parity (`web/test_runner.mjs`) | ⚠️ 513/518 — five v0.0.8 fixes not yet ported to `web/zymbol.js` (see `IMPL_V008.md` § E.3) |
+| Unit + integration (`cargo test`) | ✅ 936 passed, 0 failed |
+| VM parity check (`vm_compare.sh`) | ✅ 544/544 PASS, 0 skipped |
+| Golden files (`expected_compare.sh`) | ⚠️ 523/525 — two stale hand-written `.expected` fixtures, not interpreter regressions (see `IMPL_V008.md` § E.1) |
+| Formatter property suite (`fmt_property.sh`) | ✅ 600 PASS / 43 SKIP / 0 FAIL over 643 files, no regressions vs. baseline (the pattern-escaping bug, § E.2, is fixed) |
+| JS mirror parity (`web/tests/test_runner.mjs`) | ⚠️ 516/521 + 208/210 on the example pool — seven gaps in `web/src/zymbol/zymbol.js` (see `IMPL_V008.md` § E.3) |
 | RosettaStone i18n suite (105 languages) | ✅ PASS |
 
 ---
@@ -162,7 +162,7 @@ worse than no line: it sends projects to the tree-walker by default, which is ex
 zy-GO did before HLZ-008 was found.
 
 - ~~**Module system in VM**~~ — HLZ-008, HLZ-009, HLZ-010, MM-10 and MM-11 closed the known
-  divergences. `tests/scripts/vm_compare.sh` reports **541/541** files byte-identical under
+  divergences. `tests/scripts/vm_compare.sh` reports **544/544** files byte-identical under
   both engines, `tests/modules_scope/` included. Exactly one test carries `@vm-skip`
   (`tests/gaps/gap_key_input_type_check.zy`) and it is skipped by design — it is a
   `zymbol check` test that never executes.

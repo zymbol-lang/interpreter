@@ -1,16 +1,22 @@
 # Implementation Plan — v0.0.8 Memory Model, Auto-Free, and Validation-Driven Fixes
 
-> **Status: implemented on branch `v0.0.8`, not yet released.** `Cargo.toml` already reads
-> `version = "0.0.8"`; the CHANGELOG entry is still `[0.0.8] — Unreleased`, there is no
-> `v0.0.8` tag and `main` has not been merged. Part II below is what remains to close the
-> version.
+> **Status: code and documentation complete on branch `v0.0.8`; the tag is not cut.**
+> `Cargo.toml` reads `version = "0.0.8"` and the CHANGELOG entry is dated `2026-08-01`.
+> `main` has not been merged and there is no `v0.0.8` tag — that is the remaining step,
+> and it is the trigger for the four release workflows. Part II below is the closure
+> checklist.
 >
-> **Documentation pass — 2026-07-29.** Every document listed in Part II § A has been
-> reconciled against the code, and feature #11 (`.zyp` packages) has been documented across
-> CHANGELOG / ARCHITECTURE / GUIDE / REFERENCE / SYMBOLS / ROADMAP / README. Two pieces of
-> real debt were found while verifying, and are recorded in § E below rather than silently
-> fixed. Current measured state: **894 unit tests**, **541/541 TW/VM parity**,
-> **520/522 golden**, formatter property suite **1 new P1 failure vs. baseline**.
+> **Documentation pass — 2026-07-29.** Every document listed in Part II § A was reconciled
+> against the code, and feature #11 (`.zyp` packages) was documented across CHANGELOG /
+> ARCHITECTURE / GUIDE / REFERENCE / SYMBOLS / ROADMAP / README. Three pieces of real debt
+> were found while verifying and recorded in § E rather than silently fixed.
+>
+> **Release pass — 2026-08-01.** Three changes landed after that pass (features #12–#14
+> below: numeral-mode reach, the ordering rule, and the static-tooling audit), § E.2 is
+> **fixed**, and every figure in this document was re-measured. Current state:
+> **936 unit tests** · **544/544 TW/VM parity** · **523/525 golden** (§ E.1) ·
+> **formatter property 600 PASS / 0 FAIL, no regressions** · **benchmark gate 14/14**.
+> One item of debt remains open (§ E.3) and one decision is unmade (§ E.1).
 
 Unlike v0.0.7 (a stdlib expansion designed up front), v0.0.8 is a **debt release**: its
 scope was set by two sources of evidence, not by a feature wish list —
@@ -75,10 +81,15 @@ implement it.
 | 9 | Frame-local runtime state (MM-1, MM-3), module write-back (MM-2), import-time semantic gate (MM-4) | Fixed | TW + VM | audit |
 | 10 | Match or-patterns `p1 \|\| p2` (alternatives in a `??` arm) | Added | TW + VM + JS mirror | direct request, zy-GO key handling |
 | 11 | Zymbol Packages (`.zyp`) — `zymbol package`, `zymbol run pkg.zyp` | Added | CLI + web | distributing zy-GO as one file |
+| 12 | Numeral mode reaches every string-building path, and collections | Fixed | TW + VM + JS mirror | zyKlingonGalaxy HUD + audit |
+| 13 | One ordering rule for `<`/`<=`/`>`/`>=` in all three engines | Fixed | TW + VM + JS mirror | audit of #12 |
+| 14 | Static-tooling audit: recursive `check`, stdlib visibility, re-export indexing order, pattern escaping | Changed + Fixed | check/LSP/formatter | LSP-vs-`check`-vs-runtime sweep |
 
-Verified on the branch: 847 unit tests, 519/519 TW/VM parity, 503/503 golden,
-89/89 GUIDE examples, benchmark gate 14/14 with no regressions (features #10 and #11
-landed after this count was taken — see § 10 and § 11 for their own verification).
+Features #12–#14 arrived after the documentation pass, from two audits rather than from a
+validation project — see § 12–§ 14. They are the reason this document has a second
+verification date: the earlier figures in Part I (847 unit tests, 519/519 parity, 503/503
+golden) are the counts at the commit each section describes, kept as written. The current
+totals are in the status block at the top and in "Verification commands" below.
 
 ## 11. Zymbol Packages (`.zyp`)
 
@@ -121,11 +132,13 @@ requirement, which pre-1.0 matches only `0.0.8` exactly and would refuse to run 
 `zymbol package` always synthesizes `engine = ">=x.y.z"`, and a unit test pins that
 behavior.
 
-Web side: `web/zyp.js` reads the ZIP by hand (central directory +
-`DecompressionStream('deflate-raw')`), and `web/module-resolver.js` provides the
+Web side: `web/src/zymbol/zyp.js` reads the ZIP by hand (central directory +
+`DecompressionStream('deflate-raw')`), and `web/src/zymbol/module-resolver.js` provides the
 path-normalizing resolver that replaced one which collapsed every import to its basename —
 silently colliding same-named modules in different directories and defeating zymbol.js's
-module cache and circular-import detection.
+module cache and circular-import detection. Loading a `.zyp` **mounts** the whole tree and
+**opens one tab** (the default `[[script]]`); mounted ≠ open is the playground's file model,
+and the reason a 22-file package no longer opens 22 tabs.
 
 ---
 
@@ -346,7 +359,7 @@ non-literal pattern is involved.
   formatter (`p1 || p2` round-trips unchanged) each gained a one-line `Or` arm that
   recurses into the alternatives — no new logic, since an alternative is just another
   pattern.
-- Mirrored in the browser interpreter (`web/zymbol.js`): `parseMatchArm` now calls
+- Mirrored in the browser interpreter (`web/src/zymbol/zymbol.js`): `parseMatchArm` now calls
   `parseMatchPattern`, which wraps the old arm-parsing body (renamed
   `parseMatchPatternPrimary`) with the same top-level-only `||` chaining;
   `matchPattern` gained an `'or'` case with the same left-to-right short-circuit.
@@ -359,10 +372,129 @@ non-literal pattern is involved.
 - Verified: `cargo test` (all crates, no failures), `vm_compare.sh` 539/539 (536
   pre-existing files plus 3 new), `fmt_property.sh --baseline` no regressions (598/598
   non-skipped),
-  byte-identical output against the `web/zymbol.js` mirror on every example in the
+  byte-identical output against the `web/src/zymbol/zymbol.js` mirror on every example in the
   GUIDE section and in the three new test files. Regression tests:
   `tests/match/16_or_pattern_basic.zy`, `tests/match/17_or_pattern_mixed.zy`,
   `tests/match/18_or_pattern_block.zy` (each TW == VM).
+
+## 11b. One module-path resolution rule (`ModulePath::resolve_from`)
+
+Landed alongside feature #10 and easy to miss, because it looks like a refactor and is
+actually a fixed divergence. The tree-walker, the semantic analyzer and the VM compiler
+each answered "given this import and this importing file, which file is it?" separately.
+They agreed on relative paths and diverged on the rest: `compile_import` ignored
+`is_absolute` and `home_relative`, so `<# /abs/path => x` resolved to a *different file*
+under `--vm` than under the tree-walker — silently, because both paths exist in a normal
+checkout.
+
+`ModulePath::resolve_from(&self, importer: &Path) -> PathBuf` is now the single rule and
+all three call it. `zymbol-package`'s closure computation was the fourth would-be consumer
+and is what forced the consolidation: it would otherwise have inherited whichever copy it
+was written against, and a package's contents would have depended on which engine's rule
+its author had in mind.
+
+> Rule, same shape as § 7: never re-derive "which file does this import mean?" locally.
+> There is one answer and it lives in `ModulePath`.
+
+## 12. Numeral mode reaches every string-building path
+
+`#d0d9#` sets the active output digit script. Only `>>`'s own per-item formatting was ever
+numeral-aware, so the *same value* through a different route to the screen silently
+reverted to ASCII: `#०९#` then `y = "{n}"` then `>> y` printed `0`–`9`.
+
+The generic conversions — `Value::to_display_string()` (TW), `to_string_repr()`/`Display`
+(VM) — have no interpreter context and therefore no mode to read. **They are unchanged.**
+The fix is at every call site that *did* have `&self`/`&mut self` access to the mode and
+was calling the context-free conversion anyway: `value_to_concat_str` (juxtaposition and
+`$++`), `interpolate_string`, both `execute_output_pos` branches, and in the VM both copies
+each of `ConcatStr`, `ConcatBuild`, `BuildStr`, plus `PrintAt` and the `ReadLine` prompt.
+
+An audit of that fix then found three things it had left undone, and one thing that only
+looked like a defect:
+
+1. **Collections reverted at depth.** `>> [1, 2, 3]` printed ASCII while each element
+   printed alone followed the mode — the conversion applied the mode at the top level only.
+   `to_display_string_in`/`to_repr_string_in` (TW) and `to_display_in` (VM) recurse over
+   arrays, tuples and named tuples. Brackets, commas and separators stay ASCII: they are
+   syntax, not numbers.
+2. **The digits did not come back.** `#|…|` normalized Unicode digits but `#.N|…|`,
+   `#!N|…|`, `<<###`, `<<#.` and `<<#(n,d)` did not — a program could render `१२०` and
+   then refuse to read it. All numeric casts normalize through a shared `ascii_digits`
+   helper before parsing. Non-numeric strings are still rejected.
+3. **The VM answered `0` where the tree-walker raised.** `#.1|"४२"|` was an error in one
+   engine and `0` in the other; `c|…|`/`e|…|` on a non-number likewise. Both now fail with
+   the tree-walker's message. (Pre-existing, exposed by the audit.)
+4. **Not a defect: the mode also reaches text used as *data*.** A file name or shell
+   command built by interpolation gets the active script too. That is intended — `#d0d9#`
+   states how *this program* writes numbers, and validating that is the developer's
+   responsibility. Documented in GUIDE.md § "Intent and Responsibility", with the one
+   exception: `json::encode` keeps emitting ASCII, because a serialization format has a
+   grammar of its own.
+
+> **Performance note, worth keeping.** The first version routed *every* concatenation
+> through `numeral_int`, allocating an intermediate `String` even in ASCII mode: ~8% on
+> `"label" i` in a 3M-iteration loop (VM 0.34 s → 0.37 s, TW 0.750 s → 0.793 s).
+> `map_ascii_digits` now takes its buffer by value and the VM's hot paths write straight
+> into the destination when the mode is ASCII. Back to 0.32–0.34 s / 0.75 s. A correctness
+> fix on a hot path needs a before/after measurement, not just a passing test.
+
+## 13. One ordering rule, and no second-class digit script
+
+`? "5" > 5` coerced and answered `#0`; `? "४२" > 5` raised *cannot compare*. Same operator,
+same shape of operands, and the only difference was which script wrote the digits.
+
+The three engines had three implementations and disagreed **even in ASCII**: `"5" > 5` was
+`#0` in the tree-walker and `#1` in the VM (whose `cmp_direct` returned "greater" for every
+pair outside its table); `"10" > "9"` was `#1` in the tree-walker and `#0` in the VM; and
+the VM's call-frame loop held a *third* variant that answered `false` for anything but
+`Int`/`Int`.
+
+The rule, now identical in all three:
+
+| Operands | Result |
+|----------|--------|
+| both are numbers (a string counts if `#\|…\|` would convert it — any of the 69 scripts) | numeric comparison |
+| both are non-numeric text | lexicographic |
+| a number meets text that is not a number | error, same message in every engine |
+
+Equality is deliberately **excluded**: `==` never coerces, so `"5" == 5` and `"५" == 5` are
+both `#0`. Also aligned: `'a' < 'b'` and `#0 < #1` were a VM feature and a tree-walker
+error; both compare them now.
+
+Implementation: `cmp_order`/`cmp_order_error` (VM, used by both interpreter loops), the
+rewritten string arms of `compare_values` (TW), and `orderValues` in
+`web/src/zymbol/zymbol.js`.
+
+## 14. The static-tooling audit
+
+Two engines had been audited against each other all release (`vm_compare.sh`). The tools
+had not been audited against either. Running the analyzer over the workspace's ~918 `.zy`
+files and diffing its diagnostics against `zymbol check` and against run-time behavior
+found four divergences — repeatable via
+`crates/zymbol-analyzer/examples/lsp_scan.rs`, which prints the analyzer's diagnostics for
+a file list.
+
+| Divergence | What it cost |
+|---|---|
+| `check` followed no imports | A module that failed to parse was invisible until run time; `check` returning clean meant nothing for a modular project. Now transitive (stdlib excluded, cycles cut), with `note: reached from <importer>`. LSP gets it via `ModuleIndex::set_module_errors` + a `module-has-errors` diagnostic on the import line |
+| `index_background_module` registered imports *after* reading the export block | A re-export resolves through the file's own alias map, which did not exist yet → every i18n layer looked like it exported nothing: **33 false `export-not-found`** across four projects. Now 0 |
+| `std/` has no file on disk | `math::inventada()`, `m::PI()`, `m.sin`, and a typo in a stdlib re-export all passed `check` in silence. `zymbol_common::stdlib` is the shared export table; `check_stdlib_access` is the single reader for both `check` and the LSP |
+| `format_pattern` printed literals via `Display` | `'\n'` in a `??` arm came back as a raw newline and no longer lexed; the fail-closed gate refused to write, so `zymbol fmt` was unusable on TUI key-handling code. Now routed through the expression escaper — this closes § E.2 |
+
+Two properties of this audit are worth carrying into v0.0.9:
+
+- **The style-vs-correctness split is deliberate.** Recursive `check` reports *errors* from
+  imported modules but leaves *warnings* (unused variables, ambiguous lifetimes) with the
+  file named on the command line. A warning is about the code you are editing; an error in
+  a dependency is about whether your program runs at all.
+- **`stdlib_parity.rs` is the part that does not rot.** A hand-maintained export table would
+  drift from the implementation within one release. That test fails if the table diverges
+  from what the tree-walker or the VM compiler actually registers, which is what makes the
+  fix durable rather than a snapshot.
+
+> Rule: two implementations checked against each other is not coverage. `vm_compare.sh`
+> compared TW to VM for the whole release and never once ran the analyzer. Every tool that
+> claims to answer "is this program correct?" needs its answer diffed against the others.
 
 ---
 
@@ -375,18 +507,21 @@ because the branch touched features that five documents describe.
 
 | Item | State | Action |
 |------|-------|--------|
-| `REFERENCE.md` | ✅ **done 2026-07-29** — version line now reads v0.0.8 (unreleased); auto-free documented under memory semantics with the VM-temporaries limitation; `.zyp` error taxonomy added with the real message strings from `PackageError`; `##!` on Char was already in the symbol table | — |
+| `REFERENCE.md` | ✅ **done 2026-07-29** — version line now reads v0.0.8; auto-free documented under memory semantics with the VM-temporaries limitation; `.zyp` error taxonomy added with the real message strings from `PackageError`; `##!` on Char was already in the symbol table | — |
 | `ARCHITECTURE.md` | ✅ **done 2026-07-29** — `last_use` added to `zymbol-semantic`; auto-free and `std/term` added to the tree-walker's feature list; new `zymbol-package` crate section; crate count 18 → 19; dependency graph, CLI table and TW/VM parity table updated | — |
 | `README.md` | ✅ **done 2026-07-29** — badge v0.0.7 → v0.0.8; stdlib/packages/auto-free bullets; `zymbol package` in Quick Start with the build-vs-package distinction; test figures and project layout corrected | — |
 | `SYMBOLS.md` | ✅ **done 2026-07-29** — new "Symbol Changes in v0.0.8" section: `\|\|` or-patterns, `##!` extended to Char, `std/term` as a module (with the screen-vs-content boundary), and `.zyp` as having no grammar surface at all | — |
-| `ROADMAP.md` | ✅ **done 2026-07-29** — "VM completeness" rewritten as a statement of measured parity (541/541), both stale bullets struck through with evidence; status header now v0.0.8; `std/term` and the v0.0.8 features added to "What's Done"; Package Manager section reframed around `.zyp` as its first step | — |
-| `IMPLEMENTATION.md` | ✅ **done 2026-07-29** — parity figure corrected to 541/541; auto-free and `.zyp` rows added to the coverage table | — |
+| `ROADMAP.md` | ✅ **done 2026-07-29**, figures refreshed 2026-08-01 — "VM completeness" rewritten as a statement of measured parity (544/544), both stale bullets struck through with evidence; status header now v0.0.8; `std/term` and the v0.0.8 features added to "What's Done"; Package Manager section reframed around `.zyp` as its first step; the suite table's formatter and JS-mirror rows updated | — |
+| `IMPLEMENTATION.md` | ✅ **done 2026-07-29**, figures refreshed 2026-08-01 — parity figure now 544/544; auto-free and `.zyp` rows added to the coverage table | — |
 | `GUIDE.md` | ✅ **done 2026-07-29** — the `.zyp` section no longer delegates to `CLAUDE.md` (which is agent instructions, not user documentation): manifest format, the `>=` semver warning, the full `W001`–`W011` table, the extraction/cwd split, engine precedence, and browser loading are all inline | — |
 | `MEMORY_MODEL.md` | already covers the v0.0.8 features | No action |
-| `CHANGELOG.md` | `[0.0.8] — Unreleased`; or-patterns and `.zyp` entries under Added | Set the release date when the version is cut |
-| Git | `main` not merged; no tag | Merge to `main`, tag `v0.0.8` (branch naming: version only, no prefix) |
-| Distribution | `web/zymbol.js` has or-pattern parity and a char-escape fix (see § E.2); `##!` on Char and delimited juxtaposition parity still unchecked in the JS mirror | Rebuild installers; rebuild the VS Code extension with `bash build-extension.sh` (that script only); check the two remaining JS-mirror parity items |
-| `/usr/bin/zymbol`, `/usr/bin/zymbol-lsp` | stale system install predates or-patterns — the IDE flags valid `\|\|` code as a parse error while `interpreter/target/release/zymbol check` accepts it | Reinstall both from `interpreter/target/release/` after the next full rebuild, then reload the VS Code window |
+| `CHANGELOG.md` | ✅ **done 2026-08-01** — dated `[0.0.8] — 2026-08-01`; new `### Changed` section (`ModulePath::resolve_from`, recursive `check`); the static-tooling audit added under Fixed; header figures re-measured; the stale `web/zymbol.js` / `web/zyp.js` / `web/test_zyp.mjs` paths and the "one tab per source file" claim corrected | — |
+| `IMPL_V008.md` | ✅ **done 2026-08-01** — features #12–#14 documented in Part I; § E.2 closed; all figures re-measured | — |
+| Git | `main` not merged; no tag | Merge to `main`, tag `v0.0.8` (branch naming: version only, no prefix). **The tag is the trigger** for all four release workflows (`release: published`) |
+| `web/` distribution | `install.html`, `index.html` and `changelog.html` are already bumped to v0.0.8 with `pending` SHA256 — **those download links 404 until the tag exists**. `web/README.md`'s banner still claims they point at v0.0.7 | Merge `web/v0.0.8` to `main` (GitHub Pages) **only after** the release assets exist; fill the hashes in the same change; fix the README banner |
+| VS Code extension | v0.1.5, README reviewed for v0.0.5. No `.zyp` file association, no `std/term` snippets, no `##!`-on-Char snippet. `\|\|` colours by accident (it is in the logical-operator rule) | Not a release blocker; do it with `bash build-extension.sh` (that script only) |
+| JS mirror parity | 7 open gaps — see § E.3 | Decide port-or-declare before the next distribution refresh |
+| `/usr/bin/zymbol`, `/usr/bin/zymbol-lsp` | ✅ both are symlinks into `interpreter/target/release/`, so they track the local build. The "stale system install" note from 2026-07-29 no longer applies | Run `cargo build --release` before relying on the IDE — `zymbol-lsp`'s binary predates the last two commits |
 
 ## B. Auto-free debt
 
@@ -443,11 +578,12 @@ Measured on this branch, both ROADMAP "VM completeness" bullets are stale:
   `FmtScientific` with both precision kinds. **Delete the bullet.**
 
 - **"Module system in VM: full parity"** — HLZ-008, HLZ-009, HLZ-010, MM-10 and MM-11
-  closed the known divergences, and 519/519 parity tests pass. Exactly one test carries
-  `@vm-skip` (`tests/gaps/gap_key_input_type_check.zy`), and it is skipped **by design**:
-  it is a `zymbol check` test that never executes. **Rewrite the bullet as a statement of
+  closed the known divergences, and 544/544 parity tests pass with **0 skipped**. (The
+  `@vm-skip` on `tests/gaps/gap_key_input_type_check.zy` is gone from the count: it is a
+  `zymbol check` test that never executes.) **Rewrite the bullet as a statement of
   current parity**, and if any doubt remains, name the specific construct still missing
-  rather than leaving an open-ended claim.
+  rather than leaving an open-ended claim. *(Done — ROADMAP.md updated 2026-07-29; the
+  figure there needs the 541 → 544 bump made on 2026-08-01.)*
 
 The general point: an unqualified "not at parity" line in the ROADMAP is worse than no
 line, because it sends projects to the tree-walker by default — which is what zy-GO did
@@ -457,12 +593,25 @@ before HLZ-008 was found.
 
 ## Verification commands
 
+Measured 2026-08-01 on `v0.0.8` @ `85eedf9`:
+
 ```bash
-cargo test                                        # unit tests (847 on this branch)
-bash tests/scripts/vm_compare.sh                  # TW == VM parity (541/541)
-bash tests/scripts/expected_compare.sh            # golden tests (520/522 — see § E.1)
+cargo test --workspace                            # 936 passed, 0 failed
+bash tests/scripts/vm_compare.sh                  # TW == VM parity: 544/544, 0 skip
+bash tests/scripts/expected_compare.sh            # golden: 523/525 — see § E.1
 bash tests/scripts/fmt_property.sh --baseline tests/scripts/fmt_property_baseline.txt
-bash tests/scripts/run_all.sh --vm --runs 5       # benchmark gate (14/14)
+                                                  # 643 files: 600 PASS / 43 SKIP / 0 FAIL
+bash tests/scripts/run_all.sh --vm --runs 3       # benchmark gate 14/14, no regressions
+```
+
+From `web/` (plain Node, no `package.json`):
+
+```bash
+node tests/test_runner.mjs                        # CLI vs JS engine: 516/521, 39 skipped
+node tests/test_runner.mjs --dir examples         # example pool: 208/210
+node tests/test_catalog.mjs --check               # 208 entries / 219 files, no orphans
+node tests/test_zyp.mjs                           # .zyp reader + resolver: all pass
+node tests/test_filestore.mjs                     # playground file model: all pass
 ```
 
 A finding is not closed until it has a regression test that **fails on the previous
@@ -472,13 +621,16 @@ binary**. Every HLZ and MM entry in the v0.0.8 CHANGELOG names its test.
 
 ## E. Debt found during the documentation pass (2026-07-29)
 
-Both were found by running the full verification suite while reconciling the docs. Neither
-is fixed here: writing documentation is not the moment to change behavior, and one of them
-is a real formatter bug that deserves its own change and its own regression test.
+All three were found by running the full verification suite while reconciling the docs, and
+none was fixed in that pass: writing documentation is not the moment to change behavior.
+E.2 has since been fixed on its own commit with its own regression test (§ 14). E.1 is a
+decision nobody has made yet, and E.3 has grown from five gaps to seven.
+
+**Status at 2026-08-01:** E.1 open (decision) · E.2 **closed** · E.3 open (7 gaps).
 
 ### E.1 — Two `.expected` fixtures are stale, and the suite reports them as failures
 
-`bash tests/scripts/expected_compare.sh` reports **520/522**, failing on:
+`bash tests/scripts/expected_compare.sh` reports **523/525**, failing on:
 
 - `tests/errors/parser/parent_path_alias.zy`
 - `tests/memory02_function_isolation.zy`
@@ -498,13 +650,19 @@ The warning in `memory02` is emitted uncoloured, so it is stripped.
 Two possible fixes, both cheap, and the choice is a judgment call rather than a bug:
 regenerate the two files with `--regen` (accepts the filter as the contract), or stop
 filtering the actual output and compare both sides raw (makes warnings part of the golden
-contract, which is arguably what these two fixtures were trying to express). **Not decided
-here.**
+contract, which is arguably what these two fixtures were trying to express). **Still not
+decided.** It does not block the release — the suite's two failures are understood and
+reproducible — but it should not be inherited by v0.0.9 as an unexplained `523/525`.
 
-### E.2 — The formatter cannot format a file with escape sequences in a `Char` pattern
+### E.2 — ✅ FIXED (2026-07-29, commit `c4f610d`) — formatter escaping in match patterns
 
-`bash tests/scripts/fmt_property.sh` reports one **new** P1 failure against the baseline:
-`tests/bugs/bug_char_escape_lexing.zy` (a file added by this branch).
+> Kept for the record, because the diagnosis is the useful part. The fix is § 14's fourth
+> row: `format_pattern` now routes literals through the same escaper as `format_literal`.
+> `tests/bugs/bug_char_escape_lexing.zy` is in the property corpus and `fmt_property.sh`
+> reports **0 failures**, where it reported this one before.
+
+At the time of writing, `bash tests/scripts/fmt_property.sh` reported one **new** P1 failure
+against the baseline: `tests/bugs/bug_char_escape_lexing.zy` (a file added by this branch).
 
 ```console
 $ zymbol fmt tests/bugs/bug_char_escape_lexing.zy
@@ -536,26 +694,33 @@ Affects string patterns too: `?? s { "a\nb" => ... }` takes the same unescaped p
 **Fix shape**: route `Pattern::Literal` through the same escaping used by
 `format_literal` rather than through `Display`. Needs a regression test that formats a file
 with an escaped char pattern and reparses it — the property suite already catches it, so
-adding the fixture to the corpus is enough once the fix lands.
+adding the fixture to the corpus is enough once the fix lands. *(Done exactly this way.)*
 
-### E.3 — Five v0.0.8 fixes are not ported to the JS mirror
+### E.3 — Seven divergences between the JS mirror and the Rust engines
 
-`node web/test_runner.mjs` reports **513/518**, 39 skipped (irreducible in a browser:
-BashExec, ANSI/TUI, `std/db`, step limits). The 5 failures are parity gaps, not
-regressions: each is a v0.0.8 fix that landed in the Rust engines and has no counterpart in
-`web/zymbol.js` yet.
+Re-measured 2026-08-01 from `web/`. Two suites, and each finds gaps the other cannot:
 
-| Test | Missing in `zymbol.js` |
-|------|------------------------|
-| `bugs/bug_mm11_iterator_leftover.zy` | MM-11 — leftover loop-iterator value (JS prints `0` where both Rust engines print the iterated values) |
-| `bugs/bug_mm4_module_const_guard.zy` | MM-4 — import-time semantic gate; the JS mirror runs the module instead of reporting `cannot reassign constant 'MAX'` |
-| `bugs/bug_mm9_const_call_depth.zy` | MM-9 — root-scope constants at call depth ≥ 2; JS raises `'K' is undefined` |
-| `errors/parser/parent_path_alias.zy` | HLZ-005 — the `'./../' is not a module path` diagnostic. The JS mirror does reject the file, but with different text and only one error instead of three |
-| `modules_scope/interp_global_const.zy` | Interpolation of any identifier, including global constants — `"{DIR}"` is printed verbatim |
+- `node tests/test_runner.mjs` → **516/521**, 39 skipped (irreducible in a browser:
+  BashExec, ANSI/TUI, `std/db`, step limits). 5 failures.
+- `node tests/test_runner.mjs --dir examples` → **208/210**. 2 further failures, in the
+  example pool only. This is the argument for the pool being real files on disk: neither
+  of them is reachable by `interpreter/tests/`.
 
-Note the direction of each divergence: in MM-4 and MM-11 the JS mirror is *permissive*
-where Rust is correct, which is the worse failure mode — a playground user gets output
-where the CLI would have refused. Worth porting before the next distribution refresh, and
-already listed under "Distribution" in § A.
+| Test | Missing in `web/src/zymbol/zymbol.js` | Direction |
+|------|---------------------------------------|-----------|
+| `bugs/bug_mm11_iterator_leftover.zy` | MM-11 — leftover loop-iterator value; JS prints `0` where both Rust engines print the iterated values | JS **permissive** |
+| `bugs/bug_mm4_module_const_guard.zy` | MM-4 — import-time semantic gate; the mirror runs the module instead of reporting `cannot reassign constant 'MAX'` | JS **permissive** |
+| `bugs/bug_mm9_const_call_depth.zy` | MM-9 — root-scope constants at call depth ≥ 2; JS raises `'K' is undefined` | JS stricter |
+| `errors/parser/parent_path_alias.zy` | HLZ-005 — the `'./../' is not a module path` diagnostic; the mirror rejects the file, but with different text and one error instead of three | text only |
+| `modules_scope/interp_global_const.zy` | Interpolation of a global constant — `"{DIR}"` printed verbatim | JS wrong |
+| `examples/rosetta-stone/klingon.zy` | **HLZ-KL-001 is not ported.** The JS lexer does not accept `'` in identifiers, so `f(mI') { … }` — ordinary tlhIngan Hol — fails to parse: `Expected RPAREN, got 'EOF'`. Reduced case: `f(mI') { <~ mI' }` runs in the CLI and throws in the browser | JS wrong |
+| `examples/projects/math-es/calculadora.zy` | **Float literal precision, and this one predates v0.0.8.** The lexer accumulates digit by digit (`const f = value + frac / div`, `zymbol.js:501`), so `3.14159265` becomes `3.1415926499999998`. Affects *every* float literal, not just this example: `>> 3.14159265 ¶` already diverges. Introduced when digit-script support was added to the lexer in v0.0.4 | JS wrong |
 
-`node web/test_zyp.mjs` passes in full (the `.zyp` reader and the module resolver).
+Two things to take from the direction column. MM-4 and MM-11 are the worse failure mode:
+the mirror is *permissive* where Rust is correct, so a playground user gets output where
+the CLI would have refused. And the last row is a reminder that "parity with the Rust
+engines" was never measured on plain float literals until the example pool existed —
+five releases of a language whose landing page runs in the browser.
+
+`node tests/test_zyp.mjs`, `node tests/test_filestore.mjs` and
+`node tests/test_catalog.mjs --check` all pass in full.

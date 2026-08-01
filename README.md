@@ -518,11 +518,13 @@ bash tests/scripts/expected_compare.sh
 bash tests/scripts/fmt_property.sh --baseline tests/scripts/fmt_property_baseline.txt
 ```
 
-Current status (v0.0.8): **894 tests passing** via `cargo test` (0 failed).  
-VM parity: **541/541 PASS**. One test carries `@vm-skip`
-(`tests/gaps/gap_key_input_type_check.zy`), by design — it is a `zymbol check` test that
-never executes.  
-Golden files: **520/522 PASS** via `expected_compare.sh`. The two failures are stale
+Current status (v0.0.8): **936 tests passing** via `cargo test` (0 failed).  
+VM parity: **544/544 PASS**, 0 skipped. (`tests/gaps/gap_key_input_type_check.zy` carries
+`@vm-skip` by design — it is a `zymbol check` test that never executes — and is not
+counted.)  
+Formatter property suite: **600 PASS / 0 FAIL** over 643 files, no regressions against
+the baseline.  
+Golden files: **523/525 PASS** via `expected_compare.sh`. The two failures are stale
 `.expected` fixtures, not interpreter regressions: both were hand-written with `warning:`
 and blank lines that the script's `strip_warnings` filter removes from actual output, so
 they compare unequal against output that is otherwise byte-identical.
@@ -766,7 +768,7 @@ interpreter/
 ├── zymbol-lang.ebnf     # Formal grammar (EBNF, v3.1.0)
 ├── install-zymbol.sh    # Install script
 ├── crates/              # Rust source crates
-├── tests/               # End-to-end test suite (541 vm-compare files; 522 golden .expected pairs)
+├── tests/               # End-to-end test suite (544 vm-compare files; 525 golden .expected pairs)
 ├── docs/                # Extended documentation
 ├── LICENSE
 ├── LICENSE-AGPL-3.0     # AGPL-3.0 (interpreter source)

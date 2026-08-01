@@ -483,10 +483,14 @@ body — with each module's own exclusion set during `compile_import`) and emits
 
 ### Invisibility evidence
 
-847 unit tests (12 analyzer + 2 interpreter integration), 519/519 TW/VM
-parity, 503/503 golden files, 89/89 GUIDE examples, formatter property harness
-clean, benchmark gate 14/14 (no regressions; several benchmarks improve from
-lower allocator pressure).
+At the commit that introduced auto-free: 847 unit tests (12 analyzer + 2 interpreter
+integration), 519/519 TW/VM parity, 503/503 golden files, 89/89 GUIDE examples,
+formatter property harness clean, benchmark gate 14/14 (no regressions; several
+benchmarks improve from lower allocator pressure).
+
+Re-measured at the v0.0.8 release (2026-08-01), still with no auto-free-attributable
+failure: 936 unit tests, 544/544 TW/VM parity, 523/525 golden (two stale fixtures —
+`IMPL_V008.md` § E.1), formatter property 600 PASS / 0 FAIL, benchmark gate 14/14.
 
 ---
 
