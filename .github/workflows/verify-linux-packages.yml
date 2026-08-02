@@ -1,0 +1,128 @@
+name: Verify Linux packages
+
+# Proves that a built Linux package installs and works before anyone can
+# download it. Two ways in:
+#
+#   * workflow_call — release-linux.yml gates publication on this. It passes the
+#     artifact holding the packages it just built, so the file verified here is
+#     byte-for-byte the file that gets uploaded to the release.
+#   * workflow_dispatch — run it by hand at any time; with no artifact it builds
+#     the .deb from the current checkout first.
+#
+# Scope today: .deb / x86_64. rpm, Arch, the static musl binary and aarch64 are
+# published without verification — see packaging/verify/README.md.
+
+on:
+  workflow_call:
+    inputs:
+      artifact:
+        description: 'Artifact holding packaging/dist (empty = build from source)'
+        type: string
+        required: false
+        default: ''
+      scope:
+        description: 'smoke | full'
+        type: string
+        required: false
+        default: 'full'
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: 'smoke (metadata + install + CLI) or full (adds the E2E parity suite)'
+        type: choice
+        options: [full, smoke]
+        default: full
+
+permissions:
+  contents: read
+
+jobs:
+  verify-deb:
+    name: .deb x86_64 on debian:12
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "DEB=packaging/dist/zymbol_lang_v${VERSION}_x86_64.deb" >> "$GITHUB_ENV"
+
+      - name: Download packages under verification
+        if: inputs.artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact }}
+          path: packaging/dist
+
+      # Standalone runs have no upstream build to inherit, so reproduce what
+      # release-linux.yml does: --no-default-features (std/db links libodbc,
+      # which the package does not declare) and --no-timestamp (release naming).
+      - name: Install Rust stable
+        if: inputs.artifact == ''
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo
+        if: inputs.artifact == ''
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: verify-linux-${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build binary and .deb
+        if: inputs.artifact == ''
+        run: |
+          cargo build --release --no-default-features --target x86_64-unknown-linux-gnu
+          mkdir -p target/release
+          cp target/x86_64-unknown-linux-gnu/release/zymbol target/release/zymbol
+          bash packaging/build-packages.sh \
+            --arch x86_64 --formats deb --no-build --no-timestamp --no-hashes
+
+      - name: Confirm the package is there
+        run: |
+          test -f "$DEB" || { echo "::error::$DEB not found"; ls -la packaging/dist || true; exit 1; }
+          ls -lh "$DEB"
+
+      # debian:12 with nothing added: if the package needs something the base
+      # image lacks, that is the bug we are looking for.
+      - name: Verify in a pristine Debian container
+        # `shell: bash` sets pipefail — without it the `| tee` below would mask a
+        # failing container and the gate would pass on a broken package.
+        shell: bash
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            --workdir /workspace \
+            debian:12 \
+            bash packaging/verify/verify-deb.sh \
+              --deb "$DEB" \
+              --version "$VERSION" \
+              --arch amd64 \
+              --scope "${{ inputs.scope || 'full' }}" \
+            2>&1 | tee verify-deb.log
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "## .deb verification — v${VERSION} (x86_64)"
+            echo ""
+            echo '```'
+            sed 's/\x1b\[[0-9;]*m//g' verify-deb.log | tail -40
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-deb-log
+          path: verify-deb.log
+          if-no-files-found: warn

@@ -471,6 +471,12 @@ Returns a `[rows, cols]` array with the current terminal dimensions:
 >> "Terminal: " H "x" W ¶     // e.g. Terminal: 40x120
 ```
 
+With no terminal attached — output redirected to a file, running inside a
+container, running in CI — there is nothing to measure, and `>>?` returns the
+conventional `[24, 80]` instead of failing. A program that lays itself out with
+`>>?` therefore stays runnable when piped; it just lays itself out for 80
+columns. Both engines behave identically here.
+
 ### Positioned Output — `>>~`
 
 Print at a specific terminal position. Cursor is moved but not restored after printing.

@@ -217,6 +217,52 @@ on disk.
 
 ### Fixed
 
+**`>>?` aborted in one engine and returned a size in the other when there was no terminal (found by the new package gate)**
+- With output redirected, inside a container, or in CI, the tree-walker
+  propagated the OS error from `crossterm::terminal::size()` while the VM
+  already fell back to 80x24. Identical in a real terminal, which is why the
+  parity suite reported 544/544 for as long as it only ever ran in one.
+- Both engines now fall back to the conventional `[24, 80]`, so a TUI program
+  stays runnable when piped — it simply lays itself out for 80 columns. The
+  behaviour was undocumented; [GUIDE.md](GUIDE.md) now states it.
+- `std/term::width` is unaffected: it measures the display width of a string,
+  not the terminal.
+
+**Linux packages declared a glibc floor they did not honour (found by the new package gate)**
+- `control.in` hard-coded `Depends: libc6 (>= 2.17)` and `zymbol.spec.in`
+  `Requires: glibc >= 2.17`, while the binary needs whatever glibc built it — a
+  binary runs on its build machine's glibc or newer, never older. `dpkg` would
+  install the package on a system too old to run it, satisfying the declared
+  dependency and then failing at exec with `version 'GLIBC_2.xx' not found`.
+- `build-packages.sh` now derives the floor from the binary's own versioned
+  symbols (`glibc_min_for`) for both formats. The Arch `PKGBUILD` keeps an
+  unversioned `glibc`, correct for a rolling release.
+- `verify-deb.sh` compares the declared floor against the binary's requirement
+  **statically**, so it fails even when the verification container's glibc is new
+  enough to mask the problem — which is the case in CI (`ubuntu-22.04` builds at
+  2.35, `debian:12` verifies at 2.36).
+- Supported floor is unchanged in practice: glibc 2.35, from the release builder.
+  Older systems are served by the static musl binary.
+- New `--binary PATH` in `build-packages.sh`, to package a binary that lives
+  outside `target/` (a container build, for instance).
+
+**A stdlib module the build does not include reported two different names (found by the new package gate)**
+- `<# std/db` in a binary built `--no-default-features` — which is precisely what
+  the Linux packages ship — produced `module not found: std/db` in the
+  tree-walker and `module not found: std/db.zy` in the VM.
+- Cause: `compile_import` handled stdlib paths it had entries for and let every
+  other stdlib path fall through to file resolution, whose error formats
+  `{}.zy`. A stdlib path has no file to resolve to — `ModulePath::resolve_from`
+  returns `None` for it by contract — so the fallthrough could only ever produce
+  a misspelt name. The tree-walker returns inside its stdlib branch
+  (`load_stdlib_module`) and never reaches a file path; the compiler now does the
+  same. Also affects a typo'd stdlib import (`<# std/mth`).
+- Invisible to `vm_compare.sh` as normally run: the suite is measured with a
+  full-featured binary, where `std/db` exists and the fallthrough is never taken.
+  It surfaced only when the new release gate ran the suite against the installed
+  `.deb`. See [packaging/verify/README.md](packaging/verify/README.md).
+- Parity with the packaged binary is now 544/544, same as the development build.
+
 **Findings from the zy-Serpiente and zyKlingonGalaxy i18n rework (HLZ-SRP-001, HLZ-KL-001)**
 
 Rewriting the internationalization of the two older TUI games against

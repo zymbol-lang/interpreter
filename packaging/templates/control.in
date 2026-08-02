@@ -2,7 +2,7 @@ Package: zymbol-lang
 Version: {{VERSION}}
 Architecture: {{DEB_ARCH}}
 Maintainer: Zymbol-Lang Contributors
-Depends: libc6 (>= 2.17)
+Depends: {{DEPENDS}}
 Section: devel
 Priority: optional
 Homepage: https://github.com/your-username/zymbol-lang

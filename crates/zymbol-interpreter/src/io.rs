@@ -139,9 +139,15 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Terminal size query: >>?  — returns (rows, cols)
-    pub(crate) fn eval_terminal_size(&mut self, span: Span) -> Result<Value> {
-        let (cols, rows) = crossterm::terminal::size()
-            .map_err(|e| RuntimeError::Generic { message: e.to_string(), span })?;
+    ///
+    /// With no terminal — a pipe, a container, CI — this falls back to the
+    /// conventional 80x24 rather than failing, so a TUI program stays runnable
+    /// when its output is redirected. This used to propagate the OS error while
+    /// the VM already fell back, which meant `>>?` aborted under one engine and
+    /// returned a size under the other; identical in a real terminal, so the
+    /// parity suite never saw it until it ran inside a container.
+    pub(crate) fn eval_terminal_size(&mut self, _span: Span) -> Result<Value> {
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         Ok(Value::Tuple(vec![Value::Int(rows as i64), Value::Int(cols as i64)]))
     }
 

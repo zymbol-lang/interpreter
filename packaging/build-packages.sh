@@ -17,6 +17,7 @@ FORMATS="all"
 ARCH=""           # auto-detected below
 VERSION=""        # auto-detected below
 DO_BUILD=true
+BINARY_OVERRIDE=""
 USE_CROSS=false
 DO_HASHES=true
 USE_TIMESTAMP=true
@@ -44,6 +45,8 @@ Options:
                          Note: win/winmsi are for local testing only — release Windows builds
                          run on GitHub Actions (release-windows.yml) using MSVC.
   --cross                Cross-compile with 'cross' (required for aarch64 on x86_64 host)
+  --binary   PATH        Package this exact binary (implies --no-build). For builds
+                         that live outside target/, e.g. compiled in a container.
   --no-build             Skip cargo/cross build; use existing binary
   --no-hashes            Skip SHA256SUMS / SHA512SUMS generation
   --no-timestamp         Use canonical names without timestamp (for release builds)
@@ -63,6 +66,7 @@ while [[ $# -gt 0 ]]; do
         --arch)     ARCH="$2";     shift 2 ;;
         --formats)  FORMATS="$2";  shift 2 ;;
         --cross)        USE_CROSS=true;    shift ;;
+        --binary)       BINARY_OVERRIDE="$2"; DO_BUILD=false; shift 2 ;;
         --no-build)     DO_BUILD=false;    shift ;;
         --no-hashes)    DO_HASHES=false;   shift ;;
         --no-timestamp) USE_TIMESTAMP=false; shift ;;
@@ -150,7 +154,11 @@ info "Package base name: ${BASE_NAME}"
 # ---------------------------------------------------------------------------
 INTERP_DIR="${REPO_ROOT}"
 
-if [[ "${DO_BUILD}" == true ]]; then
+if [[ -n "${BINARY_OVERRIDE}" ]]; then
+    [[ -f "${BINARY_OVERRIDE}" ]] || error "No binary at: ${BINARY_OVERRIDE}"
+    BINARY="$(cd "$(dirname "${BINARY_OVERRIDE}")" && pwd)/$(basename "${BINARY_OVERRIDE}")"
+    info "Using binary: ${BINARY}"
+elif [[ "${DO_BUILD}" == true ]]; then
     info "Building binary for ${RUST_TARGET}..."
     cd "${INTERP_DIR}"
 
@@ -230,6 +238,44 @@ make_source_tarball() {
     tar -C "$(dirname "${dir}")" -czf "${out}" "$(basename "${dir}")"
 }
 
+# glibc_min_for <binary> — the oldest glibc that can run this binary, read from
+# the versioned symbols it references.
+#
+# The templates used to hard-code `libc6 (>= 2.17)` / `glibc >= 2.17`, which was
+# a claim nothing checked and nothing made true: the real floor is whatever the
+# build machine's glibc was. dpkg would then happily install the package on a
+# system too old to exec it — dependency satisfied, then a GLIBC_x.y version
+# error at startup. Caught by packaging/verify/verify-deb.sh, which now compares
+# this number against what the package declares.
+#
+# `grep -a` reads the names straight out of .dynstr, so this needs no binutils —
+# it runs unchanged inside the bare fedora container that builds the .rpm.
+glibc_min_for() {
+    local bin="$1"
+    grep -ao 'GLIBC_[0-9]\+\.[0-9]\+' "${bin}" 2>/dev/null \
+        | sed 's/GLIBC_//' | sort -V -u | tail -1
+}
+
+# deb_depends_for <binary> — the Depends line for a .deb shipping this binary.
+deb_depends_for() {
+    local bin="$1" deps glibc
+    glibc="$(glibc_min_for "${bin}")"
+
+    if [[ -n "${glibc}" ]]; then
+        deps="libc6 (>= ${glibc})"
+    else
+        # No versioned glibc symbols: a static binary, or a format we cannot read.
+        warn "no glibc symbols in ${bin} — declaring an unversioned libc6"
+        deps="libc6"
+    fi
+
+    if ldd "${bin}" 2>/dev/null | grep -q 'libgcc_s\.so'; then
+        deps="${deps}, libgcc-s1 (>= 3.0)"
+    fi
+
+    echo "${deps}"
+}
+
 # ---------------------------------------------------------------------------
 # .deb
 # ---------------------------------------------------------------------------
@@ -245,10 +291,13 @@ build_deb_package() {
     mkdir -p "${staging}/usr/share/applications"
     [[ -n "${ICON}" ]] && mkdir -p "${staging}/usr/share/pixmaps"
 
-    # Control file
+    # Control file — Depends is derived from the binary, never hard-coded
+    local depends; depends="$(deb_depends_for "${BINARY}")"
+    info "  Depends: ${depends}"
     sed \
         -e "s/{{VERSION}}/${VERSION}/g" \
         -e "s/{{DEB_ARCH}}/${DEB_ARCH}/g" \
+        -e "s|{{DEPENDS}}|${depends}|g" \
         "${TEMPLATES_DIR}/control.in" > "${staging}/DEBIAN/control"
 
     # Binary
@@ -302,11 +351,15 @@ build_rpm_package() {
     # RPM date (Day Mon DD YYYY)
     local rpm_date; rpm_date="$(date -u +'%a %b %d %Y')"
 
-    # Spec file
+    # Spec file — same rule as the .deb: the glibc floor comes from the binary
+    local glibc_min; glibc_min="$(glibc_min_for "${BINARY}")"
+    [[ -n "${glibc_min}" ]] || glibc_min="2.17"
+    info "  Requires: glibc >= ${glibc_min}"
     sed \
         -e "s/{{VERSION}}/${VERSION}/g" \
         -e "s/{{RPM_ARCH}}/${RPM_ARCH}/g" \
         -e "s/{{RPM_DATE}}/${rpm_date}/g" \
+        -e "s/{{GLIBC_MIN}}/${glibc_min}/g" \
         "${TEMPLATES_DIR}/zymbol.spec.in" > "${tmp}/SPECS/zymbol.spec"
 
     rpmbuild \
