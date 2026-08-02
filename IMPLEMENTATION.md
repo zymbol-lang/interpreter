@@ -16,7 +16,7 @@ Zymbol has two execution strategies that produce identical output for all suppor
 | Mode | Invocation | Description |
 |------|-----------|-------------|
 | Tree-walker | `zymbol run file.zy` | Walks the AST directly. Default. Supports all language features. |
-| Register VM | `zymbol run --vm file.zy` | Compiles to bytecode first, then executes. ~4× faster. Module system support is partial. |
+| Register VM | `zymbol run --vm file.zy` | Compiles to bytecode first, then executes. ~4× faster. Module system support reached parity with the tree-walker in v0.0.8 (see REFERENCE.md L23 and `tests/scripts/vm_compare.sh`, 544/544). Default engine for `.zyp` packages. |
 
 All examples in GUIDE.md are verified against both modes. A feature listed as "TW only" in the coverage table below is not yet supported by the VM.
 
@@ -52,6 +52,7 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 | match ident pattern (scalar/array) | ✅ | ✅ | v0.0.4 |
 | match list pattern `[a, b, _]` (structural) | ✅ | ✅ | v0.0.3 |
 | match list pattern `[v1, v2]` (containment) | ✅ | ✅ | v0.0.4 |
+| match or-pattern `p1 \|\| p2` (alternatives) | ✅ | ✅ | v0.0.8 |
 | match identifier binding | ❌ | ❌ | **Dismissed 2026-06-12** — bind before the match (idiom) |
 | Loops (all types) | ✅ | ✅ | |
 | Range with step and reverse | ✅ | ✅ | Sprint 5I |
@@ -105,7 +106,10 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 | `std/math`, `std/random` | ✅ | ✅ | v0.0.6 — native stdlib via `<# std/<name> => alias` |
 | `std/json`, `std/io`, `std/net` | ✅ | ✅ | v0.0.7 — soft `##Parse`/`##IO`/`##Network` errors |
 | `std/db` (ODBC, vendor-neutral) | ✅ | ✅ | v0.0.7 — soft `##DB` errors; builtin ids 500–514 |
+| `std/term` (terminal display metrics) | ✅ | ✅ | v0.0.8 — `width`/`pad_*`/`center`/`truncate`; columns via `unicode-width`; builtin ids 600–604 |
 | Static undefined-function detection at `check` time | ✅ | — | v0.0.7 — semantic phase (`zymbol-semantic/type_check.rs`) |
+| Auto-free (destruction at last use) | ✅ | ✅ | v0.0.8 — `zymbol-semantic/last_use.rs`; TW frees per statement, VM emits `LoadUnit` (temporaries not yet covered) |
+| `.zyp` packages (`zymbol package`, `zymbol run pkg.zyp`) | ✅ | ✅ | v0.0.8 — CLI/format feature, no grammar surface; VM is the default engine for a `.zyp` |
 | `do-while ~>` (post-cond loop) | ❌ | ❌ | **Dismissed 2026-06-12** — infinite loop + `@!` is the idiom; `~>` stays unoccupied |
 
 ---
@@ -145,8 +149,8 @@ The canonical grammar is maintained in `zymbol-lang.ebnf`; the copy below is rep
         deep  arr[i>j>…]$~  — all forms run in BOTH engines (VM: DeepSet
         instruction). Ranges (..) are not allowed in a $~ path.
   [C05] hot °name corrected: valid as RHS expression too, not only LHS
-  [C06] No new syntax for the v0.0.6/v0.0.7 stdlib (std/math, std/random,
-        std/json, std/io, std/net, std/db) — consumed via existing
+  [C06] No new syntax for the v0.0.6/v0.0.7/v0.0.8 stdlib (std/math, std/random,
+        std/json, std/io, std/net, std/db, std/term) — consumed via existing
         import_stmt (<# std/name => alias) and module calls (alias::fn)
 
   Key divergences vs v2.5.0:
@@ -689,7 +693,14 @@ lifetime_end = "\\" , identifier ;
 (*
   Juxtaposition concatenation: same-line adjacent primary values are implicitly
   concatenated (BinaryOp::Concat).  Works for strings, chars, numbers, identifiers.
-  Used by assignments, const declarations, and return statements.
+  Used by assignments, const declarations, and return statements, and — since
+  v0.0.8 — inside delimited positions: call arguments, array elements, tuple
+  elements and grouped expressions.
+
+  One difference between the two contexts: a following `(` may continue the
+  chain at statement level (when the accumulator is a literal or a binary
+  expression), but never inside a delimited position, where a parenthesis is
+  ambiguous with a lambda, a tuple and a grouped expression.
 *)
 juxtapose_chain = expr , { juxtapose_token } ;
 
@@ -1005,7 +1016,17 @@ extract_group = "[" , nav_path , { "," , nav_path } , "]" ;
   There are NO guard patterns (x? / _?) in the current implementation.  [D03]
   Range patterns accept only integer literals or char literals as bounds.  [D11]
 *)
+(*
+  A pattern is one or more primary patterns joined by "||".  Alternatives are
+  tested left to right and the first match wins.  "||" is recognised only at
+  the top level of an arm — list elements are primary patterns, so
+  [1, 2] stays unambiguous.
+*)
 pattern =
+    pattern_primary , { "||" , pattern_primary }
+  ;
+
+pattern_primary =
     "_"                                    (* wildcard *)
   | string_literal                         (* exact string match *)
   | integer_literal                        (* exact integer *)

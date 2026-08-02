@@ -1,0 +1,5 @@
+ascii=a guion=b
+kanji=1 hangul=2 cirilico=3 griego=4 devanagari=5
+piqad=10 apostrofo=11 compuesto=12
+emoji=20
+modulo=7

@@ -21,7 +21,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TESTS_DIR="$REPO_ROOT/tests"
 EXAMPLES_DIR="$REPO_ROOT/examples"
-ZYMBOL="$REPO_ROOT/target/release/zymbol"
+ZYMBOL="${ZYMBOL_BIN:-$REPO_ROOT/target/release/zymbol}"
 TIMEOUT_SEC=10
 
 BASELINE=""

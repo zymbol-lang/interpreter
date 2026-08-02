@@ -9,6 +9,8 @@ description = "Register-based virtual machine executor for Zymbol-Lang"
 zymbol-bytecode.workspace = true
 zymbol-lexer.workspace = true
 zymbol-intrinsics.workspace = true
+unicode-width.workspace = true
+unicode-segmentation.workspace = true
 thiserror.workspace = true
 crossterm = { workspace = true }
 serde_json = { workspace = true }

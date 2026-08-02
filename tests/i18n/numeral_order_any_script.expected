@@ -1,0 +1,33 @@
+--- numeric strings, ASCII digits ---
+#1
+#0
+#0
+#1
+#1
+#1
+--- numeric strings, Devanagari digits: same answers ---
+#1
+#0
+#0
+#1
+#1
+#1
+--- mixed scripts still compare as numbers ---
+#1
+#1
+--- <= and >= follow the same rule ---
+#1
+#1
+--- non-numeric text stays lexicographic ---
+#0
+#1
+--- chars order by code point, bools #0 < #1 ---
+#1
+#1
+--- equality never coerces ---
+#0
+#0
+#1
+--- and the results themselves follow the active mode ---
+#१
+#०

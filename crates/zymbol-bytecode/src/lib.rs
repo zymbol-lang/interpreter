@@ -415,6 +415,12 @@ pub mod builtins {
     pub const DB_ROLLBACK_TO:  u16 = 512;
     pub const DB_EXEC_SCRIPT:  u16 = 513;
     pub const DB_TABLE_EXISTS: u16 = 514;
+    // std/term functions (terminal display metrics)
+    pub const TERM_WIDTH:     u16 = 600;
+    pub const TERM_PAD_LEFT:  u16 = 601;
+    pub const TERM_PAD_RIGHT: u16 = 602;
+    pub const TERM_CENTER:    u16 = 603;
+    pub const TERM_TRUNCATE:  u16 = 604;
 }
 
 #[derive(Debug, Serialize, Deserialize)]

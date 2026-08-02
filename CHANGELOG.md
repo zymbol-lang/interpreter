@@ -7,6 +7,722 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
+## [0.0.8] — 2026-08-01
+
+Memory-model debt release: every divergence found by the design-vs-implementation
+audit in [MEMORY_MODEL.md](MEMORY_MODEL.md) is resolved — findings MM-1 … MM-9 plus
+the two VM parity bugs (MM-10, MM-11) discovered while verifying the fixes. Three
+validation projects written in Zymbol (zy-GO, zy-Serpiente, zyKlingonGalaxy) contributed
+the rest: HLZ-001 … HLZ-011, HLZ-SRP-001 and HLZ-KL-001 are findings from writing real
+applications, not from unit tests.
+
+Measured on the branch: **936 unit tests**, **544/544 TW/VM parity**, **523/525 golden**,
+formatter property suite **600 PASS / 0 FAIL** with no regressions against the baseline.
+The two golden failures are stale hand-written `.expected` fixtures, not interpreter
+regressions — see [IMPL_V008.md](IMPL_V008.md) § E.1. The one remaining piece of known
+debt is § E.3: the browser interpreter is behind the Rust engines on **seven** cases — six
+v0.0.8 fixes with no counterpart there yet, plus one float-literal precision bug that
+predates this release and was only found once the playground's examples became real files
+on disk.
+
+### Added
+
+**Automatic destruction at last use (auto-free) — both engines, always on**
+- A variable's memory is released right after the statement containing its
+  last use, instead of at scope end. Invisible by design: it never changes a
+  correct program's behavior — it only lowers peak memory (measured: a script
+  holding two sequential 30 MB strings peaks at ~64 MB instead of ~94 MB in
+  the tree-walker).
+- New purely lexical, conservative last-use analysis
+  (`zymbol_semantic::last_use`): a region is a flat statement sequence
+  (top-level program or a named function body); mentions are collected from
+  the whole statement subtree — nested blocks, loop bodies, lambda bodies
+  (capture happens at the statement containing the lambda), `{var}` string
+  interpolations (verbatim, mirroring the runtime resolver), and input
+  prompts. The `Expr` walker is exhaustive (no `_` arm), so future syntax
+  additions fail compilation until their mention rules are reviewed.
+- Never auto-freed (conservative exclusions): constants, hot names
+  (`x°`/`°x`), `_`-prefixed names, module-level bindings, output/mutable
+  parameters, and free variables of named functions used as first-class
+  values. Normal parameters and region-level locals are candidates.
+- Tree-walker: per-body schedules stored in `FunctionDef::Zymbol::auto_free`
+  and applied by `execute_body_scheduled`; destruction is skipped while
+  control flow is pending (frame/loop teardown owns those paths).
+  Auto-destroyed names live in a frame-local `auto_dead_variables` set: using
+  one (impossible in a correct program) raises a distinctive
+  `internal: use after auto-destruction` error — including from string
+  interpolation, which otherwise silently prints `{var}`.
+- VM: the compiler emits `LoadUnit` on the variable's register after its
+  last-use statement (same analysis, per module context). Known limitation:
+  expression temporaries may retain a value until their register is
+  overwritten, so the VM's peak-memory win is currently smaller than the
+  tree-walker's.
+- The previously dead wiring (`set_destruction_schedule`, `statement_index`)
+  was removed; `zymbol check`'s ambiguous-lifetime warnings (old def-use
+  analyzer) are unchanged.
+- Verified when it landed: 847 unit tests (12 new analyzer + 2 interpreter),
+  519/519 TW/VM parity, 503/503 golden, 89/89 GUIDE examples, benchmark gate
+  14/14 with no regressions. (Counts at that commit — the release totals are in
+  the header above.)
+
+**`std/term` — terminal display metrics (both engines)**
+
+- New stdlib module with five functions: `width`, `pad_left`, `pad_right`,
+  `center`, `truncate`. Width is measured in **terminal columns**, not grapheme
+  count — CJK ideographs, kana, hangul and most emoji occupy two columns each,
+  so `"手番"$#` is `2` but `term::width("手番")` is `4`.
+- The boundary is deliberate: `std/term` answers a question about the *screen*.
+  Everything that operates on a string's *content* — split (`$/`), slice
+  (`$[..]`), replace (`$~~`), repeat (`$*`), join, trim — is (or will be) a
+  language symbol and never enters this module. Naming it `term` rather than
+  `text` keeps that line visible.
+- Column widths come from the `unicode-width` tables over grapheme clusters
+  (`unicode-segmentation`), so a multi-code-point cluster is measured as one
+  unit and `truncate` never splits a wide glyph. `pad_*`/`center` pad with
+  spaces to an exact column count and leave already-wide strings untouched;
+  `center` gives a spare column to the right. Motivated by zy-GO, which carried
+  a hand-maintained ~40-range East Asian width table inside the game
+  (`表示/文字.zy`) — now replaced by this module.
+
+**`##!` on a `Char` yields its Unicode code point**
+
+- `##!'A'` is `65`, `##!'あ'` is `12354`. This is the only direct Char→Int
+  route (the previous workaround was inverting a base literal, `0d|c|`, and
+  stripping the `0d` prefix), and it makes characters classifiable by range —
+  `Char` is otherwise neither comparable nor castable. `###` is unchanged;
+  a Char has no fractional part, so only the truncating cast was extended.
+- Regression: `tests/casts/06_char_to_int.zy` and `tests/stdlib/stdlib_term.zy`
+  (both TW == VM), plus four unit tests over the pure width/pad/center/truncate
+  helpers.
+
+**Match or-patterns — `p1 || p2` alternatives in a `??` arm (both engines)**
+
+- An arm's pattern can now be a `||`-separated chain: `'p' || 'P' => { ... }`
+  matches if any alternative matches. Alternatives are tested left to right
+  and the first one that matches wins.
+- Alternatives combine any pattern kind, not just literals — range, comparison,
+  ident and list patterns all mix freely in one arm: `1..10 || 20..30`,
+  `< 0 || > 100`, `1 || expected || 9`, `["run", _] || ["build", _]`.
+- New `Pattern::Or(Vec<Pattern>, Span)` variant
+  (`crates/zymbol-ast/src/match_stmt.rs`). `||` is recognised only at the top
+  level of an arm — list elements stay primary patterns, so `[1, 2]` is never
+  ambiguous with two alternatives.
+- Requested directly against `GO/対局.zy`, whose key-handling arms only
+  accepted the lowercase letter (`'p'`) and silently ignored the uppercase
+  one; `['p', 'P']` (list containment) already covered that one case, but had
+  no equivalent for non-literal patterns.
+- VM: `compile_match_expr` was refactored into a recursive
+  `emit_pattern_test` that returns `(skip_patches, to_body_patches)` instead
+  of emitting the arm body inline per pattern kind — the `Or` case chains
+  this helper across alternatives, patching the last one's failure to skip
+  the whole arm and every earlier one's success to jump to the body.
+- Mirrored in the browser interpreter (`web/src/zymbol/zymbol.js`):
+  `parseMatchPattern` wraps `parseMatchPatternPrimary` with the same
+  top-level-only `||` chaining, and `matchPattern`'s new `'or'` case tests
+  alternatives left to right.
+- Regression: `tests/match/16_or_pattern_basic.zy`,
+  `tests/match/17_or_pattern_mixed.zy`, `tests/match/18_or_pattern_block.zy`
+  (all TW == VM). Verified byte-identical against the JS mirror as well.
+
+**Zymbol Packages (`.zyp`) — one file for a multi-file program**
+
+- New `zymbol package` and `.zyp` support in `zymbol run`, backed by a new
+  `zymbol-package` crate. A `.zyp` is a ZIP archive of **source**, not a
+  compiled binary: `zyp.toml` (manifest), `zyp.json` (the same manifest
+  pre-serialized so the web playground never parses TOML), and the packaged
+  `.zy` tree under `src/`. Unrelated to `zymbol build`/`zymbol-standalone`,
+  which produces a native executable — neither feature depends on the other.
+
+  ```bash
+  zymbol package DIR --script main.zy -o out.zyp   # build the archive
+  zymbol package DIR --script main.zy --dry-run    # closure + warnings, writes nothing
+  zymbol run out.zyp                               # run it
+  zymbol run out.zyp --script 囲碁 --tw            # pick an entry, force an engine
+  ```
+
+- The manifest declares one or more `[[script]]` entries (`name`, `path`,
+  `default`, `desc`) and `package.engine`, a semver *requirement*. Always write
+  `engine = ">=0.0.8"`: a bare `"0.0.8"` is a caret requirement, which pre-1.0
+  matches only that exact version and would break on every patch release.
+  `zymbol package` always synthesizes the `>=` form.
+- **Closure computation is strict**: `compute_closure` walks module imports and
+  `</ file.zy />` targets from the declared scripts; a `.zy` file that is
+  neither listed nor reachable is never packaged. **Packaging is permissive**:
+  anything unresolvable statically — an absolute import, a `<\ shell \>`, a
+  parse error — becomes a warning (`W001`–`W011`) rather than a hard failure,
+  so `--dry-run` always produces something the author can inspect. The one hard
+  error is a `[[script]]` that turns out to be a module file: a package whose
+  entry point can't run isn't permissive, it's broken.
+- **`zymbol run pkg.zyp` extracts to an ephemeral temp dir and never `chdir`s.**
+  Code is read from the temp dir, but a script's own `std/io` writes (relative
+  paths) still land in the user's real working directory, because they resolve
+  against the process's actual cwd. That asymmetry is the point of ephemeral
+  extraction: the code is disposable, the data the script writes is not.
+  `--keep-temp` retains the directory and prints its path for debugging.
+- Default engine for a `.zyp` is the **VM**; loose `.zy` files still default to
+  the tree-walker, so nothing changes for existing scripts. Precedence:
+  `--tw` > `--vm` > manifest `mode` > VM.
+- Security: ZIP entry names and `[[script]].path` go through one lexical rule
+  (`path_safety`) — no `..`, no absolute prefix, no backslash, no NUL, no drive
+  letter — checked at manifest parse time, again at extraction, and once more at
+  write time. A `[[script]].path` of `../../elsewhere.zy` previously escaped the
+  extraction directory and got arbitrary source on the user's disk read and run.
+  Per-entry and total decompressed size are capped at 100 MiB against zip bombs.
+- The writer is deterministic: fixed 1980-01-01 timestamps and fixed entry
+  order, so the same source tree always produces a byte-identical archive and a
+  `.zyp` can be verified by hash.
+- Web: `web/src/zymbol/zyp.js` reads the ZIP by hand (central directory +
+  `DecompressionStream('deflate-raw')`) — no bundler, no CDN, consistent with
+  `web/`'s no-build-step policy. Loading a `.zyp` in the playground **mounts**
+  the whole source tree (visible in the sidebar and to the module resolver,
+  named by full relative path, e.g. `packages/go/核/盤.zy`) but **opens only
+  one tab**, the default `[[script]]`; the manifest's scripts populate the
+  picker next to ▶ Run.
+- Tests: `crates/zymbol-package/tests/roundtrip.rs` plus unit tests over
+  manifest validation, the pre-1.0 semver trap, path-traversal rejection, and
+  closure/warning behavior. `web/tests/test_zyp.mjs` covers the browser reader
+  and module resolver against fixtures it builds itself.
+
+### Changed
+
+**One shared module-path resolution rule — `ModulePath::resolve_from`**
+
+- The tree-walker, the semantic analyzer and the VM compiler each carried their
+  own copy of "given this import and this importing file, which file is it?".
+  They agreed on the common case and diverged on the rest: `compile_import`
+  ignored `is_absolute` and `home_relative`, so `<# /abs/path => x` and
+  `<# ~/lib/x => x` resolved to a *different file* under `--vm` than under the
+  tree-walker — silently, because both paths existed in a normal checkout.
+- `ModulePath::resolve_from(&self, importer: &Path) -> PathBuf` is now the
+  single rule, and all three call it. Adding a path form (or changing how one
+  resolves) is one edit instead of three that can drift.
+- Found while adding `.zyp` packaging, which needed a fourth consumer of the
+  same rule for closure computation and would have inherited whichever copy it
+  was written against.
+- Regression: `tests/modules_scope/alias_shadowed_by_variable.zy` (TW == VM).
+
+**`zymbol check` now checks the whole program, not just the named file**
+
+- It followed no imports: a module that failed to parse or type-check was
+  invisible until run time, so `check` returning clean meant nothing for any
+  project organised in modules. It now walks imports transitively (stdlib
+  excluded, cycles cut) and reports each module's errors at the module's own
+  line, followed by `note: reached from <importer>`.
+- Style warnings (unused variables, ambiguous lifetimes) deliberately stay with
+  the file named on the command line — they are about the code you are editing,
+  not about its dependencies.
+- The LSP gets the same coverage through `ModuleIndex::set_module_errors`, plus
+  a new `module-has-errors` diagnostic on the import line, so a broken
+  dependency is visible in the editor at the place that pulls it in.
+
+### Fixed
+
+**`>>?` aborted in one engine and returned a size in the other when there was no terminal (found by the new package gate)**
+- With output redirected, inside a container, or in CI, the tree-walker
+  propagated the OS error from `crossterm::terminal::size()` while the VM
+  already fell back to 80x24. Identical in a real terminal, which is why the
+  parity suite reported 544/544 for as long as it only ever ran in one.
+- Both engines now fall back to the conventional `[24, 80]`, so a TUI program
+  stays runnable when piped — it simply lays itself out for 80 columns. The
+  behaviour was undocumented; [GUIDE.md](GUIDE.md) now states it.
+- `std/term::width` is unaffected: it measures the display width of a string,
+  not the terminal.
+
+**Linux packages declared a glibc floor they did not honour (found by the new package gate)**
+- `control.in` hard-coded `Depends: libc6 (>= 2.17)` and `zymbol.spec.in`
+  `Requires: glibc >= 2.17`, while the binary needs whatever glibc built it — a
+  binary runs on its build machine's glibc or newer, never older. `dpkg` would
+  install the package on a system too old to run it, satisfying the declared
+  dependency and then failing at exec with `version 'GLIBC_2.xx' not found`.
+- `build-packages.sh` now derives the floor from the binary's own versioned
+  symbols (`glibc_min_for`) for both formats. The Arch `PKGBUILD` keeps an
+  unversioned `glibc`, correct for a rolling release.
+- `verify-deb.sh` compares the declared floor against the binary's requirement
+  **statically**, so it fails even when the verification container's glibc is new
+  enough to mask the problem — which is the case in CI (`ubuntu-22.04` builds at
+  2.35, `debian:12` verifies at 2.36).
+- Supported floor is unchanged in practice: glibc 2.35, from the release builder.
+  Older systems are served by the static musl binary.
+- New `--binary PATH` in `build-packages.sh`, to package a binary that lives
+  outside `target/` (a container build, for instance).
+
+**A stdlib module the build does not include reported two different names (found by the new package gate)**
+- `<# std/db` in a binary built `--no-default-features` — which is precisely what
+  the Linux packages ship — produced `module not found: std/db` in the
+  tree-walker and `module not found: std/db.zy` in the VM.
+- Cause: `compile_import` handled stdlib paths it had entries for and let every
+  other stdlib path fall through to file resolution, whose error formats
+  `{}.zy`. A stdlib path has no file to resolve to — `ModulePath::resolve_from`
+  returns `None` for it by contract — so the fallthrough could only ever produce
+  a misspelt name. The tree-walker returns inside its stdlib branch
+  (`load_stdlib_module`) and never reaches a file path; the compiler now does the
+  same. Also affects a typo'd stdlib import (`<# std/mth`).
+- Invisible to `vm_compare.sh` as normally run: the suite is measured with a
+  full-featured binary, where `std/db` exists and the fallthrough is never taken.
+  It surfaced only when the new release gate ran the suite against the installed
+  `.deb`. See [packaging/verify/README.md](packaging/verify/README.md).
+- Parity with the packaged binary is now 544/544, same as the development build.
+
+**Findings from the zy-Serpiente and zyKlingonGalaxy i18n rework (HLZ-SRP-001, HLZ-KL-001)**
+
+Rewriting the internationalization of the two older TUI games against
+[USERAPPI18N.md](USERAPPI18N.md) surfaced two divergences. Both were found by
+writing ordinary application code, and both were silent in one engine and
+correct in the other or correct nowhere.
+
+**HLZ-SRP-001 — a module function that wrote state and returned a value lost the write**
+- In the tree-walker, `f() { v = "en"  <~ v }` returned `"en"` and left the
+  module's `v` at its previous value. No error, no warning. The register VM was
+  correct, which made it easy to miss: a program tested under `--vm` behaved,
+  and the default engine did not.
+- Cause: the MoveOrClone optimisation in `Statement::Return` moves a returned
+  bare identifier out of scope instead of cloning it — O(1) for strings and
+  arrays. The module-state write-back then looked the key up, found nothing, and
+  read that as "this frame never touched it", so the mutation was dropped. Output
+  parameters were already excluded from the move for the same reason (QW13); module
+  state was not.
+- Fix: `current_output_params` becomes `move_guard_names` and now holds both
+  output parameters and the module variables injected into the frame. Both are
+  read again after the return, so both are cloned rather than moved.
+- The shape that triggered it is the natural one for a stateful API — "change
+  this and tell me how it came out": a counter, a cursor, a locale rotator.
+- Regression: `tests/modules_scope/mod_state_return.zy`, which writes state and
+  returns it as a literal, an indexed value, a local, an unrelated value, and
+  alongside an output parameter. It fails on the previous binary.
+
+**HLZ-KL-001 — string interpolation rejected identifiers the lexer accepts**
+- `"{x}"` validated the name with `is_alphanumeric()`, which is narrower than
+  the identifier rule used everywhere else. Kanji are Unicode category `Lo` and
+  passed; Private Use Area glyphs — pIqaD, the Klingon script zyKlingonGalaxy is
+  written in — are category `Co` and did not. A program whose identifiers were
+  valid in every other position could not interpolate them.
+- The same narrower rule had been copied into two more places, with two more
+  symptoms: the unused-variable analysis did not count an interpolation as a use
+  of such a name, so it warned about variables the program does read; and the LSP's
+  word-at-cursor and identifier-validity helpers did not recognise them, so hover
+  and completion did not work in such a program.
+- Fix: `Lexer::is_ident_start` and `Lexer::is_ident_continue` are now public and
+  are the single definition. The lexer's interpolation loop, the semantic
+  analyser's interpolation scan and the analyzer's three helpers all defer to
+  them.
+- Regression: `tests/i18n/interp_identificadores.zy` interpolates names in Latin,
+  kanji, Hangul, Cyrillic, Greek, Devanagari, pIqaD (including the Klingon
+  apostrophe) and an emoji, at top level and inside a module function.
+
+**Numeral mode (`#d0d9#`) did not reach interpolation, juxtaposition, `$++` or `>>~`**
+- `#०९#\n>> n ¶` printed Devanagari digits, but `#०९#\ny = "{n}"\n>> y ¶` still
+  printed ASCII — the same value, through a different route to the screen,
+  silently reverted to `0`–`9`. `Value::to_display_string()` (tree-walker) and
+  `to_string_repr()`/`Display` (VM) are the generic value-to-text conversions
+  used by string interpolation, juxtaposition (`"a" b`), `$++` and `>>~`; none
+  of them has a numeral-mode field to read, since numeral-mode awareness had
+  only ever been wired into `>>`'s own per-item formatting.
+- Surfaced rebuilding zyKlingonGalaxy's HUD renderer: every score/delay/wave
+  count is composed into a label string (`"H:" $+ mI'(n)`) that a generic
+  centered-list helper then draws with `>>~` — a hand-written digit-by-digit
+  pIqaD conversion existed specifically because no runtime path from a live
+  `Int` to displayed text respected the active script except bare `>>`.
+- Fix: every call site with `&self`/`&mut self` access to the active mode now
+  routes Int/Float/Bool through the same numeral-aware conversion `>>` uses
+  instead of the bare, context-free one — `value_to_concat_str` (juxtaposition
+  and `$++`, tree-walker), `interpolate_string`, both `execute_output_pos`
+  branches, and, in the VM, both copies each of `ConcatStr`, `ConcatBuild` and
+  `BuildStr`, plus `PrintAt`. `Value::to_display_string()`/`to_string_repr()`
+  themselves are unchanged (no interpreter context to read the mode from) —
+  the fix is at every place that had that context and wasn't using it.
+- Regression: `test_i18n_mode_affects_interpolation`,
+  `test_i18n_mode_affects_juxtaposition`, `test_i18n_mode_affects_concat_build`
+  and their `_vm` parity counterparts in `zymbol-interpreter/tests/e2e.rs`.
+
+**Numeral mode, audited: collections, the round trip, and the cost of the fix**
+
+An audit of the change above found three things it left undone. A fourth
+finding — that the mode also reaches text the program uses as *data* (file
+names, shell commands built by interpolation) — is **intended behaviour**, not a
+defect: `#d0d9#` states how this program writes numbers, and validating that is
+the developer's responsibility. It is now documented as such in GUIDE.md
+("Intent and Responsibility"), alongside the one exception: `json::encode` keeps
+emitting ASCII, because a serialization format has a grammar of its own.
+
+- **Collections still reverted to ASCII.** `>> [1, 2, 3] ¶` printed
+  `[1, 2, 3]` under an active mode while each element printed on its own came
+  out in the active script — the conversion applied the mode at the top level
+  only, so a number stopped following it by the mere fact of sitting in a list.
+  Fixed with `Value::to_display_string_in`/`to_repr_string_in` (tree-walker) and
+  `Value::to_display_in` (VM), recursive over arrays, tuples and named tuples,
+  used by `format_value`, `numeral_repr` and both `Print` branches. Brackets,
+  commas and separators stay ASCII.
+- **The digits did not come back.** `#|…|` normalized Unicode digits, but
+  `#.N|…|`, `#!N|…|`, `<<###`, `<<#.` and `<<#(n,d)` did not — a program could
+  render `१२०` and then refuse to read it, and a user could not type what the
+  program had just shown them. All numeric casts now normalize through
+  `ascii_digits` (a shared helper in each engine) before parsing. Non-numeric
+  strings are still rejected.
+- **The VM answered 0 where the tree-walker raised.** `#.1|"४२"|` was a runtime
+  error in the tree-walker and `0` in the VM; `c|…|`/`e|…|` on a non-number was
+  an error in one engine and `0.0` in the other. Both now fail, with the
+  tree-walker's message. (Found by the audit, present since before the numeral
+  work.)
+- **Performance regression from the original fix, removed.** Routing every
+  concatenation through `numeral_int` allocated an intermediate `String` even in
+  ASCII mode, costing ~8% on `"label" i` in a loop (3M iterations: VM 0.34 s →
+  0.37 s, tree-walker 0.750 s → 0.793 s). `map_ascii_digits` now takes its
+  buffer by value and the VM's hot concatenation paths write straight into the
+  destination when the mode is ASCII: back to 0.32–0.34 s / 0.75 s.
+- Also routed: the VM's `ReadLine` prompt, the last `print!` of a value that
+  still used `Display`.
+- Regression: `test_i18n_mode_reaches_array_elements`,
+  `…_tuple_elements`, `…_interpolated_array`, `…_array_elements_vm`,
+  `test_round_accepts_unicode_digits`, `test_trunc_accepts_unicode_digits`,
+  `test_round_accepts_unicode_digits_vm` and
+  `test_round_rejects_non_numeric_string_in_both_engines`; the web example
+  `examples/numerals/composed.zy` covers collections and the round trip in the
+  CLI↔JS parity run.
+
+**Ordering comparisons: one rule, and no second-class digit script**
+
+`? "5" > 5` coerced the string and answered `#0`; `? "४२" > 5` raised *cannot
+compare string '४२' with integer 5*. Same operator, same shape of operands, and
+the only difference was which script wrote the digits — either both are strings
+or both are numbers, anything else makes every script but ASCII a second-class
+citizen of its own language.
+
+- The rule, now the same in the tree-walker, the VM and the JS engine:
+  **numeric** when both sides are numbers, where a string counts as a number if
+  `#|…|` would convert it (digits from any of the 69 scripts);
+  **lexicographic** when both sides are non-numeric text; **an error** when a
+  number meets text that is not a number. Equality is deliberately excluded —
+  `==` still never coerces, so `"5" == 5` and `"५" == 5` are both `#0`.
+- The three engines had three implementations of ordering and disagreed *even in
+  ASCII*: `"5" > 5` was `#0` in the tree-walker and `#1` in the VM (whose
+  `cmp_direct` returned "greater" for every pair outside its table); `"10" > "9"`
+  was `#1` in the tree-walker and `#0` in the VM; and the VM's call-frame loop
+  had a third variant that answered `false` for everything but `Int`/`Int`.
+  `"४२" > "९"` was `#0` in both engines where `"10" > "9"` was `#1`.
+- Replaced by `cmp_order`/`cmp_order_error` (VM, used by both interpreter loops)
+  and the rewritten string arms of `compare_values` (tree-walker), with
+  `orderValues` mirroring them in `web/src/zymbol/zymbol.js`. Comparison errors
+  now carry the same text in every engine (the JS engine also stops calling the
+  operators `Lte`/`Gte`).
+- Also aligned: `'a' < 'b'` and `#0 < #1` were a VM feature and a tree-walker
+  error; both engines compare them now.
+- Regression: `test_order_numeric_string_any_script`,
+  `test_order_non_numeric_strings_stay_lexicographic`,
+  `test_order_number_against_text_is_an_error` and
+  `test_order_rule_is_identical_in_both_engines`.
+
+**Static-tooling audit: what `check` and the LSP could not see**
+
+Running the analyzer over the workspace's ~918 `.zy` files and diffing its
+diagnostics against `zymbol check` and against what actually happens at run time
+surfaced four divergences. The recursive `check` is filed under **Changed**
+above (it is new coverage, not a repaired behavior); the other three are bugs.
+The audit is repeatable: `crates/zymbol-analyzer/examples/lsp_scan.rs` prints
+the analyzer's diagnostics for a list of files.
+
+- **A re-export was dropped on the indexer's first pass.**
+  `index_background_module` registered a file's imports *after* reading its
+  export block — but a re-export (`alias::item => name`) resolves its source
+  through that same file's alias map, which did not exist yet. Every i18n layer
+  module therefore looked like it exported nothing: **33 false
+  `export-not-found` diagnostics** across serpiente, klingon_galaxy,
+  aprende_zymbol and api_demo, on code that runs correctly. Imports are now
+  registered first. Count after the fix: 0.
+- **`std/` modules were a blind spot for every static tool.** They have no file
+  on disk, so an alias bound to one was never validated: `math::inventada()`,
+  `m::PI()` (calling a constant), `m.sin` (reading a function as a value), and a
+  typo in a stdlib re-export (`t::widht => ancho`, which silently breaks every
+  caller of an i18n layer) all passed `zymbol check` in silence and showed
+  nothing in the editor. `zymbol_common::stdlib` is now the shared export table
+  — names plus arity — and both `check` and the LSP report through the single
+  `zymbol_semantic::check_stdlib_access`, with a "did you mean" for near
+  misses. A named-tuple field may legitimately share an alias's name
+  (`resp.json.user`), so only a name that does not itself follow `.` or `::` is
+  read as a module access.
+  `crates/zymbol-cli/tests/stdlib_parity.rs` fails if the table ever drifts from
+  what the tree-walker and the VM compiler actually implement, so the fix cannot
+  rot the way a hand-maintained list would. See REFERENCE.md L27.
+- **The formatter could not format a file with an escaped literal in a match
+  pattern.** `format_pattern`'s `Pattern::Literal` arm wrote `lit.to_string()`
+  — `Display`, which does not escape — while the *expression* path correctly
+  used `escape_char`/`escape_string`. So `'\n'` in an expression formatted fine
+  and `'\n'` in a `??` arm came back as a real newline between two quotes, which
+  no longer lexes. The fail-closed safety gate caught it every time and refused
+  to write (no file was ever corrupted), but that made `zymbol fmt` unusable on
+  any file with `'\n'`, `'\t'`, `'\r'`, `'\0'` or `'\\'` in a match arm — which
+  is exactly what key handling in a TUI program looks like. String patterns took
+  the same path. Both now route through the expression escaper.
+- Regression: `crates/zymbol-semantic/src/stdlib_access.rs` (8 cases),
+  `crates/zymbol-cli/tests/cli_check_stdlib.rs` (4 cases),
+  `crates/zymbol-cli/tests/stdlib_parity.rs`, and
+  `tests/bugs/bug_char_escape_lexing.zy`, which is in the formatter property
+  corpus — `fmt_property.sh` reported it as a P1 failure before the fix and
+  reports 0 failures after.
+
+**Findings from the zy-GO validation project (HLZ-001 … HLZ-009)**
+
+Building [zy-GO](https://github.com/zymbol-lang/zy-GO) — a Go/囲碁 game whose
+engine is 13 modules across four subdirectories — surfaced nine divergences.
+Six were bugs, two were diagnostics that named neither cause nor fix, and one
+was a documentation table that sent readers to write a TUI that could not
+respond to the cursor keys.
+
+**HLZ-001 — a module constant could not carry a sign**
+- `NAME := -1` inside a module body was rejected as E013 "initializer must be a
+  literal": a signed number parses as unary minus applied to a literal, which is
+  an expression node, but `-1` is a constant, not a computation.
+- Both the parser gate and the semantic defence-in-depth gate now accept a
+  signed literal, and they share the same rule so they cannot drift apart.
+- Regression: `tests/modules_scope/out_param_module.zy`, plus unit tests in
+  `zymbol-semantic` for the accepted and still-rejected forms.
+
+**HLZ-002 — an index computed from parameters was rejected as Float**
+- `arr[(r - 1) * n + c]` inside a function failed analysis with "array index
+  must be Int, got Float", though every operand is an integer at runtime.
+- Cause: a parameter used in arithmetic was constrained to `Numeric`, and
+  `Numeric` resolved to `Float` — asserting more than was known.
+- New `ZymbolType::Number` means "Int or Float, undetermined": accepted as an
+  array index, compatible with Int and Float and with nothing else. The static
+  error for passing a String to a function that adds to its parameter is
+  preserved, and now reads "expects Number" rather than the inaccurate
+  "expects Float".
+- Regression: `tests/modules_scope/subfolder_dot_convention.zy`.
+
+**HLZ-003 — `==` was the only comparison that did not promote Int and Float**
+- `##.0 == 0` was `#0` while `##.0 >= 0` and `##.0 <= 0` were both `#1`. Since
+  the two values print identically, the contradiction was invisible: a failing
+  assertion read "expected 0, got 0".
+- `values_equal` in the tree-walker now promotes, as `compare_values` already
+  did. The VM's `cmp_direct` already promoted, so `==` was also a silent engine
+  divergence; `Value::equals` and the `CmpEqImm`/`CmpNeImm` fast and slow paths
+  are aligned too — a Float subject in `?? 3.0 { 3 => … }` used to raise a type
+  error in one and leave the destination register unwritten in the other.
+- Regression: `tests/arithmetic/int_float_equality.zy` (TW == VM), plus unit
+  tests in `zymbol-interpreter`.
+
+**HLZ-004 — the documented dot convention was rejected by `check` and the LSP**
+- `# .folder_file` in `folder/file.zy` is the convention in
+  `tests/i18n/DOT_CONVENTION.md`. Validation stripped the leading dot and then
+  compared the whole remaining name against the file stem, so `.core_board` was
+  measured against `board` and every subdirectory module failed E001.
+- The dotted form now compares against `<parent>_<stem>`. `zymbol run` had
+  always accepted these modules; `check` and the LSP rejected them, which made
+  `zymbol check` unusable on any project organised in folders — 11 of zy-GO's
+  13 modules.
+- Regression: `tests/modules_scope/subfolder_dot_convention.zy` and four unit
+  tests, including a multi-byte folder name.
+
+**HLZ-005 — `./../x` failed with a diagnostic that explained nothing**
+- The old message was "expected module path" followed by "unexpected token:
+  Slash". The spelling stays rejected on purpose: the AST records only
+  `parent_levels`, so `./../x` and `../x` are indistinguishable once parsed and
+  the formatter's token-stream safety gate would refuse any file using it. What
+  was wrong was the diagnostic, which now names the fix.
+- Regression: `tests/errors/parser/parent_path_alias.zy`.
+
+**HLZ-006 — GUIDE.md documented the wrong arrow keys**
+- §3b said `<<|` returns `'U'`, `'D'`, `'L'`, `'R'`. It returns the arrow
+  glyphs `'↑'`, `'↓'`, `'←'`, `'→'`. Following the guide produced a TUI that
+  drew correctly and ignored the cursor keys, with no error to read, because
+  the key fell through to the default match arm. `serpiente/logica.zy` has
+  matched on the glyphs since v0.0.5.
+- Corrected, with a note that this leaves every ASCII letter free for commands.
+
+**HLZ-008 — the VM silently dropped output parameters of module functions**
+- `alias::f(x<~)` compiled without a `SetupOutputWriteback`: the caller's
+  variable was never updated. No error, no warning, just the original value.
+- `compile_import` reserved chunk slots for module functions but never
+  registered their output-param flags, which only happened for the main
+  program's own functions.
+- Consequence downstream was an out-of-bounds crash far from the cause, because
+  a board passed as `局面<~` silently never changed. It is why zy-GO shipped
+  tree-walker only.
+- Regression: `tests/modules_scope/out_param_module.zy` (TW == VM).
+
+**HLZ-010 — the VM turned an interpolated constant into literal text**
+
+- `"{DIR}/f.txt"` inside a function body compiled to the eight characters
+  `{DIR}/f.txt` under `--vm`. `compile_interpolated_string` looked the name up
+  in the local registers and, on failure, fell straight through to its
+  literal-text branch — never consulting `global_consts`, where every top-level
+  constant lives, nor `global_var_map`.
+- Silent, and scoped in a way that hid it: the same string at the top level
+  worked, and a direct `>> K` inside the same function worked. Only
+  interpolation, only inside a function, only under the VM.
+- Found by a benchmark harness that played sixty-four games and wrote zero
+  records, because its output path was built this way. `io::write` was handed
+  `{記録場所}/9路_0001.kifu`, failed softly, and said nothing.
+- Regression: `tests/modules_scope/interp_global_const.zy`, covering all five
+  constant types, module-level mutable state, and the genuinely-unknown name
+  that must stay literal in both engines.
+
+**HLZ-009 — the VM could not slice a String inside a module function**
+- `s$[3..]` raised "expected Array, Tuple, or NamedTuple, got String". The
+  `ArraySlice` instruction handled the three collection types but not String,
+  and it was only reached when the subject was a runtime value rather than a
+  literal the compiler could fold — so the gap appeared inside module functions
+  and nowhere else.
+- Regression: `tests/modules_scope/out_param_module.zy`.
+
+With HLZ-008 and HLZ-009 fixed, all six zy-GO test suites pass under `--vm` as
+well as the tree-walker.
+
+**HLZ-007 — juxtaposition stopped at the first delimiter**
+
+- Implicit concatenation only existed at statement level. `f(a " " b)`,
+  `[a " " b]` and `(a " " b)` were all parse errors, so any composed string
+  handed to a function needed an intermediate variable first.
+- The finding was originally filed against string interpolation (`"{t.field}"`
+  is rejected), but measuring zy-GO's side panel showed the interpolation limit
+  was not what cost anything: nearly every intermediate variable there holds a
+  *call*, not a field access, and no interpolation syntax would remove them.
+  Two walls stood next to each other — interpolation admits only identifiers,
+  and juxtaposition did not reach inside an argument list — and only the second
+  one was load-bearing.
+- Juxtaposition now works in call arguments, array elements, tuple elements and
+  grouped expressions, with the same same-line rule as at statement level. A
+  comma still separates arguments; a following `(` never continues the chain in
+  these positions, because there it is ambiguous with a lambda, a tuple and a
+  grouped expression.
+- Parser-only change: the AST node (`BinaryOp::Concat`) already existed, so the
+  tree-walker, the compiler, the VM and the formatter needed no changes.
+- Cost of the trade: `f(a b)` with a forgotten comma now concatenates instead of
+  raising a parse error.
+- Regression: `tests/strings/30_juxtaposition_delimited.zy` (TW == VM),
+  covering arguments, nesting, commas, arrays, tuples, groups, `$*` composition
+  and a lambda argument that must stay a lambda.
+
+**HLZ-011 — a variable used only as a range bound was reported as unused**
+
+- `total = xs$#` followed by `@ i:1..total { }` warned "unused variable
+  'total'" even though the loop reads it. `analyze_expr`'s `Expr::Range` arm was
+  a no-op, with a comment claiming the bounds were "literals/identifiers only" —
+  but `start`, `end` and `step` are full `Box<Expr>`, so any variable used only
+  as a bound never counted as a use.
+- The warning surfaced non-deterministically (it depended on how many other
+  variables shared the scope), which is why it hid: zy-GO's `設定描画` tripped it
+  while the structurally identical `助言描画` did not.
+- The arm now visits `start`, `end` and `step`. A genuinely unused variable
+  still warns.
+- Regression: `crates/zymbol-semantic/tests/underscore_semantics.rs`
+  (`test_variable_used_only_as_range_bound`,
+  `test_variable_used_as_range_start_and_step`,
+  `test_genuinely_unused_still_warns`).
+
+**MM-1 — `x°`/`°x` inside a function called from a `@` loop panicked the tree-walker**
+- `loop_scope_depths` (the anchor indices for hot definitions) is now saved and
+  restored across call boundaries in `SavedCallState`. Inside a function with no
+  loops of its own, hot definitions anchor to the function scope, as documented.
+- Regression test: `tests/bugs/bug_mm1_hot_def_fn_scope.zy` (TW == VM).
+
+**MM-2 — module-state mutations made by intra-module calls were lost (TW)**
+- Write-back now runs for every module frame (both `alias::` calls and bare-name
+  intra-module calls) and is **diff-based**: only keys whose value changed
+  relative to the injected snapshot are persisted, so an outer frame can no
+  longer clobber a nested call's write-back with its stale copy.
+- Same-module nested calls inject the caller's live values (not the stale store)
+  and refresh the caller's copies on return, so sequential reads/writes across
+  intra-module call chains are consistent.
+- Parameters named like module variables shadow them and are excluded from
+  write-back.
+- Regression test: `tests/bugs/bug_mm2_module_state_helper.zy` (TW == VM).
+
+**MM-3 — `\ x` inside a function poisoned the caller's same-named variable (TW)**
+- `dead_variables` is now frame-local (saved/restored in `SavedCallState`);
+  destroying a name inside a callee no longer raises a false
+  `use after destruction` on the caller's variable.
+- Regression test: `tests/bugs/bug_mm3_destroy_frame_local.zy` (TW == VM).
+
+**MM-4 — modules loaded at runtime skipped semantic analysis**
+- `zymbol run` now applies the same semantic gate as the entry file when
+  importing a module — in **both** engines (tree-walker `load_module` and VM
+  `compile_import`). A module whose function reassigns a `:=` constant fails at
+  import time with a semantic error instead of executing with split-brain state.
+- Defense in depth: module constants are re-marked `const` inside module
+  function frames, so reassignment is a runtime error even if static analysis
+  is bypassed.
+- Regression test: `tests/bugs/bug_mm4_module_const_guard.zy` (TW == VM,
+  identical error text).
+
+**MM-10 / L23 — VM: each import alias got its own module state copy**
+- The VM compiler recompiled a module on every import, allocating fresh
+  global-variable slots per alias — two aliases to the same file (or a diamond
+  dependency) held divergent state. Compiled modules are now cached by
+  canonical file path: any later import binds its alias to the same chunks and
+  global slots, matching the tree-walker's per-path state identity.
+- Regression test: `tests/bugs/bug_mm10_alias_shared_state.zy` (two aliases +
+  diamond, TW == VM).
+
+**MM-11 / L24 — VM: leftover loop-iterator value diverged from the tree-walker**
+- VM range loops used the named iterator's register as the loop counter, so
+  after the loop it held the first out-of-range value (TW: last executed
+  value), and body writes to the iterator could alter the iteration. The VM
+  now advances a hidden counter and publishes it to the named variable at the
+  top of each iteration — leftover and body-write semantics match the
+  tree-walker in all range variants (step, reverse, break).
+- Regression test: `tests/bugs/bug_mm11_iterator_leftover.zy` (TW == VM).
+
+**MM-9 — root-scope constants vanished at call depth ≥ 2 (TW)**
+- Constants declared with `:=` at the top level of a script are now recorded in
+  a global constant table that is not swapped by call frames: they resolve at
+  any call depth, through recursion and lambda frames, and stay immutable
+  everywhere (`is_const` consults the table). Module frames do not see script
+  constants (module isolation preserved). Constants declared inside blocks or
+  function bodies remain lexically scoped; block-local constants are still
+  forwarded (and now re-marked) one frame at a time.
+- A parameter may shadow a forwarded constant — it stays assignable.
+- Regression test: `tests/bugs/bug_mm9_const_call_depth.zy` (TW == VM).
+
+- **Legacy export separators now name themselves.** `<=` or `:` inside a `#> {}`
+  block reported `expected identifier in export item`, pointing at the separator
+  while asking for an identifier the author had already written. Both now produce
+  `legacy export rename separator` with a help line giving the `=>` form; the
+  generic case gained a help line too (`crates/zymbol-parser/src/modules.rs`).
+
+### Documented
+
+- **MM-5**: constants pierce function isolation by design (GUIDE §9 note).
+- **MM-6**: the `@ var:` iterator reuses a pre-existing outer variable of the
+  same name; the leftover value is the last executed iteration value in both
+  engines (GUIDE §8 note).
+- **MM-7**: `x°`/`°x` run in both engines — the stale "tree-walker only /
+  `@vm-skip`" note was removed from the GUIDE.
+- **MM-8**: module state identity is per file path — several aliases to the
+  same module share one state in both engines (GUIDE §17 note).
+
+**I18N.md rewritten.** The previous document was written against the pre-0.0.6
+`<=` alias syntax and none of its 35 examples parsed: the breaking change that
+introduced `=>` ([0.0.6], `feat(syntax)!`) updated the other reference documents
+but touched only one line of this one. It is preserved as
+[I18N_DEPRECATED.md](I18N_DEPRECATED.md) with a banner naming the cause; the new
+[I18N.md](I18N.md) covers both internationalization mechanisms — re-export layers
+for code (now including how to wrap `std/*` modules) and dispatcher modules for
+runtime text, which the old document never documented at all. Every code block in
+it is extracted to a clean tree and executed in both engines before publication.
+
+- **Keys belong in the base language.** The runtime-text section documents the
+  convention validated in zy-GO: i18n keys are concepts in the language the
+  program is written in, each carrying a domain prefix (`区画.アゲハマ`, never
+  plain `アゲハマ`). The prefix is what stops a key from ever equalling its own
+  translation, which is what keeps completeness decidable in the base language.
+- **GUIDE §Re-export**: the prose still said the rename separator was `:`, and a
+  note still warned about L3 (`alias.CONST`) after it had been fixed.
+- `tests/i18n/matematicas/` — the four module files declared `# .ελληνικά`
+  instead of `# .matematicas_ελληνικά`, so they failed `zymbol check` with E001
+  even though `zymbol run` executed them (the check does not reach modules
+  arrived at through an import).
+- The Mandarin translation layer both I18N documents describe never existed:
+  `matematicas/中文.zy` and `中文_应用.zy` are now present with their golden
+  file, so the suite covers the four languages the pattern claims.
+- `tests/i18n/test_all_i18n.sh` invoked `app_coreano.zy`, `app_griego.zy` and
+  `app_hebreo.zy`, none of which exist under those names — the script had been
+  dead since the consumers were renamed. Rewritten around what
+  `expected_compare.sh` does *not* do: it runs `zymbol check` on every layer
+  (the gap that let E001 hide) and diffs the tree-walker against `--vm` for
+  every consumer.
+
+---
+
 ## [0.0.7] — 2026-07-02
 
 ### Added
@@ -987,10 +1703,11 @@ Initial release — Zymbol-Lang interpreter v5I.
 
 ---
 
-[Unreleased]: https://github.com/zymbol-lang/zymbol/compare/v0.0.6...HEAD
-[0.0.6]: https://github.com/zymbol-lang/zymbol/compare/v0.0.5...v0.0.6
-[0.0.5]: https://github.com/zymbol-lang/zymbol/compare/v0.0.4...v0.0.5
-[0.0.4]: https://github.com/zymbol-lang/zymbol/compare/v0.0.3...v0.0.4
-[0.0.3]: https://github.com/zymbol-lang/zymbol/compare/v0.0.2...v0.0.3
-[0.0.2]: https://github.com/zymbol-lang/zymbol/compare/v0.0.1...v0.0.2
-[0.0.1]: https://github.com/zymbol-lang/zymbol/releases/tag/v0.0.1
+[0.0.8]: https://github.com/zymbol-lang/interpreter/compare/v0.0.7...v0.0.8
+[0.0.7]: https://github.com/zymbol-lang/interpreter/compare/v0.0.6...v0.0.7
+[0.0.6]: https://github.com/zymbol-lang/interpreter/compare/v0.0.5...v0.0.6
+[0.0.5]: https://github.com/zymbol-lang/interpreter/compare/v0.0.4...v0.0.5
+[0.0.4]: https://github.com/zymbol-lang/interpreter/compare/v0.0.3...v0.0.4
+[0.0.3]: https://github.com/zymbol-lang/interpreter/compare/v0.0.2...v0.0.3
+[0.0.2]: https://github.com/zymbol-lang/interpreter/compare/v0.0.1...v0.0.2
+[0.0.1]: https://github.com/zymbol-lang/interpreter/releases/tag/v0.0.1

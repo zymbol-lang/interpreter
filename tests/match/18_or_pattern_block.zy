@@ -1,0 +1,33 @@
+// Test: || alternatives on block arms (execution-only match)
+key = 'Q'
+?? key {
+    'p' || 'P' => { >> "PAUSE" ¶ }
+    'q' || 'Q' => { >> "QUIT" ¶ }
+    _          => { >> "NOTHING" ¶ }
+}
+
+// Structural array alternatives
+cmd = ["build", "main.zy"]
+?? cmd {
+    ["run", _] || ["build", _] => { >> "known command" ¶ }
+    []                         => { >> "empty" ¶ }
+    _                          => { >> "unknown command" ¶ }
+}
+
+// First matching alternative wins, later arms are not tested
+v = 5
+?? v {
+    5 || 6 => { >> "first arm" ¶ }
+    5      => { >> "second arm (never reached)" ¶ }
+    _      => { >> "fallback" ¶ }
+}
+
+// Alternatives inside a function body
+classify(c) {
+    <~ ?? c {
+        'a' || 'e' || 'i' || 'o' || 'u' => "vowel"
+        _                               => "consonant"
+    }
+}
+>> classify('e') ¶
+>> classify('x') ¶

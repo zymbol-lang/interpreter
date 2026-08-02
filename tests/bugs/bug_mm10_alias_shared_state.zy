@@ -1,0 +1,20 @@
+// MM-10 (fixed v0.0.8): importing the same module file several times — under
+// different aliases or from different importers (diamond dependency) — shares
+// ONE state in both engines. Previously the VM compiled a separate state copy
+// per alias (see bug_mm10_counter.zy / bug_mm10_wrap_a.zy / bug_mm10_wrap_b.zy).
+
+<# ./bug_mm10_counter => a
+<# ./bug_mm10_counter => b
+<# ./bug_mm10_wrap_a  => wa
+<# ./bug_mm10_wrap_b  => wb
+
+// Two aliases, one state
+a::increment()
+a::increment()
+>> b::get_value() ¶
+
+// Diamond: wrap_a and wrap_b import bug_mm10_counter — same instance,
+// also shared with the direct aliases above.
+wa::bump_a()
+>> wb::read_b() ¶
+>> a::get_value() ¶

@@ -1,0 +1,8 @@
+// MM-4 (fixed v0.0.8): modules loaded at runtime pass the same semantic
+// analysis as the entry file — importing a module whose function reassigns a
+// module constant fails with a semantic error instead of executing silently
+// with split-brain state (see bug_mm4_modconst.zy).
+
+<# ./bug_mm4_modconst => m
+
+>> m.MAX ¶

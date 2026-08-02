@@ -215,12 +215,38 @@ impl Parser {
     ///   s = "hello" ' ' name " world"
     /// The comma operator is no longer used for concat — use juxtaposition or + for strings.
     pub(crate) fn parse_juxtapose_chain(&mut self, first: Expr) -> Result<Expr, Diagnostic> {
+        self.parse_juxtapose_chain_inner(first, true)
+    }
+
+    /// Parse an expression in a delimited position — a call argument, an array
+    /// element, a tuple element or a grouped expression — allowing implicit
+    /// concatenation there too:
+    ///   panel(" " label(k) value)      [a " " b]      (a " " b)
+    ///
+    /// Juxtaposition used to exist only at statement level, so any composed
+    /// string handed to a function needed an intermediate variable first.
+    ///
+    /// A following `(` never juxtaposes here, unlike at statement level: inside
+    /// an argument list a parenthesis is ambiguous with a lambda, a tuple and a
+    /// grouped expression, and reading it as concatenation would silently
+    /// reinterpret those.
+    pub(crate) fn parse_expr_juxt(&mut self) -> Result<Expr, Diagnostic> {
+        let first = self.parse_expr()?;
+        self.parse_juxtapose_chain_inner(first, false)
+    }
+
+    fn parse_juxtapose_chain_inner(
+        &mut self,
+        first: Expr,
+        allow_lparen: bool,
+    ) -> Result<Expr, Diagnostic> {
         let mut acc = first;
         loop {
             let next_tok = self.peek();
             let same_line = next_tok.span.start.line == acc.span().end.line;
             let can_juxt = Self::can_juxtapose(&next_tok.kind)
-                || (matches!(next_tok.kind, TokenKind::LParen)
+                || (allow_lparen
+                    && matches!(next_tok.kind, TokenKind::LParen)
                     && matches!(acc.unwrap_group(), Expr::Literal(_) | Expr::Binary(_)));
             if same_line && can_juxt {
                 let next_expr = self.parse_expr()?;

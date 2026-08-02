@@ -1,0 +1,2 @@
+Runtime error: failed to parse module: 1 semantic error(s) in '****bug_mm4_modconst.zy'
+  ****bug_mm4_modconst.zy:11:18: cannot reassign constant 'MAX'

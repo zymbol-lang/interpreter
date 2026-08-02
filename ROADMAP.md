@@ -1,11 +1,18 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **v0.0.7 (released 2026-07-02)** — all planned features shipped.
-> Highlights: native stdlib expansion (`std/json`, `std/io`, `std/net`, `std/db` via
-> ODBC), typed/validated input (`<< ##.(5,2) "p" var`), fail-closed formatter,
-> `DeepSet` VM parity for every `$~` form, the L14/L16 error-handling fixes,
-> LSP↔check diagnostic parity, and Rust edition 2024 (see `IMPL_V007.md`).
-> Validation: 507/507 VM-parity tests PASS (0 SKIP), 833 unit tests.
+> Current status: **v0.0.8** — a *debt* release, scoped by evidence rather
+> than by a feature wish list: the design-vs-implementation audit in `MEMORY_MODEL.md`
+> (MM-1 … MM-11) plus findings from three validation projects written in Zymbol
+> (zy-GO, zy-Serpiente, zyKlingonGalaxy). Highlights: auto-free (destruction at last use,
+> both engines), `std/term`, `##!` on `Char`, match or-patterns (`p1 || p2`), Zymbol
+> Packages (`.zyp`), and VM module-system parity. See `IMPL_V008.md`.
+> Validation: 544/544 VM-parity, 936 unit tests.
+>
+> Previously: **v0.0.7 (released 2026-07-02)** — native stdlib expansion (`std/json`,
+> `std/io`, `std/net`, `std/db` via ODBC), typed/validated input (`<< ##.(5,2) "p" var`),
+> fail-closed formatter, `DeepSet` VM parity for every `$~` form, the L14/L16
+> error-handling fixes, LSP↔check diagnostic parity, and Rust edition 2024
+> (see `IMPL_V007.md`).
 
 ---
 
@@ -25,6 +32,7 @@
 | CLI args capture `><` | ✅ |
 | Control flow: `?` / `_?` / `_` | ✅ |
 | Match `??` (literal, range, comparison `< expr`, ident/containment, list, wildcard) | ✅ |
+| Match or-patterns `p1 \|\| p2` (alternatives in one arm, any pattern kind) | ✅ v0.0.8 |
 | All loop forms: infinite, while, for-each, range | ✅ |
 | Range step and reverse range | ✅ |
 | Labeled loops with `@!` / `@>` | ✅ |
@@ -50,6 +58,9 @@
 | Base literals and conversions: `0x`, `0b`, `0o`, `0d` | ✅ |
 | Shell execution: `<\ cmd \>` (BashExec) and `</ file.zy />` | ✅ |
 | Explicit variable lifetime: `\ var` | ✅ |
+| Automatic destruction at last use (auto-free, both engines, unobservable) | ✅ v0.0.8 |
+| `##!` on `Char` → Unicode code point | ✅ v0.0.8 |
+| Zymbol Packages `.zyp` — `zymbol package` / `zymbol run pkg.zyp` | ✅ v0.0.8 |
 
 ### Execution Modes (complete)
 
@@ -81,8 +92,11 @@
 
 | Suite | Status |
 |-------|--------|
-| Unit + integration (`cargo test`) | ✅ 820 passed, 0 failed, 4 ignored |
-| VM parity check (`vm_compare.sh`) | ✅ 478/478 PASS (0 SKIP) |
+| Unit + integration (`cargo test`) | ✅ 936 passed, 0 failed |
+| VM parity check (`vm_compare.sh`) | ✅ 544/544 PASS, 0 skipped |
+| Golden files (`expected_compare.sh`) | ⚠️ 523/525 — two stale hand-written `.expected` fixtures, not interpreter regressions (see `IMPL_V008.md` § E.1) |
+| Formatter property suite (`fmt_property.sh`) | ✅ 600 PASS / 43 SKIP / 0 FAIL over 643 files, no regressions vs. baseline (the pattern-escaping bug, § E.2, is fixed) |
+| JS mirror parity (`web/tests/test_runner.mjs`) | ⚠️ 516/521 + 208/210 on the example pool — seven gaps in `web/src/zymbol/zymbol.js` (see `IMPL_V008.md` § E.3) |
 | RosettaStone i18n suite (105 languages) | ✅ PASS |
 
 ---
@@ -96,7 +110,7 @@ They are documented in the manual as known limitations.
 
 | Gap | Description | Workaround |
 |-----|-------------|------------|
-| **Match multi-value arms** | `1, 2 => "low"` (one arm, several values) not parsed — `[NI02]` | List containment pattern: `[1, 2] => "low"` (v0.0.4) |
+| **Match multi-value arms** | `1, 2 => "low"` (one arm, several values) not parsed — `[NI02]` | Or-patterns: `1 \|\| 2 => "low"` (v0.0.8), which also work for non-literal patterns; or list containment `[1, 2] => "low"` (v0.0.4) |
 | **Match identifier binding** | `pattern as name` — `[NI03]` — **dismissed 2026-06-12** | Extract the value before the match (the idiom) |
 | ~~**`$!!` from lambdas**~~ | **Resolved** — verified 2026-06-12: `$!!` propagates from lambdas identically to named functions (`tests/lambdas/error_propagate_lambda.zy`) | — |
 | **`do-while ~>`** | Post-condition loop `[NI01]` — **dismissed 2026-06-12** | Infinite loop with `@!` break at end (the idiom) |
@@ -141,10 +155,28 @@ no longer warn (regression test: `tests/errors/semantic/no_false_positive_unused
 - Distinguish string split `/` from arithmetic `/` in type checker
 - Model `arr[i] = val` as a mutation rather than a type mismatch
 
-#### VM completeness
+#### ~~VM completeness~~ Reached in v0.0.8
 
-- **Module system in VM**: full parity with tree-walker for `<#` imports
-- **Format expressions in VM**: `e|x|`, `c|x|` full parity (`#.N|x|` already working)
+Both bullets that used to live here were stale, and an unqualified "not at parity" line is
+worse than no line: it sends projects to the tree-walker by default, which is exactly what
+zy-GO did before HLZ-008 was found.
+
+- ~~**Module system in VM**~~ — HLZ-008, HLZ-009, HLZ-010, MM-10 and MM-11 closed the known
+  divergences. `tests/scripts/vm_compare.sh` reports **544/544** files byte-identical under
+  both engines, `tests/modules_scope/` included. Exactly one test carries `@vm-skip`
+  (`tests/gaps/gap_key_input_type_check.zy`) and it is skipped by design — it is a
+  `zymbol check` test that never executes.
+- ~~**Format expressions in VM**~~ — already done, and that line's syntax predated v0.0.6.
+  Verified on the v0.0.8 binary, TW == VM for `#,|x|` → `12,345.678`, `#^|x|` →
+  `1.2345678e4`, `#^.3|x|` → `1.235e4`, `#,.2|x|` → `12,345.68`. `compile_format`
+  (`crates/zymbol-compiler/src/lib.rs`) emits `FmtThousands`/`FmtScientific` with both
+  precision kinds.
+- CLI args capture (`><`) also has parity, despite older tables marking it VM-unsupported.
+
+Remaining VM-side debt is not a parity gap but a memory one: auto-free clears a named
+variable's register, while an expression temporary holding the same value survives until
+its register is reused. Closing it is a register-allocator change. See
+[IMPL_V008.md](IMPL_V008.md) § "Auto-free debt".
 
 ### Medium Term
 
@@ -233,18 +265,29 @@ Built-in modules accessible via `<#`:
 | `std/json` | `decode encode` — object↔NamedTuple, soft `##Parse` errors | ✅ v0.0.7 |
 | `std/net` | `get post post_json head` (sync, optional headers arg) — soft `##Network` errors | ✅ v0.0.7 |
 | `std/db` | Vendor-neutral DB access via ODBC (connect/exec/query/tx/savepoints) — soft `##DB` errors | ✅ v0.0.7 |
+| `std/term` | `width pad_left pad_right center truncate` — display width in terminal **columns** (CJK/emoji count as 2), measured over grapheme clusters | ✅ v0.0.8 |
 | `std/env` | Environment variables, OS info | **dropped v0.0.7** — redundant: `<\ "printenv KEY" \>`, `><` (see `IMPL_V007.md`) |
 | `std/string` | Advanced string utilities | planned |
 | `std/time` | Timestamps, duration, formatting | planned |
 
 #### Package Manager
 
-A minimal package manager for sharing Zymbol modules:
+**First step shipped in v0.0.8**: `.zyp` archives (`zymbol package` / `zymbol run pkg.zyp`)
+give distribution a format, a manifest (`zyp.toml`), a transitive-dependency closure and an
+engine-version requirement. The `zymbol-package` crate was deliberately kept free of
+`zymbol-interpreter`/`zymbol-vm`/`zymbol-compiler` so a package manager (or the LSP) can
+depend on it without dragging in the whole runtime.
+
+What a package manager still needs on top:
 
 - `zymbol add user/package` — install from GitHub
-- `zymbol.toml` — project manifest
-- Local and remote module resolution
-- Semantic versioning
+- Remote module resolution and a dependency graph *between* packages (today's closure is
+  intra-package only: it traces `.zy` imports inside one source tree)
+- Semantic versioning of dependencies (`package.engine` already models the interpreter
+  requirement; nothing models package-to-package requirements yet)
+- Non-`.zy` assets. Today a script that reads a data file (CSV, JSON config) via `std/io`
+  has no way to declare it as a dependency — the manifest schema wants an
+  `include = ["data/**/*.json"]` glob list (tracked as a `TODO` in `zymbol-package`)
 
 #### Language Server Improvements
 

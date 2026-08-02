@@ -1,5 +1,9 @@
 name: Build Linux packages
 
+# Three stages: build → verify → publish. Nothing reaches the release page until
+# the .deb has been installed and exercised in a pristine Debian container, so a
+# package that does not install can no longer be downloaded by anyone.
+
 on:
   release:
     types: [published]
@@ -55,6 +59,8 @@ jobs:
         # --no-default-features: prebuilt Linux binaries exclude std/db — ODBC links
         # against system libodbc (undeclared package dependency) and the driver
         # manager needs dlopen, impossible in the static builds below.
+        # verify-deb.sh enforces this: it fails the release if the packaged
+        # binary links anything beyond libc.
         run: cargo build --release --no-default-features --target ${{ matrix.rust_target }}
 
       - name: Expose binary at target/release/ for build-packages.sh
@@ -121,16 +127,54 @@ jobs:
             "zymbol_lang_v${VERSION}_${{ matrix.arch }}_linux" \
             | tee "SHA256SUMS_${{ matrix.arch }}_linux.txt"
 
+      # Hand the packages to the verify and publish jobs instead of uploading
+      # them here: the file that gets verified must be the file that ships.
+      - name: Upload packages as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages-${{ matrix.arch }}
+          path: |
+            packaging/dist/zymbol_lang_v*_${{ matrix.arch }}.deb
+            packaging/dist/zymbol_lang_v*_${{ matrix.arch }}.rpm
+            packaging/dist/zymbol_lang_v*_${{ matrix.arch }}.pkg.tar.zst
+            packaging/dist/zymbol_lang_v*_${{ matrix.arch }}_linux
+            packaging/dist/SHA256SUMS_${{ matrix.arch }}_linux.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  # Gate: the .deb x86_64 must install and pass the E2E suite in debian:12.
+  # rpm / Arch / musl / aarch64 ride along unverified for now — extending this
+  # is the next step (packaging/verify/README.md).
+  verify-linux:
+    name: Verify packages
+    needs: build-linux
+    permissions:
+      contents: read
+    uses: ./.github/workflows/verify-linux-packages.yml
+    with:
+      artifact: linux-packages-x86_64
+      scope: full
+
+  publish-linux:
+    name: Publish to release
+    needs: [build-linux, verify-linux]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download every Linux package
+        uses: actions/download-artifact@v4
+        with:
+          pattern: linux-packages-*
+          path: dist
+          merge-multiple: true
+
+      - name: List what is about to be published
+        run: ls -lh dist
+
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job has no checkout, so gh needs to be told which repo it is in.
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG="${{ github.event.release.tag_name || inputs.tag }}"
-          cd packaging/dist
-          gh release upload "$TAG" \
-            "zymbol_lang_v${VERSION}_${{ matrix.arch }}.deb" \
-            "zymbol_lang_v${VERSION}_${{ matrix.arch }}.rpm" \
-            "zymbol_lang_v${VERSION}_${{ matrix.arch }}.pkg.tar.zst" \
-            "zymbol_lang_v${VERSION}_${{ matrix.arch }}_linux" \
-            "SHA256SUMS_${{ matrix.arch }}_linux.txt" \
-            --clobber
+          gh release upload "$TAG" dist/* --clobber

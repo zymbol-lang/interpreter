@@ -25,7 +25,7 @@ impl Parser {
         }
 
         // Parse first element
-        elements.push(self.parse_expr()?);
+        elements.push(self.parse_expr_juxt()?);
 
         // Parse remaining elements (comma-separated)
         while matches!(self.peek().kind, TokenKind::Comma) {
@@ -36,7 +36,7 @@ impl Parser {
                 break;
             }
 
-            elements.push(self.parse_expr()?);
+            elements.push(self.parse_expr_juxt()?);
         }
 
         // Expect closing ]
@@ -123,7 +123,7 @@ impl Parser {
             Ok(Expr::NamedTuple(NamedTupleExpr::new(fields, span)))
         } else {
             // Parse positional tuple or grouped expression
-            let first_expr = self.parse_expr()?;
+            let first_expr = self.parse_expr_juxt()?;
 
             // Check if it's a tuple (has comma) or just grouping
             if matches!(self.peek().kind, TokenKind::Comma) {
@@ -138,7 +138,7 @@ impl Parser {
                         break;
                     }
 
-                    elements.push(self.parse_expr()?);
+                    elements.push(self.parse_expr_juxt()?);
                 }
 
                 // Expect closing )

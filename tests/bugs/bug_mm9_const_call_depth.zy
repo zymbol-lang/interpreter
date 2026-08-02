@@ -1,0 +1,18 @@
+// MM-9 (fixed v0.0.8): root-scope constants (:=) resolve at any call depth —
+// through nested named-function calls, recursion, and lambda frames
+// (previously: "'K' is undefined" at call depth >= 2 in the tree-walker).
+
+K := 5
+
+inner() { <~ K * 2 }
+outer() { <~ inner() + K }
+>> outer() ¶
+
+fact_k(n) {
+    ? n <= 1 { <~ K }
+    <~ n * fact_k(n - 1)
+}
+>> fact_k(3) ¶
+
+call_it(f) { <~ f(0) }
+>> call_it((d -> inner() + d)) ¶

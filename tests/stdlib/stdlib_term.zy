@@ -1,0 +1,34 @@
+// Test: std/term — terminal display metrics.
+// Width is columns, not grapheme count: CJK and most emoji are two columns each.
+<# std/term => t
+
+// width: String and Char, ASCII and wide
+>> t::width("abc") ¶          // 3
+>> t::width("手番") ¶         // 4
+>> t::width("go碁🌑") ¶       // 6  (1+1+2+2)
+>> t::width("") ¶             // 0
+>> t::width('あ') ¶           // 2
+>> t::width('A') ¶            // 1
+
+// pad_right / pad_left pad with spaces to an exact column count
+>> "[" t::pad_right("負ける", 12) "]" ¶   // 6 cols content + 6 spaces
+>> "[" t::pad_left("x", 5) "]" ¶
+>> "[" t::pad_right("x", 5) "]" ¶
+
+// already at/over the target width → returned untouched
+>> "[" t::pad_right("toolong", 3) "]" ¶
+
+// center: a spare column goes to the right
+>> "[" t::center("go", 10) "]" ¶
+>> "[" t::center("x", 4) "]" ¶
+
+// truncate: never splits a wide glyph
+>> "[" t::truncate("形勢判断形勢", 6) "]" ¶   // 3 ideographs = 6 cols
+>> "[" t::truncate("🌑🌕", 1) "]" ¶          // one emoji is 2 cols > 1 → empty
+>> "[" t::truncate("ab", 0) "]" ¶
+>> "[" t::truncate("short", 20) "]" ¶
+
+// pairs with ##! on a Char: classify by code-point range
+n = ##!'A'
+>> n ¶                        // 65
+>> ##!'あ' ¶                  // 12354

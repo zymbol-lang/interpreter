@@ -1,0 +1,53 @@
+// Numeral mode reaches inside collections
+//
+// An active mode applies wherever a number becomes text — bare output,
+// interpolation, juxtaposition, $++ — including the numbers nested inside
+// arrays, tuples and named tuples. A number does not stop being a number by
+// sitting in a list.
+//
+// What the mode never touches: the content of a string, a Char (even a digit
+// Char), and the punctuation that holds a collection together — brackets,
+// parentheses, commas, the `-` sign and the decimal `.`.
+
+n = 42
+a = [1, 2, 3]
+t = (7, 8)
+p = (x: 10, y: 20)
+nested = [[1, 2], [3]]
+deep = (a: [1, 2], b: (3, 4))
+f = 3.14
+b = #1
+c = '7'
+
+>> "--- ASCII (no mode active) ---" ¶
+>> "scalar        " n ¶
+>> "interpolation {n}" ¶
+>> "array         " a ¶
+>> "tuple         " t ¶
+>> "named tuple   " p ¶
+>> "interp array  {a}" ¶
+>> "float         " f ¶
+>> "bool          " b ¶
+>> "char          " c ¶
+
+#०९#
+
+>> "--- Devanagari mode ---" ¶
+>> "scalar        " n ¶
+>> "interpolation {n}" ¶
+>> "array         " a ¶
+>> "tuple         " t ¶
+>> "named tuple   " p ¶
+>> "interp array  {a}" ¶
+>> "float         " f ¶
+>> "bool          " b ¶
+>> "char          " c ¶
+>> "nested array  " nested ¶
+>> "nested tuple  " deep ¶
+>> "juxtaposition " ("n=" n) ¶
+>> "concat build  " ("n=" $++ n) ¶
+
+#09#
+
+>> "--- back to ASCII ---" ¶
+>> "array         " a ¶

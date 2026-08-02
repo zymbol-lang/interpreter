@@ -2,7 +2,7 @@
 
 Complete lookup reference: known limitations, error taxonomy, and symbol table.
 
-**Interpreter version**: v0.0.7
+**Interpreter version**: v0.0.8
 
 See also: [GUIDE.md](GUIDE.md) — full language guide with examples  
 See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar and internals
@@ -269,6 +269,107 @@ Where `std/db` IS available:
   Build-time prereq: `unixodbc-dev`; runtime prereq: `unixodbc` + the engine's ODBC
   driver. To reproduce the prebuilt behavior use `--no-default-features`.
 
+### ~~L18 — `x°`/`°x` inside a function called from a `@` loop panics~~ Fixed in v0.0.8
+
+The caller's loop anchors leaked into the callee frame (`loop_scope_depths` was not
+saved across the call boundary), so a hot definition inside the function indexed a
+scope that no longer existed — index-out-of-bounds panic in the tree-walker. Now the
+anchors are frame-local: inside a function with no `@` of its own, `x°`/`°x` anchor to
+the function scope (MEMORY_MODEL.md MM-1). Regression test:
+`tests/bugs/bug_mm1_hot_def_fn_scope.zy` (TW == VM).
+
+### ~~L19 — Module-state mutations by intra-module calls were lost~~ Fixed in v0.0.8
+
+In the tree-walker, only the frame called directly via `alias::` wrote module state
+back; a private helper's mutation was discarded, and the outer frame then clobbered
+the store with its stale copy. Write-back now runs for every module frame and is
+diff-based (only changed keys persist), same-module nested calls see the caller's live
+values, and the caller's copies are refreshed on return (MEMORY_MODEL.md MM-2).
+Regression test: `tests/bugs/bug_mm2_module_state_helper.zy` (TW == VM).
+
+### ~~L20 — `\ x` inside a function poisoned the caller's same-named variable~~ Fixed in v0.0.8
+
+The destroyed-names set was global, so `\ x` inside a callee made the caller's own `x`
+raise a false `use after destruction`. The set is now saved/restored per call frame
+(MEMORY_MODEL.md MM-3). Regression test: `tests/bugs/bug_mm3_destroy_frame_local.zy`.
+
+### ~~L21 — Modules loaded at runtime skipped semantic analysis~~ Fixed in v0.0.8
+
+`zymbol run` only lexed + parsed imported modules, so semantic-only violations inside
+module functions (e.g. reassigning a `:=` module constant) executed silently, leaving
+split-brain state (`alias.CONST` stale vs. mutated function view). Both engines now run
+the full semantic gate (VariableAnalyzer + TypeChecker) at import time, and module
+constants are re-marked `const` inside module frames as a runtime backstop
+(MEMORY_MODEL.md MM-4). Regression test: `tests/bugs/bug_mm4_module_const_guard.zy`.
+
+### ~~L22 — Root-scope constants vanished at call depth ≥ 2~~ Fixed in v0.0.8
+
+The tree-walker forwarded constants only one frame deep, so any function-calling-
+function chain (including recursion and lambda frames) lost them at depth ≥ 2 even
+though semantic analysis accepted the program. Top-level `:=` constants now live in a
+global table not swapped by call frames: visible and immutable at any depth; module
+frames still never see script constants (MEMORY_MODEL.md MM-9). Regression test:
+`tests/bugs/bug_mm9_const_call_depth.zy` (TW == VM).
+
+### ~~L23 — VM: each import alias gets its own module state copy~~ Fixed in v0.0.8
+
+The VM compiler recompiled a module on every import, allocating fresh global-variable
+slots per alias — so `a::increment()` was invisible through `b::get_value()`, and
+diamond dependencies (two modules importing the same third module) held divergent
+copies. The compiler now caches compiled modules by canonical file path: any later
+import — another alias or another importer — binds to the same chunks and global
+slots, matching the tree-walker's per-path state identity (GUIDE §17,
+MEMORY_MODEL.md MM-10). Regression test: `tests/bugs/bug_mm10_alias_shared_state.zy`
+(two aliases + diamond, TW == VM).
+
+### ~~L24 — Leftover loop-iterator value differs between engines~~ Fixed in v0.0.8
+
+When `@ i:1..3 { }` reuses a pre-declared outer `i` (GUIDE §8), the VM left the first
+out-of-range value (`4`) while the tree-walker leaves the last executed value (`3`).
+The VM's range loops now advance a hidden counter and publish it to the named
+iterator at the top of each iteration — leftover value and body-write semantics
+(writes to the iterator inside the body cannot alter the iteration) match the
+tree-walker exactly (MEMORY_MODEL.md MM-11). Regression test:
+`tests/bugs/bug_mm11_iterator_leftover.zy` (7 variants, TW == VM).
+
+### ~~L25 — Juxtaposition did not work inside call arguments~~ Fixed in v0.0.8
+
+Implicit concatenation existed only at statement level, so `f(a " " b)`,
+`[a " " b]` and `(a " " b)` were parse errors and every composed string handed
+to a function needed an intermediate variable first. It now works in call
+arguments, array elements, tuple elements and grouped expressions. A comma
+still separates, and a following `(` never continues the chain in those
+positions (it is ambiguous with a lambda, a tuple and a grouped expression) —
+GUIDE §13. Found while building zy-GO, whose side panel spent six variables on
+nothing else. Regression test:
+`tests/strings/30_juxtaposition_delimited.zy` (TW == VM).
+
+### ~~L26 — Variable used only as a range bound warned "unused"~~ Fixed in v0.0.8
+
+`total = xs$#` followed by `@ i:1..total { }` reported `total` as an unused
+variable even though the loop header reads it. The unused-variable analyzer
+skipped the `start`/`end`/`step` expressions of a range, so a name used only as
+a bound never counted as a use. The warning was noisy rather than wrong (the
+program ran correctly), but it fired non-deterministically depending on how many
+other variables shared the scope. Fixed by analyzing the range bounds; a
+genuinely unused variable still warns. Found in zy-GO's `設定描画`. Regression:
+`crates/zymbol-semantic/tests/underscore_semantics.rs` (three cases).
+
+### ~~L27 — Misuse of a `std/` module reached run time unreported~~ Fixed in v0.0.8
+
+`std/` modules are native, with no file on disk for the tooling to read, so an
+alias bound to one was a blind spot: `math::inventada(2.0)`, `m::PI()` (calling a
+constant), `m.sin` (reading a function) and a typo in a re-export
+(`t::widht => ancho`, which silently breaks every caller of an i18n layer) all
+passed `zymbol check` and showed nothing in the editor. `zymbol_common::stdlib`
+now holds the export table — names plus arity, kept in step with both engines by
+`crates/zymbol-cli/tests/stdlib_parity.rs` — and `zymbol check` and the LSP both
+report through `zymbol_semantic::check_stdlib_access`, with a "did you mean" for
+near misses. A named-tuple field may share an alias's name (`resp.json.user`), so
+only a name that does not itself follow `.` or `::` is read as a module access.
+Regression: `crates/zymbol-semantic/src/stdlib_access.rs` (8 cases),
+`crates/zymbol-cli/tests/cli_check_stdlib.rs` (4 cases).
+
 ---
 
 ## 20b. Error Taxonomy
@@ -366,11 +467,65 @@ Runtime errors carry a **kind** (e.g., `##Index`, `##Div`, `##Type`) and a **mes
 | `##Network(...)` | `std/net` functions on HTTP/connection failure |
 | `##DB(...)` | `std/db` functions on SQL/ODBC failure |
 
+`std/term` (v0.0.8) has no soft-error channel: its five functions are pure measurements
+over a string and cannot fail environmentally.
+
 ```zymbol
 <# std/io => io
 txt = io::read("missing.txt")
 ? txt$! { >> "could not read" ¶ }
 ```
+
+---
+
+### Package Errors (`.zyp`, v0.0.8)
+
+These are **CLI-level** errors from `zymbol package` / `zymbol run pkg.zyp`, not values a
+Zymbol program can catch — they occur before (or instead of) any code running.
+
+| Condition | Message |
+|-----------|---------|
+| Archive missing or unreadable | `cannot open package '<path>': <cause>` |
+| No `zyp.toml` at the archive root | `zyp.toml not found in archive (expected at the archive root)` |
+| No `zyp.toml` in the packaged directory | `zyp.toml not found at <path> (pass a directory containing one, or use --script to synthesize one)` |
+| Malformed manifest | `invalid zyp.toml: <detail>` |
+| `--script NAME` doesn't exist | `no script named 'NAME' in this package` |
+| Several scripts, none `default = true`, none named | `no default script declared in zyp.toml, and none selected with --script (use --script <name>)` |
+| Two `[[script]]` entries share a `name` | `duplicate [[script]] name '<name>' in zyp.toml` |
+| More than one `default = true` | `more than one [[script]] is marked default = true: <names>` |
+| `engine` requirement not satisfied | `package '<name>' requires engine <req>, this interpreter is <current>` |
+| Unsafe path in a ZIP entry or `[[script]].path` | `unsafe path in package: '<p>' — paths must be relative and stay inside the package (no '..', no leading '/', no drive letter, no backslash)` |
+| Entry or total decompressed size over 100 MiB | `archive entry '<name>' is too large (exceeds the <n>-byte decompression limit)` |
+| A `[[script]]` that is a module file | `script '<name>' (<path>) is a module file (has a # module declaration) — modules are imported with <#, not run directly` |
+| Declared script absent from the archive | `script '<name>' is declared in zyp.toml as '<path>', but that file is not in the archive` |
+
+**Path containment**: a ZIP entry name and a `[[script]].path` obey one lexical rule — no
+`..` component, no absolute prefix, no backslash, no NUL, no Windows drive letter — enforced
+at manifest parse time, at extraction, and at write time.
+
+Everything the closure cannot resolve statically is a **warning**, not an error
+(`W001`–`W011`); see [GUIDE.md § Distributing a Multi-File Program](GUIDE.md#distributing-a-multi-file-program-zyp).
+
+---
+
+### Memory: Automatic Destruction at Last Use (v0.0.8)
+
+A variable's memory is released right after the statement containing its **last use**,
+rather than at scope end. This is on in both engines and **unobservable by design**: it
+never changes the behavior of a correct program, it only lowers peak memory.
+
+Never auto-freed (conservative exclusions): constants, hot names (`x°`/`°x`), `_`-prefixed
+names, module-level bindings, output/mutable parameters, and free variables of named
+functions used as first-class values.
+
+If an auto-destroyed name is ever read — impossible in a correct program — the tree-walker
+raises a distinctive `internal: use after auto-destruction` error rather than silently
+producing a wrong value. String interpolation reports it too, instead of printing `{var}`
+verbatim.
+
+**Known limitation (VM)**: `emit_auto_free` clears the *named* variable's register, but a
+temporary holding the same large value survives until its register is reused — so the VM's
+peak-memory win is smaller than the tree-walker's.
 
 ---
 
@@ -412,6 +567,7 @@ Fail-safe operations are distinguished from error-handling by the absence of any
 | `_` | Else / wildcard | `_{ }` |
 | `??` | Match | `?? x { pat => val }` |
 | `[p, q]` | Match list pattern | `?? arr { [_, _] => ... }` |
+| `p \|\| q` | Match or-pattern (alternatives) | `?? k { 'p' \|\| 'P' => ... }` |
 | `@` | Loop (while) | `@ cond { }` |
 | `@` | Loop (times) | `@ N { }` — repeats exactly N times when N is a positive Int |
 | `@` | Loop (infinite) | `@ { }` |
@@ -469,7 +625,7 @@ Fail-safe operations are distinguished from error-handling by the absence of any
 | `#!N\|x\|` | Truncate N decimals | `#!2\|3.14159\|` |
 | `##.expr` | Cast to Float | `##.42` → `42` (Float) |
 | `###expr` | Cast to Int (rounding) | `###3.7` → `4` |
-| `##!expr` | Cast to Int (truncating) | `##!3.7` → `3` |
+| `##!expr` | Cast to Int (truncating); `Char` → code point | `##!3.7` → `3`, `##!'A'` → `65` |
 | `#,\|x\|` | Comma format | `#,\|1234567\|` |
 | `#^\|x\|` | Scientific notation | `#^\|12345.0\|` |
 | `0x`, `0b`, `0o`, `0d` | Base literals | `0x41` → `'A'` |

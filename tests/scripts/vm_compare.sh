@@ -1,12 +1,28 @@
 #!/usr/bin/env bash
 # vm_compare.sh — Run every .zy test file through tree-walker and VM, compare outputs
 # Usage: ./tests/scripts/vm_compare.sh [--timeout N]
+#
+# Environment:
+#   ZYMBOL_BIN            Interpreter to exercise (default: target/release/zymbol).
+#                         Set it to /usr/bin/zymbol to run the suite against an
+#                         installed package instead of the build tree.
+#   VM_COMPARE_EXCLUDE    Extended regex matched against each test's path
+#                         relative to tests/. Matching files are excluded and
+#                         reported separately from skips. Intended for binaries
+#                         built without a feature the test needs — a release
+#                         package has no std/db, so those tests cannot say
+#                         anything about tree-walker / VM parity.
+#   VM_COMPARE_SUMMARY    If set, a machine-readable summary is written to that
+#                         path: total=N pass=N fail=N skip=N excluded=N.
+#
+# Exit status: 0 when no file mismatches, 1 otherwise. A missing interpreter is
+# exit 2 — a gate must not read "nothing ran" as "nothing failed".
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TESTS_DIR="$REPO_ROOT/tests"
-ZYMBOL="$REPO_ROOT/target/release/zymbol"
+ZYMBOL="${ZYMBOL_BIN:-$REPO_ROOT/target/release/zymbol}"
 TIMEOUT_SEC="${1:-10}"
 if [[ "${1:-}" == "--timeout" ]]; then TIMEOUT_SEC="${2:-10}"; fi
 
@@ -18,12 +34,19 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
-PASS=0; FAIL=0; SKIP=0; ERROR_TREE=0; ERROR_VM=0
+if [[ ! -x "$ZYMBOL" ]]; then
+    echo "vm_compare.sh: interpreter not found or not executable: $ZYMBOL" >&2
+    echo "  build it with 'cargo build --release', or point ZYMBOL_BIN at one." >&2
+    exit 2
+fi
+
+PASS=0; FAIL=0; SKIP=0; EXCL=0; ERROR_TREE=0; ERROR_VM=0
 
 declare -a FAILURES=()
 declare -a TREE_ERRORS=()
 declare -a VM_ERRORS=()
 declare -a SKIPPED=()
+declare -a EXCLUDED=()
 
 normalize_output() {
     sed \
@@ -70,6 +93,14 @@ echo ""
 
 for file in "${FILES[@]}"; do
     rel="${file#$TESTS_DIR/}"
+
+    # Excluded by the caller — the interpreter under test cannot run these
+    if [[ -n "${VM_COMPARE_EXCLUDE:-}" ]] && grep -qE "${VM_COMPARE_EXCLUDE}" <<< "$rel"; then
+        EXCL=$((EXCL + 1))
+        EXCLUDED+=("$rel")
+        echo -e "  ${CYAN}EXCL${RESET}  $rel  ${CYAN}[excluded]${RESET}"
+        continue
+    fi
 
     # Skip files marked @vm-skip (TW-only features not yet in VM)
     if head -1 "$file" | grep -q '@vm-skip'; then
@@ -134,6 +165,7 @@ echo -e "  Total files  : ${BOLD}$TOTAL${RESET}"
 echo -e "  ${GREEN}PASS${RESET}         : ${GREEN}${BOLD}$PASS${RESET}"
 echo -e "  ${RED}FAIL${RESET}         : ${RED}${BOLD}$FAIL${RESET}"
 echo -e "  ${YELLOW}SKIP${RESET}         : ${YELLOW}${BOLD}$SKIP${RESET}"
+[[ $EXCL -gt 0 ]] && echo -e "  ${CYAN}EXCL${RESET}         : ${CYAN}${BOLD}$EXCL${RESET}  (VM_COMPARE_EXCLUDE)"
 echo ""
 
 if [[ ${#FAILURES[@]} -gt 0 ]]; then
@@ -148,6 +180,14 @@ if [[ ${#SKIPPED[@]} -gt 0 ]]; then
     echo -e "${BOLD}Skipped:${RESET}"
     for f in "${SKIPPED[@]}"; do
         echo -e "  ${YELLOW}⊘${RESET} $f"
+    done
+    echo ""
+fi
+
+if [[ ${#EXCLUDED[@]} -gt 0 ]]; then
+    echo -e "${BOLD}Excluded (VM_COMPARE_EXCLUDE):${RESET}"
+    for f in "${EXCLUDED[@]}"; do
+        echo -e "  ${CYAN}−${RESET} $f"
     done
     echo ""
 fi
@@ -186,3 +226,15 @@ elif [[ $FAIL -eq 0 ]]; then
 else
     echo -e "${RED}${BOLD}$FAIL/$TOTAL files produce different output between tree-walker and VM.${RESET}"
 fi
+
+if [[ -n "${VM_COMPARE_SUMMARY:-}" ]]; then
+    {
+        echo "total=$TOTAL"
+        echo "pass=$PASS"
+        echo "fail=$FAIL"
+        echo "skip=$SKIP"
+        echo "excluded=$EXCL"
+    } > "$VM_COMPARE_SUMMARY"
+fi
+
+[[ $FAIL -eq 0 ]] || exit 1

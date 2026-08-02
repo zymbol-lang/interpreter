@@ -1,0 +1,39 @@
+// Test: || alternatives mixing pattern kinds (range, comparison, ident, list)
+nums = [0, 5, 15, 25, 42]
+@ n:nums {
+    zone = ?? n {
+        1..10 || 20..30 => "in range"
+        0               => "zero"
+        _               => "outside"
+    }
+    >> n " => " zone ¶
+}
+
+// Comparison alternatives
+vals = [0 - 5, 50, 150]
+@ v:vals {
+    state = ?? v {
+        < 0 || > 100 => "extreme"
+        _            => "normal"
+    }
+    >> v " : " state ¶
+}
+
+// Ident alternative mixed with literals
+expected = 7
+keys = [1, 7, 9, 3]
+@ k:keys {
+    known = ?? k {
+        1 || expected || 9 => "known"
+        _                  => "unknown"
+    }
+    >> k " # " known ¶
+}
+
+// List alternatives against a scalar scrutinee (containment on each side)
+x = 4
+where = ?? x {
+    [1, 2] || [3, 4] => "in list"
+    _                => "not in list"
+}
+>> where ¶

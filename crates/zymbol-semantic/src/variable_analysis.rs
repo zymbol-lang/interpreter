@@ -635,6 +635,9 @@ impl VariableAnalyzer {
             Pattern::Ident(name, span) => {
                 self.use_variable(name, *span);
             }
+            Pattern::Or(alternatives, _) => {
+                for alt in alternatives { self.analyze_pattern(alt); }
+            }
         }
     }
 
@@ -919,7 +922,16 @@ impl VariableAnalyzer {
                                 self.use_variable(&var_name, lit.span);
                             }
                         } else if in_var {
-                            if ch.is_alphanumeric() || ch == '_' {
+                            // Same identifier rule as the lexer. A narrower one
+                            // here reported "unused variable" for names the
+                            // interpolation does resolve — pIqaD and emoji
+                            // identifiers, which are not is_alphanumeric.
+                            let ok = if var_name.is_empty() {
+                                zymbol_lexer::Lexer::is_ident_start(ch)
+                            } else {
+                                zymbol_lexer::Lexer::is_ident_continue(ch)
+                            };
+                            if ok {
                                 var_name.push(ch);
                             } else {
                                 // Non-identifier char inside {…} — not a variable reference
@@ -930,9 +942,15 @@ impl VariableAnalyzer {
                 }
             }
 
-            Expr::Range(_) => {
-                // Range expressions: start..end
-                // We could analyze start/end if they were Expr, but they're literals/identifiers only
+            Expr::Range(range) => {
+                // Range expressions: start..end:step. The bounds are full
+                // expressions, so a variable used only as a range bound
+                // (e.g. the `total` in `@ i:1..total`) counts as a use.
+                self.analyze_expr(&range.start);
+                self.analyze_expr(&range.end);
+                if let Some(step) = &range.step {
+                    self.analyze_expr(step);
+                }
             }
 
             // Execute expressions

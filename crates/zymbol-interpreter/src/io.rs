@@ -9,25 +9,19 @@ use std::io::Write;
 use zymbol_ast::{ClearScreen, Input, InputCast, InputPrompt, KeyInput, Newline, Output, OutputPos, TuiBlock};
 use zymbol_span::Span;
 use zymbol_lexer::StringPart;
-use crate::numeral_mode::{to_numeral_int, to_numeral_float, to_numeral_bool};
-use crate::data_ops::parse_numeric_string;
+use crate::data_ops::{ascii_digits, parse_numeric_string};
 use crate::{Interpreter, Result, RuntimeError, Value};
 
 impl<W: Write> Interpreter<W> {
     /// Execute output statement: >> expr1 expr2 ...
     ///
     /// Numeric values (`Int`, `Float`, `Bool`) are rendered using the active
-    /// numeral mode; all other values use their standard display form.
+    /// numeral mode, nested ones included; all other values use their standard
+    /// display form.
     pub(crate) fn execute_output(&mut self, output: &Output) -> Result<()> {
-        let mode = self.numeral_mode;
         for expr in &output.exprs {
             let value = self.eval_expr(expr)?;
-            let s = match &value {
-                Value::Int(n)   => to_numeral_int(*n, mode),
-                Value::Float(f) => to_numeral_float(*f, mode),
-                Value::Bool(b)  => to_numeral_bool(*b, mode),
-                _               => value.to_display_string(),
-            };
+            let s = self.format_value(&value);
             write!(self.output, "{}", s)?;
         }
         // In TUI mode (raw mode active) stdout is line-buffered: text without \n stays
@@ -62,7 +56,7 @@ impl<W: Write> Interpreter<W> {
                         StringPart::Text(text) => result.push_str(text),
                         StringPart::Variable(var_name) => {
                             if let Some(value) = self.get_variable(var_name) {
-                                result.push_str(&value.to_display_string());
+                                result.push_str(&self.format_value(&value));
                             } else {
                                 return Err(RuntimeError::Generic {
                                     message: format!(
@@ -145,9 +139,15 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Terminal size query: >>?  — returns (rows, cols)
-    pub(crate) fn eval_terminal_size(&mut self, span: Span) -> Result<Value> {
-        let (cols, rows) = crossterm::terminal::size()
-            .map_err(|e| RuntimeError::Generic { message: e.to_string(), span })?;
+    ///
+    /// With no terminal — a pipe, a container, CI — this falls back to the
+    /// conventional 80x24 rather than failing, so a TUI program stays runnable
+    /// when its output is redirected. This used to propagate the OS error while
+    /// the VM already fell back, which meant `>>?` aborted under one engine and
+    /// returned a size under the other; identical in a real terminal, so the
+    /// parity suite never saw it until it ran inside a container.
+    pub(crate) fn eval_terminal_size(&mut self, _span: Span) -> Result<Value> {
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         Ok(Value::Tuple(vec![Value::Int(rows as i64), Value::Int(cols as i64)]))
     }
 
@@ -206,7 +206,10 @@ impl<W: Write> Interpreter<W> {
                         execute!(std::io::stdout(), style::SetBackgroundColor(style::Color::AnsiValue(bg as u8))).ok();
                         colored = true;
                     }
-                    for item in &op.items { print!("{}", self.eval_expr(item)?.to_display_string()); }
+                    for item in &op.items {
+                        let v = self.eval_expr(item)?;
+                        print!("{}", self.format_value(&v));
+                    }
                     if styled || colored { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Reset)).ok(); }
                     std::io::stdout().flush().ok();
                     return Ok(());
@@ -255,7 +258,10 @@ impl<W: Write> Interpreter<W> {
             colored = true;
         }
 
-        for expr in &op.items { print!("{}", self.eval_expr(expr)?.to_display_string()); }
+        for expr in &op.items {
+            let v = self.eval_expr(expr)?;
+            print!("{}", self.format_value(&v));
+        }
 
         if styled || colored {
             execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Reset)).ok();
@@ -316,15 +322,19 @@ fn describe_input_cast(cast: &InputCast) -> String {
 
 /// Validate a trimmed input line against a cast, producing the typed value or an
 /// `Err(hint)` describing what was expected (the caller re-prompts on `Err`).
+///
+/// The numeric casts accept digits from any of the 69 supported scripts: an
+/// application that prints `४२` must also accept `४२` back, or its own user
+/// cannot type what the program just showed them.
 fn validate_input(s: &str, cast: &InputCast) -> std::result::Result<Value, String> {
     match cast {
         InputCast::String => Ok(Value::String(s.to_string())),
         InputCast::Numeric => Ok(parse_numeric_string(s.to_string())),
-        InputCast::Float => s.parse::<f64>().map(Value::Float).map_err(|_| describe_input_cast(cast)),
-        InputCast::Decimal { total, decimals } => validate_decimal(s, *total, *decimals)
+        InputCast::Float => ascii_digits(s).parse::<f64>().map(Value::Float).map_err(|_| describe_input_cast(cast)),
+        InputCast::Decimal { total, decimals } => validate_decimal(&ascii_digits(s), *total, *decimals)
             .map(Value::Float)
             .ok_or_else(|| describe_input_cast(cast)),
-        InputCast::Int { max_digits } => validate_int(s, *max_digits)
+        InputCast::Int { max_digits } => validate_int(&ascii_digits(s), *max_digits)
             .map(Value::Int)
             .ok_or_else(|| describe_input_cast(cast)),
         InputCast::Text { max } => {

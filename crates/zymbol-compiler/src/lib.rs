@@ -252,6 +252,29 @@ impl FunctionCtx {
 // Module constant value (evaluated at compile time for module imports)
 // ──────────────────────────────────────────────────────────────────────────────
 
+/// Exported surface of a compiled module, recorded so later imports of the
+/// same file register a new alias without recompiling (L23/MM-10).
+#[derive(Clone, Default)]
+struct CompiledModuleExports {
+    /// public function name → chunk index (includes function re-exports)
+    functions: Vec<(String, FuncIdx)>,
+    /// public function name → builtin id (stdlib re-exports through this module)
+    builtins: Vec<(String, u16)>,
+    /// public constant name → value (includes constant re-exports)
+    constants: Vec<(String, ModuleConst)>,
+}
+
+/// Auto-free (v0.0.8): overwrite each scheduled variable's register with Unit
+/// right after its last use, releasing the heap value it held. Names without
+/// a register (never materialized on this path) are skipped.
+fn emit_auto_free(ctx: &mut FunctionCtx, names: &[String]) {
+    for name in names {
+        if let Ok(reg) = ctx.get_reg(name) {
+            ctx.emit(Instruction::LoadUnit(reg));
+        }
+    }
+}
+
 #[derive(Clone)]
 enum ModuleConst {
     Int(i64),
@@ -296,6 +319,15 @@ pub struct Compiler {
     /// Source of named functions: name → (param_names, body_statements).
     /// Used to recompile named functions as closures when they capture outer variables.
     fn_source: HashMap<String, (Vec<String>, Vec<Statement>)>,
+    /// Auto-free (v0.0.8): program-wide exclusion set for the program (or
+    /// module) currently being compiled — names never freed early. Saved and
+    /// restored around module compilation.
+    auto_free_excluded: HashSet<String>,
+    /// L23/MM-10: modules already compiled, keyed by canonical file path.
+    /// Re-importing the same file — under another alias or from another
+    /// importer — binds to the same chunks and global-variable slots, so
+    /// module state is shared per file path (tree-walker parity).
+    compiled_modules: HashMap<PathBuf, CompiledModuleExports>,
     /// Builtin function IDs: "alias::func" → builtin_id (for std/math, std/random).
     builtin_map: HashMap<String, u16>,
 }
@@ -321,8 +353,15 @@ impl Compiler {
             global_var_inits: Vec::new(),
             known_module_aliases: HashSet::new(),
             fn_source: HashMap::new(),
+            compiled_modules: HashMap::new(),
             builtin_map: HashMap::new(),
+            auto_free_excluded: HashSet::new(),
         };
+
+        // Auto-free (v0.0.8): same last-use analysis as the tree-walker.
+        // Computed before imports — compile_import swaps in each module's own
+        // exclusion set while compiling module function bodies.
+        compiler.auto_free_excluded = zymbol_semantic::auto_free_exclusions(program);
 
         // Process imports first — register module functions as "alias::func"
         if let Some(base) = base_dir {
@@ -383,11 +422,20 @@ impl Compiler {
             compiler.functions[idx] = chunk;
         }
 
-        // Compile main body
+        // Compile main body, freeing registers after each variable's last use
+        // (auto-free, v0.0.8 — mirrors the tree-walker's top-level schedule).
+        let main_schedule = zymbol_semantic::region_schedule(
+            &program.statements,
+            &[],
+            &compiler.auto_free_excluded,
+        );
         let mut ctx = FunctionCtx::new("<main>");
-        for stmt in &program.statements {
+        for (i, stmt) in program.statements.iter().enumerate() {
             if !matches!(stmt, Statement::FunctionDecl(_)) {
                 compiler.compile_stmt(stmt, &mut ctx)?;
+            }
+            if let Some(names) = main_schedule.get(&i) {
+                emit_auto_free(&mut ctx, names);
             }
         }
         let main_chunk = ctx.into_chunk(0);
@@ -403,8 +451,12 @@ impl Compiler {
     /// registering exported ones as `alias::func_name` in function_index.
     /// Also handles: circular import detection, nested sub-imports, and re-exports.
     fn compile_import(&mut self, import: &zymbol_ast::ImportStmt, base_dir: &Path) -> Result<(), CompileError> {
-        // Detect stdlib modules (std/math, std/random, std/json, std/io, std/net) — no file needed.
-        if import.path.parent_levels == 0 {
+        // Detect stdlib modules (std/math, std/random, std/json, std/io, std/net, std/term) — no file needed.
+        // `is_stdlib()` requires a bare path (no ./, ../, /, or ~/ prefix) whose first component
+        // is literally "std" — matching the tree-walker's and semantic analyzer's check. The old
+        // `parent_levels == 0` test was weaker: it also matched `./std/math` (parent_levels is 0
+        // for `./` too), which would wrongly treat a same-directory `std/` folder as the stdlib.
+        if import.path.is_stdlib() {
             let module_key = import.path.components.join("/");
             if let Some(entries) = stdlib_builtin_entries(&module_key) {
                 let alias = import.alias.clone();
@@ -424,20 +476,36 @@ impl Compiler {
                 self.known_module_aliases.insert(alias);
                 return Ok(());
             }
+
+            // A stdlib path that has no entries here (`std/db` in a build without
+            // the `db` feature, or a typo like `std/mth`) has no file to fall back
+            // to: `resolve_from` returns None for stdlib paths by contract. Report
+            // it now, exactly as the tree-walker does in load_stdlib_module — the
+            // fallthrough below reported `std/db.zy`, and the two engines then
+            // disagreed on every `<# std/db` in a --no-default-features binary,
+            // which is what ships in the Linux packages.
+            return Err(CompileError::ModuleNotFound(module_key));
         }
 
-        // Build file path from import path components
-        let mut path = base_dir.to_path_buf();
-        for _ in 0..import.path.parent_levels {
-            path.pop();
-        }
-        for component in &import.path.components {
-            path.push(component);
-        }
-        path.set_extension("zy");
+        // Resolve via the single source of truth in zymbol-ast, which handles ./, ../, /abs
+        // and ~/home uniformly. This used to be reimplemented here and ignored
+        // is_absolute/home_relative entirely (always resolving against base_dir), so
+        // `<# /opt/lib/x => x` compiled to a different file under the VM than under the
+        // tree-walker. See ModulePath::resolve_from for the shared rule.
+        let path = import.path.resolve_from(base_dir).ok_or_else(|| {
+            CompileError::ModuleNotFound(format!("{}.zy", import.path.components.join("/")))
+        })?;
 
         // Canonicalize for reliable circular import detection
         let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+
+        // L23/MM-10: the same module file compiles once — a later import (any
+        // alias, any importer) just binds the alias to the cached exports, so
+        // every alias shares the same chunks and global-variable slots.
+        if let Some(exports) = self.compiled_modules.get(&canonical).cloned() {
+            self.register_module_alias(&import.alias, &exports);
+            return Ok(());
+        }
 
         // Circular import detection — use module stem name to match WT message format
         if self.loading_stack.contains(&canonical) {
@@ -477,6 +545,38 @@ impl Compiler {
                 detail.join("\n")
             ))
         })?;
+
+        // MM-4: same semantic gate as the tree-walker's load_module — a module
+        // that reassigns constants or violates scope rules must not compile.
+        // The message uses the non-canonical path to match the tree-walker's
+        // error text (engine parity).
+        {
+            let mut analyzer = zymbol_semantic::VariableAnalyzer::new();
+            let _warnings = analyzer.analyze(&module_prog);
+            let mut semantic_errors: Vec<zymbol_error::Diagnostic> =
+                analyzer.semantic_errors().to_vec();
+            let mut type_checker = zymbol_semantic::TypeChecker::new();
+            semantic_errors.extend(type_checker.check_errors(&module_prog));
+            if !semantic_errors.is_empty() {
+                let disp_path = path.display().to_string();
+                let detail: Vec<String> = semantic_errors.iter().map(|d| {
+                    let loc = d.span
+                        .map(|s| format!("{}:{}:{}", disp_path, s.start.line, s.start.column))
+                        .unwrap_or_else(|| disp_path.clone());
+                    let mut msg = format!("  {}: {}", loc, d.message);
+                    if let Some(help) = &d.help {
+                        msg.push_str(&format!("\n    help: {}", help));
+                    }
+                    msg
+                }).collect();
+                return Err(CompileError::ModuleParse(format!(
+                    "{} semantic error(s) in '{}'\n{}",
+                    semantic_errors.len(),
+                    disp_path,
+                    detail.join("\n")
+                )));
+            }
+        }
 
         let module_base_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
@@ -536,14 +636,36 @@ impl Compiler {
             self.functions.push(Chunk::new(name.as_str()));
         }
 
+        // Register output-param flags for module functions, exactly as the main
+        // program's first pass does for its own. Without this, a call to
+        // `alias::f(x<~)` compiled with no SetupOutputWriteback and the caller's
+        // variable was silently never updated — no error, no warning, just the
+        // original value, diverging from the tree-walker (HLZ-008).
+        for stmt in &module_prog.statements {
+            if let Statement::FunctionDecl(decl) = stmt {
+                if let Some(&idx) = local_scope.get(&decl.name) {
+                    let out_flags: Vec<bool> = decl
+                        .parameters
+                        .iter()
+                        .map(|p| p.kind == zymbol_ast::ParameterKind::Output)
+                        .collect();
+                    if out_flags.iter().any(|&b| b) {
+                        self.output_param_map.insert(idx, out_flags);
+                    }
+                }
+            }
+        }
+
         // Mark this module alias as known (for private-function error detection)
         self.known_module_aliases.insert(alias.to_string());
 
-        // Register exported functions in function_index as "alias::public_name"
+        // Collect exported functions as (public_name → chunk idx).
+        // Alias-qualified registration happens once at the end via
+        // register_module_alias, shared with the compiled_modules cache path.
+        let mut exports = CompiledModuleExports::default();
         for (internal, public) in &own_func_exports {
             if let Some(&idx) = local_scope.get(internal) {
-                let qualified = format!("{}::{}", alias, public);
-                self.function_index.insert(qualified, idx);
+                exports.functions.push((public.clone(), idx));
             }
         }
 
@@ -585,6 +707,13 @@ impl Compiler {
         // Activate module_scope so compile_call finds private sibling functions
         let saved_module_scope = std::mem::replace(&mut self.module_scope, local_scope);
 
+        // Auto-free (v0.0.8): module function bodies use the module's own
+        // exclusion set (its module-level bindings are never freed early).
+        let saved_auto_free_excluded = std::mem::replace(
+            &mut self.auto_free_excluded,
+            zymbol_semantic::auto_free_exclusions(&module_prog),
+        );
+
         // Compile ALL function bodies (exported + private)
         for (i, name) in all_func_names.iter().enumerate() {
             let func_decl = module_prog.statements.iter().find_map(|s| {
@@ -602,6 +731,7 @@ impl Compiler {
 
         // Restore module_scope, global_consts, and remove this module's global var entries
         self.module_scope = saved_module_scope;
+        self.auto_free_excluded = saved_auto_free_excluded;
         self.global_consts = saved_global_consts;
         for name in &module_gvar_names {
             self.global_var_map.remove(name);
@@ -618,8 +748,7 @@ impl Compiler {
             });
             if let Some(expr) = val_expr {
                 if let Some(mc) = Self::eval_const_expr(expr) {
-                    let key = format!("{}.{}", alias, public_name);
-                    self.module_constants.insert(key, mc);
+                    exports.constants.push((public_name.clone(), mc));
                 }
             }
         }
@@ -628,27 +757,44 @@ impl Compiler {
         for (src_alias, item_name, public_name) in &reexport_funcs {
             let src_qualified = format!("{}::{}", src_alias, item_name);
             if let Some(&idx) = self.function_index.get(&src_qualified) {
-                let dst_qualified = format!("{}::{}", alias, public_name);
-                self.function_index.insert(dst_qualified, idx);
+                exports.functions.push((public_name.clone(), idx));
             }
             // Propagate stdlib builtin re-exports (e.g., i18n adapter modules)
             if let Some(&bid) = self.builtin_map.get(&src_qualified) {
-                let dst_qualified = format!("{}::{}", alias, public_name);
-                self.builtin_map.insert(dst_qualified, bid);
+                exports.builtins.push((public_name.clone(), bid));
             }
         }
         for (src_alias, item_name, public_name) in &reexport_consts {
             let src_key = format!("{}.{}", src_alias, item_name);
             if let Some(mc) = self.module_constants.get(&src_key).cloned() {
-                let dst_key = format!("{}.{}", alias, public_name);
-                self.module_constants.insert(dst_key, mc);
+                exports.constants.push((public_name.clone(), mc));
             }
         }
+
+        // Register this alias and cache the exports so later imports of the
+        // same file share chunks and global slots (L23/MM-10).
+        self.register_module_alias(&alias, &exports);
+        self.compiled_modules.insert(canonical.clone(), exports);
 
         // Done with this module — remove from loading stack
         self.loading_stack.remove(&canonical);
 
         Ok(())
+    }
+
+    /// Bind an import alias to a compiled module's exported surface:
+    /// `alias::fn` → chunk idx / builtin id, `alias.CONST` → value.
+    fn register_module_alias(&mut self, alias: &str, exports: &CompiledModuleExports) {
+        for (public, idx) in &exports.functions {
+            self.function_index.insert(format!("{}::{}", alias, public), *idx);
+        }
+        for (public, bid) in &exports.builtins {
+            self.builtin_map.insert(format!("{}::{}", alias, public), *bid);
+        }
+        for (public, mc) in &exports.constants {
+            self.module_constants.insert(format!("{}.{}", alias, public), mc.clone());
+        }
+        self.known_module_aliases.insert(alias.to_string());
     }
 
     fn compile_function(&mut self, decl: &FunctionDecl) -> Result<Chunk, CompileError> {
@@ -658,9 +804,34 @@ impl Compiler {
             ctx.alloc_reg(&param.name)?;
         }
         let num_params = decl.parameters.len() as u16;
+
+        // Auto-free (v0.0.8): free body locals and by-value params after their
+        // last use. Output/Mutable params feed the caller write-back — never
+        // freed early. Same analysis as the tree-walker (invisible).
+        let mut excluded = self.auto_free_excluded.clone();
+        let mut param_candidates: Vec<String> = Vec::new();
+        for p in &decl.parameters {
+            match p.kind {
+                zymbol_ast::ParameterKind::Normal => param_candidates.push(p.name.clone()),
+                _ => {
+                    excluded.insert(p.name.clone());
+                }
+            }
+        }
+        let schedule =
+            zymbol_semantic::region_schedule(&decl.body.statements, &param_candidates, &excluded);
+
         let prev_in_fn = self.in_function_body;
         self.in_function_body = true;
-        let result = self.compile_block(&decl.body, &mut ctx);
+        let result = (|| -> Result<(), CompileError> {
+            for (i, stmt) in decl.body.statements.iter().enumerate() {
+                self.compile_stmt(stmt, &mut ctx)?;
+                if let Some(names) = schedule.get(&i) {
+                    emit_auto_free(&mut ctx, names);
+                }
+            }
+            Ok(())
+        })();
         self.in_function_body = prev_in_fn;
         result?;
         // Implicit return Unit if no explicit <~
@@ -1290,16 +1461,23 @@ impl Compiler {
             }
         };
 
-        // Allocate registers: r_i (iterator), r_end (inclusive bound), r_cmp, r_step, r_fwd
+        // Allocate registers: r_i (named iterator), r_cnt (hidden counter),
+        // r_end (inclusive bound), r_cmp, r_step, r_fwd.
+        // L24/MM-11 (tree-walker parity): the loop advances a HIDDEN counter and
+        // copies it into the named variable at the top of each iteration — so
+        // the leftover value after the loop is the last executed one (never the
+        // first out-of-range value), and body writes to the iterator variable
+        // cannot alter the iteration.
         let r_i = ctx.alloc_reg(iter_var)?;
+        let r_cnt = ctx.alloc_temp()?;
         let r_end = ctx.alloc_temp()?;
         let r_cmp = ctx.alloc_temp()?;
         let r_step = ctx.alloc_temp()?;
         let r_fwd = ctx.alloc_temp()?; // Bool: true = forward, false = reverse
 
-        // Initialize: r_i = start, r_end = end
+        // Initialize: r_cnt = start, r_end = end
         let r_start_tmp = self.compile_expr(start_expr, ctx)?;
-        ctx.emit(Instruction::CopyReg(r_i, r_start_tmp));
+        ctx.emit(Instruction::CopyReg(r_cnt, r_start_tmp));
         let r_end_tmp = self.compile_expr(end_expr, ctx)?;
         ctx.emit(Instruction::CopyReg(r_end, r_end_tmp));
 
@@ -1311,8 +1489,8 @@ impl Compiler {
             ctx.emit(Instruction::LoadInt(r_step, 1));
         }
 
-        // Detect direction: r_fwd = (r_i <= r_end)  → Bool
-        ctx.emit(Instruction::CmpLe(r_fwd, r_i, r_end));
+        // Detect direction: r_fwd = (r_cnt <= r_end)  → Bool
+        ctx.emit(Instruction::CmpLe(r_fwd, r_cnt, r_end));
 
         // Loop header: check exit condition using conditional branches
         // Range is INCLUSIVE: @ i:0..N → 0,1,...,N
@@ -1326,36 +1504,39 @@ impl Compiler {
         });
 
         // Exit check:
-        //   if r_fwd → exit when r_i > r_end
-        //   else     → exit when r_i < r_end
+        //   if r_fwd → exit when r_cnt > r_end
+        //   else     → exit when r_cnt < r_end
         // JumpIfNot r_fwd, check_rev
         let fwd_branch_patch = ctx.emit(Instruction::JumpIfNot(r_fwd, 0));
-        // Forward path: exit if r_i > r_end
-        ctx.emit(Instruction::CmpGt(r_cmp, r_i, r_end));
+        // Forward path: exit if r_cnt > r_end
+        ctx.emit(Instruction::CmpGt(r_cmp, r_cnt, r_end));
         let fwd_exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
         let skip_rev_patch = ctx.emit(Instruction::Jump(0)); // skip over reverse check
         // Reverse path:
         let check_rev_label = ctx.current_label();
         ctx.patch_jump(fwd_branch_patch, check_rev_label);
-        ctx.emit(Instruction::CmpLt(r_cmp, r_i, r_end));
+        ctx.emit(Instruction::CmpLt(r_cmp, r_cnt, r_end));
         let rev_exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
         let body_label = ctx.current_label();
         ctx.patch_jump(skip_rev_patch, body_label);
+
+        // Publish the counter into the named iterator variable (L24)
+        ctx.emit(Instruction::CopyReg(r_i, r_cnt));
 
         self.compile_block(&lp.body, ctx)?;
 
         // continue label = start of increment, so @> increments before re-checking
         let inc_label = ctx.current_label();
 
-        // Increment/decrement:
-        //   if r_fwd → r_i = r_i + r_step
-        //   else     → r_i = r_i - r_step
+        // Increment/decrement the hidden counter:
+        //   if r_fwd → r_cnt = r_cnt + r_step
+        //   else     → r_cnt = r_cnt - r_step
         let inc_fwd_patch = ctx.emit(Instruction::JumpIfNot(r_fwd, 0));
-        ctx.emit(Instruction::AddInt(r_i, r_i, r_step));
+        ctx.emit(Instruction::AddInt(r_cnt, r_cnt, r_step));
         let skip_sub_patch = ctx.emit(Instruction::Jump(0));
         let do_sub_label = ctx.current_label();
         ctx.patch_jump(inc_fwd_patch, do_sub_label);
-        ctx.emit(Instruction::SubInt(r_i, r_i, r_step));
+        ctx.emit(Instruction::SubInt(r_cnt, r_cnt, r_step));
         let after_inc_label = ctx.current_label();
         ctx.patch_jump(skip_sub_patch, after_inc_label);
 
@@ -2343,20 +2524,90 @@ impl Compiler {
         let mut end_patches: Vec<usize> = Vec::new();
 
         for case in &m.cases {
-            match &case.pattern {
-                Pattern::Wildcard(_) => {
-                    // Compile body, store to dst, jump to end
-                    if let Some(val) = &case.value {
-                        let r = self.compile_expr(val, ctx)?;
-                        ctx.emit(Instruction::CopyReg(dst, r));
-                    } else if let Some(block) = &case.block {
-                        self.compile_block(block, ctx)?;
-                    }
-                    let j = ctx.emit_jump_placeholder();
-                    end_patches.push(j);
-                    break; // Wildcard is always last
+            if matches!(case.pattern, Pattern::Wildcard(_)) {
+                // Wildcard matches everything: compile body, store to dst, jump to end
+                if let Some(val) = &case.value {
+                    let r = self.compile_expr(val, ctx)?;
+                    ctx.emit(Instruction::CopyReg(dst, r));
+                } else if let Some(block) = &case.block {
+                    self.compile_block(block, ctx)?;
                 }
-                Pattern::Literal(lit, _) => {
+                let j = ctx.emit_jump_placeholder();
+                end_patches.push(j);
+                break; // Wildcard is always last
+            }
+
+            let (skip_patches, to_body_patches) =
+                self.emit_pattern_test(&case.pattern, r_sub, ctx)?;
+
+            // Body starts here — both the fall-through and the explicit
+            // "matched" jumps land on this label
+            let body_label = ctx.current_label();
+            for p in to_body_patches {
+                ctx.patch_jump(p, body_label);
+            }
+
+            if let Some(val) = &case.value {
+                let r = self.compile_expr(val, ctx)?;
+                ctx.emit(Instruction::CopyReg(dst, r));
+            } else if let Some(block) = &case.block {
+                self.compile_block(block, ctx)?;
+            }
+            let j = ctx.emit_jump_placeholder();
+            end_patches.push(j);
+
+            let next_case = ctx.current_label();
+            for p in skip_patches {
+                ctx.patch_jump(p, next_case);
+            }
+        }
+
+        let end_label = ctx.current_label();
+        for pos in end_patches {
+            ctx.patch_jump(pos, end_label);
+        }
+        Ok(dst)
+    }
+
+    /// Emit the runtime test for a single match pattern against `r_sub`.
+    ///
+    /// Contract: falling through past the emitted code means the pattern
+    /// matched, so the arm body must follow immediately. The two returned
+    /// placeholder lists are `(skips, to_body)`: `skips` must be patched to
+    /// the next case, `to_body` to the label where the arm body starts.
+    fn emit_pattern_test(
+        &mut self,
+        pattern: &Pattern,
+        r_sub: Reg,
+        ctx: &mut FunctionCtx,
+    ) -> Result<(Vec<usize>, Vec<usize>), CompileError> {
+        let mut skips: Vec<usize> = Vec::new();
+        let mut to_body: Vec<usize> = Vec::new();
+
+        match pattern {
+            Pattern::Wildcard(_) => {
+                // Always matches: nothing to emit, fall through to the body
+            }
+            Pattern::Or(alternatives, _) => {
+                // Test alternatives left to right; the first match jumps to the body
+                for (i, alt) in alternatives.iter().enumerate() {
+                    let (alt_skips, alt_to_body) = self.emit_pattern_test(alt, r_sub, ctx)?;
+                    to_body.extend(alt_to_body);
+
+                    if i + 1 < alternatives.len() {
+                        // Falling through means this alternative matched
+                        to_body.push(ctx.emit_jump_placeholder());
+                        let next_alt = ctx.current_label();
+                        for s in alt_skips {
+                            ctx.patch_jump(s, next_alt);
+                        }
+                    } else {
+                        // Last alternative: its failure skips the whole arm
+                        skips.extend(alt_skips);
+                    }
+                }
+            }
+            Pattern::Literal(lit, _) => {
                     let skip_patch = match lit {
                         zymbol_common::Literal::Int(n) => {
                             // Emit CmpEqImm + JumpIfNot
@@ -2387,17 +2638,7 @@ impl Compiler {
                         }
                         _ => ctx.emit_jump_placeholder(), // unsupported, always skip
                     };
-                    // Body
-                    if let Some(val) = &case.value {
-                        let r = self.compile_expr(val, ctx)?;
-                        ctx.emit(Instruction::CopyReg(dst, r));
-                    } else if let Some(block) = &case.block {
-                        self.compile_block(block, ctx)?;
-                    }
-                    let j = ctx.emit_jump_placeholder();
-                    end_patches.push(j);
-                    let next_case = ctx.current_label();
-                    ctx.patch_jump(skip_patch, next_case);
+                    skips.push(skip_patch);
                 }
                 Pattern::Range(start, end_expr, _) => {
                     // Range pattern: lo..hi
@@ -2412,18 +2653,7 @@ impl Compiler {
 
                     let body_label = (ctx.current_label() + 2) as Label;
                     ctx.emit(Instruction::MatchRange(r_sub, lo, hi, body_label));
-                    let skip_patch = ctx.emit_jump_placeholder();
-                    // Body
-                    if let Some(val) = &case.value {
-                        let r = self.compile_expr(val, ctx)?;
-                        ctx.emit(Instruction::CopyReg(dst, r));
-                    } else if let Some(block) = &case.block {
-                        self.compile_block(block, ctx)?;
-                    }
-                    let j = ctx.emit_jump_placeholder();
-                    end_patches.push(j);
-                    let next_case = ctx.current_label();
-                    ctx.patch_jump(skip_patch, next_case);
+                    skips.push(ctx.emit_jump_placeholder());
                 }
                 Pattern::Comparison(op, expr, _) => {
                     // Comparison pattern: implicit scrutinee op rhs
@@ -2441,17 +2671,7 @@ impl Compiler {
                         )),
                     };
                     ctx.emit(instr);
-                    let skip_patch = ctx.emit_jump_if_not_placeholder(r_cmp);
-                    if let Some(val) = &case.value {
-                        let r = self.compile_expr(val, ctx)?;
-                        ctx.emit(Instruction::CopyReg(dst, r));
-                    } else if let Some(block) = &case.block {
-                        self.compile_block(block, ctx)?;
-                    }
-                    let j = ctx.emit_jump_placeholder();
-                    end_patches.push(j);
-                    let next_case = ctx.current_label();
-                    ctx.patch_jump(skip_patch, next_case);
+                    skips.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                 }
                 Pattern::Ident(name, _) => {
                     // Load the variable; if array → containment, else → equality
@@ -2490,17 +2710,7 @@ impl Compiler {
                     // Merge point:
                     let merge_label = ctx.current_label();
                     ctx.patch_jump(patch_arr_skip, merge_label);
-                    let skip_patch = ctx.emit_jump_if_not_placeholder(r_cmp);
-                    if let Some(val) = &case.value {
-                        let r = self.compile_expr(val, ctx)?;
-                        ctx.emit(Instruction::CopyReg(dst, r));
-                    } else if let Some(block) = &case.block {
-                        self.compile_block(block, ctx)?;
-                    }
-                    let j = ctx.emit_jump_placeholder();
-                    end_patches.push(j);
-                    let next_case = ctx.current_label();
-                    ctx.patch_jump(skip_patch, next_case);
+                    skips.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                 }
                 Pattern::List(patterns, _) => {
                     // Runtime dual dispatch: structural for array scrutinee, containment for scalar
@@ -2604,37 +2814,15 @@ impl Compiler {
                     // No containment match → skip to next case
                     let patch_contain_no_match = ctx.emit_jump_placeholder();
 
-                    // === Body (shared by both paths) ===
-                    let body_label = ctx.current_label();
-                    ctx.patch_jump(patch_struct_to_body, body_label);
-                    for p in jump_to_body_patches {
-                        ctx.patch_jump(p, body_label);
-                    }
-
-                    if let Some(val) = &case.value {
-                        let r = self.compile_expr(val, ctx)?;
-                        ctx.emit(Instruction::CopyReg(dst, r));
-                    } else if let Some(block) = &case.block {
-                        self.compile_block(block, ctx)?;
-                    }
-                    let j = ctx.emit_jump_placeholder();
-                    end_patches.push(j);
-
-                    // Patch all "no match" skips to next case
-                    let next_case = ctx.current_label();
-                    for sp in struct_skip_patches {
-                        ctx.patch_jump(sp, next_case);
-                    }
-                    ctx.patch_jump(patch_contain_no_match, next_case);
+                    // Both paths reach the body through explicit jumps
+                    to_body.push(patch_struct_to_body);
+                    to_body.extend(jump_to_body_patches);
+                    skips.extend(struct_skip_patches);
+                    skips.push(patch_contain_no_match);
                 }
             }
-        }
 
-        let end_label = ctx.current_label();
-        for pos in end_patches {
-            ctx.patch_jump(pos, end_label);
-        }
-        Ok(dst)
+        Ok((skips, to_body))
     }
 
     // ── 4C: Statement::Match ─────────────────────────────────────────────────
@@ -3068,8 +3256,34 @@ impl Compiler {
                     // Get the register for the variable
                     if let Ok(r) = ctx.get_reg(&var_name) {
                         parts.push(BuildPart::Reg(r));
+                    } else if let Some(mc) = self.global_consts.get(&var_name).cloned() {
+                        // A top-level constant, which is in scope inside every
+                        // function body but has no local register. Without this
+                        // the name fell through to the literal-text branch and
+                        // `"{DIR}/f.txt"` compiled to the eight characters
+                        // `{DIR}` — silently, and only inside functions, and
+                        // only under the VM.
+                        let r = ctx.alloc_temp()?;
+                        let instr = match mc {
+                            ModuleConst::Int(n) => Instruction::LoadInt(r, n),
+                            ModuleConst::Float(f) => Instruction::LoadFloat(r, f),
+                            ModuleConst::String(s) => {
+                                let idx = self.intern_string(&s);
+                                Instruction::LoadStr(r, idx)
+                            }
+                            ModuleConst::Bool(b) => Instruction::LoadBool(r, b),
+                            ModuleConst::Char(c) => Instruction::LoadChar(r, c),
+                        };
+                        ctx.emit(instr);
+                        parts.push(BuildPart::Reg(r));
+                    } else if let Some(&gvar_idx) = self.global_var_map.get(&var_name) {
+                        // Module-level mutable state, same reasoning.
+                        let r = ctx.alloc_temp()?;
+                        ctx.emit(Instruction::LoadGlobal(r, gvar_idx));
+                        parts.push(BuildPart::Reg(r));
                     } else {
-                        // Variable not found — treat as literal text
+                        // Genuinely unknown — treat as literal text, which is
+                        // what the tree-walker does too.
                         let text = format!("{{{}}}", var_name);
                         let idx = self.intern_string(&text);
                         parts.push(BuildPart::Lit(idx));
@@ -3656,6 +3870,11 @@ fn collect_free_in_pattern(
                 collect_free_in_pattern(p, locals, outer_ctx, seen, free);
             }
         }
+        zymbol_ast::Pattern::Or(alternatives, _) => {
+            for p in alternatives {
+                collect_free_in_pattern(p, locals, outer_ctx, seen, free);
+            }
+        }
         zymbol_ast::Pattern::Literal(_, _) | zymbol_ast::Pattern::Wildcard(_) => {}
     }
 }
@@ -3854,7 +4073,10 @@ fn eliminate_dead_code(instructions: Vec<Instruction>, old_num_regs: u16) -> (Ve
 
 /// Return the (function_name, builtin_id) pairs for a known stdlib module path,
 /// or None if the path is not a stdlib module.
-fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16)>> {
+///
+/// Public so `zymbol_common::stdlib` — the export table the tooling reads — can
+/// be tested against what the VM actually implements.
+pub fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16)>> {
     use zymbol_bytecode::builtins as B;
     match module_key {
         "std/math" => Some(vec![
@@ -3905,6 +4127,13 @@ fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16)>> 
             ("post",      B::NET_POST),
             ("post_json", B::NET_POST_JSON),
             ("head",      B::NET_HEAD),
+        ]),
+        "std/term" => Some(vec![
+            ("width",     B::TERM_WIDTH),
+            ("pad_left",  B::TERM_PAD_LEFT),
+            ("pad_right", B::TERM_PAD_RIGHT),
+            ("center",    B::TERM_CENTER),
+            ("truncate",  B::TERM_TRUNCATE),
         ]),
         // Without the `db` feature this falls through to `None` → module-not-found
         // at `<# std/db`, matching the tree-walker (see zymbol-interpreter stdlib).

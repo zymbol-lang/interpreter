@@ -468,3 +468,63 @@ data = [1, 2, 3]
     assert_eq!(errors.len(), 1, "Expected error for accessing _item after loop");
     assert!(errors[0].contains("cannot access underscore variable '_item'"));
 }
+
+// ============================================================================
+// REGRESSION: a variable used only as a range bound counts as used
+// ============================================================================
+
+#[test]
+fn test_variable_used_only_as_range_bound() {
+    // `total` is read only in the `1..total` header of the loop. The range
+    // bounds are full expressions, so this must not warn "unused variable".
+    let source = r#"
+lista = [10, 20, 30]
+total = lista$#
+@ i:1..total {
+    x = i
+    >> lista[i] ¶
+}
+"#;
+    let (warnings, _errors) = parse_and_analyze(source);
+    assert!(
+        !warnings.iter().any(|w| w.contains("unused variable 'total'")),
+        "range bound `1..total` must count as a use of `total`, got: {warnings:?}"
+    );
+}
+
+#[test]
+fn test_variable_used_as_range_start_and_step() {
+    // Bounds and step are all expressions and all count as uses.
+    let source = r#"
+lo = 2
+hi = 9
+paso = 2
+@ i:lo..hi:paso {
+    >> i ¶
+}
+"#;
+    let (warnings, _errors) = parse_and_analyze(source);
+    for name in ["lo", "hi", "paso"] {
+        assert!(
+            !warnings.iter().any(|w| w.contains(&format!("unused variable '{name}'"))),
+            "range component `{name}` must count as a use, got: {warnings:?}"
+        );
+    }
+}
+
+#[test]
+fn test_genuinely_unused_still_warns() {
+    // The fix must not suppress a real unused-variable warning.
+    let source = r#"
+otra = 5
+lista = [1, 2, 3]
+@ i:1..(lista$#) {
+    >> lista[i] ¶
+}
+"#;
+    let (warnings, _errors) = parse_and_analyze(source);
+    assert!(
+        warnings.iter().any(|w| w.contains("unused variable 'otra'")),
+        "genuinely unused `otra` must still warn, got: {warnings:?}"
+    );
+}

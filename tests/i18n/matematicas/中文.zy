@@ -1,0 +1,12 @@
+# .matematicas_中文 {
+    <# ./module => mat
+
+    #> {
+        mat::sumar => 相加
+        mat::restar => 相减
+        mat::multiplicar => 相乘
+        mat::dividir => 相除
+        mat.PI => 圆周率
+        mat.E => 自然常数
+    }
+}

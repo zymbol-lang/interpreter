@@ -1322,6 +1322,177 @@ fn test_i18n_devanagari_bool_output_vm() {
     assert_eq!(run_vm(src).expect("VM"), run(src));
 }
 
+// ── Numeral mode also reaches string-building paths, not just bare >> ────────
+//
+// #d0d9# used to affect only `>>`'s own per-item formatting. Interpolation,
+// juxtaposition (BinaryOp::Concat) and $++ all stringified Int/Float/Bool via
+// Value::to_display_string()/to_string_repr(), which has no numeral_mode field
+// to read — so a number baked into a composed string (a HUD label, a chat
+// message) stayed ASCII even under an active non-ASCII mode. Fixed by routing
+// value_to_concat_str, interpolate_string and execute_output_pos through the
+// same numeral-aware conversion >> already used.
+
+#[test]
+fn test_i18n_mode_affects_interpolation() {
+    let src = "#०९#\nx = 42\ny = \"{x}\"\n>> y ¶\n";
+    assert_eq!(run(src), "४२\n");
+}
+
+#[test]
+fn test_i18n_mode_affects_juxtaposition() {
+    // "n=" x is BinaryOp::Concat (juxtaposition used as a value), not >>'s own
+    // per-item loop — isolates the string-building path from >>'s formatting.
+    let src = "#०९#\nx = 42\ny = \"n=\" x\n>> y ¶\n";
+    assert_eq!(run(src), "n=४२\n");
+}
+
+#[test]
+fn test_i18n_mode_affects_concat_build() {
+    let src = "#०९#\nx = 42\ny = \"n=\" $++ x\n>> y ¶\n";
+    assert_eq!(run(src), "n=४२\n");
+}
+
+// >>~ writes straight to the real process stdout (print!/crossterm::execute!),
+// bypassing the Interpreter's `self.output` writer that `run()` captures — so
+// its content can't be asserted through this in-process harness (pre-existing
+// limitation, same as test_output_pos_vm above). Verified manually instead:
+// `#⟨0⟩⟨9⟩#\n>>~ (1, 1) > 42\n` under `zymbol run` prints the Devanagari/pIqaD
+// digits at the moved cursor position, not "42". The VM-parity test below still
+// guards against the two engines diverging.
+
+#[test]
+fn test_i18n_mode_interpolation_vm() {
+    let src = "#०९#\nx = 42\ny = \"{x}\"\n>> y ¶\n";
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
+#[test]
+fn test_i18n_mode_juxtaposition_vm() {
+    let src = "#०९#\nx = 42\ny = \"n=\" x\n>> y ¶\n";
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
+#[test]
+fn test_i18n_mode_concat_build_vm() {
+    let src = "#०९#\nx = 42\ny = \"n=\" $++ x\n>> y ¶\n";
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
+#[test]
+fn test_i18n_mode_output_pos_vm() {
+    let src = "#०९#\n>>~ (1, 1) > 42\n";
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
+// ── The mode reaches inside collections ──────────────────────────────────────
+//
+// An array of Ints used to print `[1, 2, 3]` under an active mode while the same
+// Ints printed on their own came out in the active script: the mode was applied
+// at the top level only, so a number reverted to ASCII by the mere fact of
+// sitting in a list. Brackets, commas and separators stay ASCII — only digits
+// change.
+
+#[test]
+fn test_i18n_mode_reaches_array_elements() {
+    let src = "#०९#\na = [1, 2, 3]\n>> a ¶\n";
+    assert_eq!(run(src), "[१, २, ३]\n");
+}
+
+#[test]
+fn test_i18n_mode_reaches_tuple_elements() {
+    let src = "#०९#\nt = (7, 8)\n>> t ¶\n";
+    assert_eq!(run(src), "(७, ८)\n");
+}
+
+#[test]
+fn test_i18n_mode_reaches_interpolated_array() {
+    let src = "#०९#\na = [1, 2]\n>> \"{a}\" ¶\n";
+    assert_eq!(run(src), "[१, २]\n");
+}
+
+#[test]
+fn test_i18n_mode_reaches_array_elements_vm() {
+    let src = "#०९#\na = [1, 2, 3]\n>> a ¶\n>> \"{a}\" ¶\nt = (7, 8)\n>> t ¶\n";
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
+// ── Numeric casts accept every digit script ──────────────────────────────────
+//
+// The counterpart of rendering: a program that prints ४२ must also read ४२ back,
+// or its own output cannot round-trip through `#.N|`, `#!N|` or `<<###`. `#|…|`
+// always normalized; the precision casts did not — and where the tree-walker
+// raised an error the VM quietly produced 0.
+
+#[test]
+fn test_round_accepts_unicode_digits() {
+    assert_eq!(run("x = #.1|\"४२\"|\n>> x ¶\n"), "42\n");
+}
+
+#[test]
+fn test_trunc_accepts_unicode_digits() {
+    assert_eq!(run("x = #!1|\"४२.७८\"|\n>> x ¶\n"), "42.7\n");
+}
+
+#[test]
+fn test_round_accepts_unicode_digits_vm() {
+    let src = "x = #.1|\"४२\"|\n>> x ¶\ny = #!1|\"४२.७८\"|\n>> y ¶\n";
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
+#[test]
+fn test_round_rejects_non_numeric_string_in_both_engines() {
+    let src = "x = #.1|\"abc\"|\n>> x ¶\n";
+    assert!(run_err(src).contains("cannot convert string"));
+    // The VM used to answer 0 here instead of failing like the tree-walker.
+    assert!(run_vm(src).is_err(), "VM accepted a non-numeric string");
+}
+
+// ── Ordering comparisons: one rule, every digit script ───────────────────────
+//
+// `"5" > 5` coerced the ASCII string to a number, but `"४२" > 5` raised
+// "cannot compare string with integer" and `"४२" > "९"` fell back to codepoint
+// order (#0) where `"10" > "9"` compared numerically (#1). Same operator, same
+// shape of operands — a different answer depending on which script wrote the
+// digits, which made every script but ASCII second-class. The rule is now one:
+// numeric when both sides are numbers (in any script), lexicographic when both
+// are text, an error when they mix. The two engines used three different
+// implementations of it (`compare_values`, `cmp_direct`, and a per-instruction
+// match in the VM's call loop) and disagreed even in ASCII: `"5" > 5` was #1 in
+// the VM, `"10" > "9"` was #0.
+
+#[test]
+fn test_order_numeric_string_any_script() {
+    // 42 > 9 in both scripts, and "10" > "9" is not codepoint order
+    assert_eq!(run("? \"१०\" > \"९\" { >> \"#1\" } _ { >> \"#0\" }\n"), "#1");
+    assert_eq!(run("? \"10\" > \"9\" { >> \"#1\" } _ { >> \"#0\" }\n"), "#1");
+    assert_eq!(run("? \"४२\" > 5 { >> \"#1\" } _ { >> \"#0\" }\n"), "#1");
+    assert_eq!(run("? \"5\" > 5 { >> \"#1\" } _ { >> \"#0\" }\n"), "#0");
+}
+
+#[test]
+fn test_order_non_numeric_strings_stay_lexicographic() {
+    assert_eq!(run("? \"abc\" > \"abd\" { >> \"#1\" } _ { >> \"#0\" }\n"), "#0");
+}
+
+#[test]
+fn test_order_number_against_text_is_an_error() {
+    assert!(run_err("? \"abc\" > 5 { >> \"x\" }\n").contains("cannot compare"));
+}
+
+#[test]
+fn test_order_rule_is_identical_in_both_engines() {
+    let src = "\
+? \"5\" > 5 { >> \"a1\" } _ { >> \"a0\" } ¶
+? \"10\" > \"9\" { >> \"b1\" } _ { >> \"b0\" } ¶
+? \"१०\" > \"९\" { >> \"c1\" } _ { >> \"c0\" } ¶
+? \"४२\" > 5 { >> \"d1\" } _ { >> \"d0\" } ¶
+? \"१.५\" > \"१.४\" { >> \"e1\" } _ { >> \"e0\" } ¶
+? \"abc\" > \"abd\" { >> \"f1\" } _ { >> \"f0\" } ¶
+? 'a' > 'b' { >> \"g1\" } _ { >> \"g0\" } ¶
+";
+    assert_eq!(run_vm(src).expect("VM"), run(src));
+}
+
 // ── Multi-dimensional indexing (index_nav) ────────────────────────────────
 
 #[test]

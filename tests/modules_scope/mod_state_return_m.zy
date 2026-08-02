@@ -1,0 +1,70 @@
+// Module for mod_state_return.zy — private state written by functions that
+// also return a value.
+
+# mod_state_return_m {
+    #> {
+        fijar, ver, reiniciar, cuenta,
+        a_literal, b_indexado, c_local, d_sin_retorno, e_delegado,
+        f_otro, g_salida, siguiente
+    }
+
+    v = "es"
+    n = 0
+
+    fijar(x) { v = x }
+    ver() { <~ v }
+
+    reiniciar() { n = 0 }
+    cuenta() { <~ n }
+
+    // Write, then return the state variable itself.
+    a_literal() {
+        v = "en"
+        <~ v
+    }
+
+    b_indexado() {
+        l = ["ja", "en"]
+        v = l[2]
+        <~ v
+    }
+
+    c_local() {
+        t = "ko"
+        v = t
+        <~ v
+    }
+
+    // Write, return nothing.
+    d_sin_retorno() {
+        l = ["ja", "en"]
+        v = l[2]
+    }
+
+    // Pure helper + void writer: the shape callers used as a workaround.
+    _calcula() {
+        l = ["ja", "en"]
+        <~ l[2]
+    }
+
+    e_delegado() { fijar(_calcula()) }
+
+    // Writes state but returns an unrelated value — must persist too.
+    f_otro() {
+        v = "zh"
+        <~ 42
+    }
+
+    // Read-modify-write and report: the shape that made the bug obvious.
+    siguiente() {
+        n = n + 1
+        <~ n
+    }
+
+    // State write plus an output parameter, to keep both guards honest.
+    g_salida(eco<~) {
+        v = "ko"
+        eco = 7
+        <~ v
+    }
+}

@@ -4,8 +4,15 @@
 > `zymbol run` (tree-walker) and `zymbol run --vm` (register VM).
 > If a construct is not documented here, it may not be implemented.
 
-**Interpreter version**: v0.0.7
+**Interpreter version**: v0.0.8
 **Test coverage**: golden-file pairs verified on both engines (`vm_compare`); `@vm-skip` files excluded from VM parity
+
+**New in v0.0.8**: `std/term` (terminal display metrics — column-accurate `width`, padding
+and truncation), `##!` on a `Char` (its Unicode code point), match or-patterns
+(`'p' || 'P' => …`, alternatives in one arm), `.zyp` packages
+([§ Distributing a Multi-File Program](#distributing-a-multi-file-program-zyp)), and
+automatic destruction at last use (auto-free — unobservable; it only lowers peak memory).
+See [§17 Standard Library Modules](#standard-library-modules-std).
 
 **New in v0.0.7**: typed/validated input (`<< ##.(5,2) "p" var`, see [§3 Input](#input-)) and
 native standard-library modules `std/json`, `std/io`, `std/net`, `std/db` (see
@@ -59,9 +66,9 @@ That constraint was minimalist by design, in the tradition of esolangs: a tight 
 
 Then the idea grew — like a little monster. Not because features were added for their own sake, but because the founding constraint turned out to have more depth than expected. Once you commit to "no keywords", you discover that symbols can carry consistent meaning across very different contexts (`_` is always non-binding, `#` is always meta-level), and that Unicode support is not an afterthought but a natural consequence of the same principle. The language kept growing as each piece clicked into place.
 
-**The founding question**, now stated plainly: every mainstream language — Python, Java, Ruby, Go, Rust — shares an invisible assumption that the programmer reads English. Keywords like `if`, `while`, `function`, `return` are English words. A developer in Spanish, Arabic, or Devanagari is permanently coding in a second language at the syntactic level, even when identifiers and strings can be localized.
+**The founding question**, now stated plainly: notation travels further than vocabulary. Mathematics writes `∑` and `∫`; a musical stave fixes pitch and duration in a single mark; a road sign is read correctly at speed by a driver who has never studied the local language. None of these replace words or compete with them — they sit *beside* language, and the same mark carries the same meaning to everyone who has learned the notation. A language built entirely from marks inherits that property.
 
-Removing keywords entirely is the minimum change needed to break that assumption. A symbol carries no etymology. `?` does not say *if* in English — it says *condition* in the visual grammar of the program. A developer writing `? edad >= 18` and one writing `? age >= 18` are doing exactly the same thing, and neither is translating.
+Removing keywords entirely is what makes it available. A symbol carries no etymology. `?` does not say *if* in English — it says *condition* in the visual grammar of the program. A developer writing `? edad >= 18` and one writing `? age >= 18` are doing exactly the same thing, and neither is translating.
 
 The practical result: any human language can be the *native* language of a Zymbol program. Spanish with full accents (`función`, `índice`), Devanagari (`सक्रिय`, `फलन`), Arabic (`متغير`, `دالة`), Korean (`변수`, `함수`), and yes — Klingon pIqaD for the ones who want to program in the language of the Empire. The digit block is registered (CSUR U+F8F0–U+F8F9) and the interpreter supports it completely. No judgment. It is the logical endpoint of the principle.
 
@@ -114,7 +121,7 @@ Types, modules, and numeral modes share `#` because all three are about *what so
 
 Zymbol's symbolic vocabulary is its own. The symbols have no external standard to conform to — their meaning is defined by the language itself and built up through consistent use. A programmer learns Zymbol by reading Zymbol, not by mapping it onto another language.
 
-This creates an initial learning curve. It also means the language can evolve its symbol system with full internal consistency, without being constrained by conventions inherited from English-based predecessors.
+This creates an initial learning curve. It also means the language can evolve its symbol system with full internal consistency: there is no inherited keyword vocabulary — English or otherwise — that a new construct has to stay compatible with.
 
 ### The Numeral Modes as Proof of Concept
 
@@ -218,7 +225,21 @@ name = "Alice"
 >> "Hello, {name}!" ¶       // Hello, Alice!
 ```
 
-Only simple identifiers (letters, digits, `_`) are allowed inside braces. Expressions must be assigned to a variable first.
+Only a simple identifier is allowed inside the braces — expressions must be
+assigned to a variable first. "Identifier" means exactly what it means
+everywhere else in the language: any Unicode letter, `_`, and any non-operator
+symbol, including scripts outside the letter categories. A name written in
+kanji, in Hangul, in Private Use Area glyphs such as pIqaD, or with an emoji
+interpolates like any other.
+
+```zymbol
+整 = 7
+>> "kanji: {整}" ¶              // kanji: 7
+```
+
+> Before v0.0.8 this position used a narrower rule than the lexer's, so a
+> program whose identifiers were valid everywhere else could still fail to
+> interpolate them.
 
 ### Numeric Literals
 
@@ -450,6 +471,12 @@ Returns a `[rows, cols]` array with the current terminal dimensions:
 >> "Terminal: " H "x" W ¶     // e.g. Terminal: 40x120
 ```
 
+With no terminal attached — output redirected to a file, running inside a
+container, running in CI — there is nothing to measure, and `>>?` returns the
+conventional `[24, 80]` instead of failing. A program that lays itself out with
+`>>?` therefore stays runnable when piped; it just lays itself out for 80
+columns. Both engines behave identically here.
+
 ### Positioned Output — `>>~`
 
 Print at a specific terminal position. Cursor is moved but not restored after printing.
@@ -494,13 +521,17 @@ Special keys are mapped to single-character symbols:
 
 | Key | Value |
 |-----|-------|
-| Arrow Up | `'U'` |
-| Arrow Down | `'D'` |
-| Arrow Left | `'L'` |
-| Arrow Right | `'R'` |
+| Arrow Up | `'↑'` (U+2191) |
+| Arrow Down | `'↓'` (U+2193) |
+| Arrow Left | `'←'` (U+2190) |
+| Arrow Right | `'→'` (U+2192) |
 | Enter | `'\n'` |
 | Escape | `'\x1b'` |
 | Other | the character as-is |
+
+> The arrows come back as the arrow glyphs themselves, not as letters. Match
+> them directly — `? k == '↑' { }` — and note that this leaves every ASCII
+> letter free for commands, uppercase included.
 
 ### TUI Block — `>>|`
 
@@ -535,6 +566,20 @@ active = #1
 // Explicit destruction
 \ x                 // releases x from current scope
 ```
+
+### Constant Scope
+
+Constants follow the same lexical rules as variables, with one deliberate
+exception — **top-level constants are global**:
+
+- A `:=` declared at the top level of a script is visible **everywhere** in
+  that script: inside any function at any call depth, through recursion and
+  lambda frames (v0.0.8 — previously the tree-walker lost them at call
+  depth ≥ 2). It stays immutable everywhere.
+- A `:=` declared inside a block dies when the block ends, like a variable.
+- Redeclaring a constant visible in the current scope is an error.
+- Module code never sees the importing script's constants — modules only see
+  their own state (see section 17).
 
 ### Compound Assignment Operators
 
@@ -649,6 +694,39 @@ block. The compiler enforces this at the semantic analysis phase.
 ```
 
 This works for both regular and `_`-prefixed variables.
+
+### Variable Lifecycle
+
+The complete life of a variable, as implemented in both engines (v0.0.8):
+
+| Phase | When | Mechanism |
+|-------|------|-----------|
+| Birth | First assignment (`=`, destructuring, `<<`, `<<\|`, `><`) | Created in the innermost scope; if the name is visible in an outer scope, that variable is updated instead (no shadowing) |
+| Block death | Enclosing block ends | Scope popped; block-local variables released |
+| Frame death | Function returns | The whole call frame is released |
+| **Auto-free** | **Right after the statement containing its last use** | Last-use analysis releases the value early — see below |
+| Explicit death | `\ var` | Immediate destruction; reassignment resurrects the name |
+| Program end | Last statement | Everything remaining is released |
+
+**Automatic destruction at last use (auto-free)** — since v0.0.8, both engines
+release a variable's memory right after the last statement that mentions it,
+instead of waiting for its scope to end. This is an **invisible optimization**:
+it never changes what a correct program prints or returns — it only lowers peak
+memory (e.g. a large array processed early in a long script is reclaimed
+immediately after its last use).
+
+The analysis is deliberately conservative. A variable is **never** auto-freed
+when it is: a constant (`:=`), hot (`x°`/`°x`), `_`-prefixed, a module-level
+binding, an output/mutable parameter (`<~`/`~`), or a free variable of a named
+function that is used as a first-class value. Mentions inside string
+interpolations (`"{var}"`), lambda bodies, nested blocks, and loop bodies all
+count as uses. When in doubt, the variable simply lives until its scope ends,
+as before.
+
+> `\ var` remains the only *observable* destruction: using a variable after
+> `\` is a lifetime error. Auto-free never produces that error in a correct
+> program — if you ever see `internal: use after auto-destruction`, it is an
+> interpreter bug: please report it.
 
 ### String Interpolation
 
@@ -765,7 +843,11 @@ x° *= 7    // outside any loop → global scope → x = 7
 **Semantic warnings** — emitted but not errors:
 - `x° ^= 2` — hot-def power: always `0` on first use
 
-> Both `x°` and `°x` are tree-walker only. Add `@vm-skip` to files that use them.
+> Both `x°` and `°x` work in **both engines** (tree-walker and `--vm`).
+> Inside a function that contains no `@` loop of its own, they anchor to the
+> function's scope — the variable dies when the function returns, even when the
+> function is called from inside a caller's loop (fixed in v0.0.8; previously
+> this panicked the tree-walker).
 
 ---
 
@@ -795,6 +877,28 @@ a <= b    // less than or equal
 a > b     // greater than
 a >= b    // greater than or equal
 ```
+
+**Ordering (`<`, `<=`, `>`, `>=`) follows one rule:**
+
+- **Numeric** when *both* sides are numbers. A string counts as a number when
+  `#|…|` would convert it — digits from **any** of the 69 supported scripts:
+
+  ```zymbol
+  >> ("10" > "9") ¶      // #1 — 10 > 9, not codepoint order
+  >> ("१०" > "९") ¶      // #1 — same comparison, Devanagari digits
+  >> ("४२" > 5) ¶        // #1
+  >> ("५" > "४") ¶       // #1
+  ```
+
+  No script is privileged: whatever ASCII digits do, every other script does.
+- **Lexicographic** when both sides are non-numeric text (`"abc" < "abd"` → `#1`).
+- **An error** when a number meets text that is not a number
+  (`"abc" > 5` → *cannot compare string 'abc' with integer 5*).
+
+Chars compare by code point and Bools order `#0 < #1`.
+
+Equality is *not* part of this rule: `==` never coerces, so `"5" == 5` is `#0`
+in every engine, and so is `"५" == 5`.
 
 ### Logical
 
@@ -869,7 +973,7 @@ x = 7
 
 `??` is **pure pattern matching** — it does not evaluate boolean conditions (use `?`/`_?` for
 conditional branching). Six pattern types are available: Literal, Range, Comparison, Wildcard,
-Ident, and List.
+Ident, and List. Any of them can be combined with `||` into alternatives.
 
 ### Literal and Range Patterns
 
@@ -980,6 +1084,63 @@ data = [10, 20, 30]
 // → three elements
 ```
 
+### Or Patterns — Alternatives with `||`
+
+Any two patterns can be joined with `||`. The arm matches when **any** alternative matches;
+alternatives are tested left to right and the first one that matches wins.
+
+```zymbol
+key = 'P'
+?? key {
+    'p' || 'P' => { >> "pause" ¶ }
+    'q' || 'Q' => { >> "quit" ¶ }
+    _          => { >> "other" ¶ }
+}
+// → pause
+```
+
+Alternatives are not limited to literals — ranges, comparisons, idents and list patterns all
+combine freely, and an arm may chain three or more:
+
+```zymbol
+n = 25
+zone = ?? n {
+    1..10 || 20..30 => "in range"
+    0               => "zero"
+    _               => "outside"
+}
+>> zone ¶    // → in range
+
+v = 150
+state = ?? v {
+    < 0 || > 100 => "extreme"
+    _            => "normal"
+}
+>> state ¶    // → extreme
+
+d = 6
+kind = ?? d {
+    1 || 3 || 5 || 7 => "odd"
+    2 || 4 || 6 || 8 => "even"
+    _                => "out of range"
+}
+>> kind ¶    // → even
+
+cmd = ["build", "main.zy"]
+?? cmd {
+    ["run", _] || ["build", _] => { >> "known command" ¶ }
+    _                          => { >> "unknown command" ¶ }
+}
+// → known command
+```
+
+> **Note**: For a plain "scalar is one of these literals" test, the list pattern `['p', 'P']`
+> (containment, see above) is equivalent to `'p' || 'P'`. `||` is the more general form — it is
+> the only way to mix pattern *kinds* in a single arm.
+
+`||` binds only at the top level of an arm, so list elements stay unambiguous: `[1, 2]` is one
+list pattern, never two alternatives. To express alternatives inside a list, use a separate arm.
+
 > **⚠ Not implemented**: Identifier binding in patterns (`n => n * 2`).
 
 ---
@@ -1039,6 +1200,28 @@ fruits = ["apple", "pear", "grape"]
     >> "  - " fruit ¶
 }
 ```
+
+### The Iterator Variable and Outer Variables
+
+The iterator of `@ var:iterable` lives in the loop's scope and disappears when
+the loop ends — **unless a variable with the same name already exists outside**.
+In that case the loop reuses (and overwrites) the outer variable, which then
+survives the loop:
+
+```zymbol
+@ i:1..3 { >> i ¶ }
+// >> i ¶            // ❌ semantic error: 'i' does not exist here
+
+i = 99
+@ i:1..3 { >> i ¶ }
+>> i ¶               // the outer i was overwritten by the loop
+```
+
+> The leftover value is the **last executed** iteration value in both engines
+> (v0.0.8 — previously the VM left the first out-of-range value, REFERENCE
+> L24). Writes to the iterator variable inside the body do not alter the
+> iteration — the loop advances an internal counter. Still, prefer reading the
+> value you need inside the loop, or use a different name for the iterator.
 
 ### Range Loop (inclusive on both ends)
 
@@ -1217,6 +1400,16 @@ test() {
 
 >> test() ¶    // → 42
 ```
+
+> **Exception — constants pierce the isolation.** Top-level `:=` constants are
+> globally scoped by design: they are readable (never writable) inside any
+> function, at any call depth. See "Constant Scope" in section 4.
+>
+> ```zymbol
+> PI := 3.14
+> area(r) { <~ r * r * PI }   // ✓ PI is visible; r * r * PI works
+> >> area(2) ¶                 // → 12.56
+> ```
 
 Functions used **as first-class values** capture the scope at the point of assignment (like lambdas):
 
@@ -2218,6 +2411,38 @@ desc = "Hello {name}, you have {n} items"
 >> desc ¶
 ```
 
+Juxtaposition also works **inside** call arguments, array elements, tuple
+elements and grouped expressions — so a composed string can be handed straight
+to a function without an intermediate variable. A comma always separates;
+juxtaposition never swallows one:
+
+```zymbol
+name = "Alice"
+n = 42
+
+label(s) { <~ "[" s "]" }
+pair(a, b) { <~ a "/" b }
+
+// call arguments — no intermediate variable needed
+>> label("v" n) ¶                // → [v42]
+>> label(name " v" n) ¶          // → [Alice v42]
+>> label("<" label("v" n) ">") ¶ // → [<[v42]>]
+
+// the comma still separates: two arguments, not one
+>> pair("a" 1, "b" 2) ¶          // → a1/b2
+
+// array elements, grouped expressions and tuple elements
+lista = [name " one", "two " n]
+>> lista[1] ¶                    // → Alice one
+grupo = (name " v" n)
+>> grupo ¶                       // → Alice v42
+```
+
+One difference from statement level: a following `(` never continues the chain
+inside these positions, because there a parenthesis is ambiguous with a lambda,
+a tuple and a grouped expression. Bind it to a variable first, or reach for
+interpolation.
+
 ### Iterating Characters
 
 ```zymbol
@@ -2558,6 +2783,12 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 
 **E013** is raised whenever an executable statement appears at the module top-level. Function bodies are unrestricted — the limitation only applies to the module block itself.
 
+> Since v0.0.8, importing a module also runs the full **semantic analysis** on
+> it (both engines): reassigning a module constant or violating scope rules
+> inside a module function fails at import time with a semantic error. Module
+> constants are additionally protected at runtime — reassignment from a module
+> function is a runtime error even if static analysis was bypassed.
+
 ### Visibility Model
 
 | Declaration | Exported in `#>` | External access | Persists across calls |
@@ -2566,6 +2797,15 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 | `count = 0` | no (excluded even if listed) | ✗ error | **yes — write-back** |
 | `fn()` | yes | `alias::fn()` | — |
 | `private_fn()` | no | ✗ error | — |
+
+**Module state identity is per file path**: importing the same module file
+several times — even under different aliases, even from different importers
+(diamond dependencies) — shares **one** state in both engines. Two aliases to
+`./counter` increment the same counter.
+
+Since v0.0.8, mutations made by **intra-module calls** persist too: an exported
+function may delegate state changes to a private helper, and the calling frame
+observes the helper's mutation immediately after the call.
 
 **Private mutable state** (`=` variables) persists between calls and is only reachable through exported getter/setter functions:
 
@@ -2628,7 +2868,7 @@ pi = u.PI
 
 ### Re-export from Another Module
 
-Use `::` to re-export a function imported from another module, and `.` to re-export a constant. Place the `<#` import before `#>` so the alias is in scope. The re-export alias follows `:`:
+Use `::` to re-export a function imported from another module, and `.` to re-export a constant. Place the `<#` import before `#>` so the alias is in scope. The new public name follows `=>`:
 
 ```zymbol
 // math.zy
@@ -2644,7 +2884,8 @@ Use `::` to re-export a function imported from another module, and `.` to re-exp
 }
 ```
 
-> **Note**: Re-export of constants via `.` is subject to [L3](#l3----module-aliasconst-does-not-work).
+> **Note**: Re-export of constants via `.` works in both engines. The old L3 limitation
+> (`alias.CONST` failing analysis) was fixed — see REFERENCE.md.
 
 ### Subdirectory Module Convention
 
@@ -2692,6 +2933,26 @@ the i18n pattern with no special handling:
 | `std/io` | `read` `write` `append` `exists` `delete` `list` `mkdir` | v0.0.7 |
 | `std/net` | `get` `post` `post_json` `head` | v0.0.7 |
 | `std/db` | `connect` `disconnect` `exec` `query` `query_one` `query_value` `tx` `begin` `commit` `rollback` `savepoint` `release` `rollback_to` `exec_script` `table_exists` | v0.0.7 |
+| `std/term` | `width` `pad_left` `pad_right` `center` `truncate` | v0.0.8 |
+
+**`std/term` — display width in terminal columns.** `width` counts **columns**, not
+graphemes: CJK ideographs, kana, hangul and most emoji take two columns each, so a
+framed panel drifts if you lay it out with `$#`. `width` accepts a String or a single
+`Char`; `pad_left`/`pad_right`/`center` pad with spaces to an exact column count (an
+already-wide string is returned untouched, and `center` gives a spare column to the
+right); `truncate` cuts to at most N columns without splitting a wide glyph.
+
+```zymbol
+<# std/term => t
+>> t::width("手番") ¶                  // → 4  (two columns each), while "手番"$# is 2
+>> "[" t::pad_right("go", 6) "]" ¶     // → [go    ]
+>> "[" t::center("go", 6) "]" ¶        // → [  go  ]
+>> "[" t::truncate("形勢判断", 4) "]" ¶ // → [形勢]  (never half a glyph)
+```
+
+This is a **screen** metric. Operating on a string's *content* — split, slice, replace,
+repeat — stays in the language's symbols (`$/`, `$[..]`, `$~~`, `$*`); `std/term` never
+duplicates them.
 
 **Error convention.** Type/arity mistakes raise a hard `RuntimeError` (the program is
 malformed). Recoverable environmental failures — file not found, network timeout, malformed
@@ -2770,6 +3031,101 @@ db::disconnect("c")
 - **Utilities**: `exec_script` (multi-statement SQL), `table_exists`.
 - SQL failures return a **soft `##DB(...)` error** (testable with `$!`, catchable with
   `!? … :! ##DB`); wrong argument types abort hard, like every stdlib module.
+
+### Distributing a Multi-File Program (`.zyp`)
+
+A project with more than one script and shared modules (imports, `</ file.zy />` targets)
+can be packaged into a single portable `.zyp` archive — a ZIP of *source*, not a compiled
+binary. `zymbol build` is the separate, unrelated feature that produces a native
+executable; a `.zyp` still needs a `zymbol` binary to run it.
+
+```bash
+zymbol package DIR --script main.zy -o out.zyp   # write the archive
+zymbol package DIR --script main.zy --dry-run    # list the closure + warnings, write nothing
+zymbol run out.zyp                                # extract to a temp dir and run
+zymbol run out.zyp --script 囲碁 --tw             # pick an entry point and an engine
+```
+
+#### The manifest (`zyp.toml`)
+
+`DIR` needs a `zyp.toml` declaring one or more `[[script]]` entry points. Without one,
+`--script` synthesizes a manifest for the run and prints it so it can be saved for next
+time:
+
+```toml
+[package]
+name = "go"
+version = "1.2.0"
+engine = ">=0.0.8"   # semver REQUIREMENT — see the warning below
+mode = "vm"          # default engine for this package's scripts
+
+[[script]]
+name = "go"
+path = "go.zy"
+default = true
+desc = "English"
+
+[[script]]
+name = "囲碁"
+path = "囲碁.zy"
+desc = "日本語"
+```
+
+> **Always write `engine = ">=0.0.8"`, never a bare `"0.0.8"`.** A bare version is a *caret*
+> requirement, and pre-1.0 a caret matches only that exact version — `"0.0.8"` would refuse
+> to run on 0.0.9. `zymbol package` always synthesizes the `>=` form.
+
+`zymbol run` picks the script named by `--script`; failing that, the one marked
+`default = true`; failing that, the only entry if there is exactly one.
+
+#### What gets packaged
+
+Packaging is **strict about what it includes** and **permissive about what it can't
+resolve**. Starting from the declared scripts, the closure follows module imports and
+`</ file.zy />` targets. A `.zy` file that is neither listed nor reachable is never
+packaged — an unused file left in the directory stays out, and `--dry-run` says so (W008).
+
+Anything that cannot be resolved statically becomes a **warning, not a failure**, so
+`--dry-run` always produces something inspectable:
+
+| Code | Meaning |
+|------|---------|
+| `W001` | Absolute or `~`-relative import — not reproducible on another machine |
+| `W002` | An import resolves to a file that doesn't exist |
+| `W003` | `<\ shell \>` present — its arguments are arbitrary expressions, so any `.zy` it runs can't be traced |
+| `W004` | A module with `</ />` was reached from more than one entry, whose base directories differ |
+| `W005` | A `</ />` target doesn't exist on disk |
+| `W006` | The file has lex/parse errors — packaged anyway, but its own dependencies weren't traced |
+| `W007` | A dependency reached via `../` lives above the first entry's directory |
+| `W008` | `.zy` files in the entry's directory that nothing reaches — not packaged |
+| `W009` | `std/db` imported — never packaged (the stdlib is synthetic), but it needs an ODBC driver at run time |
+| `W010` | The archive exceeds the recommended size ceiling |
+| `W011` | The same file was reached through two different lexical paths |
+
+The one **hard error** is a `[[script]]` that turns out to be a module file: a package whose
+entry point can't run isn't permissive, it's broken.
+
+#### Running a package
+
+`zymbol run pkg.zyp` extracts to an ephemeral temp directory and runs from there — it
+**never `chdir`s**. This split is deliberate:
+
+- **Code** is read from the temp dir and disappears when the process exits.
+- **Data the script writes** does not. A `std/io` write to a relative path lands in your
+  real working directory, because it resolves against the process's actual cwd.
+
+Use `--keep-temp` to retain the extraction directory and print its path when debugging.
+
+A `.zyp` defaults to the **register VM**; loose `.zy` files still default to the
+tree-walker, so nothing changes for ordinary scripts. Precedence is
+`--tw` > `--vm` > manifest `mode` > VM.
+
+#### In the browser
+
+The web playground loads a `.zyp` directly: one tab per source file, named by full relative
+path (e.g. `核/盤.zy`), plus a script picker populated from the manifest. The archive
+carries a `zyp.json` alongside `zyp.toml` — the same manifest, pre-serialized — so the
+browser never has to parse TOML.
 
 ---
 
@@ -2886,10 +3242,22 @@ Three prefix operators convert between Int and Float:
 |----------|------|-----------|
 | `##.expr` | ToFloat | Converts Int or Float to Float |
 | `###expr` | ToIntRound | Converts Float to Int, rounding (half away from zero) |
-| `##!expr` | ToIntTrunc | Converts Float to Int, truncating toward zero |
+| `##!expr` | ToIntTrunc | Converts Float to Int truncating toward zero; a `Char` to its code point |
 
 > **Convention**: `##.` mirrors `#.N` (round/decimal), `##!` mirrors `#!N` (truncate).
 > `###` is a dedicated rounding cast with no decimal-precision argument.
+
+`##!` also accepts a `Char`, giving its Unicode code point — the only direct Char→Int
+route, and the way to classify a character by range (`Char` is otherwise neither
+comparable nor castable):
+
+```zymbol
+>> ##!'A' ¶      // → 65
+>> ##!'あ' ¶     // → 12354
+c = 'M'
+p = ##!c
+? p >= 65 && p <= 90 { >> "upper" ¶ }   // → upper
+```
 
 ```zymbol
 i = 42
@@ -2965,8 +3333,10 @@ dec = 0d|255|    // Int → decimal string → "0d0255"
 
 Zymbol can display numbers in any of **69 Unicode digit scripts** — Devanagari,
 Arabic-Indic, Thai, Klingon pIqaD, Mathematical Bold, LCD segments, and more.
-Numeral mode only affects **output** (`>>`); internal arithmetic always uses
-binary integers and IEEE-754 floats regardless of the active script.
+Numeral mode only affects how a value is turned into **displayed text** — `>>`,
+`>>~`, string interpolation, juxtaposition and `$++` all format Int/Float/Bool
+through the active script; internal arithmetic always uses binary integers and
+IEEE-754 floats regardless of the active script.
 
 ### Mode-Switch Token `#d0d9#`
 
@@ -2998,6 +3368,89 @@ n = 42
 #09#
 >> n ¶          // → 42  (back to ASCII)
 ```
+
+### Every String-Building Path, Not Just `>>`
+
+A number rarely stays on its own — it gets folded into a label, a HUD readout,
+a chat line. Interpolation, juxtaposition (`"a" b`) and `$++` all reach for the
+same numeral-aware conversion `>>` uses, so a number baked into a composed
+string still comes out in the active script:
+
+```zymbol
+#०९#
+n = 42
+
+y = "{n}"          // interpolation
+>> y ¶             // → ४२
+
+z = "n=" n         // juxtaposition (BinaryOp::Concat)
+>> z ¶             // → n=४२
+
+w = "n=" $++ n     // $++
+>> w ¶             // → n=४२
+
+>>~ (1, 1) > n     // positioned output
+
+>> [1, 2, 3] ¶     // → [१, २, ३]  (elements, not brackets)
+>> (7, 8) ¶        // → (७, ८)
+```
+
+The mode reaches *inside* collections: a number does not stop being a number by
+sitting in a list. Brackets, parentheses, commas, the `-` sign and the decimal
+`.` stay ASCII — only digits change.
+
+Only `Value::to_display_string()` itself — the bare, context-free conversion
+with no access to which mode is active — has no numeral awareness. Every
+runtime call site that turns a value into text goes through the active mode
+instead of that bare conversion, so there is no place left where a number
+silently reverts to ASCII while the mode is on.
+
+### Intent and Responsibility
+
+`#d0d9#` is a statement about how *this program* writes numbers, and Zymbol
+takes it literally: the mode applies to text the program later uses as data, not
+only to text a human reads.
+
+```zymbol
+#०९#
+n = 42
+
+io::write("dato{n}.txt", "…")   // creates dato४२.txt — not dato42.txt
+r = <\ "echo {n}" \>            // runs: echo ४२
+b = ("{n}" == "42")             // #० — different strings, same number
+```
+
+This is intent, not a leak: the language does not second-guess which of your
+strings are labels and which are file names. What the mode never touches is a
+serialization format with its own grammar — `json::encode` always emits ASCII
+digits, so encoded data stays parseable by everything else.
+
+Two practical consequences, both the developer's to manage:
+
+- If a value must stay ASCII, build it while the mode is off (or hand ASCII back
+  with `#09#` first). Juxtaposing a raw `Int` into a `<\ … \>` command
+  (`<\ "echo " n \>`) also keeps ASCII: the shell path converts values itself.
+- Reading the digits back always works — see *Reading Numerals Back* below.
+
+### Reading Numerals Back
+
+Output and input are symmetric: every numeric cast accepts digits from any of
+the 69 supported scripts, so a program can re-read what it just printed and a
+user can type what they were just shown.
+
+```zymbol
+#०९#
+n = 120
+s = "{n}"          // ← "१२०"
+
+>> #|s| ¶          // → १२०  (parsed as the Int 120, rendered in the mode)
+>> #.0|s| ¶        // → १२०  (round: same normalization)
+<<### edad         // accepts ४२ and 42 alike
+```
+
+The `-` sign and the decimal `.` are read as ASCII, matching how they are
+written. A string that is not a number at all is still rejected — `#.1|"abc"|`
+raises `cannot convert string 'abc' to number for rounding` in both engines.
 
 ### Boolean Output
 
@@ -3191,10 +3644,29 @@ ASCII `#` (U+0023). This means:
 
 ### Scope and Persistence
 
-- Mode is **file-local** — each file starts in ASCII mode.
+- Mode is **interpreter-global, not file-local** — a program starts in ASCII
+  mode, and a `#d0d9#` anywhere changes the mode for *everything* executed
+  afterwards, including the caller that imported the module which switched it.
+  Both engines agree on this.
 - Mode changes take effect **immediately** at the statement that contains
-  `#d0d9#` and persist until the next mode-switch in the same file.
-- Importing a module does not inherit or alter the caller's mode.
+  `#d0d9#` and persist until the next mode-switch — there is no implicit reset
+  at a file, module, or function boundary.
+- Therefore a module function that renders in a non-ASCII script **must reset
+  the mode itself**, or it silently reformats every number the rest of the
+  program prints:
+
+  ```zymbol
+  mI'(n) {
+      #<d0><d9>#        // activate the target script
+      s = "{n}"         // interpolation now renders in it
+      #09#              // MANDATORY: hand ASCII back to the caller
+      <~ s
+  }
+  ```
+
+  Without the `#09#` line, a caller doing `>> 120 ¶` after calling `mI'`
+  prints in the callee's script. This is what makes a per-locale number
+  formatter possible at all — see `Hol/tlhIngan.zy` in zyKlingonGalaxy.
 - The REPL respects the active mode: expression results are displayed in the
   currently active script.
 
@@ -3204,11 +3676,13 @@ ASCII `#` (U+0023). This means:
 | ---- | ------ |
 | Default mode | ASCII (`0`–`9`) |
 | Activation token | `#d0d9#` — zero and nine of any supported block |
-| Affected output | `>>` for Int, Float, Bool |
-| Unaffected | String content, Char, Array brackets, Tuple parentheses |
+| Affected output | `>>`, `>>~`, interpolation, juxtaposition, `$++` — for Int, Float, Bool, including the ones inside arrays and tuples |
+| Unaffected | String content itself, Char, Array brackets, Tuple parentheses, commas, `json::encode` |
 | Bool prefix | `#` always ASCII; digit adapts to active script |
 | Literals | Any script's digits valid as integer literals in source |
+| Numeric casts | `#\|…\|`, `#.N\|…\|`, `#!N\|…\|`, `<<###`, `<<#.` read digits from any script |
 | Float decimal point | Always ASCII `.` regardless of active mode |
+| Text used as data | Follows the mode too (file names, shell commands) — intended, and the developer's to validate |
 | Reset to ASCII | `#09#` |
 
 ---

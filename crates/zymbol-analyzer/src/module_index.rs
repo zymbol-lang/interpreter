@@ -78,6 +78,26 @@ impl ExportedSymbol {
         }
     }
 
+    /// Create a re-exported symbol whose source module could not be resolved.
+    ///
+    /// The symbol is still exported by this module — only the jump to its
+    /// original definition is unavailable.
+    pub fn unresolved_re_export(
+        name: String,
+        kind: ExportedKind,
+        span: Span,
+        original_name: String,
+    ) -> Self {
+        Self {
+            name,
+            kind,
+            span,
+            original_name: Some(original_name),
+            source_module: None,
+            parameters: None,
+        }
+    }
+
     /// Create a re-exported symbol
     pub fn re_export(
         name: String,
@@ -164,6 +184,8 @@ pub struct ModuleIndex {
     import_graph: RwLock<HashMap<PathBuf, Vec<ImportInfo>>>,
     /// Import alias mapping: (file, alias) -> resolved path
     alias_map: DashMap<(PathBuf, String), PathBuf>,
+    /// Modules that do not compile: path -> one description per error
+    module_errors: DashMap<PathBuf, Vec<String>>,
 }
 
 impl ModuleIndex {
@@ -173,7 +195,32 @@ impl ModuleIndex {
             exports: DashMap::new(),
             import_graph: RwLock::new(HashMap::new()),
             alias_map: DashMap::new(),
+            module_errors: DashMap::new(),
         }
+    }
+
+    /// Record whether a module compiles. An empty list clears the entry.
+    ///
+    /// Keyed by the canonical path: the workspace scan and an import's
+    /// resolved path reach the same file by different routes.
+    pub fn set_module_errors(&self, path: &Path, errors: Vec<String>) {
+        let key = Self::canonical_key(path);
+        if errors.is_empty() {
+            self.module_errors.remove(&key);
+        } else {
+            self.module_errors.insert(key, errors);
+        }
+    }
+
+    /// Errors recorded for a module, if it is known not to compile.
+    pub fn module_errors(&self, path: &Path) -> Option<Vec<String>> {
+        self.module_errors
+            .get(&Self::canonical_key(path))
+            .map(|e| e.clone())
+    }
+
+    fn canonical_key(path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
     }
 
     /// Index exports for a module
@@ -185,6 +232,7 @@ impl ModuleIndex {
     pub fn remove_module(&self, path: &Path) {
         self.exports.remove(path);
         self.import_graph.write().remove(path);
+        self.module_errors.remove(&Self::canonical_key(path));
         // Remove aliases for this file
         self.alias_map.retain(|(file, _), _| file != path);
     }

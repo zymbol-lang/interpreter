@@ -1,0 +1,17 @@
+a == 0     #1
+a == 0.0   #1
+a >= 0     #1
+a <= 0     #1
+a <> 0     #0
+b == 20    #1
+b == 21    #0
+3 == 3.0   #1
+3.0 == 3   #1
+3 <> 3.0   #0
+1 == 2.0   #0
+1.5 == 1   #0
+ge y le    #1
+por tanto  #1
+match      coincide
+match int  otro
+contiene   #1

@@ -1,0 +1,13 @@
+// MM-3 (fixed v0.0.8): `\ x` inside a function is frame-local — it must not
+// poison the caller's variable with the same name (previously: false
+// "use after destruction" error on the caller's x).
+
+kill() {
+    x = 5
+    \ x
+    <~ 1
+}
+
+x = 10
+>> kill() ¶
+>> x ¶

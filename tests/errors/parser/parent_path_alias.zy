@@ -1,0 +1,11 @@
+// HLZ-005 — './../x' is rejected with a diagnostic that says what to write.
+//
+// It names the same file as '../x', but the AST records only parent_levels,
+// so the two spellings are indistinguishable once parsed: the formatter would
+// rewrite one into the other and its token-stream safety gate would refuse the
+// file. One canonical spelling, and an error that points at it — the previous
+// message was "expected module path" followed by "unexpected token: Slash",
+// which named neither the cause nor the fix.
+<# ./../shared/lib => s
+
+>> "unreachable" ¶

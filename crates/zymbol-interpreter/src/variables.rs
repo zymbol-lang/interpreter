@@ -259,6 +259,13 @@ impl<W: Write> Interpreter<W> {
         // Evaluate the constant's value
         let value = self.eval_expr(&const_decl.value)?;
 
+        // MM-9: a := at the root scope of top-level code is globally scoped —
+        // record it so functions resolve it at any call depth. Constants
+        // declared inside blocks or function bodies stay lexically scoped.
+        if self.is_root_scope() {
+            self.record_global_const(const_decl.name.clone(), value.clone());
+        }
+
         // Store in variables and mark as constant
         self.set_variable(&const_decl.name, value);
         self.mark_const(const_decl.name.clone());
@@ -309,5 +316,43 @@ mod tests {
     fn test_multiple_variables() {
         let output = run("a = \"A\"\nb = \"B\"\n>> a ¶\n>> b ¶");
         assert_eq!(output, "A\nB\n");
+    }
+
+    /// Auto-free (v0.0.8): variables are destroyed right after their last use.
+    #[test]
+    fn test_auto_free_after_last_use() {
+        let source = "x = 10\ny = 20\n>> x ¶\n>> y ¶\nK := 5\n>> K ¶";
+        let mut output = Vec::new();
+        let lexer = Lexer::new(source, FileId(0));
+        let (tokens, lex_diagnostics) = lexer.tokenize();
+        assert!(lex_diagnostics.is_empty());
+        let parser = Parser::new(tokens);
+        let program = parser.parse().expect("parse");
+        let mut interp = Interpreter::with_output(&mut output);
+        interp.execute(&program).expect("run");
+        // x and y were auto-destroyed after their last uses; K is a constant
+        // and is never auto-freed.
+        assert!(interp.get_variable("x").is_none(), "x must be auto-freed");
+        assert!(interp.get_variable("y").is_none(), "y must be auto-freed");
+        assert!(interp.auto_dead_variables.contains("x"));
+        assert!(interp.auto_dead_variables.contains("y"));
+        assert!(interp.get_variable("K").is_some(), "constants survive");
+        drop(interp);
+        assert_eq!(String::from_utf8(output).unwrap(), "10\n20\n5\n");
+    }
+
+    /// Auto-free is invisible: interpolation uses keep the variable alive.
+    #[test]
+    fn test_auto_free_respects_interpolation() {
+        let source = "n = 7\n>> n ¶\n>> \"v={n}\" ¶";
+        let mut output = Vec::new();
+        let lexer = Lexer::new(source, FileId(0));
+        let (tokens, _) = lexer.tokenize();
+        let parser = Parser::new(tokens);
+        let program = parser.parse().expect("parse");
+        let mut interp = Interpreter::with_output(&mut output);
+        interp.execute(&program).expect("run");
+        drop(interp);
+        assert_eq!(String::from_utf8(output).unwrap(), "7\nv=7\n");
     }
 }

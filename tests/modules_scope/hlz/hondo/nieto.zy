@@ -1,0 +1,14 @@
+// HLZ-004 — the dot convention names folder_file, so validation must compare
+// against `<parent>_<stem>`, not against the stem alone. Comparing against the
+// stem rejected every subdirectory module the convention exists to support.
+//
+// HLZ-002 — an array index computed from untyped parameters must not be
+// rejected as "must be Int, got Float": arithmetic on a parameter says the
+// value is numeric, not that it is a Float.
+# .hondo_nieto {
+    #> { en, plano }
+
+    en(matriz, ancho, fila, col) { <~ matriz[(fila - 1) * ancho + col] }
+
+    plano(ancho, fila, col) { <~ (fila - 1) * ancho + col }
+}

@@ -60,11 +60,53 @@ pub struct Analyzer {
 impl Analyzer {
     /// Create a new analyzer
     pub fn new() -> Self {
-        Self {
+        let analyzer = Self {
             cache: DocumentCache::new(),
             symbols: Arc::new(RwLock::new(SymbolIndex::new())),
             workspace: RwLock::new(Workspace::new()),
             module_index: ModuleIndex::new(),
+        };
+        analyzer.index_stdlib();
+        analyzer
+    }
+
+    /// Put the `std/` modules in the index, under the same synthetic paths
+    /// `resolve_import_path` produces for them.
+    ///
+    /// They have no file on disk, so nothing indexed them and every check that
+    /// consults the index skipped stdlib aliases entirely — `math::inventada()`
+    /// was reported by nobody until it failed at run time. The export list comes
+    /// from `zymbol_common::stdlib`, shared with both engines.
+    fn index_stdlib(&self) {
+        for module in zymbol_common::stdlib::MODULES {
+            let path = PathBuf::from(format!("__stdlib__/{}", module.path));
+            let uri: Arc<str> = Arc::from(format!("zymbol-stdlib:{}", module.path).as_str());
+            let mut exports =
+                ModuleExports::new(module.path.to_string(), path.clone(), uri);
+
+            // Native functions have no source span; a zero span keeps them out
+            // of go-to-definition without special-casing every consumer.
+            let span = zymbol_span::Span::new(
+                zymbol_span::Position::new(1, 1, 0),
+                zymbol_span::Position::new(1, 1, 0),
+                zymbol_span::FileId(0),
+            );
+            for func in module.functions {
+                let params = match func.arity {
+                    -1 => vec!["...".to_string()],
+                    n => (1..=n).map(|i| format!("arg{i}")).collect(),
+                };
+                exports.add_export(ExportedSymbol::function(
+                    func.name.to_string(),
+                    span,
+                    params,
+                ));
+            }
+            for constant in module.constants {
+                exports.add_export(ExportedSymbol::constant(constant.to_string(), span));
+            }
+
+            self.module_index.index_module(path, exports);
         }
     }
 
@@ -101,9 +143,35 @@ impl Analyzer {
     /// Index a module that is not open in the editor (background file)
     fn index_background_module(&self, path: &Path, content: &str) {
         // Quick parse to extract module declaration and exports
-        let (tokens, _lexer_diags) = zymbol_lexer::Lexer::new(content, zymbol_span::FileId(0)).tokenize();
+        let (tokens, lexer_diags) = zymbol_lexer::Lexer::new(content, zymbol_span::FileId(0)).tokenize();
         let parser = zymbol_parser::Parser::new(tokens);
         let parse_result = parser.parse();
+
+        // Remember whether this module compiles, so a file importing it can be
+        // told at the import line instead of finding out at run time. Both
+        // kinds of failure abort the import: the interpreter refuses a module
+        // that does not parse *and* one whose semantic analysis fails.
+        let broken: Vec<String> = match (&parse_result, lexer_diags.is_empty()) {
+            (Err(diags), _) => diags.iter().map(Self::describe_diagnostic).collect(),
+            (Ok(_), false) => lexer_diags.iter().map(Self::describe_diagnostic).collect(),
+            (Ok(program), true) => {
+                let mut var_analyzer = zymbol_semantic::VariableAnalyzer::new();
+                let _ = var_analyzer.analyze(program);
+                let mut type_checker = zymbol_semantic::TypeChecker::new();
+                var_analyzer
+                    .semantic_errors()
+                    .iter()
+                    .map(Self::describe_diagnostic)
+                    .chain(
+                        type_checker
+                            .check_errors(program)
+                            .iter()
+                            .map(Self::describe_diagnostic),
+                    )
+                    .collect()
+            }
+        };
+        self.module_index.set_module_errors(path, broken);
 
         if let Ok(program) = parse_result {
             // Extract module name
@@ -120,6 +188,27 @@ impl Analyzer {
 
             // Update workspace with module name
             self.workspace.read().update_module_name(path, Some(module_name.clone()));
+
+            // Register imports *first*: a re-export (`alias::item => name`)
+            // resolves its source through this file's own alias map, so the
+            // aliases must be in the index before the export block is read.
+            // Indexing them afterwards silently dropped every re-export on a
+            // file's first pass, which made an i18n layer module — the whole
+            // point of which is re-exporting `std/` under local names — look
+            // like it exported nothing.
+            self.module_index.clear_imports(path);
+            for import in &program.imports {
+                if let Some(resolved) = self.resolve_import_path(&import.path, path) {
+                    self.module_index.register_import(
+                        path,
+                        ImportInfo {
+                            alias: import.alias.clone(),
+                            resolved_path: resolved,
+                            span: import.span,
+                        },
+                    );
+                }
+            }
 
             // Build exports
             let uri = workspace::path_to_uri(path);
@@ -158,42 +247,45 @@ impl Analyzer {
                                     zymbol_ast::ItemType::Constant => ExportedKind::Constant,
                                 };
 
-                                // Try to resolve the source module
-                                if let Some(resolved) =
-                                    self.resolve_import_alias_internal(path, module_alias)
+                                // The export exists whether or not its source
+                                // module can be resolved. An unresolvable
+                                // alias only costs go-to-definition; dropping
+                                // the export would make every use of it look
+                                // like an error.
+                                let export = match self
+                                    .resolve_import_alias_internal(path, module_alias)
                                 {
-                                    let export = ExportedSymbol::re_export(
+                                    Some(resolved) => ExportedSymbol::re_export(
                                         exported_name,
                                         kind,
                                         *span,
                                         item_name.clone(),
                                         resolved,
-                                    );
-                                    exports.add_export(export);
-                                }
+                                    ),
+                                    None => ExportedSymbol::unresolved_re_export(
+                                        exported_name,
+                                        kind,
+                                        *span,
+                                        item_name.clone(),
+                                    ),
+                                };
+                                exports.add_export(export);
                             }
                         }
                     }
                 }
             }
 
-            // Register exports
+            // Register exports (imports were registered above)
             self.module_index.index_module(path.to_path_buf(), exports);
+        }
+    }
 
-            // Register imports
-            self.module_index.clear_imports(path);
-            for import in &program.imports {
-                if let Some(resolved) = self.resolve_import_path(&import.path, path) {
-                    self.module_index.register_import(
-                        path,
-                        ImportInfo {
-                            alias: import.alias.clone(),
-                            resolved_path: resolved,
-                            span: import.span,
-                        },
-                    );
-                }
-            }
+    /// `line N: message`, the form used inside an import's diagnostic.
+    fn describe_diagnostic(diag: &zymbol_error::Diagnostic) -> String {
+        match &diag.span {
+            Some(span) => format!("line {}: {}", span.start.line, diag.message),
+            None => diag.message.clone(),
         }
     }
 
@@ -528,6 +620,39 @@ impl Analyzer {
                 Some(resolved_path) => {
                     // Stdlib synthetic paths are always valid — skip filesystem check.
                     let is_stdlib = resolved_path.starts_with("__stdlib__");
+                    if !is_stdlib {
+                        // A module that does not compile takes this file down
+                        // with it at run time, so say so on the import line —
+                        // the editor otherwise showed nothing at all.
+                        if let Some(errors) = self.module_index.module_errors(&resolved_path) {
+                            let name = resolved_path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| resolved_path.display().to_string());
+                            let mut message = format!(
+                                "imported module '{}' has {} error(s) and cannot be loaded",
+                                name,
+                                errors.len()
+                            );
+                            for e in errors.iter().take(3) {
+                                message.push_str("\nnote: ");
+                                message.push_str(e);
+                            }
+                            diagnostics.push(lsp_types::Diagnostic {
+                                range: diagnostics::span_to_range(&import.span),
+                                severity: Some(lsp_types::DiagnosticSeverity::ERROR),
+                                code: Some(lsp_types::NumberOrString::String(
+                                    "module-has-errors".to_string(),
+                                )),
+                                code_description: None,
+                                source: Some("zymbol".to_string()),
+                                message,
+                                related_information: None,
+                                tags: None,
+                                data: None,
+                            });
+                        }
+                    }
                     if !is_stdlib && !resolved_path.exists() {
                         diagnostics.push(lsp_types::Diagnostic {
                             range: diagnostics::span_to_range(&import.span),
@@ -928,6 +1053,18 @@ impl Analyzer {
         self.cache.len()
     }
 
+    /// Errors recorded for a module by the index (diagnostic tooling).
+    pub fn debug_module_errors(&self, path: &Path) -> Option<Vec<String>> {
+        self.module_index.module_errors(path)
+    }
+
+    /// Names this module is indexed as exporting (diagnostic tooling).
+    pub fn debug_exports(&self, path: &Path) -> Option<Vec<String>> {
+        self.module_index
+            .get_exports(path)
+            .map(|e| e.exports.iter().map(|s| s.name.clone()).collect())
+    }
+
     /// Get symbol index statistics
     pub fn symbol_stats(&self) -> symbols::IndexStats {
         self.symbols.read().stats()
@@ -1028,7 +1165,7 @@ impl Analyzer {
         }
 
         let mut start = end;
-        while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
+        while start > 0 && zymbol_lexer::Lexer::is_ident_continue(chars[start - 1]) {
             start -= 1;
         }
 
@@ -1334,13 +1471,18 @@ fn get_full_line_range(content: &str, line_num: u32) -> Option<lsp_types::Range>
 }
 
 /// Check if a string is a valid Zymbol identifier
+///
+/// Defers to the lexer so the LSP recognises exactly the identifiers the
+/// language accepts. The previous rule required `is_alphabetic` to start and
+/// `is_alphanumeric` to continue, which excluded emoji and Private Use Area
+/// names — a program written in pIqaD had no working hover or completion.
 fn is_valid_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
-        Some(c) if c.is_alphabetic() || c == '_' => {}
+        Some(c) if zymbol_lexer::Lexer::is_ident_start(c) => {}
         _ => return false,
     }
-    chars.all(|c| c.is_alphanumeric() || c == '_')
+    chars.all(zymbol_lexer::Lexer::is_ident_continue)
 }
 
 /// Convert LSP Position to byte offset in content
@@ -1392,7 +1534,7 @@ fn find_function_call_context(content: &str, offset: usize) -> Option<(String, u
     let func_name: String = before_paren
         .chars()
         .rev()
-        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .take_while(|c| zymbol_lexer::Lexer::is_ident_continue(*c))
         .collect::<String>()
         .chars()
         .rev()
@@ -1675,6 +1817,131 @@ impl Default for Analyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An i18n layer module re-exports `std/` under local names. Its exports
+    /// must be indexed on the very first pass, or every call through the layer
+    /// is reported as `export-not-found` in code that runs fine — which is what
+    /// happened while imports were registered *after* the export block was read.
+    #[test]
+    fn test_re_exports_are_indexed_on_first_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let layer = dir.path().join("texto.zy");
+        std::fs::write(
+            &layer,
+            "# texto {\n    #> {\n        t::width => ancho\n    }\n\n    <# std/term => t\n}\n",
+        )
+        .unwrap();
+
+        let caller = dir.path().join("main.zy");
+        std::fs::write(&caller, "<# ./texto => txt\n\n>> txt::ancho(\"hi\") ¶\n").unwrap();
+
+        let analyzer = Analyzer::new();
+        analyzer.initialize_workspace(vec![dir.path().to_path_buf()]);
+        analyzer.scan_workspace();
+
+        let exports = analyzer
+            .debug_exports(&layer)
+            .expect("layer module must be indexed");
+        assert!(
+            exports.iter().any(|e| e == "ancho"),
+            "re-exported name missing from the index: {exports:?}"
+        );
+
+        let uri = format!("file://{}", caller.display());
+        analyzer.open_document(
+            Arc::from(uri.as_str()),
+            std::fs::read_to_string(&caller).unwrap(),
+            1,
+        );
+        let errors: Vec<_> = analyzer
+            .get_diagnostics(&uri)
+            .into_iter()
+            .filter(|d| d.severity == Some(lsp_types::DiagnosticSeverity::ERROR))
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    /// A module that does not parse takes down every file importing it, so the
+    /// import line must say so — before this the editor showed nothing and the
+    /// failure only appeared when the program was run.
+    #[test]
+    fn test_import_of_broken_module_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("roto.zy"),
+            "# roto {\n    #> {\n        f\n    }\n\n    f(x) {\n        <~ x +\n    }\n}\n",
+        )
+        .unwrap();
+        let caller = dir.path().join("principal.zy");
+        std::fs::write(&caller, "<# ./roto => r\n\n>> r::f(1) ¶\n").unwrap();
+
+        let analyzer = Analyzer::new();
+        analyzer.initialize_workspace(vec![dir.path().to_path_buf()]);
+        analyzer.scan_workspace();
+
+        let uri = format!("file://{}", caller.display());
+        analyzer.open_document(
+            Arc::from(uri.as_str()),
+            std::fs::read_to_string(&caller).unwrap(),
+            1,
+        );
+        let diags = analyzer.get_diagnostics(&uri);
+        assert!(
+            diags.iter().any(|d| {
+                d.code == Some(lsp_types::NumberOrString::String("module-has-errors".to_string()))
+                    && d.range.start.line == 0
+            }),
+            "expected a module-has-errors diagnostic on the import line: {diags:?}"
+        );
+    }
+
+    /// `std/` modules are native, so nothing indexed them and the editor said
+    /// nothing about a call that cannot work. The export table in
+    /// `zymbol_common::stdlib` closes that gap, and the same function
+    /// `zymbol check` uses produces the diagnostic.
+    #[test]
+    fn test_stdlib_calls_are_checked() {
+        let analyzer = Analyzer::new();
+        let uri = "file:///stdlib_test.zy";
+        analyzer.open_document(
+            Arc::from(uri),
+            "<# std/math => math\n\n>> math::sin(2.0) ¶\n>> math.PI ¶\n".to_string(),
+            1,
+        );
+        let clean: Vec<_> = analyzer
+            .get_diagnostics(uri)
+            .into_iter()
+            .filter(|d| d.severity == Some(lsp_types::DiagnosticSeverity::ERROR))
+            .collect();
+        assert!(clean.is_empty(), "real stdlib calls must pass: {clean:?}");
+
+        analyzer.update_document(
+            uri,
+            "<# std/math => math\n\n>> math::inventada(2.0) ¶\n".to_string(),
+            2,
+        );
+        let errors: Vec<_> = analyzer
+            .get_diagnostics(uri)
+            .into_iter()
+            .filter(|d| d.severity == Some(lsp_types::DiagnosticSeverity::ERROR))
+            .collect();
+        assert!(
+            errors
+                .iter()
+                .any(|d| d.message.contains("does not export a function 'inventada'")),
+            "unknown stdlib function must be reported: {errors:?}"
+        );
+    }
+
+    /// The index also carries the stdlib, so completion and hover can see it.
+    #[test]
+    fn test_stdlib_is_in_the_module_index() {
+        let analyzer = Analyzer::new();
+        let exports = analyzer
+            .debug_exports(&PathBuf::from("__stdlib__/std/term"))
+            .expect("std/term must be indexed");
+        assert!(exports.iter().any(|e| e == "width"), "{exports:?}");
+    }
 
     #[test]
     fn test_analyzer_creation() {

@@ -1,0 +1,12 @@
+// Module used by bug_mm4_module_const_guard.zy
+// MM-4 (fixed v0.0.8): a module function reassigning a module constant must be
+// rejected by the semantic gate at import time (both engines).
+
+# bug_mm4_modconst {
+    #> { MAX, get_max, set_evil }
+
+    MAX := 100
+
+    get_max()  { <~ MAX }
+    set_evil() { MAX = 5 }
+}

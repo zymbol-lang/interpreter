@@ -12,8 +12,9 @@ zymbol-ast = { path = "../zymbol-ast" }
 zymbol-error = { path = "../zymbol-error" }
 zymbol-span = { path = "../zymbol-span" }
 zymbol-common = { path = "../zymbol-common" }
+# StringPart appears in zymbol-ast's InputPrompt::Interpolated payload
+zymbol-lexer = { path = "../zymbol-lexer" }
 thiserror.workspace = true
 
 [dev-dependencies]
 zymbol-parser = { path = "../zymbol-parser" }
-zymbol-lexer = { path = "../zymbol-lexer" }

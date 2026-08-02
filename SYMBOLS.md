@@ -424,6 +424,48 @@ symbols are reserved for ambient process flows (`>>`, `<<`, `><`, `<\ \>`).
 
 ---
 
+## Symbol Changes in v0.0.8
+
+Like v0.0.6 and v0.0.7, this version coined **no new symbol**. It extended two existing
+ones and added one module.
+
+**`||` in match patterns — or-patterns.** An arm's pattern can be a `||`-separated chain
+of alternatives, tested left to right, first match wins:
+
+```zymbol
+?? key {
+    'p' || 'P' => { >> "pause" ¶ }
+    1..10 || 20..30 => { >> "in range" ¶ }
+    < 0 || > 100 => { >> "out of bounds" ¶ }
+}
+```
+
+`||` is already logical OR in expressions, and the pattern meaning is the same idea in
+another position: *this or that*. It is recognised **only at the top level of an arm** —
+list elements stay primary patterns, so `[1, 2]` is never ambiguous with two alternatives.
+This closes the gap that made `['p', 'P']` (list containment) the only way to accept two
+spellings, and it works for non-literal patterns, which containment never could.
+
+**`##!` extended to `Char` — code point.** `##!'A'` is `65`, `##!'あ'` is `12354`. `##!`
+already meant "cast to Int, truncating"; a `Char` has no fractional part, so only the
+truncating cast was extended (`###` is unchanged). This is the only direct Char→Int route —
+the previous workaround was inverting a base literal (`0d|c|`) and stripping the prefix —
+and it makes characters classifiable by range, which matters because `Char` is otherwise
+neither comparable nor castable.
+
+**`std/term` — a module, not symbols.** Terminal display metrics (`width`, `pad_left`,
+`pad_right`, `center`, `truncate`) are a module per the rubric. The boundary is deliberate:
+`std/term` answers a question about the **screen** (how many columns does this occupy?),
+while everything that operates on a string's **content** — split (`$/`), slice (`$[..]`),
+replace (`$~~`), repeat (`$*`) — is a language symbol and never enters this module. Naming
+it `term` rather than `text` keeps that line visible.
+
+**`.zyp` packaging — no language surface at all.** Zymbol Packages are a CLI and file-format
+feature (`zymbol package`, `zymbol run pkg.zyp`). Nothing about them appears in the grammar:
+a packaged program is the same source, read from a different place.
+
+---
+
 ## Occupied Symbol Combinations Reference
 
 Use this table when designing new operators to avoid conflicts.

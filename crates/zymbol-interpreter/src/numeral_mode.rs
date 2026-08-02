@@ -17,8 +17,7 @@ pub const ASCII_BASE: u32 = 0x0030;
 /// Negative values retain their ASCII `-` prefix; only digit characters are
 /// mapped to the target script.
 pub fn to_numeral_int(value: i64, block_base: u32) -> String {
-    let s = value.to_string();
-    map_ascii_digits(&s, block_base)
+    map_ascii_digits(value.to_string(), block_base)
 }
 
 /// Converts an `f64` to a string in the numeral system identified by `block_base`.
@@ -26,8 +25,7 @@ pub fn to_numeral_int(value: i64, block_base: u32) -> String {
 /// The integer and fractional digit groups are both converted.
 /// The `.` separator and any `e`/`E` exponent marker remain ASCII.
 pub fn to_numeral_float(value: f64, block_base: u32) -> String {
-    let s = value.to_string();
-    map_ascii_digits(&s, block_base)
+    map_ascii_digits(value.to_string(), block_base)
 }
 
 /// Converts a `bool` to `"#0"` or `"#1"` in the active numeral system.
@@ -42,11 +40,12 @@ pub fn to_numeral_bool(value: bool, block_base: u32) -> String {
 /// Replaces every ASCII digit in `s` with its equivalent in the script
 /// identified by `block_base`.  All other characters pass through unchanged.
 ///
-/// Fast-path: returns a clone of `s` without allocation when `block_base`
-/// is `ASCII_BASE` (0x0030).
-fn map_ascii_digits(s: &str, block_base: u32) -> String {
+/// Takes `s` by value so the ASCII fast-path (`block_base == ASCII_BASE`, the
+/// default mode) hands the buffer straight back instead of re-allocating it —
+/// this runs on every number-to-string concatenation, mode active or not.
+fn map_ascii_digits(s: String, block_base: u32) -> String {
     if block_base == ASCII_BASE {
-        return s.to_string();
+        return s;
     }
     s.chars()
         .map(|ch| {

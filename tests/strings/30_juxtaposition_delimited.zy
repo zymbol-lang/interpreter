@@ -1,0 +1,49 @@
+// HLZ-007 — juxtaposition inside delimited positions.
+//
+// Implicit concatenation used to exist only at statement level, so a
+// composed string handed to a function needed an intermediate variable
+// first. It now works in call arguments, array elements, tuple elements
+// and grouped expressions too.
+
+etiqueta(s) { <~ s }
+par(a, b) { <~ a "|" b }
+
+nombre = "zymbol"
+version = 8
+espacio = " "
+
+// --- call arguments ------------------------------------------------
+>> etiqueta(nombre espacio "v" version) ¶
+>> etiqueta("[" nombre "]") ¶
+
+// A comma still separates arguments — juxtaposition never eats one.
+>> par("a" 1, "b" 2) ¶
+
+// Module function calls take the same path.
+>> etiqueta("n=" version "!") ¶
+
+// Operators compose inside an argument as they do at statement level.
+>> etiqueta("=" $* 5 " fin") ¶
+
+// --- array elements ------------------------------------------------
+lista = [nombre espacio "uno", "dos" 2, "tres"]
+>> lista[1] ¶
+>> lista[2] ¶
+>> lista[3] ¶
+
+// --- grouped expression --------------------------------------------
+agrupado = (nombre espacio "v" version)
+>> agrupado ¶
+
+// --- tuple elements ------------------------------------------------
+tupla = ("a" 1, "b" 2)
+>> tupla[1] ¶
+>> tupla[2] ¶
+
+// --- nesting -------------------------------------------------------
+>> etiqueta("<" etiqueta(nombre "!") ">") ¶
+
+// A lambda in an argument position is still a lambda, not a
+// concatenation: `(` never juxtaposes inside a delimited position.
+numeros = [1, 2, 3]
+>> numeros$> (x -> x * 2) ¶

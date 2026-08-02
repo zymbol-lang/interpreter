@@ -1058,6 +1058,90 @@ fn db_table_exists(args: Vec<Value>) -> Result<Value, String> {
     }))
 }
 
+// ── std/term ───────────────────────────────────────────────────────────────────
+//
+// Terminal display metrics. Mirrors zymbol-interpreter/src/stdlib/term.rs.
+// Width is measured in terminal columns over grapheme clusters, which is not the
+// same as grapheme count (`$#`): CJK and most emoji take two columns each.
+
+use unicode_segmentation::UnicodeSegmentation as _;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+fn term_pad(s: &str, cols: i64, on_left: bool) -> String {
+    let deficit = cols - UnicodeWidthStr::width(s) as i64;
+    if deficit <= 0 {
+        return s.to_string();
+    }
+    let spaces = " ".repeat(deficit as usize);
+    if on_left { format!("{spaces}{s}") } else { format!("{s}{spaces}") }
+}
+
+fn term_center_str(s: &str, cols: i64) -> String {
+    let deficit = cols - UnicodeWidthStr::width(s) as i64;
+    if deficit <= 0 {
+        return s.to_string();
+    }
+    let left = deficit / 2;
+    let right = deficit - left;
+    format!("{}{s}{}", " ".repeat(left as usize), " ".repeat(right as usize))
+}
+
+fn term_truncate_str(s: &str, cols: i64) -> String {
+    if UnicodeWidthStr::width(s) as i64 <= cols {
+        return s.to_string();
+    }
+    let mut used = 0i64;
+    let mut out = String::new();
+    for g in s.graphemes(true) {
+        let w = UnicodeWidthStr::width(g) as i64;
+        if used + w > cols {
+            break;
+        }
+        out.push_str(g);
+        used += w;
+    }
+    out
+}
+
+fn term_width(args: Vec<Value>) -> Result<Value, String> {
+    match args.first() {
+        Some(Value::String(s)) => Ok(Value::Int(UnicodeWidthStr::width(s.as_str()) as i64)),
+        Some(Value::Char(c))   => Ok(Value::Int(UnicodeWidthChar::width(*c).unwrap_or(0) as i64)),
+        other => Err(format!(
+            "term::width: expected a String or Char, got {}",
+            other.map(|v| v.zymbol_type_name()).unwrap_or("nothing")
+        )),
+    }
+}
+
+fn term_pad_left(args: Vec<Value>) -> Result<Value, String> {
+    match (args.first(), args.get(1)) {
+        (Some(Value::String(s)), Some(Value::Int(n))) => Ok(Value::String(ZyStr::new(term_pad(s.as_str(), *n, true)))),
+        _ => Err("term::pad_left: expected (String, ###)".into()),
+    }
+}
+
+fn term_pad_right(args: Vec<Value>) -> Result<Value, String> {
+    match (args.first(), args.get(1)) {
+        (Some(Value::String(s)), Some(Value::Int(n))) => Ok(Value::String(ZyStr::new(term_pad(s.as_str(), *n, false)))),
+        _ => Err("term::pad_right: expected (String, ###)".into()),
+    }
+}
+
+fn term_center(args: Vec<Value>) -> Result<Value, String> {
+    match (args.first(), args.get(1)) {
+        (Some(Value::String(s)), Some(Value::Int(n))) => Ok(Value::String(ZyStr::new(term_center_str(s.as_str(), *n)))),
+        _ => Err("term::center: expected (String, ###)".into()),
+    }
+}
+
+fn term_truncate(args: Vec<Value>) -> Result<Value, String> {
+    match (args.first(), args.get(1)) {
+        (Some(Value::String(s)), Some(Value::Int(n))) => Ok(Value::String(ZyStr::new(term_truncate_str(s.as_str(), *n)))),
+        _ => Err("term::truncate: expected (String, ###)".into()),
+    }
+}
+
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
 pub fn call(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
@@ -1101,6 +1185,11 @@ pub fn call(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
         B::NET_POST      => net_post(args),
         B::NET_POST_JSON => net_post_json(args),
         B::NET_HEAD      => net_head(args),
+        B::TERM_WIDTH     => term_width(args),
+        B::TERM_PAD_LEFT  => term_pad_left(args),
+        B::TERM_PAD_RIGHT => term_pad_right(args),
+        B::TERM_CENTER    => term_center(args),
+        B::TERM_TRUNCATE  => term_truncate(args),
         id if (B::DB_CONNECT..=B::DB_TABLE_EXISTS).contains(&id) => db_dispatch(id, args),
         other => Err(format!("unknown builtin id {}", other)),
     }

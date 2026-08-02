@@ -35,6 +35,10 @@ mod expr_eval;
 mod index_nav;
 mod stdlib;
 
+/// What each `std/` module registers at run time — see
+/// [`stdlib::registered_names`]. Used to keep `zymbol_common::stdlib` honest.
+pub use stdlib::registered_names as stdlib_registered_names;
+
 pub(crate) use modules::LoadedModule;
 
 /// Runtime errors
@@ -89,6 +93,9 @@ enum FunctionDef {
         /// Path of the module where this function was defined.
         /// Used to restore the correct scope when a function is called through a re-export adapter.
         origin_module_path: Option<PathBuf>,
+        /// Auto-free (v0.0.8): body statement index → variables destroyed
+        /// after that statement finishes normally (last-use analysis).
+        auto_free: HashMap<usize, Vec<String>>,
     },
     Native {
         name:  &'static str,
@@ -202,27 +209,42 @@ impl PartialEq for FunctionValue {
 }
 
 impl Value {
-    /// Convert value to displayable string
+    /// Convert value to displayable string, in ASCII numerals.
+    ///
+    /// Callers with access to the active numeral mode should use
+    /// `Interpreter::format_value` (or `to_display_string_in`) instead — this
+    /// bare form is for contexts that have no interpreter to read the mode from.
     pub fn to_display_string(&self) -> String {
+        self.to_display_string_in(numeral_mode::ASCII_BASE)
+    }
+
+    /// Convert value to displayable string with every digit rendered in the
+    /// numeral system identified by `block_base`.
+    ///
+    /// The mode reaches *inside* collections: an array of Ints under `#०९#`
+    /// renders each element in Devanagari, because a number does not stop being
+    /// a number by sitting in a list. Brackets, commas, the `-` sign and the
+    /// decimal `.` stay ASCII; strings and chars are never touched.
+    pub fn to_display_string_in(&self, block_base: u32) -> String {
         // Standalone Unit prints as nothing, but INSIDE a collection it must be
         // visible — `[1, , 3]` reads like a typo. Both engines render nested
         // Unit as `()` (the VM always did; the tree-walker since 2026-06-12).
-        fn nested(v: &Value) -> String {
+        fn nested(v: &Value, block_base: u32) -> String {
             match v {
                 Value::Unit => "()".to_string(),
-                other => other.to_display_string(),
+                other => other.to_display_string_in(block_base),
             }
         }
         match self {
             Value::String(s) => s.clone(),
-            Value::Int(n) => n.to_string(),
-            Value::Float(f) => f.to_string(),
+            Value::Int(n) => numeral_mode::to_numeral_int(*n, block_base),
+            Value::Float(f) => numeral_mode::to_numeral_float(*f, block_base),
             Value::Char(c) => c.to_string(),
-            Value::Bool(b) => if *b { "#1" } else { "#0" }.to_string(),
+            Value::Bool(b) => numeral_mode::to_numeral_bool(*b, block_base),
             Value::Array(elements) => {
                 let contents = elements
                     .iter()
-                    .map(nested)
+                    .map(|v| nested(v, block_base))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{}]", contents)
@@ -230,7 +252,7 @@ impl Value {
             Value::Tuple(elements) => {
                 let contents = elements
                     .iter()
-                    .map(nested)
+                    .map(|v| nested(v, block_base))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", contents)
@@ -238,7 +260,7 @@ impl Value {
             Value::NamedTuple(fields) => {
                 let contents = fields
                     .iter()
-                    .map(|(name, value)| format!("{}: {}", name, nested(value)))
+                    .map(|(name, value)| format!("{}: {}", name, nested(value, block_base)))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", contents)
@@ -261,6 +283,11 @@ impl Value {
     /// type unambiguous — strings get `"..."`, chars get `'...'`, Unit shows
     /// as `()`.  Used by the REPL to display evaluated expression results.
     pub fn to_repr_string(&self) -> String {
+        self.to_repr_string_in(numeral_mode::ASCII_BASE)
+    }
+
+    /// Repr form rendered in the numeral system identified by `block_base`.
+    pub fn to_repr_string_in(&self, block_base: u32) -> String {
         match self {
             Value::String(s) => format!("\"{}\"", s),
             Value::Char(c)   => format!("'{}'", c),
@@ -268,7 +295,7 @@ impl Value {
             Value::Array(elements) => {
                 let contents = elements
                     .iter()
-                    .map(|v| v.to_repr_string())
+                    .map(|v| v.to_repr_string_in(block_base))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{}]", contents)
@@ -276,7 +303,7 @@ impl Value {
             Value::Tuple(elements) => {
                 let contents = elements
                     .iter()
-                    .map(|v| v.to_repr_string())
+                    .map(|v| v.to_repr_string_in(block_base))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", contents)
@@ -284,12 +311,12 @@ impl Value {
             Value::NamedTuple(fields) => {
                 let contents = fields
                     .iter()
-                    .map(|(name, v)| format!("{}: {}", name, v.to_repr_string()))
+                    .map(|(name, v)| format!("{}: {}", name, v.to_repr_string_in(block_base)))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", contents)
             }
-            _ => self.to_display_string(),
+            _ => self.to_display_string_in(block_base),
         }
     }
 
@@ -352,13 +379,11 @@ pub struct Interpreter<W: Write> {
     base_dir: PathBuf,
     /// CLI arguments passed to the script
     cli_args: Option<Vec<Value>>,
-    /// Destruction schedule: statement_index -> variables to destroy after execution
-    /// Populated by semantic analyzer's def-use chain analysis
+    /// Auto-free (v0.0.8): top-level statement index → variables to destroy
+    /// after that statement (last-use analysis, computed in `execute()`)
     destruction_schedule: HashMap<usize, Vec<String>>,
     /// Dead variables: variables that have been destroyed (for use-after-free detection)
     dead_variables: HashSet<String>,
-    /// Current statement index (for tracking which statement is executing)
-    statement_index: usize,
     /// Short-circuit flag: true if any const (:=) has been declared in this interpreter session
     has_any_const: bool,
     /// QW6: fast check — true if control_flow != None (avoids enum PartialEq on hot path)
@@ -390,18 +415,52 @@ pub struct Interpreter<W: Write> {
     pub(crate) tco_pending: bool,
     /// TCO args: the rebound argument values for the tail call restart.
     pub(crate) tco_args: Vec<Value>,
-    /// QW13 fix: output param names of the current function.
-    /// MoveOrClone (take_variable) must NOT be used for output params — writeback needs the value.
-    pub(crate) current_output_params: std::collections::HashSet<String>,
+    /// Names the MoveOrClone optimisation in `Statement::Return` must NOT move
+    /// out of scope, because something after the return still needs to read them:
+    ///   - output parameters (QW13), whose writeback copies the value to the caller;
+    ///   - module state variables (MM-2), whose write-back diffs the frame's final
+    ///     value against the injected snapshot. `<~ v` used to move `v` out, the
+    ///     write-back then found nothing, and the mutation was silently dropped —
+    ///     a module function that wrote state *and* returned a value lost the write
+    ///     in the tree-walker while the VM kept it.
+    pub(crate) move_guard_names: std::collections::HashSet<String>,
     /// Active output numeral system (block base codepoint).
     /// Default: 0x0030 (ASCII). Changed by #<d0><d9># statements.
-    /// Applies only to >> numeric outputs; does not affect to_display_string().
+    /// Applies to every path that turns an Int/Float/Bool into text — `>>`,
+    /// `>>~`, string interpolation, juxtaposition, `$++` and the elements nested
+    /// inside arrays and tuples. That includes text the program then uses as
+    /// data (a shell command, a file name): the mode is a statement of intent
+    /// about how this program writes numbers, and validating that is the
+    /// developer's responsibility. Only the bare `Value::to_display_string()`
+    /// (no numeral_mode field to read) stays ASCII — every call site with
+    /// `&self` access routes through the active mode instead.
     pub(crate) numeral_mode: u32,
     /// Called by `<<` (input) statements to read one line from the user.
     /// Receives no arguments; the prompt is printed by execute_input via self.output
     /// before invoking this function.  The default implementation reads from stdin.
     /// Override in the REPL to temporarily exit raw mode while the user types.
     pub(crate) input_fn: Box<dyn FnMut() -> std::io::Result<String>>,
+    /// MM-9: constants declared with `:=` at the root scope of top-level code.
+    /// NOT swapped by take_call_state — visible inside script functions at any
+    /// call depth (including through lambda frames). Module function frames do
+    /// not consult this table: modules only see their own state.
+    global_consts: HashMap<String, Value>,
+    /// MM-2: path of the module whose function frame is currently executing
+    /// (None = script code). Saved/restored across call boundaries; used to
+    /// sync module state between nested calls into the same module.
+    pub(crate) current_module_path: Option<PathBuf>,
+    /// MM-9: call-frame depth — 0 while executing top-level statements.
+    /// Distinguishes the root scope from a function frame's bottom scope.
+    call_depth: usize,
+    /// Auto-free (v0.0.8): names destroyed by the last-use schedule in the
+    /// CURRENT frame. Separate from `dead_variables` so an analyzer bug
+    /// surfaces as a distinctive internal error, never as a user-facing `\`
+    /// lifetime error. Frame-local (saved/restored in SavedCallState).
+    auto_dead_variables: HashSet<String>,
+    /// Auto-free (v0.0.8): program-wide exclusion set (hot names, constants,
+    /// free variables of value-used named functions, module bindings).
+    /// Computed once per `execute()`; consulted when registering functions.
+    auto_free_excluded: Rc<HashSet<String>>,
 }
 
 impl<W: Write> Interpreter<W> {
@@ -480,6 +539,12 @@ impl<W: Write> Interpreter<W> {
                 return Some(value);
             }
         }
+        // MM-9: root-scope constants are globally visible in script code
+        // regardless of call depth. Module frames skip the fallback —
+        // modules only see their own state.
+        if self.current_module_path.is_none() {
+            return self.global_consts.get(name);
+        }
         None
     }
 
@@ -502,6 +567,9 @@ impl<W: Write> Interpreter<W> {
         // A new assignment after explicit destruction (`\var`) resurrects the variable.
         if !self.dead_variables.is_empty() {
             self.dead_variables.remove(name);
+        }
+        if !self.auto_dead_variables.is_empty() {
+            self.auto_dead_variables.remove(name);
         }
         if let Some(scope) = self.scope_stack.last_mut() {
             scope.insert(name.to_string(), value);
@@ -533,6 +601,9 @@ impl<W: Write> Interpreter<W> {
         if !self.dead_variables.is_empty() {
             self.dead_variables.remove(name);
         }
+        if !self.auto_dead_variables.is_empty() {
+            self.auto_dead_variables.remove(name);
+        }
         for scope in self.scope_stack.iter_mut().rev() {
             if let Some(existing) = scope.get_mut(name) {
                 *existing = value;
@@ -547,7 +618,12 @@ impl<W: Write> Interpreter<W> {
     /// Check if a variable is a constant in any scope.
     #[inline(always)]
     pub(crate) fn is_const(&self, name: &str) -> bool {
-        if !self.has_any_const { return false; }  // B8: short-circuit
+        // B8: short-circuit
+        if !self.has_any_const && self.global_consts.is_empty() { return false; }
+        // MM-9: root-scope constants stay immutable at any call depth
+        if self.current_module_path.is_none() && self.global_consts.contains_key(name) {
+            return true;
+        }
         for const_set in self.const_vars_stack.iter().rev() {
             if const_set.contains(name) {
                 return true;
@@ -577,11 +653,41 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Mark a variable as constant in the current scope
-    fn mark_const(&mut self, name: String) {
+    pub(crate) fn mark_const(&mut self, name: String) {
         self.has_any_const = true;  // B8: activate flag
         if let Some(current_const_set) = self.const_vars_stack.last_mut() {
             current_const_set.insert(name);
         }
+    }
+
+    /// Remove a const mark from every scope of the current frame.
+    /// Used when binding a parameter whose name shadows a forwarded constant —
+    /// the parameter must stay assignable inside the function body.
+    pub(crate) fn unmark_const(&mut self, name: &str) {
+        if !self.has_any_const { return; }
+        for const_set in self.const_vars_stack.iter_mut() {
+            const_set.remove(name);
+        }
+    }
+
+    /// True while executing a top-level statement in the root scope
+    /// (not inside any function/lambda frame and not inside a block).
+    pub(crate) fn is_root_scope(&self) -> bool {
+        self.call_depth == 0 && self.scope_stack.len() == 1
+    }
+
+    /// MM-9: record a root-scope constant in the global table.
+    pub(crate) fn record_global_const(&mut self, name: String, value: Value) {
+        self.global_consts.insert(name, value);
+    }
+
+    /// Names declared as constants in the root scope. Captured by module
+    /// loading so module constants stay immutable inside module functions.
+    pub(crate) fn root_const_names(&self) -> HashSet<String> {
+        let mut names: HashSet<String> =
+            self.const_vars_stack.first().cloned().unwrap_or_default();
+        names.extend(self.global_consts.keys().cloned());
+        names
     }
 
     /// Check if a variable is mutable in any scope
@@ -623,7 +729,17 @@ impl<W: Write> Interpreter<W> {
             const_vars_stack: std::mem::take(&mut self.const_vars_stack),
             import_aliases: std::mem::take(&mut self.import_aliases),
             has_any_const: self.has_any_const,
+            // MM-1: loop anchors index into the caller's scope_stack — they must
+            // not leak into the callee frame or x°/°x would write out of bounds.
+            loop_scope_depths: std::mem::take(&mut self.loop_scope_depths),
+            // MM-3: destroyed names are frame-local — a `\ x` inside the callee
+            // must not poison the caller's own `x`.
+            dead_variables: std::mem::take(&mut self.dead_variables),
+            auto_dead_variables: std::mem::take(&mut self.auto_dead_variables),
+            // MM-2: module context is frame-local.
+            current_module_path: self.current_module_path.take(),
         };
+        self.call_depth += 1;
         // B10: reuse pooled Vec for scope_stack
         let mut fresh_scope_vec = self.scope_vec_pool.pop().unwrap_or_default();
         let map = self.scope_map_pool.pop().unwrap_or_else(|| HashMap::with_capacity(4));
@@ -648,6 +764,11 @@ impl<W: Write> Interpreter<W> {
         let mut fn_const = std::mem::replace(&mut self.const_vars_stack, saved.const_vars_stack);
         self.import_aliases = saved.import_aliases;
         self.has_any_const = saved.has_any_const;
+        self.loop_scope_depths = saved.loop_scope_depths;      // MM-1
+        self.dead_variables = saved.dead_variables;            // MM-3
+        self.auto_dead_variables = saved.auto_dead_variables;  // auto-free
+        self.current_module_path = saved.current_module_path;  // MM-2
+        self.call_depth = self.call_depth.saturating_sub(1);
 
         // Pool scope_stack components
         for mut map in fn_scope_vec.drain(..) {
@@ -674,11 +795,15 @@ impl<W: Write> Interpreter<W> {
 
 /// Interpreter state saved across a function/lambda call boundary (used by B2).
 pub(crate) struct SavedCallState {
-    scope_stack: Vec<HashMap<String, Value>>,
+    pub(crate) scope_stack: Vec<HashMap<String, Value>>,
     mutable_vars_stack: Vec<HashSet<String>>,
-    const_vars_stack: Vec<HashSet<String>>,
-    import_aliases: HashMap<String, std::path::PathBuf>,
+    pub(crate) const_vars_stack: Vec<HashSet<String>>,
+    pub(crate) import_aliases: HashMap<String, std::path::PathBuf>,
     has_any_const: bool,
+    loop_scope_depths: Vec<usize>,
+    dead_variables: HashSet<String>,
+    auto_dead_variables: HashSet<String>,
+    pub(crate) current_module_path: Option<PathBuf>,
 }
 
 fn default_input_fn() -> Box<dyn FnMut() -> std::io::Result<String>> {
@@ -707,7 +832,6 @@ impl Interpreter<std::io::Stdout> {
             cli_args: None,
             destruction_schedule: HashMap::new(),
             dead_variables: HashSet::new(),
-            statement_index: 0,
             has_any_const: false,
             has_control_flow: false,
             scope_map_pool: Vec::new(),
@@ -722,9 +846,14 @@ impl Interpreter<std::io::Stdout> {
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),
-            current_output_params: std::collections::HashSet::new(),
+            move_guard_names: std::collections::HashSet::new(),
             numeral_mode: numeral_mode::ASCII_BASE,
             input_fn: default_input_fn(),
+            global_consts: HashMap::new(),
+            current_module_path: None,
+            call_depth: 0,
+            auto_dead_variables: HashSet::new(),
+            auto_free_excluded: Rc::new(HashSet::new()),
         }
     }
 }
@@ -754,7 +883,6 @@ impl<W: Write> Interpreter<W> {
             cli_args: None,
             destruction_schedule: HashMap::new(),
             dead_variables: HashSet::new(),
-            statement_index: 0,
             has_any_const: false,
             has_control_flow: false,
             scope_map_pool: Vec::new(),
@@ -769,9 +897,14 @@ impl<W: Write> Interpreter<W> {
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),
-            current_output_params: std::collections::HashSet::new(),
+            move_guard_names: std::collections::HashSet::new(),
             numeral_mode: numeral_mode::ASCII_BASE,
             input_fn: default_input_fn(),
+            global_consts: HashMap::new(),
+            current_module_path: None,
+            call_depth: 0,
+            auto_dead_variables: HashSet::new(),
+            auto_free_excluded: Rc::new(HashSet::new()),
         }
     }
 
@@ -798,14 +931,12 @@ impl<W: Write> Interpreter<W> {
         self.base_dir = path.as_ref().to_path_buf();
     }
 
-    /// Set the destruction schedule from semantic analysis
-    /// Maps statement_index -> variables to destroy after that statement executes
-    pub fn set_destruction_schedule(&mut self, schedule: HashMap<usize, Vec<String>>) {
-        self.destruction_schedule = schedule;
-    }
-
     /// Destroy a variable immediately (remove from all scopes and mark as dead)
     fn destroy_variable(&mut self, var_name: &str) {
+        // A destroyed root constant must not resurrect through the global table.
+        if !self.global_consts.is_empty() {
+            self.global_consts.remove(var_name);
+        }
         // Remove from all scopes (search from innermost to outermost)
         for scope in self.scope_stack.iter_mut().rev() {
             if scope.remove(var_name).is_some() {
@@ -816,14 +947,45 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
+    /// Auto-free (v0.0.8): destroy a variable scheduled after its last use.
+    /// Invisible by design — the analyzer only schedules provably dead names.
+    /// Marked in `auto_dead_variables` (not `dead_variables`) so an analyzer
+    /// bug surfaces as a distinctive internal error.
+    fn auto_destroy_variable(&mut self, name: &str) {
+        // Defense in depth: constants are excluded by the analyzer already.
+        if self.is_const(name) {
+            return;
+        }
+        for scope in self.scope_stack.iter_mut().rev() {
+            if scope.remove(name).is_some() {
+                self.auto_dead_variables.insert(name.to_string());
+                return;
+            }
+        }
+    }
+
     /// Check if a variable has been destroyed (use-after-free detection)
     fn check_variable_alive(&self, var_name: &str, span: &Span) -> Result<()> {
-        if self.dead_variables.is_empty() { return Ok(()); }  // B8: short-circuit
+        // B8: short-circuit
+        if self.dead_variables.is_empty() && self.auto_dead_variables.is_empty() {
+            return Ok(());
+        }
         if self.dead_variables.contains(var_name) {
             return Err(RuntimeError::Generic {
                 message: format!(
                     "use after destruction: variable '{}' was destroyed after its last use",
                     var_name
+                ),
+                span: *span,
+            });
+        }
+        // Auto-free is invisible by design — reaching this error means the
+        // last-use analyzer scheduled a destruction too early.
+        if self.auto_dead_variables.contains(var_name) {
+            return Err(RuntimeError::Generic {
+                message: format!(
+                    "internal: use of '{}' after auto-destruction — this is a bug in the last-use analyzer, please report it (workaround: add a later `>> {}` mention or a `\\ {}` at the intended end of life)",
+                    var_name, var_name, var_name
                 ),
                 span: *span,
             });
@@ -857,13 +1019,18 @@ impl<W: Write> Interpreter<W> {
         self.has_any_const = false;
         self.has_control_flow = false;
         self.control_flow = ControlFlow::None;
-        self.statement_index = 0;
         self.tco_pending = false;
         self.tco_args.clear();
         self.current_function = None;
         self.numeral_mode = 0x0030;
         self.tui_depth = 0;
         self.try_depth = 0;
+        self.global_consts.clear();
+        self.current_module_path = None;
+        self.call_depth = 0;
+        self.auto_dead_variables.clear();
+        self.destruction_schedule.clear();
+        self.auto_free_excluded = Rc::new(HashSet::new());
     }
 
     /// Execute a single line of code (for REPL)
@@ -979,28 +1146,16 @@ impl<W: Write> Interpreter<W> {
 
     /// Format a value for display using the current active numeral mode.
     ///
-    /// Numeric types (`Int`, `Float`, `Bool`) are rendered in the active script.
-    /// All other types use their standard `to_display_string()` form.
+    /// Numeric types (`Int`, `Float`, `Bool`) are rendered in the active script,
+    /// including the ones nested inside arrays, tuples and named tuples.
     pub fn format_value(&self, value: &Value) -> String {
-        let mode = self.numeral_mode;
-        match value {
-            Value::Int(n)   => numeral_mode::to_numeral_int(*n, mode),
-            Value::Float(f) => numeral_mode::to_numeral_float(*f, mode),
-            Value::Bool(b)  => numeral_mode::to_numeral_bool(*b, mode),
-            _               => value.to_display_string(),
-        }
+        value.to_display_string_in(self.numeral_mode)
     }
 
     /// Repr form of `format_value`: numerals respect the active numeral mode,
     /// strings/chars are quoted, Unit shows as `()`.  Used by the REPL.
     pub fn format_value_repr(&self, value: &Value) -> String {
-        let mode = self.numeral_mode;
-        match value {
-            Value::Int(n)   => numeral_mode::to_numeral_int(*n, mode),
-            Value::Float(f) => numeral_mode::to_numeral_float(*f, mode),
-            Value::Bool(b)  => numeral_mode::to_numeral_bool(*b, mode),
-            _               => value.to_repr_string(),
-        }
+        value.to_repr_string_in(self.numeral_mode)
     }
 
     /// Execute a program
@@ -1010,22 +1165,53 @@ impl<W: Write> Interpreter<W> {
             self.load_import(import)?;
         }
 
-        // Reset statement index
-        self.statement_index = 0;
+        // Auto-free (v0.0.8): compute the program-wide exclusion set and the
+        // top-level destruction schedule. Function declarations executed below
+        // compute their own body schedules against the same exclusions.
+        // Invisible optimization — see zymbol_semantic::last_use.
+        self.auto_free_excluded = Rc::new(zymbol_semantic::auto_free_exclusions(program));
+        self.destruction_schedule =
+            zymbol_semantic::region_schedule(&program.statements, &[], &self.auto_free_excluded);
 
-        // Execute statements with auto-destruction
-        for statement in &program.statements {
+        // Execute statements with auto-destruction after each one's last uses
+        for (i, statement) in program.statements.iter().enumerate() {
             self.execute_statement(statement)?;
 
-            // Check if any variables should be destroyed after this statement
-            if let Some(vars_to_destroy) = self.destruction_schedule.get(&self.statement_index) {
+            // Pending control flow (shouldn't reach top level): teardown owns cleanup
+            if self.is_control_flow_pending() {
+                continue;
+            }
+            if let Some(vars_to_destroy) = self.destruction_schedule.get(&i) {
                 let vars = vars_to_destroy.clone();
                 for var_name in vars {
-                    self.destroy_variable(&var_name);
+                    self.auto_destroy_variable(&var_name);
                 }
             }
+        }
+        Ok(())
+    }
 
-            self.statement_index += 1;
+    /// Execute a function body applying its auto-free schedule (v0.0.8).
+    /// Destruction is skipped while control flow is pending — the frame or
+    /// loop teardown owns cleanup on return/break paths.
+    pub(crate) fn execute_body_scheduled(
+        &mut self,
+        block: &Block,
+        schedule: &HashMap<usize, Vec<String>>,
+    ) -> Result<()> {
+        if schedule.is_empty() {
+            return self.execute_block_no_scope(block);
+        }
+        for (i, statement) in block.statements.iter().enumerate() {
+            self.execute_statement(statement)?;
+            if self.is_control_flow_pending() {
+                break;
+            }
+            if let Some(names) = schedule.get(&i) {
+                for name in names {
+                    self.auto_destroy_variable(name);
+                }
+            }
         }
         Ok(())
     }
@@ -1047,10 +1233,31 @@ impl<W: Write> Interpreter<W> {
             Statement::Break(break_stmt) => self.execute_break(break_stmt),
             Statement::Continue(continue_stmt) => self.execute_continue(continue_stmt),
             Statement::FunctionDecl(func_decl) => {
+                // Auto-free (v0.0.8): schedule body locals and by-value params
+                // for destruction after their last use. Output/Mutable params
+                // participate in caller write-back — never freed early.
+                let mut excluded: HashSet<String> = (*self.auto_free_excluded).clone();
+                let mut param_candidates: Vec<String> = Vec::new();
+                for p in &func_decl.parameters {
+                    match p.kind {
+                        zymbol_ast::ParameterKind::Normal => {
+                            param_candidates.push(p.name.clone());
+                        }
+                        _ => {
+                            excluded.insert(p.name.clone());
+                        }
+                    }
+                }
+                let auto_free = zymbol_semantic::region_schedule(
+                    &func_decl.body.statements,
+                    &param_candidates,
+                    &excluded,
+                );
                 let func_def = FunctionDef::Zymbol {
                     parameters: func_decl.parameters.clone(),
                     body: func_decl.body.clone(),
                     origin_module_path: self.current_file.clone(),
+                    auto_free,
                 };
                 self.functions.insert(func_decl.name.clone(), Rc::new(func_def));
                 Ok(())
@@ -1084,10 +1291,12 @@ impl<W: Write> Interpreter<W> {
                     }
                     // MoveOrClone: if returning a bare identifier and not inside a try block
                     // (finally could reference the variable), move instead of clone — O(1).
-                    // Skip take_variable for output params — writeback still needs the value.
+                    // Names in move_guard_names are read again after the return —
+                    // output-param writeback and module-state write-back — so they
+                    // are cloned instead.
                     if self.try_depth == 0 {
                         if let Expr::Identifier(ident) = expr.unwrap_group() {
-                            if !self.current_output_params.contains(&ident.name) {
+                            if !self.move_guard_names.contains(&ident.name) {
                                 if let Some(v) = self.take_variable(&ident.name) {
                                     self.set_control_flow(ControlFlow::Return(Some(v)));
                                     return Ok(());

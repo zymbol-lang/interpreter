@@ -55,6 +55,23 @@ fn normalize_unicode_digits(s: &str) -> Option<String> {
     if has_digit { Some(result) } else { None }
 }
 
+/// The ASCII form of a numeric string written in any of the 69 supported digit
+/// scripts: `"४२"` → `"42"`, `"42"` → `"42"` (borrowed, no allocation).
+///
+/// Every numeric cast normalizes through this first, so a number the program
+/// rendered under an active numeral mode parses back exactly like its ASCII
+/// twin — the round trip a multilingual application depends on. Strings that
+/// are not numeric at all are handed back untouched for the caller to reject.
+pub(crate) fn ascii_digits(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.is_ascii() {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    match normalize_unicode_digits(s) {
+        Some(normalized) => std::borrow::Cow::Owned(normalized),
+        None => std::borrow::Cow::Borrowed(s),
+    }
+}
+
 /// Try to parse a trimmed string as `Int` or `Float`.
 /// Returns the original `String` value if parsing fails (fail-safe).
 /// Also handles Unicode digit scripts (Thai, Arabic, Devanagari, etc.).
@@ -113,8 +130,13 @@ impl<W: Write> Interpreter<W> {
             CastKind::ToIntTrunc => match value {
                 Value::Int(_) => Ok(value),
                 Value::Float(f) => Ok(Value::Int(f.trunc() as i64)),
+                // A Char casts to its Unicode code point. This is the only
+                // direct Char→Int route (the alternative was inverting a base
+                // literal and stripping its prefix), and it makes characters
+                // classifiable by range.
+                Value::Char(c) => Ok(Value::Int(c as u32 as i64)),
                 other => Err(RuntimeError::Generic {
-                    message: format!("##! requires a numeric value, got {}", value_type(other)),
+                    message: format!("##! requires a numeric value or Char, got {}", value_type(other)),
                     span: op.span,
                 }),
             },
@@ -335,10 +357,13 @@ impl<W: Write> Interpreter<W> {
             Value::Int(n) => n as f64,
             Value::Float(f) => f,
             Value::String(s) => {
-                // Try to parse string as number (like #|expr|)
-                if let Ok(n) = s.parse::<i64>() {
+                // Try to parse string as number (like #|expr|) — digits in any
+                // script, so a value rendered under an active numeral mode and
+                // folded back into a string still rounds.
+                let normalized = ascii_digits(s.trim());
+                if let Ok(n) = normalized.parse::<i64>() {
                     n as f64
-                } else if let Ok(f) = s.parse::<f64>() {
+                } else if let Ok(f) = normalized.parse::<f64>() {
                     f
                 } else {
                     return Err(RuntimeError::Generic {
@@ -383,10 +408,11 @@ impl<W: Write> Interpreter<W> {
             Value::Int(n) => n as f64,
             Value::Float(f) => f,
             Value::String(s) => {
-                // Try to parse string as number (like #|expr|)
-                if let Ok(n) = s.parse::<i64>() {
+                // Try to parse string as number (like #|expr|) — digits in any script.
+                let normalized = ascii_digits(s.trim());
+                if let Ok(n) = normalized.parse::<i64>() {
                     n as f64
-                } else if let Ok(f) = s.parse::<f64>() {
+                } else if let Ok(f) = normalized.parse::<f64>() {
                     f
                 } else {
                     return Err(RuntimeError::Generic {

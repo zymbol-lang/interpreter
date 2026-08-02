@@ -1,0 +1,23 @@
+// MM-1 (fixed v0.0.8): x°/°x inside a function called from within a @ loop
+// must anchor to the function's own scope — the caller's loop anchors must not
+// leak into the callee frame (previously: index-out-of-bounds panic).
+
+f() {
+    x° *= 7
+    <~ x
+}
+
+g() {
+    °y += 1
+    <~ y
+}
+
+@ _i:1..2 {
+    >> f() ¶
+}
+
+@ _i:1..2 {
+    @ _j:1..2 {
+        >> g() ¶
+    }
+}

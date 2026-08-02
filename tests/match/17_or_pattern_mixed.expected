@@ -1,0 +1,13 @@
+0 => zero
+5 => in range
+15 => outside
+25 => in range
+42 => outside
+-5 : extreme
+50 : normal
+150 : extreme
+1 # known
+7 # known
+9 # known
+3 # unknown
+in list

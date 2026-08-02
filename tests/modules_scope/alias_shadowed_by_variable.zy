@@ -1,0 +1,32 @@
+// An ordinary variable may share a module alias's name. `alias::fn(…)` and `alias.CONST`
+// address the module namespace, which is separate from the variable environment, so they
+// must keep resolving to the module regardless of what the variable holds.
+//
+// The tree-walker has always kept import aliases in their own table. The web interpreter
+// (web/zymbol.js) parsed `::` and `.` into the same node and resolved the object as an
+// ordinary expression, so once a variable took the alias's name the module became
+// unreachable and the call failed with "'.<name>' requires a named tuple" — an error
+// naming the wrong operator and the wrong problem.
+//
+// This is not a contrived pattern: zyKlingonGalaxy imports `Duj` (ship) under a Klingon
+// alias and then uses that same name for the player's ship value, so every left/right move
+// runs `duj = duj::bIj(duj, …)`. The game was unplayable in the browser because of it.
+
+<# ./hlz/salida => s
+
+// The alias resolves to the module before anything shadows it.
+>> "const antes:   " (s.LIMITE) ¶
+
+// Now let a plain variable take the same name.
+s = 10
+>> "variable:      " s ¶
+
+// Both module accesses must still work, and the variable must be unaffected by them.
+>> "const despues: " (s.LIMITE) ¶
+>> "slice:         " (s::cola("abcdef", 2)) ¶
+>> "variable otra vez: " s ¶
+
+// Reassigning through a call whose callee is the shadowed alias — the exact shape the
+// Klingon game uses on every move.
+s = s::cola("XY9", 1)
+>> "reasignada:    " s ¶

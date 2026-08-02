@@ -1,0 +1,44 @@
+// HLZ-003 — numeric equality promotes Int and Float, the way the ordering
+// comparisons already did.
+//
+// Before the fix `##.0 == 0` was #0 while `##.0 >= 0` and `##.0 <= 0` were
+// both #1, and the two values print identically — so the disagreement was
+// invisible on screen and a failing assertion read "expected 0, got 0".
+a = ##.0
+>> "a == 0     " (a == 0) ¶
+>> "a == 0.0   " (a == 0.0) ¶
+>> "a >= 0     " (a >= 0) ¶
+>> "a <= 0     " (a <= 0) ¶
+>> "a <> 0     " (a <> 0) ¶
+
+b = ##.20
+>> "b == 20    " (b == 20) ¶
+>> "b == 21    " (b == 21) ¶
+
+>> "3 == 3.0   " (3 == 3.0) ¶
+>> "3.0 == 3   " (3.0 == 3) ¶
+>> "3 <> 3.0   " (3 <> 3.0) ¶
+>> "1 == 2.0   " (1 == 2.0) ¶
+>> "1.5 == 1   " (1.5 == 1) ¶
+
+// The three properties that must hold together
+x = ##.7
+>> "ge y le    " (x >= 7 && x <= 7) ¶
+>> "por tanto  " (x == 7) ¶
+
+// Match with a literal pattern goes through a different opcode in the VM
+// (CmpEqImm) and must agree with the operator.
+m = ?? 3.0 {
+    3 => "coincide"
+    _ => "no coincide"
+}
+>> "match      " m ¶
+
+n = ?? 4 {
+    3 => "tres"
+    _ => "otro"
+}
+>> "match int  " n ¶
+
+// Equality inside collections walks the same comparison
+>> "contiene   " ([1, 2, 3] $? 2.0) ¶

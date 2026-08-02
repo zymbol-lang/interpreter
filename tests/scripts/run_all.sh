@@ -14,7 +14,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-BINARY="$PROJECT_ROOT/target/release/zymbol"
+BINARY="${ZYMBOL_BIN:-$PROJECT_ROOT/target/release/zymbol}"
 
 NO_BUILD=0
 RUN_VM=0

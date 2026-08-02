@@ -1,0 +1,49 @@
+// Regression: a module function that writes module state AND returns a value
+// must persist the write.
+//
+// The MoveOrClone optimisation in Statement::Return moved a returned bare
+// identifier out of scope. The module-state write-back then found the key
+// missing, read that as "this frame never touched it", and dropped the
+// mutation — silently, and only in the tree-walker, since the VM writes state
+// back by a different route. Found while adding a locale rotator to
+// zy-Serpiente, where `rotar()` returned the new locale and left the old one
+// active.
+//
+// The value's origin does not matter (literal, local, indexed) — what mattered
+// was whether the returned expression was a bare identifier naming module state.
+
+<# ./mod_state_return_m => m
+
+// ── write + return, three ways of producing the value ──────────────────────
+m::fijar("es")
+>> "literal   ret=" (m::a_literal())  " estado=" (m::ver()) ¶
+m::fijar("es")
+>> "indexado  ret=" (m::b_indexado()) " estado=" (m::ver()) ¶
+m::fijar("es")
+>> "local     ret=" (m::c_local())    " estado=" (m::ver()) ¶
+
+// ── write without returning it: worked before, must keep working ───────────
+m::fijar("es")
+m::d_sin_retorno()
+>> "sin_ret            estado=" (m::ver()) ¶
+
+// ── the two-function workaround must stay correct too ──────────────────────
+m::fijar("es")
+m::e_delegado()
+>> "delegado           estado=" (m::ver()) ¶
+
+// ── returning something that is NOT the state variable ─────────────────────
+m::fijar("es")
+>> "otro      ret=" (m::f_otro())     " estado=" (m::ver()) ¶
+
+// ── a counter: the classic read-modify-write-and-tell-me shape ─────────────
+m::reiniciar()
+c1 = m::siguiente()
+c2 = m::siguiente()
+c3 = m::siguiente()
+>> "cuenta " c1 c2 c3 " total=" (m::cuenta()) ¶
+
+// ── output parameters still work alongside state (QW13 guard) ──────────────
+salida = 0
+m::fijar("es")
+>> "outparam  ret=" (m::g_salida(salida)) " out=" salida " estado=" (m::ver()) ¶

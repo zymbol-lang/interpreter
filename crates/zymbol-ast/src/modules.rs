@@ -6,6 +6,7 @@
 //! - Import statements: <# path <= alias (import with required alias)
 //! - Module paths: ./relative, ../parent, absolute paths
 
+use std::path::{Path, PathBuf};
 use zymbol_span::Span;
 
 /// Module declaration: # module_name [#> { exports }]
@@ -148,5 +149,61 @@ impl ModulePath {
             parent_levels: 0,
             span,
         }
+    }
+
+    /// True for stdlib imports: a bare path (`is_relative == false && is_absolute == false`,
+    /// i.e. no `./`, `../`, `/` or `~/` prefix) whose first component is literally `std`.
+    /// Stdlib modules (`std/math`, `std/io`, ...) are synthetic — they are never resolved
+    /// against the filesystem, so callers must check this *before* calling [`resolve_from`].
+    ///
+    /// [`resolve_from`]: ModulePath::resolve_from
+    pub fn is_stdlib(&self) -> bool {
+        !self.is_relative
+            && !self.is_absolute
+            && self.components.first().map(|s| s == "std").unwrap_or(false)
+    }
+
+    /// Resolves this module path to a `.zy` file path, given the directory that relative
+    /// imports (`./foo`, `../foo`, and bare paths) are resolved against — normally the
+    /// importing file's parent directory.
+    ///
+    /// Returns `None` if a `../` chain walks above the root of `base_dir`, or if this path
+    /// `is_stdlib()` (stdlib paths have no file to resolve to; check that first).
+    ///
+    /// This is the single source of truth for module path resolution. It replaces three
+    /// previously-divergent copies of the same logic: the tree-walking interpreter
+    /// (`zymbol-interpreter/src/modules.rs`), the semantic analyzer
+    /// (`zymbol-semantic/src/modules.rs`), and the register-VM compiler
+    /// (`zymbol-compiler/src/lib.rs`'s `compile_import`, which used to ignore
+    /// `is_absolute`/`home_relative` entirely and always resolve against `base_dir` —
+    /// meaning `<# /opt/lib/x => x` resolved to different files under the tree-walker
+    /// and the VM).
+    pub fn resolve_from(&self, base_dir: &Path) -> Option<PathBuf> {
+        if self.is_stdlib() {
+            return None;
+        }
+
+        let mut resolved = if self.is_absolute {
+            if self.home_relative {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+                PathBuf::from(home)
+            } else {
+                PathBuf::from("/")
+            }
+        } else {
+            let mut base = base_dir.to_path_buf();
+            for _ in 0..self.parent_levels {
+                if !base.pop() {
+                    return None;
+                }
+            }
+            base
+        };
+
+        for component in &self.components {
+            resolved.push(component);
+        }
+        resolved.set_extension("zy");
+        Some(resolved)
     }
 }

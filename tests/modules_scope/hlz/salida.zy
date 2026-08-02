@@ -1,0 +1,36 @@
+// Regression module for HLZ-008 and HLZ-001.
+//
+// HLZ-008: an output parameter of a MODULE function must be written back
+// in both engines. The VM compiled the call without a writeback and left
+// the caller's variable untouched — silently, with no error.
+//
+// HLZ-001: a module constant may carry a sign. `-1` parses as unary minus
+// applied to a literal, which is still a constant.
+# .hlz_salida {
+    #> { LIMITE, nuevo, poner, sumar_en, cola }
+
+    LIMITE := -1
+
+    nuevo(n) {
+        a = []
+        @ i:1..n { a = a $+ 0 }
+        <~ a
+    }
+
+    poner(a<~, i, v, hechos<~) {
+        a[i] = v
+        hechos = hechos + 1
+        <~ 0
+    }
+
+    sumar_en(total<~, n) {
+        total = total + n
+    }
+
+    // HLZ-009: an open-ended slice on a String inside a module function.
+    // The VM reached a slice instruction that handled Array, Tuple and
+    // NamedTuple but not String — it only got there when the subject was a
+    // runtime value instead of a literal the compiler could fold, so the gap
+    // appeared inside module functions and nowhere else.
+    cola(s, desde) { <~ s$[desde..] }
+}
