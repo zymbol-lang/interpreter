@@ -81,9 +81,32 @@ jobs:
           path: zymbol-lang.msi
           if-no-files-found: error
 
+      # SignPath needs both secrets. When they are absent the action stops with a
+      # bare "Input required and not supplied: api-token" — which, while this job
+      # still had `continue-on-error: true` and an unsigned fallback, quietly
+      # published unsigned binaries instead. That is how v0.0.8 shipped: the run
+      # was green, the step reported success (continue-on-error always does), and
+      # the unsigned .exe and .msi sat on the release page until someone hashed
+      # them. Fail here instead, and say what to do about it.
+      - name: Require signing credentials
+        shell: bash
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
+        run: |
+          missing=()
+          [[ -n "${SIGNPATH_API_TOKEN}" ]] || missing+=(SIGNPATH_API_TOKEN)
+          [[ -n "${SIGNPATH_ORG_ID}" ]]    || missing+=(SIGNPATH_ORG_ID)
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "::error::Missing repository secret(s): ${missing[*]}"
+            echo "::error::Nothing is uploaded — this workflow does not publish unsigned Windows binaries."
+            echo "::error::Either configure the secrets, or sign by hand in the SignPath portal and upload with:"
+            echo "::error::  gh release upload <tag> <exe> <msi> SHA256_x86_64_windows.txt SHA256_x86_64_windows_msi.txt --clobber"
+            exit 1
+          fi
+
       - name: Sign MSI via SignPath
         id: sign-msi
-        continue-on-error: true
         uses: signpath/github-action-submit-signing-request@v1
         with:
           api-token:                    ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -96,29 +119,30 @@ jobs:
           output-artifact-directory:    signed
 
       - name: Rename signed MSI back to versioned name
-        if: steps.sign-msi.outcome == 'success'
         shell: bash
         run: |
           cp signed/zymbol-lang.msi "${MSI_ASSET}"
           sha256sum "${MSI_ASSET}" | tee SHA256_x86_64_windows_msi.txt
 
-      - name: Upload to release (signed MSI)
-        if: steps.sign-msi.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
+      # A signing step that reports success but hands back an untouched file
+      # would publish an unsigned installer with signed-looking provenance. The
+      # only thing that settles it is looking at the artifact about to ship.
+      - name: Confirm the MSI carries a signature
+        shell: pwsh
         run: |
-          TAG="${{ github.event.release.tag_name || inputs.tag }}"
-          gh release upload "$TAG" "$ASSET" "${MSI_ASSET}" \
-            SHA256_x86_64_windows.txt SHA256_x86_64_windows_msi.txt --clobber
+          $sig = Get-AuthenticodeSignature "$env:MSI_ASSET"
+          "Status: $($sig.Status)"
+          "Signer: $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -eq 'NotSigned') {
+            Write-Output "::error::$env:MSI_ASSET has no embedded signature — refusing to publish"
+            exit 1
+          }
 
-      - name: Compute unsigned MSI hash (fallback)
-        if: steps.sign-msi.outcome != 'success'
-        shell: bash
-        run: sha256sum "${MSI_ASSET}" | tee SHA256_x86_64_windows_msi.txt
-
-      - name: Upload to release (unsigned MSI fallback)
-        if: steps.sign-msi.outcome != 'success'
+      # Asymmetry on purpose: only the .msi goes through SignPath, so the .exe
+      # published here is unsigned. Signing it too needs its own SignPath
+      # artifact-configuration; until that exists, sign it by hand and re-upload
+      # with --clobber (that is what v0.0.8 did).
+      - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
