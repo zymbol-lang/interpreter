@@ -1,4 +1,4 @@
-name: Build Windows binary
+name: Build Windows installer
 
 on:
   release:
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build-windows:
-    name: Windows x86_64 binary
+    name: Windows x86_64 installer
     runs-on: windows-latest
 
     steps:
@@ -30,19 +30,16 @@ jobs:
       - name: Build
         run: cargo build --release --target x86_64-pc-windows-msvc
 
-      - name: Prepare asset
+      # Windows ships as the .msi only. The bare .exe used to be published beside
+      # it, but only the .msi goes through SignPath, so the .exe was the one
+      # artifact on the release page that could never carry a signature — the
+      # worst thing to hand a Windows user, since it is also the one SmartScreen
+      # complains about loudest. The installer puts the same binary on PATH.
+      - name: Read version
         shell: bash
         run: |
           VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
-          ASSET="zymbol_lang_v${VERSION}_x86_64_windows.exe"
-          cp target/x86_64-pc-windows-msvc/release/zymbol.exe "$ASSET"
-          echo "ASSET=$ASSET" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-
-      - name: Compute SHA256
-        shell: bash
-        run: |
-          sha256sum "$ASSET" | tee SHA256_x86_64_windows.txt
 
       - name: Build MSI installer
         shell: bash
@@ -100,8 +97,9 @@ jobs:
           if [[ ${#missing[@]} -gt 0 ]]; then
             echo "::error::Missing repository secret(s): ${missing[*]}"
             echo "::error::Nothing is uploaded — this workflow does not publish unsigned Windows binaries."
-            echo "::error::Either configure the secrets, or sign by hand in the SignPath portal and upload with:"
-            echo "::error::  gh release upload <tag> <exe> <msi> SHA256_x86_64_windows.txt SHA256_x86_64_windows_msi.txt --clobber"
+            echo "::error::Either configure the secrets (packaging/SIGNING.md), or sign by hand in the SignPath portal and upload with:"
+            echo "::error::  sha256sum -b <msi> > SHA256_x86_64_windows_msi.txt"
+            echo "::error::  gh release upload <tag> <msi> SHA256_x86_64_windows_msi.txt --clobber"
             exit 1
           fi
 
@@ -138,15 +136,11 @@ jobs:
             exit 1
           }
 
-      # Asymmetry on purpose: only the .msi goes through SignPath, so the .exe
-      # published here is unsigned. Signing it too needs its own SignPath
-      # artifact-configuration; until that exists, sign it by hand and re-upload
-      # with --clobber (that is what v0.0.8 did).
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           TAG="${{ github.event.release.tag_name || inputs.tag }}"
-          gh release upload "$TAG" "$ASSET" "${MSI_ASSET}" \
-            SHA256_x86_64_windows.txt SHA256_x86_64_windows_msi.txt --clobber
+          gh release upload "$TAG" "${MSI_ASSET}" \
+            SHA256_x86_64_windows_msi.txt --clobber
