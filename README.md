@@ -24,12 +24,22 @@ Zymbol started as an **esoteric programming language** — a single tight questi
 *what happens if you remove every keyword?* No `if`, no `while`, no `function`, no `return`.
 The original experiment is on [esolangs.org](https://esolangs.org). Then the idea grew.
 
-The reason the constraint matters: every mainstream language assumes the programmer reads English.
-Keywords are English words. A developer writing in Spanish, Arabic, or Devanagari is permanently
-coding in a second language at the syntactic level, even when identifiers can be localized.
+The reason the constraint matters is an old and uncontroversial one: notation travels.
+Mathematics writes `∑` and `∫`; a musical stave fixes pitch and duration in a single mark; a road
+sign is read correctly at speed by a driver who has never studied the local language. None of
+these replace words or compete with them — they sit *beside* language, and the same mark carries
+the same meaning to everyone who has learned the notation.
 
-Removing keywords entirely is the minimum change to break that assumption. A symbol carries no
-etymology — `?` does not say *if*, `@` does not say *while*. Any human language can be native:
+Zymbol applies that idea to program structure. A symbol carries no etymology: `?` does not say
+*if*, `@` does not say *while*, `->` does not say *lambda*. Nothing in the syntax has to be
+pronounced to be understood, so the whole naming budget goes where it belongs — to variables,
+functions and modules, named in whatever language the person writing them thinks in.
+
+This is a symbolic vocabulary, not a new paradigm. APL and its descendants use glyphs to express
+array programming, where each symbol is a dense operator with its own algebra; learning the
+notation *is* learning the paradigm. Zymbol's symbols do ordinary work — conditionals, loops,
+functions, modules, error handling — and a programmer coming from any imperative or functional
+language will recognize every construct behind the marks. Any human language can be native:
 
 ```zymbol
 // Spanish — no translation at the syntax level
@@ -39,6 +49,7 @@ edad = 25
 }
 
 // Devanagari — first-class program, no flag or special mode required
+#०९#                    // digits are written and printed in the local script
 सक्रिय = #१
 @ i:१..५ { >> i " " }   // → १ २ ३ ४ ५
 ```
@@ -117,7 +128,7 @@ zymbol fmt program.zy --write
 # Package into standalone executable
 # Note: bundles the source code and Zymbol interpreter into one binary — not native compilation.
 # Requires: Rust/Cargo installed, full repo checkout, and must be run from interpreter/.
-# See aprende_zymbol/avanzado/05_herramientas.md for full setup instructions.
+# Full setup: https://zymbol-lang.github.io/aprende-zymbol/#/avanzado/05_herramientas
 zymbol build program.zy -o myprogram --release
 
 # Bundle a multi-file project into one portable .zyp archive (source, not a binary)
@@ -143,9 +154,9 @@ zymbol run myproject.zyp
 | Match | `??` with literal, range, comparison `< expr`, ident, list `[a,b]`, wildcard `_` |
 | Loops | `@` (infinite/while/times/for), `@!` (break), `@>` (continue), `@:label` (labeled) |
 | Functions | `->` (lambda), `<~` (return / output param) |
-| Collections | `$#` (len), `$+` (append), `$-` (remove), `$[..]` (slice), `$?` (contains), `$??` (find all), `$^+`/`$^-` (sort), `$^` (custom sort), `$>` (map), `$|` (filter), `$<` (reduce) |
+| Collections | `$#` (len), `$+` (append), `$-` (remove), `$[..]` (slice), `$?` (contains), `$??` (find all), `$^+`/`$^-` (sort), `$^` (custom sort), `$>` (map), `$\|` (filter), `$<` (reduce) |
 | Strings | `$~~[p:r]` (replace), `$/` (split), `$++` (build), `$*` (repeat N times) |
-| TUI / Terminal | `@~` (sleep ms), `>>!` (clear screen), `>>?` (query size → `[rows,cols]`), `>>~` (positioned print), `<<\|` (blocking keypress), `<<\|?` (non-blocking keypress), `>>|` (TUI block) |
+| TUI / Terminal | `@~` (sleep ms), `>>!` (clear screen), `>>?` (query size → `[rows,cols]`), `>>~` (positioned print), `<<\|` (blocking keypress), `<<\|?` (non-blocking keypress), `>>\|` (TUI block) |
 | Multi-dim index | `arr[i>j]` (scalar), `arr[p;q]` (flat), `arr[[g];[g]]` (structured) |
 | Pipe | `\|>` with `_` placeholder |
 | Errors | `!?` (try), `:!` (catch), `:>` (finally), `$!` (is error), `$!!` (propagate) |
@@ -500,6 +511,11 @@ Benchmarks (release build):
 
 The VM is 4.4× faster than the tree-walker on `fib(35)`.
 
+Those figures are arithmetic-bound. On a real program dominated by array allocation and
+copying the gap is wider: a full 19 × 19 game of [囲碁](https://github.com/zymbol-lang/zy-GO)
+runs in **49.8s under the VM against 6m40s under the tree-walker** — 8–14× depending on
+board size. Quote the benchmark that matches your workload, not a single number.
+
 ---
 
 ## Testing
@@ -537,9 +553,9 @@ Each release milestone is stress-tested by building a non-trivial program entire
 Bugs discovered during construction feed back directly into the language.
 
 The projects below also serve as cross-language proof: each is written in a different
-natural language (English, Mandarin Chinese, Spanish, Klingon pIqaD, and Spanish again
-for scientific computing), demonstrating that Zymbol's keyword-free design is genuinely
-language-neutral — no flags, no special modes, no translation layer at the syntax level.
+natural language — English, Mandarin Chinese, Spanish, Klingon pIqaD, and Japanese —
+demonstrating that Zymbol's keyword-free design is genuinely language-neutral: no flags,
+no special modes, no translation layer at the syntax level.
 
 ### Summary
 
@@ -550,6 +566,7 @@ language-neutral — no flags, no special modes, no translation layer at the syn
 | [Serpiente](https://github.com/zymbol-lang/zy-Serpiente) | **v0.0.5** | Español | TUI primitives, register VM, hot-definition `°`, tuple equality, labeled loops |
 | [Hov veS](https://github.com/zymbol-lang/zyKlingonGalaxy) | **v0.0.5** | pIqaD (Klingon) | Multi-module orchestration, Galaxian formation AI, delta rendering, dual projectiles, 3-language i18n |
 | [Zofía](https://github.com/zymbol-lang/zy-Zofia) | **v0.0.6** | Español | Scientific computing, transformer AI from scratch, `^` float exponents, global `:=` scope fix, `#.N\|x\|` formatting |
+| [囲碁 (Igo)](https://github.com/zymbol-lang/zy-GO) | **v0.0.8** | 日本語 (Japanese) | Recursive flood fill at depth, state threading across modules, double-width glyph grid, application-level i18n in 5 languages, `std/term` |
 
 ---
 
@@ -760,6 +777,71 @@ codificacion_posicional(pos, dim, i) {
 
 ---
 
+### 囲碁 (Igo) — v0.0.8 · 日本語 (Japanese)
+
+The game of Go for the terminal, with an AI opponent, full rule enforcement (ko, suicide,
+occupied points), and automatic area scoring. Written entirely in Japanese — every
+identifier, module name and file name is kanji or kana, so the rule vocabulary in the
+source is the vocabulary a player already knows (*komi*, *atari*, *ko*, *dame*, *jigo*).
+
+It validates a different class of capability from the earlier games: a **large persistent
+data structure** (up to 361 points) threaded through cooperating modules across isolated
+function scopes, **recursive graph traversal** (group and liberty detection by flood fill),
+a heuristic decision engine, and a **double-width glyph grid** where every cell is exactly
+two terminal columns — the structural fix for the alignment class of bug found in Serpiente.
+
+The UI ships in **five languages** (日本語 / 한국어 / 中文 / English / Español) with four
+entry points that preselect one. This is application-level i18n — locale as module state,
+measured layout, and a completeness gate — and it is the reference implementation behind
+[USERAPPI18N.md](./USERAPPI18N.md).
+
+Building it drove a substantial part of v0.0.8. Findings that became interpreter changes:
+
+- **`std/term`** — the display-metrics module (`width`, `pad_left`, `pad_right`, `center`,
+  `truncate`) plus `##!` over a `Char` (→ code point). It replaced a hand-written
+  East-Asian width table inside the game — a differential test showed zero divergence
+  against `unicode-width` on every glyph the game renders, and the layer that survives is
+  a thin Japanese-named wrapper over the module.
+- **Juxtaposition inside delimited positions** — `f(a " " b)`, `[a " " b]`, `(a " " b)`
+  now concatenate as they always did at statement level. Parser-only; `BinaryOp::Concat`
+  already existed.
+- **Unused-variable false positive on ranges** — the analyzer treated `Expr::Range` as a
+  no-op, so a variable used only as a loop bound (`@ i:1..総`) was reported unused, and
+  non-deterministically so. Fixed in `variable_analysis.rs`.
+- **VM correctness under module state** — output parameters (`<~`) of module functions
+  were dropped, `String` was truncated inside a module, and `"{CONST}"` interpolation was
+  compiled to literal text inside a function. Each was a silent wrong answer, not a crash.
+
+```zymbol
+// 核/盤.zy — group detection by flood fill (連 = chain, ダメ = liberty)
+連(局面, 路, 起点) {
+    色 = 局面[起点]
+    ? 色 == 0 { <~ [] }
+    訪問 = 新規(路)
+    結果 = []
+    _探索(局面, 路, 起点, 色, 訪問, 結果)
+    <~ 結果
+}
+
+// output parameters carry the accumulator down the recursion
+_探索(局面, 路, 点, 色, 訪問<~, 結果<~) {
+    ? 訪問[点] == 1 { <~ 0 }
+    ? 局面[点] <> 色 { <~ 0 }
+    訪問[点] = 1
+    結果 = 結果 $+ 点
+    @ 隣点 : 隣(路, 点) { _探索(局面, 路, 隣点, 色, 訪問, 結果) }
+    <~ 0
+}
+```
+
+The project also ships an instrumented AI-vs-AI benchmark (`棋戦.zy`) that records one
+reproducible game per file — the AI seeds an explicit LCG through an output parameter,
+because `std/random` keeps hidden state and cannot be replayed. See
+[BENCHMARK.md](https://github.com/zymbol-lang/zy-GO/blob/main/BENCHMARK.md) for what it
+measures and for two documented misreadings of small samples.
+
+---
+
 ## Project Layout
 
 ```
@@ -789,6 +871,16 @@ interpreter/
 - [SYMBOLS.md](./SYMBOLS.md) — Symbol families, occupied combinations, and the rules a new operator must satisfy
 - [ROADMAP.md](./ROADMAP.md) — What's done, known gaps, and planned work
 - [CHANGELOG.md](./CHANGELOG.md) — Version history
+
+### Beyond this repository
+
+- [zymbol-lang.org](https://zymbol-lang.org) — the website, with the manual in 110 languages
+- [Playground](https://zymbol-lang.org/playground.html) — run Zymbol in the browser, no
+  install; multi-file projects and `.zyp` packages included ([source](https://github.com/zymbol-lang/web))
+- [Aprende Zymbol](https://zymbol-lang.github.io/aprende-zymbol/) — structured course from
+  zero, in Spanish ([source](https://github.com/zymbol-lang/aprende-zymbol))
+- [VS Code extension](https://github.com/zymbol-lang/vscode) — syntax highlighting, LSP
+  client, 46 snippets, themes and file icons
 
 ---
 

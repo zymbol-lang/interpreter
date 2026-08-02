@@ -66,9 +66,9 @@ That constraint was minimalist by design, in the tradition of esolangs: a tight 
 
 Then the idea grew — like a little monster. Not because features were added for their own sake, but because the founding constraint turned out to have more depth than expected. Once you commit to "no keywords", you discover that symbols can carry consistent meaning across very different contexts (`_` is always non-binding, `#` is always meta-level), and that Unicode support is not an afterthought but a natural consequence of the same principle. The language kept growing as each piece clicked into place.
 
-**The founding question**, now stated plainly: every mainstream language — Python, Java, Ruby, Go, Rust — shares an invisible assumption that the programmer reads English. Keywords like `if`, `while`, `function`, `return` are English words. A developer in Spanish, Arabic, or Devanagari is permanently coding in a second language at the syntactic level, even when identifiers and strings can be localized.
+**The founding question**, now stated plainly: notation travels further than vocabulary. Mathematics writes `∑` and `∫`; a musical stave fixes pitch and duration in a single mark; a road sign is read correctly at speed by a driver who has never studied the local language. None of these replace words or compete with them — they sit *beside* language, and the same mark carries the same meaning to everyone who has learned the notation. A language built entirely from marks inherits that property.
 
-Removing keywords entirely is the minimum change needed to break that assumption. A symbol carries no etymology. `?` does not say *if* in English — it says *condition* in the visual grammar of the program. A developer writing `? edad >= 18` and one writing `? age >= 18` are doing exactly the same thing, and neither is translating.
+Removing keywords entirely is what makes it available. A symbol carries no etymology. `?` does not say *if* in English — it says *condition* in the visual grammar of the program. A developer writing `? edad >= 18` and one writing `? age >= 18` are doing exactly the same thing, and neither is translating.
 
 The practical result: any human language can be the *native* language of a Zymbol program. Spanish with full accents (`función`, `índice`), Devanagari (`सक्रिय`, `फलन`), Arabic (`متغير`, `دالة`), Korean (`변수`, `함수`), and yes — Klingon pIqaD for the ones who want to program in the language of the Empire. The digit block is registered (CSUR U+F8F0–U+F8F9) and the interpreter supports it completely. No judgment. It is the logical endpoint of the principle.
 
@@ -121,7 +121,7 @@ Types, modules, and numeral modes share `#` because all three are about *what so
 
 Zymbol's symbolic vocabulary is its own. The symbols have no external standard to conform to — their meaning is defined by the language itself and built up through consistent use. A programmer learns Zymbol by reading Zymbol, not by mapping it onto another language.
 
-This creates an initial learning curve. It also means the language can evolve its symbol system with full internal consistency, without being constrained by conventions inherited from English-based predecessors.
+This creates an initial learning curve. It also means the language can evolve its symbol system with full internal consistency: there is no inherited keyword vocabulary — English or otherwise — that a new construct has to stay compatible with.
 
 ### The Numeral Modes as Proof of Concept
 
