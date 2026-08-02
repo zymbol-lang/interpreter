@@ -7,7 +7,7 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
-## [0.0.8] — 2026-08-01
+## [0.0.8] — 2026-08-02
 
 Memory-model debt release: every divergence found by the design-vs-implementation
 audit in [MEMORY_MODEL.md](MEMORY_MODEL.md) is resolved — findings MM-1 … MM-9 plus
