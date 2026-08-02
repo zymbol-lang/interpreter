@@ -425,9 +425,17 @@ elif [[ "${SCOPE}" == "full" ]]; then
         [[ "${total:-0}" -ge 500 ]] \
             && ok "suite exercised ${total} test files" \
             || bad "suite only found ${total:-0} test files — expected 500+"
-        [[ "${pass:-0}" -ge 540 ]] \
-            && ok "${pass} files byte-identical under both engines" \
-            || bad "only ${pass:-0} files passed — expected 540+"
+        # Every file the suite collected must be accounted for, and none may
+        # mismatch. Deliberately not a hard-coded corpus size: the previous
+        # `pass >= 540` was calibrated on a working tree that also held
+        # gitignored files (tests/output/ — .gitignore:23), so it counted 544
+        # where a clean checkout collects 536 and no CI run could ever satisfy
+        # it. The invariant below says what the gate actually means and does not
+        # need recalibrating every time a test is added or removed.
+        [[ "${fail:-1}" -eq 0 \
+           && $(( ${pass:-0} + ${skip:-0} + ${excluded:-0} )) -eq "${total:-0}" ]] \
+            && ok "${pass} files byte-identical under both engines (of ${total} collected)" \
+            || bad "unaccounted results: total=${total} pass=${pass} fail=${fail} skip=${skip} excluded=${excluded}"
         [[ "${skip:-0}" -eq 0 ]] \
             && ok "no tests skipped" \
             || note "${skip} test(s) skipped (timeout or @vm-skip) — not a gate failure"

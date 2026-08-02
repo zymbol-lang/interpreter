@@ -16,7 +16,7 @@ validation projects written in Zymbol (zy-GO, zy-Serpiente, zyKlingonGalaxy) con
 the rest: HLZ-001 … HLZ-011, HLZ-SRP-001 and HLZ-KL-001 are findings from writing real
 applications, not from unit tests.
 
-Measured on the branch: **936 unit tests**, **544/544 TW/VM parity**, **523/525 golden**,
+Measured on the branch: **936 unit tests**, **536/536 TW/VM parity**, **523/525 golden**,
 formatter property suite **600 PASS / 0 FAIL** with no regressions against the baseline.
 The two golden failures are stale hand-written `.expected` fixtures, not interpreter
 regressions — see [IMPL_V008.md](IMPL_V008.md) § E.1. The one remaining piece of known
@@ -221,7 +221,7 @@ on disk.
 - With output redirected, inside a container, or in CI, the tree-walker
   propagated the OS error from `crossterm::terminal::size()` while the VM
   already fell back to 80x24. Identical in a real terminal, which is why the
-  parity suite reported 544/544 for as long as it only ever ran in one.
+  parity suite reported a clean sweep for as long as it only ever ran in one.
 - Both engines now fall back to the conventional `[24, 80]`, so a TUI program
   stays runnable when piped — it simply lays itself out for 80 columns. The
   behaviour was undocumented; [GUIDE.md](GUIDE.md) now states it.
@@ -261,7 +261,7 @@ on disk.
   full-featured binary, where `std/db` exists and the fallthrough is never taken.
   It surfaced only when the new release gate ran the suite against the installed
   `.deb`. See [packaging/verify/README.md](packaging/verify/README.md).
-- Parity with the packaged binary is now 544/544, same as the development build.
+- Parity with the packaged binary is now 536/536, same as the development build.
 
 **Findings from the zy-Serpiente and zyKlingonGalaxy i18n rework (HLZ-SRP-001, HLZ-KL-001)**
 
