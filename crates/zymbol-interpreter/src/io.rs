@@ -153,20 +153,20 @@ impl<W: Write> Interpreter<W> {
 
     /// Blocking / non-blocking key input: <<| var  or  <<|? var
     pub(crate) fn execute_key_input(&mut self, ki: &KeyInput) -> Result<()> {
-        use crossterm::event::{self, Event, KeyEvent};
+        use crossterm::event::{self, Event};
         let ch = if ki.blocking {
             loop {
                 match event::read().map_err(|e| RuntimeError::Generic {
                     message: e.to_string(), span: ki.span,
                 })? {
-                    Event::Key(KeyEvent { code, .. }) => break map_key_code(code),
+                    Event::Key(key) if is_key_press(&key) => break map_key_code(key.code),
                     _ => continue,
                 }
             }
         } else {
             if event::poll(std::time::Duration::ZERO).unwrap_or(false) {
                 match event::read().unwrap_or(Event::FocusLost) {
-                    Event::Key(KeyEvent { code, .. }) => map_key_code(code),
+                    Event::Key(key) if is_key_press(&key) => map_key_code(key.code),
                     _ => '\0',
                 }
             } else { '\0' }
@@ -287,6 +287,23 @@ impl<W: Write> Interpreter<W> {
         let _ = terminal::disable_raw_mode();
         result
     }
+}
+
+/// Is this a key going *down*, as opposed to coming back up?
+///
+/// Windows is the only platform that reports key releases: its console API delivers
+/// a `KEY_EVENT` for the press and another for the release, and crossterm passes
+/// both through. Reading every `Event::Key` therefore counted each keystroke twice —
+/// a menu selection skipped an entry, and the snake moved two cells per arrow, which
+/// made it impossible to line up a one-cell gap. Unix never sends releases, so this
+/// filter changes nothing there.
+///
+/// `Repeat` counts as a press: a held key auto-repeats on Unix too, arriving as a
+/// run of ordinary presses, so accepting it is what keeps the two platforms feeling
+/// the same.
+fn is_key_press(key: &crossterm::event::KeyEvent) -> bool {
+    use crossterm::event::KeyEventKind;
+    matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
 }
 
 fn map_key_code(code: crossterm::event::KeyCode) -> char {

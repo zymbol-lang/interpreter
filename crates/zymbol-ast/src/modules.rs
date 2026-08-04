@@ -185,10 +185,9 @@ impl ModulePath {
 
         let mut resolved = if self.is_absolute {
             if self.home_relative {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-                PathBuf::from(home)
+                home_dir()
             } else {
-                PathBuf::from("/")
+                filesystem_root(base_dir)
             }
         } else {
             let mut base = base_dir.to_path_buf();
@@ -206,4 +205,58 @@ impl ModulePath {
         resolved.set_extension("zy");
         Some(resolved)
     }
+}
+
+/// The user's home directory, for `~/mod` imports.
+///
+/// Windows does not set `HOME`; it uses `USERPROFILE`. Reading only `HOME` there
+/// meant `~/mod` silently fell back to `/root` — a path that cannot exist on
+/// Windows, so the import failed with a "not found" naming a directory the user
+/// never mentioned.
+///
+/// `HOME` still comes first on every platform: a user who sets it (or a POSIX
+/// shell that sets it, as Git Bash does) means it.
+fn home_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        return PathBuf::from(home);
+    }
+    #[cfg(windows)]
+    {
+        if let Some(profile) = std::env::var_os("USERPROFILE").filter(|p| !p.is_empty()) {
+            return PathBuf::from(profile);
+        }
+        // Last resort before giving up on `~`: the pair NT actually stores.
+        if let (Some(drive), Some(path)) = (
+            std::env::var_os("HOMEDRIVE").filter(|d| !d.is_empty()),
+            std::env::var_os("HOMEPATH").filter(|p| !p.is_empty()),
+        ) {
+            let mut home = PathBuf::from(drive);
+            home.push(PathBuf::from(path));
+            return home;
+        }
+    }
+    // Nothing to go on. `~/mod` will not resolve, which is the honest outcome.
+    PathBuf::from("/")
+}
+
+/// The filesystem root that a leading-`/` import is resolved against.
+///
+/// On Unix that is `/`. On Windows a path has no meaning without a drive —
+/// `PathBuf::from("/")` is root-relative to whichever drive happens to be current —
+/// so `/mod` resolves against the root of the drive the importing file is on. That
+/// keeps `<# /lib/x` pointing inside the project's own drive rather than wherever
+/// the process was started from.
+fn filesystem_root(base_dir: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::Component;
+        let mut components = base_dir.components();
+        if let Some(Component::Prefix(prefix)) = components.next() {
+            let mut root = PathBuf::from(prefix.as_os_str());
+            root.push(std::path::MAIN_SEPARATOR_STR);
+            return root;
+        }
+    }
+    let _ = base_dir;
+    PathBuf::from("/")
 }
