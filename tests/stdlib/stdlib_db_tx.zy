@@ -2,7 +2,8 @@
 // savepoint partial rollback. Requires the SQLite ODBC driver (Driver={SQLite3}).
 <# std/db => db
 
-ruta = "Driver={SQLite3};Database=/tmp/zy_test_db_tx.db;"
+// DSN rather than a driver name, relative database file - see stdlib_db_basic.zy.
+ruta = "DSN=zymbol_sqlite;Database=zy_test_db_tx.db;"
 db::connect("c", ruta)
 db::exec("c", "DROP TABLE IF EXISTS cuentas")
 db::exec("c", "CREATE TABLE cuentas(id INTEGER PRIMARY KEY, saldo REAL)")

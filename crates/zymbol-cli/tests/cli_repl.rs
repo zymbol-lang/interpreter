@@ -120,14 +120,33 @@ fn cli_repl_clear_screen_moves_cursor_home() {
 
 #[test]
 fn cli_repl_terminal_size_positive() {
-    // In headless piped mode, crossterm returns a default size (24×80).
-    zymbol()
+    // `>>?` must give two usable dimensions — that is all a program can rely on.
+    //
+    // This used to assert the exact 24×80 that crossterm falls back to with no
+    // terminal, which is only what happens on Unix: there, a piped stdout means no
+    // tty and the query fails. Windows answers it anyway, because crossterm asks
+    // the console through `CONOUT$` rather than through the redirected handle — so
+    // the test read a real 30×120 and failed on a correct answer.
+    let output = zymbol()
         .arg("repl")
         .write_stdin("[H, W] = >>?\n>> H ¶\n>> W ¶\n")
         .assert()
         .success()
-        .stdout(contains("24"))
-        .stdout(contains("80"));
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).expect("stdout is UTF-8");
+
+    let dims: Vec<u32> = stdout
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .collect();
+
+    assert_eq!(dims.len(), 2, "expected two dimensions, got: {stdout:?}");
+    assert!(
+        dims.iter().all(|&d| d > 0),
+        "dimensions must be positive, got: {dims:?}"
+    );
 }
 
 #[test]

@@ -23,6 +23,12 @@ Thumbs.db
 tests/output/
 *.tmp
 
+# Scratch files the std/io and std/db tests create in the working directory.
+# They used to be written to /tmp, which does not exist on Windows; the tests now
+# use relative paths, so the artifacts land wherever the suite was run from.
+zy_io_*
+zy_test_db_*.db
+
 # Standalone executables built by `zymbol build`
 *.exe
 *.out

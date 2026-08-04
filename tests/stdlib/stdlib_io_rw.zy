@@ -1,7 +1,9 @@
 // Test: std/io write/read/append/exists/delete roundtrip + soft error
 <# std/io => io
 
-tmp = "/tmp/zy_io_rw_test.txt"
+// Relative, not /tmp: Windows has no /tmp, so an absolute POSIX path made this
+// test unrunnable there rather than failing for a reason about std/io.
+tmp = "zy_io_rw_test.txt"
 
 // write -> read roundtrip
 io::write(tmp, "hello")
@@ -17,4 +19,4 @@ io::delete(tmp)
 >> io::exists(tmp) ¶
 
 // reading a missing file returns a soft IO error (catchable), not a crash
->> io::read("/tmp/zy_io_absent_zzz.txt") ¶
+>> io::read("zy_io_absent_zzz.txt") ¶

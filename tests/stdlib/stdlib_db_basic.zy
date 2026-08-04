@@ -4,7 +4,20 @@
 // driver registered in the system (Driver={SQLite3}).
 <# std/db => db
 
-ruta = "Driver={SQLite3};Database=/tmp/zy_test_db_basic.db;"
+// A DSN, not a driver name, and a relative database file.
+//
+// `Driver={SQLite3}` named the driver as unixODBC happens to register it; the
+// Windows installer calls the same driver `SQLite3 ODBC Driver`, so the test could
+// only ever run on one platform. A DSN is what ODBC provides for exactly this: the
+// driver's name lives in each machine's own configuration, and the test names the
+// data source. See tests/stdlib/README-odbc.md for the one-line setup per platform.
+//
+// (Braces would also have to be written `\{ \}` here: `{...}` is Zymbol string
+// interpolation, and `Driver={SQLite3}` parsed at all only because `SQLite3` is a
+// valid identifier. `SQLite3 ODBC Driver` is not.)
+//
+// The database path is relative because Windows has no /tmp.
+ruta = "DSN=zymbol_sqlite;Database=zy_test_db_basic.db;"
 db::connect("c", ruta)
 db::exec("c", "DROP TABLE IF EXISTS socios1")
 db::exec("c", "CREATE TABLE socios1(cod INTEGER PRIMARY KEY, nombre TEXT)")

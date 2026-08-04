@@ -1,7 +1,8 @@
 // Test: std/io re-exported through a Spanish adapter module (i18n three-layer)
 <# ./io_es => io
 
-tmp = "/tmp/zy_io_i18n_test.txt"
+// Relative, not /tmp - see stdlib_io_rw.zy.
+tmp = "zy_io_i18n_test.txt"
 io::escribir(tmp, "hola")
 >> io::leer(tmp) ¶
 >> io::existe(tmp) ¶
