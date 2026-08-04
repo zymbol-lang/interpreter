@@ -241,42 +241,79 @@ impl Workspace {
     }
 }
 
-/// Convert a file path to a file:// URI
+/// Convert a file path to a `file://` URI.
+///
+/// Goes through `Url::from_file_path`, which is the only thing that gets a Windows
+/// path right: `D:\dir\x.zy` has to become `file:///D:/dir/x.zy`, with the drive
+/// after three slashes and the separators flipped. Formatting `file://{path}` by
+/// hand produced `file://D:\dir\x.zy`, which is not a URI VS Code will ever match
+/// against the document it has open — so diagnostics published under it landed
+/// nowhere.
 pub fn path_to_uri(path: &Path) -> Arc<str> {
-    let uri = format!("file://{}", path.display());
-    Arc::from(uri)
-}
-
-/// Convert a file:// URI to a path.
-/// Percent-decodes the path component so that URIs with Unicode directory names
-/// (e.g. `file:///home/user/%E6%BA%90%E7%A0%81/mod.zy`) resolve to the real
-/// filesystem path (`/home/user/源码/mod.zy`). BUG-003 fix.
-pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
-    let raw = uri.strip_prefix("file://")?;
-    Some(PathBuf::from(percent_decode(raw)))
-}
-
-/// Decode percent-encoded bytes in a URI path component.
-/// Collects raw bytes so multi-byte UTF-8 sequences (e.g. Chinese dirs) are
-/// reassembled correctly. Leaves malformed `%XX` sequences as-is.
-fn percent_decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut bytes: Vec<u8> = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            let hi = (b[i + 1] as char).to_digit(16);
-            let lo = (b[i + 2] as char).to_digit(16);
-            if let (Some(h), Some(l)) = (hi, lo) {
-                bytes.push((h * 16 + l) as u8);
-                i += 3;
-                continue;
-            }
-        }
-        bytes.push(b[i]);
-        i += 1;
+    if let Ok(url) = lsp_types::Url::from_file_path(path) {
+        return Arc::from(url.as_str());
     }
-    String::from_utf8(bytes).unwrap_or_else(|_| s.to_string())
+    // `from_file_path` only rejects relative paths. Anchor it and try again; a URI
+    // is absolute by definition, so there is nothing else it could mean.
+    if let Ok(abs) = std::path::absolute(path) {
+        if let Ok(url) = lsp_types::Url::from_file_path(&abs) {
+            return Arc::from(url.as_str());
+        }
+    }
+    Arc::from(format!("file://{}", path.display()).as_str())
+}
+
+/// Convert a `file://` URI to a path.
+///
+/// Also accepts a bare filesystem path, because several callers hold a string that
+/// is a URI when it came from the editor and a path when it came from module
+/// resolution.
+///
+/// The parsing is `Url`'s, not ours. Stripping `file://` by hand left the leading
+/// slash of `file:///D:/dir/x.zy` in place, yielding `/D:/dir/x.zy` — which Windows
+/// reads as a *relative* path, since an absolute one must start at the drive. Every
+/// import in the file was then looked for under a directory that does not exist,
+/// which is where the false `E002: Module ... not found` diagnostics came from.
+/// Percent-decoding comes along for free, so the BUG-003 Unicode-directory fix is
+/// preserved without a hand-written decoder.
+pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
+    match parse_uri(uri) {
+        Some(url) if url.scheme() == "file" => url.to_file_path().ok(),
+        // A URI in any other scheme names no file on this disk.
+        Some(_) => None,
+        None => Some(PathBuf::from(uri)),
+    }
+}
+
+/// Parse a string that is either a `file://` URI or a filesystem path into a `Url`.
+///
+/// The `if starts_with("file://") { parse } else { format!("file://{}") }` dance was
+/// repeated at half a dozen call sites, and the `else` branch carried the same
+/// Windows bug as the old `path_to_uri`.
+pub fn uri_str_to_url(uri: &str) -> Option<lsp_types::Url> {
+    match parse_uri(uri) {
+        Some(url) => Some(url),
+        None => lsp_types::Url::parse(&path_to_uri(Path::new(uri))).ok(),
+    }
+}
+
+/// Parse `s` as a URI, or `None` if it is a filesystem path.
+///
+/// The `None` case is not just "`Url::parse` failed". On Windows a path starting
+/// with a drive letter parses *successfully* as a URI, because `D:` is a
+/// syntactically valid scheme — `D:\proyecto\main.zy` comes back as a `d:` URL with
+/// an opaque body. Anything treating that as a real URI concludes it does not name a
+/// local file, which is wrong in the one place it matters.
+///
+/// So a single-letter scheme is read as a drive letter. No scheme anyone uses is one
+/// character long, and on Unix nothing is lost: a path there never looks like `X:`.
+fn parse_uri(s: &str) -> Option<lsp_types::Url> {
+    let bytes = s.as_bytes();
+    let is_drive_path = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    if is_drive_path {
+        return None;
+    }
+    lsp_types::Url::parse(s).ok()
 }
 
 #[cfg(test)]
@@ -332,53 +369,142 @@ mod tests {
         assert!(resolved_path.ends_with("main.zy"));
     }
 
+    /// An absolute path that exists as such on the platform the test runs on.
+    /// The URI helpers are the one place where a Unix-shaped literal is not a
+    /// portable stand-in: `/home/user/x.zy` is not absolute on Windows, so tests
+    /// written that way passed on Linux while asserting nothing about Windows —
+    /// which is how W-2 survived to a release.
+    fn abs(rest: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!(r"D:\{}", rest.replace('/', r"\")))
+        } else {
+            PathBuf::from(format!("/{}", rest))
+        }
+    }
+
     #[test]
     fn test_path_to_uri() {
-        let path = PathBuf::from("/home/user/project/main.zy");
-        let uri = path_to_uri(&path);
+        let uri = path_to_uri(&abs("home/user/project/main.zy"));
 
-        assert_eq!(uri.as_ref(), "file:///home/user/project/main.zy");
+        if cfg!(windows) {
+            // The drive goes *after* three slashes, and separators become forward
+            // slashes. `file://D:\...` — what the old hand-rolled version produced —
+            // is not a URI any editor will match.
+            assert_eq!(uri.as_ref(), "file:///D:/home/user/project/main.zy");
+        } else {
+            assert_eq!(uri.as_ref(), "file:///home/user/project/main.zy");
+        }
     }
 
     #[test]
     fn test_uri_to_path() {
-        let uri = "file:///home/user/project/main.zy";
-        let path = uri_to_path(uri);
+        let expected = abs("home/user/project/main.zy");
+        let uri = path_to_uri(&expected);
 
-        assert!(path.is_some());
-        assert_eq!(path.unwrap(), PathBuf::from("/home/user/project/main.zy"));
+        assert_eq!(uri_to_path(&uri).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_uri_to_path_round_trips_spaces() {
+        // The reported failure was on `D:\OneDrive - Abastible S.A\...`: spaces get
+        // percent-encoded on the way out and must survive the way back.
+        let expected = abs("OneDrive - Abastible S.A/Documentos/serpiente.zy");
+        let uri = path_to_uri(&expected);
+
+        assert!(uri.contains("%20"), "spaces should be encoded: {}", uri);
+        assert_eq!(uri_to_path(&uri).unwrap(), expected);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_uri_to_path_windows_drive_letter() {
+        // Exactly what VS Code sends. The old code stripped only `file://`, leaving
+        // `/D:/...` — a *relative* path on Windows, so every import under it was
+        // looked for in a directory that does not exist (the false E002s).
+        let uri = "file:///D:/OneDrive%20-%20Abastible%20S.A/Documentos/juego.zy";
+        let path = uri_to_path(uri).unwrap();
+
+        assert_eq!(
+            path,
+            PathBuf::from(r"D:\OneDrive - Abastible S.A\Documentos\juego.zy")
+        );
+        assert!(path.is_absolute(), "a drive-letter path must be absolute");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_uri_to_path_windows_lowercase_drive() {
+        // Some clients lowercase the drive and encode the colon.
+        let path = uri_to_path("file:///d%3A/proyecto/main.zy").unwrap();
+        assert_eq!(path, PathBuf::from(r"d:\proyecto\main.zy"));
+        assert!(path.is_absolute());
     }
 
     #[test]
     fn test_uri_to_path_unicode_encoded() {
-        // BUG-003: VS Code sends percent-encoded URIs for directories with Unicode names.
-        // 源码 encodes as %E6%BA%90%E7%A0%81 in UTF-8 percent-encoding.
-        let uri = "file:///home/user/%E6%BA%90%E7%A0%81/mod.zy";
-        let path = uri_to_path(uri).unwrap();
-        assert_eq!(path, PathBuf::from("/home/user/源码/mod.zy"));
+        // BUG-003: VS Code sends percent-encoded URIs for directories with Unicode
+        // names. 源码 encodes as %E6%BA%90%E7%A0%81 in UTF-8 percent-encoding.
+        let uri = if cfg!(windows) {
+            "file:///D:/user/%E6%BA%90%E7%A0%81/mod.zy"
+        } else {
+            "file:///home/user/%E6%BA%90%E7%A0%81/mod.zy"
+        };
+        assert_eq!(uri_to_path(uri).unwrap(), abs("user/源码/mod.zy"));
     }
 
     #[test]
     fn test_uri_to_path_unicode_plain() {
-        // URIs with unencoded Unicode (generated by path_to_uri) must also work.
-        let uri = "file:///home/user/源码/mod.zy";
-        let path = uri_to_path(uri).unwrap();
-        assert_eq!(path, PathBuf::from("/home/user/源码/mod.zy"));
+        // URIs with unencoded Unicode must also work.
+        let uri = if cfg!(windows) {
+            "file:///D:/user/源码/mod.zy"
+        } else {
+            "file:///home/user/源码/mod.zy"
+        };
+        assert_eq!(uri_to_path(uri).unwrap(), abs("user/源码/mod.zy"));
     }
 
     #[test]
-    fn test_percent_decode() {
-        assert_eq!(percent_decode("%E6%BA%90%E7%A0%81"), "源码");
-        assert_eq!(percent_decode("hello%20world"), "hello world");
-        assert_eq!(percent_decode("no_encoding"), "no_encoding");
-        assert_eq!(percent_decode("%2F"), "/");
+    fn test_uri_to_path_accepts_bare_path() {
+        // Several callers hold a string that is a URI when it came from the editor
+        // and a plain path when it came from module resolution.
+        let path = abs("proyecto/main.zy");
+        assert_eq!(uri_to_path(&path.to_string_lossy()).unwrap(), path);
+    }
+
+    #[test]
+    fn test_drive_letter_is_a_path_not_a_scheme() {
+        // `Url::parse("D:\\x.zy")` succeeds — `D:` is a syntactically valid scheme —
+        // so a bare Windows path must be recognised before parsing, or it comes back
+        // as a `d:` URL naming no local file.
+        assert!(parse_uri(r"D:\proyecto\main.zy").is_none());
+        assert!(parse_uri("D:/proyecto/main.zy").is_none());
+        assert!(parse_uri("file:///D:/proyecto/main.zy").is_some());
+        // Two-letter schemes are real and must still parse.
+        assert!(parse_uri("ab:whatever").is_some());
+    }
+
+    #[test]
+    fn test_uri_to_path_rejects_other_schemes() {
+        // An `untitled:` or `http:` document names no file on this disk.
+        assert!(uri_to_path("untitled:Untitled-1").is_none());
+        assert!(uri_to_path("https://example.com/main.zy").is_none());
+    }
+
+    #[test]
+    fn test_uri_str_to_url_takes_uris_and_paths() {
+        let path = abs("proyecto/main.zy");
+        let from_uri = uri_str_to_url(&path_to_uri(&path)).unwrap();
+        let from_path = uri_str_to_url(&path.to_string_lossy()).unwrap();
+
+        assert_eq!(from_uri, from_path);
+        assert_eq!(from_uri.to_file_path().unwrap(), path);
     }
 
     #[test]
     fn test_get_module_by_uri() {
         let (_temp, workspace) = setup_test_workspace();
 
-        let main_uri = format!("file://{}", _temp.path().join("main.zy").display());
+        let main_uri = path_to_uri(&_temp.path().join("main.zy"));
         let module = workspace.get_module_by_uri(&main_uri);
 
         assert!(module.is_some());
