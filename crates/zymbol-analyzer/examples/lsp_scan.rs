@@ -60,8 +60,8 @@ fn main() {
                 continue;
             }
         };
-        let uri = format!("file://{}", abs.display());
-        analyzer.open_document(uri.clone().into(), content, 1);
+        let uri = zymbol_analyzer::workspace::path_to_uri(&abs);
+        analyzer.open_document(std::sync::Arc::clone(&uri), content, 1);
 
         for d in analyzer.get_diagnostics(&uri) {
             let sev = match d.severity {

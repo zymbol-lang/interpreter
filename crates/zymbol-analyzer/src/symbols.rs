@@ -40,14 +40,10 @@ impl SymbolRef {
 
     /// Convert to LSP Location
     pub fn to_location(&self) -> lsp_types::Location {
-        // Create URI - if it doesn't start with file://, add it
-        let uri_str = if self.uri.starts_with("file://") {
-            self.uri.to_string()
-        } else {
-            format!("file://{}", &*self.uri)
-        };
-        let uri = lsp_types::Url::parse(&uri_str)
-            .unwrap_or_else(|_| lsp_types::Url::parse("file:///unknown").unwrap());
+        // `self.uri` is a URI when it came from the editor and a path when it came
+        // from workspace scanning; `uri_str_to_url` takes either.
+        let uri = crate::workspace::uri_str_to_url(&self.uri)
+            .unwrap_or_else(|| lsp_types::Url::parse("file:///unknown").unwrap());
         lsp_types::Location {
             uri,
             range: crate::diagnostics::span_to_range(&self.span),

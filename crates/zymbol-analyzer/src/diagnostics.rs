@@ -351,7 +351,7 @@ mod tests {
             .expect("fixture exists");
         let content = std::fs::read_to_string(&path).expect("read fixture");
         crate::document::Document::new(
-            std::sync::Arc::from(format!("file://{}", path.display()).as_str()),
+            crate::workspace::path_to_uri(&path),
             content,
             0,
             FileId(0),
