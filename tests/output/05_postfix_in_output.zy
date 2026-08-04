@@ -1,0 +1,11 @@
+// Test: Postfix operators in >> require parentheses
+arr = [10, 20, 30, 40, 50]
+s = "hello world"
+
+>> (arr$#) ¶
+>> (arr$? 30) ¶
+>> (s$#) ¶
+>> (s$? 'o') ¶
+
+len = arr$#
+>> "len=" len ¶

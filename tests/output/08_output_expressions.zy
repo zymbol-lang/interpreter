@@ -1,0 +1,12 @@
+// Test: expressions in >> (arithmetic, logical, comparisons)
+a = 10
+b = 3
+>> (a + b) ¶
+>> (a - b) ¶
+>> (a * b) ¶
+>> (a / b) ¶
+>> (a % b) ¶
+>> (a > b) ¶
+>> (a == 10) ¶
+>> (!#0) ¶
+>> (a > 5 && b < 10) ¶

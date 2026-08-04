@@ -20,7 +20,12 @@
 Thumbs.db
 
 # Test output
-tests/output/
+#
+# `tests/output/` is NOT an output directory — it holds the test cases for the
+# output operator `>>`. Ignoring it by that name hid eight committed-nowhere tests
+# for over two months: they ran on the machine that wrote them and existed on no
+# other clone, so the parity suite counted 544 files there and 536 everywhere else.
+# Nothing writes into that directory; do not add the rule back.
 *.tmp
 
 # Scratch files the std/io and std/db tests create in the working directory.
