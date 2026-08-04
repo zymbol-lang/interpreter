@@ -2,7 +2,8 @@
 // Requires the SQLite ODBC driver (Driver={SQLite3}).
 <# ./db_es => db
 
-ruta = "Driver={SQLite3};Database=/tmp/zy_test_db_i18n.db;"
+// DSN rather than a driver name, relative database file - see stdlib_db_basic.zy.
+ruta = "DSN=zymbol_sqlite;Database=zy_test_db_i18n.db;"
 db::conectar("c", ruta)
 db::ejecutar("c", "DROP TABLE IF EXISTS items")
 db::ejecutar("c", "CREATE TABLE items(id INTEGER PRIMARY KEY, txt TEXT)")
