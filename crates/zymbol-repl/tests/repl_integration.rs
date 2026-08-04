@@ -333,6 +333,25 @@ fn terminal_is_reachable() -> bool {
     crossterm::terminal::size().is_ok()
 }
 
+/// Can this process actually enter raw mode?
+///
+/// A narrower question than [`terminal_is_reachable`], and the two do come apart.
+/// On a Linux box with no controlling terminal — `cargo test` under a CI runner, or
+/// any non-interactive session — `terminal::size()` still answers, while
+/// `enable_raw_mode()` fails with `ENXIO` because there is no `/dev/tty` to open.
+/// A test that asked the first question and then asserted the second failed on
+/// Linux while being right about Windows.
+///
+/// Asking by doing is the only answer that cannot drift: raw mode is enabled and
+/// immediately undone, which is exactly what the statement under test would do.
+fn raw_mode_is_available() -> bool {
+    if crossterm::terminal::enable_raw_mode().is_ok() {
+        let _ = crossterm::terminal::disable_raw_mode();
+        return true;
+    }
+    false
+}
+
 #[test]
 fn test_key_input_headless_graceful() {
     // <<| reads one keypress. In headless mode crossterm cannot access the
@@ -362,7 +381,7 @@ fn test_tui_block_headless_graceful() {
     let mut h = ReplTestHarness::new();
     let result = h.run_line(">>| { >> \"in tui\"¶ }");
 
-    if terminal_is_reachable() {
+    if raw_mode_is_available() {
         // Real terminal: block should execute cleanly.
         assert!(result.error.is_none(), "TUI block should work on a real TTY: {:?}", result.error);
     } else {

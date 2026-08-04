@@ -447,7 +447,7 @@ mod tests {
         let uri = if cfg!(windows) {
             "file:///D:/user/%E6%BA%90%E7%A0%81/mod.zy"
         } else {
-            "file:///home/user/%E6%BA%90%E7%A0%81/mod.zy"
+            "file:///user/%E6%BA%90%E7%A0%81/mod.zy"
         };
         assert_eq!(uri_to_path(uri).unwrap(), abs("user/源码/mod.zy"));
     }
@@ -458,7 +458,7 @@ mod tests {
         let uri = if cfg!(windows) {
             "file:///D:/user/源码/mod.zy"
         } else {
-            "file:///home/user/源码/mod.zy"
+            "file:///user/源码/mod.zy"
         };
         assert_eq!(uri_to_path(uri).unwrap(), abs("user/源码/mod.zy"));
     }
