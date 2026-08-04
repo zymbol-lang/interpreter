@@ -1,0 +1,15 @@
+// Test: String interpolation works in all contexts (not just >>)
+lang = "Zymbol"
+ver = 2
+msg = "Language: {lang} v{ver}"
+>> msg ¶
+
+greet(who) { <~ "Hello, {who}!" }
+>> greet("World") ¶
+
+arr = ["item_{lang}", "ver_{ver}"]
+>> arr[2] ¶
+>> arr[2] ¶
+
+CONST := "const_{lang}"
+>> CONST ¶

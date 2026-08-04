@@ -1,0 +1,7 @@
+// Test: newline via ¶ and \\
+>> "line1" ¶
+>> "line2" \\
+>> "line3" ¶
+>> "a" "b" "c" ¶
+>> ¶
+>> "after blank" ¶

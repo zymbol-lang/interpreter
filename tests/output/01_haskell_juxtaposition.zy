@@ -1,0 +1,9 @@
+// Test: Haskell-style juxtaposition — multiple items in >>
+x = 42
+name = "Alice"
+flag = #1
+>> x ¶
+>> name ¶
+>> "x=" x ¶
+>> "name=" name " x=" x ¶
+>> "flag=" flag " x=" x " name=" name ¶

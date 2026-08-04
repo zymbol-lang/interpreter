@@ -1,0 +1,10 @@
+// Test: Function calls in >> non-first position (was bug L1, now fixed)
+add(a, b) { <~ a + b }
+double = x -> x * 2
+square(n) { <~ n * n }
+
+>> add(3, 4) ¶
+>> "add=" add(3, 4) ¶
+>> "double=" double(5) ¶
+>> "sq=" square(6) ¶
+>> "a=" add(1, 2) " b=" double(3) " c=" square(4) ¶

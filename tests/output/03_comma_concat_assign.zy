@@ -1,0 +1,19 @@
+// Test: Juxtaposition concatenation in = and :=
+// Same-line adjacent expressions are implicitly concatenated (no operator needed)
+first = "John"
+last = "Doe"
+full = first " " last
+>> full ¶
+
+GREETING := "Hello, " first "!"
+>> GREETING ¶
+
+n = 42
+msg = "Value is: " n " (int)"
+>> msg ¶
+
+a = "foo"
+b = "bar"
+c = "baz"
+combined = a "-" b "-" c
+>> combined ¶
