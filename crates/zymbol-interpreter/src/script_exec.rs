@@ -5,8 +5,7 @@
 //! - Bash exec expressions: <\ expr1 expr2 ... \> (runs shell commands — expressions concatenated)
 
 use std::io::Write;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
 use zymbol_ast::{BashExecExpr, ExecuteExpr};
 use zymbol_lexer::Lexer;
 use zymbol_parser::Parser;
@@ -21,7 +20,10 @@ impl<W: Write> Interpreter<W> {
         // Resolve the file path relative to the calling script's directory.
         // Absolute paths are used as-is; everything else is resolved from the
         // parent of the current file (or base_dir if there is no current file).
-        let file_path = if execute.path.starts_with('/') {
+        // `is_absolute` rather than a leading `/`: on Windows `D:\lib\x.zy` is
+        // absolute and has no leading slash, so testing for one filed it as relative
+        // and joined it onto the current file's directory, producing nonsense.
+        let file_path = if Path::new(&execute.path).is_absolute() {
             PathBuf::from(&execute.path)
         } else {
             let current_dir = self.current_file
@@ -107,15 +109,22 @@ impl<W: Write> Interpreter<W> {
             command.push_str(&s);
         }
 
-        // Execute the shell command
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .output()
-            .map_err(|e| RuntimeError::Generic {
-                message: format!("failed to execute bash command: {}", e),
+        // Execute the shell command — see zymbol_common::shell for which shell that
+        // is and why the answer is not obvious on Windows.
+        let mut shell = zymbol_common::shell::shell_command(&command).map_err(|e| {
+            RuntimeError::Generic {
+                message: e.to_string(),
                 span: bash.span,
-            })?;
+            }
+        })?;
+        let output = shell.output().map_err(|e| RuntimeError::Generic {
+            message: format!(
+                "failed to run `{}`: {}",
+                shell.get_program().to_string_lossy(),
+                e
+            ),
+            span: bash.span,
+        })?;
 
         // Capture both stdout and stderr
         let mut result = String::from_utf8_lossy(&output.stdout).to_string();

@@ -5,7 +5,9 @@
 //! - Literal types (Int, Float, String, Char, Bool)
 //! - Operator types (Binary, Unary, Collection)
 //! - The `std/` export table (`stdlib`), shared by the engines and the tooling
+//! - Locating the POSIX shell that `<\ \>` runs through (`shell`)
 
+pub mod shell;
 pub mod stdlib;
 
 use indexmap::IndexMap;

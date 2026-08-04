@@ -323,6 +323,25 @@ pub enum VmError {
 // Free helpers (not methods — avoids borrow conflicts in the dispatch loop)
 // ──────────────────────────────────────────────────────────────────────────────
 
+/// Run `cmd` through the system shell, for `<\ \>` and `</ />`.
+///
+/// Shared by both instructions and resolved by the same code the tree-walker uses
+/// (`zymbol_common::shell`), so the two engines cannot disagree about which shell
+/// a script runs in. A spawn failure names the program, which the previous
+/// `failed to execute bash command: program not found` did not — it named a shell
+/// the code was not even running.
+fn run_in_shell(cmd: &str) -> Result<std::process::Output, VmError> {
+    let mut shell =
+        zymbol_common::shell::shell_command(cmd).map_err(|e| VmError::Generic(e.to_string()))?;
+    shell.output().map_err(|e| {
+        VmError::Generic(format!(
+            "failed to run `{}`: {}",
+            shell.get_program().to_string_lossy(),
+            e
+        ))
+    })
+}
+
 fn fmt_comma_int(n: i64) -> String {
     let neg = n < 0;
     let digits = format!("{}", n.unsigned_abs());
@@ -2554,11 +2573,7 @@ impl<W: Write> VM<W> {
                             BuildPart::Reg(r) => cmd.push_str(&self.reg_get(*r).to_string_repr()),
                         }
                     }
-                    let out = std::process::Command::new("sh")
-                        .arg("-c")
-                        .arg(&cmd)
-                        .output()
-                        .map_err(VmError::Io)?;
+                    let out = run_in_shell(&cmd)?;
                     // Capture both stdout and stderr (mirrors tree-walker behavior)
                     let mut result = String::from_utf8_lossy(&out.stdout).into_owned();
                     if !out.stderr.is_empty() {
@@ -2584,11 +2599,7 @@ impl<W: Write> VM<W> {
                             BuildPart::Reg(r) => cmd.push_str(&self.reg_get(*r).to_string_repr()),
                         }
                     }
-                    let out = std::process::Command::new("sh")
-                        .arg("-c")
-                        .arg(&cmd)
-                        .output()
-                        .map_err(VmError::Io)?;
+                    let out = run_in_shell(&cmd)?;
                     if !out.status.success() {
                         let mut msg = String::from_utf8_lossy(&out.stderr).into_owned();
                         if msg.is_empty() {
@@ -2733,18 +2744,20 @@ impl<W: Write> VM<W> {
                 }
 
                 &Instruction::ReadKey(dst, blocking) => {
-                    use crossterm::event::{self, Event, KeyEvent};
+                    use crossterm::event::{self, Event};
                     let ch = if blocking {
                         loop {
                             match event::read() {
-                                Ok(Event::Key(KeyEvent { code, .. })) => break vm_map_key_code(code),
+                                Ok(Event::Key(key)) if vm_is_key_press(&key) => {
+                                    break vm_map_key_code(key.code)
+                                }
                                 Ok(_) => continue,
                                 Err(e) => return Err(VmError::Generic(e.to_string())),
                             }
                         }
                     } else if event::poll(std::time::Duration::ZERO).unwrap_or(false) {
                         match event::read().unwrap_or(Event::FocusLost) {
-                            Event::Key(KeyEvent { code, .. }) => vm_map_key_code(code),
+                            Event::Key(key) if vm_is_key_press(&key) => vm_map_key_code(key.code),
                             _ => '\0',
                         }
                     } else {
@@ -3818,6 +3831,17 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
             got: other.type_name().to_string(),
         }),
     }
+}
+
+/// Is this a key going *down*, as opposed to coming back up?
+///
+/// Mirrors the tree-walker's `is_key_press` — Windows reports key releases as well
+/// as presses, so `<<|` counted every keystroke twice there. See the comment on the
+/// tree-walker copy for the full story; the two must agree or the engines diverge on
+/// exactly the platform where the behaviour is hard to notice.
+fn vm_is_key_press(key: &crossterm::event::KeyEvent) -> bool {
+    use crossterm::event::KeyEventKind;
+    matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
 }
 
 fn vm_map_key_code(code: crossterm::event::KeyCode) -> char {

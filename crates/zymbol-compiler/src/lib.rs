@@ -527,11 +527,18 @@ impl Compiler {
         let (tokens, _lex_errs) = lexer.tokenize();
         let parser = zymbol_parser::Parser::new(tokens);
         let module_prog = parser.parse().map_err(|errors| {
-            let canon_path = canonical.display().to_string();
+            // The path as written, not `canonical` — same rule as the semantic gate
+            // below, and for the same reason. `canonicalize()` is for identity
+            // (cycle detection), never for text a user reads: on Windows it returns
+            // the extended-length form, so this message named the module
+            // `\\?\D:\...\sistema.zy` while the tree-walker named `D:\...\sistema.zy`.
+            // A path the user cannot type, and a tree-walker/VM mismatch that only
+            // appears off Linux, where canonicalize changes nothing visible.
+            let shown_path = path.display().to_string();
             let detail: Vec<String> = errors.iter().map(|d| {
                 let loc = d.span
-                    .map(|s| format!("{}:{}:{}", canon_path, s.start.line, s.start.column))
-                    .unwrap_or_else(|| canon_path.clone());
+                    .map(|s| format!("{}:{}:{}", shown_path, s.start.line, s.start.column))
+                    .unwrap_or_else(|| shown_path.clone());
                 let mut msg = format!("  {}: {}", loc, d.message);
                 if let Some(help) = &d.help {
                     msg.push_str(&format!("\n    help: {}", help));
@@ -541,7 +548,7 @@ impl Compiler {
             CompileError::ModuleParse(format!(
                 "{} parse error(s) in '{}'\n{}",
                 errors.len(),
-                canon_path,
+                shown_path,
                 detail.join("\n")
             ))
         })?;
@@ -1817,7 +1824,10 @@ impl Compiler {
             Expr::Execute(exec) => {
                 // Resolve path relative to base_dir (same as WT's eval_execute).
                 // Absolute paths are used as-is; everything else is joined to base_dir.
-                let abs_path = if exec.path.starts_with('/') {
+                // `is_absolute` rather than a leading `/`: on Windows `D:\lib\x.zy`
+                // is absolute and has no leading slash, so testing for one filed it
+                // as relative and joined it onto base_dir, producing nonsense.
+                let abs_path = if std::path::Path::new(&exec.path).is_absolute() {
                     exec.path.clone()
                 } else if let Some(ref base) = self.base_dir {
                     base.join(&exec.path).to_string_lossy().to_string()
