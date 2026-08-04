@@ -1,0 +1,40 @@
+# Line endings are part of this repository's test contract, so they are pinned
+# here rather than left to each machine's Git configuration.
+#
+# Without this file, Git for Windows' default `core.autocrlf=true` checks every
+# text file out as CRLF. Three things then break, none of them obviously about
+# line endings:
+#
+#   * `.expected` goldens arrive as CRLF while a program's output is LF, so every
+#     golden comparison fails until the harness normalises both sides - which the
+#     shell suites do not, leaving them unusable on Windows.
+#   * A parse error quotes the offending source, and a CRLF source file puts the
+#     carriage return inside the quoted text: `String(" >\r\n>> ")` on Windows
+#     against `String(" >\n>> ")` on Linux. Identical sources, different
+#     diagnostics.
+#   * `.input` fixtures feed the interpreter through stdin, where a stray CR is a
+#     character the program under test was never meant to see.
+#
+# `eol=lf` keeps the working tree the same on all three platforms, which is the
+# only way the same test can assert the same bytes everywhere.
+#
+# Applying this to an existing clone needs one command, because Git does not
+# rewrite files already on disk:
+#
+#     git add --renormalize .
+#
+* text=auto eol=lf
+
+# Windows shells read these through the legacy console and want CRLF.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Not text: Git must never touch a byte.
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.zyc  binary
+*.msi  binary
+*.deb  binary
+*.exe  binary
+*.dll  binary
