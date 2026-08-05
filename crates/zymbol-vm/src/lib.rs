@@ -2755,13 +2755,23 @@ impl<W: Write> VM<W> {
                                 Err(e) => return Err(VmError::Generic(e.to_string())),
                             }
                         }
-                    } else if event::poll(std::time::Duration::ZERO).unwrap_or(false) {
-                        match event::read().unwrap_or(Event::FocusLost) {
-                            Event::Key(key) if vm_is_key_press(&key) => vm_map_key_code(key.code),
-                            _ => '\0',
-                        }
                     } else {
-                        '\0'
+                        // Drain to the first keypress rather than giving up on the
+                        // first event that is not one — see the tree-walker's
+                        // execute_key_input for why a single read per call makes a
+                        // game loop fall a fixed number of ticks behind on Windows.
+                        let mut found = '\0';
+                        while event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+                            match event::read() {
+                                Ok(Event::Key(key)) if vm_is_key_press(&key) => {
+                                    found = vm_map_key_code(key.code);
+                                    break;
+                                }
+                                Ok(_) => continue,
+                                Err(_) => break,
+                            }
+                        }
+                        found
                     };
                     wreg!(dst, Value::Char(ch));
                 }
