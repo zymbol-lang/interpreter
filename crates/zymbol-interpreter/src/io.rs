@@ -164,12 +164,31 @@ impl<W: Write> Interpreter<W> {
                 }
             }
         } else {
-            if event::poll(std::time::Duration::ZERO).unwrap_or(false) {
-                match event::read().unwrap_or(Event::FocusLost) {
-                    Event::Key(key) if is_key_press(&key) => map_key_code(key.code),
-                    _ => '\0',
+            // Drain until a keypress or until nothing is pending — do not stop at the
+            // first event that is not one.
+            //
+            // Reading a single event per call was enough while every event was a
+            // keypress. On Windows each keystroke also delivers a release, so a call
+            // that happened to pull the release returned "no key" and left the queue
+            // one event longer than it found it. In a game loop calling this once per
+            // tick, the backlog grows and every turn arrives late — the same two-cell
+            // lag whether the tick is 40 ms or 160 ms, which is what gives it away as
+            // a queue and not a timing problem.
+            //
+            // Draining also covers resize and focus events, which could waste a tick
+            // on any platform.
+            let mut found = '\0';
+            while event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+                match event::read() {
+                    Ok(Event::Key(key)) if is_key_press(&key) => {
+                        found = map_key_code(key.code);
+                        break;
+                    }
+                    Ok(_) => continue,
+                    Err(_) => break,
                 }
-            } else { '\0' }
+            }
+            found
         };
         self.set_variable(&ki.variable, Value::Char(ch));
         Ok(())
