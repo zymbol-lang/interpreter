@@ -1,0 +1,5 @@
+// A variadic native function (arity -1) accepts either shape.
+<# std/math => math
+
+>> math::log(8.0) ¶
+>> math::log(8.0, 2.0) ¶

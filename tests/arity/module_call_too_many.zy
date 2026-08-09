@@ -1,0 +1,9 @@
+// A qualified call with one argument too many.
+//
+// Rejected before execution, exactly as the bare-identifier form always was.
+// Neither engine prints "antes": semantic analysis stops the program first.
+<# ./lib_saludo => s
+
+>> "antes" ¶
+s::saluda("ana", "sobra")
+>> "después" ¶

@@ -285,6 +285,11 @@ pub struct TypeChecker {
     /// Import aliases registered in the current program (e.g. `u` from `<# ./utils <= u`)
     /// These are valid identifiers that resolve to modules, not regular variables.
     module_aliases: HashSet<String>,
+    /// Parameter counts of the functions each alias can reach, so that
+    /// `m::f(a, b)` is checked the same way `f(a, b)` already was. Empty
+    /// unless a caller supplies it with [`Self::set_module_arities`] — a
+    /// qualified call is left unchecked rather than guessed at.
+    module_arities: crate::call_arity::AliasArities,
     /// Nesting depth of @ loop bodies currently being analyzed.
     /// Used to suppress "redundant °" warnings inside loops, where every iteration
     /// re-executes the same statement (°x is needed on every iteration, not just the first).
@@ -299,8 +304,19 @@ impl TypeChecker {
             errors: Vec::new(),
             warnings: Vec::new(),
             module_aliases: HashSet::new(),
+            module_arities: crate::call_arity::AliasArities::new(),
             loop_depth: 0,
         }
+    }
+
+    /// Supply the parameter counts behind each import alias, enabling the arity
+    /// check on `alias::func(...)` calls.
+    ///
+    /// Build the table with [`module_arities`](crate::module_arities) to read
+    /// modules from disk, or assemble it from editor buffers — the LSP checks
+    /// what is on screen, which may not be what is saved.
+    pub fn set_module_arities(&mut self, arities: crate::call_arity::AliasArities) {
+        self.module_arities = arities;
     }
 
     /// Check a program and return all diagnostics (errors + warnings)
@@ -1667,6 +1683,34 @@ impl TypeChecker {
                         return ZymbolType::Unknown;
                     }
                 }
+
+                // `alias::func(...)` — same check as above, against the arity
+                // table the caller supplied. Without a table, or for a name the
+                // module does not export (reported separately), nothing is said.
+                if let Expr::MemberAccess(access) = call.callable.unwrap_group() {
+                    if access.is_module_access {
+                        if let Expr::Identifier(alias) = access.object.unwrap_group() {
+                            if let Some(expected) = self
+                                .module_arities
+                                .get(&alias.name)
+                                .and_then(|module| module.get(&access.field))
+                                .copied()
+                            {
+                                // A variadic function (-1) takes any number.
+                                if expected >= 0 && arg_types.len() != expected as usize {
+                                    self.errors.push(
+                                        Diagnostic::error(format!(
+                                            "function '{}::{}' expects {} argument(s), but {} were provided",
+                                            alias.name, access.field, expected, arg_types.len()
+                                        ))
+                                        .with_span(call.span)
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
                 ZymbolType::Any
             }
 

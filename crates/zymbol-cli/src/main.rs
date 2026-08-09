@@ -393,8 +393,15 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         }
     }
 
-    // Run type checking
+    // Run type checking. The arity table must be supplied here too, not only in
+    // `check`: an argument-count mismatch is fatal before execution, and it has
+    // to be fatal for `alias::func(...)` exactly as it already was for a bare
+    // `func(...)`. Without it `run` would reject one and execute the other.
     let mut type_checker = TypeChecker::new();
+    type_checker.set_module_arities(zymbol_semantic::module_arities(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
     let type_errors = type_checker.check_errors(&program);
 
     // Type errors are fatal - stop execution
@@ -540,8 +547,12 @@ fn build_file(path: PathBuf, output: Option<PathBuf>, release: bool) -> Result<(
         }
     }
 
-    // Run type checking
+    // Run type checking, with the same arity table `run` and `check` use.
     let mut type_checker = TypeChecker::new();
+    type_checker.set_module_arities(zymbol_semantic::module_arities(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
     let type_errors = type_checker.check_errors(&program);
 
     // Type errors are fatal - stop build
@@ -965,8 +976,15 @@ fn check_source(
         }
     }
 
-    // Run type checking
+    // Run type checking. Feeding it the imports' arities extends the existing
+    // argument-count check to `alias::func(...)`, which used to go unchecked —
+    // a wrong count there only ever failed at runtime, on whichever branch
+    // happened to make the call.
     let mut type_checker = TypeChecker::new();
+    type_checker.set_module_arities(zymbol_semantic::module_arities(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
     let type_errors = type_checker.check_errors(&program);
 
     // Type errors are fatal

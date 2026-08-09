@@ -1,0 +1,9 @@
+// A qualified call with one argument too few.
+//
+// The missing parameter used to read as Unit under the VM, printing an empty
+// name instead of failing.
+<# ./lib_saludo => s
+
+>> "antes" ¶
+s::saluda()
+>> "después" ¶

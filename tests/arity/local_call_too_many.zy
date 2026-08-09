@@ -1,0 +1,9 @@
+// The bare-identifier form, for contrast: this is the behaviour the qualified
+// and std/ forms were aligned to, not a new rule invented for them.
+f(nombre) {
+    >> "hola, " nombre ¶
+}
+
+>> "antes" ¶
+f("ana", "sobra")
+>> "después" ¶

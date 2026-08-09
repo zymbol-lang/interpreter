@@ -158,6 +158,12 @@ impl Analyzer {
                 let mut var_analyzer = zymbol_semantic::VariableAnalyzer::new();
                 let _ = var_analyzer.analyze(program);
                 let mut type_checker = zymbol_semantic::TypeChecker::new();
+                if let Some(base_dir) = path.parent() {
+                    type_checker.set_module_arities(zymbol_semantic::module_arities(
+                        &program.imports,
+                        base_dir,
+                    ));
+                }
                 var_analyzer
                     .semantic_errors()
                     .iter()

@@ -157,8 +157,26 @@ impl DiagnosticPipeline {
                 lsp_diagnostics.push(to_lsp_diagnostic(semantic_error));
             }
 
-            // Type checking
+            // The document's path on disk, when it has one. Needed to resolve
+            // imports — both for the arity table below and for module analysis.
+            // Virtual documents have none and skip those passes.
+            let path = crate::workspace::uri_to_path(&document.uri).or_else(|| {
+                // Plain paths (no file:// scheme) are used by tests
+                // and tooling — accept them when they exist on disk.
+                let p = std::path::PathBuf::from(document.uri.as_ref());
+                p.exists().then_some(p)
+            });
+
+            // Type checking. The arity table makes `alias::func(...)` checked
+            // in the editor exactly as `zymbol check` checks it — without it
+            // the two disagree, and the editor is the one people believe.
             let mut type_checker = zymbol_semantic::TypeChecker::new();
+            if let Some(base_dir) = path.as_deref().and_then(|p| p.parent()) {
+                type_checker.set_module_arities(zymbol_semantic::module_arities(
+                    &program.imports,
+                    base_dir,
+                ));
+            }
             let type_diagnostics = type_checker.check(program);
 
             // Convert type diagnostics
@@ -171,13 +189,6 @@ impl DiagnosticPipeline {
             // validation). Resolving imported files needs a real filesystem
             // path, so virtual documents without one skip this pass.
             if program.module_decl.is_some() || !program.imports.is_empty() {
-                let path = crate::workspace::uri_to_path(&document.uri)
-                    .or_else(|| {
-                        // Plain paths (no file:// scheme) are used by tests
-                        // and tooling — accept them when they exist on disk.
-                        let p = std::path::PathBuf::from(document.uri.as_ref());
-                        p.exists().then_some(p)
-                    });
                 if let Some(path) = path {
                     if let Some(base_dir) = path.parent() {
                         let mut module_analyzer =
