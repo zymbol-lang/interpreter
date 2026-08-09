@@ -1,7 +1,12 @@
-# Hotfix v0.0.8_HotFix01 — Windows x86_64
+# Windows x86_64 — the eleven findings that ship in v0.0.9
 
 **Status:** fixed and verified on Windows 11; the Linux side re-verified on Debian.
-**Branch:** `v0.0.8_HotFix01`
+**Branch:** `v0.0.9`
+
+This work started as a hotfix branch off v0.0.8, and this document was called
+`HOTFIX_V008_01.md`. **There is no hotfix release.** Eleven findings is not a patch on
+top of a release, it is the substance of the next one, so the branch became `v0.0.9`
+and these corrections ship as part of it rather than as a separate 0.0.8.1.
 
 This document was written on Linux, by reading the code and reproducing a Windows
 user's report. It has since been rewritten on the Windows 11 machine where the work
