@@ -370,6 +370,41 @@ only a name that does not itself follow `.` or `::` is read as a module access.
 Regression: `crates/zymbol-semantic/src/stdlib_access.rs` (8 cases),
 `crates/zymbol-cli/tests/cli_check_stdlib.rs` (4 cases).
 
+### ~~L28 — A qualified call's argument count was never checked, and the VM ran it anyway~~ Fixed in v0.0.8
+
+The argument-count check only ever looked at a bare identifier as the callable, so
+`f("a","b")` was reported while the same mistake written `m::f("a","b")` was not — and
+neither was `math::sqrt(4.0, 9.0)`, even though L27 had already put every `std/`
+function's arity in `zymbol_common::stdlib`; the number was recorded and never read.
+
+Worse, the two engines then disagreed. The tree-walker raised. The VM did not check at
+all: `Instruction::Call` discarded `arg_regs.len()` and copied every argument into the
+callee's register window, so one argument too many **overwrote one of the callee's own
+locals** and execution continued with corrupted state, while one too few left a
+parameter reading as `Unit`. `CallBuiltin` likewise ignored the surplus, so
+`math::sqrt(4.0, 9.0)` printed `2` under `--vm` and raised under the tree-walker.
+
+`crates/zymbol-semantic/src/call_arity.rs` now builds the alias → function → arity table
+(following re-exports, depth-capped, `-1` for variadic `std/` functions such as
+`net::get`), injected via `TypeChecker::set_module_arities` by `zymbol check`, `zymbol run`,
+`zymbol build` and the analyzer alike — so the CLI, the editor and both engines agree, and
+a mismatch is fatal before execution in every one of them. Supplying the table only to
+`check` would have left `run` rejecting `f(a, b)` while executing `m::f(a, b)`: the same
+mistake, two behaviours.
+
+The VM compiler also emits `RaiseError` at the call site, with the tree-walker's exact
+wording. That is a backstop for callers that drive the compiler and VM without semantic
+analysis, not the reported path — without it, `Instruction::Call` still copies a surplus
+argument over one of the callee's registers.
+
+Found by the zyml engine, which had the rule and rejected `ZethyCLI/main.zy` over a call
+the Rust tooling accepted. Both programs it caught had the bad call on a rarely taken
+branch — ZethyCLI's "Ollama not reachable" arm, and an extra argument in ZyAudit's
+`测试/test_析答.zy` that was broken under the tree-walker and worked by accident under the
+VM. Rejecting before execution also puts all three engines on the same behaviour, zyml
+included; only the message wording still differs. Regression: `tests/arity/` (7 cases,
+TW == VM), `crates/zymbol-semantic/src/call_arity.rs` (6 cases).
+
 ---
 
 ## 20b. Error Taxonomy
@@ -408,10 +443,48 @@ Error [line N]: module 'mod' is private
 **Common triggers:**
 - Reference to an undefined variable or function
 - Calling an undefined function (bare-identifier calls are statically checked since v0.0.7)
+- Calling any function with the wrong number of arguments (see *Argument counts* below)
 - Accessing a private module from outside
 - Circular imports
 
 Semantic errors are always fatal and cannot be caught at runtime. They are reported before execution starts.
+
+---
+
+### Argument Counts
+
+Since v0.0.8 every call form is checked against the callee's parameter list, whichever way
+it is written:
+
+| Call form | Example |
+|-----------|---------|
+| Bare identifier | `f("a", "b")` |
+| Module alias | `ui::show_error("a", "b")` |
+| Standard library | `math::sqrt(4.0, 9.0)` |
+
+A mismatch is a **semantic error**: fatal, reported before execution begins, by `zymbol
+check`, `zymbol run` and `zymbol build` alike, and identically under both engines. It is
+fatal even where the call could never run —
+
+```zymbol
+? (#0) {
+    s::saluda("ana", "sobra")   // rejected; the program does not start
+}
+```
+
+— because the check is static and an argument-count mismatch is never intentional. This is
+what the language had always done for the bare-identifier form; v0.0.8 aligned the other
+two with it rather than inventing a rule for them.
+
+A `std/` function declared variadic — `net::get`, which takes a URL with or without a
+header map — accepts any count and is never reported.
+
+Before v0.0.8 only the bare-identifier form was checked. The other two passed `zymbol check`
+silently, and the two engines then disagreed: the tree-walker raised at run time, while the
+VM ignored the mismatch — a surplus argument was written over one of the callee's own
+registers and execution continued with corrupted state. See `tests/arity/` for the
+regression corpus, which covers all three call forms plus the variadic and dead-branch
+cases.
 
 ---
 
