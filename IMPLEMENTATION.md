@@ -16,7 +16,7 @@ Zymbol has two execution strategies that produce identical output for all suppor
 | Mode | Invocation | Description |
 |------|-----------|-------------|
 | Tree-walker | `zymbol run file.zy` | Walks the AST directly. Default. Supports all language features. |
-| Register VM | `zymbol run --vm file.zy` | Compiles to bytecode first, then executes. ~4× faster. Module system support reached parity with the tree-walker in v0.0.8 (see REFERENCE.md L23 and `tests/scripts/vm_compare.sh`, 544/544). Default engine for `.zyp` packages. |
+| Register VM | `zymbol run --vm file.zy` | Compiles to bytecode first, then executes. ~4× faster. Module system support reached parity with the tree-walker in v0.0.8 (see REFERENCE.md L23 and `tests/scripts/vm_compare.sh`, 551/551). Argument-count mismatches are rejected by semantic analysis before either engine starts; the compiler's own call-site check is a backstop for API callers that skip that analysis (REFERENCE.md L28). Default engine for `.zyp` packages. |
 
 All examples in GUIDE.md are verified against both modes. A feature listed as "TW only" in the coverage table below is not yet supported by the VM.
 
@@ -33,7 +33,7 @@ A. [Normative EBNF Grammar](#appendix-a-normative-ebnf-grammar)
 
 The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) and reproduced in full in [Appendix A](#appendix-a-normative-ebnf-grammar). The table below summarizes implementation status per feature.
 
-> **What "parity" means**: every parity test exercises features marked ✅|✅ and produces identical output in both tree-walker and VM. Tests for features marked ⚠ (VM unsupported) or `—` (VM not applicable) run against the tree-walker only and are not part of the parity count. The authoritative count comes from `bash tests/scripts/vm_compare.sh` (502/502 as of v0.0.7).
+> **What "parity" means**: every parity test exercises features marked ✅|✅ and produces identical output in both tree-walker and VM. Tests for features marked ⚠ (VM unsupported) or `—` (VM not applicable) run against the tree-walker only and are not part of the parity count. The authoritative count comes from `bash tests/scripts/vm_compare.sh` (551/551 as of v0.0.8, including `tests/arity/`).
 >
 > **Legend**: ✅ fully supported · ⚠ tree-walker only · ❌ not implemented · `—` not applicable to this mode
 
@@ -108,6 +108,7 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 | `std/db` (ODBC, vendor-neutral) | ✅ | ✅ | v0.0.7 — soft `##DB` errors; builtin ids 500–514 |
 | `std/term` (terminal display metrics) | ✅ | ✅ | v0.0.8 — `width`/`pad_*`/`center`/`truncate`; columns via `unicode-width`; builtin ids 600–604 |
 | Static undefined-function detection at `check` time | ✅ | — | v0.0.7 — semantic phase (`zymbol-semantic/type_check.rs`) |
+| Static argument-count check, all call forms | ✅ | — | v0.0.8 — `f()`, `alias::f()` and `std::f()` alike, fatal before execution; arity table from `zymbol-semantic/call_arity.rs` (REFERENCE.md L28) |
 | Auto-free (destruction at last use) | ✅ | ✅ | v0.0.8 — `zymbol-semantic/last_use.rs`; TW frees per statement, VM emits `LoadUnit` (temporaries not yet covered) |
 | `.zyp` packages (`zymbol package`, `zymbol run pkg.zyp`) | ✅ | ✅ | v0.0.8 — CLI/format feature, no grammar surface; VM is the default engine for a `.zyp` |
 | `do-while ~>` (post-cond loop) | ❌ | ❌ | **Dismissed 2026-06-12** — infinite loop + `@!` is the idiom; `~>` stays unoccupied |
