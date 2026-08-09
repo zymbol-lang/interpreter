@@ -1,0 +1,9 @@
+// A native function called with one argument too many.
+//
+// The VM's CallBuiltin ignored the extra register, so this printed 2 under
+// --vm and raised under the tree-walker.
+<# std/math => math
+
+>> "antes" ¶
+>> math::sqrt(4.0, 9.0) ¶
+>> "después" ¶

@@ -1,0 +1,8 @@
+// Module used by the arity tests: one function, one parameter.
+# lib_saludo {
+    #> { saluda }
+
+    saluda(nombre) {
+        >> "hola, " nombre ¶
+    }
+}

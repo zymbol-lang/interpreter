@@ -14,7 +14,6 @@ zymbol-span = { path = "../zymbol-span" }
 zymbol-common = { path = "../zymbol-common" }
 # StringPart appears in zymbol-ast's InputPrompt::Interpolated payload
 zymbol-lexer = { path = "../zymbol-lexer" }
-thiserror.workspace = true
-
-[dev-dependencies]
+# call_arity reads a module's source to learn its exported functions' arities
 zymbol-parser = { path = "../zymbol-parser" }
+thiserror.workspace = true

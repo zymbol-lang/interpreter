@@ -1,0 +1,13 @@
+// An argument-count mismatch is fatal even where the call can never run.
+//
+// The check is static and a mismatch is never intentional, so the program is
+// rejected rather than run up to the bad call. This is what the language has
+// always done for a bare `f(a, b)`; the qualified form now matches it, and so
+// does `run` — it used to reject the local form and execute this one.
+<# ./lib_saludo => s
+
+>> "vivo" ¶
+? (#0) {
+    s::saluda("ana", "sobra")
+}
+>> "fin" ¶

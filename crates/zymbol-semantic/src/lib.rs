@@ -11,6 +11,7 @@
 //! - Definition-use chain analysis
 
 
+mod call_arity;
 mod modules;
 mod stdlib_access;
 mod variable_analysis;
@@ -19,6 +20,9 @@ mod def_use;
 mod last_use;
 mod type_check;
 
+pub use call_arity::{
+    arities_of_module_file, module_arities, resolved_import_path, AliasArities, ModuleArities,
+};
 pub use modules::{SemanticError, ExportedItem, ExportTable, ModuleAnalyzer};
 pub use stdlib_access::check_stdlib_access;
 pub use variable_analysis::{VariableAnalyzer, VariableInfo, VariableDiagnostic, Severity};

@@ -330,6 +330,15 @@ pub struct Compiler {
     compiled_modules: HashMap<PathBuf, CompiledModuleExports>,
     /// Builtin function IDs: "alias::func" → builtin_id (for std/math, std/random).
     builtin_map: HashMap<String, u16>,
+    /// Declared parameter count per compiled function, so a call with the wrong
+    /// number of arguments fails the way the tree-walker fails it. `Instruction::Call`
+    /// ignores `arg_regs.len()` entirely: it copies every argument into the callee's
+    /// registers, so one argument too many overwrote a local of the callee and the
+    /// program carried on with corrupted state, while the tree-walker raised.
+    func_arity: HashMap<FuncIdx, u16>,
+    /// Declared argument count per builtin id; `-1` for the variadic ones.
+    /// Same purpose as `func_arity`, for `CallBuiltin`.
+    builtin_arity: HashMap<u16, i32>,
 }
 
 impl Compiler {
@@ -355,6 +364,8 @@ impl Compiler {
             fn_source: HashMap::new(),
             compiled_modules: HashMap::new(),
             builtin_map: HashMap::new(),
+            func_arity: HashMap::new(),
+            builtin_arity: HashMap::new(),
             auto_free_excluded: HashSet::new(),
         };
 
@@ -376,6 +387,7 @@ impl Compiler {
             if let Statement::FunctionDecl(decl) = stmt {
                 let idx = compiler.functions.len() as FuncIdx;
                 compiler.function_index.insert(decl.name.clone(), idx);
+                compiler.func_arity.insert(idx, decl.parameters.len() as u16);
                 // Register output param flags
                 let out_flags: Vec<bool> = decl.parameters.iter()
                     .map(|p| p.kind == zymbol_ast::ParameterKind::Output)
@@ -460,8 +472,14 @@ impl Compiler {
             let module_key = import.path.components.join("/");
             if let Some(entries) = stdlib_builtin_entries(&module_key) {
                 let alias = import.alias.clone();
+                let declared = zymbol_common::stdlib::module(&module_key);
                 for (func_name, builtin_id) in entries {
                     self.builtin_map.insert(format!("{}::{}", alias, func_name), builtin_id);
+                    // Keyed by builtin id, not by "alias::func", so an i18n layer
+                    // that re-exports the builtin under another name keeps its arity.
+                    if let Some(f) = declared.and_then(|m| m.function(func_name)) {
+                        self.builtin_arity.insert(builtin_id, f.arity);
+                    }
                 }
                 if module_key == "std/math" {
                     self.module_constants.insert(
@@ -651,6 +669,7 @@ impl Compiler {
         for stmt in &module_prog.statements {
             if let Statement::FunctionDecl(decl) = stmt {
                 if let Some(&idx) = local_scope.get(&decl.name) {
+                    self.func_arity.insert(idx, decl.parameters.len() as u16);
                     let out_flags: Vec<bool> = decl
                         .parameters
                         .iter()
@@ -2282,6 +2301,56 @@ impl Compiler {
         Ok(dst)
     }
 
+    /// The expected count when `got` arguments cannot satisfy it, else `None`.
+    ///
+    /// `None` in, `None` out: a call whose target has no recorded arity — a
+    /// closure chunk, a function reached through a path that never registered
+    /// one — is compiled as before rather than rejected on a guess. A negative
+    /// arity marks a variadic builtin, which any count satisfies.
+    fn arity_error(&self, declared: Option<i32>, got: usize) -> Option<i32> {
+        match declared {
+            Some(expected) if expected >= 0 && expected as usize != got => Some(expected),
+            _ => None,
+        }
+    }
+
+    /// Emit the tree-walker's arity error at this call site.
+    ///
+    /// This is a backstop, not the primary check. Semantic analysis rejects an
+    /// argument-count mismatch before either engine starts, so a program run
+    /// through the CLI never reaches these instructions. They matter when the
+    /// compiler and VM are driven directly, without that analysis: without them
+    /// `Instruction::Call` copies every argument into the callee's register
+    /// window and a surplus one overwrites a local, which is silent corruption
+    /// rather than an error.
+    ///
+    /// A `CompileError` would be the wrong shape for a backstop — it would make
+    /// the VM refuse programs the tree-walker accepts whenever the two are
+    /// driven without analysis. Raising at the call site keeps the engines
+    /// interchangeable.
+    ///
+    /// The two wordings are the tree-walker's, which phrases native and Zymbol
+    /// functions differently (`argument(s)` vs `arguments`); parity is measured
+    /// on the exact bytes, so they are reproduced rather than unified.
+    fn raise_arity(
+        &mut self,
+        expected: i32,
+        got: usize,
+        native: bool,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let msg = if native {
+            format!("function expects {} argument(s), got {}", expected, got)
+        } else {
+            format!("function expects {} arguments, got {}", expected, got)
+        };
+        let idx = self.intern_string(&msg);
+        let dst = ctx.alloc_temp()?;
+        ctx.emit(Instruction::RaiseError(idx));
+        ctx.emit(Instruction::LoadUnit(dst));
+        Ok(dst)
+    }
+
     fn compile_call(
         &mut self,
         call: &zymbol_ast::FunctionCallExpr,
@@ -2302,6 +2371,15 @@ impl Compiler {
             let mut arg_regs = Vec::with_capacity(call.arguments.len());
             for arg in &call.arguments {
                 arg_regs.push(self.compile_expr(arg, ctx)?);
+            }
+            // Wrong argument count: raise where the tree-walker raises. Native
+            // functions ignore the extra registers, so `math::sqrt(4.0, 9.0)`
+            // quietly returned 2 under the VM and errored under the tree-walker.
+            if let Some(expected) = self.arity_error(
+                self.builtin_arity.get(&builtin_id).copied(),
+                call.arguments.len(),
+            ) {
+                return self.raise_arity(expected, call.arguments.len(), true, ctx);
             }
             let dst = ctx.alloc_temp()?;
             ctx.emit(Instruction::CallBuiltin(dst, builtin_id, arg_regs));
@@ -2355,6 +2433,14 @@ impl Compiler {
         let dst = ctx.alloc_temp()?;
 
         if let Some(func_idx) = maybe_func_idx {
+            // Wrong argument count: raise before the call rather than copying the
+            // arguments over the callee's registers (see `func_arity`).
+            if let Some(expected) = self.arity_error(
+                self.func_arity.get(&func_idx).map(|n| *n as i32),
+                call.arguments.len(),
+            ) {
+                return self.raise_arity(expected, call.arguments.len(), false, ctx);
+            }
             // Emit SetupOutputWriteback if this function has output params
             if let Some(out_flags) = self.output_param_map.get(&func_idx).cloned() {
                 let mut pairs: Vec<(u16, Reg)> = Vec::new();
