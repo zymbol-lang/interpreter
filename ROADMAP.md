@@ -1,12 +1,16 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **v0.0.8** — a *debt* release, scoped by evidence rather
+> Current status: **v0.0.9 (in development)** — the Windows branch that was going to be
+> a hotfix, plus the argument-count rule (REFERENCE.md L28). See `WINDOWS_V009.md`.
+> Validation: 551/551 VM-parity, 951 unit tests. **0.0.8 is the latest published
+> release**; every figure on this page is measured on the `v0.0.9` branch.
+>
+> Previously: **v0.0.8 (released 2026-08-02)** — a *debt* release, scoped by evidence rather
 > than by a feature wish list: the design-vs-implementation audit in `MEMORY_MODEL.md`
 > (MM-1 … MM-11) plus findings from three validation projects written in Zymbol
 > (zy-GO, zy-Serpiente, zyKlingonGalaxy). Highlights: auto-free (destruction at last use,
 > both engines), `std/term`, `##!` on `Char`, match or-patterns (`p1 || p2`), Zymbol
 > Packages (`.zyp`), and VM module-system parity. See `IMPL_V008.md`.
-> Validation: 544/544 VM-parity, 936 unit tests.
 >
 > Previously: **v0.0.7 (released 2026-07-02)** — native stdlib expansion (`std/json`,
 > `std/io`, `std/net`, `std/db` via ODBC), typed/validated input (`<< ##.(5,2) "p" var`),
@@ -92,10 +96,10 @@
 
 | Suite | Status |
 |-------|--------|
-| Unit + integration (`cargo test`) | ✅ 936 passed, 0 failed |
-| VM parity check (`vm_compare.sh`) | ✅ 544/544 PASS, 0 skipped |
-| Golden files (`expected_compare.sh`) | ⚠️ 523/525 — two stale hand-written `.expected` fixtures, not interpreter regressions (see `IMPL_V008.md` § E.1) |
-| Formatter property suite (`fmt_property.sh`) | ✅ 600 PASS / 43 SKIP / 0 FAIL over 643 files, no regressions vs. baseline (the pattern-escaping bug, § E.2, is fixed) |
+| Unit + integration (`cargo test`) | ✅ 951 passed, 0 failed |
+| VM parity check (`vm_compare.sh`) | ✅ 551/551 PASS, 0 skipped |
+| Golden files (`expected_compare.sh`) | ⚠️ 530/532 — two stale hand-written `.expected` fixtures, not interpreter regressions (see `IMPL_V008.md` § E.1) |
+| Formatter property suite (`fmt_property.sh`) | ✅ 602 PASS / 48 SKIP / 0 FAIL over 650 files, no regressions vs. baseline (the pattern-escaping bug, § E.2, is fixed) |
 | JS mirror parity (`web/tests/test_runner.mjs`) | ⚠️ 516/521 + 208/210 on the example pool — seven gaps in `web/src/zymbol/zymbol.js` (see `IMPL_V008.md` § E.3) |
 | RosettaStone i18n suite (105 languages) | ✅ PASS |
 

@@ -494,7 +494,7 @@ embeds the interpreter, `package` produces a `.zyp` archive of source that still
 | Native stdlib (`std/*`, incl. `std/term`) | ✓ | ✓ |
 | Auto-free (destruction at last use) | ✓ | ✓ (see note) |
 
-Measured on v0.0.8: `tests/scripts/vm_compare.sh` reports 544/544 files with byte-identical
+Measured on v0.0.9: `tests/scripts/vm_compare.sh` reports 551/551 files with byte-identical
 output under both engines. The three rows that used to read "partial"/"—" (module system,
 CLI args, format expressions) were verified and are at parity; the last known divergences
 were closed by HLZ-008/009/010 and MM-10/MM-11.

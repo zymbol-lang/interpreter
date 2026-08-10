@@ -2,7 +2,7 @@
 
 Internal reference for contributors and tooling authors: EBNF grammar, feature coverage, and execution model details.
 
-**Interpreter version**: v0.0.7
+**Interpreter version**: v0.0.9
 
 See also: [GUIDE.md](GUIDE.md) — language guide for users  
 See also: [REFERENCE.md](REFERENCE.md) — limitations and symbol table
@@ -117,20 +117,36 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 
 ## Appendix A. Normative EBNF Grammar
 
-Source file: [`zymbol-lang.ebnf`](zymbol-lang.ebnf) — version 3.1.0, sprint v0.0.7.
+Source file: [`zymbol-lang.ebnf`](zymbol-lang.ebnf) — version 3.2.0, sprint v0.0.7 with a targeted v0.0.9 correction pass.
 
 The canonical grammar is maintained in `zymbol-lang.ebnf`; the copy below is reproduced
-**verbatim** from that file (synced 2026-06-12). If they ever diverge, the file wins.
+**verbatim** from that file (synced 2026-08-09). If they ever diverge, the file wins.
 
 ```ebnf
 (*
   Zymbol-Lang EBNF Grammar
-  Version:    3.1.0
+  Version:    3.2.0
   Generated:  2026-06-12
-  Sprint:     v0.0.7
+  Sprint:     v0.0.7, with a targeted v0.0.9 correction pass (2026-08-09)
   Test counts: authoritative via the test suite, not this header.
     E2E / VM parity:  bash tests/scripts/vm_compare.sh
     Unit tests:       cargo test
+
+  SCOPE OF THE v0.0.9 PASS — read this before trusting a rule.
+
+  This file spent v0.0.8 describing v0.0.7.  Two features with grammar surface had
+  landed and were never written down, so the normative grammar rejected programs the
+  implementation runs:
+
+    - or-patterns in a match arm (`1 || 2 || 3 => …`), added v0.0.8
+    - juxtaposition inside delimited positions — call arguments, array elements,
+      tuple elements and grouped expressions (REFERENCE.md L25), added v0.0.8
+
+  Both are corrected above.  The pass was *targeted*: each feature that
+  IMPLEMENTATION.md marks as landing in v0.0.8/v0.0.9 was checked against the
+  implementation, not every rule in this file.  A full re-derivation from the parser
+  is `agents/ebnf_regen.md`, and has not been run since v0.0.7 — so treat an
+  unexercised corner of this grammar as unverified rather than as normative.
 
   Source of truth: Rust implementation in interpreter/crates/
     zymbol-lexer   (TokenKind catalog)
@@ -150,8 +166,8 @@ The canonical grammar is maintained in `zymbol-lang.ebnf`; the copy below is rep
         deep  arr[i>j>…]$~  — all forms run in BOTH engines (VM: DeepSet
         instruction). Ranges (..) are not allowed in a $~ path.
   [C05] hot °name corrected: valid as RHS expression too, not only LHS
-  [C06] No new syntax for the v0.0.6/v0.0.7/v0.0.8 stdlib (std/math, std/random,
-        std/json, std/io, std/net, std/db, std/term) — consumed via existing
+  [C06] No new syntax for the v0.0.6/v0.0.7 stdlib (std/math, std/random,
+        std/json, std/io, std/net, std/db) — consumed via existing
         import_stmt (<# std/name => alias) and module calls (alias::fn)
 
   Key divergences vs v2.5.0:
@@ -616,7 +632,13 @@ lambda_body = expr | block ;
 *)
 function_call_expr = expr , "(" , [ call_arg_list ] , ")" ;
 
-call_arg_list = expr , { "," , expr } ;
+(*
+  An argument is a juxtapose_chain, not a bare expr: `f("hello " name)` passes one
+  concatenated string (v0.0.8, REFERENCE.md L25).  A comma still separates arguments,
+  and a following "(" never continues the chain here — it is ambiguous with a lambda,
+  a tuple and a grouped expression.
+*)
+call_arg_list = juxtapose_chain , { "," , juxtapose_chain } ;
 
 
 (* ============================================================
@@ -694,14 +716,7 @@ lifetime_end = "\\" , identifier ;
 (*
   Juxtaposition concatenation: same-line adjacent primary values are implicitly
   concatenated (BinaryOp::Concat).  Works for strings, chars, numbers, identifiers.
-  Used by assignments, const declarations, and return statements, and — since
-  v0.0.8 — inside delimited positions: call arguments, array elements, tuple
-  elements and grouped expressions.
-
-  One difference between the two contexts: a following `(` may continue the
-  chain at statement level (when the accumulator is a literal or a binary
-  expression), but never inside a delimited position, where a parenthesis is
-  ambiguous with a lambda, a tuple and a grouped expression.
+  Used by assignments, const declarations, and return statements.
 *)
 juxtapose_chain = expr , { juxtapose_token } ;
 
@@ -1017,17 +1032,7 @@ extract_group = "[" , nav_path , { "," , nav_path } , "]" ;
   There are NO guard patterns (x? / _?) in the current implementation.  [D03]
   Range patterns accept only integer literals or char literals as bounds.  [D11]
 *)
-(*
-  A pattern is one or more primary patterns joined by "||".  Alternatives are
-  tested left to right and the first match wins.  "||" is recognised only at
-  the top level of an arm — list elements are primary patterns, so
-  [1, 2] stays unambiguous.
-*)
 pattern =
-    pattern_primary , { "||" , pattern_primary }
-  ;
-
-pattern_primary =
     "_"                                    (* wildcard *)
   | string_literal                         (* exact string match *)
   | integer_literal                        (* exact integer *)
@@ -1045,6 +1050,7 @@ pattern_primary =
   | "==" , addition_expr                  (* equality comparison pattern *)
   | "<>" , addition_expr                  (* not-equal comparison pattern *)
   | identifier                             (* variable / containment pattern *)
+  | pattern , "||" , pattern               (* or-pattern: alternatives, left to right *)
   ;
 
 
@@ -1074,12 +1080,12 @@ primary_expr =
   Named tuple is detected when the first token is  Ident  followed by  : .
 *)
 tuple_or_grouped =
-    "(" , expr , ")"                       (* grouped (single expr) *)
-  | "(" , expr , "," , expr , { "," , expr } , ")"  (* positional tuple *)
+    "(" , juxtapose_chain , ")"            (* grouped (single expr) *)
+  | "(" , juxtapose_chain , "," , juxtapose_chain , { "," , juxtapose_chain } , ")"  (* positional tuple *)
   | "(" , identifier , ":" , expr , { "," , identifier , ":" , expr } , ")"  (* named tuple *)
   ;
 
-array_literal = "[" , [ expr , { "," , expr } , [ "," ] ] , "]" ;
+array_literal = "[" , [ juxtapose_chain , { "," , juxtapose_chain } , [ "," ] ] , "]" ;
 
 (*
   Execute a Zymbol script file inline.

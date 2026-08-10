@@ -17,6 +17,14 @@
 > **936 unit tests** · **544/544 TW/VM parity** · **523/525 golden** (§ E.1) ·
 > **formatter property 600 PASS / 0 FAIL, no regressions** · **benchmark gate 14/14**.
 > One item of debt remains open (§ E.3) and one decision is unmade (§ E.1).
+>
+> **Correction, 2026-08-09.** The parity figure above is wrong and is left in place only
+> because this document is the v0.0.8 record. It was measured in a working tree holding
+> test files that `.gitignore` kept out of the repository; a clean clone of v0.0.8 has
+> **536**, which is what the release notes said and what the `.deb` gate built from a
+> clone actually ran. The other figures on this line were not affected. See the note under
+> "Current status" in [README.md](README.md) for the full account and the rule that came
+> out of it: re-derive the count in a fresh clone before quoting it.
 
 Unlike v0.0.7 (a stdlib expansion designed up front), v0.0.8 is a **debt release**: its
 scope was set by two sources of evidence, not by a feature wish list —

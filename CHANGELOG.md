@@ -7,6 +7,44 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
+## [0.0.9] — unreleased
+
+In development on the `v0.0.9` branch. `Cargo.toml` already reads `0.0.9`, so this
+section exists to keep the manifest and the changelog from disagreeing about what
+version the tree is; entries move under a date when the release is cut.
+
+The Windows work that began as `v0.0.8_HotFix01` belongs here. Eleven findings is not
+a patch on top of a release, so there is **no 0.0.8.1**: the branch became `v0.0.9` and
+those corrections ship inside it. See [WINDOWS_V009.md](WINDOWS_V009.md).
+
+### Fixed
+
+**Argument counts are checked on every call form**
+
+`f("a","b")` was reported; the same mistake written `m::f("a","b")` was not, and neither
+was `math::sqrt(4.0, 9.0)` — even though every `std/` function's arity was already
+recorded and never read. The two engines then disagreed: the tree-walker raised, while
+the VM did not check at all, copying a surplus argument over one of the callee's own
+registers and continuing with corrupted state. A mismatch is now a semantic error,
+fatal before execution, in `check`, `run` and `build` alike, and in both engines.
+See REFERENCE.md L28 and `tests/arity/`.
+
+**Windows: the runtime's POSIX assumptions**
+
+Eleven findings, six of which Linux could never have surfaced and three of which were
+in the test suite itself — which is why the suite reported a healthy build right up to
+the moment a user tried to run it. Full record in [WINDOWS_V009.md](WINDOWS_V009.md).
+
+### Documentation
+
+The grammar and the spec had drifted from the implementation. `zymbol-lang.ebnf` was
+still describing v0.0.7: or-patterns and juxtaposition inside delimited positions had
+landed in v0.0.8 without being written down, so the normative grammar rejected programs
+the implementation runs. Both corrected, and the test counts quoted across README,
+GUIDE, ARCHITECTURE and CLAUDE.md were re-measured rather than carried forward.
+
+---
+
 ## [0.0.8] — 2026-08-02
 
 Memory-model debt release: every divergence found by the design-vs-implementation

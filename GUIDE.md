@@ -4,7 +4,7 @@
 > `zymbol run` (tree-walker) and `zymbol run --vm` (register VM).
 > If a construct is not documented here, it may not be implemented.
 
-**Interpreter version**: v0.0.8
+**Interpreter version**: v0.0.9
 **Test coverage**: golden-file pairs verified on both engines (`vm_compare`); `@vm-skip` files excluded from VM parity
 
 **New in v0.0.8**: `std/term` (terminal display metrics — column-accurate `width`, padding
@@ -144,7 +144,7 @@ zymbol run --help
 - **VM**: production, ~1.1–1.5× faster than Python for most workloads
 
 Both modes produce **identical output** on the full parity suite
-(`bash tests/scripts/vm_compare.sh`; 507/507 as of v0.0.7).
+(`bash tests/scripts/vm_compare.sh`; 551/551 as of v0.0.9).
 
 **Diagnostic tiers.** The same analyzers back every entry point, with one
 deliberate difference in coverage:
