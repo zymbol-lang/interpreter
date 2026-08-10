@@ -534,16 +534,38 @@ bash tests/scripts/expected_compare.sh
 bash tests/scripts/fmt_property.sh --baseline tests/scripts/fmt_property_baseline.txt
 ```
 
-Current status (v0.0.8): **936 tests passing** via `cargo test` (0 failed).  
-VM parity: **544/544 PASS**, 0 skipped. (`tests/gaps/gap_key_input_type_check.zy` carries
+Current status (v0.0.9 branch — 0.0.8 is the latest published release), re-measured
+2026-08-09:
+**951 tests passing** via `cargo test` (0 failed, 4 ignored).  
+VM parity: **551/551 PASS**, 0 skipped. (`tests/gaps/gap_key_input_type_check.zy` carries
 `@vm-skip` by design — it is a `zymbol check` test that never executes — and is not
 counted.)  
-Formatter property suite: **600 PASS / 0 FAIL** over 643 files, no regressions against
-the baseline.  
-Golden files: **523/525 PASS** via `expected_compare.sh`. The two failures are stale
+Formatter property suite: **602 PASS / 0 FAIL** over 650 files, 48 skipped, no regressions
+against the baseline.  
+Golden files: **530/532 PASS** via `expected_compare.sh`. The two failures are stale
 `.expected` fixtures, not interpreter regressions: both were hand-written with `warning:`
 and blank lines that the script's `strip_warnings` filter removes from actual output, so
 they compare unequal against output that is otherwise byte-identical.
+
+> **The parity number counts only versioned files.** During v0.0.8 this README said
+> 544/544 while the release notes said 536/536, and both were "measured": the larger
+> figure came from a working tree holding test files that `.gitignore` kept out of the
+> repository, so a clean clone — and the `.deb` gate built from one — saw a different
+> suite. Every file behind 551/551 is committed: `find tests -name '*.zy'` and
+> `git ls-files` return the same 567 paths, with no difference either way. (567 is every
+> `.zy` under `tests/`, including the modules and fixtures that tests import rather than
+> run; 551 is what the parity runner executes.) Re-derive it in a fresh clone before
+> quoting it in release notes, and disable git's path quoting when you do:
+>
+> ```bash
+> comm -3 <(find tests -name '*.zy' | sort) \
+>         <(git -c core.quotePath=false ls-files 'tests/**/*.zy' 'tests/*.zy' | sort)
+> ```
+>
+> Without `core.quotePath=false`, git escapes the non-ASCII names in `tests/i18n/`
+> (`中文_应用.zy`, `한국_앱.zy`, `עִברִית.zy`, …) as octal, and the comparison reports eight
+> phantom differences on both sides while the counts match — a mismatch in the check, not
+> in the repository.
 
 ---
 
