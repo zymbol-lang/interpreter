@@ -215,7 +215,7 @@ pub enum TokenKind {
     AtBreak,
     /// @> (continue)
     AtContinue,
-    /// @~ (sleep — only valid inside @ block)
+    /// @~ (sleep — legal anywhere; unlike @! and @> it needs no enclosing loop)
     AtTilde,
     /// @label (labeled loop declaration, legacy — fused without colon)
     AtLabel(String),

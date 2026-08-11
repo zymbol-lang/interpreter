@@ -123,7 +123,8 @@ pub enum Statement {
     /// Sets the active output numeral system for all subsequent >> outputs.
     /// `base` is the block base codepoint of the chosen script.
     SetNumeralMode { base: u32, span: Span },
-    /// Sleep statement: @~ N (milliseconds, only valid inside @ block)
+    /// Sleep statement: @~ N (milliseconds). Carries no loop requirement —
+    /// see the note on [`Sleep`](crate::Sleep).
     Sleep(Sleep),
     /// Key input: <<| var (blocking) or <<|? var (non-blocking)
     KeyInput(KeyInput),

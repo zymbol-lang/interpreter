@@ -1188,8 +1188,15 @@ impl Parser {
         matches!(self.peek().kind, TokenKind::Eof)
     }
 
-    /// Check if current position is at start of a lambda with multiple params
-    /// Pattern: ( identifier [, identifier]* ) ->
+    /// Check if current position is at start of a parenthesized lambda.
+    /// Pattern: `( [identifier [, identifier]*] ) ->`
+    ///
+    /// The parameter list may be empty: `() -> body` is a thunk. Nothing else
+    /// in the language spells `()`, so there is no ambiguity to resolve — the
+    /// empty tuple is not a value, and a call's parentheses always follow a
+    /// callable. `parse_lambda` already built an empty `params` for this shape;
+    /// until v0.0.9 this predicate refused to hand it the input, which is why
+    /// `() -> { }` parsed in `zymbol.js` and zyml but not here.
     fn is_lambda_start(&mut self) -> bool {
         // Must start with (
         if !matches!(self.peek().kind, TokenKind::LParen) {
@@ -1204,7 +1211,15 @@ impl Parser {
         // Check if we have identifier(s) followed by ->
         let mut is_lambda = false;
 
-        // Must have at least one identifier
+        // Zero-parameter lambda: `() ->`
+        if matches!(self.peek().kind, TokenKind::RParen) {
+            self.advance(); // consume )
+            is_lambda = matches!(self.peek().kind, TokenKind::Arrow);
+            self.current = checkpoint;
+            return is_lambda;
+        }
+
+        // One or more parameters
         if matches!(self.peek().kind, TokenKind::Ident(_)) {
             loop {
                 if !matches!(self.peek().kind, TokenKind::Ident(_)) {

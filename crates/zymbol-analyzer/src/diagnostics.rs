@@ -184,6 +184,13 @@ impl DiagnosticPipeline {
                 lsp_diagnostics.push(to_lsp_diagnostic(type_diag));
             }
 
+            // Loop context: `@!`/`@>` need an enclosing loop, and `@:L!` needs
+            // one labelled L. Same function `zymbol check` calls, so a mistyped
+            // label is underlined as you write it rather than at run time.
+            for diag in zymbol_semantic::check_loop_context(program) {
+                lsp_diagnostics.push(to_lsp_diagnostic(&diag));
+            }
+
             // Module analysis — same pass as `zymbol check` (E001 name
             // mismatch, E002 module not found, E009 duplicate export, export
             // validation). Resolving imported files needs a real filesystem

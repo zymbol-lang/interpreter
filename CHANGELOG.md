@@ -17,7 +17,74 @@ The Windows work that began as `v0.0.8_HotFix01` belongs here. Eleven findings i
 a patch on top of a release, so there is **no 0.0.8.1**: the branch became `v0.0.9` and
 those corrections ship inside it. See [WINDOWS_V009.md](WINDOWS_V009.md).
 
+### Added
+
+**`() -> body` — a zero-parameter lambda**
+
+```zymbol
+answer = () -> { <~ 42 }
+acciones = [() -> 1, () -> 2]
+```
+
+It already ran in `zymbol.js` and zyml; the tree-walker and the VM rejected it at parse
+time, and the EBNF sided with them. Nothing had chosen that limit — `parse_lambda` already
+built an empty parameter list for the shape, and only `is_lambda_start` refused to hand it
+the input. `()` is unambiguous: there is no empty tuple, and a call's parentheses always
+follow a callable. Grammar widened, all four engines agree. See REFERENCE.md L30 and
+`tests/lambdas/29_zero_param_thunk.zy`.
+
 ### Fixed
+
+**`zymbol fmt` wrote two spaces after a block lambda's arrow**
+
+Every `x -> { … }` came out `x ->  { … }`. `format_block` supplies its own leading space and
+the arrow wrote one too, so they added up; in brace-next-line mode the same space landed at
+end of line instead. Cosmetic, and invisible to `fmt_property.sh` — P1 reparse, P2
+idempotence, P3 semantics and P4 comments all survive a stray space, which is how it sat
+there unnoticed. The arrow now writes its trailing space only for an expression body.
+Three unit tests hold it, including one that fails on any line ending in whitespace.
+
+**The browser engine checks argument counts**
+
+v0.0.8 made a wrong argument count fatal in the Rust engines and left `zymbol.js` alone, so
+`math::sqrt(4.0, 9.0)` printed `2` in the playground and was refused outright by the CLI —
+the same program, two answers, on the tool a visitor reaches for first. Five of the ten
+CLI ↔ browser parity failures were this one gap.
+
+All three call forms are checked now. `std/` arities ship with the engine as a copy of
+`zymbol-common::stdlib`, and `web/tests/test_check.mjs` compares that copy against the Rust
+source on every run, so it cannot drift unnoticed. User-module arities come from whoever has
+the resolver: `moduleAritiesFor` reads the imported modules and
+`checkSource(src, {moduleArities})` receives the table — the same split as `module_arities`
+/ `set_module_arities` in Rust. Parity: 527/537 → 533/538. See REFERENCE.md L31.
+
+**`@!`, `@>` and labelled jumps are checked before anything runs**
+
+Nothing verified that a break had a loop to break, or that `@:outer!` named a loop that
+enclosed it, and the four engines improvised four different answers. Given
+`@:outer i:1..3 { >> i ¶  @:nope! }`, the tree-walker printed `i=1`, unwound *every*
+enclosing loop and carried on; the VM refused to compile; `zymbol.js` unwound every loop
+and ended the program; zyml raised at run time. Three of the four were silent, and
+`zymbol check` said nothing in any case.
+
+No pairwise parity suite could see this — `vm_compare.sh` covers tree-walker/VM,
+`web/tests/test_runner.mjs` covers CLI/browser, `zyml/tests/parity.sh` covers CLI/zyml, and
+each pair contains at most two of the four answers. `tests/scripts/engine_compare.sh` is
+new and runs a file through all four at once.
+
+A label is lexical on both sides, so it is now a semantic error:
+`crates/zymbol-semantic/src/loop_context.rs`, fatal in `check`, `run` and `build`, in every
+engine, and underlined in the editor as you type. A function or lambda body is a boundary —
+`f() { @! }` is an error however its call sites are nested, which the VM and zyml already
+assumed. `cfg.rs` had resolved labels this way since it was written; its `build_break` still
+carries the comment "should be caught by semantic analysis".
+
+`@~` is deliberately not covered. `SYMBOLS.md` and `REFERENCE.md` described it as loop-only
+by inheritance from the `@` prefix; no engine ever enforced that and none should, since a
+pause does not act on control flow. The documentation was corrected instead.
+
+See REFERENCE.md L29 and `tests/loops/labels/` (9 cases, four engines in agreement).
+Zero false positives across the workspace's 1080 `.zy` files.
 
 **Argument counts are checked on every call form**
 
