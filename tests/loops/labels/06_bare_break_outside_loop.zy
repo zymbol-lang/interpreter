@@ -1,0 +1,5 @@
+// The unlabelled form of the same mistake. GUIDE and SYMBOLS both describe this
+// as a semantic error; measured on v0.0.9 `zymbol check` reports nothing.
+>> "before" ¶
+@!
+>> "after" ¶

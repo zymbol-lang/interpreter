@@ -405,6 +405,79 @@ VM. Rejecting before execution also puts all three engines on the same behaviour
 included; only the message wording still differs. Regression: `tests/arity/` (7 cases,
 TW == VM), `crates/zymbol-semantic/src/call_arity.rs` (6 cases).
 
+### ~~L29 — `@!`, `@>` and labelled jumps were never checked, and the four engines disagreed~~ Fixed in v0.0.9
+
+Nothing verified that a break had a loop to break, or that `@:outer!` named a loop that
+actually enclosed it. Every engine improvised, and no two improvised alike. For
+`@:outer i:1..3 { >> i ¶  @:nope! }`:
+
+| engine | v0.0.8 behaviour |
+|--------|------------------|
+| tree-walker | printed `i=1`, unwound **every** enclosing loop, and continued the program. Silent. |
+| register VM | `VM compile error: unsupported construct: break label 'nope' not found` — before any output |
+| `zymbol.js` | printed `i=1`, unwound every loop and ended the program. Silent. |
+| zyml | printed `i=1`, then a runtime error naming the label |
+
+`zymbol check` reported nothing in any of the seven cases now in `tests/loops/labels/`,
+which is why none of the pairwise parity suites could see it: `vm_compare.sh` compares the
+tree-walker against the VM, `web/tests/test_runner.mjs` the CLI against the browser
+engine, `zyml/tests/parity.sh` the CLI against zyml. Every pair was covered; the four
+together never were. `tests/scripts/engine_compare.sh` now runs all four at once.
+
+A label is lexical where it is declared and lexical where it is used, so this is decidable
+statically and is now decided statically:
+`crates/zymbol-semantic/src/loop_context.rs`, fatal in `check`, `run` and `build` alike, in
+every engine, and reported in the editor as you type. `cfg.rs` had resolved labels this way
+since it was written — its `build_break` carries the comment *"should be caught by semantic
+analysis"*. This is that analysis, eleven versions later.
+
+A **function or lambda body is a boundary**: `f() { @! }` is an error however its call
+sites are nested. That was already true of the VM and of zyml; the tree-walker was the
+outlier.
+
+`@~` (sleep) is deliberately excluded. `SYMBOLS.md`, and this file's own symbol table,
+described it as loop-only by inheritance from the `@` prefix; no engine has ever enforced
+that, and none should — a pause does not act on the loop's control flow. The documentation
+was corrected rather than the code.
+
+Regression: `tests/loops/labels/` (9 cases, all four engines agree),
+`crates/zymbol-semantic/src/loop_context.rs` (12 cases). Zero false positives across the
+1080 `.zy` files in the workspace.
+
+### ~~L30 — `() -> { }` parsed in two engines and not in the other two~~ Fixed in v0.0.9
+
+A zero-parameter lambda ran in `zymbol.js` and in zyml and failed at parse time under the
+tree-walker and the VM with `expected expression, found RParen`. The grammar was on the
+side of the two that refused it — `lambda_params` required at least one identifier — but
+that was a limit nobody had chosen: `parse_lambda` already built an empty parameter list
+for the shape, and only `is_lambda_start` refused to hand it the input.
+
+The form is now legal everywhere. `()` is unambiguous: there is no empty tuple in Zymbol,
+and a call's parentheses always follow a callable, so `(` `)` `->` can only begin a lambda.
+The EBNF was widened to `"(" , [ identifier , { "," , identifier } ] , ")"`.
+
+Found by `tests/scripts/engine_compare.sh` while checking something else — no pairwise
+suite covers it, because the two engines that agreed with each other were on opposite sides
+of each pair. Regression: `tests/lambdas/29_zero_param_thunk.zy`, run through all four.
+
+### ~~L31 — the browser engine never checked argument counts~~ Fixed in v0.0.9
+
+L28 made a wrong argument count fatal in the Rust engines and left `zymbol.js` as it was, so
+`math::sqrt(4.0, 9.0)` printed `2` in the playground and was refused outright by the CLI —
+the same program, two answers, on the tool a visitor reaches for first. Five of the ten
+disagreements in `web/tests/test_runner.mjs` were this.
+
+The playground now checks all three call forms. `std/` arities ship with the engine
+(`STDLIB_ARITIES` in `zymbol.js`, a copy of `zymbol-common::stdlib` that
+`web/tests/test_check.mjs` compares against the Rust source on every run, so the copy cannot
+drift). User-module arities come from the caller's resolver — `moduleAritiesFor` reads each
+imported module and `checkSource(src, {moduleArities})` receives the table, the same split
+as `module_arities` / `set_module_arities` in Rust. A qualified call whose module cannot be
+resolved is left unchecked rather than guessed at.
+
+CLI ↔ browser parity went from 527/537 to 533/538. The five that remain are unrelated
+(module constants, a leftover loop iterator, a parent-path alias).
+
 ---
 
 ## 20b. Error Taxonomy
@@ -446,8 +519,40 @@ Error [line N]: module 'mod' is private
 - Calling any function with the wrong number of arguments (see *Argument counts* below)
 - Accessing a private module from outside
 - Circular imports
+- `@!` or `@>` with no enclosing loop, or a labelled jump whose label names no enclosing
+  loop (see *Loop context* below)
 
 Semantic errors are always fatal and cannot be caught at runtime. They are reported before execution starts.
+
+---
+
+### Loop Context
+
+Since v0.0.9 both loop-jump rules are checked statically:
+
+| Written | Requires |
+|---------|----------|
+| `@!` / `@>` | an enclosing `@` loop |
+| `@:name!` / `@:name>` | an enclosing `@` loop labelled `name` |
+
+```
+error: '@!' outside a loop
+  help: '@!' breaks the enclosing '@' loop; there is none here. A function or
+        lambda body does not see the caller's loops.
+
+error: no enclosing loop is labelled 'nope'
+  help: labels in scope here: 'outer'
+```
+
+A **function or lambda body is a boundary** — the caller's loops are not in scope inside a
+callee, so `f() { @! }` is an error however its call sites are nested.
+
+`@~` (sleep) carries no such requirement: it pauses execution without acting on the loop's
+control flow, and is legal at top level.
+
+Fatal before execution, in `zymbol check`, `zymbol run` and `zymbol build`, and identically
+in the tree-walker, the register VM, `zymbol.js` and zyml. See L29 for what these four did
+before, which was four different things.
 
 ---
 
@@ -644,9 +749,9 @@ Fail-safe operations are distinguished from error-handling by the absence of any
 | `@` | Loop (while) | `@ cond { }` |
 | `@` | Loop (times) | `@ N { }` — repeats exactly N times when N is a positive Int |
 | `@` | Loop (infinite) | `@ { }` |
-| `@!` | Break | `@!` or `@! label` |
-| `@>` | Continue | `@>` or `@> label` |
-| `->` | Lambda | `x -> x * 2` |
+| `@!` | Break — needs an enclosing loop | `@!` or `@:label!` |
+| `@>` | Continue — needs an enclosing loop | `@>` or `@:label>` |
+| `->` | Lambda | `x -> x * 2`, `(a, b) -> a + b`, `() -> 42` (thunk, v0.0.9) |
 | `<~` | Return / output param | `<~ value` |
 | `\|>` | Pipe | `val \|> fn` or `val \|> fn(_)` |
 | `$#` | Length | `arr$#` |

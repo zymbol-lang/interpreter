@@ -779,7 +779,7 @@ impl<'a> ExtraOccurrences<'a> {
 }
 
 /// Visit every direct sub-expression of `e` (one level).
-fn walk_sub_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+pub(crate) fn walk_sub_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
     // Reuse the exhaustive mention walker structure by scanning into a probe
     // is not possible (it flattens identifiers) — instead enumerate one level
     // via a Mentions-independent traversal built on scan_expr's shape.
@@ -1011,7 +1011,7 @@ fn walk_sub_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
 
 /// Visit every top-level expression of a statement (recursing through nested
 /// blocks but NOT into function declaration bodies).
-fn walk_stmt_exprs(stmt: &Statement, f: &mut dyn FnMut(&Expr)) {
+pub(crate) fn walk_stmt_exprs(stmt: &Statement, f: &mut dyn FnMut(&Expr)) {
     match stmt {
         Statement::Output(o) => {
             for e in &o.exprs {

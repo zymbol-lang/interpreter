@@ -82,7 +82,11 @@ impl Continue {
     }
 }
 
-/// Sleep statement: @~ N (milliseconds, only valid inside @ block)
+/// Sleep statement: @~ N (milliseconds)
+///
+/// Unlike `@!` and `@>`, this carries no loop requirement: it pauses execution
+/// without acting on any loop's control flow, and every engine has always run it
+/// at top level. See `zymbol-semantic::check_loop_context`.
 #[derive(Debug, Clone)]
 pub struct Sleep {
     pub duration: Box<Expr>,

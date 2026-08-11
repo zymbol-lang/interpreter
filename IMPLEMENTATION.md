@@ -611,6 +611,12 @@ return_stmt = "<~" , [ juxtapose_chain ] ;
     (a, b, c) -> expr            multi-parameter, expression body
     x -> { block }               single parameter, block body
     (a, b) -> { block }          multi-parameter, block body
+    () -> expr                   zero parameters — a thunk (v0.0.9)
+    () -> { block }              zero parameters, block body
+
+  The empty parameter list is unambiguous: "()" is not an empty tuple (there is
+  no such value) and a call's parentheses always follow a callable, so "(" ")"
+  "->" can only begin a lambda.
 
   When passed to HOF operators ($>, $|, $<, $^), a bare identifier is also
   accepted as a function reference (not a lambda but resolves to Expr::Identifier).
@@ -620,8 +626,8 @@ lambda_expr =
   ;
 
 lambda_params =
-    identifier                                 (* single param *)
-  | "(" , identifier , { "," , identifier } , ")"  (* multi-param or single-in-parens *)
+    identifier                                          (* single param *)
+  | "(" , [ identifier , { "," , identifier } ] , ")"   (* zero, one or many *)
   ;
 
 lambda_body = expr | block ;

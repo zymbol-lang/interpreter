@@ -1,0 +1,30 @@
+// Zero-parameter lambda — a thunk. Legal since v0.0.9 in every engine;
+// before that it parsed in zymbol.js and zyml but not in the tree-walker or
+// the VM, which is the kind of divergence only a four-engine run finds.
+// Nothing else in the language spells `()`: the empty tuple is not a value,
+// and a call's parens always follow a callable.
+
+// Block body
+answer = () -> { <~ 42 }
+>> answer() ¶
+
+// Expression body
+uno = () -> 1
+>> uno() ¶
+
+// A thunk that builds a value, then ordinary HOFs over the result
+mk = () -> { <~ [1, 2, 3] }
+arr = mk()
+>> (arr$> (x -> x * 10)) ¶
+
+// Thunks stored in an array and called by index
+acciones = [() -> 1, () -> 2]
+>> (acciones[1])() ¶
+>> (acciones[2])() ¶
+
+// Still unambiguous: a parenthesized expression is not a lambda,
+// and an empty argument list is not a parameter list.
+n = 3
+>> (n + 1) ¶
+g() { <~ 7 }
+>> g() ¶

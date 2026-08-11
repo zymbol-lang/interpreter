@@ -1,0 +1,10 @@
+// The label exists in the file but not in an enclosing loop: @:first is a
+// sibling, not an ancestor. Declared-ness is not enough; it has to enclose.
+@:first i:1..2 {
+    >> "first " i ¶
+}
+@:second j:1..3 {
+    >> "second " j ¶
+    @:first!
+}
+>> "end" ¶

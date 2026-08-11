@@ -116,6 +116,23 @@ it (`result $+ element`).
 
 ### 4.7 Lambda arrow `->` — one space each side
 
+Exactly one, whichever the body is:
+
+```zymbol
+e = x -> x + 1          // expression body
+b = (x) -> { <~ x }     // block body
+t = () -> { <~ 42 }     // zero parameters (v0.0.9)
+```
+
+The right-hand space belongs to whoever writes it once. A block supplies its
+own leading space (§5.1), so the arrow does not add one there; an expression
+has none, so the arrow does. Until v0.0.9 the arrow always wrote it and every
+block lambda came out `x ->  { … }` with two — invisible to the property
+harness, which checks reparse, idempotence, semantics and comments, and a
+stray space breaks none of the four. Fixed by
+`crates/zymbol-formatter/src/visitor.rs::format_lambda`, held by three unit
+tests including one for trailing whitespace in brace-next-line mode.
+
 ### 4.8 Pipe `|>` — one space each side
 
 ### 4.9 Concatenation `$++` — one space before

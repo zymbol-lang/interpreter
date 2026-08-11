@@ -1,0 +1,4 @@
+// A labelled break with no loop at all around it.
+>> "before" ¶
+@:nope!
+>> "after" ¶

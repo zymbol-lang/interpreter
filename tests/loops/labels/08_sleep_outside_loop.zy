@@ -1,0 +1,5 @@
+// Documented as "only valid inside a @ loop". Measured on v0.0.9 every engine
+// runs it without complaint, so the documentation is what is wrong here.
+>> "before" ¶
+@~ 10
+>> "after" ¶

@@ -1,0 +1,10 @@
+// Same, from inside a nested loop: does the unknown label stop the inner loop,
+// every loop, or the whole program?
+@:outer i:1..2 {
+    @:inner j:1..3 {
+        >> i "-" j ¶
+        @:nope!
+    }
+    >> "outer-tail" ¶
+}
+>> "end" ¶

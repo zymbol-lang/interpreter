@@ -1,0 +1,12 @@
+// Control case: every label resolves. All engines must agree, and do.
+@:outer i:1..3 {
+    @:inner j:1..3 {
+        ? j == 2 { @:outer! }
+        >> i "-" j ¶
+    }
+}
+@:skip k:1..4 {
+    ? k == 2 { @:skip> }
+    >> "k=" k ¶
+}
+>> "end" ¶

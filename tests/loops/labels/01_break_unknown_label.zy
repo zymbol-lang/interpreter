@@ -1,0 +1,9 @@
+// A labelled break naming a label that was never declared.
+// The label is lexical on both sides, so this is decidable statically.
+// Measured on v0.0.9 the four engines gave four different answers — see
+// tests/scripts/engine_compare.sh.
+@:outer i:1..3 {
+    >> "i=" i ¶
+    @:nope!
+}
+>> "end" ¶

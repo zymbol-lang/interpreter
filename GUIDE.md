@@ -1328,6 +1328,46 @@ found = #0
 | `@!` | Break innermost loop |
 | `@>` | Continue innermost loop |
 
+### Where a break or continue is legal
+
+Both rules are checked statically, by `zymbol check`, `zymbol run` and `zymbol build`
+alike, and in every engine. A program that breaks either one does not run at all.
+
+**1. There has to be a loop.** `@!` and `@>` need an enclosing `@` block:
+
+```zymbol
+@!                          // ✗ error: '@!' outside a loop
+```
+
+**2. A label has to resolve to an *enclosing* loop.** Declared elsewhere in the file is not
+enough:
+
+```zymbol
+@:outer i:1..3 { @:nope! }  // ✗ error: no enclosing loop is labelled 'nope'
+                            //   help: labels in scope here: 'outer'
+
+@:first i:1..2 { }
+@:second j:1..2 { @:first! } // ✗ 'first' is a sibling, not an ancestor
+```
+
+**A function or lambda body is a boundary.** A callee does not see the caller's loops, so
+this is an error even though the only call happens inside a loop:
+
+```zymbol
+bad() { @! }                // ✗ error: '@!' outside a loop
+@ i:1..3 { bad() }
+
+ok() { @ j:1..3 { @! } }    // ✓ the loop is the function's own
+@ i:1..3 { ok() }
+```
+
+> Before v0.0.9 neither rule was checked and the engines disagreed: the tree-walker
+> unwound *every* enclosing loop and carried on, the VM refused to compile, and the
+> browser engine ended the program — none of them said why. See REFERENCE.md L29.
+
+`@~` (sleep) is **not** subject to either rule. It pauses execution without touching the
+loop's control flow, so it is legal anywhere, including at top level.
+
 ---
 
 ## 9. Functions
@@ -1531,6 +1571,30 @@ describe = x -> {
 >> describe(-3) ¶    // → negative
 >> describe(0) ¶     // → zero
 ```
+
+### Zero-Parameter Lambda — a thunk
+
+A lambda may take no parameters at all. Both bodies work:
+
+```zymbol
+answer = () -> { <~ 42 }
+uno    = () -> 1
+
+>> answer() ¶     // → 42
+>> uno() ¶        // → 1
+
+// Deferred work, stored and called later
+acciones = [() -> 1, () -> 2]
+>> (acciones[1])() ¶    // → 1
+```
+
+`()` is unambiguous here: there is no empty tuple in Zymbol, and a call's
+parentheses always follow a callable, so `() ->` can only begin a lambda.
+
+> New in v0.0.9. It already ran in the browser engine and in zyml; the
+> tree-walker and the VM rejected it at parse time, which is the kind of
+> disagreement only a four-engine run surfaces
+> (`tests/scripts/engine_compare.sh`).
 
 ### Closures — Capturing Outer Scope
 

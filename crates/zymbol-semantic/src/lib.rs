@@ -18,6 +18,7 @@ mod variable_analysis;
 mod cfg;
 mod def_use;
 mod last_use;
+mod loop_context;
 mod type_check;
 
 pub use call_arity::{
@@ -33,3 +34,4 @@ pub use def_use::{
 };
 pub use type_check::{TypeChecker, TypeEnv, ZymbolType};
 pub use last_use::{auto_free_exclusions, region_schedule};
+pub use loop_context::check_loop_context;

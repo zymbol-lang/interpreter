@@ -393,6 +393,21 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         }
     }
 
+    // Loop-context analysis, before anything executes: `@!`/`@>` need an
+    // enclosing loop and `@:L!` needs an enclosing loop labelled L. Fatal for
+    // the same reason arity is — the four engines used to give four different
+    // answers to `@:nope!`, and the tree-walker's answer was to unwind every
+    // loop in silence.
+    let loop_errors = zymbol_semantic::check_loop_context(&program);
+    if !loop_errors.is_empty() {
+        let mut bag = DiagnosticBag::new();
+        for err in loop_errors {
+            bag.add(err);
+        }
+        bag.emit_all(&source_map);
+        return Ok(1);
+    }
+
     // Run type checking. The arity table must be supplied here too, not only in
     // `check`: an argument-count mismatch is fatal before execution, and it has
     // to be fatal for `alias::func(...)` exactly as it already was for a bare
@@ -545,6 +560,17 @@ fn build_file(path: PathBuf, output: Option<PathBuf>, release: bool) -> Result<(
             }
             eprintln!();
         }
+    }
+
+    // Loop-context analysis, on the same terms as `run` and `check`.
+    let loop_errors = zymbol_semantic::check_loop_context(&program);
+    if !loop_errors.is_empty() {
+        let mut bag = DiagnosticBag::new();
+        for err in loop_errors {
+            bag.add(err);
+        }
+        bag.emit_all(&source_map);
+        std::process::exit(1);
     }
 
     // Run type checking, with the same arity table `run` and `check` use.
@@ -974,6 +1000,18 @@ fn check_source(
             }
             eprintln!();
         }
+    }
+
+    // Loop-context analysis. `check` reports it alongside everything else
+    // rather than bailing out, so one pass surfaces every problem in the file.
+    let loop_errors = zymbol_semantic::check_loop_context(&program);
+    if !loop_errors.is_empty() {
+        let mut bag = DiagnosticBag::new();
+        for err in loop_errors {
+            bag.add(err);
+        }
+        bag.emit_all(source_map);
+        has_errors = true;
     }
 
     // Run type checking. Feeding it the imports' arities extends the existing

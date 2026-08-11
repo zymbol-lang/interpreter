@@ -1758,11 +1758,20 @@ impl<'a> FormatVisitor<'a> {
             }
         }
 
-        self.output.write(" -> ");
-
+        // `format_block` opens with its own leading space — `" { "` when it
+        // inlines, `" {"` from `open_brace`, or a newline in brace-next-line
+        // mode. So the arrow must not leave one behind, or the two add up:
+        // `x ->  { … }` in the default mode, and a trailing space at end of
+        // line in the other. An expression body has no such space of its own.
         match &lambda.body {
-            LambdaBody::Expr(expr) => self.format_expr(expr),
-            LambdaBody::Block(block) => self.format_block(block),
+            LambdaBody::Expr(expr) => {
+                self.output.write(" -> ");
+                self.format_expr(expr);
+            }
+            LambdaBody::Block(block) => {
+                self.output.write(" ->");
+                self.format_block(block);
+            }
         }
     }
 
@@ -1981,6 +1990,69 @@ mod tests {
             !formatted.contains("'\n'"),
             "raw newline written inside a char literal: {formatted}"
         );
+    }
+
+    /// `format_block` supplies its own leading space, so the arrow must not
+    /// leave one too. It did, and every block lambda came out `x ->  { … }`
+    /// with two spaces — cosmetic, invisible to the property harness (which
+    /// checks reparse, idempotence, semantics and comments, none of which a
+    /// stray space breaks), and therefore able to sit there indefinitely.
+    #[test]
+    fn test_block_lambda_arrow_has_one_space() {
+        for src in [
+            "a = (x) -> { <~ x }\n",
+            "b = (x, y) -> { <~ x }\n",
+            "c = x -> { <~ x }\n",
+            "d = () -> { <~ 1 }\n",
+            "e = arr$> (x -> { <~ x })\n",
+        ] {
+            let formatted = crate::format(src).expect("formatting must succeed");
+            assert!(
+                !formatted.contains("->  "),
+                "double space after the arrow in {src:?}: {formatted:?}"
+            );
+            assert!(
+                formatted.contains("-> {"),
+                "arrow and brace should be one space apart in {src:?}: {formatted:?}"
+            );
+        }
+    }
+
+    /// An expression body has no leading space of its own, so there the arrow
+    /// keeps the one it always had.
+    #[test]
+    fn test_expr_lambda_arrow_keeps_its_space() {
+        let formatted = crate::format("e = x -> x + 1\n").expect("formatting must succeed");
+        assert!(
+            formatted.contains("x -> x + 1"),
+            "expression body lost its spacing: {formatted:?}"
+        );
+    }
+
+    /// No line may end in whitespace. In brace-next-line mode `open_brace`
+    /// writes the newline itself, so the arrow's trailing space landed at end
+    /// of line — the same defect wearing a different hat.
+    ///
+    /// The body needs more than one statement: with the default
+    /// `inline_single_statement`, a one-statement block takes the `" { … }"`
+    /// path and never reaches `open_brace` at all.
+    #[test]
+    fn test_no_trailing_whitespace_around_lambda_braces() {
+        let src = "a = (x) -> { <~ x }\nb = x -> {\n    y = x + 1\n    <~ y\n}\n";
+        for formatted in [
+            crate::format(src).expect("formatting must succeed"),
+            crate::format_with_config(src, crate::FormatterConfig::new().with_brace_new_line())
+                .expect("formatting must succeed"),
+        ] {
+            for (i, line) in formatted.lines().enumerate() {
+                assert_eq!(
+                    line.trim_end(),
+                    line,
+                    "line {} ends in whitespace: {line:?}",
+                    i + 1
+                );
+            }
+        }
     }
 
     #[test]
