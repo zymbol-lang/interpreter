@@ -1,7 +1,0 @@
-# E013_exec_in_mod {
-    #> { fn_ok }
-
-    fn_ok() { <~ 1 }
-
-    >> "this should not be allowed" ¶
-}

@@ -554,56 +554,96 @@ board size. Quote the benchmark that matches your workload, not a single number.
 
 ## Testing
 
+**QA for this project lives in [ZyQuality](https://github.com/zymbol-lang/zyquality).**
+The `.zy` corpus and its golden files are no longer in `tests/`: they were there
+*and* in zyquality, and the two copies had drifted 28 files apart. The scripts
+below keep their names, flags and exit codes and delegate to `zyq`. They exit
+**2** if it is absent — a gate must not read "nothing ran" as "nothing failed".
+
 ```bash
-# Unit tests (all 19 crates)
+git clone https://github.com/zymbol-lang/zyquality.git ../zyquality
+make -C ../zyquality
+```
+
+```bash
+# Unit tests (all 19 crates) — unaffected, these live inside the crates
 cargo test
 
-# Tree-walker vs VM parity check
+# Tree-walker vs VM parity          → zyq consensus --engines zytw,zyvm
 bash tests/scripts/vm_compare.sh
 
-# All four engines at once (tree-walker, VM, zymbol.js, zyml) — skips any engine not built
-bash tests/scripts/engine_compare.sh FILE.zy
-bash tests/scripts/engine_compare.sh tests/loops/labels --matrix
+# All four engines                  → zyq consensus
+bash tests/scripts/engine_compare.sh
+bash tests/scripts/engine_compare.sh loops/labels
 
-# Golden expected-output tests
+# Golden expected-output tests      → zyq expect
 bash tests/scripts/expected_compare.sh
 
-# Formatter property tests (reparse, idempotence, semantics, comments)
+# Semantic diagnostics E001–E013    → zyq expect --via check
+bash tests/scripts/semantic_compare.sh
+
+# Formatter properties — stays here: only this engine has a formatter.
+# Reads the shared corpus plus this repository's examples/.
 bash tests/scripts/fmt_property.sh --baseline tests/scripts/fmt_property_baseline.txt
 ```
 
-Current status (v0.0.9 branch — 0.0.8 is the latest published release), re-measured
-2026-08-09:
-**951 tests passing** via `cargo test` (0 failed, 4 ignored).  
-VM parity: **551/551 PASS**, 0 skipped. (`tests/gaps/gap_key_input_type_check.zy` carries
-`@vm-skip` by design — it is a `zymbol check` test that never executes — and is not
-counted.)  
-Formatter property suite: **602 PASS / 0 FAIL** over 650 files, 48 skipped, no regressions
-against the baseline.  
-Golden files: **530/532 PASS** via `expected_compare.sh`. The two failures are stale
-`.expected` fixtures, not interpreter regressions: both were hand-written with `warning:`
-and blank lines that the script's `strip_warnings` filter removes from actual output, so
-they compare unequal against output that is otherwise byte-identical.
+Or ask the whole question at once, from the zyquality checkout:
+
+```bash
+./zyq suite     # selftest + audit + reject + goldens + consensus, one verdict
+```
+
+Current status (v0.0.9 branch — 0.0.8 is the latest published release),
+re-measured 2026-08-12 against the unified corpus of **585 files**:
+
+- **969 `#[test]` functions** across the 19 crates via `cargo test`.
+- Tree-walker vs VM: **583 agree, 0 diverge**, 2 files excused for every engine
+  (a re-export module, and an interactive tool that waits for a person). This is
+  32 more files than the 551 the old runner saw: the corpus gained `arity/`,
+  `loops/labels/` and zyml's 22-file smoke suite, and the 14 `input/` tests are
+  compared now that the runner feeds each engine its `.input`.
+- Golden files: **583/583 match, nothing unchecked**, via `zyq expect`. The two
+  that used to fail were stale fixtures written before the output filter
+  existed, not regressions; 47 more carried the path the corpus had when they
+  were recorded and would have failed in any other checkout. All were
+  re-recorded once, and `zyq` now strips the corpus root before comparing, so a
+  golden says the same thing everywhere.
+- Formatter properties: **627 PASS / 0 FAIL** over 682 files, 55 skipped.
+- Benchmarks: **14/14 within tolerance** of the recorded baseline via
+  `bench_gate.sh`. The programs moved to `../zyquality/bench/` — they print
+  elapsed wall time, so they are not tests and never were; the only suite that
+  had been running them was the browser parity runner, where all of them
+  failed.
+
+`ZYMBOL_BIN=/usr/bin/zymbol` still points the suite at an installed package
+rather than the build tree. `VM_COMPARE_EXCLUDE` is gone — exclusions are
+declared in `../zyquality/corpus.toml` and selected by tag:
+
+```bash
+bash tests/scripts/vm_compare.sh --without STD_DB
+```
 
 > **The parity number counts only versioned files.** During v0.0.8 this README said
 > 544/544 while the release notes said 536/536, and both were "measured": the larger
 > figure came from a working tree holding test files that `.gitignore` kept out of the
 > repository, so a clean clone — and the `.deb` gate built from one — saw a different
-> suite. Every file behind 551/551 is committed: `find tests -name '*.zy'` and
-> `git ls-files` return the same 567 paths, with no difference either way. (567 is every
-> `.zy` under `tests/`, including the modules and fixtures that tests import rather than
-> run; 551 is what the parity runner executes.) Re-derive it in a fresh clone before
-> quoting it in release notes, and disable git's path quoting when you do:
+> suite. The corpus now lives in `../zyquality/corpus/`, so re-derive it there, in a
+> fresh clone, before quoting it in release notes — and disable git's path quoting when
+> you do:
 >
 > ```bash
-> comm -3 <(find tests -name '*.zy' | sort) \
->         <(git -c core.quotePath=false ls-files 'tests/**/*.zy' 'tests/*.zy' | sort)
+> cd ../zyquality
+> comm -3 <(find corpus -name '*.zy' | sort) \
+>         <(git -c core.quotePath=false ls-files 'corpus/**/*.zy' 'corpus/*.zy' | sort)
 > ```
 >
-> Without `core.quotePath=false`, git escapes the non-ASCII names in `tests/i18n/`
+> Without `core.quotePath=false`, git escapes the non-ASCII names in `corpus/i18n/`
 > (`中文_应用.zy`, `한국_앱.zy`, `עִברִית.zy`, …) as octal, and the comparison reports eight
 > phantom differences on both sides while the counts match — a mismatch in the check, not
 > in the repository.
+>
+> Moving the corpus removed the *other* half of this problem: there is now one copy, so
+> "which corpus was measured" has one answer.
 
 ---
 

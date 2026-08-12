@@ -1,6 +1,0 @@
-// Test: constants with := are immutable — reassignment is a runtime error
-PI := 3.14159
->> PI ¶
-
-PI = 99
->> PI ¶

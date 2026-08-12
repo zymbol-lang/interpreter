@@ -1,3 +1,0 @@
-Runtime error: failed to parse module: 2 parse error(s) in '/home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy'
-  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:17:34: expected expression, found LBrace
-  /home/rakzo/github/zymbol-lang/interpreter/tests/i18n/matematicas/http.zy:17:40: E013: executable statement not allowed in module body

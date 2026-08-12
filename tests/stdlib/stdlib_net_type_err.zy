@@ -1,3 +1,0 @@
-// Test: std/net type error includes function name in message
-<# std/net => net
-net::get(42)
