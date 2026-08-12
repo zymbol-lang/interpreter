@@ -607,42 +607,29 @@ they compare unequal against output that is otherwise byte-identical.
 
 ---
 
-## Test-Driven Language Development
+## Language-Driven Validation
 
-TDD says: write a failing test, make it pass, refactor. Zymbol's release cycle applies that
-order one level up. The unit under test is **the language itself**, and the failing test is
-**a complete application that nobody can write yet**.
+Each release is validated by building a non-trivial application entirely in Zymbol, in a domain
+the language has not been asked to serve before. The application is the test and **the language
+is the unit under test**: it is written *as if the language already supported it*, and every
+place it cannot say what it means — or says it and returns a silently wrong answer — is a
+finding against the interpreter, not a defect in the program. Closing one means changing the
+language: an operator derived under the [SYMBOLS.md](./SYMBOLS.md) rules, a semantic fix, a
+TW/VM divergence, or a `std/` module.
 
-Each milestone begins by choosing a non-trivial program and writing it in Zymbol *as if the
-language already supported it*. Whatever the program cannot express — or expresses and then
-gets wrong — is a red test against the interpreter, not a defect in the program.
+This is validation, not verification, and the difference is the whole point. `cargo test`, the
+parity runs and the golden files verify — they take a program that exists and check that the
+implementation handles it correctly. None of them can report that the language cannot express a
+Go board, because a missing capability produces no failing test; only writing the board does.
+The cost is inverted from ordinary TDD: here the test is expensive and cannot be rerun, so a
+project is a *discovery* mechanism and never a gate. Every finding is distilled into a minimal
+`.zy` case, a golden and a unit test, and it is that cheap layer — not the application — that
+protects against regression afterwards.
 
-| Cycle | Applied to the language |
-|-------|-------------------------|
-| **Red** | The application is written in the language it *ought* to be. Every place it cannot say what it means, or says it and returns the wrong answer, is a failure of the language. |
-| **Green** | The interpreter changes: an operator derived under the [SYMBOLS.md](./SYMBOLS.md) rules, a semantic fix, a TW/VM divergence closed, or a `std/` module — whichever the [symbol-vs-module rubric](./SYMBOLS.md#15-natural-language-residue) says it is. |
-| **Refactor** | The finding is reduced to a minimal `.zy` case under `tests/`, added to the parity suite, and written into `GUIDE.md` / `REFERENCE.md` — so the next regression fails a test run in milliseconds, not a play-through. |
-
-**Why an application and not a unit test.** A language's defects concentrate where features
-meet, and a per-feature suite tests features one at a time. The v0.0.8 VM bugs are the clearest
-case: output parameters of *module* functions were dropped, `String` was truncated *inside a
-module*, and `"{CONST}"` interpolation was compiled to literal text *inside a function*. Each
-is a silent wrong answer rather than a crash, each needs two features composed to appear, and
-none of them was reachable by testing modules, output parameters or interpolation separately.
-Building 囲碁 hit all three, because a Go board is state threaded through cooperating modules
-and there is nowhere else for it to live.
-
-**Where the analogy breaks — and how that is covered.** In ordinary TDD the test is cheap and
-the implementation is expensive; here it is the reverse. A validation project is a whole
-application, not a test case: it cannot be rerun in a second, and a failure in it points at a
-region rather than a line. So it is a *discovery* mechanism, never a regression gate.
-What it finds is only kept if it survives the refactor step and becomes something the suite can
-run: `cargo test`, `vm_compare.sh` (TW vs VM), `expected_compare.sh` (golden output),
-`fmt_property.sh` (formatter properties), and `engine_compare.sh`, which runs one program
-through all four engines at once — the pairwise suites can hold at most two of four disagreeing
-answers, which is why the label-agreement and loop-context defects in
-[SYMBOLS.md §20](./SYMBOLS.md#20-what-describing-the-system-found-in-it) survived until a
-four-way comparison existed.
+Each project keeps a **gap log**: every friction, bug, missing capability and idea, with an ID,
+a reproduction and a status. The log closes against the release — 囲碁's eleven findings were
+all fixed in v0.0.8, each with its own regression test. The method, its decalogue, and the index
+of the six logs are in **[LDV.md](./LDV.md)**.
 
 The projects carry a second load at the same time. Each is written in a different natural
 language — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese — which is what turns
@@ -961,6 +948,7 @@ interpreter/
 - [USERAPPI18N.md](./USERAPPI18N.md) — Building a multilingual application: measured layout, runtime language switching, per-language entry points, and the completeness gate
 - [MEMORY_MODEL.md](./MEMORY_MODEL.md) — Memory and scoping model: design vs implementation audit (findings MM-1 … MM-11)
 - [SYMBOLS.md](./SYMBOLS.md) — Semiotic and morphological reference: the grapheme inventory, how marks agglutinate into operators, the declared homographs and opaque signs, and the rules a new operator must satisfy
+- [LDV.md](./LDV.md) — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the six gap logs
 - [ROADMAP.md](./ROADMAP.md) — What's done, known gaps, and planned work
 - [CHANGELOG.md](./CHANGELOG.md) — Version history
 
