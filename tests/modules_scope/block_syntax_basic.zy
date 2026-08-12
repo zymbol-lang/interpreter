@@ -1,7 +1,0 @@
-# block_syntax_basic {
-    #> { add, PI }
-
-    PI := 3.14
-
-    add(a, b) { <~ a + b }
-}

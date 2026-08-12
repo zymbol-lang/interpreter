@@ -1,6 +1,0 @@
-# E012_mod {
-    #> { exported_fn }
-
-    exported_fn()     { <~ "exported" }
-    not_exported_fn() { <~ "hidden" }
-}

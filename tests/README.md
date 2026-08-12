@@ -1,160 +1,141 @@
-# Zymbol Test Suite
+# tests/ — what is still here, and where the rest went
 
-End-to-end tests for the Zymbol interpreter. Each test is a `.zy` source file paired with a `.expected` golden output file. Tests run against the tree-walker interpreter unless noted.
+The `.zy` corpus and its `.expected` golden files **are not in this directory
+any more**. They live in [ZyQuality](https://github.com/zymbol-lang/zyquality),
+which is this project's point of record for testing.
 
-## Directory Structure
-
-```
-tests/
-├── arithmetic/          # Numeric operators, precedence, int/float arithmetic
-├── casts/               # ##. (ToFloat), ### (ToIntRound), ##! (ToIntTrunc)
-├── collections/         # Array CRUD, slices, HOF ($>, $|, $<), index navigation
-├── functions/           # Declarations, recursion, output params, scope
-├── i18n/                # Unicode numerals, non-ASCII identifiers, i18n modes
-├── index_nav/           # Deep nested access, ranges (..), fan-out extraction
-├── lambdas/             # Closures, block lambdas, first-class usage
-├── match/               # Pattern matching, guards, destructuring
-├── modules_scope/       # Module import/export, scope isolation
-├── named_tuples/        # Tuple creation, access, destructuring
-├── output/              # >> output, newline ¶, formatting operators
-├── safe_access/         # $? safe navigation, $! propagation
-├── strings/             # String operators: $/, $++, #|x|, format, precision
-├── analysis/            # Static analysis (unused vars, circular imports)
-├── tui/                 # TUI / terminal primitives tests (@~, >>!, >>?, >>~, <<|, >>|)
-├── input/               # Input statement tests (<<, << #|n|); each .zy has a companion .input file
-├── gaps/                # Language gap regression tests — one test per GAP documented in ZethyCLICLI/GAPS.md
-├── bugs/                # Bug regression tests — one test per BUG; must never regress
-└── scripts/             # Test runner scripts and benchmarks
+```text
+../zyquality/
+    zyq            the differential runner
+    corpus/        585 .zy files, 583 with a .expected golden
+    corpus.toml    which engine may be judged on which file, and why not
+    reject/        forms every engine must refuse
+    suites.toml    the script suites, so `zyq suite` runs them too
+    fmt/           formatter properties P1-P4 + baseline
+    tui/           key input through a real pty
+    bench/         the benchmark programs, runners and baseline
+    docs/          GUIDE.md example verification
+    project/       the real programs written in Zymbol
+    platform/      the native Windows runner
+    notes/         historical measurement records
 ```
 
-### `gaps/` — Language gap regression tests
+## Why it moved
 
-Each file documents and exercises a specific language limitation discovered during
-real-world usage (ZethyCLICLI). Naming: `g<ID>_<short_description>.zy`.
+The corpus existed twice — here and in `zyquality/corpus/` — and the two copies
+had already drifted **28 files apart**. `arity/` and `loops/labels/`, the work
+that v0.0.9 added precisely because the four engines disagreed about labels,
+were tested by `vm_compare.sh` and invisible to every other engine's suite.
 
-The test proves the **intended behavior** — either that the workaround works correctly,
-or that a formerly broken behavior is now fixed. Adding a test here is mandatory when
-a GAP is resolved so the fix can never silently regress.
+Underneath that, five runners each carried their own idea of the same corpus:
 
-| File | GAP | What it tests |
-|------|-----|---------------|
-| `g07_bashexec_trailing_newline.zy` | G7 | BashExec auto-trims trailing `\n`; result usable in comparisons directly |
-| `g09_module_const_access.zy` | G9 | `alias.CONST` dot access works; TypeChecker no longer blocks module aliases |
-| `g11_module_void_call.zy` | G11 | `alias::fn()` valid as void statement; no `disc =` workaround needed |
-| `g12_bashexec_expression.zy` | G12 | BashExec as first-class expression in match arms, conditionals, assignments |
-| `g13_module_private_state.zy` | G13 | Module `=` variables persist across calls via write-back mechanism |
-| `g14_export_block_position.zy` | G14 | `#>` valid after `<#` imports (not just immediately after `# name`) |
-| `g17_script_toplevel_functions.zy` | G17 | Script-level functions inherit import aliases from caller |
-| `g21_string_escape_braces.zy` | G21 | `\{` produces `{` literally, never interpolates; `{var}` still interpolates |
-| `gap001_slice_arith_bounds.zy` | GAP-001 | `$[pos-1..end]` arithmetic expressions accepted as slice bounds |
-| `gap002_concat_paren_items.zy` | GAP-002 | `"prefix" $++ (expr)` parenthesized items accepted in `$++` |
-| `gap003_loop_iter_lifetime_warning.zy` | GAP-003 | `_` prefix and pre-declared vars suppress ambiguous-lifetime warning |
-| `gap_serpiente_string_repeat.zy` | GAP-S1 | `$*` string-repeat operator: `"str" $* N` |
-| `gap_output_pos_sparse.zy` | GAP-S2 | Sparse `>>~` syntax: `(,,, fg)` and `(row, col)` inline and variable-based |
-| `gap_key_input_type_check.zy` | GAP-S3 | `<<\|` key-read usage with semantic type-check pass; function branching on char |
-| `gap_hot_definition_basic.zy` | GAP-S4 | `°` hot-definition operator: auto-initializes to neutral on first use |
+| runner | how it excluded a file | how it normalised output |
+|---|---|---|
+| `vm_compare.sh` | `@vm-skip` marker, `VM_COMPARE_EXCLUDE`, three fixed paths | five `sed` expressions |
+| `web/tests/test_runner.mjs` | a 40-entry `SKIP_SET` literal in JavaScript | `trimEnd` + tabs |
+| `zyml/tests/parity.sh` | `input/`, `manual_check.zy`, `grep -L lib_time` | nothing |
+| `engine_compare.sh` | nothing | nothing |
+| `zyq consensus` | stderr prefixes | nothing |
 
-### `bugs/` — Bug regression tests
+A file excluded from the browser comparison because it shells out was still
+counted as a divergence by zyml. Those lists are now one file, `corpus.toml`,
+next to the corpus they describe.
 
-Each file is a regression guard for a specific runtime bug. Naming: `bug_<description>.zy`.
-These tests are **high priority** — a failure here means a silent behavioral regression
-in code that previously worked correctly.
+## What is still here
 
-| File | Bug | What it guards |
-|------|-----|----------------|
-| `bug01_module_intra_calls.zy` | BUG-01 | Module functions can call each other (exported and private) |
-| `bug03_bashexec_void_statement.zy` | BUG-03 | `<\ cmd \>` valid as standalone void statement without assignment |
-| `bug04_literal_brace_string.zy` | BUG-04 / BUG-07 | `\{` and `\}` produce literal braces; never trigger interpolation |
-| `bug06_output_literal_callable.zy` | BUG-06 | `>> "literal" (expr)` outputs two items, not a function call crash |
-| `bug_double_interpolation.zy` | Double-interpolation | `\{var\}` must never interpolate; only `{var}` does |
-| `bug_output_pos_cross_line.zy` | BUG-S01 | Consecutive `>>` in function body each produce independent output lines |
-| `bug_else_underscore.zy` | BUG-S02 | `_` unconditional else and `_?` conditional else-if parse and execute correctly |
-| `bug_vm_tuple_equality.zy` | BUG-005 | VM tuple `==`/`<>` — recursive element-wise comparison (was always `#0`) |
-| `bug_vm_string_append.zy` | BUG-006 | VM `$+` with String left-operand — concatenation instead of crash (`ArrayPush` now handles `Value::String`) |
+| | |
+|---|---|
+| `parser_integration.rs` | a Rust integration test; `cargo test` runs it |
+| `scripts/` | wrappers only. No `.zy` files, no suite logic, no baselines. |
 
-Top-level `.zy` + `.expected` pairs cover cross-cutting scenarios (scope, error handling, memory model).
+Every script in `scripts/` keeps its name, its flags and its exit codes, and
+delegates. Two entry points have no wrapper because a shell one would be a lie:
+`guide_verify.py` is now `../zyquality/docs/guide_verify.py`, and `run-tests.ps1`
+is `../zyquality/platform/run-tests.ps1` — that one stays a native PowerShell
+reimplementation rather than a wrapper, because the whole reason it exists is to
+test Windows with no bash, no coreutils and no WSL.
 
-## Testing Paradigms
+`../examples/` is untouched: those are this repository's own example programs,
+not the shared corpus, and `fmt_property.sh` still sweeps them. Worth knowing:
+none of the 98 has a golden, so nothing checks what they print — only that
+formatting them does not change it.
 
-### 1. Golden-file comparison — `expected_compare.sh`
+### The eleven `.zy` files that used to be in `scripts/`
 
-Runs each `.zy` file and compares its stdout against the matching `.expected` file.
+None of them was a test, which took some digging to establish:
+
+| | what it was | who ran it |
+|---|---|---|
+| `bench_*.zy` ×7, `stress.zy` | benchmarks for `run_all.sh` / `bench_gate.sh` | only the browser parity suite, where all eight failed |
+| `lib_time.zy` | a **module** — the CLI refuses to run it directly | the same, so it failed by definition |
+| `_test_fib_approaches.zy` | an orphan; no script referenced it | the same |
+| `manual_check.zy` | an interactive tool that shells out and waits for a person | nobody |
+
+All four runners in this repository excluded `*/scripts/*`, and zyml's parity
+excluded them via `grep -L lib_time`. The only suite that executed them was
+`web/tests/test_runner.mjs` — and its ten failures were exactly these files,
+reported in that repository's README as divergences of the JavaScript engine.
+
+They now live in `../zyquality/bench/` (the benchmarks, with one copy of
+`lib_time.zy` instead of two) and `../zyquality/corpus/manual/`
+(`manual_check.zy`, beside the manual corpus it drives).
+
+## Running the tests
+
+Every script here keeps its name, its flags and its exit codes. They delegate.
 
 ```bash
-# Run all golden tests
-bash tests/scripts/expected_compare.sh
-
-# Scope to a single directory
-bash tests/scripts/expected_compare.sh strings
-bash tests/scripts/expected_compare.sh casts
-
-# Regenerate .expected files from current interpreter output
-bash tests/scripts/expected_compare.sh --regen
-bash tests/scripts/expected_compare.sh strings --regen
+bash tests/scripts/vm_compare.sh          # → zyq consensus --engines zytw,zyvm
+bash tests/scripts/engine_compare.sh      # → zyq consensus  (all four)
+bash tests/scripts/expected_compare.sh    # → zyq expect
+bash tests/scripts/semantic_compare.sh    # → zyq expect --via check
+bash tests/scripts/fmt_property.sh        # → zyquality/fmt/fmt_property.sh
+bash tests/scripts/run_all.sh             # → zyquality/bench/run_all.sh
+bash tests/scripts/bench_gate.sh          # → zyquality/bench/bench_gate.sh
+bash tests/scripts/run-project-tests.sh   # → zyquality/project/run-project-tests.sh
+cargo test                                # 969 Rust unit tests, unaffected
 ```
 
-Output:
-```
-  PASS  strings/14_split_operator.zy
-  PASS  strings/15_concat_build.zy
-  FAIL  strings/16_unicode_eval.zy
-        --- expected
-        +++ actual
-        @@ -3 +3 @@
-        -42
-        +๔๒
-```
-
-### 2. Tree-walker vs VM parity — `vm_compare.sh`
-
-Runs every `.zy` file under `tests/` twice (tree-walker and `--vm`) and reports divergences. Use this to track VM feature parity. If a companion `.input` file exists alongside the `.zy` file, it is piped as stdin to both runs automatically.
+Or the whole thing at once, which is the point of all this:
 
 ```bash
-bash tests/scripts/vm_compare.sh
+cd ../zyquality && ./zyq suite
 ```
 
-## `.zy` + `.expected` Convention
+They need a ZyQuality checkout beside this one:
 
-- The `.expected` file contains **exact stdout** the interpreter must produce, with no trailing newline.
-- Interpreter warnings (lines starting with `[warn]`) are stripped before comparison.
-- One `.expected` per `.zy`; both share the same base name and directory.
-- Comments in `.zy` files document the expected value inline (`// 42`) as a cross-check for readers.
+```bash
+git clone https://github.com/zymbol-lang/zyquality.git ../zyquality
+make -C ../zyquality
+```
 
-## `.zy` + `.input` Convention
+or `ZYQ_ROOT=/path/to/zyquality`. Without one they exit **2**, not 0 — a gate
+must not read "nothing ran" as "nothing failed".
 
-For tests that exercise `<<` (input statements), a companion `.input` file provides the stdin content:
+## Adding a test
 
-- Named identically to the `.zy` file with the `.input` extension (`02_numeric.zy` → `02_numeric.input`).
-- Content is piped as stdin by both `expected_compare.sh` and `vm_compare.sh` automatically.
-- Without an `.input` file, the test runs without stdin (any `<<` would block and timeout).
+Add the `.zy` to `../zyquality/corpus/`, then record its golden:
 
-## Adding a New Test
+```bash
+cd ../zyquality
+./zyq expect --regen --new --engines zytw --filter your/new/file
+git diff corpus/                          # read it before committing
+```
 
-1. Create `tests/<category>/NN_description.zy` with the scenario.
-2. Run `bash tests/scripts/expected_compare.sh <category> --regen` to generate the golden file.
-3. Inspect the generated `.expected` file to confirm the output is correct.
-4. Commit both files together.
+If the file cannot be compared on some engine, say so in `corpus.toml` with a
+reason — an exclusion nobody wrote a reason for is indistinguishable from a bug
+somebody hid. If it prints elapsed time it is a benchmark, and belongs in
+`../zyquality/bench/` rather than in the corpus with an exclusion to silence it.
 
-## Feature Coverage
+## One change of interface
 
-| Category | Files | Operators / Features |
-|----------|-------|----------------------|
-| `arithmetic` | 8 | `+` `-` `*` `/` `%` `**`, precedence, int/float |
-| `casts` | 4 | `##.` `###` `##!` — ToFloat, ToIntRound, ToIntTrunc |
-| `collections` | 14 | Array ops, `$>` `$|` `$<` HOF, index nav `arr[i..j]` |
-| `functions` | 8 | Named functions, recursion, `<~` output params |
-| `i18n` | 6 | `#d0d9#` mode switch, Unicode booleans, digit scripts |
-| `index_nav` | 13 | Deep access, ranges `..`, fan-out, `$?` safe access |
-| `lambdas` | 10 | `->` closures, block lambdas, pipe `\|>` |
-| `match` | 8 | `~` patterns, guards, array/tuple destructuring |
-| `modules_scope` | 6 | `#>` export, `#<` import, aliases |
-| `named_tuples` | 5 | `(:k v)` creation, access, destructuring |
-| `output` | 6 | `>>` `¶` formatting `#,\|x\|` `#^\|x\|` precision `#.N\|x\|` |
-| `safe_access` | 6 | `$?` `$!` `$!!` error propagation |
-| `strings` | 16 | `$/` split, `$++` concat-build, `$*` repeat, `#\|x\|` Unicode eval, format |
-| `tui` | 8 | `@~` sleep, `>>!` clear, `>>?` size, `>>~` positioned (single, multiple, multichar), `<<\|` key, `>>|` TUI block |
-| `input` | 8 | `<<` basic, `<< #\|n\|` numeric cast (int/float), multiple inputs, whitespace trim, prompt display, conditional, loop |
-| `gaps` | 33 | Language gap regressions (GAP-001–GAP-003, GAP-S1–GAP-S4, G7–G21, GAP-Z008–Z009) |
-| `bugs` | 19 | Bug regressions (BUG-001–BUG-007, BUG-S01–BUG-S02) |
+`VM_COMPARE_EXCLUDE` took an extended regex and is no longer read. Exclusions
+are declared once and grouped by tag:
 
-Total: **464** golden-file test pairs (`.expected` files).
+```bash
+VM_COMPARE_EXCLUDE='stdlib/stdlib_db'  bash tests/scripts/vm_compare.sh   # was
+bash tests/scripts/vm_compare.sh --without STD_DB                        # now
+```
+
+`ZYMBOL_BIN` is unchanged and still points the suite at an installed package
+instead of the build tree.

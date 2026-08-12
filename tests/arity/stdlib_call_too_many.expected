@@ -1,5 +1,0 @@
-[1m[31merror[39m[0m: function 'math::sqrt' expects 1 argument(s), but 2 were provided
-  [1m[34m-->[39m[0m tests/arity/stdlib_call_too_many.zy:8:4
-[1m[34m   8[39m[0m [34m|[39m
-[1m[34m   8[39m[0m [34m|[39m >> math::sqrt(4.0, 9.0) ¶
-[34m     |[39m [1m[31m   ^^^^^^^^^^^^^^^^^^^^[39m[0m

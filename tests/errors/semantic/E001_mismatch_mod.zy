@@ -1,5 +1,0 @@
-# totally_wrong_name {
-    #> { greet }
-
-    greet() { <~ "hello" }
-}

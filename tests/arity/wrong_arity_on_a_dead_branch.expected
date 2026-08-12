@@ -1,5 +1,0 @@
-[1m[31merror[39m[0m: function 's::saluda' expects 1 argument(s), but 2 were provided
-  [1m[34m-->[39m[0m tests/arity/wrong_arity_on_a_dead_branch.zy:11:5
-[1m[34m  11[39m[0m [34m|[39m
-[1m[34m  11[39m[0m [34m|[39m     s::saluda("ana", "sobra")
-[34m     |[39m [1m[31m    ^^^^^^^^^^^^^^^^^^^^^^^^^[39m[0m
