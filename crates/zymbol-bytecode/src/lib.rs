@@ -106,6 +106,13 @@ pub enum Instruction {
     And(Reg, Reg, Reg),
     Or(Reg, Reg, Reg),
     Not(Reg, Reg),
+    /// `dst = src is an Int` — the runtime type test that lets `@ <expr>`
+    /// pick between the TIMES and the WHILE form the way the tree-walker does.
+    IsInt(Reg, Reg),
+    /// `dst = src`, but only if `src` is a Bool. A loop specifier is a count
+    /// (Int) or a condition (Bool); anything else raises rather than being
+    /// coerced through truthiness, which no two engines agreed on.
+    AsLoopCond(Reg, Reg),
 
     // ── Control flow ─────────────────────────────────────────────────────
     Jump(Label),

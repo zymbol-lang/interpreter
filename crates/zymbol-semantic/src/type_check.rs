@@ -294,6 +294,10 @@ pub struct TypeChecker {
     /// Used to suppress "redundant °" warnings inside loops, where every iteration
     /// re-executes the same statement (°x is needed on every iteration, not just the first).
     loop_depth: u32,
+    /// Range bounds an enclosing `?` has already compared against something, so
+    /// the "direction decided at runtime" warning stays quiet on the loops that
+    /// are guarded correctly. Keys come from [`Self::expr_key`].
+    guarded_bounds: Vec<String>,
 }
 
 impl TypeChecker {
@@ -306,7 +310,58 @@ impl TypeChecker {
             module_aliases: HashSet::new(),
             module_arities: crate::call_arity::AliasArities::new(),
             loop_depth: 0,
+            guarded_bounds: Vec::new(),
         }
+    }
+
+    /// A stable key for the expressions that show up as range bounds, so a
+    /// guard can be matched against the bound it protects. `None` for anything
+    /// more complex than a name, a field, an index or a `$#` over one of those
+    /// — an unrecognized shape simply is not treated as guarded.
+    fn expr_key(expr: &Expr) -> Option<String> {
+        match expr.unwrap_group() {
+            Expr::Identifier(id) => Some(id.name.clone()),
+            Expr::CollectionLength(op) => {
+                Some(format!("{}$#", Self::expr_key(&op.collection)?))
+            }
+            Expr::MemberAccess(m) => {
+                Some(format!("{}.{}", Self::expr_key(&m.object)?, m.field))
+            }
+            Expr::Index(ix) => Some(format!(
+                "{}[{}]",
+                Self::expr_key(&ix.array)?,
+                Self::expr_key(&ix.index)
+                    .or_else(|| match ix.index.unwrap_group() {
+                        Expr::Literal(lit) => Some(format!("{:?}", lit.value)),
+                        _ => None,
+                    })?
+            )),
+            _ => None,
+        }
+    }
+
+    /// The range bounds a condition vouches for: both sides of any comparison
+    /// it contains, including the operands of `&&`/`||` chains.
+    fn guarded_bounds(cond: &Expr) -> Vec<String> {
+        let mut out = Vec::new();
+        fn walk(e: &Expr, out: &mut Vec<String>) {
+            if let Expr::Binary(b) = e.unwrap_group() {
+                match b.op {
+                    BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le
+                    | BinaryOp::Ge | BinaryOp::Eq | BinaryOp::Neq => {
+                        out.extend(TypeChecker::expr_key(&b.left));
+                        out.extend(TypeChecker::expr_key(&b.right));
+                    }
+                    BinaryOp::And | BinaryOp::Or => {
+                        walk(&b.left, out);
+                        walk(&b.right, out);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        walk(cond, &mut out);
+        out
     }
 
     /// Supply the parameter counts behind each import alias, enabling the arity
@@ -574,12 +629,18 @@ impl TypeChecker {
                     );
                 }
 
-                // Check then block
+                // Check then block. A comparison in the condition guards the
+                // range bounds it names for the whole block — `? n >= 2 { @ i:2..n … }`
+                // is the correct way to write that loop and must not be warned about.
+                let guarded = Self::guarded_bounds(&if_stmt.condition);
+                let guard_depth = self.guarded_bounds.len();
+                self.guarded_bounds.extend(guarded);
                 self.env.enter_scope();
                 for stmt in &if_stmt.then_block.statements {
                     self.check_statement(stmt);
                 }
                 self.env.exit_scope();
+                self.guarded_bounds.truncate(guard_depth);
 
                 // Check else-if branches
                 for branch in &if_stmt.else_if_branches {
@@ -620,14 +681,46 @@ impl TypeChecker {
                             condition.as_ref(),
                             Expr::Literal(lit) if matches!(lit.value, zymbol_common::Literal::Int(_))
                         );
+                    // A specifier is a count (Int) or a condition (Bool); every
+                    // engine refuses anything else at run time. Warned rather
+                    // than errored because the inference behind `cond_type` is
+                    // approximate, and a false positive here would reject code
+                    // that runs correctly.
                     if !is_times_loop && !matches!(cond_type, ZymbolType::Bool | ZymbolType::Any | ZymbolType::Unknown) {
                         self.warnings.push(
                             Diagnostic::warning(format!(
-                                "loop condition should be Bool, got {}",
+                                "loop expects a count or a condition, got {}",
                                 cond_type.name()
                             ))
                             .with_span(condition.span())
                         );
+                    }
+                }
+
+                // A range infers its direction from its endpoints, so `i:2..n`
+                // is not an empty range when n is 1 — it counts down, from 2 to
+                // 1, which is how "walk the rest of the list" walks off the
+                // front of a one-element list. Say so when the direction cannot
+                // be read off the source.
+                if let Some(iterable) = &loop_stmt.iterable {
+                    if let Expr::Range(range) = iterable.unwrap_group() {
+                        let is_int_literal = |e: &Expr| matches!(
+                            e.unwrap_group(),
+                            Expr::Literal(lit) if matches!(lit.value, zymbol_common::Literal::Int(_))
+                        );
+                        let guarded = Self::expr_key(&range.end)
+                            .is_some_and(|k| self.guarded_bounds.contains(&k));
+                        if !guarded && !(is_int_literal(&range.start) && is_int_literal(&range.end)) {
+                            self.warnings.push(
+                                Diagnostic::warning(
+                                    "range direction is decided at runtime: if the end \
+                                     turns out to be lower than the start, this loop counts \
+                                     down instead of not running. Guard the empty case."
+                                        .to_string()
+                                )
+                                .with_span(range.span)
+                            );
+                        }
                     }
                 }
 

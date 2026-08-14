@@ -361,12 +361,21 @@ mod tests {
 
     /// Build a Document from a real corpus fixture (module analysis needs a
     /// filesystem path to resolve imports).
+    ///
+    /// The corpus lives in ZyQuality, a sibling repository — `ZYQUALITY_DIR`
+    /// overrides where, the same way `engines.toml` overrides every path it
+    /// reaches back through. A missing corpus is a hard failure, not a skip: a
+    /// gate must not read "nothing ran" as "nothing failed".
     fn doc_from_fixture(rel: &str) -> crate::document::Document {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
+        let corpus = std::env::var("ZYQUALITY_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../zyquality")
+            });
+        let path = corpus
             .join(rel)
             .canonicalize()
-            .expect("fixture exists");
+            .unwrap_or_else(|e| panic!("corpus fixture {rel} not found under {}: {e}", corpus.display()));
         let content = std::fs::read_to_string(&path).expect("read fixture");
         crate::document::Document::new(
             crate::workspace::path_to_uri(&path),
@@ -381,9 +390,9 @@ mod tests {
     #[test]
     fn test_module_errors_in_pipeline() {
         let cases = [
-            ("tests/errors/semantic/E001_mismatch_mod.zy", "E001"),
-            ("tests/errors/semantic/E002_mod_not_found.zy", "E002"),
-            ("tests/errors/semantic/E009_dup_export.zy", "E009"),
+            ("corpus/errors/semantic/E001_mismatch_mod.zy", "E001"),
+            ("corpus/errors/semantic/E002_mod_not_found.zy", "E002"),
+            ("corpus/errors/semantic/E009_dup_export.zy", "E009"),
         ];
         for (fixture, code) in cases {
             let doc = doc_from_fixture(fixture);

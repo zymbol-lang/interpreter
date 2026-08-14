@@ -511,18 +511,37 @@ allocator change, not an analysis change.
 
 ## Performance Notes
 
-Benchmarks vs CPython 3 (release build, post-Sprint 5D+):
+The microbenchmarks are `zyquality/bench/`, and `zyquality/bench/baseline.txt`
+is their recorded median — machine-specific, so the numbers below are one host's,
+re-measured for v0.0.9 (release build, best of 3, process startup subtracted:
+~5 ms tree-walker, ~3 ms VM):
 
-| Benchmark | Tree-walker | VM | Python |
-|-----------|:-----------:|:--:|:------:|
-| Stress loop | ~200ms | 67ms | 77ms |
-| Match | ~165ms | 50ms | 75ms |
-| Collections | ~14s | 33ms | 44ms |
-| Strings | ~43ms | 36ms | 25ms |
-| Recursion (fib) | ~1480ms | 308ms | 218ms |
+| Benchmark | Tree-walker | VM | VM speedup |
+|-----------|:-----------:|:--:|:----------:|
+| Strings | 76 ms | 51 ms | 1.4× |
+| Collections | 71 ms | 37 ms | 1.9× |
+| Stress loop | 236 ms | 78 ms | 3.0× |
+| Match | 171 ms | 54 ms | 3.1× |
+| Recursion (`fib`) | 1566 ms | 253 ms | 6.1× |
 
-VM is 4.4× faster than tree-walker on `fib(35)`. Collections improvement is dramatic
-(tree-walker limitation with HashMap cloning per scope).
+**There is no single speedup factor, and the widely-quoted "~4×" is the low end
+of the range, not its middle.** The microbenchmarks span 1.4×–6.1×; real
+programs sit far above them, because the tree-walker's cost is per call frame
+and per scope, and the microbenchmarks are shallow:
+
+| Real workload (Chaturanga) | Tree-walker | VM | VM speedup |
+|---------------|:-----------:|:--:|:----------:|
+| `perft(3)`, 4448 nodes | 6.11 s | 0.146 s | **42x** |
+| full alpha-beta suite | 43.5 s | 0.949 s | **46x** |
+
+The go engine (囲碁) reported 8–14× on its own workload; alpha-beta search sits
+higher still, because it is recursion with output parameters and array indexing
+in the innermost loop — exactly where the tree-walker pays most, once per frame
+and once per scope. Quote the workload, not a bare multiplier.
+
+An earlier revision of this table reported Collections as ~14 s under the
+tree-walker (a HashMap-clone-per-scope limitation). That was fixed; it is 71 ms
+now, and the entry had outlived the defect it described.
 
 Key VM optimizations implemented:
 - **Sprint 5C**: flat register stack — zero allocation per call frame

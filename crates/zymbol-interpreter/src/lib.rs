@@ -320,6 +320,25 @@ impl Value {
         }
     }
 
+    /// Readable type name for diagnostics, as opposed to [`Self::type_name`],
+    /// which yields the language's `##` type symbol. Mirrors zyml's `type_name`
+    /// and the VM's `type_word`, so a message naming a type reads the same
+    /// whichever engine produced it.
+    pub fn type_word(&self) -> &'static str {
+        match self {
+            Value::Int(_)        => "integer",
+            Value::Float(_)      => "float",
+            Value::Bool(_)       => "bool",
+            Value::String(_)     => "string",
+            Value::Char(_)       => "char",
+            Value::Array(_)      => "array",
+            Value::Tuple(_) | Value::NamedTuple(_) => "tuple",
+            Value::Function(f)   => if f.is_named_fn { "function" } else { "lambda" },
+            Value::Error(_)      => "error",
+            Value::Unit          => "unit",
+        }
+    }
+
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Int(_)        => "###",
