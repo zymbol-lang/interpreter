@@ -48,3 +48,10 @@ packaging/RELEASE_NOTES_*.md
 
 # Manual test logs (generated per session, not committed)
 tests/manual/logs/manual_*.log
+
+# Coverage profiles. A binary built with `-C instrument-coverage` writes a
+# default_*.profraw into the *current directory* on every run when
+# LLVM_PROFILE_FILE is unset — so one `cargo test` after a coverage build drops
+# dozens of them here. See zyquality/coverage/run.sh.
+*.profraw
+*.profdata

@@ -24,6 +24,7 @@ use std::rc::Rc;
 
 use thiserror::Error;
 use zymbol_bytecode::{BuildPart, Chunk, CompiledProgram, FuncIdx, InputKind, Instruction, Reg};
+use zymbol_common::num;
 use zymbol_lexer::digit_blocks::digit_value;
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -324,6 +325,15 @@ pub enum VmError {
     CastError { op: &'static str, got: String },
     #[error("division by zero")]
     DivisionByZero,
+    #[error("modulo by zero")]
+    ModuloByZero,
+    /// An integer result outside `zymbol_common::num`'s range. Spelled exactly
+    /// as the tree-walker spells it — `zyq consensus` compares the text.
+    #[error("integer overflow: {a} {op} {b}")]
+    IntOverflow { a: i64, op: &'static str, b: i64 },
+    /// `###`/`##!` on a float with no integer form in range.
+    #[error("integer overflow: {op} cannot represent this float")]
+    CastOverflow { op: &'static str },
     #[error("array index out of bounds: index {index} for array of length {length}")]
     IndexOutOfBounds { index: i64, length: usize },
     #[error("index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)")]
@@ -458,9 +468,13 @@ fn num_eq_imm(v: &Value, imm: i64) -> Option<bool> {
 fn cmp_order(va: &Value, vb: &Value) -> Option<i32> {
     use std::cmp::Ordering;
     fn ord(o: Ordering) -> i32 { match o { Ordering::Less => -1, Ordering::Equal => 0, Ordering::Greater => 1 } }
-    fn as_int(s: &str) -> Option<i64> { ascii_digits(s.trim()).parse::<i64>().ok() }
+    fn as_int(s: &str) -> Option<i64> {
+        match num::parse(&ascii_digits(s.trim())) { num::Num::Int(n) => Some(n), _ => None }
+    }
     fn as_f64(s: &str) -> Option<f64> { ascii_digits(s.trim()).parse::<f64>().ok() }
-    fn f_ord(x: f64, y: f64) -> i32 { ord(x.partial_cmp(&y).unwrap_or(Ordering::Equal)) }
+    // NaN has no ordering against anything, itself included. Folding that into
+    // `Equal` made `nan <= 1.0` and `nan >= 1.0` both true.
+    fn f_ord(x: f64, y: f64) -> i32 { x.partial_cmp(&y).map_or(INCOMPARABLE, ord) }
 
     match (va, vb) {
         (Value::Int(x), Value::Int(y))     => Some(ord(x.cmp(y))),
@@ -525,14 +539,34 @@ fn cmp_order_error(va: &Value, vb: &Value, op: &str) -> String {
     }
 }
 
+/// Returned by `cmp_direct` and `cmp_order` for values with no ordering at all
+/// — two different types, or anything involving NaN.
+///
+/// It is deliberately not a value the sign tests would accept: an ordering
+/// comparison against it must be *false in all four directions*, which is what
+/// IEEE-754 says about NaN. That is why the operators below ask `ord_lt(r)`
+/// rather than `r < 0` — `INCOMPARABLE > 0` is true, and reading the sign is
+/// exactly the bug this constant exists to prevent.
+const INCOMPARABLE: i32 = 2;
+
+#[inline] fn ord_lt(r: i32) -> bool { r == -1 }
+#[inline] fn ord_le(r: i32) -> bool { r == -1 || r == 0 }
+#[inline] fn ord_gt(r: i32) -> bool { r == 1 }
+#[inline] fn ord_ge(r: i32) -> bool { r == 1 || r == 0 }
+
 fn cmp_direct(va: &Value, vb: &Value) -> i32 {
     use std::cmp::Ordering;
     fn ord(o: Ordering) -> i32 { match o { Ordering::Less => -1, Ordering::Equal => 0, Ordering::Greater => 1 } }
     match (va, vb) {
         (Value::Int(x), Value::Int(y))     => ord(x.cmp(y)),
-        (Value::Float(x), Value::Float(y)) => ord(x.partial_cmp(y).unwrap_or(Ordering::Equal)),
-        (Value::Int(x), Value::Float(y))   => ord((*x as f64).partial_cmp(y).unwrap_or(Ordering::Equal)),
-        (Value::Float(x), Value::Int(y))   => ord(x.partial_cmp(&(*y as f64)).unwrap_or(Ordering::Equal)),
+        // `unwrap_or(Equal)` here made NaN equal to every float, including
+        // itself: `partial_cmp` returns None precisely when one side is NaN, and
+        // callers read 0 as "equal". INCOMPARABLE is a non-zero code, so `==` is
+        // false and `!=` is true — which is what IEEE-754 says about NaN, and
+        // what the other three engines already did.
+        (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).map_or(INCOMPARABLE, ord),
+        (Value::Int(x), Value::Float(y))   => (*x as f64).partial_cmp(y).map_or(INCOMPARABLE, ord),
+        (Value::Float(x), Value::Int(y))   => x.partial_cmp(&(*y as f64)).map_or(INCOMPARABLE, ord),
         (Value::String(x), Value::String(y)) => ord(x.as_str().cmp(y.as_str())),
         (Value::Char(x), Value::Char(y))   => ord(x.cmp(y)),
         (Value::Bool(x), Value::Bool(y))   => ord(x.cmp(y)),
@@ -570,16 +604,14 @@ fn vm_validate_input(s: &str, kind: &InputKind) -> Result<Value, String> {
     match kind {
         InputKind::Raw => Ok(Value::String(ZyStr::new(s.to_string()))),
         InputKind::Numeric => {
-            if let Ok(i) = s.parse::<i64>() {
-                Ok(Value::Int(i))
-            } else if let Ok(f) = s.parse::<f64>() {
-                Ok(Value::Float(f))
-            } else if let Some(norm) = normalize_unicode_digits(s) {
-                if let Ok(i) = norm.parse::<i64>() { Ok(Value::Int(i)) }
-                else if let Ok(f) = norm.parse::<f64>() { Ok(Value::Float(f)) }
-                else { Ok(Value::String(ZyStr::new(s.to_string()))) }
-            } else {
-                Ok(Value::String(ZyStr::new(s.to_string())))
+            match num::parse(s) {
+                num::Num::Int(i) => Ok(Value::Int(i)),
+                num::Num::Float(f) => Ok(Value::Float(f)),
+                num::Num::None => match normalize_unicode_digits(s).map(|n| num::parse(&n)) {
+                    Some(num::Num::Int(i)) => Ok(Value::Int(i)),
+                    Some(num::Num::Float(f)) => Ok(Value::Float(f)),
+                    _ => Ok(Value::String(ZyStr::new(s.to_string()))),
+                },
             }
         }
         InputKind::Float => ascii_digits(s).parse::<f64>()
@@ -859,7 +891,8 @@ impl<W: Write> VM<W> {
                     frame.catch_ip = u32::MAX;
                     let kind = match &_err {
                         VmError::TypeError { .. } | VmError::CastError { .. } => "Type",
-                        VmError::DivisionByZero => "Div",
+                        VmError::DivisionByZero | VmError::ModuloByZero => "Div",
+                        VmError::IntOverflow { .. } | VmError::CastOverflow { .. } => "Range",
                         VmError::IndexOutOfBounds { .. } | VmError::IndexZero => "Index",
                         VmError::Io(_) => "IO",
                         _ => "_",
@@ -873,6 +906,19 @@ impl<W: Write> VM<W> {
                 }
                 return Err(_err);
             }};
+        }
+
+        // An integer result, or the overflow the tree-walker would have raised.
+        // Every integer instruction goes through this: the VM used to use the
+        // `wrapping_*` family throughout, so `10 ^ 20` answered with the low 64
+        // bits of the true product and no program could tell.
+        macro_rules! iop {
+            ($v:expr, $a:expr, $op:expr, $b:expr) => {
+                match $v {
+                    Some(n) => n,
+                    None => raise!(VmError::IntOverflow { a: $a, op: $op, b: $b }),
+                }
+            };
         }
 
         // Ordering comparison, raising the tree-walker's error when the two
@@ -969,19 +1015,19 @@ impl<W: Write> VM<W> {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
                         let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa + fb));
-                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(va.wrapping_add(vb))); }
+                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(iop!(num::add(va, vb), va, "+", vb))); }
                 }
                 &Instruction::SubInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
                         let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa - fb));
-                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(va.wrapping_sub(vb))); }
+                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(iop!(num::sub(va, vb), va, "-", vb))); }
                 }
                 &Instruction::MulInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
                         let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa * fb));
-                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(va.wrapping_mul(vb))); }
+                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(iop!(num::mul(va, vb), va, "*", vb))); }
                 }
                 &Instruction::DivInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
@@ -996,10 +1042,15 @@ impl<W: Write> VM<W> {
                 &Instruction::ModInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
-                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa % fb));
+                        let (fa, fb) = (rf!(a), rf!(b));
+                        // As in the integer branch below and in `DivFloat`: a
+                        // zero divisor is an error whichever type it was written
+                        // as, not a NaN.
+                        if fb == 0.0 { raise!(VmError::ModuloByZero); }
+                        wreg!(dst, Value::Float(fa % fb));
                     } else {
                         let (va, vb) = (ri!(a), ri!(b));
-                        if vb == 0 { raise!(VmError::DivisionByZero); }
+                        if vb == 0 { raise!(VmError::ModuloByZero); }
                         wreg!(dst, Value::Int(va % vb));
                     }
                 }
@@ -1009,7 +1060,15 @@ impl<W: Write> VM<W> {
                         let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa.powf(fb)));
                     } else {
                         let (va, vb) = (ri!(a), ri!(b));
-                        wreg!(dst, Value::Int(if vb < 0 { 0 } else { va.wrapping_pow(vb as u32) }));
+                        // A negative exponent is a float operation, as in the
+                        // tree-walker. This used to answer Int(0), so `2 ^ -2`
+                        // was 0 here and 0.25 there.
+                        if vb < 0 {
+                            wreg!(dst, Value::Float((va as f64).powf(vb as f64)));
+                        } else {
+                            let e = u32::try_from(vb).unwrap_or(u32::MAX);
+                            wreg!(dst, Value::Int(iop!(num::pow(va, e), va, "^", vb)));
+                        }
                     }
                 }
                 &Instruction::NegInt(dst, src) => {
@@ -1022,17 +1081,17 @@ impl<W: Write> VM<W> {
                 &Instruction::AddIntImm(dst, src, imm) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
                         let v = rf!(src); wreg!(dst, Value::Float(v + imm as f64));
-                    } else { let v = ri!(src); wreg!(dst, Value::Int(v.wrapping_add(imm as i64))); }
+                    } else { let v = ri!(src); wreg!(dst, Value::Int(iop!(num::add(v, imm as i64), v, "+", imm as i64))); }
                 }
                 &Instruction::SubIntImm(dst, src, imm) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
                         let v = rf!(src); wreg!(dst, Value::Float(v - imm as f64));
-                    } else { let v = ri!(src); wreg!(dst, Value::Int(v.wrapping_sub(imm as i64))); }
+                    } else { let v = ri!(src); wreg!(dst, Value::Int(iop!(num::sub(v, imm as i64), v, "-", imm as i64))); }
                 }
                 &Instruction::MulIntImm(dst, src, imm) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
                         let v = rf!(src); wreg!(dst, Value::Float(v * imm as f64));
-                    } else { let v = ri!(src); wreg!(dst, Value::Int(v.wrapping_mul(imm as i64))); }
+                    } else { let v = ri!(src); wreg!(dst, Value::Int(iop!(num::mul(v, imm as i64), v, "*", imm as i64))); }
                 }
                 &Instruction::CmpEqImm(dst, src, imm) => {
                     match num_eq_imm(rreg!(src), imm as i64) {
@@ -1055,7 +1114,11 @@ impl<W: Write> VM<W> {
                 &Instruction::AddFloat(dst, a, b) => { let (va, vb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(va + vb)); }
                 &Instruction::SubFloat(dst, a, b) => { let (va, vb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(va - vb)); }
                 &Instruction::MulFloat(dst, a, b) => { let (va, vb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(va * vb)); }
-                &Instruction::DivFloat(dst, a, b) => { let (va, vb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(va / vb)); }
+                &Instruction::DivFloat(dst, a, b) => {
+                    let (va, vb) = (rf!(a), rf!(b));
+                    if vb == 0.0 { raise!(VmError::DivisionByZero); }
+                    wreg!(dst, Value::Float(va / vb));
+                }
                 &Instruction::PowFloat(dst, a, b) => { let (va, vb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(va.powf(vb))); }
                 &Instruction::NegFloat(dst, src)  => { let v = rf!(src); wreg!(dst, Value::Float(-v)); }
 
@@ -1070,7 +1133,10 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::FloatToIntRound(dst, src) => {
                     let v = match rreg!(src) {
-                        Value::Float(f) => f.round() as i64,
+                        Value::Float(f) => match num::from_f64(f.round()) {
+                            Some(n) => n,
+                            None => raise!(VmError::CastOverflow { op: "###" }),
+                        },
                         Value::Int(n)   => *n,
                         other => raise!(VmError::CastError { op: "###", got: other.type_name().to_string() }),
                     };
@@ -1078,7 +1144,10 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::FloatToIntTrunc(dst, src) => {
                     let v = match rreg!(src) {
-                        Value::Float(f) => f.trunc() as i64,
+                        Value::Float(f) => match num::from_f64(f.trunc()) {
+                            Some(n) => n,
+                            None => raise!(VmError::CastOverflow { op: "##!" }),
+                        },
                         Value::Int(n)   => *n,
                         // Char → its Unicode code point (matches the tree-walker).
                         Value::Char(c)  => *c as u32 as i64,
@@ -1214,10 +1283,10 @@ impl<W: Write> VM<W> {
                 // ── Comparison ──────────────────────────────────────────────
                 &Instruction::CmpEq(dst, a, b) => { let r = cmp_direct(rreg!(a), rreg!(b)); wreg!(dst, Value::Bool(r == 0)); }
                 &Instruction::CmpNe(dst, a, b) => { let r = cmp_direct(rreg!(a), rreg!(b)); wreg!(dst, Value::Bool(r != 0)); }
-                &Instruction::CmpLt(dst, a, b) => { let r = ord_or_raise!(a, b, "Lt"); wreg!(dst, Value::Bool(r  < 0)); }
-                &Instruction::CmpLe(dst, a, b) => { let r = ord_or_raise!(a, b, "Le"); wreg!(dst, Value::Bool(r <= 0)); }
-                &Instruction::CmpGt(dst, a, b) => { let r = ord_or_raise!(a, b, "Gt"); wreg!(dst, Value::Bool(r  > 0)); }
-                &Instruction::CmpGe(dst, a, b) => { let r = ord_or_raise!(a, b, "Ge"); wreg!(dst, Value::Bool(r >= 0)); }
+                &Instruction::CmpLt(dst, a, b) => { let r = ord_or_raise!(a, b, "Lt"); wreg!(dst, Value::Bool(ord_lt(r))); }
+                &Instruction::CmpLe(dst, a, b) => { let r = ord_or_raise!(a, b, "Le"); wreg!(dst, Value::Bool(ord_le(r))); }
+                &Instruction::CmpGt(dst, a, b) => { let r = ord_or_raise!(a, b, "Gt"); wreg!(dst, Value::Bool(ord_gt(r))); }
+                &Instruction::CmpGe(dst, a, b) => { let r = ord_or_raise!(a, b, "Ge"); wreg!(dst, Value::Bool(ord_ge(r))); }
 
                 // ── Logical ─────────────────────────────────────────────────
                 &Instruction::And(dst, a, b) => { let (va, vb) = (rreg!(a).is_truthy(), rreg!(b).is_truthy()); wreg!(dst, Value::Bool(va && vb)); }
@@ -2252,8 +2321,15 @@ impl<W: Write> VM<W> {
                     let args: Vec<Value> = arg_regs.iter()
                         .map(|&r| unsafe { self.value_stack.get_unchecked(base + r as usize).clone() })
                         .collect();
-                    let result = crate::stdlib_builtins::call(builtin_id, args)
-                        .map_err(VmError::Generic)?;
+                    // `raise!`, not `?`. The `?` propagated straight out of the
+                    // interpreter loop without looking for an armed `:!`, so no
+                    // hard error from any `std/` function was catchable in this
+                    // engine — `!? { m::ln(0.0) } :! ##_ { }` caught it in the
+                    // tree-walker and aborted the program here.
+                    let result = match crate::stdlib_builtins::call(builtin_id, args) {
+                        Ok(v) => v,
+                        Err(e) => raise!(VmError::Generic(e)),
+                    };
                     wreg!(dst, result);
                 }
 
@@ -2454,14 +2530,14 @@ impl<W: Write> VM<W> {
                         Value::String(s) => {
                             let s_rc = s.clone();
                             let trimmed = s_rc.as_ref().trim();
-                            if let Ok(i) = trimmed.parse::<i64>() {
+                            if let num::Num::Int(i) = num::parse(trimmed) {
                                 Value::Int(i)
-                            } else if let Ok(f) = trimmed.parse::<f64>() {
+                            } else if let num::Num::Float(f) = num::parse(trimmed) {
                                 Value::Float(f)
                             } else if let Some(normalized) = normalize_unicode_digits(trimmed) {
-                                if let Ok(i) = normalized.parse::<i64>() {
+                                if let num::Num::Int(i) = num::parse(&normalized) {
                                     Value::Int(i)
-                                } else if let Ok(f) = normalized.parse::<f64>() {
+                                } else if let num::Num::Float(f) = num::parse(&normalized) {
                                     Value::Float(f)
                                 } else {
                                     Value::String(s_rc)
@@ -3007,6 +3083,16 @@ impl<W: Write> VM<W> {
             ip += 1;
             macro_rules! r { ($r:expr) => { &self.value_stack[base + $r as usize] } }
             macro_rules! w { ($r:expr, $v:expr) => { self.value_stack[base + $r as usize] = $v } }
+            // As in the main loop, but this one returns rather than raising:
+            // errors here propagate to the caller, which owns the catch.
+            macro_rules! iop {
+                ($v:expr, $a:expr, $op:expr, $b:expr) => {
+                    match $v {
+                        Some(n) => n,
+                        None => return Err(VmError::IntOverflow { a: $a, op: $op, b: $b }),
+                    }
+                };
+            }
             match instr {
                 &Instruction::Return(src) => {
                     let result = mem::replace(&mut self.value_stack[base + src as usize], Value::Unit);
@@ -3032,7 +3118,7 @@ impl<W: Write> VM<W> {
                         let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
                         w!(dst, Value::Float(fa + fb));
                     } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        let res = va.wrapping_add(*vb); w!(dst, Value::Int(res));
+                        let res = iop!(num::add(*va, *vb), *va, "+", *vb); w!(dst, Value::Int(res));
                     }
                 }
                 &Instruction::SubInt(dst, a, b) => {
@@ -3042,7 +3128,7 @@ impl<W: Write> VM<W> {
                         let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
                         w!(dst, Value::Float(fa - fb));
                     } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        let res = va.wrapping_sub(*vb); w!(dst, Value::Int(res));
+                        let res = iop!(num::sub(*va, *vb), *va, "-", *vb); w!(dst, Value::Int(res));
                     }
                 }
                 &Instruction::MulInt(dst, a, b) => {
@@ -3052,7 +3138,7 @@ impl<W: Write> VM<W> {
                         let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
                         w!(dst, Value::Float(fa * fb));
                     } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        let res = va.wrapping_mul(*vb); w!(dst, Value::Int(res));
+                        let res = iop!(num::mul(*va, *vb), *va, "*", *vb); w!(dst, Value::Int(res));
                     }
                 }
                 &Instruction::ModInt(dst, a, b) => {
@@ -3060,22 +3146,24 @@ impl<W: Write> VM<W> {
                     if is_fl {
                         let fa = match r!(a) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
                         let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        if fb != 0.0 { w!(dst, Value::Float(fa % fb)); }
+                        if fb == 0.0 { return Err(VmError::ModuloByZero); }
+                        w!(dst, Value::Float(fa % fb));
                     } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        if *vb != 0 { w!(dst, Value::Int(va % vb)); }
+                        if *vb == 0 { return Err(VmError::ModuloByZero); }
+                        w!(dst, Value::Int(va % vb));
                     }
                 }
                 &Instruction::AddIntImm(dst, src, imm) => {
                     if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v + imm as f64)); }
-                    else if let Value::Int(v) = r!(src) { w!(dst, Value::Int(v.wrapping_add(imm as i64))); }
+                    else if let Value::Int(v) = r!(src) { let (a, b) = (*v, imm as i64); w!(dst, Value::Int(iop!(num::add(a, b), a, "+", b))); }
                 }
                 &Instruction::SubIntImm(dst, src, imm) => {
                     if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v - imm as f64)); }
-                    else if let Value::Int(v) = r!(src) { w!(dst, Value::Int(v.wrapping_sub(imm as i64))); }
+                    else if let Value::Int(v) = r!(src) { let (a, b) = (*v, imm as i64); w!(dst, Value::Int(iop!(num::sub(a, b), a, "-", b))); }
                 }
                 &Instruction::MulIntImm(dst, src, imm) => {
                     if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v * imm as f64)); }
-                    else if let Value::Int(v) = r!(src) { w!(dst, Value::Int(v.wrapping_mul(imm as i64))); }
+                    else if let Value::Int(v) = r!(src) { let (a, b) = (*v, imm as i64); w!(dst, Value::Int(iop!(num::mul(a, b), a, "*", b))); }
                 }
                 &Instruction::CmpEqImm(dst, src, imm) => {
                     let res = num_eq_imm(r!(src), imm as i64).unwrap_or(false);
@@ -3104,7 +3192,7 @@ impl<W: Write> VM<W> {
                     let res = !r!(a).equals(r!(b)); w!(dst, Value::Bool(res));
                 }
                 &Instruction::CmpGt(dst, a, b) => {
-                    let res = ord_slow(r!(a), r!(b), "Gt")? > 0;
+                    let res = ord_gt(ord_slow(r!(a), r!(b), "Gt")?);
                     w!(dst, Value::Bool(res));
                 }
                 &Instruction::Not(dst, src) => {
@@ -3245,15 +3333,15 @@ impl<W: Write> VM<W> {
                     self.value_stack[base + *dst as usize] = result;
                 }
                 &Instruction::CmpLt(dst, a, b) => {
-                    let res = ord_slow(r!(a), r!(b), "Lt")? < 0;
+                    let res = ord_lt(ord_slow(r!(a), r!(b), "Lt")?);
                     w!(dst, Value::Bool(res));
                 }
                 &Instruction::CmpLe(dst, a, b) => {
-                    let res = ord_slow(r!(a), r!(b), "Le")? <= 0;
+                    let res = ord_le(ord_slow(r!(a), r!(b), "Le")?);
                     w!(dst, Value::Bool(res));
                 }
                 &Instruction::CmpGe(dst, a, b) => {
-                    let res = ord_slow(r!(a), r!(b), "Ge")? >= 0;
+                    let res = ord_ge(ord_slow(r!(a), r!(b), "Ge")?);
                     w!(dst, Value::Bool(res));
                 }
                 &Instruction::NamedTupleGet(dst, tuple_reg, field_idx) => {
@@ -3351,7 +3439,13 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::PowInt(dst, a, b) => {
                     if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        w!(dst, Value::Int(va.wrapping_pow(*vb as u32)));
+                        let (va, vb) = (*va, *vb);
+                        if vb < 0 {
+                            w!(dst, Value::Float((va as f64).powf(vb as f64)));
+                        } else {
+                            let e = u32::try_from(vb).unwrap_or(u32::MAX);
+                            w!(dst, Value::Int(iop!(num::pow(va, e), va, "^", vb)));
+                        }
                     }
                 }
                 &Instruction::NegInt(dst, src) => {
@@ -3393,6 +3487,7 @@ impl<W: Write> VM<W> {
                         (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
                         _ => return Ok(Value::Unit),
                     };
+                    if vb == 0.0 { return Err(VmError::DivisionByZero); }
                     w!(dst, Value::Float(va / vb));
                 }
                 &Instruction::PowFloat(dst, a, b) => {
@@ -3420,14 +3515,20 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::FloatToIntRound(dst, src) => {
                     match r!(src) {
-                        Value::Float(f) => { let v = f.round() as i64; w!(dst, Value::Int(v)); }
+                        Value::Float(f) => match num::from_f64(f.round()) {
+                            Some(v) => w!(dst, Value::Int(v)),
+                            None => return Err(VmError::CastOverflow { op: "###" }),
+                        },
                         Value::Int(n)   => { let v = *n; w!(dst, Value::Int(v)); }
                         _ => {}
                     }
                 }
                 &Instruction::FloatToIntTrunc(dst, src) => {
                     match r!(src) {
-                        Value::Float(f) => { let v = f.trunc() as i64; w!(dst, Value::Int(v)); }
+                        Value::Float(f) => match num::from_f64(f.trunc()) {
+                            Some(v) => w!(dst, Value::Int(v)),
+                            None => return Err(VmError::CastOverflow { op: "##!" }),
+                        },
                         Value::Int(n)   => { let v = *n; w!(dst, Value::Int(v)); }
                         Value::Char(c)  => { let v = *c as u32 as i64; w!(dst, Value::Int(v)); }
                         _ => {}
@@ -3719,13 +3820,15 @@ impl<W: Write> VM<W> {
                         Value::String(s) => {
                             let s_rc = s.clone();
                             let trimmed = s_rc.as_ref().trim();
-                            if let Ok(i) = trimmed.parse::<i64>() { Value::Int(i) }
-                            else if let Ok(f) = trimmed.parse::<f64>() { Value::Float(f) }
-                            else if let Some(norm) = normalize_unicode_digits(trimmed) {
-                                if let Ok(i) = norm.parse::<i64>() { Value::Int(i) }
-                                else if let Ok(f) = norm.parse::<f64>() { Value::Float(f) }
-                                else { Value::String(s_rc) }
-                            } else { Value::String(s_rc) }
+                            match num::parse(trimmed) {
+                                num::Num::Int(i) => Value::Int(i),
+                                num::Num::Float(f) => Value::Float(f),
+                                num::Num::None => match normalize_unicode_digits(trimmed).map(|n| num::parse(&n)) {
+                                    Some(num::Num::Int(i)) => Value::Int(i),
+                                    Some(num::Num::Float(f)) => Value::Float(f),
+                                    _ => Value::String(s_rc),
+                                },
+                            }
                         }
                         Value::Int(n) => Value::Int(*n),
                         Value::Float(f) => Value::Float(*f),

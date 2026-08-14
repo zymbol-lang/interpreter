@@ -29,10 +29,14 @@ fn json_to_value(v: serde_json::Value) -> Value {
         serde_json::Value::Null => Value::Unit,
         serde_json::Value::Bool(b) => Value::Bool(b),
         serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Int(i)
-            } else {
-                Value::Float(n.as_f64().unwrap_or(f64::NAN))
+            // JSON numbers are unbounded on paper and 64-bit in serde_json, so
+            // one past the Zymbol range becomes a Float here rather than an Int
+            // no other engine could hold. Unlike `##` on a string, this is not a
+            // loss the reader can avoid: JSON has a single number type, and a
+            // float is what the browser's own parser would have produced.
+            match n.as_i64().filter(|i| zymbol_common::num::in_int_range(*i)) {
+                Some(i) => Value::Int(i),
+                None => Value::Float(n.as_f64().unwrap_or(f64::NAN)),
             }
         }
         serde_json::Value::String(s) => Value::String(s),

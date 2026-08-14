@@ -613,10 +613,11 @@ Related operators:
 
 **Common sources:**
 - Index out of bounds: `arr[99]` when array has fewer elements
-- Division by zero: `x / 0`
+- Division by zero: `x / 0`; modulo by zero: `x % 0`
+- Integer overflow: any result outside ±(2⁵³ − 1) — see [Numeric limits](#numeric-limits)
 - Named tuple field not found: `t.nonexistent`
 
-Runtime errors carry a **kind** (e.g., `##Index`, `##Div`, `##Type`) and a **message** string. The value in `_err` has the format `##Kind(message)`. The `#?` type symbol of an error value is the kind itself — `(##Index, N, ...)` — there is no generic error type symbol.
+Runtime errors carry a **kind** (e.g., `##Index`, `##Div`, `##Type`, `##Range`) and a **message** string. The value in `_err` has the format `##Kind(message)`. The `#?` type symbol of an error value is the kind itself — `(##Index, N, ...)` — there is no generic error type symbol.
 
 ```zymbol
 !? {
@@ -625,6 +626,72 @@ Runtime errors carry a **kind** (e.g., `##Index`, `##Div`, `##Type`) and a **mes
     >> _err ¶   // ##Index(array index out of bounds: index 99 for array of length 3)
 }
 ```
+
+---
+
+### Numeric limits
+
+| Type | Range | Leaving it |
+| --- | --- | --- |
+| `Int` | −9007199254740991 … 9007199254740991, i.e. ±(2⁵³ − 1) | `##Range` error |
+| `Float` | IEEE-754 binary64 | `inf` / `-inf` — a value, not an error |
+
+**Float semantics** are IEEE-754 throughout, which is narrower than "whatever the
+host language does" and had to be made so in all four engines:
+
+| | Rule |
+| --- | --- |
+| `==` | **Exact.** No tolerance. `0.1 + 0.2 == 0.3` is `#0`. Int/Float promotion applies first, so `1.0 == 1` is `#1`. |
+| `NaN` | False in **every** direction, itself included: `n == n`, `n < 1.0`, `n <= 1.0` and `n >= 1.0` are all `#0`; only `n <> n` is `#1`. |
+| `-0.0` | Keeps its sign in output: prints `-0`. |
+| Output | Always plain digits, never an exponent — `1.0e21` prints `1000000000000000000000`. Ask for scientific notation with `#^`. |
+
+> The tree-walker used to compare floats with an **absolute** tolerance
+> (`|a−b| < f64::EPSILON`), which called `1e-20` and `-5e-20` equal, broke
+> transitivity, and did nothing at all near 1e300. The tolerance had been added
+> to make `1.0 == 1` work; promotion is what actually does that.
+
+> A three-state comparator cannot express "no ordering", and all four engines had
+> collapsed NaN into *equal* somewhere. `<`, `<=`, `>`, `>=` now test an
+> `INCOMPARABLE` code rather than the sign of a comparison result.
+
+The integer bound is the mantissa of a double, chosen so that **all four engines
+represent every Zymbol integer exactly and natively**: `i64` in the tree-walker
+and the register VM, OCaml's 63-bit `int` in `zyml`, a `Number` in the browser.
+Nothing is boxed, nothing is a `BigInt`, and no engine is approximating — which
+is why an integer means one thing across all of them.
+
+Before v0.0.9 there was no rule at all and each engine used its host's. The same
+program gave four answers:
+
+```zymbol
+>>(10 ^ 20) ¶
+// zytw  Runtime error: power operation overflow      (the only engine that noticed)
+// zyvm  7766279631452241920                          (the low 64 bits)
+// zyml  -1457092405402533888                         (the low 63 bits)
+// zyjs  100000000000000000000                        (right by luck: 10²⁰ = 2²⁰·5²⁰)
+```
+
+`##Range` is raised by:
+
+| Source | Example |
+| --- | --- |
+| `+`, `-`, `*`, `^` | `9007199254740991 + 1` → `integer overflow: 9007199254740991 + 1` |
+| An integer literal | `9223372036854775807` → `integer literal out of range` (lexical, not runtime) |
+| `###` / `##!` on a float | `###1.0e300` → `integer overflow: ### cannot represent this float` |
+
+Operations that **cannot** raise it: unary `-` (the range is symmetric), `/` and
+`%` on integers (a quotient or remainder of in-range operands is in range), and
+anything on floats.
+
+Readers of outside data do not raise it either — they degrade, because the data
+is not the program's mistake. A JSON number past the range becomes a `Float`; a
+`BIGINT` column past it stays the `String` the driver sent, like `DECIMAL`; `#|x|`
+on digits past it returns the string unchanged rather than a rounded number.
+
+> A quantity that may exceed the range — a position hash, an accumulator over a
+> long loop — must be reduced as it goes (`h = h % 1000000`, as `Chaturanga`'s
+> position hash does) or held as a `Float`.
 
 ---
 

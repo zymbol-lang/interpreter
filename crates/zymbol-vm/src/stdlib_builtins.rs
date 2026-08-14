@@ -5,6 +5,7 @@
 
 #[cfg(feature = "db")]
 use std::cell::RefCell;
+use zymbol_common::num;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -275,10 +276,11 @@ fn json_to_value(v: serde_json::Value) -> Value {
         serde_json::Value::Null => Value::Unit,
         serde_json::Value::Bool(b) => Value::Bool(b),
         serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Int(i)
-            } else {
-                Value::Float(n.as_f64().unwrap_or(f64::NAN))
+            // Past the Zymbol range a JSON integer becomes a Float, as it does
+            // in the tree-walker and as the browser's own parser would have it.
+            match n.as_i64().filter(|i| num::in_int_range(*i)) {
+                Some(i) => Value::Int(i),
+                None => Value::Float(n.as_f64().unwrap_or(f64::NAN)),
             }
         }
         serde_json::Value::String(s) => Value::String(ZyStr::new(s)),
@@ -703,10 +705,12 @@ fn db_cell_from_text(text: String, dt: &DataType) -> Value {
         | DataType::SmallInt
         | DataType::BigInt
         | DataType::TinyInt
-        | DataType::Bit => text
-            .parse::<i64>()
-            .map(Value::Int)
-            .unwrap_or_else(|_| Value::String(ZyStr::new(text))),
+        // A BIGINT column is wider than a Zymbol integer; past the range the
+        // value stays the String the driver sent (as the tree-walker does).
+        | DataType::Bit => match num::parse(text.trim()) {
+            num::Num::Int(n) => Value::Int(n),
+            _ => Value::String(ZyStr::new(text)),
+        },
         DataType::Real | DataType::Double | DataType::Float { .. } => text
             .parse::<f64>()
             .map(Value::Float)

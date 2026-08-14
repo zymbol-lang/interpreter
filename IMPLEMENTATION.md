@@ -1171,6 +1171,12 @@ char_escape  = "\\n" | "\\t" | "\\r" | "\\'" | "\\\\" | "\\0" ;
   Integer literal: decimal digits.  Underscores are allowed as separators.
   Also includes Unicode digit blocks (Devanagari, Bengali, …) when the
   active numeral mode is set.
+
+  The grammar admits any number of digits; the *value* must fall in the safe
+  integer range ±(2^53 - 1), and one outside it is a lexical error
+  ("integer literal out of range").  The bound is not a property of the syntax
+  but of the language's integer type -- see REFERENCE.md, Numeric limits, and
+  zymbol-common/src/num.rs, which every engine implements.
 *)
 integer_literal = digit , { digit | "_" } ;
 

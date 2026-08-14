@@ -7,6 +7,7 @@
 //! - String split: String / Char
 //! - Type promotions: Int ↔ Float
 
+use zymbol_common::num;
 use zymbol_common::BinaryOp;
 use zymbol_span::Span;
 use crate::data_ops::ascii_digits;
@@ -17,12 +18,26 @@ use std::io::Write;
 /// The integer a string holds, with digits from any of the 69 supported scripts
 /// (`"४२"` → 42). `None` when the string is not an integer.
 pub(crate) fn str_as_int(s: &str) -> Option<i64> {
-    ascii_digits(s.trim()).parse::<i64>().ok()
+    ascii_digits(s.trim()).parse::<i64>().ok().filter(|n| num::in_int_range(*n))
 }
 
 /// `str_as_int` for numbers with a fractional part or an exponent.
 pub(crate) fn str_as_float(s: &str) -> Option<f64> {
     ascii_digits(s.trim()).parse::<f64>().ok()
+}
+
+/// Lift an in-range integer into a `Value`, or report the overflow the way all
+/// four engines report it. The operands are echoed because `integer overflow`
+/// on its own tells a reader nothing about which of the operations on the line
+/// produced it.
+fn int_result(v: Option<i64>, a: i64, op: &str, b: i64, span: &Span) -> Result<Value> {
+    match v {
+        Some(n) => Ok(Value::Int(n)),
+        None => Err(RuntimeError::Generic {
+            message: num::overflow_msg(a, op, b),
+            span: *span,
+        }),
+    }
 }
 
 impl<W: Write> Interpreter<W> {
@@ -31,7 +46,7 @@ impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_add(&self, left: &Value, right: &Value, span: &Span) -> Result<Value> {
         match (left, right) {
             // Integer addition
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+            (Value::Int(a), Value::Int(b)) => int_result(num::add(*a, *b), *a, "+", *b, span),
             // Float addition
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
             // Type promotion: Int + Float → Float
@@ -68,14 +83,19 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Evaluate arithmetic operations (sub, mul, mod)
-    pub(crate) fn eval_arithmetic<F, G>(&self, left: &Value, right: &Value, int_op: F, float_op: G, span: &Span) -> Result<Value>
+    ///
+    /// `int_op` returns `None` when the result is not a Zymbol integer; `op` is
+    /// how the operator is spelled back in that error. The integer and float
+    /// paths are separate because only the integer one has a range to leave —
+    /// a float that overflows yields `inf`, which is a value.
+    pub(crate) fn eval_arithmetic<F, G>(&self, left: &Value, right: &Value, int_op: F, float_op: G, op: &str, span: &Span) -> Result<Value>
     where
-        F: Fn(i64, i64) -> i64,
+        F: Fn(i64, i64) -> Option<i64>,
         G: Fn(f64, f64) -> f64,
     {
         match (left, right) {
             // Integer operations
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(int_op(*a, *b))),
+            (Value::Int(a), Value::Int(b)) => int_result(int_op(*a, *b), *a, op, *b, span),
             // Float operations
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(float_op(*a, *b))),
             // Type promotion: Int op Float → Float
@@ -86,6 +106,30 @@ impl<W: Write> Interpreter<W> {
                 span: *span,
             }),
         }
+    }
+
+    /// Evaluate modulo (%)
+    ///
+    /// Split out of `eval_arithmetic` because a zero divisor is not an overflow
+    /// and because `a % b` on integers *panics* in Rust when `b` is 0 — the one
+    /// arithmetic case where the tree-walker used to abort the process instead
+    /// of raising a Zymbol error the program could catch.
+    pub(crate) fn eval_mod(&self, left: &Value, right: &Value, span: &Span) -> Result<Value> {
+        // A zero divisor of *either* type, matching `eval_div`. Checking only
+        // `Int % Int` left `1 % 0.0` and `1.0 % 0` answering NaN here while the
+        // OCaml and browser engines raised — and while `1 / 0.0` raised in all
+        // four. Whether a zero divisor is an error cannot depend on which of the
+        // two numeric types the zero was written as.
+        let divides_by_zero = matches!(right, Value::Int(0)) || matches!(right, Value::Float(f) if *f == 0.0);
+        if divides_by_zero && matches!(left, Value::Int(_) | Value::Float(_)) {
+            return Err(RuntimeError::Generic {
+                message: "modulo by zero".to_string(),
+                span: *span,
+            });
+        }
+        // The remainder of two in-range integers is always in range, so the
+        // integer path can never overflow once the divisor is known non-zero.
+        self.eval_arithmetic(left, right, |a, b| Some(a % b), |a, b| a % b, "%", span)
     }
 
     /// Evaluate division (with zero check and string split)
@@ -150,17 +194,12 @@ impl<W: Write> Interpreter<W> {
                     // Negative exponents produce floats
                     Ok(Value::Float((*base as f64).powf(*exp as f64)))
                 } else {
-                    // Convert exponent to u32 for pow() method
-                    let exp_u32 = *exp as u32;
-
-                    // Use checked_pow to detect overflow
-                    match base.checked_pow(exp_u32) {
-                        Some(result) => Ok(Value::Int(result)),
-                        None => Err(RuntimeError::Generic {
-                            message: format!("power operation overflow: {}^{}", base, exp),
-                            span: *span,
-                        }),
-                    }
+                    // An exponent too large for u32 cannot produce an in-range
+                    // result anyway (except for the bases below, which `num::pow`
+                    // settles), so clamping it is safe and keeps the error the
+                    // same one every other overflow reports.
+                    let exp_u32 = u32::try_from(*exp).unwrap_or(u32::MAX);
+                    int_result(num::pow(*base, exp_u32), *base, "^", *exp, span)
                 }
             }
             // Float exponentiation
@@ -185,13 +224,24 @@ impl<W: Write> Interpreter<W> {
             (Value::String(a), Value::String(b)) => a == b,
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
-            // Int/Float promotion, matching compare_values. Without it `==` was
-            // the only comparison that did not promote: `##.0 >= 0` and
-            // `##.0 <= 0` were both #1 while `##.0 == 0` was #0, and the two
-            // values print identically, so the disagreement was invisible.
-            (Value::Int(a), Value::Float(b)) => (*a as f64 - b).abs() < f64::EPSILON,
-            (Value::Float(a), Value::Int(b)) => (a - *b as f64).abs() < f64::EPSILON,
+            // Float equality is exact, as IEEE-754 defines it and as the other
+            // three engines have always implemented it.
+            //
+            // This used to be `(a - b).abs() < f64::EPSILON`, which is an
+            // *absolute* tolerance: `f64::EPSILON` is the spacing of the floats
+            // near 1.0, so the test said every pair of values closer together
+            // than 2.2e-16 was equal — including `1e-20 == -5e-20`, a positive
+            // and a negative. It also made equality non-transitive, and near
+            // 1e300 it did nothing at all, the spacing there being ~1e284.
+            //
+            // The tolerance was introduced for Int/Float promotion (so that
+            // `##.0 == 0` agreed with `##.0 >= 0`), but promotion is what fixes
+            // that, not the epsilon — the two arms below promote and compare
+            // exactly, and `1.0 == 1` is still true. A program that wants a
+            // tolerance should name it: `(a - b)$abs < 0.001`.
+            (Value::Float(a), Value::Float(b)) => a == b,
+            (Value::Int(a), Value::Float(b)) => *a as f64 == *b,
+            (Value::Float(a), Value::Int(b)) => *a == *b as f64,
             (Value::Char(a), Value::Char(b)) => a == b,
             (Value::Array(a), Value::Array(b)) => {
                 a.len() == b.len() && a.iter().zip(b).all(|(x, y)| Self::values_equal_static(x, y))
