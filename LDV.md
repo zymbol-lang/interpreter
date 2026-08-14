@@ -184,7 +184,7 @@ cooperating modules; there was nowhere else for it to live, so it hit all three.
 
 ### 5.1 The index
 
-Six published projects, six logs, ~3,000 lines of recorded findings. This table is the only
+Seven published projects, seven logs, ~3,000 lines of recorded findings. This table is the only
 index of them that exists.
 
 | Project | Version | Log | ID scheme |
@@ -195,8 +195,9 @@ index of them that exists.
 | [Hov veS](https://github.com/zymbol-lang/zyKlingonGalaxy) | v0.0.5 | `hallazgos_es.md` | `HLZ-NNN` and `HLZ-KL-NNN` |
 | [Zofía](https://github.com/zymbol-lang/zy-Zofia) | v0.0.6 | `HALLAZGOS.md` | `BUG-ZNNN` / `GAP-ZNNN` / `IDEA-ZNNN` |
 | [囲碁 (Igo)](https://github.com/zymbol-lang/zy-GO) | v0.0.8 | `HALLAZGOS_ES.md` | `HLZ-NNN` with a type column, plus `IDEA-NNN` |
+| [चतुरङ्गम् (Chaturanga)](https://github.com/zymbol-lang/zyChaturanga) | v0.0.9 | `HALLAZGOS_ES.md` | `HLZ-CHA-NNN` / `IDEA-CHA-NNN` — scoped from the first entry |
 
-The substance is consistent across all six: a reading guide, findings with a reproduction and
+The substance is consistent across all seven: a reading guide, findings with a reproduction and
 a status, and a resolution history. Several logs cross-reference each other — Zofía opens with
 the lessons carried over from Serpiente, Serpiente's `HLZ-SRP-001` is discussed next to 囲碁's
 `HLZ-008` — which is the method working: a finding in one domain is worth stating in the
@@ -208,9 +209,9 @@ Recorded rather than quietly corrected, because the drift is real and its cost i
 
 - **Four file names for one artifact:** `GAPS.md`, `HALLAZGOS.md`, `HALLAZGOS_ES.md`,
   `hallazgos_es.md`. Decalogue point 6 names the log `HALLAZGOS.md`; that is literally true of
-  **one log in six**.
+  **one log in seven**.
 - **Three ID schemes**, with no single one in the majority: `Gn` (1 project), `TYPE-NNN`
-  (3), `HLZ-NNN` (2).
+  (3), `HLZ-NNN` (3 — of which चतुरङ्गम् is the only one scoped by project throughout).
 - **A live collision.** 囲碁's `HLZ-001`–`HLZ-011` and Hov veS's `HLZ-001`–`HLZ-003` are
   different findings sharing the same identifiers. A bare `HLZ-002` is ambiguous across the
   two logs, and both logs cite IDs in prose. Hov veS already invented the fix mid-log, when it
@@ -219,10 +220,16 @@ Recorded rather than quietly corrected, because the drift is real and its cost i
 **Canonical form for a new project**, which is what the majority convention becomes once the
 collision is taken seriously: a file named `HALLAZGOS.md`, sections `BUG` / `GAP` / `ERROR` /
 `IDEA`, a summary table at the top with ID, module, context and status, and identifiers
-**scoped by project** — `BUG-GO-001`, not `BUG-001`. Renaming the six existing logs is not
+**scoped by project** — `BUG-GO-001`, not `BUG-001`. Renaming the six older logs is not
 free: they link to each other by path and cite each other by ID, so it is a coordinated change
 across six repositories rather than six independent commits, and it is deferred rather than
 pretended away.
+
+चतुरङ्गम् is the first log written against this form rather than retrofitted to it: every
+identifier is scoped (`HLZ-CHA-001`) from the first entry, which is the half of the convention
+that costs nothing to adopt at the start and a coordinated rename afterwards. It kept the
+`HALLAZGOS_ES.md` name of the three logs before it rather than the `HALLAZGOS.md` the decalogue
+asks for — so the file-name drift is still six against one, and now deliberately so.
 
 ---
 
