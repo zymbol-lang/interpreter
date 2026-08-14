@@ -534,21 +534,32 @@ performance benchmarks.
 
 ## Performance
 
-Benchmarks (release build):
+Microbenchmarks (`zyquality/bench/`, release build, re-measured for v0.0.9,
+best of 3, process startup subtracted):
 
-| Benchmark | Tree-walker | VM |
-|-----------|:-----------:|:--:|
-| Stress loop | ~200ms | **67ms** |
-| Match | ~165ms | **50ms** |
-| Collections | ~14s | **33ms** |
-| Recursion | ~1480ms | 308ms |
+| Benchmark | Tree-walker | VM | VM speedup |
+|-----------|:-----------:|:--:|:----------:|
+| Strings | 76ms | **51ms** | 1.4× |
+| Collections | 71ms | **37ms** | 1.9× |
+| Stress loop | 236ms | **78ms** | 3.0× |
+| Match | 171ms | **54ms** | 3.1× |
+| Recursion (`fib`) | 1566ms | **253ms** | 6.1× |
 
-The VM is 4.4× faster than the tree-walker on `fib(35)`.
+Those figures are arithmetic-bound and shallow. On real programs the gap is much
+wider, because the tree-walker's cost is per call frame and per scope:
 
-Those figures are arithmetic-bound. On a real program dominated by array allocation and
-copying the gap is wider: a full 19 × 19 game of [囲碁](https://github.com/zymbol-lang/zy-GO)
-runs in **49.8s under the VM against 6m40s under the tree-walker** — 8–14× depending on
-board size. Quote the benchmark that matches your workload, not a single number.
+| Real workload | Tree-walker | VM | VM speedup |
+|---------------|:-----------:|:--:|:----------:|
+| zy-GO, full 19x19 game | 6m40s | **49.8s** | 8-14x |
+| Chaturanga, `perft(3)`, 4448 nodes | 6.11s | **0.146s** | 42x |
+| Chaturanga, full alpha-beta suite | 43.5s | **0.949s** | 46x |
+
+(The go engine is [囲碁](https://github.com/zymbol-lang/zy-GO); the chess-ancestor
+engine is चतुरङ्गम्.)
+
+**Quote the workload, not a single number.** "~4×" circulated for a long time as
+if it were the language's speedup; it is the low end of the microbenchmarks and
+roughly a tenth of what a search-shaped program sees.
 
 ---
 
@@ -668,13 +679,18 @@ protects against regression afterwards.
 
 Each project keeps a **gap log**: every friction, bug, missing capability and idea, with an ID,
 a reproduction and a status. The log closes against the release — 囲碁's eleven findings were
-all fixed in v0.0.8, each with its own regression test. The method, its decalogue, and the index
-of the six logs are in **[LDV.md](./LDV.md)**.
+all fixed in v0.0.8, each with its own regression test. चतुरङ्गम्'s five are open against
+v0.0.9. The method, its decalogue, and the index of the seven logs are in
+**[LDV.md](./LDV.md)**.
 
 The projects carry a second load at the same time. Each is written in a different natural
-language — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese — which is what turns
-"keyword-free means language-neutral" from a claim into a result: no flags, no special modes,
-no translation layer at the syntax level.
+language — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese, Sanskrit — which is what
+turns "keyword-free means language-neutral" from a claim into a result: no flags, no special
+modes, no translation layer at the syntax level. Sanskrit adds the case the earlier six could
+not make: Devanagari is the first script where a single identifier needs combining marks to be
+spelled at all, so `मन्त्री` and `अश्वः` are not "Unicode support" in the sense CJK was — they
+are a grapheme cluster question that reaches the lexer, the analyzer and the display layer at
+once.
 
 ### Summary
 
@@ -686,6 +702,7 @@ no translation layer at the syntax level.
 | [Hov veS](https://github.com/zymbol-lang/zyKlingonGalaxy) | **v0.0.5** | pIqaD (Klingon) | Multi-module orchestration, Galaxian formation AI, delta rendering, dual projectiles, 3-language i18n |
 | [Zofía](https://github.com/zymbol-lang/zy-Zofia) | **v0.0.6** | Español | Scientific computing, transformer AI from scratch, `^` float exponents, global `:=` scope fix, `#.N\|x\|` formatting |
 | [囲碁 (Igo)](https://github.com/zymbol-lang/zy-GO) | **v0.0.8** | 日本語 (Japanese) | Recursive flood fill at depth, state threading across modules, double-width glyph grid, application-level i18n in 5 languages, `std/term` |
+| [चतुरङ्गम् (Chaturanga)](https://github.com/zymbol-lang/zyChaturanga) | **v0.0.9** | संस्कृतम् (Sanskrit) | Devanagari identifiers with conjuncts and visarga, alpha-beta search over make/unmake, mixed-script module names, numeral script as an i18n axis |
 
 ---
 
@@ -961,6 +978,122 @@ measures and for two documented misreadings of small samples.
 
 ---
 
+### चतुरङ्गम् (Chaturanga) — v0.0.9 · संस्कृतम् (Sanskrit)
+
+Chaturanga — the sixth-century Indian ancestor of chess — for the terminal, with the
+historical rules, an alpha-beta opponent, and an interface in five languages. Written
+entirely in Sanskrit: the game's own name is the compound **चतुर्-अङ्ग**, *four limbs*, and
+the pieces are those four divisions of an army (पत्तिः foot, अश्वः horse, रथः chariot,
+गजः elephant), so the vocabulary in the source is the vocabulary the game was first
+described with.
+
+It pushes on a different axis from 囲碁. Where the go engine proved that a **large** state
+could be threaded through modules, this one proves that state can be **searched**: go offers
+three hundred moves a position and search is hopeless, chaturanga offers about twenty and
+alpha-beta is the right instrument. The board is never copied — every move is played and
+taken back on one array — so `कृति`/`प्रत्यावर्तनम्` being exact inverses across thousands
+of nodes is a language-level property the suite asserts directly.
+
+Three capabilities were under test for the first time:
+
+- **Devanagari identifiers.** Not "Unicode support" in the sense CJK already proved: `मन्त्री`
+  and `अश्वः` need combining marks — virama, matras, visarga — to be spelled at all. They
+  work unchanged in the lexer, the VM, `zymbol check` and the LSP, and a module name mixing
+  two scripts (`# .भाषा_فارسی`, a Persian locale inside a Devanagari tree) checks clean.
+- **Grapheme cluster ≠ display column, in a script where both vary.** `रा` is two graphemes
+  and two columns, `र` is one of each, `कृ` is two graphemes and *one* column. `std/term`
+  answers all three correctly, which is what lets one padding function hold a board where
+  emoji, chess symbols and Devanagari letters share a grid.
+- **The numeral mode as an i18n axis.** `#d0d9#` turns out to be process-global, not
+  per-file, so a locale dispatcher can switch the digit script along with the language. The
+  same line of drawing code yields `e४`, `e۴` and `e4`, and nothing below it knows which.
+  This is a third i18n mechanism beyond the two in [I18N.md](./I18N.md), now written up in
+  [USERAPPI18N.md](./USERAPPI18N.md) §14.
+
+Its log held five entries, **all closed against v0.0.9**:
+
+- **`@ <expr>` picked the loop form differently in each engine.** Logged as the `Bool` case,
+  it turned out to be three: the VM decided from the *syntactic shape* of the specifier
+  while the tree-walker, zyml and the JavaScript engine decided from the *value*, so
+  `@ <Bool>` aborted under the VM and `@ f()` / `@ arr$#` looped forever there. A fourth,
+  where the tree-walker was the odd one out: a negative `Int` count spun forever instead of
+  running zero times. Fixed by fixing the rule — **an `Int` is a count, anything else is a
+  condition** — with the VM asking at runtime (`IsInt` + `compile_adaptive_loop`, one body
+  emitted for both paths) and the tree-walker dropping its `n > 0` guard.
+  A second pass closed the other half: the *condition* path still read the specifier
+  through truthiness, which no two engines agreed on — `@ []` ran zero times in the
+  tree-walker, forever in the VM and raised in zyml. **A specifier is a count or a
+  condition; anything else is refused at run time**, with one message across all four
+  engines. `zyquality/corpus/loops/13_specifier_forms.zy` holds them to the forms that
+  run and `zyquality/reject/loops/` to the ones that must not; there was no corpus file
+  writing any of these forms before.
+- **A range infers its direction, so `@ i:2..n` counts *down* when `n < 2`** instead of not
+  iterating. The semantics were left alone — making the descending range empty would
+  silence loops that currently run, and a bug that stops warning is worse than one that
+  crashes. `zymbol check` now warns when a range's endpoints are not both integer literals,
+  and stays quiet when an enclosing `?` already guards the bound.
+- **GUIDE.md said the numeral mode persists "in the same file".** It is global to the
+  process — which is the useful behaviour, and the one the game depends on. The guide says
+  so now, and the technique is written up as a third i18n mechanism in
+  [USERAPPI18N.md](./USERAPPI18N.md) §14, traps included.
+- **The VM is 42–46× the tree-walker on this workload**, not the ~4× that had been quoted
+  for years. A search is recursion with output parameters and array indexing in the
+  innermost loop, which is where the tree-walker pays per frame. Every performance figure
+  in this repository was re-measured; see [Performance](#performance).
+
+```zymbol
+// मूल/मतिः.zy — negamax with alpha-beta, scored from the mover's side.
+// The board goes down as an output parameter and comes back untouched:
+// every move is played and taken back, never copied.
+गवेषणम्(स्थितिः<~, वर्णः, गभीरता, अल्फा, बीटा, सारणी, पदानि<~) {
+    पदानि = पदानि + १
+    ? गभीरता <= ० { <~ आ::मूल्याङ्कनम्(स्थितिः, वर्णः, सारणी) }
+
+    चालाः = नि::वैधचालाः(स्थितिः, वर्णः)
+    // मातः and गतिरोधः are both losses — this game keeps the old
+    // shatranj rule, and it touches the search in exactly this line
+    ? (चालाः$#) == ० { <~ ० - १०००० - गभीरता }
+
+    रिपुवर्णः = अ::रिपुः(वर्णः)
+    श्रेष्ठम् = ० - ९९९९९
+    @ चालः : क्रमणम्(स्थितिः, चालाः) {
+        अङ्गम् = स्थितिः[अ::आदिपदम्(चालः)]
+        गृहीतम् = ०
+        नि::कृति(स्थितिः, चालः, गृहीतम्)
+        मूल्यम् = ० - गवेषणम्(स्थितिः, रिपुवर्णः, गभीरता - १,
+                              ० - बीटा, ० - अल्फा, सारणी, पदानि)
+        नि::प्रत्यावर्तनम्(स्थितिः, चालः, अङ्गम्, गृहीतम्)
+
+        ? मूल्यम् > श्रेष्ठम् { श्रेष्ठम् = मूल्यम् }
+        ? मूल्यम् > अल्फा { अल्फा = मूल्यम् }
+        ? अल्फा >= बीटा { <~ श्रेष्ठम् }
+    }
+    <~ श्रेष्ठम्
+}
+```
+
+```zymbol
+// भाषा/प्रेषकः.zy — choosing a language chooses a digit script.
+// One directive, and every number the program will print follows it.
+निर्धारणम्(संकेतः) {
+    वर्तमानाभाषा = संकेतः
+    ?? संकेतः {
+        "fa" => { #۰۹# }      // Extended Arabic-Indic, U+06F0 — not U+0660
+        "en" => { #09# }
+        "es" => { #09# }
+        _    => { #०९# }      // Devanagari, U+0966
+    }
+    <~ ०
+}
+```
+
+Six suites produce **byte-identical output under the tree-walker and the register VM**,
+which is the property that makes the node counts meaningful: the search is deterministic, so
+both engines must visit the same 16 / 272 / 1 646 nodes at levels 1 / 2 / 3 — a divergence
+there would not show in the chosen move, because the choice is random among the survivors.
+
+---
+
 ## Project Layout
 
 ```
@@ -988,7 +1121,7 @@ interpreter/
 - [USERAPPI18N.md](./USERAPPI18N.md) — Building a multilingual application: measured layout, runtime language switching, per-language entry points, and the completeness gate
 - [MEMORY_MODEL.md](./MEMORY_MODEL.md) — Memory and scoping model: design vs implementation audit (findings MM-1 … MM-11)
 - [SYMBOLS.md](./SYMBOLS.md) — Semiotic and morphological reference: the grapheme inventory, how marks agglutinate into operators, the declared homographs and opaque signs, and the rules a new operator must satisfy
-- [LDV.md](./LDV.md) — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the six gap logs
+- [LDV.md](./LDV.md) — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the seven gap logs
 - [ROADMAP.md](./ROADMAP.md) — What's done, known gaps, and planned work
 - [CHANGELOG.md](./CHANGELOG.md) — Version history
 

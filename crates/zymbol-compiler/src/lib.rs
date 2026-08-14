@@ -264,6 +264,24 @@ struct CompiledModuleExports {
     constants: Vec<(String, ModuleConst)>,
 }
 
+/// Whether an expression can only ever produce a Bool, judged from its shape
+/// alone. Used to keep `@ n <= 3` on the plain WHILE path instead of paying for
+/// the runtime type test that `@ <expr>` of unknown type needs.
+fn expr_is_always_bool(expr: &Expr) -> bool {
+    match expr.unwrap_group() {
+        Expr::Literal(lit) => matches!(lit.value, Literal::Bool(_)),
+        Expr::Binary(b) => matches!(
+            b.op,
+            BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Lt | BinaryOp::Gt
+                | BinaryOp::Le | BinaryOp::Ge
+        ) || (matches!(b.op, BinaryOp::And | BinaryOp::Or)
+            && expr_is_always_bool(&b.left)
+            && expr_is_always_bool(&b.right)),
+        Expr::Unary(u) => matches!(u.op, UnaryOp::Not),
+        _ => false,
+    }
+}
+
 /// Auto-free (v0.0.8): overwrite each scheduled variable's register with Unit
 /// right after its last use, releasing the heap value it held. Names without
 /// a register (never materialized on this path) are skipped.
@@ -1305,18 +1323,19 @@ impl Compiler {
                 self.compile_foreach_loop(lp, ctx)
             }
         } else if lp.condition.is_some() {
-            // Detect TIMES loop: condition is a literal Int → repeat N times
-            // (look through user parens: `@(3)` parses as Group(Literal(3)))
+            // Which of TIMES and WHILE a `@ <expr>` loop is depends on the *value*
+            // the specifier evaluates to, not on its syntactic shape: an Int is a
+            // repeat count, anything else is a condition re-tested every pass. Two
+            // shapes let us decide that statically; everything else must ask at
+            // runtime, which is what compile_adaptive_loop emits.
+            // (Look through user parens: `@(3)` parses as Group(Literal(3)).)
             let cond = lp.condition.as_ref().unwrap().unwrap_group();
-            let is_literal_times = matches!(cond, Expr::Literal(lit) if matches!(lit.value, Literal::Int(_)));
-            // Dynamic times: condition is an identifier (variable holding an Int count)
-            let is_dynamic_times = matches!(cond, Expr::Identifier(_));
-            if is_literal_times {
+            if matches!(cond, Expr::Literal(lit) if matches!(lit.value, Literal::Int(_))) {
                 self.compile_times_loop(lp, ctx)
-            } else if is_dynamic_times {
-                self.compile_dynamic_times_loop(lp, ctx)
-            } else {
+            } else if expr_is_always_bool(cond) {
                 self.compile_while_loop(lp, ctx)
+            } else {
+                self.compile_adaptive_loop(lp, ctx)
             }
         } else {
             self.compile_infinite_loop(lp, ctx)
@@ -1371,24 +1390,51 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_dynamic_times_loop(
+    /// `@ <expr>` where the specifier's type is not known until it runs.
+    ///
+    /// The specifier is evaluated once up front and type-tested. If it is an Int
+    /// the loop runs that many times (a negative count runs zero times) and the
+    /// expression is never re-evaluated; otherwise it is re-evaluated and tested
+    /// for truth on every pass. That is the tree-walker's rule, and the body is
+    /// emitted once for both paths so break and continue keep a single target.
+    fn compile_adaptive_loop(
         &mut self,
         lp: &Loop,
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
-        // Evaluate the count expression once
-        let r_n = self.compile_expr(lp.condition.as_ref().unwrap(), ctx)?;
+        let cond_expr = lp.condition.as_ref().unwrap();
+
+        // Evaluate once, then decide which loop this is.
+        let r_first = self.compile_expr(cond_expr, ctx)?;
+        let r_n = ctx.alloc_temp()?;
+        let r_is_times = ctx.alloc_temp()?;
         let r_i = ctx.alloc_temp()?;
         let r_cmp = ctx.alloc_temp()?;
+        ctx.emit(Instruction::CopyReg(r_n, r_first));
+        ctx.emit(Instruction::IsInt(r_is_times, r_n));
         ctx.emit(Instruction::LoadInt(r_i, 0));
 
         let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
         ctx.loop_stack.push(LoopCtx { break_patches: Vec::new(), continue_patches: Vec::new(), label: lp.label.clone() });
 
+        // TIMES path: i >= n → done. Falls through to the body otherwise.
+        let to_while = ctx.emit_jump_if_not_placeholder(r_is_times);
         ctx.emit(Instruction::CmpGe(r_cmp, r_i, r_n));
-        let exit_jump = ctx.emit(Instruction::JumpIf(r_cmp, 0));
+        let exit_times = ctx.emit(Instruction::JumpIf(r_cmp, 0));
+        let to_body = ctx.emit(Instruction::Jump(0));
 
+        // WHILE path: re-evaluate the specifier and test it for truth. A value
+        // that is neither a count nor a condition raises here rather than being
+        // read through truthiness — this is also what catches it on the first
+        // pass, since a non-Int specifier always arrives down this path.
+        let while_label = ctx.current_label();
+        let r_cond = self.compile_expr(cond_expr, ctx)?;
+        let r_checked = ctx.alloc_temp()?;
+        ctx.emit(Instruction::AsLoopCond(r_checked, r_cond));
+        let exit_while = ctx.emit(Instruction::JumpIfNot(r_checked, 0));
+
+        let body_label = ctx.current_label();
         self.compile_block(&lp.body, ctx)?;
 
         let inc_label = ctx.current_label();
@@ -1396,7 +1442,10 @@ impl Compiler {
         ctx.emit(Instruction::Jump(loop_start));
 
         let loop_end = ctx.current_label();
-        ctx.patch_jump(exit_jump, loop_end);
+        ctx.patch_jump(to_while, while_label);
+        ctx.patch_jump(to_body, body_label);
+        ctx.patch_jump(exit_times, loop_end);
+        ctx.patch_jump(exit_while, loop_end);
 
         let lctx = ctx.loop_stack.pop().unwrap();
         for pos in lctx.break_patches { ctx.patch_jump(pos, loop_end); }
@@ -4284,7 +4333,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::CmpEqImm(d, s, _) | Instruction::CmpNeImm(d, s, _)
             | Instruction::CmpLtImm(d, s, _) | Instruction::CmpLeImm(d, s, _)
             | Instruction::CmpGtImm(d, s, _) | Instruction::CmpGeImm(d, s, _) => { upd(*d); upd(*s); }
-            Instruction::Not(d, s) => { upd(*d); upd(*s); }
+            Instruction::Not(d, s) | Instruction::IsInt(d, s)
+            | Instruction::AsLoopCond(d, s) => { upd(*d); upd(*s); }
             Instruction::And(d, a, b) | Instruction::Or(d, a, b) => { upd(*d); upd(*a); upd(*b); }
             Instruction::Return(r) | Instruction::Print(r)
             | Instruction::JumpIf(r, _) | Instruction::JumpIfNot(r, _) => upd(*r),

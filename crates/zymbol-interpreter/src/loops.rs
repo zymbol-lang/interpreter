@@ -10,6 +10,16 @@ use std::io::Write;
 use zymbol_ast::{Break, Continue, Expr, Loop, Sleep};
 use crate::{ControlFlow, Interpreter, Result, RuntimeError, Value};
 
+/// The `@ <expr>` specifier is either a count (`Int`) or a condition (`Bool`).
+/// Anything else is refused rather than coerced — the same message and the same
+/// type names all four engines use, so the form fails identically everywhere.
+fn loop_specifier_error(value: &Value, span: zymbol_span::Span) -> RuntimeError {
+    RuntimeError::Generic {
+        message: format!("loop expects a count or a condition, got {}", value.type_word()),
+        span,
+    }
+}
+
 /// Returns true if an assignment's RHS contains a hot self-reference to the same variable.
 /// Covers `arr = arr°$+ i` (CollectionAppend) and `s = s° + ch` (Binary Add).
 fn rhs_has_hot_self_ref(expr: &zymbol_ast::Expr, name: &str) -> bool {
@@ -185,9 +195,11 @@ impl<W: Write> Interpreter<W> {
                 // QW16: check once whether loop body needs a fresh scope per iteration
                 let needs_scope = body_needs_own_scope(&loop_stmt.body, self);
                 match initial_value {
-                    Value::Int(n) if n > 0 => {
-                        // TIMES loop: repeat N times (evaluated once)
-                        for _ in 0..n {
+                    Value::Int(n) => {
+                        // TIMES loop: repeat N times (evaluated once). A count of
+                        // zero or less runs the body zero times — it is a count,
+                        // not a condition, so it never falls through to WHILE.
+                        for _ in 0..n.max(0) {
                             if needs_scope {
                                 self.execute_block(&loop_stmt.body)?;
                             } else {
@@ -196,12 +208,15 @@ impl<W: Write> Interpreter<W> {
                             if self.handle_loop_control(&loop_stmt.label) { break; }
                         }
                     }
-                    _ => {
+                    Value::Bool(_) => {
                         // WHILE loop: re-evaluate condition each iteration
                         loop {
                             let condition = self.eval_expr(condition_expr)?;
+                            let Value::Bool(keep_going) = condition else {
+                                return Err(loop_specifier_error(&condition, condition_expr.span()));
+                            };
 
-                            if !self.is_truthy(&condition) { break; }
+                            if !keep_going { break; }
 
                             if needs_scope {
                                 self.execute_block(&loop_stmt.body)?;
@@ -210,6 +225,13 @@ impl<W: Write> Interpreter<W> {
                             }
                             if self.handle_loop_control(&loop_stmt.label) { break; }
                         }
+                    }
+                    other => {
+                        // Neither a count nor a condition. Truthiness would have
+                        // to invent an answer here, and each engine invented a
+                        // different one — an array was false in the tree-walker,
+                        // true in the VM and a hard error in zyml.
+                        return Err(loop_specifier_error(&other, condition_expr.span()));
                     }
                 }
             } else {

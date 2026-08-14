@@ -1161,7 +1161,7 @@ i = 0
 
 ### Times Loop — repeat exactly N times
 
-When the loop specifier is a positive integer literal, the body executes **exactly N times**. The condition is evaluated once and never re-evaluated:
+When the loop specifier evaluates to an integer, the body executes **exactly N times**. The specifier is evaluated once and never re-evaluated:
 
 ```zymbol
 @ 5 { >> "Zz" }
@@ -1180,7 +1180,55 @@ The counter is implicit — no iterator variable is exposed. Use `@!` to break e
 // prints "tick " exactly 10 times
 ```
 
-> **Note**: The analyzer emits `loop condition should be Bool, got Int` because the grammar shares the `expr` production with While. This warning is expected and harmless — the runtime correctly identifies the form as a TIMES loop.
+**What makes a loop a Times loop is the specifier's *value*, not its shape.** Any
+expression that yields an Int is a repeat count — a variable, a call, a
+collection size:
+
+```zymbol
+reps = 5
+@ reps { … }        // 5 times
+
+@ items$# { … }     // once per element, without binding one
+
+count() { <~ 3 }
+@ count() { … }     // 3 times — the call happens once
+```
+
+An integer count of zero or less runs the body **zero times**. It is a count,
+not a condition, so it never falls through to the While form and a negative
+number cannot spin forever:
+
+```zymbol
+n = -2
+@ n { >> "never" ¶ }    // prints nothing
+```
+
+A `Bool` — including any comparison — is a condition, re-evaluated on every pass
+(see While, below). **Those are the only two possibilities.** A specifier that is
+neither a count nor a condition is refused at run time, in every engine, with the
+same message:
+
+```zymbol
+items = [1, 2, 3]
+@ items { … }      // ❌ loop expects a count or a condition, got array
+
+n = 3.5
+@ n { … }          // ❌ loop expects a count or a condition, got float
+```
+
+Truthiness is deliberately not applied here. It used to be, and the engines did
+not agree on what an array or an empty string meant: `@ []` ran zero times in the
+tree-walker, forever in the VM, and raised in zyml. Refusing the form is the only
+answer that is the same everywhere. To walk a collection use `@ x:items`, and to
+count its elements use `@ items$#`.
+
+All four engines decide this the same way; `zyquality/corpus/loops/13_specifier_forms.zy`
+covers the forms that run and `zyquality/reject/loops/` the ones that must not.
+
+> **Note**: When the analyzer can tell statically that a specifier is neither a
+> count nor a condition, it warns — `loop expects a count or a condition, got [Int]`
+> for an array, say. It warns rather than errors because that inference is
+> approximate; the engines refuse the form at run time regardless.
 
 ### While Loop
 
@@ -1253,6 +1301,28 @@ i = 99
 @ i:5..0:1 { >> i " " }
 >> ¶    // → 5 4 3 2 1 0
 ```
+
+> **There is no empty range.** A range infers its direction from its endpoints,
+> so `2..1` is not "nothing to do" — it is the two-element descending range
+> `2, 1`. That matters when an endpoint is computed:
+>
+> ```zymbol
+> list = [42]
+> @ i:2..list$# { >> list[i] ¶ }    // ❌ index 2 for array of length 1
+> ```
+>
+> The usual intent — *walk the rest of the list* — needs an explicit guard,
+> because with a one-element list the range runs backwards off the front:
+>
+> ```zymbol
+> ? list$# >= 2 {
+>     @ i:2..list$# { >> list[i] ¶ }
+> }
+> ```
+>
+> The analyzer warns whenever a range's endpoints are not both integer
+> literals, since that is exactly when the direction cannot be read off the
+> source.
 
 ### For-each over String (char by char)
 
@@ -3414,7 +3484,32 @@ Write the digit `0` and digit `9` of the target script, enclosed in `#…#`:
 ```
 
 The token is **purely a runtime directive** — it emits no output and leaves no
-variable. One mode-switch persists until the next one in the same file.
+variable. One mode-switch persists until the next one.
+
+**The mode is global to the process, not to the file.** Reaching a mode-switch
+anywhere — inside a function, inside an imported module — changes how every
+subsequent `>>` formats numbers, in every module and in the main program:
+
+```zymbol
+// script/setter.zy
+# .script_setter {
+    #> { activate }
+    activate(code) { ? code == "sa" { #०९# }  <~ 0 }
+}
+```
+```zymbol
+// main.zy
+<# ./script/setter => s
+<# ./script/other  => other
+s::activate("sa")
+other::show(42)       // → ४२   (a different file)
+>> "here: " 42 ¶      // → ४२
+```
+
+That is what makes the mode usable as an i18n layer: a language dispatcher can
+pick the digit script along with the language, and no drawing code needs to
+know which one is active. See `USERAPPI18N.md` §"Third mechanism" for the
+pattern and its two traps.
 
 ### Output Under an Active Mode
 

@@ -36,6 +36,7 @@ that came before it.
 11. [Documentation and locale codes](#11-documentation-and-locale-codes)
 12. [Audit checklist](#12-audit-checklist)
 13. [Case studies](#13-case-studies)
+14. [Third mechanism: the digit script](#14-third-mechanism-the-digit-script)
 
 ---
 
@@ -49,6 +50,10 @@ projects do the second and stop.
 | **Code** | Can a developer work against this engine without reading its base language? | Re-export layers | [`I18N.md`](I18N.md) Part 1, §9 below |
 | **Text** | Can the user read this application in their language? | Dispatcher + key catalogue | [`I18N.md`](I18N.md) Part 2, §2–§4 below |
 | **Presentation** | Does the application still *work* when the text changes? | Measured layout, hot switching, a gate | This document, §5–§10 |
+
+Numbers ride along the Text axis, but through a mechanism of their own: the
+digit script is a process-global runtime mode the dispatcher can set once, so
+`42` prints as `४२` or `۴۲` without any call site knowing. See §14.
 
 The third axis is the one that gets skipped, and it is the one that decides whether
 adding a fourth language is an afternoon or a rewrite. In a terminal application it
@@ -687,6 +692,70 @@ that proved numbers can be a locale concern (§4). Audit:
 sixth is three edits. Its own remaining gaps are recorded in
 [`GO/AUDITORIA_I18N_ES.md`](https://github.com/zymbol-lang/zy-GO) — the reference
 is not exempt from its own checklist.
+
+---
+
+## 14. Third mechanism: the digit script
+
+`I18N.md` documents two mechanisms — re-export layers for code, dispatcher
+modules for runtime text. There is a third, and it is the only one that needs no
+catalogue at all: **choosing a language can choose the script the digits are
+written in.**
+
+The numeral mode-switch (`#०९#`, GUIDE.md §"Mode-Switch Token") is a runtime
+directive that is **global to the process**, not to the file. So the dispatcher
+that already knows the current language can set it in the same place:
+
+```zymbol
+set_language(code) {
+    current_language = code
+    ?? code {
+        "fa" => { #۰۹# }      // Extended Arabic-Indic  U+06F0
+        "hi" => { #०९# }      // Devanagari             U+0966
+        "en" => { #09# }      // ASCII
+        "es" => { #09# }
+        _    => { #09# }
+    }
+    <~ 0
+}
+```
+
+**Nothing downstream has to know.** No drawing code, no formatting helper and no
+key in the catalogue changes. The same line that composes a square's name emits
+`e४`, `e۴` or `e4`, and every number the application prints — scores, counters,
+coordinates, menu indices — follows the language without a single call site
+being touched. That is what separates this from the other two mechanisms: they
+need an entry per string, this one needs an entry per *language*.
+
+चतुरङ्गम् uses it across four scripts; the verification is in its
+`परीक्षा/भाषापरीक्षा.zy` and `परीक्षा/चित्रपरीक्षा.zy` suites.
+
+### Two traps
+
+Both are documented in the guide as intended behaviour, and neither is obvious
+when the mode is being driven by a language setting rather than written inline.
+
+1. **The mode reaches `io::write` and `<\ … \>`.** A program that writes a data
+   file while a non-ASCII mode is active will create `dato४२.txt`, and a shell
+   command built with a number in it will carry that number in the active
+   script. A game log, a save file, an export — anything that *names* a file or
+   builds a command — must switch back to `#09#` first:
+
+   ```zymbol
+   save_game(n) {
+       #09#                       // filenames are not user-facing text
+       io::write("game" n ".log", body)
+       set_language(current_language)   // restore the user's script
+   }
+   ```
+
+2. **`json::encode` always emits ASCII**, so serialized data is safe as it
+   stands. This is the asymmetry worth remembering: the *display* path is
+   localized and the *data* path is not, which is the right way round, but it
+   means you cannot test one by looking at the other.
+
+The rule that falls out of both: **the mode belongs to output the user reads.**
+Switch back before anything a machine will read back.
 
 ---
 

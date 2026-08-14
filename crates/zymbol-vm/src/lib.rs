@@ -150,6 +150,25 @@ impl fmt::Display for Value {
 }
 
 impl Value {
+    /// Readable type name for diagnostics. Mirrors `zymbol-interpreter`'s
+    /// `type_word` and zyml's `type_name`, so a message naming a type reads the
+    /// same whichever engine produced it.
+    fn type_word(&self) -> &'static str {
+        match self {
+            Value::Int(_)        => "integer",
+            Value::Float(_)      => "float",
+            Value::Bool(_)       => "bool",
+            Value::String(_)     => "string",
+            Value::Char(_)       => "char",
+            Value::Array(_)      => "array",
+            Value::Tuple(_) | Value::NamedTuple(_) => "tuple",
+            Value::Function(..)  => "function",
+            Value::Closure(..)   => "lambda",
+            Value::Error(_)      => "error",
+            Value::Unit          => "unit",
+        }
+    }
+
     #[inline(always)]
     fn is_truthy(&self) -> bool {
         match self {
@@ -1204,6 +1223,18 @@ impl<W: Write> VM<W> {
                 &Instruction::And(dst, a, b) => { let (va, vb) = (rreg!(a).is_truthy(), rreg!(b).is_truthy()); wreg!(dst, Value::Bool(va && vb)); }
                 &Instruction::Or (dst, a, b) => { let (va, vb) = (rreg!(a).is_truthy(), rreg!(b).is_truthy()); wreg!(dst, Value::Bool(va || vb)); }
                 &Instruction::Not(dst, src)  => { let v = rreg!(src).is_truthy(); wreg!(dst, Value::Bool(!v)); }
+                &Instruction::IsInt(dst, src) => { let v = matches!(rreg!(src), Value::Int(_)); wreg!(dst, Value::Bool(v)); }
+                &Instruction::AsLoopCond(dst, src) => {
+                    match rreg!(src) {
+                        &Value::Bool(b) => wreg!(dst, Value::Bool(b)),
+                        other => {
+                            let got = other.type_word();
+                            raise!(VmError::Generic(format!(
+                                "loop expects a count or a condition, got {got}"
+                            )))
+                        }
+                    }
+                }
 
                 // ── Control flow ────────────────────────────────────────────
                 &Instruction::Jump(label)          => { ip = label as usize; }
@@ -3078,6 +3109,20 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::Not(dst, src) => {
                     let v = r!(src).is_truthy(); w!(dst, Value::Bool(!v));
+                }
+                &Instruction::IsInt(dst, src) => {
+                    let v = matches!(r!(src), Value::Int(_)); w!(dst, Value::Bool(v));
+                }
+                &Instruction::AsLoopCond(dst, src) => {
+                    match r!(src) {
+                        &Value::Bool(b) => w!(dst, Value::Bool(b)),
+                        other => {
+                            let got = other.type_word();
+                            return Err(VmError::Generic(format!(
+                                "loop expects a count or a condition, got {got}"
+                            )));
+                        }
+                    }
                 }
                 &Instruction::Jump(label) => { ip = label as usize; }
                 &Instruction::JumpIf(cond, label) if r!(cond).is_truthy() => { ip = label as usize; }
