@@ -4,9 +4,11 @@
 //! - Symbol interning for efficient identifier storage
 //! - Literal types (Int, Float, String, Char, Bool)
 //! - Operator types (Binary, Unary, Collection)
+//! - The numeric model — the integer range every engine must agree on (`num`)
 //! - The `std/` export table (`stdlib`), shared by the engines and the tooling
 //! - Locating the POSIX shell that `<\ \>` runs through (`shell`)
 
+pub mod num;
 pub mod shell;
 pub mod stdlib;
 

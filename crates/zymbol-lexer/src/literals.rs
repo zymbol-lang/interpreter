@@ -368,13 +368,18 @@ impl Lexer {
                 }
             }
         } else {
-            match number_str.parse::<i64>() {
-                Ok(n) => Token::new(TokenKind::Integer(n), self.span(start)),
-                Err(_) => {
+            // `number_str` holds ASCII digits and nothing else by construction,
+            // so the only way to fail here is to be too large — first for `i64`,
+            // then for Zymbol's own narrower range. Both report the same thing,
+            // because to a program there is one bound, not two.
+            match number_str.parse::<i64>().ok().filter(|n| zymbol_common::num::in_int_range(*n)) {
+                Some(n) => Token::new(TokenKind::Integer(n), self.span(start)),
+                None => {
                     let span = self.span(start);
                     self.diagnostics.push(
-                        Diagnostic::error(format!("invalid integer literal: '{}'", number_str))
-                            .with_span(span),
+                        Diagnostic::error(format!("integer literal out of range: '{}'", number_str))
+                            .with_span(span)
+                            .with_help(zymbol_common::num::ZY_INT_RANGE_HELP),
                     );
                     Token::new(TokenKind::Error(format!("invalid integer: '{}'", number_str)), span)
                 }

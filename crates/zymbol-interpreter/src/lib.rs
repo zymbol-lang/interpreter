@@ -165,6 +165,13 @@ impl ErrorValue {
         Self::new("Div", message)
     }
 
+    /// Create a Range error — an integer that left `zymbol_common::num`'s range.
+    /// Raised by arithmetic, by the `###` cast, and by any reader that turns
+    /// outside data into an integer.
+    pub fn range(message: impl Into<String>) -> Self {
+        Self::new("Range", message)
+    }
+
     /// Create a Parse error
     pub fn parse(message: impl Into<String>) -> Self {
         Self::new("Parse", message)
@@ -1583,11 +1590,16 @@ impl<W: Write> Interpreter<W> {
             RuntimeError::Generic { message, .. } => {
                 // Try to classify the error based on message content
                 let lower_msg = message.to_lowercase();
-                if lower_msg.contains("index") || lower_msg.contains("out of bounds") {
+                // Checked before the rest: an integer that left its range is a
+                // ##Range whatever else the message happens to mention.
+                if lower_msg.contains("overflow") || lower_msg.contains("out of range") {
+                    Value::Error(ErrorValue::range(message.clone()))
+                } else if lower_msg.contains("index") || lower_msg.contains("out of bounds") {
                     Value::Error(ErrorValue::index(message.clone()))
                 } else if lower_msg.contains("type") {
                     Value::Error(ErrorValue::type_error(message.clone()))
-                } else if lower_msg.contains("division") || lower_msg.contains("divide by zero") {
+                } else if lower_msg.contains("division") || lower_msg.contains("divide by zero")
+                    || lower_msg.contains("modulo") {
                     Value::Error(ErrorValue::div(message.clone()))
                 } else if lower_msg.contains("parse") {
                     Value::Error(ErrorValue::parse(message.clone()))

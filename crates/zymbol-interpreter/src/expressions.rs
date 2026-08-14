@@ -6,6 +6,7 @@
 //! - Pipe expressions (function composition with placeholder syntax)
 
 use zymbol_ast::{BinaryExpr, Expr, PipeExpr, UnaryExpr};
+use zymbol_common::num;
 use zymbol_common::BinaryOp;
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
@@ -129,10 +130,10 @@ impl<W: Write> Interpreter<W> {
 
             // Arithmetic operators
             BinaryOp::Add => self.eval_add(&left, &right, &binary.span),
-            BinaryOp::Sub => self.eval_arithmetic(&left, &right, |a, b| a - b, |a, b| a - b, &binary.span),
-            BinaryOp::Mul => self.eval_arithmetic(&left, &right, |a, b| a * b, |a, b| a * b, &binary.span),
+            BinaryOp::Sub => self.eval_arithmetic(&left, &right, num::sub, |a, b| a - b, "-", &binary.span),
+            BinaryOp::Mul => self.eval_arithmetic(&left, &right, num::mul, |a, b| a * b, "*", &binary.span),
             BinaryOp::Div => self.eval_div(&left, &right, &binary.span),
-            BinaryOp::Mod => self.eval_arithmetic(&left, &right, |a, b| a % b, |a, b| a % b, &binary.span),
+            BinaryOp::Mod => self.eval_mod(&left, &right, &binary.span),
             BinaryOp::Pow => self.eval_pow(&left, &right, &binary.span),
 
             // Comparison operators

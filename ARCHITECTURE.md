@@ -155,6 +155,13 @@ Static analysis passes over the AST:
 Walks the AST directly and evaluates it. This is the default execution mode.
 
 **Runtime `Value` enum**:
+
+> `Int` is stored in an `i64`, but the *language's* integer is narrower: the
+> safe-integer range ±(2⁵³ − 1) defined in `zymbol-common/src/num.rs`. The ten
+> spare bits are headroom for the checks, not range a program can use — every
+> operation that could produce a value outside it raises `##Range`. See
+> REFERENCE.md § Numeric limits.
+
 ```rust
 enum Value {
     Int(i64), Float(f64), Char(char), Bool(bool),

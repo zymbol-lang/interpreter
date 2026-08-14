@@ -29,6 +29,7 @@
 //! ejecutar, consultar, transaccion, …).
 
 use crate::{ErrorValue, FunctionDef, Result, RuntimeError, Value};
+use zymbol_common::num;
 use base64::Engine as _;
 use odbc_api::{
     handles::DataType, parameter::InputParameter, Connection, ConnectionOptions, Cursor,
@@ -165,7 +166,16 @@ fn cell_from_text(text: String, dt: &DataType) -> Value {
         | DataType::SmallInt
         | DataType::BigInt
         | DataType::TinyInt
-        | DataType::Bit => text.parse::<i64>().map(Value::Int).unwrap_or(Value::String(text)),
+        // A BIGINT column is 64-bit at the database and wider than a Zymbol
+        // integer, so a value past the range stays the String the driver sent —
+        // the same fail-safe DECIMAL already gets, and lossless either way. It
+        // must not become an Int that only one engine could hold.
+        | DataType::Bit => text
+            .parse::<i64>()
+            .ok()
+            .filter(|n| num::in_int_range(*n))
+            .map(Value::Int)
+            .unwrap_or(Value::String(text)),
         DataType::Real | DataType::Double | DataType::Float { .. } => {
             text.parse::<f64>().map(Value::Float).unwrap_or(Value::String(text))
         }

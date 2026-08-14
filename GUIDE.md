@@ -277,8 +277,8 @@ The following identifiers have conventional meaning but are not reserved: `_err`
 
 | Type | Literal / source | `#?` symbol | Notes |
 |------|-----------------|-------------|-------|
-| Int | `42`, `-7` | `###` | 64-bit signed |
-| Float | `3.14`, `1.5e10` | `##.` | Scientific notation supported |
+| Int | `42`, `-7` | `###` | Safe integer: ±(2⁵³ − 1). Leaving the range is a `##Range` error — see [The number model](#the-number-model) |
+| Float | `3.14`, `1.5e10` | `##.` | IEEE-754 double. Scientific notation supported; overflow yields `inf`, which is a value |
 | String | `"text"` | `##"` | Interpolation: `"Hello {name}"` |
 | Char | `'A'` | `##'` | Single Unicode character |
 | Bool | `#1`, `#0` | `##?` | NOT numeric — `#1` ≠ `1` |
@@ -289,6 +289,110 @@ The following identifiers have conventional meaning but are not reserved: `_err`
 | Lambda | `x -> x * 2` | `##->` | Lambda definition symbol; display `<lambd/N>` |
 | Error | _(runtime value)_ | `##<Kind>` | Type IS the kind: `##Index`, `##Div`, `##IO`, … |
 | Unit | _(void return)_ | `##_` | Returned by functions with no `<~`; display is empty |
+
+### The number model
+
+Zymbol has two numeric types and one rule each.
+
+**`Int` is a safe integer: −9007199254740991 … 9007199254740991**, that is
+±(2⁵³ − 1). Leaving that range — by arithmetic, by a literal, or by a cast — is a
+`##Range` error. It is never a wrapped value, never a rounded one, and never a
+silent promotion to `Float`.
+
+```zymbol
+>>(10 ^ 20) ¶                    // ✗ integer overflow: 10 ^ 20
+>>(9007199254740991 + 1) ¶       // ✗ integer overflow: 9007199254740991 + 1
+>>(9223372036854775807) ¶        // ✗ integer literal out of range
+>>(###1.0e300) ¶                 // ✗ integer overflow: ### cannot represent this float
+```
+
+It is an ordinary catchable error, so a program that expects to reach the edge
+can say so:
+
+```zymbol
+!? {
+    x = 10 ^ 20
+} :! ##Range {
+    >> "too large" ¶             // → too large
+}
+```
+
+The bound is the mantissa of a double, not the width of any one implementation.
+That is what makes it *one* rule: every engine — the tree-walker, the register
+VM, the OCaml engine and the browser engine — holds this range exactly and
+natively, so an integer means the same thing in all four. A wider `Int` would
+have to be approximated somewhere, and an approximation that only shows up past
+2⁵³ is the kind of disagreement nobody finds until it matters.
+
+Negation is total: the range is symmetric, so `-x` is the one integer operation
+that can never overflow.
+
+**`Float` is an IEEE-754 double**, and keeps IEEE-754 semantics — all of them,
+not just the arithmetic.
+
+*Overflow yields `inf`, which is a value, not an error.* The format has an
+infinity, so nothing is lost by reaching it:
+
+```zymbol
+>>(1.0e308 * 10.0) ¶      // → inf
+>>(-1.0e308 * 10.0) ¶     // → -inf
+>>(1.0e-308 / 1.0e308) ¶  // → 0
+>>(-0.0) ¶                // → -0     (the sign of zero is kept)
+```
+
+The asymmetry with `Int` is deliberate. An integer that leaves its range has
+nowhere to go but a wrong answer, so it stops; a float that leaves its range
+lands on a value IEEE-754 defines, so it continues. Division and modulo by zero
+remain errors (`##Div`) for both.
+
+*`==` is exact.* Two floats are equal when they are the same value, with no
+tolerance — a tolerance would make equality non-transitive, and no fixed one is
+right at both 1e-20 and 1e300. Name the tolerance when you want one:
+
+```zymbol
+>>(0.1 + 0.2 == 0.3) ¶            // → #0   (correct: they really differ)
+>>(0.1 + 0.2 - 0.3) ¶             // → 0.00000000000000005551115123125783
+```
+
+Comparing with a tolerance is a thing you write, not a thing `==` guesses:
+
+```zymbol
+<# std/math => m
+a = 0.1 + 0.2
+b = 0.3
+? m::abs(a - b) < 0.000001 {
+    >> "close enough" ¶           // → close enough
+}
+```
+
+Int/Float promotion is unaffected — `1.0 == 1` is true, because the two sides
+are promoted and *then* compared exactly.
+
+*`NaN` compares false in every direction*, including against itself. It is the
+one value where `x == x` is false, and the reason `<` and `>=` are not each
+other's negation:
+
+```zymbol
+<# std/math => m
+n = m::sqrt(-1.0)
+>>(n == n) ¶   // → #0
+>>(n <> n) ¶   // → #1
+>>(n < 1.0) ¶  // → #0
+>>(n >= 1.0) ¶ // → #0   ← not the negation of the line above
+```
+
+*Floats print as digits, never as an exponent.* `1.0e21` prints
+`1000000000000000000000` and `1.5e-10` prints `0.00000000015`. Scientific
+notation is something you ask for, with `#^`:
+
+```zymbol
+>> #^|1234567.0| ¶      // → 1.234567e6
+>> #^.2|1234567.0| ¶    // → 1.23e6
+```
+
+When a quantity may exceed the integer range — a hash, an accumulator over a long
+loop — reduce it as you go (`h = h % 1000000`) or hold it as a `Float` and accept
+the precision that implies.
 
 ### Non-value Types
 

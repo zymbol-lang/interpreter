@@ -9,6 +9,7 @@
 
 use std::io::Write;
 use zymbol_ast::{BaseConversionExpr, CastKind, Expr, FormatExpr, NumericCastExpr, NumericEvalExpr, RoundExpr, TruncExpr, TypeMetadataExpr};
+use zymbol_common::num;
 use zymbol_lexer::digit_blocks::digit_value;
 
 use crate::{Interpreter, Result, RuntimeError, Value};
@@ -76,22 +77,44 @@ pub(crate) fn ascii_digits(s: &str) -> std::borrow::Cow<'_, str> {
 /// Returns the original `String` value if parsing fails (fail-safe).
 /// Also handles Unicode digit scripts (Thai, Arabic, Devanagari, etc.).
 pub(crate) fn parse_numeric_string(s: String) -> Value {
-    let trimmed = s.trim();
-    if let Ok(n) = trimmed.parse::<i64>() {
-        return Value::Int(n);
+    // What the text says is `num::parse`'s call, shared with the VM so the two
+    // engines cannot read the same string differently.
+    fn numeric(t: &str) -> Option<Value> {
+        match num::parse(t) {
+            num::Num::Int(n) => Some(Value::Int(n)),
+            num::Num::Float(f) => Some(Value::Float(f)),
+            num::Num::None => None,
+        }
     }
-    if let Ok(f) = trimmed.parse::<f64>() {
-        return Value::Float(f);
+    let trimmed = s.trim();
+    if let Some(v) = numeric(trimmed) {
+        return v;
     }
     if let Some(normalized) = normalize_unicode_digits(trimmed) {
-        if let Ok(n) = normalized.parse::<i64>() {
-            return Value::Int(n);
-        }
-        if let Ok(f) = normalized.parse::<f64>() {
-            return Value::Float(f);
+        if let Some(v) = numeric(&normalized) {
+            return v;
         }
     }
     Value::String(s)
+}
+
+/// A float already rounded or truncated, as an integer.
+///
+/// `f as i64` in Rust *saturates*: `1e300` becomes `i64::MAX` and `nan` becomes
+/// `0`, so the cast used to answer with a number the program never computed.
+/// Out of range is a `##Range` error like any other integer overflow.
+fn cast_to_int(f: f64, cast: &str, span: zymbol_span::Span) -> Result<Value> {
+    match num::from_f64(f) {
+        Some(n) => Ok(Value::Int(n)),
+        None => Err(RuntimeError::Generic {
+            // The offending float is deliberately not quoted: the engines still
+            // print large floats differently (`1e+300` in the browser, 301
+            // digits here), and an error message is the last place a parity gate
+            // should have to tolerate that. The span already points at it.
+            message: format!("integer overflow: {} cannot represent this float", cast),
+            span,
+        }),
+    }
 }
 
 impl<W: Write> Interpreter<W> {
@@ -121,7 +144,7 @@ impl<W: Write> Interpreter<W> {
             },
             CastKind::ToIntRound => match value {
                 Value::Int(_) => Ok(value),
-                Value::Float(f) => Ok(Value::Int(f.round() as i64)),
+                Value::Float(f) => cast_to_int(f.round(), "###", op.span),
                 other => Err(RuntimeError::Generic {
                     message: format!("### requires a numeric value, got {}", value_type(other)),
                     span: op.span,
@@ -129,7 +152,7 @@ impl<W: Write> Interpreter<W> {
             },
             CastKind::ToIntTrunc => match value {
                 Value::Int(_) => Ok(value),
-                Value::Float(f) => Ok(Value::Int(f.trunc() as i64)),
+                Value::Float(f) => cast_to_int(f.trunc(), "##!", op.span),
                 // A Char casts to its Unicode code point. This is the only
                 // direct Char→Int route (the alternative was inverting a base
                 // literal and stripping its prefix), and it makes characters
