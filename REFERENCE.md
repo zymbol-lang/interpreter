@@ -480,6 +480,278 @@ CLI ↔ browser parity went from 527/537 to 533/538. The five that remain are un
 
 ---
 
+### ~~L32 — A destructuring pattern does not check the shape it receives~~ Fixed in v0.0.9
+
+The pattern is purely syntactic: either bracket shape accepts either collection type, in all
+four engines.
+
+```zymbol
+[a, b, c] = (1, 2, 3)    // accepted — array pattern, tuple value
+(a, b, c) = [1, 2, 3]    // accepted — tuple pattern, array value
+```
+
+The two types are otherwise distinct — `(1,2,3) == [1,2,3]` is `#0`, and they print
+differently — so the laxity is confined to the pattern and contradicts the rest of the
+model. Its practical cost is that a function returning `<~ (a, b)` is routinely received
+with `[a, b]`, and nothing marks the mismatch: `serpiente/` does this 35 times.
+
+**Fixed.** The pattern is typed: `[ … ]` accepts only an array, `( … )` only a tuple, and a
+mismatch is a runtime error — `array pattern '[ … ]' requires an array, got ##)`, spelled
+identically in all four engines (`zyq consensus` compares the text, and the VM's
+`zymbol_type_name` had to be bypassed because it writes `##[]` where the tree-walker writes
+`##]`).
+
+It broke four places on the first run, every one of them a real mistake the laxity had been
+hiding: `tui/03_terminal_size_positive.zy`, `tui/07_terminal_size_ops.zy` and two Rust tests
+received `>>?` — documented in their own comments as *"returns (rows, cols) as a positional
+tuple"* — with `[H, W]`. All four now say `(H, W)`. Regression tests:
+`corpus/errors/runtime/destructure_pattern_type.zy` (both directions, caught with `!?` so the
+message can be compared across engines).
+
+### ~~L33 — The last name of a pattern does not absorb the remainder~~ Fixed in v0.0.9
+
+Today a pattern truncates in one direction and under-fills in the other, and neither is
+diagnosed:
+
+```zymbol
+t = (1,2,3,4,5,6,7,8,9)
+(a, b, c)    = t          // c = 3      — values 4..9 dropped in silence
+(p, q, r, s) = (1,2,3)    // s = ##_    — Unit, no diagnostic
+```
+
+**Decision.** The **last name of the pattern absorbs whatever remains**, and is `##_` (Unit)
+when nothing remains. Destructuring therefore never fails on a length mismatch: with two
+names there is always somewhere to put the rest.
+
+```zymbol
+(a, b, c) = (1,2,3,4,5,6,7,8,9)   // c = (3,4,5,6,7,8,9)
+(a, b, c) = ('a','b')             // c = ##_
+(a, b, c) = (1,2,3)               // c = 3
+[a, b, c] = [1,2,3,4,5]           // c = [3,4,5]
+```
+
+The absorbed remainder takes the container's own shape — a tuple yields a tuple, an array
+yields an array. **This also settles an existing inconsistency**: `(h, *tail) = (1,2,3)`
+currently yields the *array* `[2,3]` out of a tuple.
+
+**`*rest` keeps a distinct meaning and is not deprecated.** Without the mark, the last name
+is a scalar when exactly one value remains; with it, the binding is always a collection:
+
+```zymbol
+(a, b, c)  = (1,2,3)   // c = 3     — scalar
+(a, b, *c) = (1,2,3)   // c = (3)   — collection of one
+(a, b, *c) = (1,2)     // c = ()    — empty collection, not Unit
+```
+
+`*` is how a caller asks for a **stable type**; bare absorption is how it asks for
+convenience.
+
+**Accepted consequence.** The type of the last binding is decided at run time by the length
+of the value: `c` above is a Tuple, a Unit and an Int in three otherwise identical
+statements. In particular, a function that grows one more return value keeps every existing
+call site compiling, and the last variable at each site silently turns from a scalar into a
+collection — `serpiente/` has 35 such sites. This was weighed against the convenience and
+accepted on 2026-08-15. The planned Clippy-style lint is the intended place to flag it, not
+the type checker.
+
+**The two sub-questions, closed on 2026-08-15:**
+
+- **A single-name pattern absorbs too.** The rule has no exceptions: `[solo] = [1,2,3]`
+  binds `[1,2,3]`, where it used to bind `1`. `[x] = arr` therefore says what `x = arr`
+  already said — accepted as the cost of a rule with no special cases.
+- **Nothing is discarded implicitly, so no new discard syntax was added.** Absorption is
+  what makes the discard question mostly go away: every value ends up under some name.
+  Dropping one is the programmer's own act — name it `_something` (the declared-but-unused
+  prefix the analyzer already honours) or end its life with `\name`. `_` was left exactly as
+  it was: it still discards one position in an array pattern, still does not parse inside a
+  positional pattern, and there is still no anonymous `*_`. By the uniform rule, a `_` in
+  the last position absorbs the remainder without binding it.
+
+**Implemented in all four engines**, each mirroring `Interpreter::bind_positional`: the
+tree-walker (`bind_positional`), the VM (two new instructions, `DestructureCheck` and
+`DestructureAbsorb`, since the choice between Unit, scalar and collection is only knowable at
+run time), `zymbol.js` (`bindPositional`), and `zyml` (`DSeq` grew an `is_tuple` flag, as its
+AST had been folding both patterns into one constructor). Regression test:
+`corpus/collections/33_destructure_absorb.zy`, agreed by all four.
+
+**Two divergences surfaced while implementing this**, neither of which the gate could see
+because no corpus file exercised a `*rest` on a tuple or a `*rest` with items after it:
+
+- the tree-walker returned `Value::Array` for *any* rest, so `(h, *tail) = (1,2,3)` gave the
+  array `[2,3]` under TW and the tuple `(2,3)` under the VM (whose `ArraySlice` preserves the
+  container). Both now keep the container's shape.
+- the VM and `zymbol.js` ignored the items that follow a `*rest`: `[w, *x, y] = [10..50]`
+  gave `x=[20,30,40] y=50` under TW and `x=[20,30,40,50] y=30` under the VM. Both now count
+  those slots from the end, as the tree-walker's `trailing` always did.
+
+### L34 — An output-parameter slot accepts an expression *(fixed in v0.0.9 in three engines; `zyml` pending)*
+
+```zymbol
+g(b<~) { b = b + 100 }
+g(2 + 3)    // accepted; the write lands nowhere and nothing is reported
+```
+
+`<~` promises the change travels back to the caller (SYMBOLS.md §9.1). When the argument is
+not assignable there is no caller variable to travel back to, and the call is accepted
+anyway — the one guarantee the mark exists to make, silently withdrawn.
+
+**Fixed.** Passing a non-assignable expression to a `<~` slot is now a semantic error,
+caught before the program runs:
+
+```
+error: argument 1 of 'g' is an output parameter '<~' and needs a variable, not an expression
+  help: '<~' writes the change back into the caller's variable; there is nowhere to write an
+        expression back to — assign it to a variable first
+```
+
+`TypeChecker` records which slots of each function are outputs (`record_output_slots`) and
+checks the arguments at each call (`check_output_arguments`). The browser engine mirrors it
+in its checker — `funcOutSlots` filled beside `funcArity`, checked by `checkOutputArgs`
+next to the existing `checkArity` — and words the diagnostic identically, which is what
+`web/tests/test_check.mjs` compares. Functions without an output parameter — nearly all of
+them — record nothing.
+
+Regression test: `corpus/errors/semantic/output_param_expression.zy`, graded via `check`.
+
+**Still open**: `zyml` accepts the call as before. It has no equivalent analysis pass, so
+the rejection would have to happen at compile time — the one engine of the four where this
+is not a check but a new piece of machinery.
+
+### ~~L35 — `zyml` does not lex `~` in a parameter list~~ Fixed in v0.0.9
+
+The OCaml engine rejects the working-copy mark at lexing time:
+
+```
+f(a~) { … }     → zyml: Lex error: unexpected character '~' (line 1)
+g(b<~) { … }    → accepted by all four engines
+```
+
+So `~` is a three-engine feature and `<~` is a four-engine one. The parity gate cannot see
+this: no corpus file uses either mark in a signature, and no `.zy` in the whole workspace
+declares a `<~` parameter — the feature is documented, implemented and unexercised.
+
+**Fixed.** `zyml` lexes `~` as `TMod` and accepts it in a signature. Two places needed it:
+the lexer, which fell through to "unexpected character", and `is_func_decl`, which decides
+whether `name(…) {` is a declaration by scanning the tokens between the parentheses and
+admitted only `TIdent | TComma | TRet` — so a `~` made it stop reading the whole thing as a
+function.
+
+A function's scope is already isolated, so `~` needs no run-time support: it declares in the
+signature the working copy the body would otherwise write by hand, and only `<~` sends
+anything back.
+
+The gate now holds both marks: `corpus/functions/param_marks.zy` exercises `~`, `<~`, the
+two together, `<~` alongside a return value, and a two-output swap — agreed by all four
+engines.
+
+### ~~L36 — `<~` was invisible at the call site~~ Fixed in v0.0.9
+
+`f(x)` did not reveal that `x` might come back changed: the mark lived only in the
+signature, so a reader had to open `f` to find out which arguments a call modifies. In a
+language whose whole claim is that the mark tells you what happens, that was the one place
+the mark was missing.
+
+**Fixed.** The mark is now written at the call site too, and is **required** wherever the
+callee declares an output parameter:
+
+```zymbol
+bump(b<~) { b = b + 100 }
+
+y = 2
+bump(y)      // ✗ error: argument 1 of 'bump' is an output parameter and must be
+             //   marked '<~' at the call site
+bump(y<~)    // ✓
+```
+
+The reverse is an error too — marking an argument the callee does not declare as an output
+(`calc(z<~)` where `calc(a)`) — which is what stops the annotation drifting away from the
+signature. Being required is the whole point: an optional mark would be absent from exactly
+the call sites nobody revisited.
+
+This coins **no new symbol**: it is `<~` in a new position, which is the bar SYMBOLS.md sets
+for extending the grammar. It has no run-time meaning — the callee's signature is still what
+makes a parameter an output — so the tree-walker and the VM needed no change at all; the AST
+carries `out_args` and the checkers compare it against the signature.
+
+**The same rule holds for qualified calls**, `m::f(x<~)`. That needed a table the arity
+check did not have: `module_out_slots` in `zymbol-semantic` (mirrored by `moduleOutSlotsFor`
+in `zymbol.js`), built beside `module_arities` rather than by widening it — `ModuleArities`
+is read in six places across three crates and none of them has anything to say about output
+parameters. A module that cannot be resolved leaves its calls unchecked, exactly as the
+arity check already does.
+
+Nine corpus files had to gain the mark, which is the measure of what it buys: every one of
+them was a call that modified its caller's variable without saying so.
+
+Implemented in `zytw`, `zyvm` and `zyjs`. **`zyml` does not enforce it** — like L34, it has
+no analysis pass to host the check.
+
+### ~~L37 — the browser engine mixed diagnostics into the program's output~~ Fixed in v0.0.9
+
+The Rust engines keep two streams apart: what the program prints goes to stdout, what the
+engine has to say *about* the program — a runtime error, a refusal to run — goes to stderr,
+and the process exits non-zero. `zymbol.js` had one stream, because a browser has one panel,
+and wrote everything through `onOutput`.
+
+That single difference was **69 of the 91 corpus divergences**, and it hid the rest: the gate
+read as "the browser engine disagrees about 91 programs" when it disagreed about 22 and
+formatted the other 69 differently. Two of the 69 were real, though, and worth separating:
+
+- a module file run directly was refused by the CLI (stderr, exit 1) and **run** by the
+  browser engine (stdout, exit 0) — `runZymbol` returned success for a program it had
+  declined to execute;
+- every runtime error landed in the program's own output, so a test comparing stdout could
+  not tell a program that printed "Runtime error: …" from one that failed.
+
+**Fixed** by giving `runZymbol` an optional `opts.onError`. A caller that is a process
+(`tests/run_one.mjs`) passes one and gets the CLI's split — diagnostics on stderr, exit 1.
+The playground passes none and keeps today's behaviour, everything in the one panel, which
+is all a browser has; the fallback is `onOutput`, so nothing there changed. The refusal is
+recorded as `Interpreter.moduleRefused` rather than emitted, so `runZymbol` can route it and
+report the failure.
+
+Corpus agreement across `zytw`, `zyvm` and `zyjs` went from 506/599 to 575/599, and the
+example pool from 194/216 to 206/216.
+
+### ~~L38 — the browser engine's remaining divergences~~ Fixed in v0.0.9
+
+With L37's stream split in place, what the gate had been calling "91 disagreements" turned
+out to be 22, and they fell into a handful of causes. All of them are now closed, and
+`zytw`, `zyvm` and `zyjs` agree on **597 of 597** corpus files that all three can run.
+
+Nothing here changed the Rust engines: every fix brought `zymbol.js` (or its Node runner) to
+what the two of them already did.
+
+| Fault | What it was |
+|---|---|
+| `2 ^ 3 ^ 2` | `parseExponent` used `if` instead of recursing, so it parsed one `^` and failed on the second. `^` is right-associative: 2^(3^2) = 512 |
+| `1e10` | the exponent was only read after a decimal point, so `e10` was lexed as an identifier. Now read for integers too, and only when a digit follows — `e\|x\|` keeps its meaning |
+| `grid$+ [0, 0]` | `$+` followed by `[` was always the positional insert. The Rust lexer distinguishes them by the space (`DollarPlusLBracket`); `zymbol.js` now emits the same two tokens |
+| leftover iterator | the iterator lived in a per-iteration scope that was discarded. It now publishes to a pre-existing outer name — and takes whatever the body left there, so `@ w:1..3 { w = 100 }` leaves 100 (MM-11) |
+| root constants | crossing a function boundary admitted only functions and modules, so `K := 5` was invisible at call depth ≥ 2 (MM-9) |
+| module analysis | a module loaded at run time was parsed but never analysed, so one reassigning its own `:=` constant simply ran (MM-4). The checker also gained the module-scope notion `Env` already had, without which every `_private` helper looked like a scope violation |
+| nested imports | the resolver was called without the importing file's path, so `<# ./module` inside `i18n/matematicas/中文.zy` was looked up beside the *entry* file. The runner now returns a child resolver rooted at the module, the shape the playground already used |
+| execution ceiling | the 50 000-step cap that protects a browser tab was being applied to a Node process, failing long-but-finite programs the CLI runs happily |
+| positioned output | `>>~` and `>>!` need a terminal context; without one the runner dropped the escape sequences the CLI has always written |
+| `mI'` | the apostrophe did not continue an identifier, so Klingon `mI'` opened a character literal that swallowed the file. `Lexer::is_ident_continue` admits any non-whitespace, non-operator character |
+
+Two corpus files were changed rather than an engine: `stdlib_json_decode*.zy` compared the
+*text* of a malformed-JSON error, which comes from whichever JSON parser the engine embeds
+and has been marked engine-specific in `zymbol.js` since v0.0.7. They now assert the contract
+— a catchable Error value rather than an abort — with `$!`.
+
+Three more turned up in `web/examples/`, which the corpus does not cover:
+
+| Fault | What it was |
+|---|---|
+| `3.14159265` printed as `3.1415926499999998` | the lexer assembled a float from its parts (`3 + 14159265/100000000`) instead of parsing the literal. The digits are collected as ASCII first, so a literal written in any numeral script still parses exactly |
+| `<< name` with no input | the runner's `inputFn` answered `''` for ever. `null` is the engine's documented EOF signal, and with it `<<` past the end raises "end of input while waiting for …", as the CLI does on a closed stdin |
+| an empty stdin was one empty line | `''.split('\n')` is `['']`, so the first `<<` succeeded with an empty answer before EOF was ever reached. A trailing newline no longer adds a line either |
+
+Corpus **597/597** and the example pool **210/210**, all three engines.
+
+---
+
 ## 20b. Error Taxonomy
 
 Zymbol errors are classified into three categories based on when and how they are detected.
@@ -794,7 +1066,8 @@ Fail-safe operations are distinguished from error-handling by the absence of any
 |--------|-----------|---------|
 | `=` | Assignment | `x = 5` |
 | `[..] =` | Array destructure | `[a, b, *rest] = arr` |
-| `(..) =` | Tuple destructure | `(name: n, age: a) = t` |
+| `(..) =` | Positional tuple destructure | `(a, b) = t` — the form that receives a `<~ (a, b)` return |
+| `(n: ..) =` | Named tuple destructure | `(name: n, age: a) = t` |
 | `:=` | Constant | `PI := 3.14` |
 | `>>` | Output | `>> "hello" ¶` |
 | `<<` | Input | `<< "prompt: " var` |

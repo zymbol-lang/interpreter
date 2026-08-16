@@ -129,7 +129,7 @@ fn cli_repl_terminal_size_positive() {
     // the test read a real 30×120 and failed on a correct answer.
     let output = zymbol()
         .arg("repl")
-        .write_stdin("[H, W] = >>?\n>> H ¶\n>> W ¶\n")
+        .write_stdin("(H, W) = >>?\n>> H ¶\n>> W ¶\n")
         .assert()
         .success()
         .get_output()
@@ -154,7 +154,7 @@ fn cli_repl_terminal_size_usable_in_condition() {
     // >>? result can be destructured and compared; #1 = true in Zymbol
     zymbol()
         .arg("repl")
-        .write_stdin("[H, W] = >>?\nok = H > 0\n>> ok¶\n")
+        .write_stdin("(H, W) = >>?\nok = H > 0\n>> ok¶\n")
         .assert()
         .success()
         .stdout(contains("#1"));

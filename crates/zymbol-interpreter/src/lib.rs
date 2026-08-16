@@ -1396,43 +1396,33 @@ impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_destructure_assign(&mut self, d: &DestructureAssign) -> Result<()> {
         let rhs = self.eval_expr(&d.value)?;
         match &d.pattern {
-            DestructurePattern::Array(items) | DestructurePattern::Positional(items) => {
+            // The pattern is typed: `[ … ]` takes an array, `( … )` takes a tuple.
+            // A mismatch is an error rather than a silent reinterpretation (REFERENCE.md L32).
+            DestructurePattern::Array(items) => {
                 let elements: Vec<Value> = match &rhs {
                     Value::Array(arr) => arr.clone(),
-                    Value::Tuple(tup) => tup.clone(),
                     _ => return Err(RuntimeError::Generic {
                         message: format!(
-                            "destructure assignment requires an array or tuple, got {}",
+                            "array pattern '[ … ]' requires an array, got {}",
                             self.value_type_name(&rhs)
                         ),
                         span: d.span,
                     }),
                 };
-                let mut idx = 0usize;
-                for item in items {
-                    match item {
-                        DestructureItem::Bind(name) => {
-                            let val = elements.get(idx).cloned().unwrap_or(Value::Unit);
-                            self.set_variable(name, val);
-                            idx += 1;
-                        }
-                        DestructureItem::Rest(name) => {
-                            // Collect remaining elements (excluding any trailing Bind/Ignore items)
-                            let trailing = items.iter().rev().take_while(|i| !matches!(i, DestructureItem::Rest(_))).count();
-                            let end = if trailing > 0 && elements.len() > idx + trailing {
-                                elements.len() - trailing
-                            } else {
-                                elements.len()
-                            };
-                            let rest: Vec<Value> = elements.get(idx..end).unwrap_or(&[]).to_vec();
-                            self.set_variable(name, Value::Array(rest));
-                            idx = end;
-                        }
-                        DestructureItem::Ignore => {
-                            idx += 1;
-                        }
-                    }
-                }
+                self.bind_positional(items, elements, false);
+            }
+            DestructurePattern::Positional(items) => {
+                let elements: Vec<Value> = match &rhs {
+                    Value::Tuple(tup) => tup.clone(),
+                    _ => return Err(RuntimeError::Generic {
+                        message: format!(
+                            "tuple pattern '( … )' requires a tuple, got {}",
+                            self.value_type_name(&rhs)
+                        ),
+                        span: d.span,
+                    }),
+                };
+                self.bind_positional(items, elements, true);
             }
             DestructurePattern::NamedTuple(fields) => {
                 let pairs: &Vec<(String, Value)> = match &rhs {
@@ -1455,6 +1445,57 @@ impl<W: Write> Interpreter<W> {
             }
         }
         Ok(())
+    }
+
+    /// Bind an array or positional-tuple pattern against the values it received.
+    ///
+    /// The **last item of the pattern absorbs whatever remains** (REFERENCE.md L33), so a
+    /// length mismatch is never an error: it binds `Unit` when nothing is left, the bare
+    /// value when exactly one is, and a collection when several are. `is_tuple` selects the
+    /// shape that collection takes — the remainder keeps the shape of the container it came
+    /// from.
+    ///
+    /// An explicit `*rest` opts out of absorption: it already governs how the values are
+    /// shared out, and its binding is always a collection, even of one element or none.
+    fn bind_positional(&mut self, items: &[DestructureItem], elements: Vec<Value>, is_tuple: bool) {
+        let wrap = |vals: Vec<Value>| if is_tuple { Value::Tuple(vals) } else { Value::Array(vals) };
+        let has_rest = items.iter().any(|i| matches!(i, DestructureItem::Rest(_)));
+        let mut idx = 0usize;
+
+        for (pos, item) in items.iter().enumerate() {
+            let absorbs = !has_rest && pos + 1 == items.len();
+            match item {
+                DestructureItem::Bind(name) => {
+                    let val = if absorbs {
+                        match elements.len().saturating_sub(idx) {
+                            0 => Value::Unit,
+                            1 => elements[idx].clone(),
+                            _ => wrap(elements[idx..].to_vec()),
+                        }
+                    } else {
+                        elements.get(idx).cloned().unwrap_or(Value::Unit)
+                    };
+                    self.set_variable(name, val);
+                    idx = if absorbs { elements.len() } else { idx + 1 };
+                }
+                DestructureItem::Rest(name) => {
+                    // Collect remaining elements (excluding any trailing Bind/Ignore items)
+                    let trailing = items.iter().rev().take_while(|i| !matches!(i, DestructureItem::Rest(_))).count();
+                    let end = if trailing > 0 && elements.len() > idx + trailing {
+                        elements.len() - trailing
+                    } else {
+                        elements.len()
+                    };
+                    let rest: Vec<Value> = elements.get(idx..end).unwrap_or(&[]).to_vec();
+                    self.set_variable(name, wrap(rest));
+                    idx = end;
+                }
+                DestructureItem::Ignore => {
+                    // In the last position `_` absorbs the remainder without binding it.
+                    idx = if absorbs { elements.len() } else { idx + 1 };
+                }
+            }
+        }
     }
 
     /// Evaluate an expression

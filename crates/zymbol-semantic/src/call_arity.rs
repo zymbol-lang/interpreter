@@ -170,6 +170,79 @@ pub fn arities_of_module_file(path: &Path) -> Option<ModuleArities> {
     arities_of_file(path, 0)
 }
 
+// ── Output-parameter slots, per alias ────────────────────────────────────────
+//
+// The call-site mark `m::f(x<~)` is checked against the callee's signature the
+// same way a bare `f(x<~)` is (REFERENCE.md L36). This is a table beside the
+// arity one rather than a wider value type: `ModuleArities` is read in six
+// places across three crates and mirrored in `zymbol.js`, and none of them has
+// anything to say about output parameters.
+
+/// Which parameter slots of each exported function are `<~` outputs.
+pub type ModuleOutSlots = HashMap<String, Vec<usize>>;
+
+/// The same, per import alias.
+pub type AliasOutSlots = HashMap<String, ModuleOutSlots>;
+
+/// Build the output-slot table for every import in `program`.
+///
+/// A `std/` module contributes nothing: the standard library declares no output
+/// parameter. A module that cannot be resolved or parsed is simply absent, and
+/// its calls go unchecked rather than guessed at — the same rule the arity check
+/// already follows.
+pub fn module_out_slots(imports: &[ImportStmt], base_dir: &Path) -> AliasOutSlots {
+    let mut table = AliasOutSlots::new();
+    for import in imports {
+        if import.path.is_stdlib() {
+            continue;
+        }
+        let Some(path) = import.path.resolve_from(base_dir) else { continue };
+        let Some(slots) = out_slots_of_file(&path) else { continue };
+        if !slots.is_empty() {
+            table.insert(import.alias.clone(), slots);
+        }
+    }
+    table
+}
+
+/// The exported functions of one module file that take output parameters.
+fn out_slots_of_file(path: &Path) -> Option<ModuleOutSlots> {
+    let source = std::fs::read_to_string(path).ok()?;
+    let program = parse(&source)?;
+    let module_decl = program.module_decl.as_ref()?;
+    let export_block = module_decl.export_block.as_ref()?;
+
+    // Slots of everything declared in the module, exported or not — the export
+    // block names them, and a rename points back to the original.
+    let declared: HashMap<&str, Vec<usize>> = program
+        .statements
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Statement::FunctionDecl(decl) => {
+                let slots: Vec<usize> = decl.parameters.iter().enumerate()
+                    .filter(|(_, p)| matches!(p.kind, zymbol_ast::ParameterKind::Output))
+                    .map(|(i, _)| i)
+                    .collect();
+                Some((decl.name.as_str(), slots))
+            }
+            _ => None,
+        })
+        .collect();
+
+    let mut out = ModuleOutSlots::new();
+    for item in &export_block.items {
+        if let ExportItem::Own { name, rename, .. } = item {
+            if let Some(slots) = declared.get(name.as_str()) {
+                if !slots.is_empty() {
+                    let public = rename.clone().unwrap_or_else(|| name.clone());
+                    out.insert(public, slots.clone());
+                }
+            }
+        }
+    }
+    Some(out)
+}
+
 /// The file an import resolves to, or `None` for `std/` and unresolvable paths.
 pub fn resolved_import_path(import: &ImportStmt, base_dir: &Path) -> Option<PathBuf> {
     import.path.resolve_from(base_dir)

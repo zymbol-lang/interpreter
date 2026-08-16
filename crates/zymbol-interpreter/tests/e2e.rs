@@ -1732,7 +1732,7 @@ fn test_sleep_zero() {
 #[test]
 fn test_terminal_size_type() {
     // >>? returns a (rows, cols) tuple; both must be positive integers
-    let src = "[H, W] = >>?\n>> (H > 0) ¶\n>> (W > 0) ¶\n";
+    let src = "(H, W) = >>?\n>> (H > 0) ¶\n>> (W > 0) ¶\n";
     assert_eq!(run(src), "#1\n#1\n");
 }
 
@@ -1754,7 +1754,7 @@ fn test_clear_screen_vm() {
 #[test]
 fn test_terminal_size_vm() {
     // Both pipelines should return the same (rows, cols) tuple
-    let src = "[H, W] = >>?\n>> H ¶\n>> W ¶\n";
+    let src = "(H, W) = >>?\n>> H ¶\n>> W ¶\n";
     assert_eq!(run_vm(src).expect("VM terminal size"), run(src));
 }
 
