@@ -176,6 +176,10 @@ impl DiagnosticPipeline {
                     &program.imports,
                     base_dir,
                 ));
+                type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+                    &program.imports,
+                    base_dir,
+                ));
             }
             let type_diagnostics = type_checker.check(program);
 

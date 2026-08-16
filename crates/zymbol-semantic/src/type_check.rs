@@ -290,6 +290,9 @@ pub struct TypeChecker {
     /// unless a caller supplies it with [`Self::set_module_arities`] — a
     /// qualified call is left unchecked rather than guessed at.
     module_arities: crate::call_arity::AliasArities,
+    /// Which slots of each module function are `<~` outputs, so `m::f(x<~)` is
+    /// checked like `f(x<~)`. Supplied beside the arities; empty means unchecked.
+    module_out_slots: crate::call_arity::AliasOutSlots,
     /// Nesting depth of @ loop bodies currently being analyzed.
     /// Used to suppress "redundant °" warnings inside loops, where every iteration
     /// re-executes the same statement (°x is needed on every iteration, not just the first).
@@ -298,9 +301,95 @@ pub struct TypeChecker {
     /// the "direction decided at runtime" warning stays quiet on the loops that
     /// are guarded correctly. Keys come from [`Self::expr_key`].
     guarded_bounds: Vec<String>,
+    /// Which parameter slots of each function are `<~` outputs. A `<~` slot
+    /// promises the change travels back to the caller, so the argument has to be
+    /// something that can be written to (REFERENCE.md L34).
+    output_slots: HashMap<String, Vec<usize>>,
 }
 
 impl TypeChecker {
+    /// Note which of `func`'s parameter slots are `<~` outputs, so that calls to
+    /// it can be checked (REFERENCE.md L34). Functions with no output parameter
+    /// — nearly all of them — record nothing.
+    fn record_output_slots(&mut self, func: &zymbol_ast::FunctionDecl) {
+        let slots: Vec<usize> = func.parameters.iter().enumerate()
+            .filter(|(_, p)| matches!(p.kind, zymbol_ast::ParameterKind::Output))
+            .map(|(i, _)| i)
+            .collect();
+        if !slots.is_empty() {
+            self.output_slots.insert(func.name.clone(), slots);
+        }
+    }
+
+    /// A `<~` parameter sends its change back to the caller's variable. When the
+    /// argument is not a name there is nothing to send it back to, and the write
+    /// is silently lost — so the call is rejected instead (REFERENCE.md L34).
+    fn check_output_arguments(&mut self, name: &str, arguments: &[Expr]) {
+        let Some(slots) = self.output_slots.get(name).cloned() else { return };
+        for i in slots {
+            let Some(arg) = arguments.get(i) else { continue };
+            if matches!(arg.unwrap_group(), Expr::Identifier(_)) {
+                continue;
+            }
+            self.errors.push(
+                Diagnostic::error(format!(
+                    "argument {} of '{}' is an output parameter '<~' and needs a variable, \
+                     not an expression",
+                    i + 1, name
+                ))
+                .with_span(arg.span())
+                .with_help(
+                    "'<~' writes the change back into the caller's variable; there is \
+                     nowhere to write an expression back to — assign it to a variable first"
+                )
+            );
+        }
+    }
+
+    /// The call site must spell `<~` on exactly the arguments the callee declares
+    /// as outputs (REFERENCE.md L36). The mark is redundant with the signature on
+    /// purpose: it states the same contract where the consequence lands, so a
+    /// reader can see which arguments come back changed without opening the
+    /// function. Being required is what keeps it from drifting out of date.
+    ///
+    /// `slots` is `None` when the callee's signature is not known — a qualified
+    /// call into a module that could not be resolved — and the call is then left
+    /// unchecked rather than guessed at.
+    fn check_out_marks(
+        &mut self,
+        name: &str,
+        slots: Option<&[usize]>,
+        call: &zymbol_ast::FunctionCallExpr,
+    ) {
+        let Some(slots) = slots else { return };
+        for (i, arg) in call.arguments.iter().enumerate() {
+            let declared = slots.contains(&i);
+            let marked = call.out_args.contains(&i);
+            if declared == marked {
+                continue;
+            }
+            let d = if declared {
+                Diagnostic::error(format!(
+                    "argument {} of '{}' is an output parameter and must be marked '<~' \
+                     at the call site",
+                    i + 1, name
+                ))
+                .with_help(
+                    "write the argument as 'name<~' — the mark says the value comes back \
+                     changed, so a reader does not have to open the function to find out"
+                )
+            } else {
+                Diagnostic::error(format!(
+                    "argument {} of '{}' is marked '<~' but the function does not declare \
+                     it as an output parameter",
+                    i + 1, name
+                ))
+                .with_help("drop the '<~', or declare the parameter as an output in the signature")
+            };
+            self.errors.push(d.with_span(arg.span()));
+        }
+    }
+
     /// Create a new type checker
     pub fn new() -> Self {
         Self {
@@ -309,8 +398,10 @@ impl TypeChecker {
             warnings: Vec::new(),
             module_aliases: HashSet::new(),
             module_arities: crate::call_arity::AliasArities::new(),
+            module_out_slots: crate::call_arity::AliasOutSlots::new(),
             loop_depth: 0,
             guarded_bounds: Vec::new(),
+            output_slots: HashMap::new(),
         }
     }
 
@@ -370,6 +461,12 @@ impl TypeChecker {
     /// Build the table with [`module_arities`](crate::module_arities) to read
     /// modules from disk, or assemble it from editor buffers — the LSP checks
     /// what is on screen, which may not be what is saved.
+    /// Supply the output-parameter slots behind each import alias, enabling the
+    /// call-site mark check on `m::f(x<~)` (REFERENCE.md L36).
+    pub fn set_module_out_slots(&mut self, slots: crate::call_arity::AliasOutSlots) {
+        self.module_out_slots = slots;
+    }
+
     pub fn set_module_arities(&mut self, arities: crate::call_arity::AliasArities) {
         self.module_arities = arities;
     }
@@ -391,6 +488,7 @@ impl TypeChecker {
                 let param_types: Vec<ZymbolType> = func.parameters.iter()
                     .map(|_| ZymbolType::Any)
                     .collect();
+                self.record_output_slots(func);
                 self.env.define_function(&func.name, param_types, ZymbolType::Any);
             }
         }
@@ -431,6 +529,7 @@ impl TypeChecker {
                 let param_types: Vec<ZymbolType> = func.parameters.iter()
                     .map(|_| ZymbolType::Any)
                     .collect();
+                self.record_output_slots(func);
                 self.env.define_function(&func.name, param_types, ZymbolType::Any);
             }
         }
@@ -1728,6 +1827,13 @@ impl TypeChecker {
 
                 // Try to get function signature
                 if let Expr::Identifier(ident) = call.callable.unwrap_group() {
+                    self.check_output_arguments(&ident.name, &call.arguments);
+                    let slots = self.output_slots.get(&ident.name).cloned();
+                    // A locally declared function always has a known signature:
+                    // no slots recorded means it declares no output parameter.
+                    if self.env.lookup_function(&ident.name).is_some() {
+                        self.check_out_marks(&ident.name, Some(slots.as_deref().unwrap_or(&[])), call);
+                    }
                     if let Some((param_types, ret_type)) = self.env.lookup_function(&ident.name).cloned() {
                         // Validate argument count
                         if arg_types.len() != param_types.len() {
@@ -1783,6 +1889,21 @@ impl TypeChecker {
                 if let Expr::MemberAccess(access) = call.callable.unwrap_group() {
                     if access.is_module_access {
                         if let Expr::Identifier(alias) = access.object.unwrap_group() {
+                            // The call-site output mark, checked against the module's
+                            // signature exactly as a bare call's is. A module whose
+                            // arity is unknown is also unchecked here — the signature
+                            // is not known, so neither is the right answer.
+                            if self.module_arities.get(&alias.name)
+                                .is_some_and(|m| m.contains_key(&access.field))
+                            {
+                                let slots = self.module_out_slots
+                                    .get(&alias.name)
+                                    .and_then(|m| m.get(&access.field))
+                                    .cloned()
+                                    .unwrap_or_default();
+                                let name = format!("{}::{}", alias.name, access.field);
+                                self.check_out_marks(&name, Some(&slots), call);
+                            }
                             if let Some(expected) = self
                                 .module_arities
                                 .get(&alias.name)

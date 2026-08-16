@@ -22,7 +22,8 @@ mod loop_context;
 mod type_check;
 
 pub use call_arity::{
-    arities_of_module_file, module_arities, resolved_import_path, AliasArities, ModuleArities,
+    arities_of_module_file, module_arities, module_out_slots, resolved_import_path, AliasArities,
+    AliasOutSlots, ModuleArities, ModuleOutSlots,
 };
 pub use modules::{SemanticError, ExportedItem, ExportTable, ModuleAnalyzer};
 pub use stdlib_access::check_stdlib_access;

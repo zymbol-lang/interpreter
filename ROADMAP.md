@@ -152,6 +152,53 @@ They are documented in the manual as known limitations.
 - **Match multi-value arms**: extend parser to accept `val1, val2 => expr` arm syntax
 - ~~Match identifier binding~~ — dismissed 2026-06-12 (see gaps table above)
 
+#### Multiple returns and out-parameters — decided 2026-08-15
+
+Five decisions taken together, after an audit found that the two mechanisms for getting
+several values out of a function were both fully implemented, both documented only in part,
+and consequently almost unused: `(a, b) = f()` appears in 2 corpus files against 9 using
+`[a, b] = f()`, and **no `.zy` in the workspace declares a `<~` parameter at all**. The
+documentation tables were corrected on the same date (REFERENCE.md §21, IMPLEMENTATION.md
+feature table, SYMBOLS.md §16); the five items below are behavioral and still open.
+
+| # | Decision | Tracked as | Status |
+|---|----------|------------|--------|
+| 1 | The destructuring pattern is **typed**: `[ … ]` takes an array, `( … )` takes a tuple | REFERENCE.md L32 | ✅ four engines |
+| 2 | The last name **absorbs the remainder** (`##_` when nothing remains); destructuring never fails on length | REFERENCE.md L33 | ✅ four engines |
+| 3 | A non-assignable expression in a `<~` slot is a **semantic error** | REFERENCE.md L34 | ⚠ `zytw` `zyvm` `zyjs`; `zyml` open |
+| 4 | `zyml` implements `~`, and the corpus starts covering both marks | REFERENCE.md L35 | ✅ |
+| 5 | `<~` becomes **visible at the call site**: `f(x<~)`, required, qualified calls included | REFERENCE.md L36 | ⚠ `zytw` `zyvm` `zyjs`; `zyml` open |
+
+**Decision 2 — absorption, chosen over strict arity.** The first form of this decision was
+the opposite (an unequal length is an error, a tail discarded only via `*rest`). It was
+replaced on the same day: destructuring never fails on length, and the last name of the
+pattern takes whatever is left over, or `##_` when nothing is. The cost is accepted rather
+than unnoticed — the last binding's type is then decided at run time by the length of the
+value, so a function that grows a return value keeps its old call sites compiling while that
+variable turns from scalar to collection. L33 records the trade in full; the Clippy-style
+lint below, not the type checker, is where it gets flagged.
+
+**Decision 2's two sub-questions were closed on the same day.** A single-name pattern
+absorbs like any other (`[solo] = [1,2,3]` now binds the whole array — the rule has no
+special cases), and **no new discard syntax was added**: absorption already puts every value
+under some name, and dropping one is the programmer's own act, spelled `_something` or
+`\name`. `_` keeps exactly the meaning it had.
+
+**Decision 5 — `<~` at the call site.** Settled on 2026-08-15 and implemented the same day:
+the mark is **required** wherever the callee declares an output parameter, and marking an
+argument the callee does not declare is an error too. Optional would have meant absent from
+exactly the call sites nobody revisited; requiring it is what keeps the annotation and the
+signature from drifting apart. The rule is the same for `m::f(x<~)`. See REFERENCE.md L36
+for what it cost — a table beside `module_arities`, and nine corpus files that were
+modifying their caller's variables without saying so.
+
+**Migration is a linter's job, not a rewrite.** `serpiente/` receives tuple returns with
+`[ … ]` 35 times and would read better with out-parameters
+(`tick_comida(comio, serpiente, AN, AL, semilla<~, comida<~, fruta<~)` replaces a
+three-value tuple plus its destructuring). Those call sites are **not** to be migrated by
+hand ahead of the language work: decisions 1 and 2 make the wrong ones fail to compile, and
+the planned Clippy-style lint pass is what proposes the out-parameter form where it applies.
+
 #### ~~Fix static analyzer false positives~~ Resolved
 
 Verified 2026-06-12: variables used only inside string interpolation or BashExec

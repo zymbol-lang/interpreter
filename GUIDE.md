@@ -1564,7 +1564,11 @@ factorial(n) {
 
 ### Output Parameters `<~`
 
-Output params are passed by reference — the function can modify them:
+Output params are passed by reference — the function can modify them. The mark is written
+**both in the signature and at the call site**, and is required in both: `f(x)` would not
+tell the reader that `x` comes back changed (REFERENCE.md L36).
+
+
 
 ```zymbol
 // Output param only (modifies caller's variable)
@@ -1573,7 +1577,7 @@ increment(counter<~) {
 }
 
 x = 0
-increment(x)
+increment(x<~)
 >> x ¶    // → 1
 
 // Output param + return value (simultaneous)
@@ -1583,7 +1587,7 @@ get_and_increment(val<~) {
 }
 
 n = 5
-result = get_and_increment(n)
+result = get_and_increment(n<~)
 >> "result=" result " n=" n ¶    // → result=6 n=6
 
 // Multiple output params
@@ -1595,9 +1599,45 @@ swap(a<~, b<~) {
 
 x = 10
 y = 20
-swap(x, y)
+swap(x<~, y<~)
 >> "x=" x " y=" y ¶    // → x=20 y=10
 ```
+
+#### Choosing between `<~` parameters and a tuple return
+
+Both get several values out of a function. They say different things:
+
+```zymbol
+// tuple return — the function computes new values
+step(seed) { <~ (seed * 7 % 11, seed + 1) }
+(value, next) = step(3)
+>> "value=" value " next=" next ¶     // → value=10 next=4
+
+// output params — the function updates values the caller already holds
+advance(seed<~, count<~) {
+    seed  = seed * 7 % 11
+    count = count + 1
+}
+seed  = 3
+count = 0
+advance(seed<~, count<~)
+>> "seed=" seed " count=" count ¶     // → seed=10 count=1
+```
+
+Use the **tuple return** when the values are results the caller did not have before, and
+the call reads as an expression. Use **`<~` parameters** when the caller already owns the
+variables and the call is an instruction to update them — the reader then sees the updated
+names at the call site instead of a destructuring pattern that has to be matched up
+positionally.
+
+> **`~` is not `<~`.** `p~` is a *working copy*: the body may reassign it freely and the
+> caller's argument is untouched. The single `<` mark is what makes the change travel back.
+> Both marks work in all four engines as of v0.0.9 (REFERENCE.md L35).
+>
+> **A `<~` slot needs a variable, not an expression.** `g(2 + 3)` where `g` declares `g(b<~)`
+> is a semantic error: `<~` writes back into the caller's variable, and an expression gives
+> it nowhere to write. Assign it to a variable first. (The OCaml engine still accepts it —
+> REFERENCE.md L34.)
 
 ### Function Scope
 
@@ -2175,15 +2215,44 @@ Unpack arrays or tuples into individual variables in a single statement.
 ```zymbol
 arr = [10, 20, 30, 40, 50]
 
-// Basic — bind by position
-[a, b, c] = arr          // a=10  b=20  c=30
+// Basic — the last name absorbs whatever is left over
+[a, b, c] = arr          // a=10  b=20  c=[30, 40, 50]
 
-// Rest collector — *name captures remaining elements
+// Exactly as many names as values — nothing is left to absorb
+[d, e, f] = [1, 2, 3]    // d=1  e=2  f=3
+
+// Fewer values than names — the last one gets ##_ (Unit)
+[g, h, i] = [1, 2]       // g=1  h=2  i=##_
+
+// Rest collector — *name is always a collection, even of one element or none
 [first, *rest] = arr     // first=10  rest=[20, 30, 40, 50]
 
 // Discard with _
 [x, _, z] = [1, 2, 3]   // x=1  z=3
 ```
+
+**The last name of a pattern absorbs the remainder** — `##_` when nothing remains, the bare
+value when exactly one does, and a collection when several do. Destructuring therefore never
+fails on a length mismatch: with two names there is always somewhere to put the rest. The
+absorbed remainder keeps the shape of the container it came from, so an array yields an
+array and a tuple yields a tuple.
+
+The rule has no exceptions, including the one-name case: `[solo] = arr` binds the whole
+array, saying what `x = arr` already said.
+
+Use `*rest` when the binding must be a collection whatever the length — that is the
+difference the mark buys:
+
+```zymbol
+[a, b, c]  = [1, 2, 3]   // c = 3     — a bare value
+[a, b, *c] = [1, 2, 3]   // c = [3]   — a collection of one
+[a, b, *c] = [1, 2]      // c = []    — empty, not ##_
+```
+
+> **Nothing is discarded implicitly.** Every value ends up under some name; dropping one is
+> your own act — call it `_something` (the analyzer already treats a `_` prefix as
+> deliberately unused) or end its life with `\name`. In the last position `_` absorbs the
+> remainder without binding it.
 
 ### Positional Tuple Destructuring
 
@@ -2192,8 +2261,30 @@ point = (100, 200)
 (px, py) = point         // px=100  py=200
 
 triple = (1, 2, 3)
-(h, *tail) = triple      // h=1  tail=[2, 3]
+(h, *tail) = triple      // h=1  tail=(2, 3) — a tuple, like its container
 ```
+
+**This is the form that receives a multi-value return.** A function returns several values
+as a tuple, and the tuple is taken apart by the tuple pattern — the receiver mirrors the
+sender:
+
+```zymbol
+divmod(a, b) { <~ (a / b, a % b) }
+
+(q, r) = divmod(17, 5)
+>> "q=" q " r=" r ¶      // → q=3 r=2
+```
+
+Note that the tuple is built by the **comma**, not by the parentheses: `<~ (7)` returns the
+Int `7` grouped, not a one-element tuple.
+
+> **The pattern is typed**: `[ … ]` takes an array and `( … )` takes a tuple. Receiving one
+> with the other's pattern is an error — `[q, r] = divmod(…)` above would fail, because
+> `divmod` returns a tuple. Write the shape the function returns. See REFERENCE.md L32.
+
+For a function whose values are better named than positioned, or that updates values the
+caller already holds, see [Output Parameters `<~`](#output-parameters-) in §9 — that is the
+other way to get several values out, and it needs no destructuring at all.
 
 ### Named Tuple Destructuring
 
@@ -4040,7 +4131,7 @@ bsort(arr<~) {
 }
 
 data = [64, 34, 25, 12, 22, 11, 90]
-bsort(data)
+bsort(data<~)
 >> data ¶    // → [11, 12, 22, 25, 34, 64, 90]
 ```
 

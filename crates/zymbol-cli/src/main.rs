@@ -358,7 +358,10 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
     if program.module_decl.is_some() {
         let module_name = program.module_decl.as_ref().map(|m| m.name.as_str()).unwrap_or("?");
         eprintln!("warning: '{}' is a module file and cannot be run directly", display_name);
-        eprintln!("  = help: module '{}' is meant to be imported with <# ./{} <= alias", module_name, path.file_stem().and_then(|s| s.to_str()).unwrap_or("module"));
+        // `=>`, not the pre-v0.0.6 `<=`: that spelling is rejected by the parser
+        // (`test_import_le_syntax_rejected`), so the help was handing out an
+        // import line that cannot parse. The browser engine already said `=>`.
+        eprintln!("  = help: module '{}' is meant to be imported with <# ./{} => alias", module_name, path.file_stem().and_then(|s| s.to_str()).unwrap_or("module"));
         return Ok(1);
     }
 
@@ -414,6 +417,10 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
     // `func(...)`. Without it `run` would reject one and execute the other.
     let mut type_checker = TypeChecker::new();
     type_checker.set_module_arities(zymbol_semantic::module_arities(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
+    type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
@@ -576,6 +583,10 @@ fn build_file(path: PathBuf, output: Option<PathBuf>, release: bool) -> Result<(
     // Run type checking, with the same arity table `run` and `check` use.
     let mut type_checker = TypeChecker::new();
     type_checker.set_module_arities(zymbol_semantic::module_arities(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
+    type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
@@ -1020,6 +1031,10 @@ fn check_source(
     // happened to make the call.
     let mut type_checker = TypeChecker::new();
     type_checker.set_module_arities(zymbol_semantic::module_arities(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
+    type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));

@@ -90,7 +90,7 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 | BashExec / Execute script | ✅ | ✅ | |
 | CLI args capture `><` | ✅ | ✅ | VM support added (`LoadCliArgs`) |
 | Negative array indices | ✅ | ✅ | `arr[-1]` normalized in both modes (v0.0.2) |
-| Destructuring assignment | ✅ | ✅ | `[a, b] = arr`, `(name: n) = t` (v0.0.2) |
+| Destructuring assignment | ✅ | ✅ | Three patterns, all v0.0.2: `[a, b] = arr` (array), `(a, b) = t` (positional tuple), `(name: n) = t` (named tuple) |
 | Named functions as first-class values | ✅ | ✅ | Fixed v0.0.4 audit: identifier → `MakeFunc`; fns with outer-scope captures remain TW-only |
 | `$!` error check | ✅ | ✅ | Fixed v0.0.4 audit: `Value::Error` variant + real `IsError` check |
 | `$!!` error propagation | ✅ | ✅ | Fixed v0.0.4 audit: `Expr::ErrorPropagate` compiled (IsError + branch + Return) |

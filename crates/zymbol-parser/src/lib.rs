@@ -436,9 +436,15 @@ impl Parser {
                     if self.peek().span.start.line != expr.span().end.line { break; }
                     self.advance();
                     let mut arguments = Vec::new();
+                    let mut out_args: Vec<usize> = Vec::new();
                     if !matches!(self.peek().kind, TokenKind::RParen) {
                         loop {
                             arguments.push(self.parse_expr()?);
+                            // `x<~` — the call-site output mark (REFERENCE.md L36)
+                            if matches!(self.peek().kind, TokenKind::Return) {
+                                self.advance();
+                                out_args.push(arguments.len() - 1);
+                            }
                             if matches!(self.peek().kind, TokenKind::Comma) {
                                 self.advance();
                             } else {
@@ -453,8 +459,8 @@ impl Parser {
                     }
                     self.advance();
                     let span = expr.span().to(&rparen.span);
-                    expr = Expr::FunctionCall(FunctionCallExpr::new(
-                        Box::new(expr), arguments, span,
+                    expr = Expr::FunctionCall(FunctionCallExpr::new_with_out_args(
+                        Box::new(expr), arguments, out_args, span,
                     ));
                 }
                 _ => break,
@@ -532,10 +538,16 @@ impl Parser {
 
                     // Parse arguments
                     let mut arguments = Vec::new();
+                    let mut out_args: Vec<usize> = Vec::new();
 
                     if !matches!(self.peek().kind, TokenKind::RParen) {
                         loop {
                             arguments.push(self.parse_expr_juxt()?);
+                            // `x<~` — the call-site output mark (REFERENCE.md L36)
+                            if matches!(self.peek().kind, TokenKind::Return) {
+                                self.advance();
+                                out_args.push(arguments.len() - 1);
+                            }
 
                             if matches!(self.peek().kind, TokenKind::Comma) {
                                 self.advance(); // consume ,
@@ -556,9 +568,10 @@ impl Parser {
                     self.advance(); // consume )
 
                     let span = expr.span().to(&rparen_token.span);
-                    expr = Expr::FunctionCall(FunctionCallExpr::new(
+                    expr = Expr::FunctionCall(FunctionCallExpr::new_with_out_args(
                         Box::new(expr),
                         arguments,
+                        out_args,
                         span,
                     ));
                 }
@@ -927,9 +940,15 @@ impl Parser {
 
                     // Parse arguments
                     let mut arguments = Vec::new();
+                    let mut out_args: Vec<usize> = Vec::new();
                     if !matches!(self.peek().kind, TokenKind::RParen) {
                         loop {
                             arguments.push(self.parse_expr_juxt()?);
+                            // `x<~` — the call-site output mark (REFERENCE.md L36)
+                            if matches!(self.peek().kind, TokenKind::Return) {
+                                self.advance();
+                                out_args.push(arguments.len() - 1);
+                            }
 
                             if matches!(self.peek().kind, TokenKind::Comma) {
                                 self.advance(); // consume ,
@@ -959,9 +978,10 @@ impl Parser {
                         span_start.to(&self.tokens[self.current - 2].span), // Up to func_name
                     ));
 
-                    Ok(Expr::FunctionCall(FunctionCallExpr::new(
+                    Ok(Expr::FunctionCall(FunctionCallExpr::new_with_out_args(
                         Box::new(member_access),
                         arguments,
+                        out_args,
                         span,
                     )))
                 }
@@ -975,10 +995,16 @@ impl Parser {
 
                     // Parse arguments
                     let mut arguments = Vec::new();
+                    let mut out_args: Vec<usize> = Vec::new();
 
                     if !matches!(self.peek().kind, TokenKind::RParen) {
                         loop {
                             arguments.push(self.parse_expr_juxt()?);
+                            // `x<~` — the call-site output mark (REFERENCE.md L36)
+                            if matches!(self.peek().kind, TokenKind::Return) {
+                                self.advance();
+                                out_args.push(arguments.len() - 1);
+                            }
 
                             if matches!(self.peek().kind, TokenKind::Comma) {
                                 self.advance(); // consume ,
@@ -1003,9 +1029,10 @@ impl Parser {
                     // Create identifier as callable
                     let callable = Expr::Identifier(IdentifierExpr::new(name, span_start));
 
-                    Ok(Expr::FunctionCall(FunctionCallExpr::new(
+                    Ok(Expr::FunctionCall(FunctionCallExpr::new_with_out_args(
                         Box::new(callable),
                         arguments,
+                        out_args,
                         span,
                     )))
                 } else {

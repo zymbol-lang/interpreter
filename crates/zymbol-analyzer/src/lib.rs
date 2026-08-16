@@ -163,6 +163,10 @@ impl Analyzer {
                         &program.imports,
                         base_dir,
                     ));
+                    type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+                        &program.imports,
+                        base_dir,
+                    ));
                 }
                 var_analyzer
                     .semantic_errors()

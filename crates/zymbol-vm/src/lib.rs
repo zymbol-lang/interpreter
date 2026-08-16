@@ -255,6 +255,29 @@ impl Value {
         }
     }
 
+    /// The type name spelled as the tree-walker's `value_type_name` spells it.
+    ///
+    /// Destructuring errors are compared verbatim across engines by `zyq consensus`, so the
+    /// two must agree to the character. `zymbol_type_name` above uses a different spelling
+    /// for the same types (`##[]` against `##]`, `##()` against `##)`) and cannot be reused
+    /// here.
+    fn tw_type_name(&self) -> &'static str {
+        match self {
+            Value::Int(_)           => "###",
+            Value::Float(_)         => "##.",
+            Value::String(_)        => "##\"",
+            Value::Char(_)          => "##'",
+            Value::Bool(_)          => "##?",
+            Value::Array(_)         => "##]",
+            Value::Tuple(_)         => "##)",
+            Value::NamedTuple(_)    => "##)",
+            Value::Function(_, _)   => "##()",
+            Value::Closure(_, _, _) => "##->",
+            Value::Unit             => "##_",
+            Value::Error(_)         => "##!",
+        }
+    }
+
     /// Equality for pattern matching and $? operator
     fn equals(&self, other: &Value) -> bool {
         match (self, other) {
@@ -2470,6 +2493,46 @@ impl<W: Write> VM<W> {
                     self.reg_set(dst, Value::Array(Rc::new(items)));
                 }
 
+                // ── Destructuring ────────────────────────────────────────────
+                &Instruction::DestructureCheck(src, wants_tuple) => {
+                    let v = self.reg_get(src);
+                    let ok = if wants_tuple {
+                        matches!(v, Value::Tuple(_))
+                    } else {
+                        matches!(v, Value::Array(_))
+                    };
+                    if !ok {
+                        let got = v.tw_type_name();
+                        raise!(VmError::Generic(if wants_tuple {
+                            format!("tuple pattern '( … )' requires a tuple, got {got}")
+                        } else {
+                            format!("array pattern '[ … ]' requires an array, got {got}")
+                        }));
+                    }
+                }
+                &Instruction::DestructureAbsorb(dst, src, from) => {
+                    let value = match self.reg_get(src) {
+                        Value::Array(arr) => {
+                            let rest = &arr.as_ref()[(from as usize - 1).min(arr.len())..];
+                            match rest.len() {
+                                0 => Value::Unit,
+                                1 => rest[0].clone(),
+                                _ => Value::Array(Rc::new(rest.to_vec())),
+                            }
+                        }
+                        Value::Tuple(tup) => {
+                            let rest = &tup.as_ref()[(from as usize - 1).min(tup.len())..];
+                            match rest.len() {
+                                0 => Value::Unit,
+                                1 => rest[0].clone(),
+                                _ => Value::Tuple(Rc::new(rest.to_vec())),
+                            }
+                        }
+                        _ => Value::Unit,
+                    };
+                    self.reg_set(dst, value);
+                }
+
                 // ── Tuples ───────────────────────────────────────────────────
                 Instruction::MakeTuple(dst, regs) => {
                     let dst = *dst;
@@ -3543,6 +3606,46 @@ impl<W: Write> VM<W> {
                 &Instruction::Or(dst, a, b) => {
                     let res = r!(a).is_truthy() || r!(b).is_truthy();
                     w!(dst, Value::Bool(res));
+                }
+
+                // ── Destructuring ────────────────────────────────────────────
+                &Instruction::DestructureCheck(src, wants_tuple) => {
+                    let v = &self.value_stack[base + src as usize];
+                    let ok = if wants_tuple {
+                        matches!(v, Value::Tuple(_))
+                    } else {
+                        matches!(v, Value::Array(_))
+                    };
+                    if !ok {
+                        let got = v.tw_type_name();
+                        return Err(VmError::Generic(if wants_tuple {
+                            format!("tuple pattern '( … )' requires a tuple, got {got}")
+                        } else {
+                            format!("array pattern '[ … ]' requires an array, got {got}")
+                        }));
+                    }
+                }
+                &Instruction::DestructureAbsorb(dst, src, from) => {
+                    let value = match &self.value_stack[base + src as usize] {
+                        Value::Array(arr) => {
+                            let rest = &arr.as_ref()[(from as usize - 1).min(arr.len())..];
+                            match rest.len() {
+                                0 => Value::Unit,
+                                1 => rest[0].clone(),
+                                _ => Value::Array(Rc::new(rest.to_vec())),
+                            }
+                        }
+                        Value::Tuple(tup) => {
+                            let rest = &tup.as_ref()[(from as usize - 1).min(tup.len())..];
+                            match rest.len() {
+                                0 => Value::Unit,
+                                1 => rest[0].clone(),
+                                _ => Value::Tuple(Rc::new(rest.to_vec())),
+                            }
+                        }
+                        _ => Value::Unit,
+                    };
+                    w!(dst, value);
                 }
 
                 // ── Tuples ───────────────────────────────────────────────────

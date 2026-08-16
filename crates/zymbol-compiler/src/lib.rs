@@ -1193,27 +1193,54 @@ impl Compiler {
     ) -> Result<(), CompileError> {
         let r_rhs = self.compile_expr(&d.value, ctx)?;
         match &d.pattern {
+            // The pattern is typed (L32) and its last item absorbs the remainder (L33).
+            // Both rules match `Interpreter::bind_positional` in the tree-walker; the two
+            // are compared verbatim by `zyq consensus`.
             DestructurePattern::Array(items) | DestructurePattern::Positional(items) => {
+                let wants_tuple = matches!(&d.pattern, DestructurePattern::Positional(_));
+                ctx.emit(Instruction::DestructureCheck(r_rhs, wants_tuple));
+
+                let rest_at = items.iter().position(|i| matches!(i, DestructureItem::Rest(_)));
+                // Items after a `*rest` are counted from the end, exactly as the
+                // tree-walker's `trailing` does: their position from the front is not
+                // known until run time.
+                let trailing = rest_at.map_or(0, |p| items.len() - p - 1);
                 let mut idx: i64 = 0;
-                for item in items {
+                for (pos, item) in items.iter().enumerate() {
+                    let absorbs = rest_at.is_none() && pos + 1 == items.len();
+                    let after_rest = rest_at.is_some_and(|p| pos > p);
                     match item {
                         DestructureItem::Bind(name) => {
-                            let r_idx = ctx.alloc_temp()?;
-                            ctx.emit(Instruction::LoadInt(r_idx, idx + 1));
                             let dst = if let Ok(existing) = ctx.get_reg(name) {
                                 existing
                             } else {
                                 ctx.alloc_reg(name)?
                             };
-                            ctx.emit(Instruction::ArrayGet(dst, r_rhs, r_idx));
+                            if absorbs {
+                                ctx.emit(Instruction::DestructureAbsorb(dst, r_rhs, (idx + 1) as u32));
+                            } else {
+                                let r_idx = ctx.alloc_temp()?;
+                                // After the rest, index from the end: -trailing … -1
+                                let n = if after_rest {
+                                    -((items.len() - pos) as i64)
+                                } else {
+                                    idx + 1
+                                };
+                                ctx.emit(Instruction::LoadInt(r_idx, n));
+                                ctx.emit(Instruction::ArrayGet(dst, r_rhs, r_idx));
+                            }
                             idx += 1;
                         }
                         DestructureItem::Rest(name) => {
                             let r_lo = ctx.alloc_temp()?;
                             ctx.emit(Instruction::LoadInt(r_lo, idx + 1));
                             let r_hi = ctx.alloc_temp()?;
-                            // Use array length as hi (slice to end)
+                            // ArraySlice takes hi in r_lo + 1: the length, less whatever
+                            // the trailing items are entitled to.
                             ctx.emit(Instruction::ArrayLen(r_hi, r_rhs));
+                            if trailing > 0 {
+                                ctx.emit(Instruction::SubIntImm(r_hi, r_hi, trailing as i32));
+                            }
                             let dst = if let Ok(existing) = ctx.get_reg(name) {
                                 existing
                             } else {
@@ -4353,6 +4380,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::ArrayInsert(d, i, v) => { upd(*d); upd(*i); upd(*v); }
             Instruction::ArrayLen(d, a) | Instruction::ArrayContains(d, a, _)
             | Instruction::ArraySlice(d, a, _) => { upd(*d); upd(*a); }
+            Instruction::DestructureCheck(s, _) => upd(*s),
+            Instruction::DestructureAbsorb(d, s, _) => { upd(*d); upd(*s); }
             Instruction::ArrayMap(d, a, f) | Instruction::ArrayFilter(d, a, f) => { upd(*d); upd(*a); upd(*f); }
             Instruction::ArrayReduce(d, a, i, f) => { upd(*d); upd(*a); upd(*i); upd(*f); }
             Instruction::ArraySort(d, a, _, f) => { upd(*d); upd(*a); if *f != u16::MAX { upd(*f); } }

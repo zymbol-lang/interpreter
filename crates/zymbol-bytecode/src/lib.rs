@@ -171,6 +171,16 @@ pub enum Instruction {
     /// ascending: true=$^+, false=$^-; func_reg=u8::MAX means natural order
     ArraySort(Reg, Reg, bool, Reg),
 
+    // ── Destructuring ────────────────────────────────────────────────────
+    /// Check a destructuring pattern's shape against the value it received:
+    /// `true` demands a tuple `( … )`, `false` an array `[ … ]`. Errors on a
+    /// mismatch instead of reinterpreting the value (REFERENCE.md L32).
+    DestructureCheck(Reg, bool),
+    /// dst = the remainder of src from 1-based index `idx`: Unit when nothing is
+    /// left, the bare element when exactly one is, and a collection when several
+    /// are — keeping src's own shape (REFERENCE.md L33).
+    DestructureAbsorb(Reg, Reg, u32),
+
     // ── Tuples ───────────────────────────────────────────────────────────
     /// Build a positional tuple: dst = (regs[0], regs[1], ...)
     MakeTuple(Reg, Vec<Reg>),

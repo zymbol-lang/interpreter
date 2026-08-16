@@ -876,6 +876,16 @@ level.
 | `[ … ]` | array literal |
 | `( … )` | tuple, named tuple, grouping, arguments |
 
+A tuple is built by the **comma**, not by the parentheses: `(7)` is the Int `7` grouped, not
+a one-element tuple. The same pairing governs how a value is taken apart — a `[ … ]` pattern
+receives an array, a `( … )` pattern receives a tuple, and the shape a function returns is
+the shape that receives it:
+
+```zymbol
+f() { <~ (1, 2, 3) }
+(a, b, c) = f()      // the receiver mirrors the sender
+```
+
 The base prefixes are opaque *and* they are English abbreviations (he**x**, **b**inary,
 **o**ctal, **d**ecimal). §15 records them.
 
