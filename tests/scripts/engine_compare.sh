@@ -3,18 +3,22 @@
 #
 # A wrapper over ZyQuality (../zyquality), the project's point of record for
 # testing.  This script was written because vm_compare.sh sees two engines,
-# web/tests/test_runner.mjs sees two, zyml/tests/parity.sh sees two, and no
-# suite ever put all four answers side by side.  zyq is that idea grown up:
-# equivalence classes over N engines, with the exclusion rules and the
-# redactions declared next to the corpus instead of once per runner.
+# web/tests/test_runner.mjs sees two, zyml/tests/parity.sh saw two, and no suite
+# ever put all the answers side by side.  zyq is that idea grown up: equivalence
+# classes over N engines, with the exclusion rules and the redactions declared
+# next to the corpus instead of once per runner.
 #
 #   bash tests/scripts/engine_compare.sh                    # the whole corpus
 #   bash tests/scripts/engine_compare.sh loops/labels       # a subtree
 #   bash tests/scripts/engine_compare.sh FILE.zy            # one file, in detail
 #   bash tests/scripts/engine_compare.sh DIR --engines tw,vm
 #
-# Engine names are the ids in zyquality/engines.toml: zytw, zyvm, zyjs, zyml.
-# The old short forms (tw, vm, js, zyml) are still accepted and translated.
+# Engine names are the ids in zyquality/engines.toml: zytw, zyvm, zyjs.
+# The old short forms (tw, vm, js) are still accepted and translated.
+#
+# `ml` used to translate to `zyml`, the OCaml engine.  It was retired on
+# 2026-08-17 and is no longer in engines.toml; the alias is gone with it rather
+# than left to expand into an engine id that no longer resolves.
 #
 # `--matrix` is now `-v`: the matrix was a way of seeing agreement as well as
 # divergence, which is what verbose does.
@@ -37,7 +41,6 @@ translate_engines() {
             tw)   out+=(zytw) ;;
             vm)   out+=(zyvm) ;;
             js)   out+=(zyjs) ;;
-            ml)   out+=(zyml) ;;
             *)    out+=("$e") ;;
         esac
     done

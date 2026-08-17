@@ -1330,9 +1330,10 @@ enunciaba la gramática, y la implementación tampoco coincidía con ella. Enunc
 comprobarla son actos distintos, y solo el segundo se sostiene.
 
 La herramienta que lo hizo detectable es `tests/scripts/engine_compare.sh`, que ejecuta un
-programa a través del tree-walker, la VM de registros, `zymbol.js` y zyml al mismo tiempo. Toda
-suite existente compara un *par* de motores, y un par puede a lo sumo contener dos de cuatro
-respuestas en desacuerdo.
+programa a través de todos los motores a la vez: el tree-walker, la VM de registros,
+`zymbol.js`, y zyml hasta que se retiró el 2026-08-17. Toda suite existente compara un *par*
+de motores, y un par puede a lo sumo contener dos de cuatro respuestas en desacuerdo; tener
+una cuarta respuesta es lo que hizo detectables estos defectos.
 
 #### 20.2 Defectos en este documento, hallados de la misma manera
 

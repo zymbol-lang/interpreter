@@ -14,8 +14,9 @@ zymbol run --vm f.zy   # register VM             zymbol fmt f.zy --write
 zymbol run app.zyp     # .zyp bundle (--vm default)   zymbol repl
 ```
 
-Four engines must agree: `zytw` (Rust tree-walker), `zyvm` (Rust register VM),
-`zyml` (OCaml), `zyjs` (browser, `web/src/zymbol/zymbol.js`).
+Three engines must agree: `zytw` (Rust tree-walker), `zyvm` (Rust register VM),
+`zyjs` (browser, `web/src/zymbol/zymbol.js`). A fourth, `zyml` (OCaml), was
+retired on 2026-08-17; it appears in this document only as history.
 
 ---
 
