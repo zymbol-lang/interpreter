@@ -144,7 +144,8 @@ zymbol run --help
 - **VM**: production, ~1.1–1.5× faster than Python for most workloads
 
 Both modes produce **identical output** on the full parity suite
-(`bash tests/scripts/vm_compare.sh`; 551/551 as of v0.0.9).
+(`zyq consensus --engines zytw,zyvm` in `zyquality/`, which `tests/scripts/vm_compare.sh`
+wraps; 597 of 599 corpus files agree and 0 diverge as of v0.0.9).
 
 **Diagnostic tiers.** The same analyzers back every entry point, with one
 deliberate difference in coverage:
@@ -464,7 +465,8 @@ t = (e#?)[1]
 >> a b c ¶                          // identifiers directly
 >> add(2, 3) ¶                       // function call in any position
 >> "sum=" add(1, 2) " double=" double(5) ¶   // mixed
->> (arr$#) ¶                        // postfix operators require parentheses in >>
+>> arr$# ¶                          // postfix operators need no parentheses (since v0.0.7)
+>> (arr$#) ¶                        // parentheses are still valid, and group when needed
 ```
 
 Output uses **juxtaposition** (Haskell-style) — values separated by spaces are printed in sequence. `+` is for numeric addition only; using it with strings is a type error:
@@ -568,16 +570,18 @@ Some TUI primitives are tree-walker only; see the per-primitive notes below for 
 
 ### Query Terminal Size — `>>?`
 
-Returns a `[rows, cols]` array with the current terminal dimensions:
+Returns a `(rows, cols)` **positional tuple** with the current terminal dimensions.
+Receive it with a tuple pattern — since v0.0.9 the bracket shape is checked, so
+`[H, W] = >>?` is a runtime error (REFERENCE.md L32):
 
 ```zymbol
-[H, W] = >>?
+(H, W) = >>?
 >> "Terminal: " H "x" W ¶     // e.g. Terminal: 40x120
 ```
 
 With no terminal attached — output redirected to a file, running inside a
 container, running in CI — there is nothing to measure, and `>>?` returns the
-conventional `[24, 80]` instead of failing. A program that lays itself out with
+conventional `(24, 80)` instead of failing. A program that lays itself out with
 `>>?` therefore stays runnable when piped; it just lays itself out for 80
 columns. Both engines behave identically here.
 
@@ -856,8 +860,9 @@ json = "\{\"key\":\"value\"\}"
 >> json ¶                                // → {"key":"value"}
 ```
 
-> **⚠ False warning**: `unused variable 'name'` may appear even when `name` is used
-> inside an interpolated string. This is a static analyzer bug — ignore it.
+> A name used **only** inside an interpolated string counts as used: the analyzer reads
+> interpolations, so `name = "World"` followed by `"Hello {name}!"` warns about nothing.
+> (Earlier versions emitted a false `unused variable` here — REFERENCE.md L9.)
 
 ### Hot Definition Operator `°` (U+00B0)
 
@@ -1739,11 +1744,14 @@ r = nums$> (x -> double(x))         // ✅ wrapper also valid
 ### Anti-patterns
 
 ```zymbol
-// Postfix operators in >> require parentheses
->> arr$# ¶               // ❌ "DollarHash unexpected"
->> (arr$#) ¶             // ✅
-n = arr$#                // ✅ intermediate variable
+// A named function in a HOF slot takes no parentheses: '(' opens a lambda
+r = nums$> (double)      // ❌ "expected '->' in lambda expression"
+r = nums$> double        // ✅ direct reference
+r = nums$> (x -> double(x))   // ✅ explicit lambda
 ```
+
+> Postfix operators in `>>` were an anti-pattern until v0.0.7 and are not one now:
+> `>> arr$# ¶` is correct, and parentheses remain valid for grouping (REFERENCE.md L1).
 
 ### Named Function vs Lambda — When to Use Each
 
@@ -2003,7 +2011,7 @@ In 0-based systems, the same loop would require `0..(arr$#-1)` or similar.
 arr = [10, 20, 30, 40, 50]
 len = arr$#
 >> len ¶        // → 5
->> (arr$#) ¶    // → 5  (parentheses required in >>)
+>> arr$# ¶      // → 5  (no parentheses needed in >>)
 ```
 
 ### Append, Insert, Remove, Contains, Slice
@@ -2822,7 +2830,11 @@ evens = nums$| (x -> x % 2 == 0)
 sum = nums$< (0, (acc, x) -> acc + x)
 >> sum ¶    // → 55
 
-// Chaining via intermediate variables (direct chaining is not supported)
+// Direct chaining — each operator applies to the result of the previous one
+chained = nums$| (x -> x > 3)$> (x -> x * x)
+>> chained ¶    // → [16, 25, 36, 49, 64, 81, 100]
+
+// Intermediate variables do the same thing and read better in long pipelines
 step1 = nums$| (x -> x > 3)
 step2 = step1$> (x -> x * x)
 >> step2 ¶    // → [16, 25, 36, 49, 64, 81, 100]
@@ -3743,10 +3755,17 @@ z = "n=" n         // juxtaposition (BinaryOp::Concat)
 w = "n=" $++ n     // $++
 >> w ¶             // → n=४२
 
->>~ (1, 1) > n     // positioned output
-
 >> [1, 2, 3] ¶     // → [१, २, ३]  (elements, not brackets)
 >> (7, 8) ¶        // → (७, ८)
+```
+
+Positioned output converts too. It is shown on its own because `>>~` writes a cursor
+escape ahead of the value, so its output is not comparable line by line:
+
+```zymbol
+#०९#
+n = 42
+>>~ (1, 1) > n     // prints ४२ at row 1, col 1
 ```
 
 The mode reaches *inside* collections: a number does not stop being a number by
@@ -3799,6 +3818,12 @@ s = "{n}"          // ← "१२०"
 
 >> #|s| ¶          // → १२०  (parsed as the Int 120, rendered in the mode)
 >> #.0|s| ¶        // → १२०  (round: same normalization)
+```
+
+Typed input normalises the same way — this one waits for a person, so it is shown on
+its own rather than run as an example:
+
+```zymbol
 <<### edad         // accepts ४२ and 42 alike
 ```
 

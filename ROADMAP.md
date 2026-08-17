@@ -2,7 +2,8 @@
 
 > Current status: **v0.0.9 (in development)** — the Windows branch that was going to be
 > a hotfix, plus the argument-count rule (REFERENCE.md L28). See `WINDOWS_V009.md`.
-> Validation: 551/551 VM-parity, 951 unit tests. **0.0.8 is the latest published
+> Validation (measured 2026-08-17): 597/599 TW/VM consensus with 0 divergences,
+> 975 unit tests. **0.0.8 is the latest published
 > release**; every figure on this page is measured on the `v0.0.9` branch.
 >
 > Previously: **v0.0.8 (released 2026-08-02)** — a *debt* release, scoped by evidence rather
@@ -96,8 +97,8 @@
 
 | Suite | Status |
 |-------|--------|
-| Unit + integration (`cargo test`) | ✅ 951 passed, 0 failed |
-| VM parity check (`vm_compare.sh`) | ✅ 551/551 PASS, 0 skipped |
+| Unit + integration (`cargo test`) | ✅ 975 passed, 0 failed |
+| TW/VM consensus (`zyq consensus --engines zytw,zyvm`) | ✅ 597 of 599 agree, 0 diverge (2 excluded by `corpus.toml`) |
 | Golden files (`expected_compare.sh`) | ⚠️ 530/532 — two stale hand-written `.expected` fixtures, not interpreter regressions (see `IMPL_V008.md` § E.1) |
 | Formatter property suite (`fmt_property.sh`) | ✅ 602 PASS / 48 SKIP / 0 FAIL over 650 files, no regressions vs. baseline (the pattern-escaping bug, § E.2, is fixed) |
 | JS mirror parity (`web/tests/test_runner.mjs`) | ⚠️ 516/521 + 208/210 on the example pool — seven gaps in `web/src/zymbol/zymbol.js` (see `IMPL_V008.md` § E.3) |
@@ -116,7 +117,7 @@ They are documented in the manual as known limitations.
 |-----|-------------|------------|
 | **Match multi-value arms** | `1, 2 => "low"` (one arm, several values) not parsed — `[NI02]` | Or-patterns: `1 \|\| 2 => "low"` (v0.0.8), which also work for non-literal patterns; or list containment `[1, 2] => "low"` (v0.0.4) |
 | **Match identifier binding** | `pattern as name` — `[NI03]` — **dismissed 2026-06-12** | Extract the value before the match (the idiom) |
-| ~~**`$!!` from lambdas**~~ | **Resolved** — verified 2026-06-12: `$!!` propagates from lambdas identically to named functions (`tests/lambdas/error_propagate_lambda.zy`) | — |
+| ~~**`$!!` from lambdas**~~ | **Resolved** — verified 2026-06-12: `$!!` propagates from lambdas identically to named functions (`zyquality/corpus/lambdas/error_propagate_lambda.zy`) | — |
 | **`do-while ~>`** | Post-condition loop `[NI01]` — **dismissed 2026-06-12** | Infinite loop with `@!` break at end (the idiom) |
 | **Dict / map literal** | `[NI05]` — no `key: value` collection literal | Use named tuples, or arrays of `(k, v)` pairs |
 
@@ -128,7 +129,7 @@ They are documented in the manual as known limitations.
 > **Resolved since this table was first written** (verified against `crates/` + `tests/`):
 > module constant access `alias.CONST` (see REFERENCE.md L4), named functions as
 > first-class values (`f = myFunc`) and as HOF references (`arr$> myFunc`)
-> (`tests/analysis/p0a_named_fn_firstclass.zy`, GAP-Z009), and `><` CLI-args capture
+> (`zyquality/corpus/analysis/p0a_named_fn_firstclass.zy`, GAP-Z009), and `><` CLI-args capture
 > in VM mode (`LoadCliArgs`). Match guard patterns `_?` were **removed**, not added
 > (EBNF `[D03]`/`[R05]`).
 
@@ -202,7 +203,7 @@ the planned Clippy-style lint pass is what proposes the out-parameter form where
 #### ~~Fix static analyzer false positives~~ Resolved
 
 Verified 2026-06-12: variables used only inside string interpolation or BashExec
-no longer warn (regression test: `tests/errors/semantic/no_false_positive_unused.zy`).
+no longer warn (regression test: `zyquality/corpus/errors/semantic/no_false_positive_unused.zy`).
 - Distinguish string split `/` from arithmetic `/` in type checker
 - Model `arr[i] = val` as a mutation rather than a type mismatch
 
@@ -213,9 +214,9 @@ worse than no line: it sends projects to the tree-walker by default, which is ex
 zy-GO did before HLZ-008 was found.
 
 - ~~**Module system in VM**~~ — HLZ-008, HLZ-009, HLZ-010, MM-10 and MM-11 closed the known
-  divergences. `tests/scripts/vm_compare.sh` reports **544/544** files byte-identical under
-  both engines, `tests/modules_scope/` included. Exactly one test carries `@vm-skip`
-  (`tests/gaps/gap_key_input_type_check.zy`) and it is skipped by design — it is a
+  divergences. The TW/VM consensus reports **597 of 599** corpus files byte-identical under
+  both engines (2026-08-17), `zyquality/corpus/modules_scope/` included. Exactly one test carries `@vm-skip`
+  (`zyquality/corpus/gaps/gap_key_input_type_check.zy`) and it is skipped by design — it is a
   `zymbol check` test that never executes.
 - ~~**Format expressions in VM**~~ — already done, and that line's syntax predated v0.0.6.
   Verified on the v0.0.8 binary, TW == VM for `#,|x|` → `12,345.678`, `#^|x|` →

@@ -601,7 +601,7 @@ after `>>` selects *what aspect* of the surface is acted on.
 |---|---|---|
 | `>>` | print (juxtaposition, no implicit newline) | OUT |
 | `>>!` | clear the screen | OUT + FRC — force the surface to a known state |
-| `>>?` | query terminal size (`[H, W] = >>?`) | OUT + IRR — ask the surface a question |
+| `>>?` | query terminal size (`(H, W) = >>?`) | OUT + IRR — ask the surface a question |
 | `>>~ (…) > items` | positioned / styled output | OUT + MOD — modify position and style |
 | `>>\| { }` | TUI block: alternate screen + raw mode | OUT + GATE — a controlled region |
 
@@ -708,7 +708,7 @@ r = f(x)
 >> "r=" r " x=" x ¶            // → r=6 x=5   — the caller's x is untouched
 
 y = 5
-g(y)
+g(y<~)                         // the mark is required at the call site too (v0.0.9, L36)
 >> "y=" y ¶                    // → y=6       — the change travelled back
 ```
 
