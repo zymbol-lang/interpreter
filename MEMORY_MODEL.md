@@ -165,8 +165,8 @@ three states cross the call boundary when the design says nothing should:
 > **v0.0.8**: both leaks are fixed — `loop_scope_depths` (MM-1) and
 > `dead_variables` (MM-3) are saved and restored per call frame in
 > `SavedCallState`. Both examples above now print the VM result in both engines.
-> Regression tests: `tests/bugs/bug_mm1_hot_def_fn_scope.zy`,
-> `tests/bugs/bug_mm3_destroy_frame_local.zy`.
+> Regression tests: `zyquality/corpus/bugs/bug_mm1_hot_def_fn_scope.zy`,
+> `zyquality/corpus/bugs/bug_mm3_destroy_frame_local.zy`.
 
 ---
 
@@ -222,7 +222,7 @@ an error. The GUIDE does not specify constant *scope*.
 > lambda frames. Block-local constants remain lexically scoped and are still
 > forwarded one frame at a time — now re-marked (`mark_const`) so chains work.
 > A parameter may shadow a forwarded constant (`unmark_const` at binding).
-> Regression test: `tests/bugs/bug_mm9_const_call_depth.zy`.
+> Regression test: `zyquality/corpus/bugs/bug_mm9_const_call_depth.zy`.
 
 ```zymbol
 PI := 3.14
@@ -310,7 +310,7 @@ c::bump_via_helper()
 > with the keys just written back. Parameters named like module variables are
 > excluded from write-back. The rule of thumb below is obsolete — helpers may
 > mutate state freely. Regression test:
-> `tests/bugs/bug_mm2_module_state_helper.zy`.
+> `zyquality/corpus/bugs/bug_mm2_module_state_helper.zy`.
 
 **Rule of thumb until fixed** *(obsolete since v0.0.8, kept for history)*: mutate
 module state only in the function that is called directly through `alias::`;
@@ -346,7 +346,7 @@ directly and catches the reassignment. Run `check` on every module file in CI.
 > text. The example above fails at import time. As a runtime backstop, module
 > constant names (`LoadedModule.const_names`) are re-marked `const` when
 > injected into module frames, so reassignment errors even if analysis is
-> bypassed. Regression test: `tests/bugs/bug_mm4_module_const_guard.zy`.
+> bypassed. Regression test: `zyquality/corpus/bugs/bug_mm4_module_const_guard.zy`.
 
 ---
 

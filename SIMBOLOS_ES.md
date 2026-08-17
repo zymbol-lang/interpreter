@@ -614,7 +614,7 @@ después de `>>` selecciona *qué aspecto* de la superficie se ve afectado.
 |---|---|---|
 | `>>` | imprimir (yuxtaposición, sin salto de línea implícito) | OUT |
 | `>>!` | limpiar la pantalla | OUT + FRZ — forzar la superficie a un estado conocido |
-| `>>?` | consultar el tamaño de la terminal (`[H, W] = >>?`) | OUT + IRR — preguntarle algo a la superficie |
+| `>>?` | consultar el tamaño de la terminal (`(H, W) = >>?`) | OUT + IRR — preguntarle algo a la superficie |
 | `>>~ (…) > elementos` | salida posicionada / con estilo | OUT + MOD — modificar posición y estilo |
 | `>>\| { }` | bloque TUI: pantalla alterna + modo raw | OUT + GATE — una región controlada |
 
@@ -722,7 +722,7 @@ r = f(x)
 >> "r=" r " x=" x ¶            // → r=6 x=5   — la x del llamador queda intacta
 
 y = 5
-g(y)
+g(y<~)                         // la marca también es obligatoria en la llamada (v0.0.9, L36)
 >> "y=" y ¶                    // → y=6       — el cambio viajó de vuelta
 ```
 

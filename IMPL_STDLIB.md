@@ -819,7 +819,7 @@ if import.path.components.first().map(|s| s == "std").unwrap_or(false)
 
 ## Step 9 — Test cases
 
-New test files in `interpreter/tests/stdlib/`:
+New test files in `zyquality/corpus/stdlib/`:
 
 | File | Tests |
 |------|-------|

@@ -501,12 +501,13 @@ embeds the interpreter, `package` produces a `.zyp` archive of source that still
 | Native stdlib (`std/*`, incl. `std/term`) | ✓ | ✓ |
 | Auto-free (destruction at last use) | ✓ | ✓ (see note) |
 
-Measured on v0.0.9: `tests/scripts/vm_compare.sh` reports 551/551 files with byte-identical
-output under both engines. The three rows that used to read "partial"/"—" (module system,
+Measured 2026-08-17 on v0.0.9: `zyq consensus --engines zytw,zyvm` (what
+`tests/scripts/vm_compare.sh` now delegates to) reports **597 of 599 corpus files agreeing
+and 0 diverging**, the other 2 excluded for a reason declared in `zyquality/corpus.toml`. The three rows that used to read "partial"/"—" (module system,
 CLI args, format expressions) were verified and are at parity; the last known divergences
 were closed by HLZ-008/009/010 and MM-10/MM-11.
 
-Exactly one test carries `@vm-skip` — `tests/gaps/gap_key_input_type_check.zy` — and it is
+Exactly one test carries `@vm-skip` — `zyquality/corpus/gaps/gap_key_input_type_check.zy` — and it is
 skipped by design: it is a `zymbol check` test that never executes.
 
 **Auto-free note**: both engines implement it, but the VM's peak-memory win is currently

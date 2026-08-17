@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.0.8-informational?style=flat-square"/>
+  <img src="https://img.shields.io/badge/version-v0.0.9-informational?style=flat-square"/>
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square"/>
   <img src="https://img.shields.io/badge/status-active-brightgreen?style=flat-square"/>
@@ -218,7 +218,7 @@ PI := 3.14159       // Const (immutable — reassignment is a runtime error)
 >> "Hello" ¶                    // with newline
 >> "Score: " score ¶            // string + variable (juxtaposition)
 >> "a=" a " b=" b ¶             // multiple values
->> (arr$#) ¶                    // postfix ops need parentheses in >>
+>> arr$# ¶                      // postfix ops need no parentheses in >> (since v0.0.7)
 >> "Sum: " (x + y) ¶            // parenthesized expression
 ```
 
@@ -604,8 +604,11 @@ Or ask the whole question at once, from the zyquality checkout:
 ./zyq suite     # selftest + audit + reject + goldens + consensus, one verdict
 ```
 
-Current status (v0.0.9 branch — 0.0.8 is the latest published release),
-re-measured 2026-08-12 against the unified corpus of **585 files**:
+Current status (v0.0.9 branch — 0.0.8 is the latest published release).
+**Re-measured 2026-08-17**: the corpus is now **599 files**; `cargo test` runs **975 tests,
+0 failed**; `zyq consensus --engines zytw,zyvm` reports **597 agreeing, 0 diverging**, the
+other 2 excluded by `corpus.toml`. The figures below are the 2026-08-12 measurement against
+the 585-file corpus, kept because the surrounding text explains what each number covers:
 
 - **969 `#[test]` functions** across the 19 crates via `cargo test`.
 - Tree-walker vs VM: **583 agree, 0 diverge**, 2 files excused for every engine
@@ -621,7 +624,7 @@ re-measured 2026-08-12 against the unified corpus of **585 files**:
   golden says the same thing everywhere.
 - Formatter properties: **627 PASS / 0 FAIL** over 682 files, 55 skipped.
 - Benchmarks: **14/14 within tolerance** of the recorded baseline via
-  `bench_gate.sh`. The programs moved to `../zyquality/bench/` — they print
+  `tests/scripts/bench_gate.sh`. The programs moved to `../zyquality/bench/` — they print
   elapsed wall time, so they are not tests and never were; the only suite that
   had been running them was the browser parity runner, where all of them
   failed.
@@ -1113,6 +1116,7 @@ interpreter/
 
 ## Documentation
 
+- [LLM.md](./LLM.md) — The whole language on one page, written for a model to read in one pass: the rules that break code silently, then every construct in compressed form
 - [GUIDE.md](./GUIDE.md) — Full language guide with verified examples (all constructs)
 - [REFERENCE.md](./REFERENCE.md) — Known limitations, error taxonomy, complete symbol table
 - [IMPLEMENTATION.md](./IMPLEMENTATION.md) — EBNF grammar, coverage table, TW/VM internals

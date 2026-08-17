@@ -16,7 +16,7 @@ Zymbol has two execution strategies that produce identical output for all suppor
 | Mode | Invocation | Description |
 |------|-----------|-------------|
 | Tree-walker | `zymbol run file.zy` | Walks the AST directly. Default. Supports all language features. |
-| Register VM | `zymbol run --vm file.zy` | Compiles to bytecode first, then executes. ~4× faster. Module system support reached parity with the tree-walker in v0.0.8 (see REFERENCE.md L23 and `tests/scripts/vm_compare.sh`, 551/551). Argument-count mismatches are rejected by semantic analysis before either engine starts; the compiler's own call-site check is a backstop for API callers that skip that analysis (REFERENCE.md L28). Default engine for `.zyp` packages. |
+| Register VM | `zymbol run --vm file.zy` | Compiles to bytecode first, then executes. Faster by a factor that depends on the workload — 1.4–6× on the microbenchmarks, 42–46× on an alpha-beta search; quote the workload, never a single number (ARCHITECTURE.md). Module system support reached parity with the tree-walker in v0.0.8 (see REFERENCE.md L23 and `tests/scripts/vm_compare.sh` → `zyq consensus --engines zytw,zyvm`, 597/599 agreeing with 0 divergences as of v0.0.9). Argument-count mismatches are rejected by semantic analysis before either engine starts; the compiler's own call-site check is a backstop for API callers that skip that analysis (REFERENCE.md L28). Default engine for `.zyp` packages. |
 
 All examples in GUIDE.md are verified against both modes. A feature listed as "TW only" in the coverage table below is not yet supported by the VM.
 
@@ -33,7 +33,7 @@ A. [Normative EBNF Grammar](#appendix-a-normative-ebnf-grammar)
 
 The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) and reproduced in full in [Appendix A](#appendix-a-normative-ebnf-grammar). The table below summarizes implementation status per feature.
 
-> **What "parity" means**: every parity test exercises features marked ✅|✅ and produces identical output in both tree-walker and VM. Tests for features marked ⚠ (VM unsupported) or `—` (VM not applicable) run against the tree-walker only and are not part of the parity count. The authoritative count comes from `bash tests/scripts/vm_compare.sh` (551/551 as of v0.0.8, including `tests/arity/`).
+> **What "parity" means**: every parity test exercises features marked ✅|✅ and produces identical output in both tree-walker and VM. Tests for features marked ⚠ (VM unsupported) or `—` (VM not applicable) run against the tree-walker only and are not part of the parity count. The authoritative count comes from `zyq consensus --engines zytw,zyvm` in `zyquality/` (`bash tests/scripts/vm_compare.sh` is now a wrapper over it): 599 corpus files, **597 agreeing and 0 diverging** as of v0.0.9, the remaining 2 excluded for a declared reason in `corpus.toml`. The corpus itself lives in `zyquality/corpus/`, not in `interpreter/tests/`.
 >
 > **Legend**: ✅ fully supported · ⚠ tree-walker only · ❌ not implemented · `—` not applicable to this mode
 
@@ -91,7 +91,7 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 | CLI args capture `><` | ✅ | ✅ | VM support added (`LoadCliArgs`) |
 | Negative array indices | ✅ | ✅ | `arr[-1]` normalized in both modes (v0.0.2) |
 | Destructuring assignment | ✅ | ✅ | Three patterns, all v0.0.2: `[a, b] = arr` (array), `(a, b) = t` (positional tuple), `(name: n) = t` (named tuple) |
-| Named functions as first-class values | ✅ | ✅ | Fixed v0.0.4 audit: identifier → `MakeFunc`; fns with outer-scope captures remain TW-only |
+| Named functions as first-class values | ✅ | ✅ | Fixed v0.0.4 audit: identifier → `MakeFunc`. Outer-scope captures work in the VM too (verified 2026-08-17: `base = 10` / `adder(n) { <~ n + base }` / `f = adder` gives 15 in both engines, and stays 15 after `base = 99`) |
 | `$!` error check | ✅ | ✅ | Fixed v0.0.4 audit: `Value::Error` variant + real `IsError` check |
 | `$!!` error propagation | ✅ | ✅ | Fixed v0.0.4 audit: `Expr::ErrorPropagate` compiled (IsError + branch + Return) |
 | Times loop `@ N { }` | ✅ | ✅ | Int condition evaluated once → repeat exactly N times |

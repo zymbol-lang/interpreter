@@ -124,7 +124,7 @@ arr = [10, 20, 30, 40, 50]
 The analyzer now tracks variable usage inside string interpolation (`"{x}"`) and
 inside BashExec commands (both `<\ "ls {x}" \>` interpolation and juxtaposed
 items `<\ "cat " x \>`) — no false "unused variable" warnings (verified 2026-06-12).
-Regression test: `tests/errors/semantic/no_false_positive_unused.zy` (`zymbol check`
+Regression test: `zyquality/corpus/errors/semantic/no_false_positive_unused.zy` (`zymbol check`
 must stay clean).
 
 ### ~~L10 — Collection operators cannot be chained~~ Fixed in v0.0.4
@@ -173,7 +173,7 @@ r = handler(err_value)    // r is the error — "ok" never evaluates
 ? r$! { >> "handle it" ¶ }
 ```
 
-Regression test: `tests/lambdas/error_propagate_lambda.zy` (TW == VM parity).
+Regression test: `zyquality/corpus/lambdas/error_propagate_lambda.zy` (TW == VM parity).
 
 ### L11 — Arrays must be homogeneous *(by design)*
 
@@ -222,7 +222,7 @@ limit := 100
 ```
 
 Destructuring into regular variables (including re-binding existing `=` variables)
-is unchanged. Regression test: `tests/errors/semantic/const_destructure_overwrite.zy`.
+is unchanged. Regression test: `zyquality/corpus/errors/semantic/const_destructure_overwrite.zy`.
 
 ### ~~L16 — `!?` corrupts outer scope when a function fails~~ Fixed in v0.0.7
 
@@ -252,7 +252,7 @@ adder(n) { <~ n + base }   // 'base' is not visible in the isolated fn scope
 ```
 
 Works for errors raised at any call depth (typed catches included). Regression test:
-`tests/bugs/bug_l16_try_scope_restore.zy` (TW == VM parity).
+`zyquality/corpus/bugs/bug_l16_try_scope_restore.zy` (TW == VM parity).
 
 ### L17 — `std/db` not available in prebuilt Linux/macOS binaries *(by design)*
 
@@ -276,7 +276,7 @@ saved across the call boundary), so a hot definition inside the function indexed
 scope that no longer existed — index-out-of-bounds panic in the tree-walker. Now the
 anchors are frame-local: inside a function with no `@` of its own, `x°`/`°x` anchor to
 the function scope (MEMORY_MODEL.md MM-1). Regression test:
-`tests/bugs/bug_mm1_hot_def_fn_scope.zy` (TW == VM).
+`zyquality/corpus/bugs/bug_mm1_hot_def_fn_scope.zy` (TW == VM).
 
 ### ~~L19 — Module-state mutations by intra-module calls were lost~~ Fixed in v0.0.8
 
@@ -285,13 +285,13 @@ back; a private helper's mutation was discarded, and the outer frame then clobbe
 the store with its stale copy. Write-back now runs for every module frame and is
 diff-based (only changed keys persist), same-module nested calls see the caller's live
 values, and the caller's copies are refreshed on return (MEMORY_MODEL.md MM-2).
-Regression test: `tests/bugs/bug_mm2_module_state_helper.zy` (TW == VM).
+Regression test: `zyquality/corpus/bugs/bug_mm2_module_state_helper.zy` (TW == VM).
 
 ### ~~L20 — `\ x` inside a function poisoned the caller's same-named variable~~ Fixed in v0.0.8
 
 The destroyed-names set was global, so `\ x` inside a callee made the caller's own `x`
 raise a false `use after destruction`. The set is now saved/restored per call frame
-(MEMORY_MODEL.md MM-3). Regression test: `tests/bugs/bug_mm3_destroy_frame_local.zy`.
+(MEMORY_MODEL.md MM-3). Regression test: `zyquality/corpus/bugs/bug_mm3_destroy_frame_local.zy`.
 
 ### ~~L21 — Modules loaded at runtime skipped semantic analysis~~ Fixed in v0.0.8
 
@@ -300,7 +300,7 @@ module functions (e.g. reassigning a `:=` module constant) executed silently, le
 split-brain state (`alias.CONST` stale vs. mutated function view). Both engines now run
 the full semantic gate (VariableAnalyzer + TypeChecker) at import time, and module
 constants are re-marked `const` inside module frames as a runtime backstop
-(MEMORY_MODEL.md MM-4). Regression test: `tests/bugs/bug_mm4_module_const_guard.zy`.
+(MEMORY_MODEL.md MM-4). Regression test: `zyquality/corpus/bugs/bug_mm4_module_const_guard.zy`.
 
 ### ~~L22 — Root-scope constants vanished at call depth ≥ 2~~ Fixed in v0.0.8
 
@@ -309,7 +309,7 @@ function chain (including recursion and lambda frames) lost them at depth ≥ 2 
 though semantic analysis accepted the program. Top-level `:=` constants now live in a
 global table not swapped by call frames: visible and immutable at any depth; module
 frames still never see script constants (MEMORY_MODEL.md MM-9). Regression test:
-`tests/bugs/bug_mm9_const_call_depth.zy` (TW == VM).
+`zyquality/corpus/bugs/bug_mm9_const_call_depth.zy` (TW == VM).
 
 ### ~~L23 — VM: each import alias gets its own module state copy~~ Fixed in v0.0.8
 
@@ -319,7 +319,7 @@ diamond dependencies (two modules importing the same third module) held divergen
 copies. The compiler now caches compiled modules by canonical file path: any later
 import — another alias or another importer — binds to the same chunks and global
 slots, matching the tree-walker's per-path state identity (GUIDE §17,
-MEMORY_MODEL.md MM-10). Regression test: `tests/bugs/bug_mm10_alias_shared_state.zy`
+MEMORY_MODEL.md MM-10). Regression test: `zyquality/corpus/bugs/bug_mm10_alias_shared_state.zy`
 (two aliases + diamond, TW == VM).
 
 ### ~~L24 — Leftover loop-iterator value differs between engines~~ Fixed in v0.0.8
@@ -330,7 +330,7 @@ The VM's range loops now advance a hidden counter and publish it to the named
 iterator at the top of each iteration — leftover value and body-write semantics
 (writes to the iterator inside the body cannot alter the iteration) match the
 tree-walker exactly (MEMORY_MODEL.md MM-11). Regression test:
-`tests/bugs/bug_mm11_iterator_leftover.zy` (7 variants, TW == VM).
+`zyquality/corpus/bugs/bug_mm11_iterator_leftover.zy` (7 variants, TW == VM).
 
 ### ~~L25 — Juxtaposition did not work inside call arguments~~ Fixed in v0.0.8
 
@@ -342,7 +342,7 @@ still separates, and a following `(` never continues the chain in those
 positions (it is ambiguous with a lambda, a tuple and a grouped expression) —
 GUIDE §13. Found while building zy-GO, whose side panel spent six variables on
 nothing else. Regression test:
-`tests/strings/30_juxtaposition_delimited.zy` (TW == VM).
+`zyquality/corpus/strings/30_juxtaposition_delimited.zy` (TW == VM).
 
 ### ~~L26 — Variable used only as a range bound warned "unused"~~ Fixed in v0.0.8
 
@@ -402,7 +402,7 @@ the Rust tooling accepted. Both programs it caught had the bad call on a rarely 
 branch — ZethyCLI's "Ollama not reachable" arm, and an extra argument in ZyAudit's
 `测试/test_析答.zy` that was broken under the tree-walker and worked by accident under the
 VM. Rejecting before execution also puts all three engines on the same behaviour, zyml
-included; only the message wording still differs. Regression: `tests/arity/` (7 cases,
+included; only the message wording still differs. Regression: `zyquality/corpus/arity/` (7 cases,
 TW == VM), `crates/zymbol-semantic/src/call_arity.rs` (6 cases).
 
 ### ~~L29 — `@!`, `@>` and labelled jumps were never checked, and the four engines disagreed~~ Fixed in v0.0.9
@@ -418,7 +418,7 @@ actually enclosed it. Every engine improvised, and no two improvised alike. For
 | `zymbol.js` | printed `i=1`, unwound every loop and ended the program. Silent. |
 | zyml | printed `i=1`, then a runtime error naming the label |
 
-`zymbol check` reported nothing in any of the seven cases now in `tests/loops/labels/`,
+`zymbol check` reported nothing in any of the seven cases now in `zyquality/corpus/loops/labels/`,
 which is why none of the pairwise parity suites could see it: `vm_compare.sh` compares the
 tree-walker against the VM, `web/tests/test_runner.mjs` the CLI against the browser
 engine, `zyml/tests/parity.sh` the CLI against zyml. Every pair was covered; the four
@@ -440,7 +440,7 @@ described it as loop-only by inheritance from the `@` prefix; no engine has ever
 that, and none should — a pause does not act on the loop's control flow. The documentation
 was corrected rather than the code.
 
-Regression: `tests/loops/labels/` (9 cases, all four engines agree),
+Regression: `zyquality/corpus/loops/labels/` (9 cases, all four engines agree),
 `crates/zymbol-semantic/src/loop_context.rs` (12 cases). Zero false positives across the
 1080 `.zy` files in the workspace.
 
@@ -458,7 +458,7 @@ The EBNF was widened to `"(" , [ identifier , { "," , identifier } ] , ")"`.
 
 Found by `tests/scripts/engine_compare.sh` while checking something else — no pairwise
 suite covers it, because the two engines that agreed with each other were on opposite sides
-of each pair. Regression: `tests/lambdas/29_zero_param_thunk.zy`, run through all four.
+of each pair. Regression: `zyquality/corpus/lambdas/29_zero_param_thunk.zy`, run through all four.
 
 ### ~~L31 — the browser engine never checked argument counts~~ Fixed in v0.0.9
 
@@ -704,7 +704,7 @@ formatted the other 69 differently. Two of the 69 were real, though, and worth s
   not tell a program that printed "Runtime error: …" from one that failed.
 
 **Fixed** by giving `runZymbol` an optional `opts.onError`. A caller that is a process
-(`tests/run_one.mjs`) passes one and gets the CLI's split — diagnostics on stderr, exit 1.
+(`web/tests/run_one.mjs`) passes one and gets the CLI's split — diagnostics on stderr, exit 1.
 The playground passes none and keeps today's behaviour, everything in the one panel, which
 is all a browser has; the fallback is `onOutput`, so nothing there changed. The refusal is
 recorded as `Interpreter.moduleRefused` rather than emitted, so `runZymbol` can route it and
@@ -859,7 +859,7 @@ header map — accepts any count and is never reported.
 Before v0.0.8 only the bare-identifier form was checked. The other two passed `zymbol check`
 silently, and the two engines then disagreed: the tree-walker raised at run time, while the
 VM ignored the mismatch — a surplus argument was written over one of the callee's own
-registers and execution continued with corrupted state. See `tests/arity/` for the
+registers and execution continued with corrupted state. See `zyquality/corpus/arity/` for the
 regression corpus, which covers all three call forms plus the variadic and dead-branch
 cases.
 
@@ -1053,10 +1053,23 @@ Some operations are intentionally **fail-safe**: they never raise a runtime erro
 | Operation | Failure result |
 |-----------|---------------|
 | `#\|"abc"\|` — numeral conversion | original string unchanged |
-| `arr$? val` — contains | `false` |
-| `#?val` — safe type check | `false` (never errors) |
+| `arr$? val` — contains | `#0`, including when the value is of another type (`[1,2,3]$? "x"` → `#0`) |
+| `val#?` — type metadata | always the 3-tuple `(type_symbol, count, display)`; there is no failure path. **Postfix only** — `#?val` does not parse |
 
 Fail-safe operations are distinguished from error-handling by the absence of any error path — they are guaranteed to return a valid value of a predictable type.
+
+### Warnings that a correct program still gets
+
+These are warnings, not errors: the program runs, and `zymbol check` exits 0. They are
+listed because each one appears in ordinary correct code, so a reader who does not expect
+them will hunt for a bug that is not there (verified 2026-08-17, both engines).
+
+| Warning | When | How to silence it |
+|---------|------|-------------------|
+| `ambiguous lifetime for 'i'` · *variable is modified inside a loop* | Every **named iterator** of a `@` loop with a binder — `@ i:1..3`, `@ f:arr`, `@ c:"hola"`. A `while` header and an outer variable written inside the body do **not** trigger it. | Prefix the iterator: `@ _i:1..3`. Use a bare name only when the value is genuinely needed after the loop. |
+| `range direction is decided at runtime` | A range bound that is not a literal — `@ i:1..MAX`. If the end turns out lower than the start, the loop counts **down** rather than not running. | Nothing to silence: guard the empty case, or accept the descending walk. |
+| `unused variable 'x'` | A variable that is never read. Reads inside string interpolation (`"{x}"`) and inside `<\ … \>` **do** count as uses (L9). | Prefix `_` when the variable is deliberate: `_unused = 42`. |
+| `loop expects a count or a condition, got [Int]` | The analyzer can tell statically that a `@` specifier is neither. It warns rather than errors because the inference is approximate — the engines refuse the form at run time regardless. | Use `@ x:items` to walk a collection, `@ items$#` to count it. |
 
 ---
 
@@ -1074,7 +1087,7 @@ Fail-safe operations are distinguished from error-handling by the absence of any
 | `<< <typespec>` | Typed/validated input (v0.0.7) | `<< ##.(5,2) "p: " v`, `<< ###(4) "n: " n`, `<< ##"(20) "s: " s`, `<< ##' "c: " c` |
 | `@~` | Sleep (ms) | `@~ 500` |
 | `>>!` | Clear screen | `>>!` |
-| `>>?` | Query terminal size | `[H, W] = >>?` |
+| `>>?` | Query terminal size (positional tuple) | `(H, W) = >>?` |
 | `>>~` | Positioned/styled output | `>>~ (5, 10) > "text"` |
 | `<<\|` | Blocking key input | `<<\| k` |
 | `<<\|?` | Non-blocking key input | `<<\|? k` |
