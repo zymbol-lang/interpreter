@@ -1311,8 +1311,10 @@ implementation did not match it either. Stating a rule and checking it are diffe
 and only the second one holds.
 
 The tooling that made it findable is `tests/scripts/engine_compare.sh`, which runs a program
-through the tree-walker, the register VM, `zymbol.js` and zyml at once. Every existing suite
-compares a *pair* of engines, and a pair can hold at most two of four disagreeing answers.
+through every engine at once — the tree-walker, the register VM, `zymbol.js`, and zyml until
+it was retired on 2026-08-17. Every existing suite compares a *pair* of engines, and a pair
+can hold at most two of four disagreeing answers; having a fourth answer is what made these
+findable.
 
 #### 20.2 Defects in this document, found the same way
 

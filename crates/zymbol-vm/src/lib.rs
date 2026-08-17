@@ -152,7 +152,7 @@ impl fmt::Display for Value {
 
 impl Value {
     /// Readable type name for diagnostics. Mirrors `zymbol-interpreter`'s
-    /// `type_word` and zyml's `type_name`, so a message naming a type reads the
+    /// `type_word` and (until it was retired) zyml's `type_name`, so a message naming a type reads the
     /// same whichever engine produced it.
     fn type_word(&self) -> &'static str {
         match self {

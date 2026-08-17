@@ -164,11 +164,11 @@ feature table, SYMBOLS.md §16); the five items below are behavioral and still o
 
 | # | Decision | Tracked as | Status |
 |---|----------|------------|--------|
-| 1 | The destructuring pattern is **typed**: `[ … ]` takes an array, `( … )` takes a tuple | REFERENCE.md L32 | ✅ four engines |
-| 2 | The last name **absorbs the remainder** (`##_` when nothing remains); destructuring never fails on length | REFERENCE.md L33 | ✅ four engines |
-| 3 | A non-assignable expression in a `<~` slot is a **semantic error** | REFERENCE.md L34 | ⚠ `zytw` `zyvm` `zyjs`; `zyml` open |
-| 4 | `zyml` implements `~`, and the corpus starts covering both marks | REFERENCE.md L35 | ✅ |
-| 5 | `<~` becomes **visible at the call site**: `f(x<~)`, required, qualified calls included | REFERENCE.md L36 | ⚠ `zytw` `zyvm` `zyjs`; `zyml` open |
+| 1 | The destructuring pattern is **typed**: `[ … ]` takes an array, `( … )` takes a tuple | REFERENCE.md L32 | ✅ every engine |
+| 2 | The last name **absorbs the remainder** (`##_` when nothing remains); destructuring never fails on length | REFERENCE.md L33 | ✅ every engine |
+| 3 | A non-assignable expression in a `<~` slot is a **semantic error** | REFERENCE.md L34 | ✅ `zytw` `zyvm` `zyjs` — every engine that exists |
+| 4 | ~~`zyml` implements `~`~~, and the corpus starts covering both marks | REFERENCE.md L35 | ✅ (`zyml` retired 2026-08-17) |
+| 5 | `<~` becomes **visible at the call site**: `f(x<~)`, required, qualified calls included | REFERENCE.md L36 | ✅ `zytw` `zyvm` `zyjs` — every engine that exists |
 
 **Decision 2 — absorption, chosen over strict arity.** The first form of this decision was
 the opposite (an unequal length is an error, a tail discarded only via `*rest`). It was

@@ -1,10 +1,11 @@
-//! The numeric model of Zymbol — one definition, four engines.
+//! The numeric model of Zymbol — one definition, every engine.
 //!
 //! # Why this file exists
 //!
 //! Zymbol never declared its integer type, so each engine inherited the one its
-//! host offered: `i64` in the two Rust engines, OCaml's 63-bit `int` in `zyml`,
-//! an IEEE-754 double in the browser. `10 ^ 20` produced four different answers
+//! host offered: `i64` in the two Rust engines, an IEEE-754 double in the
+//! browser, and OCaml's 63-bit `int` in `zyml` (retired 2026-08-17, and one of
+//! the four answers below). `10 ^ 20` produced four different answers
 //! — a runtime error, two different wrapped values, and a float that happened
 //! to be exact — and the parity gate never noticed, because the corpus held no
 //! program that could overflow.
@@ -25,14 +26,16 @@
 //! - Floats are IEEE-754 doubles and keep IEEE-754 semantics: overflow yields
 //!   `inf`, which is a value, not an error.
 //!
-//! The engines that are not Rust reimplement these same rules — see
-//! `zyml/src/value.ml` and `web/src/zymbol/zymbol.js`. The error messages are
-//! spelled identically in all four, because `zyq consensus` compares text.
+//! The engine that is not Rust reimplements these same rules — see
+//! `web/src/zymbol/zymbol.js`. The error messages are spelled identically,
+//! because `zyq consensus` compares text. (`zyml/src/value.ml` was the third
+//! such reimplementation; that engine was retired on 2026-08-17 and its
+//! repository is archived, so nothing here has to stay in step with it.)
 
 /// The largest Zymbol integer: 2⁵³ − 1.
 ///
 /// The bound is the f64 mantissa, not a Rust type: it is the last integer that
-/// `zyjs` can hold with no rounding, so it is the last one all four engines
+/// `zyjs` can hold with no rounding, so it is the last one all the engines
 /// agree on. `i64` and OCaml's 63-bit `int` both have room to spare, which is
 /// what makes the check below cheap everywhere.
 pub const ZY_INT_MAX: i64 = 9_007_199_254_740_991;

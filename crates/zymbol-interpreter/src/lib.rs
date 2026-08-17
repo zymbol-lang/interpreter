@@ -328,7 +328,7 @@ impl Value {
     }
 
     /// Readable type name for diagnostics, as opposed to [`Self::type_name`],
-    /// which yields the language's `##` type symbol. Mirrors zyml's `type_name`
+    /// which yields the language's `##` type symbol. Mirrored zyml's `type_name`
     /// and the VM's `type_word`, so a message naming a type reads the same
     /// whichever engine produced it.
     pub fn type_word(&self) -> &'static str {

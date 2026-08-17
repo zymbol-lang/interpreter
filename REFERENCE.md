@@ -584,7 +584,7 @@ because no corpus file exercised a `*rest` on a tuple or a `*rest` with items af
   gave `x=[20,30,40] y=50` under TW and `x=[20,30,40,50] y=30` under the VM. Both now count
   those slots from the end, as the tree-walker's `trailing` always did.
 
-### L34 — An output-parameter slot accepts an expression *(fixed in v0.0.9 in three engines; `zyml` pending)*
+### ~~L34 — An output-parameter slot accepts an expression~~ Fixed in v0.0.9
 
 ```zymbol
 g(b<~) { b = b + 100 }
@@ -613,9 +613,11 @@ them — record nothing.
 
 Regression test: `corpus/errors/semantic/output_param_expression.zy`, graded via `check`.
 
-**Still open**: `zyml` accepts the call as before. It has no equivalent analysis pass, so
-the rejection would have to happen at compile time — the one engine of the four where this
-is not a check but a new piece of machinery.
+This was the last item left open on `zyml`, the OCaml engine: it accepted the call as
+before, having no equivalent analysis pass, so the rejection would have had to happen at
+compile time — the one engine of the four where this was not a check but a new piece of
+machinery. `zyml` was **retired on 2026-08-17** and the item closed with it. Enforced in
+every engine that exists.
 
 ### ~~L35 — `zyml` does not lex `~` in a parameter list~~ Fixed in v0.0.9
 
@@ -683,8 +685,9 @@ arity check already does.
 Nine corpus files had to gain the mark, which is the measure of what it buys: every one of
 them was a call that modified its caller's variable without saying so.
 
-Implemented in `zytw`, `zyvm` and `zyjs`. **`zyml` does not enforce it** — like L34, it has
-no analysis pass to host the check.
+Implemented in `zytw`, `zyvm` and `zyjs` — every engine that exists. `zyml`, the OCaml
+engine, never enforced it: like L34, it had no analysis pass to host the check. It was
+retired on 2026-08-17 and the gap closed with it.
 
 ### ~~L37 — the browser engine mixed diagnostics into the program's output~~ Fixed in v0.0.9
 
@@ -823,8 +826,9 @@ callee, so `f() { @! }` is an error however its call sites are nested.
 control flow, and is legal at top level.
 
 Fatal before execution, in `zymbol check`, `zymbol run` and `zymbol build`, and identically
-in the tree-walker, the register VM, `zymbol.js` and zyml. See L29 for what these four did
-before, which was four different things.
+in the tree-walker, the register VM and `zymbol.js` — and in zyml, the OCaml engine, until it
+was retired on 2026-08-17. See L29 for what these four did before, which was four different
+things; being the fourth answer is what made the disagreement impossible to defend.
 
 ---
 
@@ -927,14 +931,21 @@ host language does" and had to be made so in all four engines:
 > collapsed NaN into *equal* somewhere. `<`, `<=`, `>`, `>=` now test an
 > `INCOMPARABLE` code rather than the sign of a comparison result.
 
-The integer bound is the mantissa of a double, chosen so that **all four engines
-represent every Zymbol integer exactly and natively**: `i64` in the tree-walker
-and the register VM, OCaml's 63-bit `int` in `zyml`, a `Number` in the browser.
-Nothing is boxed, nothing is a `BigInt`, and no engine is approximating — which
-is why an integer means one thing across all of them.
+The integer bound is the mantissa of a double, chosen so that **every engine
+represents every Zymbol integer exactly and natively**: `i64` in the tree-walker
+and the register VM, a `Number` in the browser, and — when the bound was
+chosen — OCaml's 63-bit `int` in `zyml`. Nothing is boxed, nothing is a
+`BigInt`, and no engine is approximating, which is why an integer means one
+thing across all of them.
+
+**The browser is the constraint that binds**, and it still does: `Number` is an
+f64, so 2⁵³−1 is where exactness ends. OCaml's 63-bit `int` was the looser of
+the two and would have allowed more; `zyml` was retired on 2026-08-17 and the
+bound does not move, because the engine that set it is the one still shipping.
 
 Before v0.0.9 there was no rule at all and each engine used its host's. The same
-program gave four answers:
+program gave four answers — this is the observation the rule exists to answer,
+kept verbatim although `zyml` has since been retired:
 
 ```zymbol
 >>(10 ^ 20) ¶

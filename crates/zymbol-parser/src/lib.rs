@@ -1223,7 +1223,7 @@ impl Parser {
     /// empty tuple is not a value, and a call's parentheses always follow a
     /// callable. `parse_lambda` already built an empty `params` for this shape;
     /// until v0.0.9 this predicate refused to hand it the input, which is why
-    /// `() -> { }` parsed in `zymbol.js` and zyml but not here.
+    /// `() -> { }` parsed in `zymbol.js` and in zyml (retired) but not here.
     fn is_lambda_start(&mut self) -> bool {
         // Must start with (
         if !matches!(self.peek().kind, TokenKind::LParen) {
