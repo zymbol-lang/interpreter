@@ -29,6 +29,22 @@ pub enum AssignSugar {
     IndexedAssign,
     /// Indexed compound assignment `name[i] op= expr`
     IndexedCompound(BinaryOp),
+    /// A bare `$` edit statement: `arr$+ 3`, `arr[2]$~ 99`, `arr$-[1]`, `d["k"]$~ v`.
+    ///
+    /// The parser desugars these into `name = <the same $ expression>`, which is
+    /// observably identical because Zymbol assigns collections by value and has
+    /// no aliasing (`DI-04`) — nobody else holds the old one. What the marker
+    /// carries is the *source form*, and two things need it: the formatter, to
+    /// reprint what was written, and the tuple guard, because `t$+ 3` and
+    /// `t[1]$~ 99` written as statements mean "modify this tuple" and a tuple
+    /// does not change, while `u = t$+ 3` derives a second one and is fine.
+    ///
+    /// This is decision 12 of `Divergente_ES/forma/README.md`, the rule of the
+    /// result: a `$` whose result is *used* builds, a `$` that *is* the whole
+    /// statement modifies in place. Before it, a bare `$+` statement did nothing
+    /// at all, without a warning (`DI-01`), and `arr[i]$~ v` as a statement did
+    /// not even parse.
+    InPlaceEdit,
 }
 
 /// Assignment statement: name = expr
@@ -108,6 +124,25 @@ pub enum DestructurePattern {
     Positional(Vec<DestructureItem>),
     /// `(field: var, ...)` — named tuple destructuring
     NamedTuple(Vec<(String, String)>),
+}
+
+impl DestructurePattern {
+    /// The names this pattern binds, in order — what a loop head has to declare
+    /// so `@ (k, v):pares` is not "undefined variable 'k'".
+    pub fn bound_names(&self) -> Vec<String> {
+        match self {
+            DestructurePattern::Array(items) | DestructurePattern::Positional(items) => items
+                .iter()
+                .filter_map(|i| match i {
+                    DestructureItem::Bind(n) | DestructureItem::Rest(n) => Some(n.clone()),
+                    DestructureItem::Ignore => None,
+                })
+                .collect(),
+            DestructurePattern::NamedTuple(pairs) => {
+                pairs.iter().map(|(_, v)| v.clone()).collect()
+            }
+        }
+    }
 }
 
 /// Destructure assignment: `[a, b] = expr` / `(name: n, age: a) = expr`

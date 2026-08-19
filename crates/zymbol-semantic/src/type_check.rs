@@ -861,6 +861,18 @@ impl TypeChecker {
                     };
                     self.env.define_var(iter_var, iter_type);
                 }
+                // `@ (k, v):pares` defines every name its pattern binds. The
+                // element types are not known statically — the pattern may sit
+                // over a tuple of mixed types, which is what a tuple is for — so
+                // each name is `Any`, exactly as `(k, v) = par` leaves them.
+                if let Some(pattern) = &loop_stmt.iterator_pattern {
+                    if let Some(iterable) = &loop_stmt.iterable {
+                        let _ = self.infer_expr(iterable);
+                    }
+                    for name in pattern.bound_names() {
+                        self.env.define_var(&name, ZymbolType::Any);
+                    }
+                }
 
                 self.loop_depth += 1;
                 for stmt in &loop_stmt.body.statements {
@@ -1710,23 +1722,53 @@ impl TypeChecker {
                     ZymbolType::Array(Box::new(ZymbolType::Any))
                 } else {
                     let first_type = self.infer_expr(&arr.elements[0]);
+                    let mut mixed = false;
 
-                    // Validate all elements have compatible types
                     for (i, elem) in arr.elements.iter().skip(1).enumerate() {
                         let elem_type = self.infer_expr(elem);
                         if !self.types_compatible(&elem_type, &first_type) {
-                            self.errors.push(
-                                Diagnostic::error(format!(
-                                    "array element {} has type {}, but expected {} (same as first element)",
-                                    i + 2, elem_type.name(), first_type.name()
-                                ))
-                                .with_span(elem.span())
-                                .with_help("all array elements must have the same type")
-                            );
+                            mixed = true;
+                            // `#[…]` declares the mix, so there is nothing to
+                            // report. `[…]` is homogeneous and gets checked —
+                            // decision 15 of Divergente_ES/forma/README.md.
+                            if !arr.declared_mixed {
+                                self.errors.push(
+                                    Diagnostic::error(format!(
+                                        "array element {} has type {}, but expected {} (same as first element)",
+                                        i + 2, elem_type.name(), first_type.name()
+                                    ))
+                                    .with_span(elem.span())
+                                    .with_help("all array elements must have the same type — write `#[…]` if the mix is deliberate")
+                                );
+                            }
                         }
                     }
 
-                    ZymbolType::Array(Box::new(first_type))
+                    // Decision 18: a `#[…]` that turns out homogeneous is the
+                    // escape hatch being used where it is not needed. This is
+                    // the vaccine against what happened to `Object` in Java and
+                    // `any` in TypeScript — an opt-out of the type discipline
+                    // that exists gets used, and the warning keeps it in its
+                    // place, with the same mechanism that already flags an
+                    // unused variable.
+                    if arr.declared_mixed && !mixed {
+                        self.warnings.push(
+                            Diagnostic::warning(format!(
+                                "this `#[…]` has no mixed types: every element is {}",
+                                first_type.name()
+                            ))
+                            .with_span(arr.span)
+                            .with_help("use `[…]` — `#[…]` is for declaring a mix that is deliberate")
+                        );
+                    }
+
+                    // Same type either way. A declared mix has an open element
+                    // type; a checked array has the type of its first element.
+                    if arr.declared_mixed {
+                        ZymbolType::Array(Box::new(ZymbolType::Any))
+                    } else {
+                        ZymbolType::Array(Box::new(first_type))
+                    }
                 }
             }
 
@@ -1754,7 +1796,14 @@ impl TypeChecker {
                 // and rejecting it would flag every index computed from an
                 // untyped parameter. A value that really is a Float at runtime
                 // is still caught there.
-                if !matches!(
+                // A String index is how a dictionary is addressed — `d["k"]`
+                // and `d[clave]` — so it is only wrong when the receiver is
+                // known to be something else. Decision 7 made the named tuple
+                // the dictionary; before it, this check was what made a computed
+                // key impossible (DM-09).
+                let string_key_ok = matches!(index_type, ZymbolType::String)
+                    && !matches!(array_type, ZymbolType::Array(_) | ZymbolType::String);
+                if !string_key_ok && !matches!(
                     index_type,
                     ZymbolType::Int
                         | ZymbolType::Bool

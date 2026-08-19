@@ -120,6 +120,27 @@ impl<W: Write> Interpreter<W> {
 
     fn run_loop(&mut self, loop_stmt: &Loop) -> Result<()> {
         // Check if this is a for-each loop
+        // `@ (k, v):pares { … }` — bind each element through the same pattern
+        // language the assignment uses. On a DICTIONARY the elements handed over
+        // are `(clave, valor)` pairs: `@ k:d` still yields keys (decision 8), and
+        // the pattern form is what asks for both.
+        if let (Some(pattern), Some(iterable_expr)) =
+            (&loop_stmt.iterator_pattern, &loop_stmt.iterable)
+        {
+            let values = self.eval_iterable_pairs(iterable_expr)?;
+            let needs_scope = body_needs_own_scope(&loop_stmt.body, self);
+            for value in values {
+                self.bind_destructure_pattern(pattern, value, loop_stmt.span)?;
+                if needs_scope {
+                    self.execute_block(&loop_stmt.body)?;
+                } else {
+                    self.execute_block_no_scope(&loop_stmt.body)?;
+                }
+                if self.handle_loop_control(&loop_stmt.label) { break; }
+            }
+            return Ok(());
+        }
+
         if let (Some(iterator_var), Some(iterable_expr)) = (&loop_stmt.iterator_var, &loop_stmt.iterable) {
             // B5: Fast path for integer ranges — avoid Vec allocation
             if let Expr::Range(range_expr) = iterable_expr.unwrap_group() {

@@ -358,12 +358,22 @@ impl Parser {
     /// - Unary operators: -95, !flag
     /// - Primary expressions: literals, identifiers, arrays, tuples, (expr)
     /// - Postfix for identifiers: arr[0], obj.field, func()
-    /// - String concatenation with +: "a" + 5 works
-    /// - But NOT other binary ops: "Score: " -95 is two items
+    /// - Arithmetic, at full precedence: + - * / % ^ and a leading unary
+    /// - But NOT comparison or the logical operators: `>> 1 == 1 ¶` is refused,
+    ///   and `>> (1 == 1) ¶` is the form that works. Arguments are juxtaposed,
+    ///   so the parser has to decide where one ends, and `<`/`>` are the same
+    ///   characters that open `<#`, `<~` and close `>>|`.
     ///
-    /// This allows: >> "Score: " -95 ¶     (two separate items)
-    /// And also:    >> "i=" + i ¶           (concatenation)
+    /// So:          >> "i=" i ¶             (two items, juxtaposed)
     /// And also:    >> arr[0] ¶             (indexed access)
+    /// And also:    >> -7 % 3 ¶             (-1: the unary is a term, not the
+    ///                                      end of the argument)
+    ///
+    /// One trap, deliberate and worth stating because this comment used to claim
+    /// the opposite: **`- ` and `+` join two arguments, they do not separate
+    /// them.** `>> "Score: " -95 ¶` is `"Score: " - 95`, an arithmetic error on a
+    /// string — not two items. `>> "Score: " (-95) ¶` is the form that prints
+    /// both. Every engine agrees on this, which is why no suite ever flagged it.
     pub(crate) fn parse_output_item(&mut self) -> Result<Expr, Diagnostic> {
         // Addition/subtraction level — lowest binary precedence in output context.
         // Supports numeric arithmetic: >> "Suma: " 10 + 5 ¶  (single item = 15)
@@ -389,15 +399,13 @@ impl Parser {
     /// Multiplication/division level for output items (higher precedence than +/-)
     /// Supports: >> "Result: " 10 * 5 ¶  → outputs "Result: 50"
     fn parse_output_item_mul(&mut self) -> Result<Expr, Diagnostic> {
-        let token = self.peek().clone();
-
-        // Handle unary operators (- and !) at the start of an item: >> -5 ¶  >> !flag ¶
-        if matches!(token.kind, TokenKind::Not | TokenKind::Minus) {
-            return self.parse_unary();
-        }
-
-        // Use parse_output_item_term as base so ^ (power) is handled with correct
-        // precedence on both sides of * / %
+        // A leading unary is handled one level down, in parse_output_item_term,
+        // and that placement is the whole of the fix for DI-03. This function
+        // used to `return self.parse_unary()` on seeing `-` or `!`, which closed
+        // the argument on the spot: the `* / %` loop below never ran, so `>> 7 %
+        // 3` printed 1 while `>> -7 % 3` was a parse error, and `-3 * 4`,
+        // `-2 * -3` and `-2 ^ 2` failed with it. The rule that came out of that
+        // — `%` works, but not after a minus — is not one anybody could learn.
         let mut expr = self.parse_output_item_term()?;
 
         // Allow * / % with proper precedence
@@ -422,16 +430,27 @@ impl Parser {
     fn parse_output_item_term(&mut self) -> Result<Expr, Diagnostic> {
         let token = self.peek().clone();
 
-        // Handle unary - for negative numbers at this level: a * -b
-        if matches!(token.kind, TokenKind::Minus) {
-            return self.parse_unary();
-        }
-
-        // Parse primary
-        let mut expr = self.parse_primary_expr()?;
-
-        // Handle postfix operations (collection ops, indexing, member access, calls)
-        expr = self.parse_output_item_postfix(expr)?;
+        // A leading unary (`-5`, `!flag`, and `a * -b` in the middle of a
+        // product) is a *term*, not a whole argument, so `*`, `/`, `%` and `^`
+        // still apply to it afterwards.
+        //
+        // It has to be parsed at this level rather than above because `^` is
+        // handled here, and the unary binds tighter than `^` everywhere else in
+        // the language: `-2 ^ 2` is `(-2) ^ 2` = 4. Parsing it one level up
+        // would leave `^` to start a new output argument.
+        //
+        // `parse_unary` bottoms out at `parse_primary_expr`, so a postfix
+        // operator on a negated operand is not picked up here — as it was not
+        // before. `>> -(arr$#)` is the form that works, and changing that is a
+        // precedence question of its own, not part of DI-03.
+        let mut expr = if matches!(token.kind, TokenKind::Not | TokenKind::Minus) {
+            self.parse_unary()?
+        } else {
+            // Parse primary, then postfix operations (collection ops, indexing,
+            // member access, calls)
+            let primary = self.parse_primary_expr()?;
+            self.parse_output_item_postfix(primary)?
+        };
 
         // Handle ^ (power) — right-associative, highest binary precedence.
         // Right-recursive call so 2^3^4 = 2^(3^4).

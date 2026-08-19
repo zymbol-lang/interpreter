@@ -176,6 +176,16 @@ impl ErrorValue {
     pub fn parse(message: impl Into<String>) -> Self {
         Self::new("Parse", message)
     }
+
+    /// Create a Key error — a dictionary key that is not there.
+    ///
+    /// Decision 10 of `Divergente_ES/forma/README.md`: reading an absent key is
+    /// an error, not `##_`. It is Python's `KeyError`, not JavaScript's
+    /// `undefined`, and it is coherent with `a[0]`, which is also an error
+    /// rather than a silently wrong answer.
+    pub fn key(message: impl Into<String>) -> Self {
+        Self::new("Key", message)
+    }
 }
 
 /// Runtime value
@@ -1184,6 +1194,41 @@ impl<W: Write> Interpreter<W> {
         value.to_repr_string_in(self.numeral_mode)
     }
 
+    /// Bind a function declaration to its name.
+    ///
+    /// Called twice for a top-level declaration — once by the hoisting pass in
+    /// `execute` and once when the statement itself runs — which is harmless: it
+    /// builds the same `FunctionDef` and overwrites the same entry.
+    pub(crate) fn register_function(&mut self, func_decl: &zymbol_ast::FunctionDecl) {
+        // Auto-free (v0.0.8): schedule body locals and by-value params
+        // for destruction after their last use. Output/Mutable params
+        // participate in caller write-back — never freed early.
+        let mut excluded: HashSet<String> = (*self.auto_free_excluded).clone();
+        let mut param_candidates: Vec<String> = Vec::new();
+        for p in &func_decl.parameters {
+            match p.kind {
+                zymbol_ast::ParameterKind::Normal => {
+                    param_candidates.push(p.name.clone());
+                }
+                _ => {
+                    excluded.insert(p.name.clone());
+                }
+            }
+        }
+        let auto_free = zymbol_semantic::region_schedule(
+            &func_decl.body.statements,
+            &param_candidates,
+            &excluded,
+        );
+        let func_def = FunctionDef::Zymbol {
+            parameters: func_decl.parameters.clone(),
+            body: func_decl.body.clone(),
+            origin_module_path: self.current_file.clone(),
+            auto_free,
+        };
+        self.functions.insert(func_decl.name.clone(), Rc::new(func_def));
+    }
+
     /// Execute a program
     pub fn execute(&mut self, program: &Program) -> Result<()> {
         // Process imports first
@@ -1198,6 +1243,34 @@ impl<W: Write> Interpreter<W> {
         self.auto_free_excluded = Rc::new(zymbol_semantic::auto_free_exclusions(program));
         self.destruction_schedule =
             zymbol_semantic::region_schedule(&program.statements, &[], &self.auto_free_excluded);
+
+        // Hoisting: a function declared anywhere at the top level is callable
+        // from anywhere at the top level, including above its own declaration.
+        //
+        // This used to be decided by architecture rather than by anybody: the VM
+        // compiles the file before running it and so registers every name first
+        // (zymbol-compiler `compile`, "First pass: register function names"),
+        // while this engine and the browser one bound each name as its statement
+        // executed. `>> f(2) ¶` above `f(x) { <~ x * 10 }` printed 20 under
+        // `--vm` and was `undefined function: 'f'` by default — the same program,
+        // two answers (DM-03).
+        //
+        // The static analyzer had already picked a side: `zymbol check` passes
+        // that program, because zymbol-semantic collects declarations before
+        // checking calls. So the analyzer promised something only one of the
+        // three engines delivered.
+        //
+        // Top level only, which is what the VM does. A function declared inside a
+        // block still appears when the block runs; hoisting it out would move the
+        // three engines apart again, in the other direction.
+        //
+        // Must run after `auto_free_excluded` is set: `register_function` reads
+        // it to compute the body's destruction schedule.
+        for statement in &program.statements {
+            if let Statement::FunctionDecl(func_decl) = statement {
+                self.register_function(func_decl);
+            }
+        }
 
         // Execute statements with auto-destruction after each one's last uses
         for (i, statement) in program.statements.iter().enumerate() {
@@ -1259,33 +1332,7 @@ impl<W: Write> Interpreter<W> {
             Statement::Break(break_stmt) => self.execute_break(break_stmt),
             Statement::Continue(continue_stmt) => self.execute_continue(continue_stmt),
             Statement::FunctionDecl(func_decl) => {
-                // Auto-free (v0.0.8): schedule body locals and by-value params
-                // for destruction after their last use. Output/Mutable params
-                // participate in caller write-back — never freed early.
-                let mut excluded: HashSet<String> = (*self.auto_free_excluded).clone();
-                let mut param_candidates: Vec<String> = Vec::new();
-                for p in &func_decl.parameters {
-                    match p.kind {
-                        zymbol_ast::ParameterKind::Normal => {
-                            param_candidates.push(p.name.clone());
-                        }
-                        _ => {
-                            excluded.insert(p.name.clone());
-                        }
-                    }
-                }
-                let auto_free = zymbol_semantic::region_schedule(
-                    &func_decl.body.statements,
-                    &param_candidates,
-                    &excluded,
-                );
-                let func_def = FunctionDef::Zymbol {
-                    parameters: func_decl.parameters.clone(),
-                    body: func_decl.body.clone(),
-                    origin_module_path: self.current_file.clone(),
-                    auto_free,
-                };
-                self.functions.insert(func_decl.name.clone(), Rc::new(func_def));
+                self.register_function(func_decl);
                 Ok(())
             }
             Statement::Return(return_stmt) => {
@@ -1395,7 +1442,22 @@ impl<W: Write> Interpreter<W> {
     /// Execute a destructure assignment statement: [a, *rest, _] = expr / (a, b) = expr / (field: var) = expr
     pub(crate) fn eval_destructure_assign(&mut self, d: &DestructureAssign) -> Result<()> {
         let rhs = self.eval_expr(&d.value)?;
-        match &d.pattern {
+        self.bind_destructure_pattern(&d.pattern, rhs, d.span)
+    }
+
+    /// Bind a destructuring pattern to a value that is already evaluated.
+    ///
+    /// Split out of `eval_destructure_assign` so a loop head can use the very
+    /// same pattern: `@ (k, v):pares { … }` binds each element exactly as
+    /// `(k, v) = par` would, which is the whole point — the pattern language is
+    /// one language, and the loop stops needing a first line that only unpacks.
+    pub(crate) fn bind_destructure_pattern(
+        &mut self,
+        pattern: &DestructurePattern,
+        rhs: Value,
+        span: zymbol_span::Span,
+    ) -> Result<()> {
+        match pattern {
             // The pattern is typed: `[ … ]` takes an array, `( … )` takes a tuple.
             // A mismatch is an error rather than a silent reinterpretation (REFERENCE.md L32).
             DestructurePattern::Array(items) => {
@@ -1406,7 +1468,7 @@ impl<W: Write> Interpreter<W> {
                             "array pattern '[ … ]' requires an array, got {}",
                             self.value_type_name(&rhs)
                         ),
-                        span: d.span,
+                        span,
                     }),
                 };
                 self.bind_positional(items, elements, false);
@@ -1419,7 +1481,7 @@ impl<W: Write> Interpreter<W> {
                             "tuple pattern '( … )' requires a tuple, got {}",
                             self.value_type_name(&rhs)
                         ),
-                        span: d.span,
+                        span,
                     }),
                 };
                 self.bind_positional(items, elements, true);
@@ -1432,7 +1494,7 @@ impl<W: Write> Interpreter<W> {
                             "named tuple destructure requires a named tuple, got {}",
                             self.value_type_name(&rhs)
                         ),
-                        span: d.span,
+                        span,
                     }),
                 };
                 for (field, var_name) in fields {
@@ -1635,6 +1697,10 @@ impl<W: Write> Interpreter<W> {
                 // ##Range whatever else the message happens to mention.
                 if lower_msg.contains("overflow") || lower_msg.contains("out of range") {
                     Value::Error(ErrorValue::range(message.clone()))
+                // Before the index branch: a missing key is a ##Key even though
+                // the reader reached it through the index syntax `d["k"]`.
+                } else if lower_msg.contains("no key") {
+                    Value::Error(ErrorValue::key(message.clone()))
                 } else if lower_msg.contains("index") || lower_msg.contains("out of bounds") {
                     Value::Error(ErrorValue::index(message.clone()))
                 } else if lower_msg.contains("type") {

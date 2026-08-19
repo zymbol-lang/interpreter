@@ -16,7 +16,25 @@ impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_deep_index(&mut self, di: &DeepIndexExpr) -> Result<Value> {
         let mut current = self.eval_expr(&di.array)?;
         for step in &di.path.steps {
-            let idx = self.eval_nav_atom(&step.index, step)?;
+            // A step is an ordinary expression, and its VALUE says how to
+            // address: Int → position, String → dictionary key. Same rule as
+            // `d[clave]`, one level down, which is why `config[k1>k2]` works
+            // with `k1 = "servidor"`.
+            let step_val = self.eval_expr(&step.index)?;
+            if let Value::String(key) = &step_val {
+                current = descend_key(current, key, di.span)?;
+                continue;
+            }
+            let idx = match step_val {
+                Value::Int(n) => n,
+                other => return Err(RuntimeError::Generic {
+                    message: format!(
+                        "a navigation step is a position (Int) or a dictionary key (String), got {:?}",
+                        other
+                    ),
+                    span: step.index.span(),
+                }),
+            };
             current = descend(current, idx, step.index.span(), di.span)?;
         }
         Ok(current)
@@ -133,8 +151,31 @@ impl<W: Write> Interpreter<W> {
             }
             Ok(collected)
         } else {
-            // Plain step — descend
-            let idx = self.eval_nav_atom(&step.index, step)?;
+            // Plain step — descend. A step is an ORDINARY EXPRESSION, and its
+            // value says how to address: an Int is a position, a String is a
+            // dictionary key. That is what makes `config[k1>k2]` work with
+            // `k1 = "servidor"` — the same rule as `d[clave]`, one level down.
+            //
+            // It has to be the value and not the spelling: a bare identifier
+            // inside `[…]` is a VARIABLE, which is exactly what makes a computed
+            // key possible. If `config[servidor>…]` meant the key named
+            // `servidor`, then `d[clave]` would mean the key named `clave` and
+            // computed keys could not exist.
+            let step_val = self.eval_expr(&step.index)?;
+            if let Value::String(key) = &step_val {
+                let next = descend_key(current, key, span)?;
+                return self.walk_steps(next, rest, span);
+            }
+            let idx = match step_val {
+                Value::Int(n) => n,
+                other => return Err(RuntimeError::Generic {
+                    message: format!(
+                        "a navigation step is a position (Int) or a dictionary key (String), got {:?}",
+                        other
+                    ),
+                    span: step.index.span(),
+                }),
+            };
             let next = descend(current, idx, step.index.span(), span)?;
             self.walk_steps(next, rest, span)
         }
@@ -157,6 +198,29 @@ impl<W: Write> Interpreter<W> {
                 span: expr.span(),
             }),
         }
+    }
+}
+
+/// Descend into a dictionary by KEY — the String half of a navigation step.
+fn descend_key(collection: Value, key: &str, op_span: zymbol_span::Span) -> Result<Value> {
+    match collection {
+        Value::NamedTuple(fields) => match fields.iter().find(|(k, _)| k == key) {
+            Some((_, v)) => Ok(v.clone()),
+            None => {
+                let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                Err(RuntimeError::Generic {
+                    message: crate::variables::missing_key_msg(key, &available),
+                    span: op_span,
+                })
+            }
+        },
+        other => Err(RuntimeError::Generic {
+            message: format!(
+                "a String navigation step addresses a dictionary key, and this is {}",
+                other.type_name()
+            ),
+            span: op_span,
+        }),
     }
 }
 

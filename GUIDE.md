@@ -490,6 +490,26 @@ ok = a == b
 > separate items — the literal and the parenthesized expression — never a call.
 > Literals (strings, numbers, booleans) are not callable.
 
+**What `>>` accepts, and where the line is.** The output operator has a narrower grammar than
+the rest of the language: arithmetic and everything below it, but not comparison and not the
+logical operators.
+
+```zymbol
+>> 2 + 3 * 4 ¶                     // ✅ 14 — full arithmetic precedence
+>> -7 % 3 ¶                        // ✅ -1 — a leading unary is a term, not the end
+>> -2 ^ 2 ¶                        // ✅ 4  — the unary binds tighter than ^
+>> (1 == 1) ¶                      // ✅ #1 — a comparison needs parentheses
+```
+
+`>> 1 == 1 ¶` and `>> #1 && #0 ¶` are **parse errors**. The reason is juxtaposition: since
+`>> "x=" n " end" ¶` is three arguments, the parser has to decide where each one ends, and
+`<` and `>` are the same characters that open `<#` and `<~` and close `>>|`. Parentheses lift
+anything over the line, and always work.
+
+> **Trap**: `+` and `-` **join** two arguments; they do not separate them.
+> `>> "Score: " -95 ¶` is `"Score: " - 95` — arithmetic on a string, which is an error, not
+> two items. Write `>> "Score: " (-95) ¶`.
+
 ### Newline
 
 ```zymbol
@@ -1358,6 +1378,40 @@ fruits = ["apple", "pear", "grape"]
 }
 ```
 
+### For-each with a Pattern
+
+A destructuring pattern goes where a single name goes, binding each element
+exactly as an assignment would — because it **is** the same pattern language.
+What it removes is a line whose only job was to unpack:
+
+```zymbol
+pares = [("a", 1), ("b", 2)]
+
+@ par:pares {              @ (k, v):pares {
+    (k, v) = par      →        >> k "=" v ¶
+    >> k "=" v ¶           }
+}
+```
+
+Everything the assignment pattern does works here: the rest absorbs, the
+wildcard discards, and an array pattern walks an array of arrays.
+
+```zymbol
+@ (n, *resto):filas { … }      // the rest keeps the container's shape
+@ (_, texto, _):filas { … }    // discard the positions you do not need
+@ [a, b]:matriz { … }          // an array pattern, over an array of arrays
+```
+
+On a **dictionary** the pattern form is what asks for both halves — `@ k:d` still
+yields keys:
+
+```zymbol
+@ (clave, valor):d { >> clave " → " valor ¶ }
+```
+
+> `@ (` is also how a count loop with a parenthesised specifier begins —
+> `@ (n + 1) { }`. The two are told apart by the `:` after the `)`.
+
 ### The Iterator Variable and Outer Variables
 
 The iterator of `@ var:iterable` lives in the loop's scope and disappears when
@@ -2148,35 +2202,99 @@ by_name_desc = db$^ (a, b -> a.name > b.name)
 > custom comparator. For named or positional tuple arrays, use `$^` with a lambda.
 > `$^` with a lambda on a primitive array is also valid when you need custom ordering.
 
-### Direct Element Update
+### Declaring a mix — `#[…]`
 
-Arrays are mutable. Elements can be replaced or updated in-place using index syntax:
+`[…]` is homogeneous and gets checked; a deliberate mix is **declared** with
+`#[…]` and is not checked. **They are the same type** — `#?` answers `##]` for
+both, and every operator behaves the same:
+
+```zymbol
+mixto = #[#0, 1, '2', "tres", 4.0]
+homog = [1, 2, 3]
+>> mixto#? ¶       // → (##], 5, [#0, 1, 2, tres, 4])
+>> homog#? ¶       // → (##], 3, [1, 2, 3])
+```
+
+What `[…]` refuses, and what the refusal now names:
+
+```text
+[1, "dos", 3.0]
+error: array element 2 has type String, but expected Int (same as first
+       element) — write `#[…]` if the mix is deliberate
+```
+
+This is what closes the hole the rule used to leave: `json::decode` hands back a
+heterogeneous array, and until `#[…]` existed there was no way to *write* one —
+the language could produce a value it could not spell.
+
+The analyser warns when a `#[…]` turns out homogeneous, which keeps the escape
+hatch in its place:
+
+```text
+h = #[1, 2, 3]
+warning: this `#[…]` has no mixed types: every element is Int
+help: use `[…]` — `#[…]` is for declaring a mix that is deliberate
+```
+
+### Element Update — the rule of the result
+
+Arrays are mutable, and `$~` is how an element changes. **There is no indexed
+assignment**: `arr[2] = 99` is an error, because `=` means "this NAME now holds
+this value" and `arr[2] = 99` names nothing — it reaches inside a structure and
+changes a part. Two different operations under one sign.
+
+Which of the two `$~` does is decided by **what happens to its result**:
+
+- the result is **used** — assignment, argument, `>>`, condition, chaining —
+  so the operator **builds**, and the original is untouched;
+- the result is **discarded** — the `$` is the whole statement — so it
+  **modifies in place**.
+
+The two cases are disjoint and are told apart by looking at the syntax. And
+discarding the result has no other possible use: if you were going to throw it
+away, you meant to modify.
 
 ```zymbol
 arr = [10, 20, 30, 40, 50]
 
-// Direct assignment (1-based index)
-arr[2] = 99
+// The result is DISCARDED → modifies in place
+arr[2]$~ 99
 >> arr ¶    // → [10, 99, 30, 40, 50]
 
-// Compound indexed assignment (+=, -=, *=, /=, %=, ^=)
-arr[1] += 5
+arr[1]$~ (arr[1] + 5)
 >> arr ¶    // → [15, 99, 30, 40, 50]
 
-arr[3] *= 2
->> arr ¶    // → [15, 99, 60, 40, 50]
-
-// Functional form — returns a new array; original is unchanged
+// The result is USED → builds; the original is unchanged
 arr2 = arr[2]$~ 0
->> arr ¶    // → [15, 99, 60, 40, 50]  (unchanged)
->> arr2 ¶   // → [15, 0, 60, 40, 50]
+>> arr ¶    // → [15, 99, 30, 40, 50]  (unchanged)
+>> arr2 ¶   // → [15, 0, 30, 40, 50]
 
-// Deep functional update — nav path [i>j>…] selects a nested element
+// Deep update — a nav path [i>j>…] selects a nested element, and follows the
+// same rule
 m  = [[1, 2], [3, 4]]
-m2 = m[1>2]$~ 99
->> m ¶      // → [[1, 2], [3, 4]]   (unchanged)
->> m2 ¶     // → [[1, 99], [3, 4]]
+m2 = m[1>2]$~ 99      // result used → builds
+>> m ¶                // → [[1, 2], [3, 4]]   (unchanged)
+>> m2 ¶               // → [[1, 99], [3, 4]]
+m[1>2]$~ 99           // result discarded → modifies
+>> m ¶                // → [[1, 99], [3, 4]]
 ```
+
+And what no longer exists:
+
+```text
+arr[2] = 99
+error: indexed assignment does not exist: 'arr[…] =' is not a form of Zymbol
+help: use 'arr[i]$~ value' to modify in place — '=' gives a value to a NAME,
+      '$~' changes part of a collection
+```
+
+> **`$~` takes its value with the unary rule**, so a compound value needs
+> parentheses: `arr[1]$~ (arr[1] + 5)`, not `arr[1]$~ arr[1] + 5`, which reads
+> only `arr[1]`.
+
+> The whole editing family follows the rule of the result — `$+`, `$++`, `[i]$~`,
+> `$-`, `$--`, `$-[i]`, `$^+`, `$^-`, `$^`. The consulting half never modifies
+> anything: `$#`, `$?`, `$??`, `$[..]`, `$>`, `$|`, `$<`, `$/`, `$*`, `$~~`.
 
 > The deep form works in both engines (compiled to the `DeepSet` instruction in the
 > VM). Ranges (`..`) are not supported in a `$~` path — only scalar steps.
@@ -2186,7 +2304,7 @@ m2 = m[1>2]$~ 99
 > ```zymbol
 > a = [1, 2, 3]
 > b = a
-> a[1] = 99
+> a[1]$~ 99
 > >> a ¶    // → [99, 2, 3]
 > >> b ¶    // → [1, 2, 3]   ← b is unaffected
 > ```
@@ -2571,45 +2689,46 @@ person = (name: "Alice", age: 25, active: #1)
 >> person[1] ¶      // → Alice
 >> person[2] ¶      // → 25
 
-// Nested named tuples
+// Nested dictionaries
 pos = (x: 10, y: 20)
 p = (pos: pos, label: "origin")
 >> p.label ¶        // → origin
 >> p.pos.x ¶        // → 10
 ```
 
+> **A tuple with named fields is a dictionary.** It is mutable, its keys can be
+> computed, added and removed, and it can be walked. “Named tuple” stopped being
+> a defensible name the moment the thing could change — a tuple is immutable by
+> definition. See “Dictionaries”.
+
 ### Immutability
 
-Tuples cannot be modified after creation. Any attempt to assign to an element
-produces a runtime error:
+A **positional** tuple cannot change. Any attempt to modify one in place is an
+error, whatever the operator — immutability is a property of the value, not an
+exception inside each `$`:
 
 ```zymbol
 t = (10, 20, 30)
-t[1] = 99    // ❌ runtime error: cannot modify tuple 't': tuples are immutable
-t[1] += 5    // ❌ same error
+t[1] = 99     // ❌ indexed assignment does not exist
+t[1]$~ 99     // ❌ cannot modify tuple 't': tuples are immutable
+t$+ 40        // ❌ same error
 ```
 
-To derive a new tuple with one element changed, use the functional update operator `$~`.
-The original tuple is never touched:
+To derive a new tuple, use the same operators with their **result** — the rule of
+the result again, and the original is never touched:
 
 ```zymbol
 t = (10, 20, 30)
 t2 = t[2]$~ 999
 >> t ¶     // → (10, 20, 30)   ← original unchanged
 >> t2 ¶    // → (10, 999, 30)  ← new tuple
+
+t3 = t$+ 40
+>> t3 ¶    // → (10, 20, 30, 40)
 ```
 
-Named tuples support `$~` too (v0.0.6), addressed by 1-based position **or by
-field-name string** (useful when the field is chosen at runtime):
-
-```zymbol
-person = (name: "Alice", age: 25)
-older  = person["age"]$~ 26       // by field name
-upper  = person[1]$~ "ALICE"      // by position (1-based; negative allowed)
->> person.age ¶    // → 25   ← original unchanged
->> older.age ¶     // → 26
->> upper.name ¶    // → ALICE
-```
+> A tuple with **named** fields is a different thing — a **dictionary** — and it
+> *is* mutable. See “Dictionaries” below. The colon is what separates them.
 
 Rebuilding explicitly remains valid when several fields change at once:
 
@@ -2623,6 +2742,132 @@ other  = (name: person.name, age: 26)
 > Both mechanisms are independent and complementary.
 
 ---
+
+## 12b. Dictionaries
+
+A tuple with **named** fields is a dictionary: `(clave: valor)`. There is no new
+type and no new notation — `(1, 2)` is a positional tuple and is immutable,
+`(a: 1, b: 2)` is a dictionary and is mutable, and the colon is the only thing
+that separates them.
+
+It is addressed **by key, and only by key**.
+
+### Reading
+
+```zymbol
+u = (nombre: "Ana", edad: 30)
+
+>> u.nombre ¶          // the dot reaches keys that are identifiers
+>> u["nombre"] ¶       // the bracket reaches ANY key
+
+clave = "edad"
+>> u[clave] ¶          // ← the key may be COMPUTED
+```
+
+The dot is convenient; the bracket is what JSON needs, because a JSON key can be
+any string:
+
+```zymbol
+u["dos palabras"]$~ 7      // the dot cannot spell this key
+>> u["dos palabras"] ¶
+```
+
+### An absent key is an error
+
+Reading a key that is not there raises `##Key` — Python's `KeyError`, not
+JavaScript's `undefined`. It is coherent with `a[0]`, which is also an error
+rather than a silently wrong answer:
+
+```zymbol
+>> u["sueldo"] ¶
+// Runtime error: no key 'sueldo' in dictionary — available: nombre, edad
+```
+
+Which makes `$?` necessary: on a dictionary it asks about the **key**, as `in`
+does in Python and in JS.
+
+```zymbol
+? u$? "sueldo" {
+    >> u["sueldo"] ¶
+}
+```
+
+### Modifying, adding and removing
+
+```zymbol
+u["edad"]$~ 31            // modifies in place (the rule of the result)
+otro = u["edad"]$~ 31     // builds; u is untouched
+
+u["ciudad"]$~ "Lima"      // a key that is NOT there gets ADDED
+u$-["ciudad"]             // removed by its address, which IS the key
+```
+
+> Note the contrast with the array, where `arr[7]$~ v` fails on an absent
+> element. The two are not inconsistent: an array is addressed by POSITION, so
+> writing past the end would leave a hole; a dictionary is addressed by KEY and
+> has none to leave.
+
+### Walking
+
+`@ k:d` yields the **keys**, in insertion order — `for k in d`, as Python spells
+it. With `d[k]` available the key is enough to reach the value:
+
+```zymbol
+d = (alfa: 10, beta: 20)
+@ clave:d {
+    >> clave " = " d[clave] ¶
+}
+```
+
+And the pattern form asks for both halves at once:
+
+```zymbol
+@ (clave, valor):d {
+    >> clave " → " valor ¶
+}
+```
+
+### Nesting — this is already JSON
+
+```zymbol
+config = (
+    servidor: (host: "localhost", puerto: 8080),
+    etiquetas: ["web", "api"]
+)
+
+>> config.servidor.host ¶
+>> config["servidor"]["puerto"] ¶
+
+// A navigation path reaches down and modifies. A step is an ordinary
+// expression, and its VALUE says how to address: an Int is a position, a
+// string is a key.
+k1 = "servidor"
+k2 = "puerto"
+>> config[k1>k2] ¶
+config[k1>k2]$~ 9090
+config["servidor">"puerto"]$~ 9090     // a literal key works the same
+```
+
+### The position is not an address
+
+Everything positional is refused on a dictionary, because adding a key changes
+what sits at each position and a program that depended on it would stop being
+correct with nothing to say so:
+
+```zymbol
+d[2]        d[-1]        d[2]$~ v
+d$-[2]      d$[1:2]      d$[2..3]      d$-[1:2]
+// error: a dictionary is addressed by key, not by position
+```
+
+There is no principled line between “the second key” and “the first two keys”,
+and a positional *write* is strictly worse than a positional read — it corrupts
+data rather than returning the wrong value. This is Python's position: `dict`
+has no indexing and no slicing, and the slice gets **no** key-based replacement:
+“the first two keys” is not a question a dictionary should answer.
+
+A **positional tuple** keeps the whole family — there the index is the only
+address there is, and the size is fixed.
 
 ## 13. Strings
 
@@ -3196,6 +3441,20 @@ pi = u.PI
 <# ../shared/lib => s    // parent directory
 <# ./sub/folder => c     // subdirectory
 ```
+
+### Imports come first
+
+In an executable file, every `<#` precedes the first statement. Blank lines and comments may
+sit above them; a statement closes the import section.
+
+```zymbol
+<# std/json => js        // ✅ imports first
+>> "ready" ¶
+```
+
+An import written after a statement is `error: imports must come before any statement`, in
+every engine. (Before v0.0.9 the browser engine ran such a file anyway, so a program written
+in the playground could fail to parse outside it — see REFERENCE.md L40.)
 
 ### Export Aliases
 
@@ -4148,8 +4407,8 @@ bsort(arr<~) {
         @ j:1..(n-i) {
             ? arr[j] > arr[j+1] {
                 tmp = arr[j]
-                arr[j] = arr[j+1]
-                arr[j+1] = tmp
+                arr[j]$~ arr[j+1]
+                arr[j+1]$~ tmp
             }
         }
     }

@@ -294,6 +294,23 @@ impl Value {
             (Value::Tuple(a), Value::Tuple(b)) => {
                 a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.equals(y))
             }
+            // Arrays compare element by element, exactly as tuples do. The
+            // missing arm fell through to `_ => false`, so `[1,2,3] == [1,2,3]`
+            // answered #0 in the VM and #1 in the other two engines (DM-02): a
+            // silent wrong answer, and a `?` on it took the opposite branch.
+            //
+            // Recursing through `equals` is what gives nested arrays and the
+            // Int/Float promotion for free — element equality has to be the same
+            // relation as scalar equality, or `[1] == [1.0]` disagrees with
+            // `1 == 1.0`, which is #1 and documented.
+            (Value::Array(a), Value::Array(b)) => {
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.equals(y))
+            }
+            // NamedTuple is deliberately absent: the tree-walker says #0 here and
+            // the browser engine says #1, and decisions 7-11 of
+            // Divergente_ES/forma/README.md turn the named tuple into the
+            // dictionary, whose equality is a design question of its own. Adding
+            // an arm now would be picking that answer by accident (DM-22).
             _ => false,
         }
     }
@@ -594,6 +611,21 @@ fn cmp_direct(va: &Value, vb: &Value) -> i32 {
         (Value::Char(x), Value::Char(y))   => ord(x.cmp(y)),
         (Value::Bool(x), Value::Bool(y))   => ord(x.cmp(y)),
         (Value::Tuple(x), Value::Tuple(y)) => {
+            if x.len() != y.len() { return 1; }
+            for (a, b) in x.iter().zip(y.iter()) {
+                let r = cmp_direct(a, b);
+                if r != 0 { return r; }
+            }
+            0
+        }
+        // Same arm for arrays, and for the same reason as in `Value::equals`
+        // above: without it `[1,2,3] == [1,2,3]` was #0 in the VM alone (DM-02).
+        //
+        // This function returns an ordering code and `==` reads 0 as equal, so a
+        // non-zero result also makes `<>` true — which is all `==`/`<>` need. It
+        // is not an order on arrays: no engine defines one, and the first
+        // differing element's code is returned only so equality is decided.
+        (Value::Array(x), Value::Array(y)) => {
             if x.len() != y.len() { return 1; }
             for (a, b) in x.iter().zip(y.iter()) {
                 let r = cmp_direct(a, b);
@@ -918,6 +950,11 @@ impl<W: Write> VM<W> {
                         VmError::IntOverflow { .. } | VmError::CastOverflow { .. } => "Range",
                         VmError::IndexOutOfBounds { .. } | VmError::IndexZero => "Index",
                         VmError::Io(_) => "IO",
+                        // A dictionary key that is not there is a ##Key, even
+                        // though the reader arrived through the index syntax
+                        // `d["k"]` (decision 10). The tree-walker classifies the
+                        // same way, from the same wording.
+                        VmError::Generic(m) if m.starts_with("no key '") => "Key",
                         _ => "_",
                     };
                     frame.try_depth = 0;
@@ -1507,6 +1544,37 @@ impl<W: Write> VM<W> {
                     }
                 }
                 &Instruction::ArrayGet(dst, arr_reg, idx_reg) => {
+                    // A dictionary is addressed by KEY, and the key may be
+                    // computed (decision 7, DM-09). Checked before the index is
+                    // read as an Int, which is what used to make `d[clave]` a
+                    // type error here.
+                    if let (Value::NamedTuple(fields), Value::String(key)) =
+                        (&self.value_stack[base + arr_reg as usize], self.reg_get(idx_reg))
+                    {
+                        let key = key.as_str().to_string();
+                        match fields.iter().find(|(k, _)| *k == key) {
+                            Some((_, v)) => { let v = v.clone(); self.reg_set(dst, v); }
+                            None => {
+                                let available: Vec<String> =
+                                    fields.iter().map(|(k, _)| k.clone()).collect();
+                                raise!(VmError::Generic(missing_key_msg(&key, &available)));
+                            }
+                        }
+                        continue;
+                    }
+                    // Decision 11: a dictionary is addressed by KEY, never by
+                    // position. In a mutable dictionary a positional index is
+                    // fragile — adding a key changes what sits at each position.
+                    if let (Value::NamedTuple(fields), Value::Int(_)) =
+                        (&self.value_stack[base + arr_reg as usize], self.reg_get(idx_reg))
+                    {
+                        let first = fields.first().map(|(k, _)| k.clone())
+                            .unwrap_or_else(|| "clave".to_string());
+                        raise!(VmError::Generic(format!(
+                            "a dictionary is addressed by key, not by position\nhelp: use d[\"{}\"] — adding a key changes what sits at each position",
+                            first
+                        )));
+                    }
                     let idx = match self.as_int(idx_reg) {
                         Ok(n) => n,
                         Err(e) => raise!(e),
@@ -1563,6 +1631,50 @@ impl<W: Write> VM<W> {
                         Err(e) => raise!(e),
                     }
                 }
+                &Instruction::IterPairs(dst, src) => {
+                    let val = match &self.value_stack[base + src as usize] {
+                        Value::NamedTuple(nt) => Value::Array(Rc::new(
+                            nt.iter()
+                                .map(|(k, v)| Value::Tuple(Rc::new(vec![
+                                    Value::String(ZyStr::new(k.clone())), v.clone(),
+                                ])))
+                                .collect::<Vec<_>>(),
+                        )),
+                        Value::String(s) => Value::Array(Rc::new(
+                            s.chars().map(Value::Char).collect::<Vec<_>>(),
+                        )),
+                        Value::Array(arr) => Value::Array(arr.clone()),
+                        Value::Tuple(t) => Value::Tuple(t.clone()),
+                        other => raise!(VmError::TypeError {
+                            expected: "String, Array or dictionary",
+                            got: other.type_name().to_string(),
+                        }),
+                    };
+                    self.reg_set(dst, val);
+                }
+                &Instruction::AssertMutable(reg, name_idx) => {
+                    if let Value::Tuple(_) = self.reg_get(reg) {
+                        let name = self.string_rcs[name_idx as usize].as_str();
+                        raise!(VmError::Generic(tuple_immutable_msg(name)));
+                    }
+                }
+                &Instruction::DeepSetInPlace(dst, path_reg, val_reg, name_idx) => {
+                    let val = self.reg_get(val_reg).clone();
+                    let path = match self.reg_get(path_reg) {
+                        Value::Array(p) => p.clone(),
+                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    let root = mem::replace(&mut self.value_stack[base + dst as usize], Value::Unit);
+                    if let Value::Tuple(_) = &root {
+                        self.value_stack[base + dst as usize] = root;
+                        let name = self.string_rcs[name_idx as usize].as_str();
+                        raise!(VmError::Generic(tuple_immutable_msg(name)));
+                    }
+                    match vm_deep_set(root, &path, val) {
+                        Ok(updated) => self.value_stack[base + dst as usize] = updated,
+                        Err(e) => raise!(e),
+                    }
+                }
                 &Instruction::ArraySet(arr_reg, idx_reg, val_reg) => {
                     let val = self.reg_get(val_reg).clone();
                     let idx_val = self.reg_get(idx_reg).clone();
@@ -1583,6 +1695,15 @@ impl<W: Write> VM<W> {
                         Value::NamedTuple(rc_fields) => {
                             let fields = Rc::make_mut(rc_fields);
                             match idx_val {
+                                // A positional WRITE corrupts data rather than
+                                // returning the wrong value: strictly worse than
+                                // the positional read decision 11 withdrew.
+                                Value::Int(_) => {
+                                    let first = fields.first().map(|(k, _)| k.clone());
+                                    raise!(VmError::Generic(dict_not_positional(
+                                        "d[n]$~ value", first.as_deref())));
+                                }
+                                #[allow(unreachable_patterns)]
                                 Value::Int(idx) => {
                                     let i = if idx == 0 { raise!(VmError::IndexZero);
                                     } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
@@ -1595,7 +1716,8 @@ impl<W: Write> VM<W> {
                                     if let Some(f) = fields.iter_mut().find(|(k, _)| k == name.as_str()) {
                                         f.1 = val;
                                     } else {
-                                        raise!(VmError::Generic(format!("named tuple has no field '{}'", name.as_str())));
+                                        // A key that is not there gets added.
+                                        fields.push((name.as_str().to_string(), val));
                                     }
                                 }
                                 other => raise!(VmError::TypeError { expected: "Int or String", got: other.type_name().to_string() }),
@@ -1615,6 +1737,27 @@ impl<W: Write> VM<W> {
                     self.reg_set(dst, Value::Int(n));
                 }
                 &Instruction::ArrayRemove(arr_reg, idx_reg) => {
+                    // In a dictionary the ADDRESS is the key, so `$-[…]` — which
+                    // already means "remove by address" for the array — is the
+                    // same operator with the same sense (decision 9). Checked
+                    // before the index is read as an Int.
+                    if let (Value::NamedTuple(fields), Value::String(key)) =
+                        (&self.value_stack[base + arr_reg as usize], self.reg_get(idx_reg))
+                    {
+                        let key = key.as_str().to_string();
+                        let mut out = fields.as_ref().clone();
+                        match out.iter().position(|(k, _)| *k == key) {
+                            Some(i) => { out.remove(i); }
+                            None => {
+                                let available: Vec<String> =
+                                    fields.iter().map(|(k, _)| k.clone()).collect();
+                                raise!(VmError::Generic(missing_key_msg(&key, &available)));
+                            }
+                        }
+                        self.value_stack[base + arr_reg as usize] =
+                            Value::NamedTuple(Rc::new(out));
+                        continue;
+                    }
                     let idx = self.as_int(idx_reg)?;
                     let result = match std::mem::replace(&mut self.value_stack[base + arr_reg as usize], Value::Unit) {
                         Value::Array(mut rc_arr) => {
@@ -1638,14 +1781,8 @@ impl<W: Write> VM<W> {
                             Value::Tuple(Rc::new(tup))
                         }
                         Value::NamedTuple(rc_fields) => {
-                            let mut fields = rc_fields.as_ref().clone();
-                            let i = if idx == 0 { raise!(VmError::IndexZero);
-                            } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
-                            if i < 0 || i as usize >= fields.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
-                            }
-                            fields.remove(i as usize);
-                            Value::NamedTuple(Rc::new(fields))
+                            let first = rc_fields.first().map(|(k, _)| k.clone());
+                            raise!(VmError::Generic(dict_not_positional("d$-[n]", first.as_deref())));
                         }
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
@@ -1793,10 +1930,9 @@ impl<W: Write> VM<W> {
                         }
                         Value::NamedTuple(rc_nt) => {
                             let mut fields = rc_nt.as_ref().clone();
-                            if lo <= hi && hi <= fields.len() {
-                                fields.drain(lo..hi);
-                            }
-                            self.value_stack[base + arr_reg as usize] = Value::NamedTuple(Rc::new(fields));
+                            let _ = (lo, hi);
+                            let first = fields.first().map(|(k, _)| k.clone());
+                            raise!(VmError::Generic(dict_not_positional("d$-[a..b]", first.as_deref())));
                         }
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
@@ -2038,7 +2174,18 @@ impl<W: Write> VM<W> {
                         }
                         Value::Array(arr)       => Value::Array(arr.clone()),
                         Value::Tuple(t)         => Value::Tuple(t.clone()),
-                        Value::NamedTuple(nt)   => Value::NamedTuple(nt.clone()),
+                        // A dictionary yields its KEYS, in insertion order —
+                        // `for k in d` as Python spells it (decision 8). It used
+                        // to pass the dictionary through unchanged, so the
+                        // indexed read below handed back the VALUES, while the
+                        // tree-walker refused to walk one at all: three engines,
+                        // two answers, and neither was the decided one.
+                        //
+                        // With `d[k]` available the key is enough to reach the
+                        // value, so no destructuring pattern has to enter `@`.
+                        Value::NamedTuple(nt) => Value::Array(Rc::new(
+                            nt.iter().map(|(k, _)| Value::String(ZyStr::new(k.clone()))).collect::<Vec<_>>(),
+                        )),
                         other => raise!(VmError::TypeError {
                             expected: "String or Array",
                             got: other.type_name().to_string(),
@@ -2366,6 +2513,22 @@ impl<W: Write> VM<W> {
                             Value::String(sub) => s.as_ref().contains(sub.as_str()),
                             _ => false,
                         },
+                        // On a DICTIONARY the question is about the KEY, which
+                        // is what `in` asks in Python and in JS. Decision 10
+                        // makes reading an absent key an error, so this is what
+                        // lets a dictionary built piece by piece be consulted at
+                        // all. A POSITIONAL tuple keeps the value question:
+                        // there are no keys to ask about.
+                        Value::NamedTuple(fields) => match &elem {
+                            Value::String(key) => {
+                                fields.iter().any(|(k, _)| k.as_str() == key.as_str())
+                            }
+                            other => raise!(VmError::TypeError {
+                                expected: "String",
+                                got: other.type_name().to_string(),
+                            }),
+                        },
+                        Value::Tuple(t) => t.as_ref().iter().any(|v| v.equals(&elem)),
                         other => raise!(VmError::TypeError { expected: "Array or String", got: other.type_name().to_string() }),
                     };
                     self.reg_set(dst, Value::Bool(result));
@@ -2400,9 +2563,12 @@ impl<W: Write> VM<W> {
                             let len = fields.len() as i64;
                             let lo_norm = (if lo == 0 { 0i64 } else if lo < 0 { len + lo } else { lo - 1 }).max(0).min(len) as usize;
                             let hi_norm = (if hi < 0 { len + hi + 1 } else { hi }).max(0).min(len) as usize;
-                            let lo_norm = lo_norm.min(fields.len());
-                            let hi_norm = hi_norm.min(fields.len()).max(lo_norm);
-                            Value::NamedTuple(Rc::new(fields[lo_norm..hi_norm].to_vec()))
+                            let _ = (lo_norm, hi_norm);
+                            // No key-based replacement, and it does not get one:
+                            // "the first two keys" is not a question a dictionary
+                            // should answer — Python's `dict` has no slicing.
+                            let first = fields.first().map(|(k, _)| k.clone());
+                            raise!(VmError::Generic(dict_not_positional("d$[a..b]", first.as_deref())));
                         }
                         // Strings slice too. The tree-walker has always allowed
                         // `s$[3..]`; the VM only reached this instruction when
@@ -2560,10 +2726,7 @@ impl<W: Write> VM<W> {
                                 Some(v) => v,
                                 None => {
                                     let available: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
-                                    raise!(VmError::Generic(format!(
-                                        "Named tuple has no field '{}'. Available fields: {}",
-                                        field_name, available.join(", ")
-                                    )));
+                                    raise!(VmError::Generic(missing_key_msg(&field_name, &available)));
                                 }
                             }
                         }
@@ -3424,6 +3587,39 @@ impl<W: Write> VM<W> {
 
                 // ── Array/Tuple indexing ──────────────────────────────────────
                 &Instruction::ArrayGet(dst, arr_reg, idx_reg) => {
+                    // The dictionary rules, same as the main dispatch loop above.
+                    // This second loop is the one a LOOP BODY runs through, which
+                    // is exactly where `@ k:d { >> d[k] ¶ }` lives — patching
+                    // only the first one left the commonest use of a computed key
+                    // failing with "expected Int, got String".
+                    if let Value::NamedTuple(fields) = r!(arr_reg) {
+                        match r!(idx_reg) {
+                            Value::String(key) => {
+                                let key = key.as_str().to_string();
+                                let fields = fields.clone();
+                                match fields.iter().find(|(k, _)| *k == key) {
+                                    Some((_, v)) => { let v = v.clone(); w!(dst, v); }
+                                    None => {
+                                        let available: Vec<String> =
+                                            fields.iter().map(|(k, _)| k.clone()).collect();
+                                        return Err(VmError::Generic(
+                                            missing_key_msg(&key, &available)));
+                                    }
+                                }
+                                continue;  // `ip` was advanced before the match
+                            }
+                            // Decision 11: addressed by key, never by position.
+                            Value::Int(_) => {
+                                let first = fields.first().map(|(k, _)| k.clone())
+                                    .unwrap_or_else(|| "clave".to_string());
+                                return Err(VmError::Generic(format!(
+                                    "a dictionary is addressed by key, not by position\nhelp: use d[\"{}\"] — adding a key changes what sits at each position",
+                                    first
+                                )));
+                            }
+                            _ => {}
+                        }
+                    }
                     let idx = match r!(idx_reg) { Value::Int(n) => *n, _ => 0 };
                     let val = match r!(arr_reg).clone() {
                         Value::Array(arr) => {
@@ -3488,6 +3684,14 @@ impl<W: Write> VM<W> {
                     let elem = r!(elem_reg).clone();
                     let found = match r!(arr_reg) {
                         Value::Array(arr) => arr.iter().any(|v| v.equals(&elem)),
+                        // On a dictionary the question is about the KEY.
+                        Value::NamedTuple(fields) => match &elem {
+                            Value::String(key) => {
+                                fields.iter().any(|(k, _)| k.as_str() == key.as_str())
+                            }
+                            _ => false,
+                        },
+                        Value::Tuple(t) => t.iter().any(|v| v.equals(&elem)),
                         _ => false,
                     };
                     w!(dst, Value::Bool(found));
@@ -4019,6 +4223,26 @@ impl<W: Write> VM<W> {
                     let updated = vm_deep_set(root, &path, val)?;
                     self.value_stack[base + dst as usize] = updated;
                 }
+                &Instruction::AssertMutable(reg, name_idx) => {
+                    if let Value::Tuple(_) = r!(reg) {
+                        let name = self.string_rcs[name_idx as usize].as_str();
+                        return Err(VmError::Generic(tuple_immutable_msg(name)));
+                    }
+                }
+                &Instruction::DeepSetInPlace(dst, path_reg, val_reg, name_idx) => {
+                    let val = r!(val_reg).clone();
+                    let path = match r!(path_reg) {
+                        Value::Array(p) => p.clone(),
+                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    let root = mem::replace(&mut self.value_stack[base + dst as usize], Value::Unit);
+                    if let Value::Tuple(_) = &root {
+                        let name = self.string_rcs[name_idx as usize].as_str();
+                        return Err(VmError::Generic(tuple_immutable_msg(name)));
+                    }
+                    let updated = vm_deep_set(root, &path, val)?;
+                    self.value_stack[base + dst as usize] = updated;
+                }
 
                 _ => {
                     // For unsupported instructions in HOF mini-VM, skip
@@ -4034,6 +4258,46 @@ impl<W: Write> VM<W> {
 /// `deep_update_value` over VM values. Steps are Int (1-based, negative counts
 /// from the end) for arrays, tuples, and named tuples; a String step addresses
 /// a named-tuple field by name. An empty remaining path replaces the value.
+/// The tree-walker's refusal of `t[i] = val`, word for word.
+///
+/// Spelled once and quoted from here because `zyq consensus` compares text: two
+/// engines that refuse the same program with different wording are still a
+/// divergence. The tree-walker's copy is in
+/// `zymbol-interpreter/src/variables.rs`.
+fn tuple_immutable_msg(name: &str) -> String {
+    format!(
+        "cannot modify tuple '{}': tuples are immutable\nhelp: use 'new = {}[i]$~ value' for a functional update",
+        name, name
+    )
+}
+
+/// The refusal of an absent dictionary key, spelled as the tree-walker spells
+/// it (`zymbol-interpreter::variables::missing_key_msg`) — `zyq consensus`
+/// compares text, and this engine used to say the least of the three: no list of
+/// available keys at all.
+/// The refusal of a positional address on a dictionary, spelled as the
+/// tree-walker spells it (`collection_ops::dict_not_positional`).
+///
+/// Decision 11 withdrew `d[2]`, and the reasoning covers the whole family: in a
+/// mutable dictionary a position is not a stable address. A positional WRITE is
+/// strictly worse than a positional read, since it corrupts data rather than
+/// returning the wrong value.
+fn dict_not_positional(op: &str, first_key: Option<&str>) -> String {
+    let k = first_key.unwrap_or("clave");
+    format!(
+        "a dictionary is addressed by key, not by position: `{}` has no meaning here\nhelp: use the key — d[\"{}\"], d[\"{}\"]$~ value, d$-[\"{}\"] — because adding a key changes what sits at each position",
+        op, k, k, k
+    )
+}
+
+fn missing_key_msg(key: &str, available: &[String]) -> String {
+    if available.is_empty() {
+        format!("no key '{}' in dictionary — it is empty", key)
+    } else {
+        format!("no key '{}' in dictionary — available: {}", key, available.join(", "))
+    }
+}
+
 fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmError> {
     let Some((step, rest)) = path.split_first() else {
         return Ok(new_val);
@@ -4074,14 +4338,24 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
             let i = match step {
                 Value::String(name) => match fields.iter().position(|(k, _)| k == name.as_str()) {
                     Some(i) => i,
+                    // A key that is not there gets ADDED, as it does in Python.
+                    // The array refuses the same move (decision 13) and the two
+                    // are not inconsistent: an array is addressed by POSITION,
+                    // so writing past the end leaves a hole; a dictionary is
+                    // addressed by KEY and has no holes to leave.
                     None => {
-                        return Err(VmError::Generic(format!(
-                            "named tuple has no field '{}'",
-                            name.as_str()
-                        )))
+                        fields.push((name.as_str().to_string(), Value::Unit));
+                        fields.len() - 1
                     }
                 },
-                other => resolve(int_step(other)?, fields.len())?,
+                // A positional WRITE corrupts data rather than returning the
+                // wrong value: strictly worse than the positional read that
+                // decision 11 withdrew.
+                _ => {
+                    let first = fields.first().map(|(k, _)| k.clone());
+                    return Err(VmError::Generic(dict_not_positional(
+                        "d[n]$~ value", first.as_deref())));
+                }
             };
             let sub = mem::replace(&mut fields[i].1, Value::Unit);
             fields[i].1 = vm_deep_set(sub, rest, new_val)?;

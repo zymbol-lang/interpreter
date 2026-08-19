@@ -31,8 +31,15 @@ impl Parser {
             // arr[[...]] — double bracket → structured or flat-wrapped extract
             TokenKind::LBracket => true,
 
-            // arr[n>...] or arr[n;...] or arr[n..end] — nav path with plain atom
-            TokenKind::Integer(_) | TokenKind::Ident(_) => {
+            // arr[n>...] or arr[n;...] or arr[n..end] — nav path with plain atom.
+            //
+            // `String` is here so a LITERAL key can start a path:
+            // `config["servidor">"puerto"]`. Without it the `>` was read as a
+            // comparison and the whole thing became `index must be an integer,
+            // got Bool(true)`. A step is an ordinary expression whose value says
+            // how to address — Int is a position, String is a key — so a literal
+            // and a variable holding the same string mean the same thing.
+            TokenKind::Integer(_) | TokenKind::Ident(_) | TokenKind::String(_) => {
                 match self.peek_ahead(2) {
                     Some(t) => matches!(
                         t.kind,
@@ -322,6 +329,14 @@ impl Parser {
                 self.advance();
                 Ok(Box::new(Expr::Identifier(IdentifierExpr::new(name, token.span))))
             }
+            // A literal dictionary key: `config["servidor">"puerto"]`. A step is
+            // an ordinary expression whose value says how to address, so a
+            // literal and a variable holding the same string mean the same.
+            TokenKind::String(s) => {
+                let s = s.clone();
+                self.advance();
+                Ok(Box::new(Expr::Literal(LiteralExpr::new(Literal::String(s), token.span))))
+            }
             TokenKind::LParen => {
                 self.advance(); // consume `(`
                 let expr = self.parse_expr()?;
@@ -338,7 +353,7 @@ impl Parser {
                 Ok(Box::new(Expr::Group(GroupExpr::new(Box::new(expr), span))))
             }
             _ => Err(Diagnostic::error(
-                "expected index: integer, variable, or (expression)",
+                "expected navigation step: a position (integer or variable) or a dictionary key (string)",
             )
             .with_span(token.span)
             .with_help(

@@ -60,7 +60,7 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 | Functions + output params | ✅ | ✅ | |
 | Lambdas / closures | ✅ | ✅ | |
 | Arrays (full CRUD) | ✅ | ✅ | |
-| `arr[i] = val` (direct update) | ✅ | ✅ | Sprint 5I |
+| ~~`arr[i] = val`~~ (direct update) | ❌ | ❌ | **Withdrawn in v0.0.9.** `=` gives a value to a NAME; reaching inside a structure is `$~`. Refused in all three engines; the migration was 107 sites and every golden held |
 | `arr[i] += val` (compound indexed update) | ✅ | ✅ | |
 | `arr[i>j]` scalar deep access | ✅ | ✅ | v0.0.4 |
 | `arr[p;q]` flat extraction | ✅ | ✅ | v0.0.4 |
@@ -90,7 +90,8 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 | BashExec / Execute script | ✅ | ✅ | |
 | CLI args capture `><` | ✅ | ✅ | VM support added (`LoadCliArgs`) |
 | Negative array indices | ✅ | ✅ | `arr[-1]` normalized in both modes (v0.0.2) |
-| Destructuring assignment | ✅ | ✅ | Three patterns, all v0.0.2: `[a, b] = arr` (array), `(a, b) = t` (positional tuple), `(name: n) = t` (named tuple) |
+| Destructuring assignment | ✅ | ✅ | Three patterns, all v0.0.2: `[a, b] = arr` (array), `(a, b) = t` (positional tuple), `(name: n) = t` (dictionary). `_` discards a position in **both** the array and the tuple pattern (v0.0.9 — it was array-only) |
+| For-each with a pattern `@ (k, v):x` | ✅ | ✅ | v0.0.9 — the same pattern language in the loop head; on a dictionary it hands over `(clave, valor)` pairs, while `@ k:d` yields keys |
 | Named functions as first-class values | ✅ | ✅ | Fixed v0.0.4 audit: identifier → `MakeFunc`. Outer-scope captures work in the VM too (verified 2026-08-17: `base = 10` / `adder(n) { <~ n + base }` / `f = adder` gives 15 in both engines, and stays 15 after `base = 99`) |
 | `$!` error check | ✅ | ✅ | Fixed v0.0.4 audit: `Value::Error` variant + real `IsError` check |
 | `$!!` error propagation | ✅ | ✅ | Fixed v0.0.4 audit: `Expr::ErrorPropagate` compiled (IsError + branch + Return) |
@@ -100,7 +101,11 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 | String repeat `$*` | ✅ | ✅ | v0.0.5 |
 | FatArrow `=>` (match arms, import alias, export rename) | ✅ | ✅ | v0.0.6 breaking change — replaced `:` / `<=` |
 | Deep functional update `arr[i>j]$~ val` | ✅ | ✅ | v0.0.7 — `DeepSet` instruction; all `$~` forms (incl. positional tuples) route through it |
-| Named-tuple update `nt[i]$~` / `nt["field"]$~` | ✅ | ✅ | v0.0.6 |
+| Dictionary update `d["k"]$~ val` | ✅ | ✅ | v0.0.6; v0.0.9 **adds** the key when absent, and the positional form `d[i]$~` was withdrawn |
+| Dictionary read by computed key `d[k]` | ✅ | ✅ | v0.0.9 — it was `array index must be Int, got String` before, which made the thing a record rather than a dictionary |
+| Dictionary key ops `d$? "k"` / `d$-["k"]` / `@ k:d` | ✅ | ✅ | v0.0.9 — ask, remove, walk. Absent key raises `##Key` |
+| Declared-mixed array `#[…]` | ✅ | ✅ | v0.0.9 — same type as `[…]` (`#?` → `##]`); `[…]` is checked, `#[…]` is not, and a homogeneous `#[…]` warns |
+| Edit `$` as a statement | ✅ | ✅ | v0.0.9 — the rule of the result: result used → builds, result discarded → modifies in place. Replaces the withdrawn `arr[i] = v` |
 | `<<` input (prompt, numeric cast) in VM | ✅ | ✅ | v0.0.6 (`ReadLine` instruction) |
 | Typed/validated input `<< ##.(T,D) "p" var` | ✅ | ✅ | v0.0.7 — re-prompts until valid; `##.` `###` `##"` `##'` typespecs |
 | `std/math`, `std/random` | ✅ | ✅ | v0.0.6 — native stdlib via `<# std/<name> => alias` |
@@ -889,8 +894,10 @@ collection_remove_positional =
   collection_update — requires an already-indexed LHS; returns a NEW collection.  [C04]
   The  $~  token is only valid when the left-hand expression is an index expr:
     arr[i]$~ val           — array element (1-based, negative allowed)
-    tuple[i]$~ val         — positional/named tuple by index
-    nt["field"]$~ val      — named tuple by field-name string (v0.0.6)
+    tuple[i]$~ val         — positional tuple by index (builds; a tuple never changes)
+    d["field"]$~ val       — dictionary by key (v0.0.6); adds the key if absent (v0.0.9)
+    d[k1>k2]$~ val         — deep by key: a step's value decides, Int is a
+                             position and String is a key (v0.0.9)
     arr[i>j>…]$~ val       — deep update through a nav path (scalar steps only;
                              ranges (..) are not allowed in a $~ path)
 *)

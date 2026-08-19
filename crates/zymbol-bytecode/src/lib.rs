@@ -297,6 +297,44 @@ pub enum Instruction {
     /// level — mirrors the tree-walker's `$~` semantics (arr[i]$~, t[i]$~,
     /// nt["field"]$~, and deep arr[i>j>…]$~).
     DeepSet(Reg, Reg, Reg), // (dst_root, idx_path, val)
+    /// `DeepSet` for the *in-place* surface form `t[i] = val`, which is not the
+    /// same statement as the functional `new = t[i]$~ val` even though the
+    /// parser desugars both into a `CollectionUpdate`.
+    ///
+    /// The difference only matters for a positional tuple: a tuple is immutable
+    /// (GUIDE.md § 12), so `t[i] = val` has to be refused while `new = t[i]$~
+    /// val` has to work — it derives a second tuple and leaves the first alone.
+    /// The tree-walker tells them apart by `AssignSugar::IndexedAssign`; the
+    /// compiler used to drop that field, so both forms reached `DeepSet` and the
+    /// VM silently modified the tuple (`DM-16`).
+    ///
+    /// Refuses `Value::Tuple` at the root of the path, in the tree-walker's exact
+    /// words. Everything else behaves as `DeepSet`.
+    /// `(dst_root, idx_path, val, target_name)` — `target_name` is the pool
+    /// index of the assigned variable's name, carried for one reason: the
+    /// refusal has to be spelled in the tree-walker's exact words, and a
+    /// register has no name.
+    DeepSetInPlace(Reg, Reg, Reg, StrIdx),
+
+    /// `(dst, src)` — normalise an iterable for a `@ (a, b):x` loop.
+    ///
+    /// Same as `StrChars` except on a DICTIONARY, where it yields
+    /// `(clave, valor)` pairs instead of bare keys. `@ k:d` keeps yielding keys
+    /// (decision 8); the pattern form is what asks for both, and the pair is the
+    /// language's own answer to "several values that travel together".
+    IterPairs(Reg, Reg),
+
+    /// `(receiver, name)` — refuse an in-place edit on a positional tuple.
+    ///
+    /// Emitted once, at the top of a bare `$` edit statement, for every editing
+    /// operator that is not `$~` (which guards itself through `DeepSetInPlace`
+    /// because it already holds the root in a register). Immutability is a
+    /// property of the value and not of the operator, so `$+`, `$-`, `$^`… all
+    /// share this one check rather than each carrying its own exception.
+    ///
+    /// `name` is the pool index of the receiver's name, so the refusal is
+    /// spelled in the tree-walker's exact words.
+    AssertMutable(Reg, StrIdx),
 
     // ── Halt ─────────────────────────────────────────────────────────────
     Halt,

@@ -30,7 +30,12 @@ pub(crate) fn str_as_float(s: &str) -> Option<f64> {
 /// four engines report it. The operands are echoed because `integer overflow`
 /// on its own tells a reader nothing about which of the operations on the line
 /// produced it.
-fn int_result(v: Option<i64>, a: i64, op: &str, b: i64, span: &Span) -> Result<Value> {
+/// Turn a checked integer result into a value or a `##Range` error.
+///
+/// `pub(crate)` because the fast paths in `expressions.rs` and
+/// `variables.rs` have to raise the same error in the same words: they used
+/// to wrap instead, which is `DM-01`.
+pub(crate) fn int_result(v: Option<i64>, a: i64, op: &str, b: i64, span: &Span) -> Result<Value> {
     match v {
         Some(n) => Ok(Value::Int(n)),
         None => Err(RuntimeError::Generic {

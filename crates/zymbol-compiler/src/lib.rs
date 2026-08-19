@@ -17,6 +17,7 @@ use zymbol_ast::{
     InputPrompt, InputCast,
 };
 use zymbol_lexer::StringPart;
+use zymbol_ast::AssignSugar;
 use zymbol_ast::Pattern;
 use zymbol_ast::BasePrefix;
 use zymbol_ast::CastKind;
@@ -946,9 +947,11 @@ impl Compiler {
                         ctx.postfix_hot_vars.insert(a.name.clone());
                     }
                 }
-                self.compile_assignment(&a.name, &a.value, ctx)
+                self.compile_assignment(&a.name, &a.value, a.sugar, ctx)
             }
-            Statement::ConstDecl(c) => self.compile_assignment(&c.name, &c.value, ctx),
+            Statement::ConstDecl(c) => {
+                self.compile_assignment(&c.name, &c.value, AssignSugar::None, ctx)
+            }
             Statement::Output(o) => self.compile_output(o, ctx),
             Statement::Newline(_n) => {
                 ctx.emit(Instruction::PrintNewline);
@@ -1139,8 +1142,23 @@ impl Compiler {
         &mut self,
         name: &str,
         value: &Expr,
+        sugar: AssignSugar,
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
+        // A bare `$` edit statement modifies its receiver, and a positional
+        // tuple does not change. `$~` guards itself through `DeepSetInPlace`,
+        // which already holds the root in a register; every other editing
+        // operator gets the check here, once, on the receiver — because
+        // immutability is a property of the value, not of the operator
+        // (forma/tuplas.zy § 6).
+        if sugar == AssignSugar::InPlaceEdit
+            && !matches!(value.unwrap_group(), Expr::CollectionUpdate(_))
+        {
+            if let Ok(r_recv) = ctx.get_reg(name) {
+                let idx = self.intern_string(name);
+                ctx.emit(Instruction::AssertMutable(r_recv, idx));
+            }
+        }
         // Optimise: arr = arr$+ elem → ArrayPush in-place (O(1), no clone)
         if let Expr::CollectionAppend(ca) = value {
             if let Expr::Identifier(ident) = ca.collection.unwrap_group() {
@@ -1161,7 +1179,25 @@ impl Compiler {
             }
         }
 
-        let src = self.compile_expr(value, ctx)?;
+        // `t[i] = val` and `t[i] op= val` were desugared by the parser into a
+        // CollectionUpdate, so by the time they arrive here they look exactly
+        // like the functional `new = t[i]$~ val`. Only `sugar` still records
+        // which one the programmer wrote, and the difference is not cosmetic: a
+        // positional tuple must refuse the in-place form and allow the
+        // functional one. The compiler used to drop the field, both forms
+        // reached `DeepSet`, and the VM modified the tuple in silence (DM-16).
+        let in_place = matches!(
+            sugar,
+            AssignSugar::IndexedAssign
+                | AssignSugar::IndexedCompound(_)
+                | AssignSugar::InPlaceEdit
+        );
+        let src = match value.unwrap_group() {
+            Expr::CollectionUpdate(cu) if in_place => {
+                self.compile_collection_update_as(cu, Some(name), ctx)?
+            }
+            _ => self.compile_expr(value, ctx)?,
+        };
         let src_ty = ctx.get_reg_type(src);
 
         // If this name is a module global var, emit StoreGlobal instead of local register assign
@@ -1340,6 +1376,34 @@ impl Compiler {
         lp: &Loop,
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
+        // `@ (k, v):x { … }` desugars to `@ __zy_par:x { (k, v) = __zy_par; … }`,
+        // which reuses the foreach compilation and the destructure compilation
+        // unchanged. The only piece that is genuinely new is `IterPairs`, which
+        // hands a DICTIONARY over as `(clave, valor)` pairs — `@ k:d` still
+        // yields keys (decision 8).
+        if let Some(pattern) = &lp.iterator_pattern {
+            let tmp = "__zy_par".to_string();
+            let mut body = lp.body.clone();
+            let span = lp.span;
+            body.statements.insert(0, zymbol_ast::Statement::DestructureAssign(
+                zymbol_ast::DestructureAssign {
+                    pattern: pattern.clone(),
+                    value: Box::new(Expr::Identifier(zymbol_ast::IdentifierExpr::new(tmp.clone(), span))),
+                    span,
+                },
+            ));
+            let desugared = zymbol_ast::Loop {
+                condition: None,
+                iterator_var: Some(tmp),
+                iterator_pattern: None,
+                iterable: lp.iterable.clone(),
+                body,
+                label: lp.label.clone(),
+                span,
+            };
+            return self.compile_foreach_loop(&desugared, ctx);
+        }
+
         // Four cases: infinite, while, range for-each, array for-each
         if lp.iterator_var.is_some() {
             // Check if iterable is a Range or an array/expression
@@ -2846,42 +2910,7 @@ impl Compiler {
                     skips.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                 }
                 Pattern::Ident(name, _) => {
-                    // Load the variable; if array → containment, else → equality
-                    let r_var = if let Ok(r) = ctx.get_reg(name) {
-                        r
-                    } else if let Some(mc) = self.global_consts.get(name).cloned() {
-                        let r = ctx.alloc_temp()?;
-                        let instr = match mc {
-                            ModuleConst::Int(n)    => Instruction::LoadInt(r, n),
-                            ModuleConst::Float(f)  => { ctx.set_reg_type(r, StaticType::Float); Instruction::LoadFloat(r, f) }
-                            ModuleConst::String(s) => { let idx = self.intern_string(&s); ctx.set_reg_type(r, StaticType::String); Instruction::LoadStr(r, idx) }
-                            ModuleConst::Bool(b)   => { ctx.set_reg_type(r, StaticType::Bool); Instruction::LoadBool(r, b) }
-                            ModuleConst::Char(c)   => { ctx.set_reg_type(r, StaticType::Char); Instruction::LoadChar(r, c) }
-                        };
-                        ctx.emit(instr);
-                        r
-                    } else if let Some(&gvar_idx) = self.global_var_map.get(name) {
-                        let r = ctx.alloc_temp()?;
-                        ctx.emit(Instruction::LoadGlobal(r, gvar_idx));
-                        r
-                    } else {
-                        return Err(CompileError::UndefinedVariable(name.clone()));
-                    };
-                    // Runtime dispatch: array variable → containment check, scalar → equality
-                    let r_is_arr = ctx.alloc_temp()?;
-                    ctx.emit(Instruction::IsArray(r_is_arr, r_var));
-                    let patch_to_eq = ctx.emit_jump_if_not_placeholder(r_is_arr);
-                    // Array branch: ArrayContains(r_cmp, r_var, r_sub)
-                    let r_cmp = ctx.alloc_temp()?;
-                    ctx.emit(Instruction::ArrayContains(r_cmp, r_var, r_sub));
-                    let patch_arr_skip = ctx.emit_jump_placeholder(); // jump over eq branch
-                    // Scalar branch:
-                    let eq_label = ctx.current_label();
-                    ctx.patch_jump(patch_to_eq, eq_label);
-                    ctx.emit(Instruction::CmpEq(r_cmp, r_sub, r_var));
-                    // Merge point:
-                    let merge_label = ctx.current_label();
-                    ctx.patch_jump(patch_arr_skip, merge_label);
+                    let r_cmp = self.compile_ident_pattern_test(name, r_sub, ctx)?;
                     skips.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                 }
                 Pattern::List(patterns, _) => {
@@ -2934,6 +2963,34 @@ impl Compiler {
                                         struct_skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                                     }
                                     _ => {}
+                                }
+                            }
+                            // An identifier is a value to compare, and the whole
+                            // point of DM-26 is that it used to fall through the
+                            // catch-all below and match silently.
+                            Pattern::Ident(name, _) => {
+                                let r_idx = ctx.alloc_temp()?;
+                                ctx.emit(Instruction::LoadInt(r_idx, (i + 1) as i64));
+                                let r_elem = ctx.alloc_temp()?;
+                                ctx.emit(Instruction::ArrayGet(r_elem, r_sub, r_idx));
+                                match self.compile_ident_pattern_test(name, r_elem, ctx) {
+                                    Ok(r_cmp) => {
+                                        struct_skip_patches
+                                            .push(ctx.emit_jump_if_not_placeholder(r_cmp));
+                                    }
+                                    // An undefined name has to fail *when the arm
+                                    // is reached*, not when the file is compiled.
+                                    // The arity check above already jumped out on
+                                    // a length mismatch, so the tree-walker never
+                                    // looks at `a` in `?? [1,2] { [a,b,c] => … }`
+                                    // and answers `_`. Raising here at compile
+                                    // time would refuse a program it runs.
+                                    Err(CompileError::UndefinedVariable(n)) => {
+                                        let idx = self.intern_string(&format!(
+                                            "undefined variable '{}' in match pattern", n));
+                                        ctx.emit(Instruction::RaiseError(idx));
+                                    }
+                                    Err(e) => return Err(e),
                                 }
                             }
                             _ => {}
@@ -3082,11 +3139,98 @@ impl Compiler {
         Ok(dst)
     }
 
+    /// Compile the test an `Ident` pattern performs against `r_sub`, leaving the
+    /// boolean result in the returned register.
+    ///
+    /// An identifier in a pattern is a **value that gets compared**, never a name
+    /// that gets bound — `?? codigo { umbral => … }` compares `codigo` against
+    /// the value of `umbral` (`corpus/match/13_ident_scalar.zy`), and an
+    /// identifier naming nothing is an error, which is what
+    /// `CompileError::UndefinedVariable` below is for.
+    ///
+    /// Extracted so the list pattern can run the same test on each element. It
+    /// could not before: the structural path handled only `Wildcard` and
+    /// `Literal` and let everything else fall through a catch-all that emitted
+    /// nothing, so `?? [9,8,7] { [a, b, c] => … }` **took the branch** with `a`,
+    /// `b` and `c` undefined, while the tree-walker refused it. A pattern that
+    /// matches when it should raise is the worst way to be wrong, and this is
+    /// the engine that is going to be the default (DM-26).
+    fn compile_ident_pattern_test(
+        &mut self,
+        name: &str,
+        r_sub: Reg,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        // Load the variable; if array → containment, else → equality
+        let r_var = if let Ok(r) = ctx.get_reg(name) {
+            r
+        } else if let Some(mc) = self.global_consts.get(name).cloned() {
+            let r = ctx.alloc_temp()?;
+            let instr = match mc {
+                ModuleConst::Int(n)    => Instruction::LoadInt(r, n),
+                ModuleConst::Float(f)  => { ctx.set_reg_type(r, StaticType::Float); Instruction::LoadFloat(r, f) }
+                ModuleConst::String(s) => { let idx = self.intern_string(&s); ctx.set_reg_type(r, StaticType::String); Instruction::LoadStr(r, idx) }
+                ModuleConst::Bool(b)   => { ctx.set_reg_type(r, StaticType::Bool); Instruction::LoadBool(r, b) }
+                ModuleConst::Char(c)   => { ctx.set_reg_type(r, StaticType::Char); Instruction::LoadChar(r, c) }
+            };
+            ctx.emit(instr);
+            r
+        } else if let Some(&gvar_idx) = self.global_var_map.get(name) {
+            let r = ctx.alloc_temp()?;
+            ctx.emit(Instruction::LoadGlobal(r, gvar_idx));
+            r
+        } else {
+            return Err(CompileError::UndefinedVariable(name.to_string()));
+        };
+        // Runtime dispatch: array variable → containment check, scalar → equality
+        let r_is_arr = ctx.alloc_temp()?;
+        ctx.emit(Instruction::IsArray(r_is_arr, r_var));
+        let patch_to_eq = ctx.emit_jump_if_not_placeholder(r_is_arr);
+        // Array branch: ArrayContains(r_cmp, r_var, r_sub)
+        let r_cmp = ctx.alloc_temp()?;
+        ctx.emit(Instruction::ArrayContains(r_cmp, r_var, r_sub));
+        let patch_arr_skip = ctx.emit_jump_placeholder(); // jump over eq branch
+        // Scalar branch:
+        let eq_label = ctx.current_label();
+        ctx.patch_jump(patch_to_eq, eq_label);
+        ctx.emit(Instruction::CmpEq(r_cmp, r_sub, r_var));
+        // Merge point:
+        let merge_label = ctx.current_label();
+        ctx.patch_jump(patch_arr_skip, merge_label);
+        Ok(r_cmp)
+    }
+
     fn compile_collection_update(
         &mut self,
         cu: &zymbol_ast::CollectionUpdateExpr,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
+        // A bare `$~` expression is the functional update: it derives a new
+        // collection and a tuple is a legal target.
+        self.compile_collection_update_as(cu, None, ctx)
+    }
+
+    /// `compile_collection_update`, told whether the source form was the
+    /// in-place `t[i] = val` (`in_place`) or the functional `t[i]$~ val`.
+    /// The only thing it changes is which opcode carries the write, and the
+    /// only thing that distinguishes them is whether a positional tuple at the
+    /// root is refused.
+    fn compile_collection_update_as(
+        &mut self,
+        cu: &zymbol_ast::CollectionUpdateExpr,
+        in_place: Option<&str>,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        // The assigned variable's name, interned once, so the VM can name it in
+        // the refusal exactly as the tree-walker does.
+        let target = match in_place {
+            Some(name) => Some(self.intern_string(name)),
+            None => None,
+        };
+        let deep_set = move |dst, path, val| match target {
+            Some(idx) => Instruction::DeepSetInPlace(dst, path, val, idx),
+            None => Instruction::DeepSet(dst, path, val),
+        };
         match cu.target.unwrap_group() {
             // Single-level: arr[i]$~ val, t[i]$~ val, nt["field"]$~ val.
             // Routed through DeepSet (not ArraySet) because $~ is the functional
@@ -3102,7 +3246,7 @@ impl Compiler {
                 let r_val = self.compile_expr(&cu.value, ctx)?;
                 let dst = ctx.alloc_temp()?;
                 ctx.emit(Instruction::CopyReg(dst, r_arr));
-                ctx.emit(Instruction::DeepSet(dst, r_path, r_val));
+                ctx.emit(deep_set(dst, r_path, r_val));
                 Ok(dst)
             }
             // Deep: arr[i>j>…]$~ val
@@ -3123,7 +3267,7 @@ impl Compiler {
                 let r_val = self.compile_expr(&cu.value, ctx)?;
                 let dst = ctx.alloc_temp()?;
                 ctx.emit(Instruction::CopyReg(dst, r_root));
-                ctx.emit(Instruction::DeepSet(dst, r_path, r_val));
+                ctx.emit(deep_set(dst, r_path, r_val));
                 Ok(dst)
             }
             _ => Err(CompileError::Unsupported("collection update on non-index expr".into())),
@@ -3499,7 +3643,7 @@ impl Compiler {
         let iter_var = lp.iterator_var.as_ref().unwrap();
         let iterable = lp.iterable.as_ref().unwrap();
 
-        let r_coll = self.compile_expr(iterable, ctx)?;
+        let mut r_coll = self.compile_expr(iterable, ctx)?;
         let coll_is_string = ctx.get_reg_type(r_coll) == StaticType::String;
 
         let r_len = ctx.alloc_temp()?;
@@ -3514,8 +3658,26 @@ impl Compiler {
             ctx.emit(Instruction::StrLen(r_len, r_coll));
             ctx.emit(Instruction::LoadInt(r_idx, 0));
         } else {
-            // Generic path: StrChars converts String→Array<Char> once, O(1) for arrays.
-            ctx.emit(Instruction::StrChars(r_coll, r_coll));
+            // Generic path: StrChars normalises the collection once — O(1) for an
+            // array, String→Array<Char>, and dictionary→array of KEYS.
+            //
+            // Into a FRESH register, not over `r_coll`. When the iterable is a
+            // bare name, `r_coll` IS that variable's register, so writing the
+            // normalised form back over it replaced the variable for the rest of
+            // the loop. Nobody could see it while the normalisation was a no-op
+            // for arrays and the String path was taken statically — but the
+            // moment a dictionary normalised to its keys, `@ k:d { … d[k] … }`
+            // indexed the key array instead of the dictionary and answered
+            // "expected Int, got String".
+            let r_iter = ctx.alloc_temp()?;
+            // `__zy_par` is the desugared pattern loop: a dictionary has to be
+            // handed over as pairs there, and as bare keys everywhere else.
+            if iter_var == "__zy_par" {
+                ctx.emit(Instruction::IterPairs(r_iter, r_coll));
+            } else {
+                ctx.emit(Instruction::StrChars(r_iter, r_coll));
+            }
+            r_coll = r_iter;
             ctx.emit(Instruction::ArrayLen(r_len, r_coll));
             ctx.emit(Instruction::LoadInt(r_idx, 1));  // 1-based: start at 1
         }
@@ -4375,6 +4537,9 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::ArrayPush(a, e) => { upd(*a); upd(*e); }
             Instruction::ArrayGet(d, a, i) | Instruction::ArraySet(d, a, i)
             | Instruction::DeepSet(d, a, i) => { upd(*d); upd(*a); upd(*i); }
+            Instruction::DeepSetInPlace(d, a, i, _) => { upd(*d); upd(*a); upd(*i); }
+            Instruction::AssertMutable(r, _) => { upd(*r); }
+            Instruction::IterPairs(d, s) => { upd(*d); upd(*s); }
             Instruction::ArrayRemove(d, a) | Instruction::ArrayRemoveValue(d, a)
             | Instruction::ArrayRemoveAll(d, a) | Instruction::ArrayRemoveRange(d, a) => { upd(*d); upd(*a); }
             Instruction::ArrayInsert(d, i, v) => { upd(*d); upd(*i); upd(*v); }

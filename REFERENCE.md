@@ -185,15 +185,22 @@ record = ["English", "en.zy", #0]    // ❌ String + String + Bool
 
 **Why**: arrays are Zymbol's ordered mutable collection for uniform data — sequences of the same kind of value. This constraint enables type-safe collection operations (`$>`, `$|`, `$<`, `$^`) without runtime type dispatch.
 
-**Heterogeneous records belong in named tuples**, which are immutable and field-named:
+A deliberate mix in an array is **declared** with `#[…]`, which is the same type
+(`#?` answers `##]` for both) and is not checked:
 
 ```zymbol
-// ✅ Named tuple — heterogeneous, immutable, field-addressed:
+mixto = #[#0, 1, '2', "tres", 4.0]     // ✅ the mix is declared
+```
+
+**Heterogeneous records belong in dictionaries**, which are key-addressed:
+
+```zymbol
+// ✅ Dictionary — heterogeneous, mutable, key-addressed:
 record = (lang: "English", file: "en.zy", active: #1)
 >> record.lang ¶
 >> record.active ¶
 
-// ✅ Array of named tuples — uniform container of heterogeneous records:
+// ✅ Array of dictionaries — uniform container of heterogeneous records:
 langs = [
     (lang: "English", file: "en.zy",  active: #1),
     (lang: "Spanish", file: "es.zy",  active: #1),
@@ -204,7 +211,9 @@ langs = [
 }
 ```
 
-The design distinction maps cleanly: **arrays = typed sequences**, **named tuples = structured records**.
+The design distinction maps cleanly: **`[…]` = typed sequences**, **`#[…]` = a
+declared mix**, **`(a: 1)` = key-addressed records**, **`(1, 2)` = a fixed,
+immutable group of values that travel together.
 
 ---
 
@@ -755,6 +764,77 @@ Corpus **597/597** and the example pool **210/210**, all three engines.
 
 ---
 
+### L39 — `>>` takes arithmetic, not comparison — **by design**
+
+The output operator has a narrower grammar than the rest of the language. Everything up to and
+including arithmetic works; comparison and the logical operators do not:
+
+| Written | Result |
+|---|---|
+| `>> 2 + 3 * 4 ¶` | `14` |
+| `>> -7 % 3 ¶` | `-1` |
+| `>> -2 ^ 2 ¶` | `4` |
+| `>> 1 == 1 ¶` | **parse error** |
+| `>> #1 && #0 ¶` | **parse error** |
+| `>> (1 == 1) ¶` | `#1` — parentheses always work |
+
+**The cause.** Arguments are juxtaposed — `>> "x=" n " end" ¶` is three of them — so the parser
+must decide where one argument ends and the next begins. `<` and `>` are the same characters
+that open `<#` and `<~` and close `>>|`, and a comparison in argument position is ambiguous
+against the next argument. The cut is drawn below comparison, and parentheses lift anything
+over it.
+
+**Two traps inside the rule**, both worth stating because both were wrong somewhere:
+
+- `+` and `-` **join** two arguments rather than separating them. `>> "Score: " -95 ¶` is
+  `"Score: " - 95` — an arithmetic error on a string, not two items. Write
+  `>> "Score: " (-95) ¶`. Every engine agrees, which is why no suite ever flagged it.
+- A leading unary is a *term*, so the rest of the arithmetic still applies to it. This was
+  broken until v0.0.9: the output parser returned as soon as it saw `-`, so `>> 7 % 3 ¶`
+  printed `1` while `>> -7 % 3 ¶` was `error: expected expression, found Percent`, and
+  `-5 / 2`, `-3 * 4`, `-2 * -3` and `-2 ^ 2` failed with it. The resulting rule — `%` works,
+  but not after a minus — was not one anybody could learn. Fixed in v0.0.9; the browser
+  engine, which had been accepting the *whole* expression language here, was narrowed to the
+  same cut in the same change, so a program written in the playground parses outside it.
+
+Gate: `zyquality/corpus/output/10_unary_in_output.zy` prints every form twice, once through
+`>>` and once through a variable, so a value that depends on which parser saw it is a
+failure; `zyquality/reject/output/01_comparison_unparenthesized.zy` and `02` fix the limit
+itself.
+
+---
+
+### L40 — imports come before every statement — **by design**
+
+In an executable file, every `<#` import precedes the first statement:
+
+```zymbol
+<# std/json => js         // ✅ imports first
+>> "ready" ¶
+```
+
+```zymbol
+>> "ready" ¶
+<# std/json => js         // ✗ error: imports must come before any statement
+```
+
+The rule is as old as the parser — the loop that reads the leading run of `<#` stops at the
+first statement, and anything after it is a parse error — but it was **written in no
+document** until v0.0.9, and the browser engine did not enforce it: it parsed `Import` as an
+ordinary statement and ran the second program above, printing `ready` and then the encoded
+JSON. A program that broke the rule worked in exactly one engine of three, and no text said
+which of them was right (DM-12).
+
+Fixed in v0.0.9 in three places at once, because the rule needed all three to be worth
+anything: the browser engine enforces it, the Rust diagnostic names the rule instead of the
+token (it used to be `unexpected token: ModuleImport` with `help: expected statement`), and
+this entry exists. Gate: `zyquality/reject/modules/01_import_after_code.zy`.
+
+Blank lines and comments before an import are fine — only statements close the import
+section.
+
+---
+
 ## 20b. Error Taxonomy
 
 Zymbol errors are classified into three categories based on when and how they are detected.
@@ -893,7 +973,7 @@ Related operators:
 - Integer overflow: any result outside ±(2⁵³ − 1) — see [Numeric limits](#numeric-limits)
 - Named tuple field not found: `t.nonexistent`
 
-Runtime errors carry a **kind** (e.g., `##Index`, `##Div`, `##Type`, `##Range`) and a **message** string. The value in `_err` has the format `##Kind(message)`. The `#?` type symbol of an error value is the kind itself — `(##Index, N, ...)` — there is no generic error type symbol.
+Runtime errors carry a **kind** (e.g., `##Index`, `##Div`, `##Type`, `##Range`, `##Key`) and a **message** string. The value in `_err` has the format `##Kind(message)`. The `#?` type symbol of an error value is the kind itself — `(##Index, N, ...)` — there is no generic error type symbol.
 
 ```zymbol
 !? {
@@ -994,6 +1074,23 @@ on digits past it returns the string unchanged rather than a rounded number.
 | `##IO(...)` | `std/io` functions on filesystem failure |
 | `##Network(...)` | `std/net` functions on HTTP/connection failure |
 | `##DB(...)` | `std/db` functions on SQL/ODBC failure |
+
+`##Key` is raised by reading a dictionary key that is not there — through the dot
+or through the bracket, since it is the same lookup:
+
+```zymbol
+u = (nombre: "Ana", edad: 30)
+!? {
+    >> u["sueldo"] ¶
+} :! ##Key {
+    >> _err ¶   // ##Key(no key 'sueldo' in dictionary — available: nombre, edad)
+}
+```
+
+It is Python's `KeyError`, not JavaScript's `undefined`, and it is coherent with
+`a[0]`, which is also an error rather than a silently wrong answer. It is what
+makes `d$? "clave"` necessary: a dictionary built piece by piece has to be
+askable before it is read.
 
 `std/term` (v0.0.8) has no soft-error channel: its five functions are pure measurements
 over a string and cannot fail environmentally.
@@ -1128,11 +1225,16 @@ them will hunt for a bug that is not there (verified 2026-08-17, both engines).
 | `$-[i:n]` | Remove range (count-based) | `arr$-[2:2]` |
 | `$?` | Contains | `arr$? val` |
 | `$??` | Find all indices of value | `arr$?? val` |
-| `arr[i] = val` | Direct element update (arrays only) | `arr[2] = 99` |
-| `arr[i] += val` | Compound element update (arrays only) | `arr[1] += 5` |
-| `arr[i]$~` | Functional update — returns new collection | `arr[2]$~ 99` |
-| `arr[i>j]$~` | Deep functional update (nested) | `m[1>2]$~ 99` |
-| `nt[i]$~` / `nt["f"]$~` | Named-tuple update by index or field name | `p["y"]$~ 42` |
+| ~~`arr[i] = val`~~ | **Withdrawn.** Indexed assignment does not exist — `=` gives a value to a NAME | use `arr[i]$~ val` |
+| ~~`arr[i] += val`~~ | **Withdrawn** with the above | use `arr[i]$~ (arr[i] + val)` |
+| `arr[i]$~ val` | Update. Result **used** → builds; result **discarded** → modifies in place | `arr[2]$~ 99` |
+| `arr[i>j]$~ val` | Deep update, same rule | `m[1>2]$~ 99` |
+| `d["k"]$~ val` | Dictionary update by key; **adds** the key if absent | `p["y"]$~ 42` |
+| `d[k1>k2]$~ val` | Deep update by key — a step's value decides: Int is a position, String is a key | `config[k1>k2]$~ 9090` |
+| `d$-["k"]` | Remove a key — `$-[…]` is "by address", and a dictionary's address is its key | `u$-["ciudad"]` |
+| `d$? "k"` | Does the dictionary have this key? (`in`, as in Python/JS) | `u$? "edad"` |
+| `#[…]` | Array with a **declared** mix of element types — same type as `[…]` | `#[#0, 1, "x"]` |
+| `@ (k, v):x` | For-each with a destructuring pattern where a name would go | `@ (k,v):pares { }` |
 | `arr[i>j]` | Scalar deep access (row i, col j) | `m[2>3]` → `6` |
 | `arr[i>j>k]` | Scalar deep access depth 3+ | `cubo[1>2>1]` |
 | `arr[(e)>j]` | Computed first step | `m[(n)>(n)]` |

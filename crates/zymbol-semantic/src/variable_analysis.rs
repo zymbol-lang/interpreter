@@ -462,6 +462,13 @@ impl VariableAnalyzer {
                         false,
                     );
                 }
+                // `@ (k, v):pares` declares every name its pattern binds, the
+                // same way a single iterator name is declared.
+                if let Some(pattern) = &loop_stmt.iterator_pattern {
+                    for name in pattern.bound_names() {
+                        self.declare_variable(name, loop_stmt.span, false);
+                    }
+                }
 
                 // Analyze loop body statements (don't use analyze_block to avoid double scope entry)
                 for statement in &loop_stmt.body.statements {

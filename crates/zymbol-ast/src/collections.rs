@@ -13,6 +13,20 @@ use crate::Expr;
 pub struct ArrayLiteralExpr {
     pub elements: Vec<Expr>,
     pub span: Span,
+    /// Written `#[…]` rather than `[…]`: the mix of element types is
+    /// **declared**, so the homogeneity check does not apply.
+    ///
+    /// It is the same type either way — `#?` answers `##]` for both, and every
+    /// operator behaves the same — which is decision 15 of
+    /// `Divergente_ES/forma/README.md`. The `#` is the meta/type mark and `##]`
+    /// is already the array type's symbol, so declaring that an array has an
+    /// open element type *is* a statement about its type.
+    ///
+    /// The flag exists so the analyser can do two different things: skip the
+    /// check here, and **warn when a `#[…]` turns out homogeneous** — the
+    /// vaccine against what happened to `Object` in Java and `any` in
+    /// TypeScript (decision 18).
+    pub declared_mixed: bool,
 }
 
 /// Tuple expression: (expr1, expr2, ...) - positional, requires at least 2 elements
@@ -46,7 +60,12 @@ pub struct GroupExpr {
 
 impl ArrayLiteralExpr {
     pub fn new(elements: Vec<Expr>, span: Span) -> Self {
-        Self { elements, span }
+        Self { elements, span, declared_mixed: false }
+    }
+
+    /// `#[…]` — the mix is declared and is not checked.
+    pub fn new_mixed(elements: Vec<Expr>, span: Span) -> Self {
+        Self { elements, span, declared_mixed: true }
     }
 }
 
