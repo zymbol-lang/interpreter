@@ -25,6 +25,29 @@ use zymbol_ast::{
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
 
+/// The refusal of a positional address on a dictionary, in one place.
+///
+/// Decision 11 of `Divergente_ES/forma/README.md` withdrew `d[2]`, and the
+/// reasoning covers the whole family: in a mutable dictionary a position is not
+/// a stable address, because adding a key changes what sits at each one. There
+/// is no principled line between "the second key" and "the first two keys", and
+/// a positional *write* — `d[2]$~ v`, `d$-[2]` — is strictly worse than a
+/// positional read, since it corrupts data rather than returning the wrong one.
+///
+/// This is Python's position: `dict` has no indexing and no slicing. The slice
+/// has no key-based replacement and does not get one — "the first two keys" is
+/// not a question a dictionary should answer.
+///
+/// The POSITIONAL tuple keeps the whole family: there the index is the only
+/// address there is, and the size is fixed.
+pub(crate) fn dict_not_positional(op: &str, first_key: Option<&str>) -> String {
+    let k = first_key.unwrap_or("clave");
+    format!(
+        "a dictionary is addressed by key, not by position: `{}` has no meaning here\nhelp: use the key — d[\"{}\"], d[\"{}\"]$~ value, d$-[\"{}\"] — because adding a key changes what sits at each position",
+        op, k, k, k
+    )
+}
+
 impl<W: Write> Interpreter<W> {
     /// Evaluate collection length operator: collection$#
     pub(crate) fn eval_collection_length(&mut self, op: &CollectionLengthExpr) -> Result<Value> {
@@ -88,6 +111,35 @@ impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_collection_remove(&mut self, op: &CollectionRemoveAtExpr) -> Result<Value> {
         let collection = self.eval_expr(&op.collection)?;
         let index_value = self.eval_expr(&op.index)?;
+
+        // In a dictionary the ADDRESS is the key, so `$-[…]` — which already
+        // means "remove by address" for the array (`arr$-[1]`, by position) — is
+        // the same operator with the same sense (decision 9). That leaves
+        // `$- value` free to keep meaning "by value" in both collections.
+        if let (Value::NamedTuple(fields), Value::String(key)) =
+            (&collection, &index_value)
+        {
+            let key = key.clone();
+            let mut out: Vec<(String, Value)> = fields.to_vec();
+            match out.iter().position(|(k, _)| *k == key) {
+                Some(i) => { out.remove(i); }
+                None => {
+                    let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                    return Err(RuntimeError::Generic {
+                        message: crate::variables::missing_key_msg(&key, &available),
+                        span: op.span,
+                    });
+                }
+            }
+            return Ok(Value::NamedTuple(out));
+        }
+
+        if let (Value::NamedTuple(fields), Value::Int(_)) = (&collection, &index_value) {
+            return Err(RuntimeError::Generic {
+                message: dict_not_positional("d$-[n]", fields.first().map(|(k, _)| k.as_str())),
+                span: op.span,
+            });
+        }
 
         // Extract index as integer
         let index = match index_value {
@@ -212,6 +264,25 @@ impl<W: Write> Interpreter<W> {
                 let found = tup.iter().any(|item| self.values_equal(item, &element));
                 Ok(Value::Bool(found))
             }
+            // On a DICTIONARY the question is about the KEY, which is what `in`
+            // asks in Python and in JS. Decision 10 makes reading an absent key
+            // an error, so this is what lets a dictionary built piece by piece be
+            // consulted at all — without it there is no way to ask before
+            // reading. Asking about a value is a different operation and would
+            // need its own sign.
+            Value::NamedTuple(ref fields) => {
+                let key = match &element {
+                    Value::String(s) => s.clone(),
+                    other => return Err(RuntimeError::Generic {
+                        message: format!(
+                            "a dictionary is asked about a key, so `$?` needs a String, got {:?}",
+                            other
+                        ),
+                        span: op.span,
+                    }),
+                };
+                Ok(Value::Bool(fields.iter().any(|(k, _)| *k == key)))
+            }
             Value::String(ref s) => {
                 // Check if string contains character or substring
                 match element {
@@ -249,7 +320,10 @@ impl<W: Write> Interpreter<W> {
         // Deep update path: arr[i>j>k]$~ val
         if let Expr::DeepIndex(di) = op.target.unwrap_group() {
             // Evaluate all step indices (ranges not supported for update)
-            let mut indices: Vec<i64> = Vec::with_capacity(di.path.steps.len());
+            // A step is an ordinary expression, and its VALUE says how to
+            // address: Int → position, String → dictionary key. Same rule as
+            // `d[clave]`, one level down.
+            let mut indices: Vec<Value> = Vec::with_capacity(di.path.steps.len());
             for step in &di.path.steps {
                 if step.range_end.is_some() {
                     return Err(RuntimeError::Generic {
@@ -258,9 +332,12 @@ impl<W: Write> Interpreter<W> {
                     });
                 }
                 match self.eval_expr(&step.index)? {
-                    Value::Int(n) => indices.push(n),
+                    v @ (Value::Int(_) | Value::String(_)) => indices.push(v),
                     other => return Err(RuntimeError::Generic {
-                        message: format!("deep update index must be integer, got {:?}", other),
+                        message: format!(
+                            "a navigation step is a position (Int) or a dictionary key (String), got {:?}",
+                            other
+                        ),
                         span: op.span,
                     }),
                 }
@@ -358,12 +435,18 @@ impl<W: Write> Interpreter<W> {
             }
             Value::NamedTuple(mut fields) => {
                 match index_value {
-                    Value::Int(n) => {
-                        let len = fields.len();
-                        let i = resolve_int(n, len, op.span)?;
-                        fields[i].1 = new_value;
-                        Ok(Value::NamedTuple(fields))
-                    }
+                    // A positional WRITE is strictly worse than a positional
+                    // read: it corrupts data rather than returning the wrong
+                    // value. `d[2]$~ v` is exactly the failure decision 11
+                    // describes — adding a key changes what sits at each
+                    // position — applied to a mutation.
+                    Value::Int(_) => Err(RuntimeError::Generic {
+                        message: dict_not_positional(
+                            "d[n]$~ value",
+                            fields.first().map(|(k, _)| k.as_str()),
+                        ),
+                        span: op.span,
+                    }),
                     Value::String(name) => {
                         for (field_name, field_value) in &mut fields {
                             if *field_name == name {
@@ -371,14 +454,21 @@ impl<W: Write> Interpreter<W> {
                                 return Ok(Value::NamedTuple(fields));
                             }
                         }
-                        let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
-                        Err(RuntimeError::Generic {
-                            message: format!(
-                                "named tuple has no field '{}'. Available: {}",
-                                name, available.join(", ")
-                            ),
-                            span: op.span,
-                        })
+                        // A key that is not there gets ADDED — `forma/diccionarios.zy`
+                        // § 3, and it is what `d[k] = v` does in Python.
+                        //
+                        // Note the contrast with the array, where decision 13
+                        // makes `arr[7]$~ v` fail on an absent element. The two
+                        // are not inconsistent: an array is addressed by
+                        // POSITION, so writing past the end would leave a hole,
+                        // and JavaScript's `<3 empty items>` is what that looks
+                        // like. A dictionary is addressed by KEY and has no
+                        // holes to leave.
+                        //
+                        // Without this, a JSON built piece by piece — the normal
+                        // case — could not be built at all.
+                        fields.push((name.clone(), new_value));
+                        Ok(Value::NamedTuple(fields))
                     }
                     _ => Err(RuntimeError::Generic {
                         message: format!(
@@ -505,10 +595,13 @@ impl<W: Write> Interpreter<W> {
                 let slice = tup[(start as usize)..(end as usize)].to_vec();
                 Ok(Value::Tuple(slice))
             }
-            Value::NamedTuple(fields) => {
-                let slice = fields[(start as usize)..(end as usize)].to_vec();
-                Ok(Value::NamedTuple(slice))
-            }
+            // No key-based replacement, and it does not get one: "the first
+            // two keys" is not a question a dictionary should answer, which is
+            // why Python's `dict` has no slicing either.
+            Value::NamedTuple(fields) => Err(RuntimeError::Generic {
+                message: dict_not_positional("d$[a..b]", fields.first().map(|(k, _)| k.as_str())),
+                span: op.span,
+            }),
             Value::String(s) => {
                 // Convert string to chars, slice, then back to string
                 let chars: Vec<char> = s.chars().collect();
@@ -973,7 +1066,11 @@ impl<W: Write> Interpreter<W> {
         match collection {
             Value::Array(mut arr) => { arr.drain(start..end); Ok(Value::Array(arr)) }
             Value::Tuple(mut tup) => { tup.drain(start..end); Ok(Value::Tuple(tup)) }
-            Value::NamedTuple(mut fields) => { fields.drain(start..end); Ok(Value::NamedTuple(fields)) }
+            // Removing a RUN of keys by position: same family, same refusal.
+            Value::NamedTuple(fields) => Err(RuntimeError::Generic {
+                message: dict_not_positional("d$-[a..b]", fields.first().map(|(k, _)| k.as_str())),
+                span: op.span,
+            }),
             Value::String(s) => {
                 let mut chars: Vec<char> = s.chars().collect();
                 chars.drain(start..end);
@@ -1070,17 +1167,72 @@ fn natural_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 /// Called by eval_collection_update for `arr[i>j>k]$~ val`.
 fn deep_update_value(
     col: Value,
-    indices: &[i64],
+    indices: &[Value],
     new_val: Value,
     span: zymbol_span::Span,
 ) -> Result<Value> {
     if indices.is_empty() {
         return Ok(new_val);
     }
-    let idx = indices[0];
-    let sub = get_at_idx(&col, idx, span)?;
+    let idx = &indices[0];
+    let sub = get_at_step(&col, idx, span)?;
     let updated_sub = deep_update_value(sub, &indices[1..], new_val, span)?;
-    set_at_idx(col, idx, updated_sub, span)
+    set_at_step(col, idx, updated_sub, span)
+}
+
+/// Read the element a navigation step addresses: a key on a dictionary, a
+/// 1-based position on anything else.
+fn get_at_step(col: &Value, step: &Value, span: zymbol_span::Span) -> Result<Value> {
+    if let (Value::NamedTuple(fields), Value::String(key)) = (col, step) {
+        return match fields.iter().find(|(k, _)| k == key) {
+            Some((_, v)) => Ok(v.clone()),
+            None => {
+                let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                Err(RuntimeError::Generic {
+                    message: crate::variables::missing_key_msg(key, &available),
+                    span,
+                })
+            }
+        };
+    }
+    if let (Value::NamedTuple(fields), Value::Int(_)) = (col, step) {
+        return Err(RuntimeError::Generic {
+            message: dict_not_positional("d[n>…]", fields.first().map(|(k, _)| k.as_str())),
+            span,
+        });
+    }
+    match step {
+        Value::Int(n) => get_at_idx(col, *n, span),
+        other => Err(RuntimeError::Generic {
+            message: format!("a navigation step is a position or a key, got {:?}", other),
+            span,
+        }),
+    }
+}
+
+/// Replace the element a navigation step addresses. Adds the key when it is not
+/// there, exactly as the single-level `d["k"]$~ v` does.
+fn set_at_step(col: Value, step: &Value, new_val: Value, span: zymbol_span::Span) -> Result<Value> {
+    if let (Value::NamedTuple(mut fields), Value::String(key)) = (col.clone(), step) {
+        match fields.iter_mut().find(|(k, _)| k == key) {
+            Some(f) => f.1 = new_val,
+            None => fields.push((key.clone(), new_val)),
+        }
+        return Ok(Value::NamedTuple(fields));
+    }
+    if let (Value::NamedTuple(fields), Value::Int(_)) = (&col, step) {
+        return Err(RuntimeError::Generic {
+            message: dict_not_positional("d[n>…]$~ value", fields.first().map(|(k, _)| k.as_str())),
+            span,
+        });
+    }
+    match step {
+        Value::Int(n) => set_at_idx(col, *n, new_val, span),
+        other => Err(RuntimeError::Generic {
+            message: format!("a navigation step is a position or a key, got {:?}", other),
+            span,
+        }),
+    }
 }
 
 /// Read element at 1-based (or negative) integer index from any indexable Value.

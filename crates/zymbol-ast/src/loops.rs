@@ -16,6 +16,16 @@ use crate::{Block, Expr};
 pub struct Loop {
     pub condition: Option<Box<Expr>>, // None for infinite loop, Some for while loop
     pub iterator_var: Option<String>,  // For for-each loops: @ i:range { }
+    /// `@ (k, v):pares { … }` — a destructuring pattern where a single name
+    /// would go, binding each element the way `(k, v) = par` binds one.
+    ///
+    /// It is the same pattern language as the assignment, deliberately: the loop
+    /// stops needing a first line whose only job is to unpack. That line was
+    /// already in `forma/tuplas.zy` § 7 for every walk over an array of tuples,
+    /// and it is what made `@ k:d` name the dictionary twice.
+    ///
+    /// Mutually exclusive with `iterator_var`.
+    pub iterator_pattern: Option<crate::DestructurePattern>,
     pub iterable: Option<Box<Expr>>,   // For for-each loops: the range/array to iterate
     pub body: Block,
     pub label: Option<String>, // Optional label for break/continue
@@ -44,6 +54,7 @@ impl Loop {
         Self {
             condition,
             iterator_var: None,
+            iterator_pattern: None,
             iterable: None,
             body,
             label,
@@ -62,6 +73,26 @@ impl Loop {
         Self {
             condition: None,
             iterator_var: Some(iterator_var),
+            iterator_pattern: None,
+            iterable: Some(iterable),
+            body,
+            label,
+            span,
+        }
+    }
+
+    /// Create a destructuring for-each loop: `@ (k, v):iterable { }`
+    pub fn for_each_pattern(
+        pattern: crate::DestructurePattern,
+        iterable: Box<Expr>,
+        body: Block,
+        label: Option<String>,
+        span: Span,
+    ) -> Self {
+        Self {
+            condition: None,
+            iterator_var: None,
+            iterator_pattern: Some(pattern),
             iterable: Some(iterable),
             body,
             label,

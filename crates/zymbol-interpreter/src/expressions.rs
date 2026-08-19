@@ -8,6 +8,7 @@
 use zymbol_ast::{BinaryExpr, Expr, PipeExpr, UnaryExpr};
 use zymbol_common::num;
 use zymbol_common::BinaryOp;
+use crate::arithmetic_ops::int_result;
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
 
@@ -53,6 +54,47 @@ impl<W: Write> Interpreter<W> {
     /// Evaluate a binary expression (arithmetic and comparison operators)
     pub(crate) fn eval_binary(&mut self, binary: &BinaryExpr) -> Result<Value> {
         use zymbol_common::Literal;
+
+        // Short-circuit && and ||, before anything evaluates both sides.
+        //
+        // This has to come first. Every path below — the fast paths and the
+        // slow one — evaluates `binary.right` before dispatching on the
+        // operator, which made `#0 && f()` call `f()` and `arr$# > 0 &&
+        // arr[1] > 5` index an empty array. The answer was still right, so the
+        // corpus could not see it: only a right-hand side with an observable
+        // effect tells the two apart. The VM and the browser engine have always
+        // short-circuited; this is the tree-walker catching up (DM-19).
+        //
+        // Guarding the *left* operand's type before deciding is deliberate:
+        // `1 && x` must stay the same error it has always been, not become an
+        // error about `x`.
+        if matches!(binary.op, BinaryOp::And | BinaryOp::Or) {
+            let is_and = binary.op == BinaryOp::And;
+            let name = if is_and { "AND" } else { "OR" };
+            let left = self.eval_expr(&binary.left)?;
+            let left_bool = match &left {
+                Value::Bool(b) => *b,
+                _ => return Err(RuntimeError::Generic {
+                    message: format!("logical {name} requires boolean operands, got {:?}", left),
+                    span: binary.span,
+                }),
+            };
+            // `#0 && _` is #0 and `#1 || _` is #1 whatever the right side says,
+            // so the right side is not evaluated at all — not even to type-check
+            // it. That is the whole point: the left operand guards the right.
+            if left_bool != is_and {
+                return Ok(Value::Bool(left_bool));
+            }
+            let right = self.eval_expr(&binary.right)?;
+            let right_bool = match &right {
+                Value::Bool(b) => *b,
+                _ => return Err(RuntimeError::Generic {
+                    message: format!("logical {name} requires boolean operands, got {:?}", right),
+                    span: binary.span,
+                }),
+            };
+            return Ok(Value::Bool(right_bool));
+        }
         // QW15a: Identifier OP IntLiteral — most common in loops/conditions
         // Saves 2× eval_expr dispatch (~80ns) per binary expression
         if let Expr::Identifier(lhs) = binary.left.unwrap_group() {
@@ -67,9 +109,16 @@ impl<W: Write> Interpreter<W> {
                             BinaryOp::Ge  => return Ok(Value::Bool(l >= r)),
                             BinaryOp::Eq  => return Ok(Value::Bool(l == r)),
                             BinaryOp::Neq => return Ok(Value::Bool(l != r)),
-                            BinaryOp::Add => return Ok(Value::Int(l.wrapping_add(r))),
-                            BinaryOp::Sub => return Ok(Value::Int(l.wrapping_sub(r))),
-                            BinaryOp::Mul => return Ok(Value::Int(l.wrapping_mul(r))),
+                            // The i53 range is checked here, not only on the
+                            // slow path. These arms used to wrap, so
+                            // `>>(9007199254740991 + 1)` raised ##Range on a
+                            // literal — constant-folded — and answered
+                            // 9007199254740992 the moment the same value came
+                            // from a variable, which is the shape every real
+                            // program has (DM-01).
+                            BinaryOp::Add => return int_result(num::add(l, r), l, "+", r, &binary.span),
+                            BinaryOp::Sub => return int_result(num::sub(l, r), l, "-", r, &binary.span),
+                            BinaryOp::Mul => return int_result(num::mul(l, r), l, "*", r, &binary.span),
                             BinaryOp::Mod if r != 0 => return Ok(Value::Int(l % r)),
                             BinaryOp::Div if r != 0 => return Ok(Value::Int(l / r)),
                             _ => {}
@@ -89,9 +138,11 @@ impl<W: Write> Interpreter<W> {
                         BinaryOp::Ge  => return Ok(Value::Bool(l >= r)),
                         BinaryOp::Eq  => return Ok(Value::Bool(l == r)),
                         BinaryOp::Neq => return Ok(Value::Bool(l != r)),
-                        BinaryOp::Add => return Ok(Value::Int(l.wrapping_add(r))),
-                        BinaryOp::Sub => return Ok(Value::Int(l.wrapping_sub(r))),
-                        BinaryOp::Mul => return Ok(Value::Int(l.wrapping_mul(r))),
+                        // Same range check as the arm above: identifier OP
+                        // identifier is the other half of DM-01.
+                        BinaryOp::Add => return int_result(num::add(l, r), l, "+", r, &binary.span),
+                        BinaryOp::Sub => return int_result(num::sub(l, r), l, "-", r, &binary.span),
+                        BinaryOp::Mul => return int_result(num::mul(l, r), l, "*", r, &binary.span),
                         BinaryOp::Mod if r != 0 => return Ok(Value::Int(l % r)),
                         BinaryOp::Div if r != 0 => return Ok(Value::Int(l / r)),
                         _ => {}

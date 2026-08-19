@@ -13,6 +13,28 @@ use crate::Parser;
 
 impl Parser {
     /// Parse array literal: [1, 2, 3]
+    /// `#[…]` — an array whose mix of element types is **declared**.
+    ///
+    /// Same collection and same type as `[…]`: `#?` answers `##]` for both and
+    /// every operator behaves the same (decision 15). What changes is that the
+    /// analyser does not check the elements against each other — and that it
+    /// warns when the mix turns out not to be one (decision 18).
+    ///
+    /// The `#` is lexed on its own, so nothing in the lexer had to move: `#1`,
+    /// `#?`, `##]` and `#०९#` are untouched. `#[` was a syntax error in all
+    /// three engines, which is exactly what left it free for this.
+    pub(crate) fn parse_mixed_array_literal(&mut self) -> Result<Expr, Diagnostic> {
+        let hash = self.advance(); // consume #
+        let arr = self.parse_array_literal()?;
+        match arr {
+            Expr::ArrayLiteral(a) => {
+                let span = hash.span.to(&a.span);
+                Ok(Expr::ArrayLiteral(ArrayLiteralExpr::new_mixed(a.elements, span)))
+            }
+            other => Ok(other),
+        }
+    }
+
     pub(crate) fn parse_array_literal(&mut self) -> Result<Expr, Diagnostic> {
         let start_token = self.advance(); // consume [
         let mut elements = Vec::new();

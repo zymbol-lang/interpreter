@@ -4,6 +4,7 @@
 //! Phase 1: Parses assignments and identifiers
 
 use zymbol_ast::{
+    Assignment, AssignSugar,
     BasePrefix, Block, CastKind, CollectionLengthExpr, Expr, ExprStatement, FormatKind,
     FunctionCallExpr, IdentifierExpr, IndexExpr, LiteralExpr,
     NumericCastExpr, Program, RangeExpr, Statement, TypeMetadataExpr,
@@ -107,6 +108,38 @@ impl Parser {
         }
     }
 
+    /// True when `name[…]` at statement position is an indexed *assignment*
+    /// (`arr[i] = v`, `arr[i] += v`) rather than an edit statement
+    /// (`arr[i]$~ v`) or anything else that merely starts with a bracket.
+    ///
+    /// Saves and restores the position, like the other `is_*` probes.
+    fn is_indexed_assignment(&mut self) -> bool {
+        let saved = self.current;
+        self.advance(); // name
+        self.advance(); // [
+        let mut depth = 1;
+        while depth > 0 && !self.is_at_end() {
+            match self.peek().kind {
+                TokenKind::LBracket => depth += 1,
+                TokenKind::RBracket => depth -= 1,
+                _ => {}
+            }
+            self.advance();
+        }
+        let answer = matches!(
+            self.peek().kind,
+            TokenKind::Assign
+                | TokenKind::PlusAssign
+                | TokenKind::MinusAssign
+                | TokenKind::StarAssign
+                | TokenKind::SlashAssign
+                | TokenKind::PercentAssign
+                | TokenKind::CaretAssign
+        );
+        self.current = saved;
+        answer
+    }
+
     /// Parse a single statement
     fn parse_statement(&mut self) -> Result<Statement, Diagnostic> {
         let token = self.peek();
@@ -203,15 +236,44 @@ impl Parser {
                             | TokenKind::CaretAssign
                             | TokenKind::PlusPlus
                             | TokenKind::MinusMinus
-                            | TokenKind::LBracket
                             | TokenKind::DollarExclaimExclaim
                         ))
-                        .unwrap_or(false);
+                        .unwrap_or(false)
+                        // `name[` used to route here unconditionally, which made
+                        // the parser demand `=` after the bracket and turned
+                        // `arr[2]$~ 99` into "expected '=' after index
+                        // expression". Look past the bracket instead: only an
+                        // actual indexed *assignment* belongs in
+                        // `parse_assignment`; `arr[2]$~ 99` is an edit statement
+                        // and is parsed as the expression it is (decision 12).
+                        || (matches!(self.peek_ahead(1).map(|t| t.kind.clone()),
+                                     Some(TokenKind::LBracket))
+                            && self.is_indexed_assignment());
                     if is_assignment_op {
                         self.parse_assignment()
                     } else {
                         let expr = self.parse_expr()?;
                         let span = expr.span();
+                        // Decision 12, the rule of the result: a `$` edit whose
+                        // result is the whole statement modifies in place. It
+                        // desugars to `name = <the same expression>`, which is
+                        // observably the same thing because collections assign
+                        // by value and there is no aliasing (DI-04) — and the
+                        // sugar marker keeps the source form for the formatter
+                        // and for the tuple guard.
+                        //
+                        // Before this, a bare `arr$+ 3` parsed, ran, and did
+                        // nothing at all, with no warning (DI-01).
+                        if let Some(name) = in_place_edit_target(&expr) {
+                            return Ok(Statement::Assignment(Assignment {
+                                name,
+                                value: expr,
+                                span,
+                                hot: false,
+                                pre_hot: false,
+                                sugar: AssignSugar::InPlaceEdit,
+                            }));
+                        }
                         Ok(Statement::Expr(ExprStatement::new(expr, span)))
                     }
                 }
@@ -296,6 +358,16 @@ impl Parser {
             }
             TokenKind::Eof => Err(Diagnostic::error("unexpected end of file")
                 .with_span(token.span)),
+            // Reached only when an import appears *after* a statement: the loop
+            // in `parse` consumes the leading run of them, and everything left
+            // arrives here. The generic arm below said `unexpected token:
+            // ModuleImport` with `help: expected statement`, which names the
+            // token and not the rule — and the rule was written nowhere else
+            // either, while the browser engine ran the program happily (DM-12).
+            TokenKind::ModuleImport => Err(Diagnostic::error(
+                "imports must come before any statement")
+                .with_span(token.span)
+                .with_help("move this `<#` above the first statement in the file")),
             TokenKind::Error(msg) => Err(Diagnostic::error(msg.clone())
                 .with_span(token.span)),
             _ => Err(Diagnostic::error(format!("unexpected token: {:?}", token.kind))
@@ -1068,6 +1140,15 @@ impl Parser {
                 // Parse array literal: [expr1, expr2, ...]
                 self.parse_array_literal()
             }
+            // `#[…]` — declared-mixed array (decision 15). A bare `#` at
+            // expression position is otherwise the module mark, and `#` followed
+            // by `[` is unambiguous.
+            TokenKind::Hash
+                if matches!(self.peek_ahead(1).map(|t| t.kind.clone()),
+                            Some(TokenKind::LBracket)) =>
+            {
+                self.parse_mixed_array_literal()
+            }
             TokenKind::DoubleQuestion => {
                 // Parse match expression: ?? expr { cases }
                 self.parse_match_expr()
@@ -1335,5 +1416,45 @@ mod tests {
         assert_eq!(stmts.len(), 3); // SetNumeralMode + Output + Newline
         assert!(matches!(stmts[0], Statement::SetNumeralMode { base: 0x0030, .. }));
         assert!(matches!(stmts[1], Statement::Output(_)));
+    }
+}
+
+/// The variable an editing `$` writes to, when the whole expression is one such
+/// edit and its receiver is a plain name.
+///
+/// This is what decides whether a statement modifies in place (decision 12).
+/// Only the **editing** half of the family qualifies — `$+`, `$++`, `$~`, `$-`,
+/// `$--`, `$-[…]`, `$+[…]`, `$^`, `$^+`, `$^-`. The consulting half (`$#`, `$?`,
+/// `$[..]`, `$>`, `$|`, `$<`, …) never modifies anything, so discarding its
+/// result is dead code and belongs to decision 19, not here.
+///
+/// Returning `None` for a receiver that is not a name is decision 20: `f()[1]$~ 5`
+/// would modify a temporary nobody holds, so it stays an expression statement and
+/// is refused rather than silently doing nothing.
+fn in_place_edit_target(expr: &Expr) -> Option<String> {
+    fn base_name(e: &Expr) -> Option<String> {
+        match e.unwrap_group() {
+            Expr::Identifier(i) => Some(i.name.clone()),
+            Expr::Index(ix) => base_name(&ix.array),
+            Expr::DeepIndex(di) => base_name(&di.array),
+            _ => None,
+        }
+    }
+    match expr.unwrap_group() {
+        Expr::CollectionAppend(e) => base_name(&e.collection),
+        Expr::CollectionInsert(e) => base_name(&e.collection),
+        Expr::CollectionRemoveValue(e) => base_name(&e.collection),
+        Expr::CollectionRemoveAll(e) => base_name(&e.collection),
+        Expr::CollectionRemoveAt(e) => base_name(&e.collection),
+        Expr::CollectionRemoveRange(e) => base_name(&e.collection),
+        Expr::CollectionSortAsc(e)
+        | Expr::CollectionSortDesc(e)
+        | Expr::CollectionSortCustom(e) => base_name(&e.collection),
+        Expr::CollectionUpdate(e) => base_name(&e.target),
+        // `$++` adds several at once, or concatenates a string (decision 12b).
+        // It builds a ConcatBuild rather than a Collection* node, which is why
+        // it needs naming here explicitly.
+        Expr::ConcatBuild(e) => base_name(&e.base),
+        _ => None,
     }
 }

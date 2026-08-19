@@ -92,9 +92,26 @@ impl<W: Write> Interpreter<W> {
                         // Convert string to array of chars for iteration
                         Ok(s.chars().map(Value::Char).collect())
                     }
+                    // A dictionary yields its KEYS, in insertion order — `for k
+                    // in d` as Python spells it. With `d[k]` available the key
+                    // is enough to reach the value, so no destructuring pattern
+                    // has to be introduced into `@` (decision 8).
+                    //
+                    // A dictionary whose keys cannot be enumerated only serves
+                    // when the program already knows what it holds, which is the
+                    // definition of a record — the thing decision 7 stopped it
+                    // from being.
+                    Value::NamedTuple(fields) => Ok(fields
+                        .iter()
+                        .map(|(k, _)| Value::String(k.clone()))
+                        .collect()),
+                    // A positional tuple is walked too (decision 21): the type
+                    // system is dynamic and `#?` validates each element, so
+                    // walking a mixed collection is not walking blind.
+                    Value::Tuple(items) => Ok(items.to_vec()),
                     _ => Err(RuntimeError::Generic {
                         message: format!(
-                            "can only iterate over ranges, arrays, and strings, got {:?}",
+                            "can only iterate over ranges, arrays, strings, tuples and dictionaries, got {:?}",
                             value
                         ),
                         span: expr.span(),
@@ -181,11 +198,7 @@ impl<W: Write> Interpreter<W> {
                     .map(|(name, _)| name.clone())
                     .collect();
                 Err(RuntimeError::Generic {
-                    message: format!(
-                        "Named tuple has no field '{}'. Available fields: {}",
-                        member.field,
-                        available_fields.join(", ")
-                    ),
+                    message: crate::variables::missing_key_msg(&member.field, &available_fields),
                     span: member.span,
                 })
             }
@@ -212,9 +225,67 @@ impl<W: Write> Interpreter<W> {
 
     /// Evaluate array/tuple indexing
     /// Supports arrays, tuples (both positional and named), and strings
+    /// The elements a `@ (a, b):x` loop hands to its pattern.
+    ///
+    /// Identical to `eval_iterable` except on a DICTIONARY, where it yields
+    /// `(clave, valor)` pairs instead of bare keys. `@ k:d` keeps yielding keys
+    /// (decision 8) — the pattern form is what asks for both, and the pair is
+    /// the language's own answer to "several values that travel together"
+    /// (decision 24).
+    pub(crate) fn eval_iterable_pairs(&mut self, expr: &zymbol_ast::Expr) -> Result<Vec<Value>> {
+        if let Ok(v) = self.eval_expr(expr) {
+            if let Value::NamedTuple(fields) = v {
+                return Ok(fields
+                    .iter()
+                    .map(|(k, val)| Value::Tuple(vec![Value::String(k.clone()), val.clone()]))
+                    .collect());
+            }
+        }
+        self.eval_iterable(expr)
+    }
+
     pub(crate) fn eval_index(&mut self, idx: &IndexExpr) -> Result<Value> {
         let collection_value = self.eval_expr(&idx.array)?;
         let index_value = self.eval_expr(&idx.index)?;
+
+        // A dictionary is addressed by KEY, and the key may be computed —
+        // `d[clave]`, not just `d.nombre`. Without this the named tuple was a
+        // record, not a dictionary: readable only when the program already knew
+        // what it held (decision 7, DM-09).
+        //
+        // The dot only reaches keys that are identifiers; the bracket reaches
+        // any key, which is what JSON needs — `d["mi clave"]` cannot be written
+        // any other way.
+        if let (Value::NamedTuple(fields), Value::String(key)) =
+            (&collection_value, &index_value)
+        {
+            if let Some((_, v)) = fields.iter().find(|(k, _)| k == key) {
+                return Ok(v.clone());
+            }
+            let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+            return Err(RuntimeError::Generic {
+                message: crate::variables::missing_key_msg(key, &available),
+                span: idx.span,
+            });
+        }
+
+        // Decision 11: a dictionary is addressed by KEY, never by position.
+        // In a mutable dictionary a positional index is fragile — adding a key
+        // changes what sits at each position, and a program that depended on
+        // `d[2]` stops being correct with nothing to say so.
+        //
+        // The POSITIONAL tuple keeps `t[1]` in full: there the index is the only
+        // address there is, and the size is fixed.
+        if let (Value::NamedTuple(fields), Value::Int(_)) = (&collection_value, &index_value) {
+            let first = fields.first().map(|(k, _)| k.clone()).unwrap_or_else(|| "clave".into());
+            return Err(RuntimeError::Generic {
+                message: format!(
+                    "a dictionary is addressed by key, not by position\nhelp: use d[\"{}\"] — adding a key changes what sits at each position",
+                    first
+                ),
+                span: idx.span,
+            });
+        }
 
         // Extract index
         let index = match index_value {

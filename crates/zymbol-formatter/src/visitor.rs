@@ -441,6 +441,13 @@ impl<'a> FormatVisitor<'a> {
     /// match (defensive), fall back to plain `=` printing — the safety gate
     /// rejects any unfaithful result.
     fn format_assignment(&mut self, assign: &Assignment) {
+        // A bare `$` edit statement reprints as the expression it was written
+        // as — `arr$+ 3`, not `arr = arr$+ 3`. The receiver is already inside
+        // `value`, so this has to run before the name is written.
+        if assign.sugar == AssignSugar::InPlaceEdit {
+            self.format_expr(&assign.value);
+            return;
+        }
         if assign.pre_hot {
             self.output.write("°");
         }
@@ -505,6 +512,7 @@ impl<'a> FormatVisitor<'a> {
                     }
                 }
             }
+            AssignSugar::InPlaceEdit => unreachable!("handled above"),
             AssignSugar::None => {}
         }
 
