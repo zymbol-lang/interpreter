@@ -102,7 +102,112 @@ Eleven findings, six of which Linux could never have surfaced and three of which
 in the test suite itself — which is why the suite reported a healthy build right up to
 the moment a user tried to run it. Full record in [WINDOWS_V009.md](WINDOWS_V009.md).
 
+### Changed — the collections
+
+The three collections were redesigned as one piece rather than three, and the
+whole of it is set down in [COLLECTIONS.md](COLLECTIONS.md), which is the point
+of record. What follows is the summary; the reasoning, the measurements and the
+rejected alternatives are there.
+
+**The indexed assignment is withdrawn.** `arr[i] = v`, `m[i][j] = v` and
+`d["k"] = v` are errors in all three collections. `=` means "this NAME now holds
+this value", and `arr[2] = 99` names nothing: it reaches inside a structure and
+changes a part. Two different operations under one sign.
+
+```zymbol
+arr[2] = 99      // error: indexed assignment does not exist
+arr[2]$~ 99      // the form that exists
+```
+
+**The rule of the result.** A `$` edit whose result is **used** builds and leaves
+the original alone; one that **is** the whole statement modifies in place.
+
+```zymbol
+otro = arr$+ 4       // result used      → builds; arr untouched
+arr$+ 4              // result discarded → modifies arr
+```
+
+The two cases are disjoint and are told apart by looking at the syntax, and
+discarding the result has no other possible use: if you were going to throw it
+away, you meant to modify. Before this, a bare `arr$+ 4` ran and did nothing at
+all, with no warning, and `arr[2]$~ 99` as a statement did not even parse.
+
+The order mattered: this had to exist before the indexed assignment could go, or
+the language would have had no way to change an element. Migration was 107 sites
+and every golden held afterwards.
+
+**`#[…]` — an array whose mix of element types is declared.** Same type as
+`[…]` — `#?` answers `##]` for both — so `json::decode`'s heterogeneous array
+finally has a spelling. `[…]` stays checked; a homogeneous `#[…]` warns.
+
+**The named tuple is the dictionary**, and the vocabulary follows: a tuple is
+immutable by definition and this is not. `(1, 2)` is a positional tuple, `(a: 1)`
+is a dictionary, and the colon is all that separates them. It gained computed
+keys (`d[k]`), key insertion, `d$? "k"`, `d$-["k"]`, `@ k:d` over keys, and
+`##Key` on an absent one — six pieces, each of which alone was enough to keep a
+JSON built piece by piece from being built at all.
+
+Its whole positional family went with `d[2]`: `d[-1]`, `d[2]$~ v`, `d$-[2]`,
+`d$[1:2]`. In a mutable dictionary a position is not a stable address, and a
+positional *write* is strictly worse than a positional read — it corrupts data
+rather than returning the wrong value. This is Python's position: `dict` has no
+indexing and no slicing, and the slice gets no key-based replacement.
+
+**A pattern where a name goes.** `@ (k, v):pares { … }` binds each element as
+`(k, v) = par` would, because it is the same pattern language; it removes a line
+whose only job was to unpack. And `_` discards a position in the tuple pattern as
+it already did in the array one.
+
+**Only one `*rest` per pattern.** Two are ambiguous by definition, and the three
+engines invented three different splits — one of them returning an element twice.
+
+### Changed — diagnostics
+
+**The brace escape is symmetric.** `\{` and `\}` are the literal braces, and a
+brace that is neither escaped nor part of an interpolation is an error on either
+side. `"\{\"n\":1}"` used to print happily while the same JSON with neither
+escape was refused. GUIDE.md had documented the symmetric form all along; the
+implementation was what disagreed.
+
+**`x#?` requires its operand to exist.** Asking a variable its type is not an
+exception to "defined before use". `infer_expr` matched `Expr::TypeMetadata(_)`
+and returned the tuple type without inferring the operand, so the name was never
+looked up — which is why the LSP flagged `user_choice#?` in the editor while
+`zymbol check` said "No errors or warnings". This retires the `("##_", 0, ())`
+answer for an uncreated name.
+
+**`zymbol run` warns like `zymbol check`.** The def-use pass ran only in `check`,
+so `@ i:1..3 { … }` warned about `i` there and in the playground and said nothing
+on `run`.
+
+**Diagnostics stop naming the engine.** `VM compile error:` is now `error:`, and
+`type error: expected Int, got String` on an arithmetic operand is the
+tree-walker's `+ is arithmetic only — use juxtaposition`. A reader is told what
+the language refuses, not which of its three implementations noticed.
+
+### Fixed — two defects the comparison surfaced
+
+**One bad line reported 22 errors.** Parser recovery advanced by a single token
+after a failed statement, so the tail of the refused line was parsed as code and
+each fragment raised its own `unexpected token: X` with a `help:` listing every
+statement keyword. Only the first was real. Recovery now skips the statement;
+regenerating the goldens deleted 386 lines and added 4.
+
+**Diagnostics came out in HashMap order.** `get_ambiguous_variables()` walks a
+HashMap, so the same file reported `'k'` before `'w'` on one run and after it on
+the next. Harmless while only `check` printed them; the moment `run` did too,
+every differential comparison began to flap — the formatter audit reported the
+same failure count twice with different files among them. Both call sites sort by
+source position now.
+
+**`zymbol fmt` refused any file using `#[…]` or `@ (k, v):x`.** The safety gate
+declining to print `[…]` for `#[…]` — a different program, since the homogeneity
+check applies to one and not the other — rather than write something untrue.
+
 ### Documentation
+
+[COLLECTIONS.md](COLLECTIONS.md) is new: one document for the three collections,
+the rules that govern them, and why each was decided the way it was.
 
 The grammar and the spec had drifted from the implementation. `zymbol-lang.ebnf` was
 still describing v0.0.7: or-patterns and juxtaposition inside delimited positions had
