@@ -120,6 +120,22 @@ impl Lexer {
                 }
 
                 parts.push(StringPart::Variable(var_name));
+            } else if ch == '}' {
+                // A `}` that closes nothing. The escape is symmetric: `\{` and
+                // `\}` are the literal braces, and a bare one is an error on
+                // either side.
+                //
+                // It used to be accepted, so `"\{\"n\":1}"` — the half-escaped
+                // form — printed happily while the same string with neither
+                // escape was refused. Two spellings of the same JSON, one
+                // accepted and one not, with nothing to say why.
+                let span = self.span(start);
+                self.diagnostics.push(
+                    Diagnostic::error("unmatched '}' in string")
+                        .with_span(span)
+                        .with_help("the escape is symmetric — write \\} for a literal brace, as \\{ is for the opening one"),
+                );
+                return Token::new(TokenKind::Error("unmatched close brace".to_string()), span);
             } else {
                 current_text.push(ch);
                 self.advance();

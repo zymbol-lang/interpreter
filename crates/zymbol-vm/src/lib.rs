@@ -306,11 +306,21 @@ impl Value {
             (Value::Array(a), Value::Array(b)) => {
                 a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.equals(y))
             }
-            // NamedTuple is deliberately absent: the tree-walker says #0 here and
-            // the browser engine says #1, and decisions 7-11 of
-            // Divergente_ES/forma/README.md turn the named tuple into the
-            // dictionary, whose equality is a design question of its own. Adding
-            // an arm now would be picking that answer by accident (DM-22).
+            // Two dictionaries are equal when they hold the same keys with the
+            // same values — decided 2026-08-19 (DM-22). Both Rust engines said
+            // `#0`, which was indefensible: every other collection compares by
+            // value, and a dictionary that never equals another cannot be
+            // tested, deduplicated or asserted on.
+            //
+            // Key ORDER is not part of it. Insertion order is preserved for
+            // walking, as in Python's dict, but two dictionaries built in a
+            // different order still hold the same thing.
+            (Value::NamedTuple(a), Value::NamedTuple(b)) => {
+                a.len() == b.len()
+                    && a.iter().all(|(ka, va)| {
+                        b.iter().any(|(kb, vb)| ka == kb && va.equals(vb))
+                    })
+            }
             _ => false,
         }
     }
@@ -359,7 +369,10 @@ struct FrameInfo {
 
 #[derive(Debug, Error)]
 pub enum VmError {
-    #[error("type error: expected {expected}, got {got}")]
+    // Phrased as the LANGUAGE, not as the check that noticed. "type error:
+    // expected Int, got String" names an internal predicate; a reader is told
+    // what the program did wrong.
+    #[error("this needs {expected} and got {got}")]
     TypeError { expected: &'static str, got: String },
     #[error("{op} requires a numeric value, got {got}")]
     CastError { op: &'static str, got: String },
@@ -633,6 +646,20 @@ fn cmp_direct(va: &Value, vb: &Value) -> i32 {
             }
             0
         }
+        // Two dictionaries are equal when they hold the same keys with the same
+        // values (DM-22, decided 2026-08-19). Key ORDER is not part of it: two
+        // dictionaries built in a different order still hold the same thing, so
+        // this looks each key up rather than zipping.
+        (Value::NamedTuple(x), Value::NamedTuple(y)) => {
+            if x.len() != y.len() { return 1; }
+            for (ka, va) in x.iter() {
+                match y.iter().find(|(kb, _)| kb == ka) {
+                    Some((_, vb)) if cmp_direct(va, vb) == 0 => {}
+                    _ => return 1,
+                }
+            }
+            0
+        }
         _ => 1,
     }
 }
@@ -902,12 +929,22 @@ impl<W: Write> VM<W> {
         macro_rules! wreg {
             ($r:expr, $v:expr) => { unsafe { *self.value_stack.get_unchecked_mut(base + $r as usize) = $v } }
         }
-        // ri!: read register as Int, raise TypeError on mismatch
+        // ri!: read register as Int for an ARITHMETIC operand.
+        //
+        // A String here is the commonest mistake in the language and has a
+        // teaching answer that the tree-walker has always given: `+` is
+        // arithmetic, and concatenation is juxtaposition. Saying "expected Int,
+        // got String" instead describes the check and leaves the reader to guess
+        // the rule — and the two engines then refuse the same program with
+        // different words (DM-08). The tree-walker is the message bench.
         macro_rules! ri {
             ($r:expr) => {
                 match unsafe { self.value_stack.get_unchecked(base + $r as usize) } {
                     Value::Int(n) => *n,
-                    other => raise!(VmError::TypeError { expected: "Int", got: other.type_name().to_string() }),
+                    Value::String(_) => raise!(VmError::Generic(
+                        "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\"".to_string()
+                    )),
+                    other => raise!(VmError::TypeError { expected: "a number", got: other.type_name().to_string() }),
                 }
             }
         }
@@ -2675,6 +2712,47 @@ impl<W: Write> VM<W> {
                             format!("array pattern '[ … ]' requires an array, got {got}")
                         }));
                     }
+                }
+                &Instruction::DestructureRest(dst, src, from, trailing) => {
+                    let (len, is_tuple) = match self.reg_get(src) {
+                        Value::Array(a) => (a.len(), false),
+                        Value::Tuple(t) => (t.len(), true),
+                        _ => (0, false),
+                    };
+                    let lo = (from as usize - 1).min(len);
+                    // The trailing names get their share only if the elements
+                    // reach that far — the tree-walker's rule, exactly.
+                    let end = if trailing > 0 && len > lo + trailing as usize {
+                        len - trailing as usize
+                    } else {
+                        len
+                    };
+                    let slice: Vec<Value> = match self.reg_get(src) {
+                        Value::Array(a) => a.as_ref().get(lo..end).unwrap_or(&[]).to_vec(),
+                        Value::Tuple(t) => t.as_ref().get(lo..end).unwrap_or(&[]).to_vec(),
+                        _ => Vec::new(),
+                    };
+                    let v = if is_tuple { Value::Tuple(Rc::new(slice)) } else { Value::Array(Rc::new(slice)) };
+                    self.reg_set(dst, v);
+                }
+                &Instruction::DestructureTail(dst, src, k, from, trailing) => {
+                    let len = match self.reg_get(src) {
+                        Value::Array(a) => a.len(),
+                        Value::Tuple(t) => t.len(),
+                        _ => 0,
+                    };
+                    let lo = (from as usize - 1).min(len);
+                    let v = if trailing > 0 && len > lo + trailing as usize {
+                        let i = len - k as usize;
+                        match self.reg_get(src) {
+                            Value::Array(a) => a.as_ref().get(i).cloned().unwrap_or(Value::Unit),
+                            Value::Tuple(t) => t.as_ref().get(i).cloned().unwrap_or(Value::Unit),
+                            _ => Value::Unit,
+                        }
+                    } else {
+                        Value::Unit
+                    };
+                    self.reg_set(dst, v);
                 }
                 &Instruction::DestructureAbsorb(dst, src, from) => {
                     let value = match self.reg_get(src) {

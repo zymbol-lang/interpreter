@@ -36,6 +36,24 @@ impl Parser {
             }
             self.advance(); // consume ']'
 
+            // `m[1][2] = 77` — chained brackets. The indexed assignment does not
+            // exist at any depth (decision 6), and nesting is navigated with
+            // `>`: `m[1>2]`. Both halves belong in the message, because a reader
+            // who wrote this needs to know the notation as well as the rule.
+            if matches!(self.peek().kind, TokenKind::LBracket) {
+                let span = ident_token.span.to(&self.peek().span);
+                self.skip_statement();
+                return Err(Diagnostic::error(format!(
+                    "indexed assignment does not exist: '{}[…] =' is not a form of Zymbol",
+                    name
+                ))
+                .with_span(span)
+                .with_help(format!(
+                    "nesting is navigated with '>', so this is '{}[i>j]$~ value' — '=' gives a value to a NAME, '$~' changes part of a collection",
+                    name
+                )));
+            }
+
             let assign_tok = self.peek().clone();
             // Decision 6 of Divergente_ES/forma/README.md: the indexed
             // assignment is withdrawn, in all three collections.
@@ -60,6 +78,7 @@ impl Parser {
                     | TokenKind::PercentAssign
                     | TokenKind::CaretAssign
             ) {
+                self.skip_statement();
                 return Err(Diagnostic::error(format!(
                     "indexed assignment does not exist: '{}[…] =' is not a form of Zymbol",
                     name

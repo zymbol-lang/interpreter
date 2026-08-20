@@ -181,6 +181,24 @@ pub enum Instruction {
     /// are — keeping src's own shape (REFERENCE.md L33).
     DestructureAbsorb(Reg, Reg, u32),
 
+    /// `(dst, src, from, trailing)` — bind a `*rest` that has `trailing` named
+    /// items after it, mirroring the tree-walker's `bind_positional`.
+    ///
+    /// The trailing names are entitled to their share **only if the elements
+    /// reach that far**. When they do not, the rest takes everything that is
+    /// left and the trailing names get `Unit`: destructuring goes left to right
+    /// and stops where the values stop (DM-24, decided 2026-08-19).
+    ///
+    /// The VM used to subtract `trailing` unconditionally and index the trailing
+    /// names from the END, so `[d0, *dR, d9] = [1, 2]` gave `dR=[] d9=2` while
+    /// the other two engines gave `dR=[2] d9=`.
+    DestructureRest(Reg, Reg, u32, u32),
+
+    /// `(dst, src, k, from, trailing)` — bind the item `k` places from the end
+    /// of a pattern that has a `*rest`, under the same rule: the value only if
+    /// the elements reach that far, `Unit` otherwise.
+    DestructureTail(Reg, Reg, u32, u32, u32),
+
     // ── Tuples ───────────────────────────────────────────────────────────
     /// Build a positional tuple: dst = (regs[0], regs[1], ...)
     MakeTuple(Reg, Vec<Reg>),

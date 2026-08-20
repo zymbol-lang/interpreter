@@ -2189,7 +2189,21 @@ impl TypeChecker {
 
             // Data operations
             Expr::NumericEval(_) => ZymbolType::Float,
-            Expr::TypeMetadata(_) => ZymbolType::Tuple(vec![ZymbolType::String, ZymbolType::Int, ZymbolType::Any]),
+            // `x#?` answers a tuple, and the OPERAND is inferred like any other
+            // expression — which is how an undefined name in it gets reported.
+            //
+            // The operand used to be ignored (`TypeMetadata(_)`), so
+            // `user_choice#?` on a name that does not exist answered
+            // `(##_, 0, ())` and `zymbol check` said "No errors or warnings",
+            // while the LSP — running the analyser directly — flagged it. Three
+            // ways to ask, two answers, and the quiet one was the CLI.
+            //
+            // A variable is defined before use or it is not; asking its type is
+            // not an exception to that.
+            Expr::TypeMetadata(op) => {
+                let _ = self.infer_expr(&op.expr);
+                ZymbolType::Tuple(vec![ZymbolType::String, ZymbolType::Int, ZymbolType::Any])
+            }
             Expr::Format(_) => ZymbolType::String,
             Expr::BaseConversion(_) => ZymbolType::String,
             Expr::Round(_) | Expr::Trunc(_) => ZymbolType::Float,

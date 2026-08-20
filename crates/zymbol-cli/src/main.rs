@@ -436,6 +436,51 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         return Ok(1);
     }
 
+    // Def-use analysis, so `run` says what `check` says.
+    //
+    // It used to run only in `check`, and the split was invisible and wrong:
+    // `@ i:1..3 { … }` warned about `i` on `zymbol check` and in the playground
+    // — which mirrors `check` — and said nothing on `zymbol run`. Three ways to
+    // ask the same question, two answers.
+    //
+    // And the warning is worth having. `i += 1` inside the loop is visible for
+    // the rest of that pass and gone on the next, exactly as in Python:
+    //
+    //     @ i:1..3 { >> i " "  i += 1  >> i " " }   →  1 2 2 3 3 4
+    //
+    // Python does not warn; Zymbol does, and a modification that silently does
+    // not persist is worth a word. A word — not an error: the program is
+    // correct and runs.
+    {
+        let cfg = ControlFlowGraph::build_sequential(&program.statements);
+        let mut def_use_analyzer = DefUseAnalyzer::new();
+        let _ = def_use_analyzer.analyze(&program.statements, &cfg);
+        // In source order. `get_ambiguous_variables` walks a HashMap, so the
+        // same file reported `'k'` before `'w'` on one run and after it on the
+        // next. A diagnostic whose ORDER changes between runs makes every
+        // differential comparison flap: the formatter audit reported 13
+        // failures twice in a row with two DIFFERENT files among them.
+        let mut ambiguous = def_use_analyzer.get_ambiguous_variables();
+        ambiguous.sort_by_key(|c| c.ambiguity.as_ref().map(|a| {
+            (a.suggested_span.start.line, a.suggested_span.start.column)
+        }));
+        for chain in &ambiguous {
+            if let Some(ambiguity) = &chain.ambiguity {
+                let reason = match ambiguity.reason {
+                    AmbiguityReason::LoopVariant => "variable is modified inside a loop",
+                    AmbiguityReason::ConditionalUse => "variable is used in some branches but not others",
+                    AmbiguityReason::MultipleExitPaths => "multiple possible last uses",
+                };
+                eprintln!("warning: ambiguous lifetime for '{}'", chain.variable);
+                eprintln!("  --> {}:{}:{}", display_name,
+                    ambiguity.suggested_span.start.line, ambiguity.suggested_span.start.column);
+                eprintln!("  = note: {}", reason);
+                eprintln!("  = help: consider using explicit lifetime annotation");
+                eprintln!();
+            }
+        }
+    }
+
     // Show type warnings but continue execution
     for warning in type_checker.get_warnings() {
         eprintln!("warning: {}", warning.message);
@@ -465,7 +510,11 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
                 ) {
                     eprintln!("Runtime error: {}", e);
                 } else {
-                    eprintln!("VM compile error: {}", e);
+                    // Never the engine's name: a reader is told what the
+                    // LANGUAGE refuses, not which of its three implementations
+                    // noticed. `VM compile error:` on a program the tree-walker
+                    // refuses too is a fact about our build, not about Zymbol.
+                    eprintln!("error: {}", e);
                 }
                 return Ok(1);
             }
@@ -1128,7 +1177,11 @@ fn check_source(
     let _chains = def_use_analyzer.analyze(&program.statements, &cfg);
 
     // Report ambiguous lifetime warnings
-    let ambiguous_vars = def_use_analyzer.get_ambiguous_variables();
+    // Source order, for the same reason as in `run` above.
+    let mut ambiguous_vars = def_use_analyzer.get_ambiguous_variables();
+    ambiguous_vars.sort_by_key(|c| c.ambiguity.as_ref().map(|a| {
+        (a.suggested_span.start.line, a.suggested_span.start.column)
+    }));
     let mut lifetime_warning_count = 0;
     for chain in &ambiguous_vars {
         if !report_warnings {

@@ -254,6 +254,21 @@ impl<W: Write> Interpreter<W> {
             (Value::Tuple(a), Value::Tuple(b)) => {
                 a.len() == b.len() && a.iter().zip(b).all(|(x, y)| Self::values_equal_static(x, y))
             }
+            // Two dictionaries are equal when they hold the same keys with the
+            // same values (DM-22). They compared as `#0` here while the browser
+            // engine said `#1`, and `#0` was indefensible: every other
+            // collection compares by value, and a dictionary that never equals
+            // another cannot be tested, deduplicated or asserted on.
+            //
+            // Key ORDER is not part of it. Insertion order is preserved for
+            // walking, as in Python's dict, but two dictionaries built in a
+            // different order still hold the same thing.
+            (Value::NamedTuple(a), Value::NamedTuple(b)) => {
+                a.len() == b.len()
+                    && a.iter().all(|(ka, va)| {
+                        b.iter().any(|(kb, vb)| ka == kb && Self::values_equal_static(va, vb))
+                    })
+            }
             (Value::Unit, Value::Unit) => true,
             _ => false,
         }
