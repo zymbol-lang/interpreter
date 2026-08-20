@@ -796,7 +796,7 @@ compuesto.
 | `@:etiqueta!` / `@:etiqueta>` | el bucle al que se apunta |
 | `:!` | la cláusula de error |
 | `:>` | la cláusula de limpieza |
-| `nombre: valor` | un campo de tupla nombrada |
+| `nombre: valor` | una clave de diccionario |
 | `@ i:arr` | la variable de iteración |
 | `1..10:2` | el paso |
 | `$[i:n]` | la cantidad en un corte |
@@ -890,8 +890,9 @@ pero significa que "entrar en" tiene dos exponentes según si el paso es hacia u
 | `0x` `0b` `0o` `0d` | prefijos de base para códigos de carácter: `0x41` → `'A'` |
 | `#1` / `#0` | literales Bool, en cualquiera de 69 sistemas numéricos |
 | `¶` / `\\` | salto de línea en el flujo de salida (§6.1) |
-| `[ … ]` | literal de arreglo |
-| `( … )` | tupla, tupla nombrada, agrupación, argumentos |
+| `[ … ]` | literal de arreglo — homogéneo, y comprobado |
+| `#[ … ]` | literal de arreglo con la mezcla de tipos **declarada**; es el mismo tipo que `[ … ]` |
+| `( … )` | tupla posicional, diccionario, agrupación, argumentos |
 
 Los prefijos de base son opacos *y además* son abreviaturas del inglés (he**x**adecimal,
 **b**inario, **o**ctal, **d**ecimal). El §15 los registra.

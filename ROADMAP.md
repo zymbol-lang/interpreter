@@ -119,7 +119,7 @@ They are documented in the manual as known limitations.
 | **Match identifier binding** | `pattern as name` — `[NI03]` — **dismissed 2026-06-12** | Extract the value before the match (the idiom) |
 | ~~**`$!!` from lambdas**~~ | **Resolved** — verified 2026-06-12: `$!!` propagates from lambdas identically to named functions (`zyquality/corpus/lambdas/error_propagate_lambda.zy`) | — |
 | **`do-while ~>`** | Post-condition loop `[NI01]` — **dismissed 2026-06-12** | Infinite loop with `@!` break at end (the idiom) |
-| **Dict / map literal** | `[NI05]` — no `key: value` collection literal | Use named tuples, or arrays of `(k, v)` pairs |
+| ~~**Dict / map literal**~~ | **Resolved in v0.0.9** — `(clave: valor)` IS the dictionary: computed keys, insertion, removal, `@ k:d`, `##Key`. No new type and no new notation; see [COLLECTIONS.md](COLLECTIONS.md) § 5 | — |
 
 > **Dismissed 2026-06-12** (validated with the language author): `do-while ~>` and
 > match identifier binding will NOT be implemented. Their workarounds are the

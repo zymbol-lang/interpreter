@@ -873,8 +873,9 @@ level.
 | `0x` `0b` `0o` `0d` | base prefixes for character codes: `0x41` → `'A'` |
 | `#1` / `#0` | Bool literals, in any of 69 numeral scripts |
 | `¶` / `\\` | newline in the output stream (§6.1) |
-| `[ … ]` | array literal |
-| `( … )` | tuple, named tuple, grouping, arguments |
+| `[ … ]` | array literal — homogeneous, and checked |
+| `#[ … ]` | array literal with the mix of element types **declared**; the same type as `[ … ]` |
+| `( … )` | positional tuple, dictionary, grouping, arguments |
 
 A tuple is built by the **comma**, not by the parentheses: `(7)` is the Int `7` grouped, not
 a one-element tuple. The same pairing governs how a value is taken apart — a `[ … ]` pattern

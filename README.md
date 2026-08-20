@@ -342,19 +342,19 @@ has  = nums$? 3         // #1
 sub  = nums$[2..4]      // [2,3,4]
 srt  = nums$^+          // sort ascending
 
-// Array element update
-nums[1] = 99
-nums[2] += 10
+// Array element update — `$~`, never `=`
+nums[1]$~ 99
+nums[2]$~ (nums[2] + 10)
 
 // Destructuring
 [first, *rest] = nums    // first=99, rest=[...remaining]
 
-// Named tuples
+// Dictionaries — a tuple with named fields
 person = (name: "Alice", age: 25)
 >> person.name ¶         // Alice
->> person.age ¶          // 25
+>> person["age"] ¶       // 25 — the bracket takes a computed key too
 
-// Array of named tuples
+// Array of dictionaries
 people = [
     (name: "Alice", age: 25),
     (name: "Bob",   age: 30)
@@ -1119,6 +1119,7 @@ interpreter/
 - [LLM.md](./LLM.md) — The whole language on one page, written for a model to read in one pass: the rules that break code silently, then every construct in compressed form
 - [GUIDE.md](./GUIDE.md) — Full language guide with verified examples (all constructs)
 - [REFERENCE.md](./REFERENCE.md) — Known limitations, error taxonomy, complete symbol table
+- [COLLECTIONS.md](./COLLECTIONS.md) — The three collections as one piece: the rule of the result, why `=` never writes into a collection, the array and its declared mix, the tuple, the dictionary, and the reasoning behind each rule
 - [IMPLEMENTATION.md](./IMPLEMENTATION.md) — EBNF grammar, coverage table, TW/VM internals
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — Interpreter architecture and performance benchmarks
 - [I18N.md](./I18N.md) — Internationalization: multilingual code via re-export layers, and runtime text via dispatcher modules

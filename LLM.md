@@ -169,8 +169,9 @@ a$- v          remove first      a$-- v     remove all               a$-[1]     
 a$-[2..3]      remove range      a$-[2:2]   remove count-based       a$? v      contains
 a$?? v         all indices       a$[1..3]   slice (both ends)        a$[1:2]    slice by count
 a$^+  a$^-     sort asc/desc     a$^ (x,y -> x.f < y.f)              // comparator sort
-a[2] = 99      in-place update   a[1] += 5  compound update          // arrays only
-a[2]$~ 99      functional update (returns a new collection)
+a[2]$~ 99      the ONE update form. `a[2] = 99` does not exist, in any collection
+               result used   → builds, original untouched:  b = a[2]$~ 99
+               result thrown → modifies in place:            a[2]$~ 99
 ```
 
 **Deep access / update — `>` navigates, and is the intended form; `a[i][j]` is deprecated:**
