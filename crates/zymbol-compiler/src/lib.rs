@@ -1255,34 +1255,38 @@ impl Compiler {
                             if absorbs {
                                 ctx.emit(Instruction::DestructureAbsorb(dst, r_rhs, (idx + 1) as u32));
                             } else {
-                                let r_idx = ctx.alloc_temp()?;
-                                // After the rest, index from the end: -trailing … -1
-                                let n = if after_rest {
-                                    -((items.len() - pos) as i64)
+                                if after_rest {
+                                    // The trailing names are entitled to their
+                                    // share only if the elements reach that far;
+                                    // otherwise they are Unit and the rest keeps
+                                    // everything (DM-24). Indexing from the end
+                                    // unconditionally was what made
+                                    // `[d0, *dR, d9] = [1,2]` give `d9=2` here
+                                    // and `d9=` in the other two engines.
+                                    let rest_from = rest_at.unwrap() as u32 + 1;
+                                    ctx.emit(Instruction::DestructureTail(
+                                        dst, r_rhs,
+                                        (items.len() - pos) as u32,
+                                        rest_from,
+                                        trailing as u32,
+                                    ));
                                 } else {
-                                    idx + 1
-                                };
-                                ctx.emit(Instruction::LoadInt(r_idx, n));
-                                ctx.emit(Instruction::ArrayGet(dst, r_rhs, r_idx));
+                                    let r_idx = ctx.alloc_temp()?;
+                                    ctx.emit(Instruction::LoadInt(r_idx, idx + 1));
+                                    ctx.emit(Instruction::ArrayGet(dst, r_rhs, r_idx));
+                                }
                             }
                             idx += 1;
                         }
                         DestructureItem::Rest(name) => {
-                            let r_lo = ctx.alloc_temp()?;
-                            ctx.emit(Instruction::LoadInt(r_lo, idx + 1));
-                            let r_hi = ctx.alloc_temp()?;
-                            // ArraySlice takes hi in r_lo + 1: the length, less whatever
-                            // the trailing items are entitled to.
-                            ctx.emit(Instruction::ArrayLen(r_hi, r_rhs));
-                            if trailing > 0 {
-                                ctx.emit(Instruction::SubIntImm(r_hi, r_hi, trailing as i32));
-                            }
                             let dst = if let Ok(existing) = ctx.get_reg(name) {
                                 existing
                             } else {
                                 ctx.alloc_reg(name)?
                             };
-                            ctx.emit(Instruction::ArraySlice(dst, r_rhs, r_lo));
+                            ctx.emit(Instruction::DestructureRest(
+                                dst, r_rhs, (idx + 1) as u32, trailing as u32,
+                            ));
                             idx += 1;
                         }
                         DestructureItem::Ignore => {
@@ -4540,6 +4544,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::DeepSetInPlace(d, a, i, _) => { upd(*d); upd(*a); upd(*i); }
             Instruction::AssertMutable(r, _) => { upd(*r); }
             Instruction::IterPairs(d, s) => { upd(*d); upd(*s); }
+            Instruction::DestructureRest(d, s, _, _) => { upd(*d); upd(*s); }
+            Instruction::DestructureTail(d, s, _, _, _) => { upd(*d); upd(*s); }
             Instruction::ArrayRemove(d, a) | Instruction::ArrayRemoveValue(d, a)
             | Instruction::ArrayRemoveAll(d, a) | Instruction::ArrayRemoveRange(d, a) => { upd(*d); upd(*a); }
             Instruction::ArrayInsert(d, i, v) => { upd(*d); upd(*i); upd(*v); }

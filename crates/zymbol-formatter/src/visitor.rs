@@ -522,7 +522,16 @@ impl<'a> FormatVisitor<'a> {
 
     /// Format a destructure assignment statement
     fn format_destructure_assign(&mut self, d: &DestructureAssign) {
-        match &d.pattern {
+        self.format_destructure_pattern(&d.pattern);
+        self.output.write(" = ");
+        self.format_expr(&d.value);
+    }
+
+    /// Format a destructuring pattern on its own — shared by the assignment and
+    /// by a loop head, `@ (k, v):pares`, which uses the very same pattern
+    /// language and would otherwise have needed a second copy of this.
+    fn format_destructure_pattern(&mut self, pattern: &DestructurePattern) {
+        match pattern {
             DestructurePattern::Array(items) => {
                 self.output.write("[");
                 for (i, item) in items.iter().enumerate() {
@@ -570,8 +579,6 @@ impl<'a> FormatVisitor<'a> {
                 self.output.write(")");
             }
         }
-        self.output.write(" = ");
-        self.format_expr(&d.value);
     }
 
     /// Format a constant declaration
@@ -681,7 +688,15 @@ impl<'a> FormatVisitor<'a> {
         }
 
         // Handle for-each loop
-        if let Some(ref iter_var) = loop_stmt.iterator_var {
+        if let Some(ref pattern) = loop_stmt.iterator_pattern {
+            // `@ (k, v):pares` — a pattern where a single name would go.
+            self.output.space();
+            self.format_destructure_pattern(pattern);
+            self.output.write(":");
+            if let Some(ref iterable) = loop_stmt.iterable {
+                self.format_expr(iterable);
+            }
+        } else if let Some(ref iter_var) = loop_stmt.iterator_var {
             self.output.space();
             self.output.write(iter_var);
             self.output.write(":");
@@ -1180,6 +1195,15 @@ impl<'a> FormatVisitor<'a> {
     fn format_array_literal(&mut self, arr: &ArrayLiteralExpr) {
         let config = self.output.config().clone();
         let should_inline = self.estimate_array_length(arr) <= config.max_inline_array_length;
+
+        // `#[…]` — the declared mix. Without the mark the formatter reprinted it
+        // as `[…]`, which is a DIFFERENT program: the homogeneity check applies
+        // to one and not the other. The safety gate caught it and refused to
+        // write the file, which is the gate doing its job — and the reason
+        // `zymbol fmt` simply failed on any file using the form.
+        if arr.declared_mixed {
+            self.output.write("#");
+        }
 
         if should_inline || arr.elements.is_empty() {
             // Inline format

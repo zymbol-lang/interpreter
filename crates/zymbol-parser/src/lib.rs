@@ -95,7 +95,8 @@ impl Parser {
                     }
                     Err(diag) => {
                         self.diagnostics.push(diag);
-                        self.advance();
+                        // Past the whole statement — see `skip_statement`.
+                        self.skip_statement();
                     }
                 }
             }
@@ -108,6 +109,35 @@ impl Parser {
         }
     }
 
+    /// Consume the rest of the current statement, so a refusal does not become a
+    /// cascade.
+    ///
+    /// The recovery in `parse_block` advances by ONE token after a failed
+    /// statement, which is enough to make progress and not enough to get past
+    /// the statement that failed. So `a[2] = 99` reported the real refusal —
+    /// "indexed assignment does not exist" — and then `unexpected token:
+    /// Integer(99)`, a second error about the leftovers of the first, with a
+    /// `help:` listing every statement keyword. A reader cannot act on that, and
+    /// it buries the message that matters.
+    ///
+    /// Called by a refusal that has already decided the whole statement is
+    /// wrong: there is nothing further to learn from parsing its tail.
+    pub(crate) fn skip_statement(&mut self) {
+        // Always advance at least once: the caller is recovering from a failed
+        // statement, and a skip that can consume nothing turns recovery into a
+        // loop. `}` and `;` end a statement, so stopping ON them is right —
+        // stopping on them without having moved is not.
+        if self.is_at_end() { return; }
+        let line = self.peek().span.start.line;
+        self.advance();
+        while !self.is_at_end()
+            && self.peek().span.start.line == line
+            && !matches!(self.peek().kind, TokenKind::RBrace | TokenKind::Semicolon)
+        {
+            self.advance();
+        }
+    }
+
     /// True when `name[…]` at statement position is an indexed *assignment*
     /// (`arr[i] = v`, `arr[i] += v`) rather than an edit statement
     /// (`arr[i]$~ v`) or anything else that merely starts with a bracket.
@@ -116,15 +146,21 @@ impl Parser {
     fn is_indexed_assignment(&mut self) -> bool {
         let saved = self.current;
         self.advance(); // name
-        self.advance(); // [
-        let mut depth = 1;
-        while depth > 0 && !self.is_at_end() {
-            match self.peek().kind {
-                TokenKind::LBracket => depth += 1,
-                TokenKind::RBracket => depth -= 1,
-                _ => {}
+        // Every consecutive bracket group, not just the first: `m[1][2] = 77`
+        // has to reach the same refusal as `m[2] = 77`, or it falls through to
+        // an expression statement and the reader gets "unexpected token: Assign"
+        // — a fact about the parser, not about the language.
+        while matches!(self.peek().kind, TokenKind::LBracket) {
+            self.advance(); // [
+            let mut depth = 1;
+            while depth > 0 && !self.is_at_end() {
+                match self.peek().kind {
+                    TokenKind::LBracket => depth += 1,
+                    TokenKind::RBracket => depth -= 1,
+                    _ => {}
+                }
+                self.advance();
             }
-            self.advance();
         }
         let answer = matches!(
             self.peek().kind,
@@ -391,6 +427,24 @@ impl Parser {
         while !matches!(self.peek().kind, TokenKind::RBrace) && !self.is_at_end() {
             match self.parse_statement() {
                 Ok(stmt) => {
+                    // A function is free in a script or part of a module —
+                    // never of a block (DM-23, decided 2026-08-19).
+                    //
+                    // Both engines already refused it, but only at the CALL, and
+                    // with `undefined function: 'f'` about a function that is
+                    // plainly there — a message that describes the symptom and
+                    // hides the rule. The browser engine ran it, so a program
+                    // written in the playground failed outside it.
+                    if let Statement::FunctionDecl(f) = &stmt {
+                        self.diagnostics.push(
+                            Diagnostic::error(format!(
+                                "a function cannot be declared inside a block: '{}' is free in a script or part of a module, not of a '?', '@' or function body",
+                                f.name
+                            ))
+                            .with_span(f.span)
+                            .with_help("move the declaration to the top level of the script or into a module"),
+                        );
+                    }
                     statements.push(stmt);
                     // Consume optional semicolon after statement
                     if matches!(self.peek().kind, TokenKind::Semicolon) {
@@ -399,8 +453,16 @@ impl Parser {
                 }
                 Err(diag) => {
                     self.diagnostics.push(diag);
-                    // Try to recover
-                    self.advance();
+                    // Recover past the whole statement, not one token.
+                    //
+                    // Advancing by one meant the tail of a failed statement was
+                    // parsed as if it were code, and each fragment produced its
+                    // own error: one bad line in `corpus`-shaped source reported
+                    // 22 of them, each with a `help:` listing every statement
+                    // keyword. The real message was the first; the other 21 were
+                    // the parser talking about its own leftovers, and they bury
+                    // the one a reader can act on.
+                    self.skip_statement();
                 }
             }
         }

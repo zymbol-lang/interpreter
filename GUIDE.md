@@ -441,6 +441,22 @@ t = meta[1]
 
 Named functions use `##()` — the call-syntax symbol. Lambdas use `##->` — their definition syntax. This distinction is visible in both the type symbol (field 1) and the display string (field 3): `<funct/N>` vs `<lambd/N>`.
 
+> **The operand must exist.** `#?` asks what a value *is*, which is a different
+> question from whether a name was ever created, and it is not an exception to
+> "defined before use":
+>
+> ```text
+> info = nonexistent#?
+> error: undefined variable 'nonexistent'
+>   help: variables must be defined before use
+> ```
+>
+> This retired an older pattern in which an uncreated name answered
+> `("##_", 0, ())`. To let a branch supply a value, give the name one first and
+> let the branch replace it — the default then reads as a line rather than as
+> the absence of one. `##_` keeps its other meanings: the generic error type,
+> and the Unit a rest pattern leaves when it runs out.
+
 Error values use their **kind** as the type symbol — there is no generic `##error` symbol:
 
 ```zymbol
@@ -879,6 +895,22 @@ To include a **literal `{` or `}`** in a string (without triggering interpolatio
 json = "\{\"key\":\"value\"\}"
 >> json ¶                                // → {"key":"value"}
 ```
+
+**The escape is symmetric**: a brace that is neither escaped nor part of an
+interpolation is an error, on either side.
+
+```text
+"\{\"n\":1}"     error: unmatched '}' in string
+                  help: the escape is symmetric — write \} for a literal
+                        brace, as \{ is for the opening one
+"}"               the same error
+"{{…}}"           error: invalid character in string interpolation
+                  help: interpolation must be {identifier} — use \{ for a
+                        literal brace
+```
+
+Doubling the brace is how Rust and Python spell a literal one; Zymbol does not
+borrow that — `\{` and `\}` are the spelling, and only those.
 
 > A name used **only** inside an interpolated string counts as used: the analyzer reads
 > interpolations, so `name = "World"` followed by `"Hello {name}!"` warns about nothing.
