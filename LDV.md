@@ -184,7 +184,7 @@ cooperating modules; there was nowhere else for it to live, so it hit all three.
 
 ### 5.1 The index
 
-Eight published projects, eight logs, ~4,000 lines of recorded findings. This table is the only
+Eight published projects, eight logs, ~4,100 lines of recorded findings. This table is the only
 index of them that exists.
 
 | Project | Version | Log | ID scheme |

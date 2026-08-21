@@ -684,7 +684,7 @@ Each project keeps a **gap log**: every friction, bug, missing capability and id
 a reproduction and a status. The log closes against the release — 囲碁's eleven findings were
 all fixed in v0.0.8, each with its own regression test. चतुरङ्गम्'s five were all resolved on
 2026-08-13, against the same v0.0.9 — fixed, documented or warned, each with the decision
-recorded at the foot of its entry. ZyBank's twenty-four are **open** against that release, which
+recorded at the foot of its entry. ZyBank's twenty-five are **open** against that release, which
 is the state an LDV project ships in: closing one is a language change or a reasoned rejection,
 and neither is the application author's call. The method, its decalogue, and the index of the
 eight logs are in **[LDV.md](./LDV.md)**.
@@ -1147,7 +1147,7 @@ Four capabilities were under test for the first time:
   text, of the digit script and of the currency. Hindi with Kuwaiti dinars gives `-२५.९९० د.ك`,
   and that is correct: the language someone reads does not say which currency their money is in.
 
-Its log holds **twenty-four** findings — 8 BUG, 11 GAP, 3 ERROR, 2 IDEA — and it is the first
+Its log holds **twenty-five** findings — 8 BUG, 12 GAP, 3 ERROR, 2 IDEA — and it is the first
 written against the canonical form of [LDV.md](./LDV.md) § 5.2 entire, `HALLAZGOS.md` included.
 **Three are engine divergences**, in a language whose gate reports zero over 616 corpus files.
 Two of them are symmetric:
@@ -1187,7 +1187,15 @@ The field validates per keystroke rather than on confirm, which is the domain sh
 again: it does not accept a letter, and the decimal point is accepted because the *currency* has
 decimals — in CLP the point key does nothing, in KWD three digits follow it.
 
-Five suites, four judged against goldens and one that drives the TUI through a real pty. That
+And it produced the finding that best states why an application reaches what a corpus cannot:
+**the language can WRITE numerals in 69 scripts and cannot READ one.** A Hindi InScript layout
+sends U+0966, a Bengali keyboard U+09E6; `###c` refuses a Char, `#|c|` returns the character as
+text, and there is no digit predicate — so with no code point there is nothing to deduce a value
+from, and the only way through is a table per script whose position is the value (GAP-ZYB-012).
+No test case was going to find this, because a test case has no keyboard. It took an application
+that printed «$१२,३४५.०७» to someone and then refused the «१» they typed back.
+
+Six suites, five judged against goldens and one that drives the TUI through a real pty. That
 one judges the **balances** rather than the bytes and reports BUG-ZYB-008 instead of gating on
 it — the same division `zyquality` makes between goldens and consensus. The browser engine does
 not take part: `std/db` does not exist there, and it has neither a terminal nor a filesystem.
