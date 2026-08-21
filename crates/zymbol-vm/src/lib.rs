@@ -108,6 +108,28 @@ pub enum Value {
     Error(ZyStr),
 }
 
+/// Materialize a module-level initializer into a runtime value.
+///
+/// Split out of `Vm::run` because the collection variants are recursive: a
+/// dictionary of dictionaries is one initializer and has to be built depth
+/// first. It runs once per global at startup, never inside the dispatch loop.
+fn global_init_value(init: &zymbol_bytecode::GlobalInit) -> Value {
+    use zymbol_bytecode::GlobalInit as G;
+    match init {
+        G::Int(n) => Value::Int(*n),
+        G::Float(f) => Value::Float(*f),
+        G::Bool(b) => Value::Bool(*b),
+        G::Char(c) => Value::Char(*c),
+        G::Str(s) => Value::String(ZyStr::new(s.clone())),
+        G::Unit => Value::Unit,
+        G::Array(items) => Value::Array(Rc::new(items.iter().map(global_init_value).collect())),
+        G::Tuple(items) => Value::Tuple(Rc::new(items.iter().map(global_init_value).collect())),
+        G::Dict(fields) => Value::NamedTuple(Rc::new(
+            fields.iter().map(|(k, v)| (k.clone(), global_init_value(v))).collect(),
+        )),
+    }
+}
+
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -891,14 +913,7 @@ impl<W: Write> VM<W> {
         self.string_rcs = program.string_pool.iter().map(|s| ZyStr::from_str_ref(s)).collect();
 
         // Initialize global variables from program inits
-        self.global_vars = program.global_var_inits.iter().map(|init| match init {
-            zymbol_bytecode::GlobalInit::Int(n) => Value::Int(*n),
-            zymbol_bytecode::GlobalInit::Float(f) => Value::Float(*f),
-            zymbol_bytecode::GlobalInit::Bool(b) => Value::Bool(*b),
-            zymbol_bytecode::GlobalInit::Char(c) => Value::Char(*c),
-            zymbol_bytecode::GlobalInit::Str(s) => Value::String(ZyStr::new(s.clone())),
-            zymbol_bytecode::GlobalInit::Unit => Value::Unit,
-        }).collect();
+        self.global_vars = program.global_var_inits.iter().map(global_init_value).collect();
 
         // Push initial frame for main chunk
         let num_regs = program.main.num_registers as usize;

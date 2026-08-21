@@ -236,7 +236,9 @@ area(r) { <~ r * r * PI }   // works: PI injected into the isolated frame
 
 **Design** (GUIDE §17): a module has exported constants (`:=`, read via `alias.CONST`),
 private mutable state (`=` variables, persisting across calls, reachable only through
-exported functions), and functions. Initializers must be literals (E013).
+exported functions), and functions. Initializers must be literals (E013) — which
+since v0.0.9 includes the three collection literals, recursively, so a lookup table
+is module state like any scalar (REFERENCE L41).
 
 **Implementation** (`modules.rs`, `LoadedModule` at `modules.rs:21`):
 

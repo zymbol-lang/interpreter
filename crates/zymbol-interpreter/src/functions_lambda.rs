@@ -33,6 +33,25 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Capture only the variables in `names` from the current scope stack.
+    /// The module bindings a function body names, computed once per body.
+    ///
+    /// Keyed by the address of the `Rc<FunctionDef>`, which is stable for as
+    /// long as the module is loaded and is what every call to that function
+    /// shares. See `module_var_mentions`.
+    fn module_body_mentions(
+        &mut self,
+        func_def: &std::rc::Rc<FunctionDef>,
+        body: &zymbol_ast::Block,
+    ) -> std::rc::Rc<std::collections::HashSet<String>> {
+        let key = std::rc::Rc::as_ptr(func_def) as usize;
+        if let Some(cached) = self.module_var_mentions.get(&key) {
+            return cached.clone();
+        }
+        let set = std::rc::Rc::new(zymbol_semantic::mentioned_names(body));
+        self.module_var_mentions.insert(key, set.clone());
+        set
+    }
+
     fn capture_only(&self, names: &HashSet<String>) -> HashMap<String, Value> {
         if names.is_empty() {
             return HashMap::new();
@@ -358,37 +377,63 @@ impl<W: Write> Interpreter<W> {
         // G17 fix: script-level functions inherit the caller's import_aliases so
         // module calls (ollama::fn, ui::fn, etc.) resolve correctly.
         let saved_functions = if let Some(ctx_path) = &module_ctx_path {
-            if let Some(module) = self.loaded_modules.get(ctx_path).cloned() {
-                // MM-2: on a same-module nested call the caller's frame holds
-                // fresher values than the store (its own write-back has not run
-                // yet) — inject the caller's live copies instead of stale ones.
-                let same_module_caller =
-                    saved.current_module_path.as_deref() == Some(ctx_path.as_path());
-                for (name, value) in &module.all_variables {
+            // MM-2: on a same-module nested call the caller's frame holds
+            // fresher values than the store (its own write-back has not run
+            // yet) — inject the caller's live copies instead of stale ones.
+            let same_module_caller =
+                saved.current_module_path.as_deref() == Some(ctx_path.as_path());
+            // Only the bindings this body actually names are injected, and
+            // nothing else is copied out of the module at all.
+            //
+            // This used to be `self.loaded_modules.get(path).cloned()` — a deep
+            // copy of the whole `LoadedModule`, every value in it, on every
+            // call — followed by a second deep copy of each variable into the
+            // frame. The tree-walker's collections are plain `Vec`s, so a module
+            // holding a sixty-key table paid for that table on every call to any
+            // of its functions, including ones that never name it. The mention
+            // set is an over-approximation, computed once per body; a name that
+            // is never written is also never diffed on the way out, which is the
+            // other half of the same copy. See REFERENCE.md L44.
+            let mentions = self.module_body_mentions(&func_def, body);
+            let want_functions = module_info.is_some();
+            let prepared = self.loaded_modules.get(ctx_path).map(|module| {
+                let vars: Vec<(String, Value)> = module
+                    .all_variables
+                    .iter()
+                    .filter(|(n, _)| mentions.contains(n.as_str()))
+                    .map(|(n, v)| (n.clone(), v.clone()))
+                    .collect();
+                let const_names: Vec<String> = module.const_names.iter().cloned().collect();
+                let import_aliases = module.import_aliases.clone();
+                let all_functions = if want_functions {
+                    Some(module.all_functions.clone())
+                } else {
+                    None
+                };
+                (vars, const_names, import_aliases, all_functions)
+            });
+            if let Some((vars, const_names, import_aliases, all_functions)) = prepared {
+                for (name, value) in vars {
                     let live = if same_module_caller {
-                        lookup_in_scopes(&saved.scope_stack, name)
+                        lookup_in_scopes(&saved.scope_stack, &name)
                             .cloned()
-                            .unwrap_or_else(|| value.clone())
+                            .unwrap_or(value)
                     } else {
-                        value.clone()
+                        value
                     };
                     injected_module_vars.insert(name.clone(), live.clone());
-                    self.set_variable(name, live);
+                    self.set_variable(&name, live);
                 }
                 // MM-4 runtime guard: module constants stay immutable inside
                 // module function bodies even when static analysis was skipped.
-                for const_name in &module.const_names {
-                    self.mark_const(const_name.clone());
+                for const_name in const_names {
+                    self.mark_const(const_name);
                 }
-                self.import_aliases = module.import_aliases.clone();
+                self.import_aliases = import_aliases;
                 self.current_module_path = Some(ctx_path.clone());
-                if module_info.is_some() {
-                    // Swap in the module's complete function table; save caller's table
-                    Some(std::mem::replace(&mut self.functions, module.all_functions.clone()))
-                } else {
-                    // Intra-module call: table already swapped by the outer alias:: call
-                    None
-                }
+                // Swap in the module's complete function table; save caller's.
+                // Intra-module calls need no swap — the outer alias:: call did it.
+                all_functions.map(|t| std::mem::replace(&mut self.functions, t))
             } else {
                 None
             }

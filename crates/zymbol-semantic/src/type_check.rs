@@ -105,6 +105,18 @@ impl ZymbolType {
     }
 }
 
+/// What a bracket means on a given receiver.
+///
+/// Two operations share one sign: `arr[3]` reaches a position and `d["k"]`
+/// reaches a key. They are told apart by the receiver, never by the index.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum IndexKind {
+    /// Array, string or positional tuple — the index is an Int.
+    Position,
+    /// Dictionary — the index is a String key.
+    Key,
+}
+
 /// Type constraint for inference
 #[derive(Debug, Clone)]
 pub enum TypeConstraint {
@@ -301,6 +313,16 @@ pub struct TypeChecker {
     /// the "direction decided at runtime" warning stays quiet on the loops that
     /// are guarded correctly. Keys come from [`Self::expr_key`].
     guarded_bounds: Vec<String>,
+    /// During parameter-constraint collection only: names in the function body
+    /// that are bound to a collection literal, and which of the two things the
+    /// bracket then means on them.
+    ///
+    /// The bracket addresses a POSITION in an array, a string or a positional
+    /// tuple, and a KEY in a dictionary, so `f(k) { <~ d[k] }` says nothing
+    /// about `k` until the receiver is known. Reading it out of the type
+    /// environment is not possible here: locals are all `Any` at this point.
+    /// Populated per function and cleared with the constraints.
+    index_receiver_kinds: HashMap<String, IndexKind>,
     /// Which parameter slots of each function are `<~` outputs. A `<~` slot
     /// promises the change travels back to the caller, so the argument has to be
     /// something that can be written to (REFERENCE.md L34).
@@ -401,6 +423,7 @@ impl TypeChecker {
             module_out_slots: crate::call_arity::AliasOutSlots::new(),
             loop_depth: 0,
             guarded_bounds: Vec::new(),
+            index_receiver_kinds: HashMap::new(),
             output_slots: HashMap::new(),
         }
     }
@@ -1018,8 +1041,15 @@ impl TypeChecker {
             self.env.define_var(&param.name, ZymbolType::Any);
         }
 
+        // Note which locals are bound to a collection literal before reading
+        // the body: a bracket's meaning is decided by its receiver, and the
+        // type environment has every local at `Any` at this point.
+        self.index_receiver_kinds.clear();
+        self.collect_index_receiver_kinds(&func.body);
+
         // Collect constraints from body usage
         self.collect_constraints_from_block(&func.body, &func.parameters.iter().map(|p| p.name.clone()).collect::<Vec<_>>());
+        self.index_receiver_kinds.clear();
 
         // Define local variables (non-parameter assignments) in scope so return type
         // inference can resolve them. Without this, `<~ local_var` produces a false
@@ -1249,9 +1279,27 @@ impl TypeChecker {
                 }
             }
             Expr::Index(index) => {
-                // If indexing with a param, it should be Int
+                // The bracket addresses two different things, and which one
+                // decides the index type. A POSITION — in an array, a string or
+                // a positional tuple — is an Int; a KEY in a dictionary is a
+                // String. So the constraint follows the receiver, and when the
+                // receiver's type is not known here, nothing is constrained.
+                //
+                // It used to be `Exact(Int)` unconditionally, which predates the
+                // dictionary having a computed key at all. The effect was that
+                // `f(k) { <~ d[k] }` — the shape of every table lookup — had its
+                // parameter declared an Int and became uncallable with the very
+                // key it was written for, while both engines ran it correctly.
+                // Under-constraining is the safe direction: `infer_expr` checks
+                // the index against the receiver at the use site anyway.
                 if let Some(param) = self.get_param_name(&index.index, params) {
-                    self.env.add_param_constraint(&param, TypeConstraint::Exact(ZymbolType::Int));
+                    if let Some(kind) = self.index_kind_of(&index.array, params) {
+                        let ty = match kind {
+                            IndexKind::Position => ZymbolType::Int,
+                            IndexKind::Key => ZymbolType::String,
+                        };
+                        self.env.add_param_constraint(&param, TypeConstraint::Exact(ty));
+                    }
                 }
                 self.collect_constraints_from_expr(&index.array, params);
                 self.collect_constraints_from_expr(&index.index, params);
@@ -1270,6 +1318,81 @@ impl TypeChecker {
                 self.collect_constraints_from_expr(&op.element, params);
             }
             _ => {}
+        }
+    }
+
+    /// Which of the two bracket operations this receiver takes, when that can
+    /// be told during constraint collection. `None` means it cannot, and
+    /// nothing is constrained — an unknown receiver says nothing about its
+    /// index, and `infer_expr` still checks the pair at the use site.
+    fn index_kind_of(&self, receiver: &Expr, params: &[String]) -> Option<IndexKind> {
+        match receiver.unwrap_group() {
+            Expr::ArrayLiteral(_) | Expr::Tuple(_) => Some(IndexKind::Position),
+            Expr::NamedTuple(_) => Some(IndexKind::Key),
+            Expr::Literal(lit) => match lit.value {
+                Literal::String(_) | Literal::InterpolatedString(_) => Some(IndexKind::Position),
+                _ => None,
+            },
+            // A parameter is unknown by definition — it is what is being
+            // inferred — so it never decides the kind for another parameter.
+            Expr::Identifier(id) if !params.contains(&id.name) => {
+                self.index_receiver_kinds.get(&id.name).copied().or_else(|| {
+                    match self.env.lookup_var(&id.name) {
+                        Some(ZymbolType::Array(_))
+                        | Some(ZymbolType::String)
+                        | Some(ZymbolType::Tuple(_)) => Some(IndexKind::Position),
+                        Some(ZymbolType::NamedTuple(_)) => Some(IndexKind::Key),
+                        _ => None,
+                    }
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Record which body-local names are bound to a collection literal, so a
+    /// bracket on one of them can say what its index means. Recurses into the
+    /// blocks a local can be written in; a name bound twice to different kinds
+    /// is dropped rather than guessed at.
+    fn collect_index_receiver_kinds(&mut self, block: &Block) {
+        for stmt in &block.statements {
+            match stmt {
+                Statement::Assignment(assign) => {
+                    let kind = match assign.value.unwrap_group() {
+                        Expr::ArrayLiteral(_) | Expr::Tuple(_) => Some(IndexKind::Position),
+                        Expr::NamedTuple(_) => Some(IndexKind::Key),
+                        Expr::Literal(lit) => match lit.value {
+                            Literal::String(_) | Literal::InterpolatedString(_) => {
+                                Some(IndexKind::Position)
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    match (kind, self.index_receiver_kinds.get(&assign.name).copied()) {
+                        (Some(k), None) => {
+                            self.index_receiver_kinds.insert(assign.name.clone(), k);
+                        }
+                        (Some(k), Some(prev)) if k != prev => {
+                            self.index_receiver_kinds.remove(&assign.name);
+                        }
+                        _ => {}
+                    }
+                }
+                Statement::If(if_stmt) => {
+                    self.collect_index_receiver_kinds(&if_stmt.then_block);
+                    for branch in &if_stmt.else_if_branches {
+                        self.collect_index_receiver_kinds(&branch.block);
+                    }
+                    if let Some(else_block) = &if_stmt.else_block {
+                        self.collect_index_receiver_kinds(else_block);
+                    }
+                }
+                Statement::Loop(loop_stmt) => {
+                    self.collect_index_receiver_kinds(&loop_stmt.body);
+                }
+                _ => {}
+            }
         }
     }
 
