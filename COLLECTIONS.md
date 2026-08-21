@@ -357,6 +357,43 @@ named `servidor`, then `d[clave]` would mean the key named `clave`.
 
 This is why no new type was needed for JSON.
 
+### A table belongs in a module
+
+A collection literal initialises module state, at any nesting depth. This is
+where a lookup table goes: a module is the language's only unit of shared state,
+and its functions read the table without anyone passing it down the call chain —
+which also avoids the copy that passing a collection to a function costs.
+
+```zymbol
+# catalogo {
+    #> { IDIOMAS, texto, claves }
+
+    IDIOMAS := ["es", "en"]
+    tabla = (es: "hola", en: "hi")
+
+    texto(k) {
+        c = k
+        ? (tabla$? c) { <~ tabla[c] }
+        <~ c
+    }
+
+    // The key catalogue is derived from the table, not kept beside it.
+    claves() {
+        fuera = []
+        @ k : tabla { fuera$+ k }
+        <~ fuera
+    }
+}
+```
+
+Until v0.0.9 only a scalar was accepted there (E013), so a table had to be
+written as a `??` chain inside a function — which cannot be asked what keys it
+holds, so every application that had one also maintained a second, hand-written
+list of them. See REFERENCE.md L41.
+
+What is still refused is anything that **computes**: `tabla = json::decode(…)`
+is a call, and a module body runs nothing. Load it in a function instead.
+
 ### The position is not an address
 
 Everything positional is refused:

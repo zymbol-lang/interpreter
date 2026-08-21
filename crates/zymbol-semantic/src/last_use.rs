@@ -553,6 +553,32 @@ pub fn region_schedule(
 /// - for module programs (`# name { }`), every module-level binding: module
 ///   variables participate in the state write-back protocol and module
 ///   constants are re-marked at injection.
+/// Every name mentioned anywhere in a block, nested blocks and lambda bodies
+/// included, plus the names inside `{…}` string interpolations.
+///
+/// This is the same walk `auto_free_exclusions` uses, exposed because the
+/// tree-walker needs the opposite question: not "which names may I free" but
+/// "which of the module's bindings does this body actually touch". A module
+/// function frame is given a copy of the module's state on entry, and the
+/// tree-walker's values are not reference-counted, so a module holding a
+/// sixty-key table paid a deep copy of it on every call — including calls to
+/// functions that never name the table (REFERENCE.md L44).
+///
+/// The answer is deliberately an **over-approximation**: a name that appears
+/// anywhere counts, whether or not the mention is reached. Injecting too much
+/// is what the code did before and is always safe; injecting too little would
+/// be an undefined-variable error, so the walk being exhaustive over `Expr`
+/// (no `_` arm) is what makes this usable.
+pub fn mentioned_names(block: &zymbol_ast::Block) -> HashSet<String> {
+    let mut m = Mentions::default();
+    for stmt in &block.statements {
+        scan_stmt(stmt, &mut m);
+    }
+    let mut out: HashSet<String> = m.last.into_keys().collect();
+    out.extend(m.poisoned);
+    out
+}
+
 pub fn auto_free_exclusions(program: &Program) -> HashSet<String> {
     let mut excluded = HashSet::new();
 

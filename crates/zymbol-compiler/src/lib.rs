@@ -301,6 +301,25 @@ enum ModuleConst {
     String(String),
     Bool(bool),
     Char(char),
+    /// `[1, 2, 3]` — recursive, so a nested collection is one constant.
+    Array(Vec<ModuleConst>),
+    /// `(1, 2)` — the positional tuple.
+    Tuple(Vec<ModuleConst>),
+    /// `(a: 1, b: 2)` — the dictionary, in declaration order.
+    Dict(Vec<(String, ModuleConst)>),
+}
+
+impl ModuleConst {
+    /// A collection is not inlined at its use sites the way a scalar is.
+    ///
+    /// A scalar constant costs one `Load*` wherever it is named. A collection
+    /// costs one instruction per element, every time — so a table of sixty keys
+    /// would be rebuilt on every lookup, and a module table is exactly the thing
+    /// that gets looked up in a loop. Collections become globals instead,
+    /// materialized once when the VM starts.
+    fn is_collection(&self) -> bool {
+        matches!(self, ModuleConst::Array(_) | ModuleConst::Tuple(_) | ModuleConst::Dict(_))
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -426,10 +445,20 @@ impl Compiler {
 
         // Collect global IMMUTABLE constants (:=) so function bodies can inline them.
         // Mutable assignments (=) are NOT inlined to preserve function scope isolation.
+        // A collection constant becomes a global instead of being inlined — see
+        // `ModuleConst::is_collection`.
         for stmt in &program.statements {
             if let Statement::ConstDecl(c) = stmt {
                 if let Some(mc) = Self::eval_const_expr(&c.value) {
-                    compiler.global_consts.insert(c.name.clone(), mc);
+                    if mc.is_collection() {
+                        if !compiler.global_var_map.contains_key(&c.name) {
+                            let gvar_idx = compiler.global_var_inits.len() as u16;
+                            compiler.global_var_inits.push(Self::global_init_of(&mc));
+                            compiler.global_var_map.insert(c.name.clone(), gvar_idx);
+                        }
+                    } else {
+                        compiler.global_consts.insert(c.name.clone(), mc);
+                    }
                 }
             }
         }
@@ -714,37 +743,48 @@ impl Compiler {
             }
         }
 
-        // Collect module-level immutable constants (:=) for function body inlining
+        // Collect module-level immutable constants (:=) for function body inlining.
+        // A collection constant becomes a global instead — see
+        // `ModuleConst::is_collection`.
         let saved_global_consts = std::mem::take(&mut self.global_consts);
+
+        // A module's own bindings SHADOW whatever the map already holds under
+        // the same name, and the previous binding is put back when the module
+        // is done. Skipping the insert instead would let a module read the
+        // program's `TABLA` under its own name — which became reachable the
+        // moment program-level collection constants started living here too.
+        let mut shadowed_gvars: Vec<(String, Option<u16>)> = Vec::new();
+        let bind_gvar = |compiler: &mut Self,
+                             name: &str,
+                             init: zymbol_bytecode::GlobalInit,
+                             shadowed: &mut Vec<(String, Option<u16>)>| {
+            let gvar_idx = compiler.global_var_inits.len() as u16;
+            compiler.global_var_inits.push(init);
+            let prev = compiler.global_var_map.insert(name.to_string(), gvar_idx);
+            shadowed.push((name.to_string(), prev));
+        };
+
         for stmt in &module_prog.statements {
             if let Statement::ConstDecl(c) = stmt {
                 if let Some(mc) = Self::eval_const_expr(&c.value) {
-                    self.global_consts.insert(c.name.clone(), mc);
+                    if mc.is_collection() {
+                        bind_gvar(self, &c.name, Self::global_init_of(&mc), &mut shadowed_gvars);
+                    } else {
+                        self.global_consts.insert(c.name.clone(), mc);
+                    }
                 }
             }
         }
 
         // Register module-level mutable variables (= not :=) as global vars
         // so function bodies can read/write them across calls via LoadGlobal/StoreGlobal.
-        let mut module_gvar_names: Vec<String> = Vec::new();
         for stmt in &module_prog.statements {
             if let Statement::Assignment(a) = stmt {
-                if !self.global_var_map.contains_key(&a.name) {
-                    let gvar_idx = self.global_var_inits.len() as u16;
-                    let init = if let Some(mc) = Self::eval_const_expr(&a.value) {
-                        match mc {
-                            ModuleConst::Int(n) => zymbol_bytecode::GlobalInit::Int(n),
-                            ModuleConst::Float(f) => zymbol_bytecode::GlobalInit::Float(f),
-                            ModuleConst::Bool(b) => zymbol_bytecode::GlobalInit::Bool(b),
-                            ModuleConst::Char(c) => zymbol_bytecode::GlobalInit::Char(c),
-                            ModuleConst::String(s) => zymbol_bytecode::GlobalInit::Str(s),
-                        }
-                    } else {
-                        zymbol_bytecode::GlobalInit::Unit
-                    };
-                    self.global_var_inits.push(init);
-                    self.global_var_map.insert(a.name.clone(), gvar_idx);
-                    module_gvar_names.push(a.name.clone());
+                if !shadowed_gvars.iter().any(|(n, _)| n == &a.name) {
+                    let init = Self::eval_const_expr(&a.value)
+                        .map(|mc| Self::global_init_of(&mc))
+                        .unwrap_or(zymbol_bytecode::GlobalInit::Unit);
+                    bind_gvar(self, &a.name, init, &mut shadowed_gvars);
                 }
             }
         }
@@ -778,8 +818,11 @@ impl Compiler {
         self.module_scope = saved_module_scope;
         self.auto_free_excluded = saved_auto_free_excluded;
         self.global_consts = saved_global_consts;
-        for name in &module_gvar_names {
-            self.global_var_map.remove(name);
+        for (name, prev) in shadowed_gvars.iter().rev() {
+            match prev {
+                Some(idx) => { self.global_var_map.insert(name.clone(), *idx); }
+                None => { self.global_var_map.remove(name); }
+            }
         }
 
         // Collect own constant/variable exports
@@ -1803,16 +1846,7 @@ impl Compiler {
                 }
                 // Fall back to global constant inlining (module-level consts in function bodies)
                 if let Some(mc) = self.global_consts.get(&id.name).cloned() {
-                    let dst = ctx.alloc_temp()?;
-                    let instr = match mc {
-                        ModuleConst::Int(n) => Instruction::LoadInt(dst, n),
-                        ModuleConst::Float(f) => { ctx.set_reg_type(dst, StaticType::Float); Instruction::LoadFloat(dst, f) }
-                        ModuleConst::String(s) => { let idx = self.intern_string(&s); ctx.set_reg_type(dst, StaticType::String); Instruction::LoadStr(dst, idx) }
-                        ModuleConst::Bool(b) => { ctx.set_reg_type(dst, StaticType::Bool); Instruction::LoadBool(dst, b) }
-                        ModuleConst::Char(c) => { ctx.set_reg_type(dst, StaticType::Char); Instruction::LoadChar(dst, c) }
-                    };
-                    ctx.emit(instr);
-                    return Ok(dst);
+                    return self.emit_module_const(&mc, ctx);
                 }
                 // Fall back to module global variable (mutable state shared across calls)
                 if let Some(&gvar_idx) = self.global_var_map.get(&id.name) {
@@ -2646,7 +2680,113 @@ impl Compiler {
                     None
                 }
             }
+            // A collection literal names a value rather than computing one, so
+            // it is a constant by the same reading as `-1` above, and the rule
+            // is recursive. `None` if any element is not — one computed element
+            // makes the whole thing a computation.
+            Expr::Group(g) => Self::eval_const_expr(&g.expr),
+            Expr::ArrayLiteral(arr) => arr
+                .elements
+                .iter()
+                .map(Self::eval_const_expr)
+                .collect::<Option<Vec<_>>>()
+                .map(ModuleConst::Array),
+            Expr::Tuple(t) => t
+                .elements
+                .iter()
+                .map(Self::eval_const_expr)
+                .collect::<Option<Vec<_>>>()
+                .map(ModuleConst::Tuple),
+            Expr::NamedTuple(nt) => nt
+                .fields
+                .iter()
+                .map(|(k, v)| Self::eval_const_expr(v).map(|c| (k.clone(), c)))
+                .collect::<Option<Vec<_>>>()
+                .map(ModuleConst::Dict),
             _ => None,
+        }
+    }
+
+    /// Emit the instructions that rebuild a module constant in a fresh
+    /// register.
+    ///
+    /// The scalar cases are one `Load*` each, which is what the four call sites
+    /// used to write inline. The collections need a sequence — build each
+    /// element, then one instruction to gather them — so a shared emitter is
+    /// the only way the four sites can stay in agreement.
+    fn emit_module_const(
+        &mut self,
+        mc: &ModuleConst,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let dst = ctx.alloc_temp()?;
+        match mc {
+            ModuleConst::Int(n) => {
+                ctx.emit(Instruction::LoadInt(dst, *n));
+            }
+            ModuleConst::Float(f) => {
+                ctx.set_reg_type(dst, StaticType::Float);
+                ctx.emit(Instruction::LoadFloat(dst, *f));
+            }
+            ModuleConst::String(s) => {
+                let idx = self.intern_string(s);
+                ctx.set_reg_type(dst, StaticType::String);
+                ctx.emit(Instruction::LoadStr(dst, idx));
+            }
+            ModuleConst::Bool(b) => {
+                ctx.set_reg_type(dst, StaticType::Bool);
+                ctx.emit(Instruction::LoadBool(dst, *b));
+            }
+            ModuleConst::Char(c) => {
+                ctx.set_reg_type(dst, StaticType::Char);
+                ctx.emit(Instruction::LoadChar(dst, *c));
+            }
+            ModuleConst::Array(items) => {
+                ctx.emit(Instruction::NewArray(dst));
+                for item in items {
+                    let r = self.emit_module_const(item, ctx)?;
+                    ctx.emit(Instruction::ArrayPush(dst, r));
+                }
+            }
+            ModuleConst::Tuple(items) => {
+                let mut regs = Vec::with_capacity(items.len());
+                for item in items {
+                    regs.push(self.emit_module_const(item, ctx)?);
+                }
+                ctx.emit(Instruction::MakeTuple(dst, regs));
+            }
+            ModuleConst::Dict(fields) => {
+                let mut names = Vec::with_capacity(fields.len());
+                let mut regs = Vec::with_capacity(fields.len());
+                for (k, v) in fields {
+                    names.push(self.intern_string(k));
+                    regs.push(self.emit_module_const(v, ctx)?);
+                }
+                ctx.emit(Instruction::MakeNamedTuple(dst, names, regs));
+            }
+        }
+        Ok(dst)
+    }
+
+    /// A module constant as a VM startup initializer. Mirrors
+    /// [`Self::emit_module_const`] for the globals table, which is built once
+    /// rather than compiled into a function body.
+    fn global_init_of(mc: &ModuleConst) -> zymbol_bytecode::GlobalInit {
+        use zymbol_bytecode::GlobalInit as G;
+        match mc {
+            ModuleConst::Int(n) => G::Int(*n),
+            ModuleConst::Float(f) => G::Float(*f),
+            ModuleConst::Bool(b) => G::Bool(*b),
+            ModuleConst::Char(c) => G::Char(*c),
+            ModuleConst::String(s) => G::Str(s.clone()),
+            ModuleConst::Array(items) => G::Array(items.iter().map(Self::global_init_of).collect()),
+            ModuleConst::Tuple(items) => G::Tuple(items.iter().map(Self::global_init_of).collect()),
+            ModuleConst::Dict(fields) => G::Dict(
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Self::global_init_of(v)))
+                    .collect(),
+            ),
         }
     }
 
@@ -2718,29 +2858,7 @@ impl Compiler {
         if let Expr::Identifier(obj) = ma.object.unwrap_group() {
             let key = format!("{}.{}", obj.name, ma.field);
             if let Some(mc) = self.module_constants.get(&key).cloned() {
-                let dst = ctx.alloc_temp()?;
-                let instr = match mc {
-                    ModuleConst::Int(n) => Instruction::LoadInt(dst, n),
-                    ModuleConst::Float(f) => {
-                        ctx.set_reg_type(dst, StaticType::Float);
-                        Instruction::LoadFloat(dst, f)
-                    }
-                    ModuleConst::String(s) => {
-                        let idx = self.intern_string(&s);
-                        ctx.set_reg_type(dst, StaticType::String);
-                        Instruction::LoadStr(dst, idx)
-                    }
-                    ModuleConst::Bool(b) => {
-                        ctx.set_reg_type(dst, StaticType::Bool);
-                        Instruction::LoadBool(dst, b)
-                    }
-                    ModuleConst::Char(c) => {
-                        ctx.set_reg_type(dst, StaticType::Char);
-                        Instruction::LoadChar(dst, c)
-                    }
-                };
-                ctx.emit(instr);
-                return Ok(dst);
+                return self.emit_module_const(&mc, ctx);
             }
         }
         let r_obj = self.compile_expr(&ma.object, ctx)?;
@@ -3169,16 +3287,7 @@ impl Compiler {
         let r_var = if let Ok(r) = ctx.get_reg(name) {
             r
         } else if let Some(mc) = self.global_consts.get(name).cloned() {
-            let r = ctx.alloc_temp()?;
-            let instr = match mc {
-                ModuleConst::Int(n)    => Instruction::LoadInt(r, n),
-                ModuleConst::Float(f)  => { ctx.set_reg_type(r, StaticType::Float); Instruction::LoadFloat(r, f) }
-                ModuleConst::String(s) => { let idx = self.intern_string(&s); ctx.set_reg_type(r, StaticType::String); Instruction::LoadStr(r, idx) }
-                ModuleConst::Bool(b)   => { ctx.set_reg_type(r, StaticType::Bool); Instruction::LoadBool(r, b) }
-                ModuleConst::Char(c)   => { ctx.set_reg_type(r, StaticType::Char); Instruction::LoadChar(r, c) }
-            };
-            ctx.emit(instr);
-            r
+            self.emit_module_const(&mc, ctx)?
         } else if let Some(&gvar_idx) = self.global_var_map.get(name) {
             let r = ctx.alloc_temp()?;
             ctx.emit(Instruction::LoadGlobal(r, gvar_idx));
@@ -3583,18 +3692,7 @@ impl Compiler {
                         // `"{DIR}/f.txt"` compiled to the eight characters
                         // `{DIR}` — silently, and only inside functions, and
                         // only under the VM.
-                        let r = ctx.alloc_temp()?;
-                        let instr = match mc {
-                            ModuleConst::Int(n) => Instruction::LoadInt(r, n),
-                            ModuleConst::Float(f) => Instruction::LoadFloat(r, f),
-                            ModuleConst::String(s) => {
-                                let idx = self.intern_string(&s);
-                                Instruction::LoadStr(r, idx)
-                            }
-                            ModuleConst::Bool(b) => Instruction::LoadBool(r, b),
-                            ModuleConst::Char(c) => Instruction::LoadChar(r, c),
-                        };
-                        ctx.emit(instr);
+                        let r = self.emit_module_const(&mc, ctx)?;
                         parts.push(BuildPart::Reg(r));
                     } else if let Some(&gvar_idx) = self.global_var_map.get(&var_name) {
                         // Module-level mutable state, same reasoning.

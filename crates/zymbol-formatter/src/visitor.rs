@@ -1472,7 +1472,13 @@ impl<'a> FormatVisitor<'a> {
         if needs_parens { self.output.write(")"); }
         self.output.write("(");
 
-        let estimated_len = self.estimate_args_length(&call.arguments);
+        // `x<~` — the call-site output mark. It is part of the call and not of
+        // the argument expression, so it lives in `out_args` and has to be
+        // written back here; without this the safety gate saw a `Return` token
+        // in the source and none in the output, and refused to format any file
+        // that marks an argument at all (REFERENCE.md L36, L43).
+        let estimated_len =
+            self.estimate_args_length(&call.arguments) + call.out_args.len() * 2;
         let should_break = self.output.would_exceed_line_length(estimated_len + 1);
 
         if should_break && !call.arguments.is_empty() {
@@ -1481,6 +1487,9 @@ impl<'a> FormatVisitor<'a> {
             self.output.indent();
             for (i, arg) in call.arguments.iter().enumerate() {
                 self.format_expr(arg);
+                if call.out_args.contains(&i) {
+                    self.output.write("<~");
+                }
                 if i < call.arguments.len() - 1 {
                     self.output.write(",");
                     self.output.newline();
@@ -1493,6 +1502,9 @@ impl<'a> FormatVisitor<'a> {
             // Inline arguments
             for (i, arg) in call.arguments.iter().enumerate() {
                 self.format_expr(arg);
+                if call.out_args.contains(&i) {
+                    self.output.write("<~");
+                }
                 if i < call.arguments.len() - 1 {
                     self.output.write(", ");
                 }
@@ -1974,6 +1986,19 @@ fn escape_char(c: char) -> String {
 
 /// Format a float, removing unnecessary trailing zeros
 fn format_float(f: f64) -> String {
+    // An overflowing literal — `1.0e400` — is already infinity by the time the
+    // lexer is done with it, and `{:e}` prints that as `inf`, which re-lexes as
+    // an identifier. The gate caught it and refused to format the file, which
+    // is the fail-closed behaviour working, but it left one corpus file
+    // unformattable over a value that does have a spelling: any literal that
+    // overflows produces exactly this value, so `1.0e400` is the canonical one.
+    //
+    // NaN is deliberately not handled: no literal produces it, so a NaN here
+    // could only come from somewhere the formatter should not be guessing
+    // about, and refusing is the right answer.
+    if f.is_infinite() {
+        return if f.is_sign_positive() { "1.0e400".to_string() } else { "-1.0e400".to_string() };
+    }
     // Check if it's a whole number
     if f.fract() == 0.0 && f.abs() < 1e15 {
         format!("{}.0", f as i64)
@@ -1991,6 +2016,14 @@ fn format_float(f: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_float_spells_infinity_as_a_literal() {
+        // `{:e}` gives "inf", which is an identifier when read back.
+        assert_eq!(format_float(f64::INFINITY), "1.0e400");
+        assert_eq!(format_float(f64::NEG_INFINITY), "-1.0e400");
+        assert_eq!("1.0e400".parse::<f64>().unwrap(), f64::INFINITY);
+    }
 
     #[test]
     fn test_escape_string() {

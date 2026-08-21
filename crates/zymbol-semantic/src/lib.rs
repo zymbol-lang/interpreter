@@ -34,5 +34,5 @@ pub use def_use::{
     AmbiguousLifetime, AmbiguityReason,
 };
 pub use type_check::{TypeChecker, TypeEnv, ZymbolType};
-pub use last_use::{auto_free_exclusions, region_schedule};
+pub use last_use::{auto_free_exclusions, mentioned_names, region_schedule};
 pub use loop_context::check_loop_context;

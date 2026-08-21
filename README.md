@@ -1176,9 +1176,8 @@ A fifth capability arrived with the full-screen program, which is where the ledg
 operated — accounts opened, movements recorded, corrected and deleted, balances credited and
 debited. **Nobody had written an input field in Zymbol before**, and building one cost four more
 findings: `<<|` delivers Ctrl+letter *as* the letter and collapses Tab with Backspace
-(BUG-ZYB-006); there is no character literal for a control code and no way in or out by number,
-so the three keys a field needs are fabricated through `printf` (GAP-ZYB-010); arrow keys cannot
-be used without losing ESC (GAP-ZYB-011); and a write to module state inside `>>|` is not seen
+(BUG-ZYB-006); arrow keys cannot be used without losing ESC (GAP-ZYB-011); and a write to
+module state inside `>>|` is not seen
 by another function of the same module — the tree-walker keeps the old value, the VM does not,
 and both readings coexist (BUG-ZYB-008, the first finding here that resisted reduction: six
 minimal cases are recorded as *not* reproducing it).
@@ -1187,13 +1186,32 @@ The field validates per keystroke rather than on confirm, which is the domain sh
 again: it does not accept a letter, and the decimal point is accepted because the *currency* has
 decimals — in CLP the point key does nothing, in KWD three digits follow it.
 
-And it produced the finding that best states why an application reaches what a corpus cannot:
-**the language can WRITE numerals in 69 scripts and cannot READ one.** A Hindi InScript layout
-sends U+0966, a Bengali keyboard U+09E6; `###c` refuses a Char, `#|c|` returns the character as
-text, and there is no digit predicate — so with no code point there is nothing to deduce a value
-from, and the only way through is a table per script whose position is the value (GAP-ZYB-012).
-No test case was going to find this, because a test case has no keyboard. It took an application
-that printed «$१२,३४५.०७» to someone and then refused the «१» they typed back.
+And it produced the finding that best states why an application reaches what a corpus cannot —
+and then, on review, the one that best states how an application gets a finding *wrong*. What
+the field exposed is real: a Hindi InScript layout sends U+0966 and a Bengali keyboard U+09E6,
+so **a program that prints «$१२,३४५.०७» to someone and then refuses the «१» they type back has
+localised its output and left its input in ASCII.** No test case was going to find that, because
+a test case has no keyboard.
+
+What was written up alongside it was not. Two findings claimed the language cannot go from a
+character to a number or back (GAP-ZYB-010, GAP-ZYB-012), and both rested on one incomplete
+experiment: `###c` was tried — the *rounding* cast, which refuses a Char for good reason — and
+`#|c|`, which converts to text. `##!` was not, and `##!` is the operator that answers: `##!'७'`
+is 2413, documented in REFERENCE.md and shipped in v0.0.8 alongside `std/term`, which the same
+application was already using. Characters can also be written by code point in four bases —
+`0d27`, `0x1b`, `0o33`, `0b11011` are all ESC, and they are *character* literals (`0d65 == 'A'`
+is `#1`, `0d65 == 65` is `#0`).
+
+The cost of not knowing that was thirteen hand-copied glyph tables and two shell processes per
+keystroke, to work around something the language already did. The correction is in ZyBank's
+HALLAZGOS.md rather than deleted from it, because the method error generalises: an application
+finds what a corpus cannot, **and mistakes absence for a gap in a way a corpus cannot**, by
+testing the wrong operator and generalising from it. A finding against the language is worth no
+more than the probe behind it, and the probe has to exhaust the operators that could answer.
+
+What survives as a gap is much smaller: there is no built-in digit predicate, so an application
+still declares each script's zero — thirteen integers, nine of them the progression `2406 + 128k`
+because an Indic block is 128 code points wide, and a digit's value is `##!t` minus that zero.
 
 Six suites, five judged against goldens and one that drives the TUI through a real pty. That
 one judges the **balances** rather than the bytes and reports BUG-ZYB-008 instead of gating on

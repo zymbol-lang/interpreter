@@ -764,6 +764,170 @@ Corpus **597/597** and the example pool **210/210**, all three engines.
 
 ---
 
+### ~~L41 — a module could not hold a collection~~ Fixed in v0.0.9
+
+A module body accepts only literal-initialised bindings (E013, GUIDE §17), and
+"literal" was implemented as *scalar*: `is_literal_expr` matched
+`Expr::Literal` and a signed literal, nothing else. So all three collections
+were refused as module state, at any nesting depth:
+
+```zymbol
+# catalogo {
+    tabla = (es: "hola", en: "hi")   // E013: variable initializer in module
+    LADOS := [10, 20, 30]            //       must be a literal
+}
+```
+
+The documentation never said this. GUIDE.md wrote "literal RHS only", and
+`[1, 2, 3]` is a literal by every ordinary reading of the word — it names a
+value, it does not compute one. What the rule is *for* is keeping execution out
+of a module body, and a collection literal executes nothing.
+
+**The cost was structural rather than cosmetic.** A module is where a lookup
+table belongs — it is the language's only unit of shared state — so with tables
+locked out, the four game applications wrote their translation catalogues as
+`??` chains inside a function instead: 455 branches in zy-GO, 394 in
+Chaturanga, 96 in Hov veS, 68 in Serpiente. Each one also carries a
+hand-maintained list of its own keys, because a `??` chain cannot be asked what
+it contains. The dictionary arriving in v0.0.9 with a computed key, `$?` and
+`@ k:d` made the table expressible for the first time — and E013 was what still
+kept it out of the only place it could live.
+
+**The browser engine never had the restriction**: `zymbol.js` checks the
+*shape* of a module statement (`VarAssign`, `ConstAssign`, `FuncDecl`, …) and
+never looks at the initializer, so it had been running these modules all along.
+This was therefore a live three-engine divergence that no suite could see —
+no corpus file put a collection in a module, since two engines out of three
+refused to parse one.
+
+**Fixed.** A collection literal is a literal, recursively: an array, a
+positional tuple and a dictionary qualify when every element does, so a
+dictionary of dictionaries — the shape of a decoded JSON object — is one
+initializer. Anything that computes is E013 as before, at any depth.
+
+The VM needed the machinery, not just the permission: `ModuleConst` and
+`GlobalInit` were both scalar-only enums, and the four sites that turn a module
+constant into bytecode each emitted exactly one `Load*` instruction. They now
+share one emitter (`emit_module_const`), since a collection needs a sequence —
+build each element, then one instruction to gather them — and four hand-written
+copies of that could not stay in agreement.
+
+Regression test: `corpus/modules_scope/module_collection_state.zy` — exported
+collection constants, private dictionary state, a key inserted into module state
+and read back, and a nested dictionary. Agreed by all three engines.
+
+**The same blind spot hid the opposite error.** `zymbol.js` did not check the
+initializer at all — it checked the statement's *type*, and `VarAssign` is
+allowed in a module body — so it was not only accepting collection literals but
+also `x = 1 + 2` and `t = json::decode(raw)`, running them while both Rust
+engines refused to parse the file. Neither direction was visible to the gate,
+for the same reason: a file two engines reject has no golden for the third to
+disagree with. The browser engine now applies the same rule, worded the same
+way, and the form is in `reject/modules/02_computed_module_initializer.zy`.
+
+### ~~L42 — a parameter used as a dictionary key was declared an Int~~ Fixed in v0.0.9
+
+```zymbol
+busca(d, k) { <~ d[k] }
+>> busca((es: "hola"), "es") ¶
+```
+
+```
+error: argument 2 has type String, but function 'busca' expects Int
+```
+
+Both engines run this correctly; only the checker refused it. The constraint
+collector had one rule for the bracket — *"if indexing with a param, it should
+be Int"* — written when the bracket only ever reached a position. Decision 7
+gave the dictionary a computed key, and the bracket became two operations under
+one sign: a POSITION in an array, a string or a positional tuple, always an
+Int; a KEY in a dictionary, always a String.
+
+The index cannot decide which; only the receiver can. So the constraint now
+follows the receiver, and where the receiver is unknown — a parameter, a
+returned value — nothing is constrained, which is the safe direction:
+`infer_expr` still checks the pair at the use site.
+
+Reading the receiver out of the type environment does not work here, because
+during signature inference every local is `Any`. A pre-scan
+(`collect_index_receiver_kinds`) notes which body-local names are bound to a
+collection literal, and a name bound to two different kinds is dropped rather
+than guessed at.
+
+This **gained** a diagnostic as well as fixing one: an Int passed where a
+dictionary key belongs is now refused before the program runs, where it used to
+be accepted and fail at run time — with two different messages, one per engine.
+
+Regression test: `corpus/collections/41_dict_key_parameter.zy`.
+
+### ~~L43 — `zymbol fmt` refused every file that marks an output argument~~ Fixed in v0.0.9
+
+L36 put the output mark at the call site, `f(x<~)`, and the formatter was never
+taught to print it. The mark belongs to the call and not to the argument
+expression — it is `out_args` on `FunctionCallExpr`, not part of the `Expr` —
+so `format_function_call` walked the arguments and dropped it.
+
+The safety gate caught the loss and refused the file, which is the fail-closed
+design working exactly as intended: nothing was corrupted. What it means in
+practice is that `zymbol fmt` stopped working on any file that uses the mark —
+**nine corpus files**, and every application file that passes an argument by
+output. The formatter suite reported it as nine P1 failures; P1 is the reparse
+property, and the file never got as far as being reparsed.
+
+Two things kept this quiet. The mark became *required* in this same release, so
+the files that use it are all recent; and a refusal to format is silent unless
+somebody was formatting.
+
+Fixed by writing `<~` after the marked argument in both the inline and the
+broken-over-lines paths, and counting it in the width estimate that chooses
+between them.
+
+**The same run surfaced a second one**: a float literal that overflows —
+`1.0e400` — is already `inf` when the lexer is done, and `{:e}` prints `inf`,
+which reads back as an identifier. Any overflowing literal produces exactly that
+value, so the formatter now writes `1.0e400` for it. NaN is deliberately left
+alone: no literal produces one, so a NaN could only come from somewhere the
+formatter should not be guessing about, and refusing is the right answer.
+
+### ~~L44 — a module function call copied the whole module's state~~ Fixed in v0.0.9
+
+A module function frame is given the module's state on entry and the changes are
+diffed back on exit. The tree-walker's collections are plain `Vec`s and not
+reference counted, so both halves are **deep copies** — and it copied
+everything, twice:
+
+- `self.loaded_modules.get(path).cloned()` cloned the entire `LoadedModule`,
+  every value in it, including `constants`, which this path never reads;
+- then every module variable was cloned again into the frame, whether or not
+  the body ever names it.
+
+While module state could only be a scalar this was invisible. L41 made a table
+module state, and the cost became proportional to the largest thing in the
+module rather than to what the function touches — **309 ms → 26 ms** for 20 000
+calls to a function that never names the module's sixty-key table, and
+**502 ms → 395 ms** for the accessor that does.
+
+**Fixed** by taking out of the module only what the frame needs: the bindings
+the body actually names, and the small parts (aliases, constant names, the
+function table). The mention set comes from the same exhaustive walk that
+auto-free uses (`zymbol_semantic::mentioned_names`) and is computed once per
+body; it is an over-approximation on purpose, since injecting too much is what
+the code did before and is always safe, while injecting too little would be an
+undefined-variable error.
+
+Regression test: `corpus/modules_scope/module_state_mentions.zy` — the seven
+ways a body can name a module binding, including inside a nested block, inside
+a `{…}` interpolation, inside a lambda, and a write from a function that never
+reads it.
+
+**What remains**: the accessor that does name the table still copies it once per
+call, because the tree-walker's values are not reference counted. The register
+VM does not have this shape at all — its globals are read in place — and it is
+between 10× and 20× faster on the same programs. Making the tree-walker's
+collections reference counted is the real fix and is not this release's.
+
+---
+
 ### L39 — `>>` takes arithmetic, not comparison — **by design**
 
 The output operator has a narrower grammar than the rest of the language. Everything up to and

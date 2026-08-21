@@ -2713,13 +2713,14 @@ data = (42, "hello", #1, 3.14)
 ```zymbol
 person = (name: "Alice", age: 25, active: #1)
 
-// Access by field name (recommended)
+// Access by field name
 >> person.name ¶    // → Alice
 >> person.age ¶     // → 25
 
-// Access by positional index (1-based)
->> person[1] ¶      // → Alice
->> person[2] ¶      // → 25
+// Access by key — the bracket reaches ANY key, including a computed one
+>> person["name"] ¶ // → Alice
+campo = "age"
+>> person[campo] ¶  // → 25
 
 // Nested dictionaries
 pos = (x: 10, y: 20)
@@ -2732,6 +2733,11 @@ p = (pos: pos, label: "origin")
 > computed, added and removed, and it can be walked. “Named tuple” stopped being
 > a defensible name the moment the thing could change — a tuple is immutable by
 > definition. See “Dictionaries”.
+>
+> **The position is not an address.** `person[1]` is an error — *a dictionary is
+> addressed by key, not by position* — because adding a key changes what sits at
+> each position. The whole positional family goes with it: `d[-1]`, `d[2]$~ v`,
+> `d$-[2]`, `d$[1:2]`. See COLLECTIONS.md.
 
 ### Immutability
 
@@ -3388,8 +3394,8 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 |---------|---------|-------|
 | `<# path => alias` | ✓ | Import |
 | `#> { ... }` | ✓ | Export block |
-| `NAME := literal` | ✓ | Exported constant (literal RHS only) |
-| `var = literal` | ✓ | Private mutable state (literal RHS only) |
+| `NAME := literal` | ✓ | Exported constant (literal RHS only, collections included) |
+| `var = literal` | ✓ | Private mutable state (literal RHS only, collections included) |
 | `fn(params) { }` | ✓ | Function definition |
 | `>> expr` | ✗ | **E013** — output not allowed in module body |
 | `<< var` | ✗ | **E013** — input not allowed in module body |
@@ -3400,6 +3406,27 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 | `<~ expr` | ✗ | **E013** — return not allowed outside function |
 
 **E013** is raised whenever an executable statement appears at the module top-level. Function bodies are unrestricted — the limitation only applies to the module block itself.
+
+**A literal includes a collection literal**, recursively: `[1, 2, 3]`, `(1, 2)`,
+`(a: 1, b: 2)` and a dictionary of dictionaries all name a value rather than
+computing one, and all initialise module state. What stays out is anything that
+computes — a call, a name, an operator, an interpolated string — at any depth.
+
+```zymbol
+# catalogo {
+    #> { texto }
+    IDIOMAS := ["es", "en"]                    // ✓ exported constant
+    tabla = (es: "hola", en: "hi")             // ✓ private state
+    // tabla = json::decode(io::read("x"))     // ✗ E013 — a call computes
+    texto(k) { c = k
+        ? (tabla$? c) { <~ tabla[c] }
+        <~ c }
+}
+```
+
+Until v0.0.9 only a scalar was accepted here, which is why four of the project's
+applications wrote their translation tables as `??` chains inside a function: it
+was the only way to put a table in a module.
 
 > Since v0.0.8, importing a module also runs the full **semantic analysis** on
 > it (both engines): reassigning a module constant or violating scope rules

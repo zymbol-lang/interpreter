@@ -355,11 +355,15 @@ impl ModuleAnalyzer {
         })
     }
 
-    /// A module-level initializer must be a literal, optionally signed.
+    /// A module-level initializer must be a literal, optionally signed, or a
+    /// collection literal built only out of those.
     ///
     /// `-1` parses as unary minus applied to a literal — an expression node,
-    /// but a constant all the same. This mirrors `Parser::is_literal_expr`;
-    /// the two checks are deliberate defence in depth and must agree.
+    /// but a constant all the same. A collection literal is the same case one
+    /// level up: `[1, 2, 3]` and `(a: 1)` name a value rather than computing
+    /// one, and the rule is recursive so a nested dictionary — a decoded JSON
+    /// object — qualifies too. This mirrors `Parser::is_literal_expr`; the two
+    /// checks are deliberate defence in depth and must agree.
     fn is_literal_init(expr: &Expr) -> bool {
         match expr.unwrap_group() {
             Expr::Literal(_) => true,
@@ -367,6 +371,9 @@ impl ModuleAnalyzer {
                 matches!(u.op, UnaryOp::Neg | UnaryOp::Pos)
                     && matches!(u.operand.unwrap_group(), Expr::Literal(_))
             }
+            Expr::ArrayLiteral(arr) => arr.elements.iter().all(Self::is_literal_init),
+            Expr::Tuple(tuple) => tuple.elements.iter().all(Self::is_literal_init),
+            Expr::NamedTuple(nt) => nt.fields.iter().all(|(_, v)| Self::is_literal_init(v)),
             _ => false,
         }
     }

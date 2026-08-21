@@ -438,6 +438,17 @@ pub struct Interpreter<W: Write> {
     const_vec_pool: Vec<Vec<HashSet<String>>>,
     /// QW9: Recycled Vec pool for argument evaluation (avoids per-call heap alloc)
     arg_vec_pool: Vec<Vec<Value>>,
+    /// Which of a module's bindings each module function body actually names,
+    /// keyed by the address of its `Rc<FunctionDef>`.
+    ///
+    /// A module function frame is given a copy of the module's state on entry
+    /// and diffs it on the way out. The tree-walker's collections are not
+    /// reference-counted, so both halves are deep copies, and the cost was
+    /// proportional to the whole of the module's state rather than to the part
+    /// the function touches — a module holding a sixty-key table paid for it on
+    /// every call, including calls to functions that never name the table.
+    /// Computed once per function body and reused (REFERENCE.md L44).
+    module_var_mentions: HashMap<usize, std::rc::Rc<std::collections::HashSet<String>>>,
     /// MoveOrClone guard: depth of active try/catch blocks.
     /// When > 0, Return must clone (finally block may reference the variable after <~).
     /// When == 0, Return can move (take_variable) — O(1) for String/Array.
@@ -877,6 +888,7 @@ impl Interpreter<std::io::Stdout> {
             mut_vec_pool: Vec::new(),
             const_vec_pool: Vec::new(),
             arg_vec_pool: Vec::new(),
+            module_var_mentions: HashMap::new(),
             try_depth: 0,
             tui_depth: 0,
             current_function: None,
@@ -928,6 +940,7 @@ impl<W: Write> Interpreter<W> {
             mut_vec_pool: Vec::new(),
             const_vec_pool: Vec::new(),
             arg_vec_pool: Vec::new(),
+            module_var_mentions: HashMap::new(),
             try_depth: 0,
             tui_depth: 0,
             current_function: None,

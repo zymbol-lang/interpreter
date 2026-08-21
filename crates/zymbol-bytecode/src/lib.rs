@@ -424,6 +424,16 @@ pub enum GlobalInit {
     Char(char),
     Str(String),
     Unit,
+    /// `[1, 2, 3]` as module state. The three collection variants are
+    /// recursive, so a dictionary of dictionaries — which is the shape of a
+    /// decoded JSON object — is one initializer, materialized once when the VM
+    /// starts and never re-evaluated.
+    Array(Vec<GlobalInit>),
+    /// `(1, 2)` — the positional tuple.
+    Tuple(Vec<GlobalInit>),
+    /// `(a: 1, b: 2)` — the dictionary, in declaration order, which is the
+    /// order it iterates in.
+    Dict(Vec<(String, GlobalInit)>),
 }
 
 /// Builtin function IDs — shared between compiler (emit site) and VM (dispatch).
