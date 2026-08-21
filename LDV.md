@@ -8,7 +8,7 @@
 > which is the *verification* layer this method feeds. Not a list of the projects — the
 > `README.md` § Language-Driven Validation table is that, and § 5 here indexes their logs.
 >
-> **Method.** Every claim below was checked against the seven gap logs in the application
+> **Method.** Every claim below was checked against the eight gap logs in the application
 > repositories, not against a previous edition of this document. Where the practice has
 > drifted from what it says about itself, § 5.2 says so instead of tidying it away.
 
@@ -184,7 +184,7 @@ cooperating modules; there was nowhere else for it to live, so it hit all three.
 
 ### 5.1 The index
 
-Seven published projects, seven logs, ~3,000 lines of recorded findings. This table is the only
+Eight published projects, eight logs, ~3,800 lines of recorded findings. This table is the only
 index of them that exists.
 
 | Project | Version | Log | ID scheme |
@@ -196,8 +196,9 @@ index of them that exists.
 | [Zofía](https://github.com/zymbol-lang/zy-Zofia) | v0.0.6 | `HALLAZGOS.md` | `BUG-ZNNN` / `GAP-ZNNN` / `IDEA-ZNNN` |
 | [囲碁 (Igo)](https://github.com/zymbol-lang/zy-GO) | v0.0.8 | `HALLAZGOS_ES.md` | `HLZ-NNN` with a type column, plus `IDEA-NNN` |
 | [चतुरङ्गम् (Chaturanga)](https://github.com/zymbol-lang/zyChaturanga) | v0.0.9 | `HALLAZGOS_ES.md` | `HLZ-CHA-NNN` / `IDEA-CHA-NNN` — scoped from the first entry |
+| [ZyBank](https://github.com/zymbol-lang/ZyBank) | v0.0.9 | `HALLAZGOS.md` | `BUG-ZYB-NNN` / `GAP-ZYB-NNN` / `ERROR-ZYB-NNN` / `IDEA-ZYB-NNN` — the canonical form entire |
 
-The substance is consistent across all seven: a reading guide, findings with a reproduction and
+The substance is consistent across all eight: a reading guide, findings with a reproduction and
 a status, and a resolution history. Several logs cross-reference each other — Zofía opens with
 the lessons carried over from Serpiente, Serpiente's `HLZ-SRP-001` is discussed next to 囲碁's
 `HLZ-008` — which is the method working: a finding in one domain is worth stating in the
@@ -209,9 +210,11 @@ Recorded rather than quietly corrected, because the drift is real and its cost i
 
 - **Four file names for one artifact:** `GAPS.md`, `HALLAZGOS.md`, `HALLAZGOS_ES.md`,
   `hallazgos_es.md`. Decalogue point 6 names the log `HALLAZGOS.md`; that is literally true of
-  **one log in seven**.
-- **Three ID schemes**, with no single one in the majority: `Gn` (1 project), `TYPE-NNN`
-  (3), `HLZ-NNN` (3 — of which चतुरङ्गम् is the only one scoped by project throughout).
+  **two logs in eight** — Zofía's, which arrived at the name on its own, and ZyBank's, which
+  is the first to adopt it deliberately.
+- **Three ID schemes**, and `TYPE-NNN` is now the plurality: `Gn` (1 project), `TYPE-NNN`
+  (4 — Zofía, ZyAudit, Serpiente and ZyBank), `HLZ-NNN` (3 — of which चतुरङ्गम् is the only one
+  scoped by project throughout).
 - **A live collision.** 囲碁's `HLZ-001`–`HLZ-011` and Hov veS's `HLZ-001`–`HLZ-003` are
   different findings sharing the same identifiers. A bare `HLZ-002` is ambiguous across the
   two logs, and both logs cite IDs in prose. Hov veS already invented the fix mid-log, when it
@@ -229,7 +232,13 @@ pretended away.
 identifier is scoped (`HLZ-CHA-001`) from the first entry, which is the half of the convention
 that costs nothing to adopt at the start and a coordinated rename afterwards. It kept the
 `HALLAZGOS_ES.md` name of the three logs before it rather than the `HALLAZGOS.md` the decalogue
-asks for — so the file-name drift is still six against one, and now deliberately so.
+asks for.
+
+**ZyBank is the first to adopt the whole form**: the file name the decalogue asks for, the four
+`BUG` / `GAP` / `ERROR` / `IDEA` sections, a summary table with ID, module, context and status,
+and identifiers scoped from the first entry (`BUG-ZYB-001`). So the convention now exists in
+full somewhere, which is what makes the pending rename of the six older logs a mechanical job
+rather than a design question. The file-name drift is six against two.
 
 ---
 

@@ -682,12 +682,15 @@ protects against regression afterwards.
 
 Each project keeps a **gap log**: every friction, bug, missing capability and idea, with an ID,
 a reproduction and a status. The log closes against the release — 囲碁's eleven findings were
-all fixed in v0.0.8, each with its own regression test. चतुरङ्गम्'s five are open against
-v0.0.9. The method, its decalogue, and the index of the seven logs are in
-**[LDV.md](./LDV.md)**.
+all fixed in v0.0.8, each with its own regression test. चतुरङ्गम्'s five were all resolved on
+2026-08-13, against the same v0.0.9 — fixed, documented or warned, each with the decision
+recorded at the foot of its entry. ZyBank's nineteen are **open** against that release, which
+is the state an LDV project ships in: closing one is a language change or a reasoned rejection,
+and neither is the application author's call. The method, its decalogue, and the index of the
+eight logs are in **[LDV.md](./LDV.md)**.
 
-The projects carry a second load at the same time. Each is written in a different natural
-language — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese, Sanskrit — which is what
+The projects carry a second load at the same time. They are written across six natural
+languages — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese, Sanskrit — which is what
 turns "keyword-free means language-neutral" from a claim into a result: no flags, no special
 modes, no translation layer at the syntax level. Sanskrit adds the case the earlier six could
 not make: Devanagari is the first script where a single identifier needs combining marks to be
@@ -706,6 +709,7 @@ once.
 | [Zofía](https://github.com/zymbol-lang/zy-Zofia) | **v0.0.6** | Español | Scientific computing, transformer AI from scratch, `^` float exponents, global `:=` scope fix, `#.N\|x\|` formatting |
 | [囲碁 (Igo)](https://github.com/zymbol-lang/zy-GO) | **v0.0.8** | 日本語 (Japanese) | Recursive flood fill at depth, state threading across modules, double-width glyph grid, application-level i18n in 5 languages, `std/term` |
 | [चतुरङ्गम् (Chaturanga)](https://github.com/zymbol-lang/zyChaturanga) | **v0.0.9** | संस्कृतम् (Sanskrit) | Devanagari identifiers with conjuncts and visarga, alpha-beta search over make/unmake, mixed-script module names, numeral script as an i18n axis |
+| [ZyBank](https://github.com/zymbol-lang/ZyBank) | **v0.0.9** | Español | `std/db` in an application, money as integers with a per-currency exponent, dictionaries, configuration precedence, functions passed across module boundaries |
 
 ---
 
@@ -1097,6 +1101,82 @@ there would not show in the chosen move, because the choice is random among the 
 
 ---
 
+### ZyBank — v0.0.9 · Español
+
+A personal ledger for the terminal: income and expenses over SQLite, accounts in several
+currencies, transfers, and an interface in four languages. It is the first project chosen for
+**domain distance rather than a new script** — the seven before it were a CLI over an HTTP
+service, two TUI games, scientific computing, a code auditor and two board games, and not one
+of them had persistence, money arithmetic, or a dictionary.
+
+The requirement that shaped everything came from the domain and not from the language: **an
+amount is one integer in the minor unit of its currency, and the number of decimals is
+configuration, not a constant.** The Chilean peso has no minor unit in circulation, the dollar
+and the euro have two, the Kuwaiti dinar has three. The same stored `1050` is `$1.050`,
+`$10.50` or `1.050 د.ك`, and nothing about the integer changes.
+
+```zymbol
+// A currency is a dictionary; `exponente` is what says what the integer MEANS
+CLP: (código: "CLP", exponente: 0, símbolo: "$",   posición: "antes",   miles: ".", decimal: ",", espacio: #0, nombre: "Peso chileno"),
+KWD: (código: "KWD", exponente: 3, símbolo: "د.ك", posición: "después", miles: ",", decimal: ".", espacio: #1, nombre: "Dinar kuwaití")
+
+// The padding zero is obtained by converting 0 HERE, not written as a literal:
+// under `#०९#` zero is «०», and a fixed "0" would mix two scripts inside one
+// amount — `$१२,३४५.0७` instead of `$१२,३४५.०७`
+cero = "" 0
+frac = rellenar(frac_txt, exp, cero)
+```
+
+Four capabilities were under test for the first time:
+
+- **`std/db` in an application.** Five corpus files touched it and no program did. Transfers
+  are the reason: two entries that live or die together, so `tx` rather than two `exec`s —
+  half a transfer is not a state the database may hold. Across currencies the destination
+  amount is required rather than derived, because inventing a rate would be falsifying an
+  entry.
+- **The dictionary**, which arrived in v0.0.9 and that no application had used. The locale
+  catalogues, the currency table, the preferences and the CLI verbs are all dictionaries read
+  by **computed** key — the operation that separates a dictionary from a record.
+- **Data that outlives the language it was entered in.** What is stored are keys
+  (`gasto.alimentación`), never translated names, so a ledger created in Japanese reads in
+  Spanish. The configuration file may itself be written in the user's language —
+  `{"言語": "hi", "通貨": "KWD"}` configures it — through `json::decode_map`, and the CLI verbs
+  are accepted in all four languages at once (`zybank 口座` = `zybank cuentas`).
+- **A fourth i18n axis.** [USERAPPI18N.md](./USERAPPI18N.md) documents three mechanisms;
+  money needs one more, because the *format* of a number is independent of the language of the
+  text, of the digit script and of the currency. Hindi with Kuwaiti dinars gives `-२५.९९० د.ك`,
+  and that is correct: the language someone reads does not say which currency their money is in.
+
+Its log holds **nineteen** findings — 5 BUG, 9 GAP, 3 ERROR, 2 IDEA — and it is the first
+written against the canonical form of [LDV.md](./LDV.md) § 5.2 entire, `HALLAZGOS.md` included.
+Two of them are **engine divergences**, in a language whose gate reports zero over 616 corpus
+files, and they are symmetric:
+
+| what is passed to another module | zytw | zyvm | zyjs |
+|---|---|---|---|
+| a lambda that uses a module alias | **error** | 6 | 6 |
+| a function defined **in a module** | 6 | **error** | 6 |
+| a function defined at file scope | 6 | 6 | 6 |
+
+Each Rust engine breaks a different one, and the only form that works everywhere is the one
+unavailable inside a module — which is where an application's code lives. So **there is
+currently no way to write a higher-order function across modules that runs on both Rust
+engines.** Neither is reachable without composing three features, and the VM half surfaced
+only when the package was first run, since a `.zyp` defaults to `--vm`.
+
+The rest of the log is mostly about things that fail *quietly*: `d[k]$~ "" v` assigns `""` and
+drops `v` with no diagnostic while `s$+ "" v` concatenates; composing a message with a soft
+`##DB` error aborts the process that was handling it; a `NULL` column answers `#0` to `$!`, so
+the natural check never fires; and `zymbol check` accepts a file-scope variable read from
+inside a function, which is exactly the write that fails at run time in the branch a suite
+reaches last.
+
+Five suites, four judged against goldens and one that drives the TUI through a real pty and
+compares the two engines byte for byte. The browser engine does not take part: `std/db` does
+not exist there, and it has neither a terminal nor a filesystem.
+
+---
+
 ## Project Layout
 
 ```
@@ -1126,7 +1206,7 @@ interpreter/
 - [USERAPPI18N.md](./USERAPPI18N.md) — Building a multilingual application: measured layout, runtime language switching, per-language entry points, and the completeness gate
 - [MEMORY_MODEL.md](./MEMORY_MODEL.md) — Memory and scoping model: design vs implementation audit (findings MM-1 … MM-11)
 - [SYMBOLS.md](./SYMBOLS.md) — Semiotic and morphological reference: the grapheme inventory, how marks agglutinate into operators, the declared homographs and opaque signs, and the rules a new operator must satisfy
-- [LDV.md](./LDV.md) — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the seven gap logs
+- [LDV.md](./LDV.md) — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the eight gap logs
 - [ROADMAP.md](./ROADMAP.md) — What's done, known gaps, and planned work
 - [CHANGELOG.md](./CHANGELOG.md) — Version history
 
