@@ -669,13 +669,41 @@ Special keys are mapped to single-character symbols:
 | Arrow Down | `'↓'` (U+2193) |
 | Arrow Left | `'←'` (U+2190) |
 | Arrow Right | `'→'` (U+2192) |
-| Enter | `'\n'` |
-| Escape | `'\x1b'` |
+| Enter | `'\n'` — a line feed, even though the keyboard sends a carriage return |
+| Escape | `0d27` |
+| Tab | `0d9` |
+| Backspace | `0d127` (DEL) — what the terminal sends for that key |
+| Ctrl + *letter* | its control character: Ctrl+A is `0d1`, Ctrl+S is `0d19` |
 | Other | the character as-is |
 
 > The arrows come back as the arrow glyphs themselves, not as letters. Match
 > them directly — `? k == '↑' { }` — and note that this leaves every ASCII
 > letter free for commands, uppercase included.
+
+**Control keys carry no separate modifier**, because they do not need one: what
+the terminal sends for Ctrl+A *is* the byte 1, and `0d1` writes it. So a
+shortcut is an ordinary comparison, and "is this a control key" is arithmetic on
+the code point:
+
+```zymbol
+<<| k
+? k == 0d19 { guardar() }              // Ctrl+S
+? k == 0d17 { salir() }                // Ctrl+Q
+es_control(t) { <~ (##!t < 32) || (##!t == 127) }
+```
+
+> Until v0.0.9 this was not so: Ctrl+A arrived as the letter `a`, so no program
+> could offer a Ctrl shortcut — the shortcut fired when the user typed that
+> letter into a text field — and Tab and Backspace both arrived as `0d0`, one
+> value for two keys, which made a form where Tab moves between fields
+> impossible to write: every jump would have erased a character.
+
+A field that accepts "any printable character" should say so, and skip the rest:
+
+```zymbol
+_? es_control(t) { }                    // not typed into the field
+_ { texto = texto "" t }
+```
 
 ### TUI Block — `>>|`
 
@@ -2320,9 +2348,14 @@ help: use 'arr[i]$~ value' to modify in place — '=' gives a value to a NAME,
       '$~' changes part of a collection
 ```
 
-> **`$~` takes its value with the unary rule**, so a compound value needs
-> parentheses: `arr[1]$~ (arr[1] + 5)`, not `arr[1]$~ arr[1] + 5`, which reads
-> only `arr[1]`.
+> **`$~` takes a whole expression as its value** — arithmetic, juxtaposition and
+> all — because `arr[i]$~ v` is an assignment: `arr[1]$~ arr[1] + 5` and
+> `d["a"]$~ "hola " nombre` both do what they look like. Parentheses are allowed
+> and never wrong.
+>
+> Until v0.0.9 it took one postfix expression and the rest of the line became a
+> separate statement, so `d["a"]$~ "" v` assigned `""` and dropped `v` in
+> silence. See COLLECTIONS.md § 1.
 
 > The whole editing family follows the rule of the result — `$+`, `$++`, `[i]$~`,
 > `$-`, `$--`, `$-[i]`, `$^+`, `$^-`, `$^`. The consulting half never modifies
@@ -3684,7 +3717,38 @@ db::disconnect("c")
   positional-tuple of parameters bound to `?` placeholders — quotes in data are safe by
   construction (no SQL injection by string concatenation).
 - **Rows are `NamedTuple`s** keyed by column name; `query` returns an array of rows,
-  `query_one` a single row (or soft error), `query_value` a single scalar.
+  `query_one` a single row, `query_value` a single scalar.
+- **`query_one` that matches nothing is a soft error** — `##DB(query_one matched no
+  rows)` — so `? fila$!` is the check, and it is the same check that catches a broken
+  query. A row that exists but holds a `NULL` in one of its columns is a different
+  question: the row is not an error, and the column comes back as `Unit`.
+
+  ```zymbol
+  <# std/db => db
+  db::connect("c", "Driver={SQLite3};Database=/tmp/demo_nulos.db;")
+  db::exec("c", "DROP TABLE IF EXISTS socios")
+  db::exec("c", "CREATE TABLE socios(cod INTEGER PRIMARY KEY, nota TEXT)")
+  db::exec("c", "INSERT INTO socios(cod, nota) VALUES(1, NULL)")
+
+  ausente = db::query_one("c", "SELECT cod, nota FROM socios WHERE cod = ?", (99,))
+  >> ausente$! ¶                       // → #1
+  >> ausente ¶                         // → ##DB(query_one matched no rows)
+
+  fila = db::query_one("c", "SELECT cod, nota FROM socios WHERE cod = ?", (1,))
+  >> fila$! ¶                          // → #0
+  >> "[" fila.nota "]" ¶               // → []
+  db::disconnect("c")
+  ```
+
+  The row exists, so `fila$!` is `#0`; its `nota` column was `NULL`, so it prints as
+  nothing. Two questions, two answers.
+
+  > Before v0.0.9 no rows returned `Unit` too, so `$!` answered `#0` either way and
+  > the branch the documentation prescribed could never be taken. A program failed
+  > several lines later, on a line that was correct, with a message about tuples.
+- `query_value` still returns `Unit` for no rows, and deliberately: its result is one
+  scalar, and a scalar column may legitimately *be* `NULL`. There the two emptinesses
+  really are the same value.
 - **Transactions**: `tx(name, batch)` runs an array of `(sql, params)` tuples atomically;
   low-level `begin`/`commit`/`rollback` plus nested `savepoint`/`release`/`rollback_to`.
 - **Utilities**: `exec_script` (multi-statement SQL), `table_exists`.

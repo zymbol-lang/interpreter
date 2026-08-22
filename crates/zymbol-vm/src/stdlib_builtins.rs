@@ -633,6 +633,23 @@ fn db_odbc_err(e: odbc_api::Error) -> Value {
     db_err(e.to_string())
 }
 
+/// The soft error `query_one` gives back when the query ran and matched nothing.
+///
+/// BUG-ZYB-007: it used to return `Unit`, which is also what a `NULL` column
+/// returns, so `$!` answered `#0` for "no such row" exactly as it does for a
+/// row that exists. The documented check — `? fila$!` — could never be true,
+/// and the branch behind it was dead code that read as live: a program with a
+/// perfectly good "no such account" message, translated into four languages,
+/// instead died several lines later with `Cannot access member 'moneda' on
+/// non-tuple value`, naming a tuple in a line that was written correctly.
+///
+/// A failure has to be reported where it happens or it is reported somewhere
+/// it did not.
+#[cfg(feature = "db")]
+fn db_no_rows() -> Value {
+    db_err("query_one matched no rows".to_string())
+}
+
 #[cfg(feature = "db")]
 fn db_with_conn<F>(name: &str, f: F) -> Value
 where
@@ -871,7 +888,7 @@ fn db_query_one(args: Vec<Value>) -> Result<Value, String> {
     let sql = db_take_string(it.next(), "sql")?;
     let bound = db_bind_params(db_take_params(it.next())?)?;
     Ok(match db_run_query(&name, &sql, bound, true, false) {
-        Value::Array(rows) => rows.first().cloned().unwrap_or(Value::Unit),
+        Value::Array(rows) => rows.first().cloned().unwrap_or_else(db_no_rows),
         other => other,
     })
 }

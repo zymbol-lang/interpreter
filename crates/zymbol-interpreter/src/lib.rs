@@ -205,6 +205,13 @@ pub enum Value {
     Unit,
 }
 
+/// The module aliases visible at one point in the program (alias -> file path).
+///
+/// Behind an `Rc` because every function value carries the set that was visible
+/// where it was written, and every call frame swaps one in: without sharing,
+/// creating a lambda inside a loop would deep-copy the map on each iteration.
+pub type ModuleAliases = std::rc::Rc<std::collections::HashMap<String, std::path::PathBuf>>;
+
 /// Function value for lambdas and closures
 #[derive(Debug, Clone)]
 pub struct FunctionValue {
@@ -214,9 +221,14 @@ pub struct FunctionValue {
     /// True when this value was created from a named FunctionDecl used as a first-class value.
     /// Named functions may complete their block without <~ and return Unit (unlike block lambdas).
     pub is_named_fn: bool,
-    /// Module aliases captured at definition time for named functions.
-    /// Empty for anonymous lambdas — they inherit aliases from the fast path in eval_lambda_call.
-    pub module_aliases: std::collections::HashMap<String, std::path::PathBuf>,
+    /// The module aliases visible where this function was written.
+    ///
+    /// Restored for the duration of the call, so `alias::fn` inside the body
+    /// means what it meant at the definition site. Anonymous lambdas used to
+    /// leave this empty and inherit the *caller's* aliases instead, which is
+    /// the same thing only while the lambda is called from where it was
+    /// defined — crossing into another module lost them (BUG-ZYB-001).
+    pub module_aliases: ModuleAliases,
 }
 
 impl PartialEq for FunctionValue {
@@ -408,7 +420,17 @@ pub struct Interpreter<W: Write> {
     /// Modules currently being loaded (for circular import detection)
     loading_modules: HashSet<PathBuf>,
     /// Import aliases (alias -> file_path)
-    import_aliases: HashMap<String, PathBuf>,
+    import_aliases: ModuleAliases,
+    /// The module variables injected into the CURRENT frame, as they were at
+    /// injection time.
+    ///
+    /// Two things read it. The write-back when the frame returns diffs against
+    /// it, so a frame that never touched a key cannot clobber what a nested
+    /// call wrote (MM-2). And a call to another function of the same module
+    /// flushes the difference to the store on the way in, so the callee sees
+    /// what this frame has written rather than what the store last heard
+    /// (MM-12 — see `flush_module_frame`).
+    frame_module_vars: HashMap<String, Value>,
     /// Current file path (for resolving relative imports)
     current_file: Option<PathBuf>,
     /// Base directory for module resolution
@@ -775,6 +797,7 @@ impl<W: Write> Interpreter<W> {
             mutable_vars_stack: std::mem::take(&mut self.mutable_vars_stack),
             const_vars_stack: std::mem::take(&mut self.const_vars_stack),
             import_aliases: std::mem::take(&mut self.import_aliases),
+            frame_module_vars: std::mem::take(&mut self.frame_module_vars),
             has_any_const: self.has_any_const,
             // MM-1: loop anchors index into the caller's scope_stack — they must
             // not leak into the callee frame or x°/°x would write out of bounds.
@@ -810,6 +833,7 @@ impl<W: Write> Interpreter<W> {
         let mut fn_mut = std::mem::replace(&mut self.mutable_vars_stack, saved.mutable_vars_stack);
         let mut fn_const = std::mem::replace(&mut self.const_vars_stack, saved.const_vars_stack);
         self.import_aliases = saved.import_aliases;
+        self.frame_module_vars = saved.frame_module_vars;
         self.has_any_const = saved.has_any_const;
         self.loop_scope_depths = saved.loop_scope_depths;      // MM-1
         self.dead_variables = saved.dead_variables;            // MM-3
@@ -845,7 +869,8 @@ pub(crate) struct SavedCallState {
     pub(crate) scope_stack: Vec<HashMap<String, Value>>,
     mutable_vars_stack: Vec<HashSet<String>>,
     pub(crate) const_vars_stack: Vec<HashSet<String>>,
-    pub(crate) import_aliases: HashMap<String, std::path::PathBuf>,
+    pub(crate) import_aliases: ModuleAliases,
+    pub(crate) frame_module_vars: HashMap<String, Value>,
     has_any_const: bool,
     loop_scope_depths: Vec<usize>,
     dead_variables: HashSet<String>,
@@ -873,7 +898,8 @@ impl Interpreter<std::io::Stdout> {
             const_vars_stack: vec![HashSet::new()],
             loaded_modules: HashMap::new(),
             loading_modules: HashSet::new(),
-            import_aliases: HashMap::new(),
+            import_aliases: ModuleAliases::default(),
+            frame_module_vars: HashMap::new(),
             current_file: None,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             cli_args: None,
@@ -925,7 +951,8 @@ impl<W: Write> Interpreter<W> {
             const_vars_stack: vec![HashSet::new()],
             loaded_modules: HashMap::new(),
             loading_modules: HashSet::new(),
-            import_aliases: HashMap::new(),
+            import_aliases: ModuleAliases::default(),
+            frame_module_vars: HashMap::new(),
             current_file: None,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             cli_args: None,
@@ -1062,7 +1089,8 @@ impl<W: Write> Interpreter<W> {
         self.const_vars_stack.push(HashSet::new());
         self.functions.clear();
         self.dead_variables.clear();
-        self.import_aliases.clear();
+        self.import_aliases = ModuleAliases::default();
+        self.frame_module_vars.clear();
         self.loading_modules.clear();
         self.loop_scope_depths.clear();
         self.has_any_const = false;
@@ -1655,20 +1683,23 @@ impl<W: Write> Interpreter<W> {
         // Check if we got an error (either RuntimeError or returned Error value)
         let error_value = match &try_result {
             Err(e) => Some(self.runtime_error_to_value(e)),
-            Ok(()) => {
-                // Check if control flow returned an error value
-                if let ControlFlow::Return(Some(ref val)) = self.control_flow {
-                    if val.is_error() {
-                        let err = val.clone();
-                        self.clear_control_flow();
-                        Some(err)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
+            // A pending `Return` is VALUE flow and never exception flow, even
+            // when the value it carries is an error.
+            //
+            // This used to look inside the return, and treat an error found
+            // there as something `:!` should catch. That made `$!!` — an early
+            // return, by definition — behave as a throw whenever it happened to
+            // sit inside a `!?`, so a function propagating a failure upwards
+            // was intercepted by its own catch clause instead of returning.
+            // The register VM and the browser engine both returned the value;
+            // only the tree-walker caught it, and `GUIDE.md` § "Value flow"
+            // states the rule the other two follow: "`$!!` … does not throw an
+            // exception, so it cannot be caught with `!?`/`:!`".
+            //
+            // A `<~` of an ordinary value already left through here untouched,
+            // so this is the same path, now taken by every return alike. The
+            // finally clause below still runs: that is what a finally is.
+            Ok(()) => None,
         };
 
         // If we have an error, try to find a matching catch clause
@@ -1685,8 +1716,24 @@ impl<W: Write> Interpreter<W> {
         }
 
         // Execute finally block if present (always runs)
+        //
+        // "Always" includes the case where the try block returned. A pending
+        // `ControlFlow::Return` has to be set aside first, or the finally runs
+        // against a frame that is already unwinding: `execute_block` stops at
+        // the first statement it sees while control flow is pending, so
+        // `:> { >> "cleaning" ¶ }` printed `cleaning` and swallowed the newline
+        // — half a statement, which is worse than none. The return is put back
+        // afterwards unless the finally raised its own control flow, which
+        // legitimately wins.
         if let Some(ref finally) = try_stmt.finally_clause {
-            self.execute_block(&finally.block)?;
+            let pending = std::mem::replace(&mut self.control_flow, ControlFlow::None);
+            let pending_flag = std::mem::replace(&mut self.has_control_flow, false);
+            let finally_result = self.execute_block(&finally.block);
+            if matches!(self.control_flow, ControlFlow::None) {
+                self.control_flow = pending;
+                self.has_control_flow = pending_flag;
+            }
+            finally_result?;
         }
 
         // If error wasn't caught, propagate it

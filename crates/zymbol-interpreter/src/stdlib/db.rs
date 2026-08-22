@@ -14,7 +14,7 @@
 //!   disconnect(name)                   -> Unit | Error
 //!   exec(name, sql[, params])          -> Int  | Error    (affected rows)
 //!   query(name, sql[, params])         -> Array<NamedTuple> | Error
-//!   query_one(name, sql[, params])     -> NamedTuple | Unit | Error
+//!   query_one(name, sql[, params])     -> NamedTuple | Error  (no rows is an Error)
 //!   query_value(name, sql[, params])   -> scalar | Unit | Error
 //!   tx(name, statements)               -> Unit | Error    (atomic (sql,params) batch)
 //!   begin/commit/rollback(name)        -> Unit | Error
@@ -72,6 +72,22 @@ fn db_error(msg: impl Into<String>) -> Value {
 
 fn odbc_err(e: odbc_api::Error) -> Value {
     db_error(e.to_string())
+}
+
+/// The soft error `query_one` gives back when the query ran and matched nothing.
+///
+/// BUG-ZYB-007: it used to return `Unit`, which is also what a `NULL` column
+/// returns, so `$!` answered `#0` for "no such row" exactly as it does for a
+/// row that exists. The documented check — `? fila$!` — could never be true,
+/// and the branch behind it was dead code that read as live: a program with a
+/// perfectly good "no such account" message, translated into four languages,
+/// instead died several lines later with `Cannot access member 'moneda' on
+/// non-tuple value`, naming a tuple in a line that was written correctly.
+///
+/// A failure has to be reported where it happens or it is reported somewhere
+/// it did not.
+fn no_rows() -> Value {
+    db_error("query_one matched no rows".to_string())
 }
 
 fn type_err(message: impl Into<String>, span: Span) -> RuntimeError {
@@ -340,14 +356,14 @@ fn db_query(args: Vec<Value>, span: Span) -> Result<Value> {
     Ok(run_query(&name, &sql, bound, false, false))
 }
 
-/// db::query_one(name, sql[, params]) -> NamedTuple | Unit | Error
+/// db::query_one(name, sql[, params]) -> NamedTuple | Error — no rows is a soft error
 fn db_query_one(args: Vec<Value>, span: Span) -> Result<Value> {
     let mut it = args.into_iter();
     let name = take_string(it.next(), "name", span)?;
     let sql = take_string(it.next(), "sql", span)?;
     let bound = bind_params(take_params(it.next(), span)?, span)?;
     Ok(match run_query(&name, &sql, bound, true, false) {
-        Value::Array(mut rows) => rows.drain(..).next().unwrap_or(Value::Unit),
+        Value::Array(mut rows) => rows.drain(..).next().unwrap_or_else(no_rows),
         other => other, // soft error passes through
     })
 }

@@ -3175,7 +3175,7 @@ impl<W: Write> VM<W> {
                         loop {
                             match event::read() {
                                 Ok(Event::Key(key)) if vm_is_key_press(&key) => {
-                                    break vm_map_key_code(key.code)
+                                    break vm_map_key_code(&key)
                                 }
                                 Ok(_) => continue,
                                 Err(e) => return Err(VmError::Generic(e.to_string())),
@@ -3190,7 +3190,7 @@ impl<W: Write> VM<W> {
                         while event::poll(std::time::Duration::ZERO).unwrap_or(false) {
                             match event::read() {
                                 Ok(Event::Key(key)) if vm_is_key_press(&key) => {
-                                    found = vm_map_key_code(key.code);
+                                    found = vm_map_key_code(&key);
                                     break;
                                 }
                                 Ok(_) => continue,
@@ -4472,17 +4472,49 @@ fn vm_is_key_press(key: &crossterm::event::KeyEvent) -> bool {
     matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
 }
 
-fn vm_map_key_code(code: crossterm::event::KeyCode) -> char {
-    use crossterm::event::KeyCode::*;
-    match code {
+/// Translate a key event into the single character `<<|` yields.
+///
+/// Mirrors the tree-walker's `map_key_code`; the two must agree or the engines
+/// diverge on the keyboard, which only the pty harness can catch.
+fn vm_map_key_code(key: &crossterm::event::KeyEvent) -> char {
+    use crossterm::event::{KeyCode::*, KeyModifiers};
+
+    // Ctrl+letter is a control character, and that is what the terminal puts on
+    // the wire: Ctrl+A is 0x01, Ctrl+S is 0x13. crossterm hands it over
+    // decoded — `Char('a')` with CONTROL set — and this function used to read
+    // the code and drop the modifiers, so Ctrl+A arrived as the letter `a`
+    // (BUG-ZYB-006). Not "the combination never arrived": it arrived wearing
+    // another key's clothes, which is worse — a Ctrl+X shortcut fired when the
+    // user typed an x into a text field, and no full-screen program could offer
+    // Ctrl+S, Ctrl+Q or Ctrl+C at all.
+    //
+    // Handing back the control character adds nothing to the language: `0d1`
+    // already writes it, and `##!t < 32` already asks the question.
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        if let Char(c) = key.code {
+            let lower = c.to_ascii_lowercase();
+            if lower.is_ascii_lowercase() {
+                return (lower as u8 - b'a' + 1) as char;
+            }
+        }
+    }
+
+    match key.code {
         Char(c) => c,
-        Up      => '↑',
-        Down    => '↓',
-        Left    => '←',
-        Right   => '→',
+        Up      => '\u{2191}',
+        Down    => '\u{2193}',
+        Left    => '\u{2190}',
+        Right   => '\u{2192}',
         Enter   => '\n',
         Esc     => '\x1B',
-        _       => '\0',
+        // Tab and Backspace used to fall through to `'\0'` together, so a
+        // program could not tell them apart — harmless in a numeric field,
+        // which is why ZyBank treated both as "delete", and impossible in a
+        // form where Tab moves between fields: every jump would erase a
+        // character. Both now carry what the terminal sends for them.
+        Tab       => '\t',      // 0d9
+        Backspace => '\x7F',    // 0d127 — DEL, which is what a terminal sends
+        _         => '\0',
     }
 }
 
