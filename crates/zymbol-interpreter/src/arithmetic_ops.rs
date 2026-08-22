@@ -80,6 +80,14 @@ impl<W: Write> Interpreter<W> {
             Value::Int(n) => Ok(to_numeral_int(*n, self.numeral_mode)),
             Value::Float(f) => Ok(to_numeral_float(*f, self.numeral_mode)),
             Value::Bool(b) => Ok(to_numeral_bool(*b, self.numeral_mode)),
+            // BUG-ZYB-003: a soft error must reach a string. `>>` has always
+            // rendered one, and both the register VM and the browser engine
+            // concatenate it; only the tree-walker aborted — on the line that
+            // *handles* the failure, which is the one place a program must not
+            // acquire a second way to fail. `r = f(); ? r$! { <~ (#0, "" r) }`
+            // is the ordinary shape of propagating an error upwards, and it
+            // died in the branch that tests exercise least.
+            Value::Error(_) => Ok(v.to_display_string_in(self.numeral_mode)),
             _ => Err(RuntimeError::Generic {
                 message: format!("cannot juxtapose value of type {:?} in string context", v),
                 span: *span,

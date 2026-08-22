@@ -51,13 +51,26 @@ marks) or making every edit mutate and losing the pure forms. This costs nothing
 every program written before it used the result, so every program kept meaning
 what it meant.
 
-**`$~` takes its value with the unary rule**, so a compound value needs
-parentheses:
+**`$~` takes a whole expression as its value** — arithmetic, juxtaposition and
+all — because `arr[i]$~ v` is an assignment, and this is what the right-hand
+side of `=` accepts:
 
 ```text
-arr[1]$~ (arr[1] + 5)     // correct
-arr[1]$~ arr[1] + 5       // reads only arr[1]
+arr[1]$~ arr[1] + 5       // correct
+d["a"]$~ "hola " nombre   // correct: juxtaposition
+d["b"]$~ (f(x) * 2)       // parentheses are allowed and never wrong
 ```
+
+> Until v0.0.9 it took only a single postfix expression, and **the rest of the
+> line was parsed as a separate statement**. `arr[1]$~ arr[1] + 5` read just
+> `arr[1]`; worse, `d["a"]$~ "" v` assigned `""` and left `v` behind as a bare
+> identifier — a statement with no effect and no diagnostic — so the value
+> vanished with no error and no warning, in all three engines. It cost a
+> ZyBank release: configuration read from a JSON file arrived with every value
+> empty and the program started on its defaults as though the file were not
+> there. The three-piece form `d[k]$~ "pre" v "post"` did raise a parse error,
+> because a string cannot begin a statement, so the two-piece case was the only
+> silent one — and the frequent one. ZyBank/HALLAZGOS.md, BUG-ZYB-002.
 
 ### The family, in two halves
 

@@ -28,7 +28,17 @@ impl<W: Write> Interpreter<W> {
             body: lambda.body.clone(),
             captures: Rc::new(captures),
             is_named_fn: false,
-            module_aliases: std::collections::HashMap::new(),
+            // BUG-ZYB-001: a lambda carries the aliases of the scope it was
+            // written in, exactly as a named function does. Leaving this empty
+            // made the lambda borrow whatever aliases the *call site* happened
+            // to have, which is only the same map while it is called from home.
+            // `Rc` clone, so a lambda built in a loop costs a refcount bump.
+            //
+            // Freezing the set here is safe because `<#` must precede every
+            // statement in a file (and in a module body) — the parser rejects
+            // an import written after one. So by the time any lambda is
+            // evaluated, every alias the file will ever have is already in.
+            module_aliases: self.import_aliases.clone(),
         }))
     }
 
@@ -100,9 +110,22 @@ impl<W: Write> Interpreter<W> {
                     let value = std::mem::replace(&mut arg_values[i], Value::Unit);
                     self.set_variable_new(param, value);
                 }
+                // This path deliberately skips take_call_state, so it must swap
+                // the aliases itself — a lambda called from inside another
+                // module sees that module's aliases otherwise (BUG-ZYB-001).
+                // `ptr_eq` is the common case: same map, nothing to swap.
+                let swap = !Rc::ptr_eq(&self.import_aliases, &func.module_aliases);
+                let saved_aliases = if swap {
+                    Some(std::mem::replace(&mut self.import_aliases, func.module_aliases.clone()))
+                } else {
+                    None
+                };
                 // Pop the scope on the error path too, or the lambda's params
                 // leak into the caller's scope view (L16 family).
                 let result = self.eval_expr(expr);
+                if let Some(saved) = saved_aliases {
+                    self.import_aliases = saved;
+                }
                 self.pop_scope();
                 return result;
             }
@@ -111,10 +134,16 @@ impl<W: Write> Interpreter<W> {
         // B2: zero-copy save + fresh isolated scope (see take_call_state)
         let saved = self.take_call_state();
 
-        // G7 fix: named functions carry module_aliases captured at definition time.
+        // G7 fix: functions carry module_aliases captured at definition time.
         // take_call_state() clears import_aliases; restore from the function's own
         // snapshot so that alias::fn calls work regardless of call depth.
-        if func.is_named_fn && !func.module_aliases.is_empty() {
+        //
+        // BUG-ZYB-001: this used to be gated on `is_named_fn`, which left every
+        // lambda reading the *caller's* aliases. A lambda that names a module
+        // then worked at home and failed the moment it was handed to a function
+        // in another module — the natural workaround for GAP-ZYB-005, so the
+        // workaround for a gap landed inside a bug.
+        if !func.module_aliases.is_empty() {
             self.import_aliases = func.module_aliases.clone();
         }
 
@@ -269,7 +298,7 @@ impl<W: Write> Interpreter<W> {
                 ),
                 captures: Rc::new(std::collections::HashMap::new()),
                 is_named_fn: false,
-                module_aliases: std::collections::HashMap::new(),
+                module_aliases: crate::ModuleAliases::default(),
             };
         };
         let mut refs = HashSet::new();
@@ -282,6 +311,44 @@ impl<W: Write> Interpreter<W> {
             captures: Rc::new(captures),
             is_named_fn: true,
             module_aliases: self.import_aliases.clone(),
+        }
+    }
+
+    /// Publish the calling frame's module-state writes to the store (MM-12).
+    ///
+    /// Called on the way *into* a function of the module the caller is already
+    /// in. Without it a write is visible only to the frame that made it and to
+    /// whatever that frame calls directly; one function in between — one that
+    /// does not name the variable, so nothing of it is injected — and the call
+    /// after that reads the store, which has not heard about the write yet.
+    ///
+    /// Only keys that actually changed are published, diffed against the
+    /// snapshot the caller was given. That is the same rule the write-back on
+    /// return uses, and for the same reason: a frame holding an untouched copy
+    /// must not overwrite what a nested call has since stored (MM-2).
+    ///
+    /// Costs one comparison per module variable the *caller* had injected —
+    /// the names it mentions, not the module's whole table — and nothing at all
+    /// for a caller that had none, which is every call from outside the module.
+    fn flush_module_frame(&mut self, saved: &crate::SavedCallState, ctx_path: &std::path::Path) {
+        if saved.frame_module_vars.is_empty() {
+            return;
+        }
+        let mut updates: Vec<(String, Value)> = Vec::new();
+        for (key, injected) in &saved.frame_module_vars {
+            if let Some(live) = lookup_in_scopes(&saved.scope_stack, key) {
+                if live != injected {
+                    updates.push((key.clone(), live.clone()));
+                }
+            }
+        }
+        if updates.is_empty() {
+            return;
+        }
+        if let Some(module) = self.loaded_modules.get_mut(ctx_path) {
+            for (key, val) in updates {
+                module.all_variables.insert(key, val);
+            }
         }
     }
 
@@ -368,7 +435,9 @@ impl<W: Write> Interpreter<W> {
 
         // Snapshot of the module values injected into this frame. The write-back
         // below diffs against it, so keys this frame never modified cannot
-        // clobber changes written back by nested calls (MM-2).
+        // clobber changes written back by nested calls (MM-2). It lives on the
+        // interpreter rather than in this function so an intra-module call can
+        // flush it on the way in — see `flush_module_frame` (MM-12).
         let mut injected_module_vars: HashMap<String, Value> = HashMap::new();
 
         // If this is a module function call, restore the module's execution context.
@@ -382,6 +451,22 @@ impl<W: Write> Interpreter<W> {
             // yet) — inject the caller's live copies instead of stale ones.
             let same_module_caller =
                 saved.current_module_path.as_deref() == Some(ctx_path.as_path());
+            // MM-12: publish what the CALLER has written before reading the
+            // store. A frame's writes only reached the store when that frame
+            // returned, so anything it called meanwhile read a stale value —
+            // unless it happened to be called directly, because then the
+            // `same_module_caller` lookup below found the live copy in the
+            // caller's own scope. One level of indirection lost it:
+            //
+            //     correr()  { v = "nuevo"  _lee()  _medio() }
+            //     _medio()  { _lee() }          // does not name `v`
+            //     _lee()    { >> v ¶ }          // "nuevo", then "viejo"
+            //
+            // `_medio` has no `v` of its own to be found, so `_lee` fell back
+            // to the store, which still held what was there before `correr`
+            // ran. The register VM and the browser engine keep module state in
+            // one place and never had the question.
+            self.flush_module_frame(&saved, ctx_path);
             // Only the bindings this body actually names are injected, and
             // nothing else is copied out of the module at all.
             //
@@ -501,6 +586,9 @@ impl<W: Write> Interpreter<W> {
         for name in injected_module_vars.keys() {
             self.move_guard_names.insert(name.clone());
         }
+        // Hand the snapshot to the frame, so a nested intra-module call can
+        // flush this frame's writes before it reads the store (MM-12).
+        self.frame_module_vars = injected_module_vars.clone();
 
         // QW1: execute_block_no_scope — take_call_state already owns scope[0] (params).
         // QW17: TCO loop — if tco_pending is set after execution, rebind params and restart.
@@ -605,6 +693,17 @@ impl<W: Write> Interpreter<W> {
             && self.current_module_path.as_deref() == module_ctx_path.as_deref()
         {
             for (key, val) in module_state_updates {
+                // MM-12: the caller's SNAPSHOT moves with its frame, or the two
+                // disagree about what "unchanged" means. The flush on the way
+                // into the next call diffs the live value against this snapshot
+                // — leave it behind and a caller that writes the value the
+                // snapshot happens to hold looks untouched, so its write is
+                // never published and the store keeps answering with what this
+                // frame just put there. That is the second half of BUG-ZYB-008:
+                // the aviso was painted, cleared by the caller, and painted
+                // again on the next turn from a store that never heard about
+                // the clearing.
+                self.frame_module_vars.insert(key.clone(), val.clone());
                 self.set_variable(&key, val);
             }
         }

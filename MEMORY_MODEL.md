@@ -8,6 +8,13 @@
 > note describing the new behavior. Promoted to `REFERENCE.md` as L18–L24 (all
 > fixed). Regression tests: `tests/bugs/bug_mm*.zy` (TW == VM parity).
 >
+> **MM-12 (v0.0.9)** was found afterwards, by an application rather than by this
+> audit: module state read through a helper that does not name it saw the value
+> from before the current frame's write. It is fixed, and the reason it survived
+> the audit is worth keeping — every case anyone wrote called the reader
+> *directly*, and a direct call was the one shape that worked. See §7 and the
+> findings table.
+>
 > Design sources: `GUIDE.md` §4 (Variables and Constants), §9 (Functions), §10/10b
 > (Lambdas, Capture Semantics), §17 (Modules); `REFERENCE.md` §20 (Known Limitations).
 > Implementation source: `crates/zymbol-interpreter` (tree-walker). Every claim below was
@@ -297,6 +304,25 @@ state mutations persist across calls.
     get_value()        { <~ count }
 }
 ```
+
+> **MM-12 (v0.0.9).** Reading module state through a helper that does not *name*
+> it used to see the value from before the current frame's write. Injection only
+> copies the names a body mentions, and a frame's writes only reached the store
+> when that frame returned; a direct call still saw the fresh value, because the
+> injection looks for a live copy in the caller's own scope first. Put one
+> function in between that mentions nothing, and there was no live copy to find:
+>
+> ```zymbol
+> correr()  { v = "nuevo"  _lee()  _medio() }   // "nuevo", then "viejo"
+> _medio()  { _lee() }                          // does not name `v`
+> _lee()    { >> v ¶ }
+> ```
+>
+> A same-module call now publishes the caller's changed keys to the store on the
+> way in (`flush_module_frame`), diffed against the snapshot the caller was
+> given so an untouched copy cannot clobber a nested call's write-back — the
+> MM-2 rule, applied on entry as well as on return. The snapshot travels with
+> the frame it describes, or the two disagree about what "unchanged" means.
 ```zymbol
 <# ./counter => c
 c::bump_via_helper()
@@ -384,6 +410,7 @@ which works transparently since capture reads any visible scope.
 | **MM-9** | 🔴 Bug | Constants × nested calls | In the tree-walker, a global constant vanished at call depth ≥ 2 (injected copies were not re-marked const). | ✅ **Fixed** — root-scope constants live in a global table not swapped by frames; REFERENCE L22 |
 | **MM-10** | 🟠 Bug (VM) | Modules × VM | The VM gave each import alias its own module state copy; the tree-walker shares one state per file path. | ✅ **Fixed** — compiler caches compiled modules by canonical path; aliases and diamond importers share chunks and global slots; REFERENCE L23 |
 | **MM-11** | 🟡 Bug (VM) | Loops × VM | Leftover iterator value after a loop that reuses an outer variable differed: TW leaves the last executed value, VM left the first out-of-range value (body writes could also alter iteration). | ✅ **Fixed** — VM range loops advance a hidden counter published to the named iterator per iteration; REFERENCE L24 |
+| **MM-12** | 🔴 Bug (TW) | Modules × indirection | A write to module state reached the store only when the writing frame returned, so a call routed through a function that does not name the variable read the pre-write value. Direct calls were fine — the injection finds a live copy in the caller's own scope — which is why six minimal cases missed it. | ✅ **Fixed** — the caller's changed module keys are flushed to the store on entry to any same-module call, and the caller's snapshot moves with its frame; corpus `modules_scope/estado_por_intermedia.zy`; ZyBank BUG-ZYB-008 |
 
 ## 10. Verified Behavior Matrix
 

@@ -354,6 +354,21 @@ pub struct Compiler {
     /// Known module aliases (registered via import). Used to distinguish
     /// "private function" errors from "completely unknown" errors at call sites.
     known_module_aliases: HashSet<String>,
+    /// Finally blocks whose `!?` statement the compiler is currently inside,
+    /// outermost first.
+    ///
+    /// A finally is emitted inline after the try/catch, which is enough for
+    /// code that falls off the end of the block and nothing else: a `<~` inside
+    /// the try body returns from the *function* and jumps straight over those
+    /// instructions, so the finally never ran at all (BUG-ZYB-010). The
+    /// tree-walker and the browser engine both ran it.
+    ///
+    /// So every `<~` reachable from inside a `!?` emits a copy of the pending
+    /// finally blocks first, innermost first — which is what the note on
+    /// `Instruction::TryCatch` means by "the compiler emits the block twice".
+    /// The list is empty for the overwhelming majority of returns, and that is
+    /// the case that costs nothing.
+    pending_finally: Vec<zymbol_ast::Block>,
     /// Source of named functions: name → (param_names, body_statements).
     /// Used to recompile named functions as closures when they capture outer variables.
     fn_source: HashMap<String, (Vec<String>, Vec<Statement>)>,
@@ -399,6 +414,7 @@ impl Compiler {
             global_var_map: HashMap::new(),
             global_var_inits: Vec::new(),
             known_module_aliases: HashSet::new(),
+            pending_finally: Vec::new(),
             fn_source: HashMap::new(),
             compiled_modules: HashMap::new(),
             builtin_map: HashMap::new(),
@@ -1005,18 +1021,22 @@ impl Compiler {
             Statement::Break(b) => self.compile_break(b, ctx),
             Statement::Continue(c) => self.compile_continue(c, ctx),
             Statement::Return(r) => {
-                // TCO: if `<~ f(args)` where f is the current function → TailCall
-                if let Some(val) = &r.value {
-                    if let Expr::FunctionCall(call) = val.unwrap_group() {
-                        if let Expr::Identifier(id) = call.callable.unwrap_group() {
-                            if id.name == ctx.name {
-                                if let Some(&func_idx) = self.function_index.get(&id.name) {
-                                    let mut arg_regs = Vec::with_capacity(call.arguments.len());
-                                    for arg in &call.arguments {
-                                        arg_regs.push(self.compile_expr(arg, ctx)?);
+                // TCO: if `<~ f(args)` where f is the current function → TailCall.
+                // Suppressed inside a `!?` that has a finally: the call must not
+                // replace this frame while there is still cleanup owed on it.
+                if self.pending_finally.is_empty() {
+                    if let Some(val) = &r.value {
+                        if let Expr::FunctionCall(call) = val.unwrap_group() {
+                            if let Expr::Identifier(id) = call.callable.unwrap_group() {
+                                if id.name == ctx.name {
+                                    if let Some(&func_idx) = self.function_index.get(&id.name) {
+                                        let mut arg_regs = Vec::with_capacity(call.arguments.len());
+                                        for arg in &call.arguments {
+                                            arg_regs.push(self.compile_expr(arg, ctx)?);
+                                        }
+                                        ctx.emit(Instruction::TailCall(func_idx, arg_regs));
+                                        return Ok(());
                                     }
-                                    ctx.emit(Instruction::TailCall(func_idx, arg_regs));
-                                    return Ok(());
                                 }
                             }
                         }
@@ -1028,6 +1048,22 @@ impl Compiler {
                     let t = ctx.alloc_temp()?;
                     ctx.emit(Instruction::LoadUnit(t));
                     t
+                };
+                // The returned value is fixed BEFORE the finally runs, so a
+                // finally that assigns to the same name cannot change what
+                // comes back — which is what the other two engines do.
+                //
+                // The copy is the whole point: `compile_expr` on an identifier
+                // hands back the variable's OWN register, not a temporary, so
+                // `<~ v` followed by `v = "otro"` in the finally returned
+                // "otro". Only paid when there is a finally to run.
+                let reg = if self.pending_finally.is_empty() {
+                    reg
+                } else {
+                    let held = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::CopyReg(held, reg));
+                    self.emit_pending_finally(ctx)?;
+                    held
                 };
                 ctx.emit(Instruction::Return(reg));
                 Ok(())
@@ -1855,7 +1891,19 @@ impl Compiler {
                     return Ok(dst);
                 }
                 // Named function used as first-class value: f = myFunc, arr$> myFunc, x |> myFunc
-                if self.function_index.contains_key(&id.name) {
+                //
+                // BUG-ZYB-005: `module_scope` has to be consulted here for the
+                // same reason `compile_call` consults it — inside a module body
+                // a sibling function is in that map and not in
+                // `function_index`, which only ever holds the main program's
+                // names and `alias::exported` ones. Calling `_helper(x)` worked
+                // and *passing* `_helper` did not, so a higher-order function
+                // between modules ran under the tree-walker and the browser
+                // engine and died under the VM — first noticed when a `.zyp`
+                // was packaged, since a package defaults to `--vm`.
+                if self.function_index.contains_key(&id.name)
+                    || self.module_scope.contains_key(&id.name)
+                {
                     // Check if the function body captures variables from the current scope
                     let maybe_source = self.fn_source.get(&id.name).cloned();
                     if let Some((params, stmts)) = maybe_source {
@@ -1878,7 +1926,13 @@ impl Compiler {
                             return Ok(dst);
                         }
                     }
-                    let func_idx = *self.function_index.get(&id.name).unwrap();
+                    // Same precedence as `compile_call`: the qualified table
+                    // first, the enclosing module's own names second.
+                    let func_idx = *self
+                        .function_index
+                        .get(&id.name)
+                        .or_else(|| self.module_scope.get(&id.name))
+                        .unwrap();
                     let dst = ctx.alloc_temp()?;
                     ctx.emit(Instruction::MakeFunc(dst, func_idx));
                     return Ok(dst);
@@ -3848,6 +3902,25 @@ impl Compiler {
     //   finally_label:
     //   [finally body]
     //   end_label:
+    /// Emit a copy of every pending finally block, innermost first.
+    ///
+    /// Called before a `Return` that is lexically inside one or more `!?`
+    /// statements with a `:>` clause. The list is taken out while they compile,
+    /// so a `<~` written inside a finally does not re-emit that same finally
+    /// forever.
+    fn emit_pending_finally(&mut self, ctx: &mut FunctionCtx) -> Result<(), CompileError> {
+        if self.pending_finally.is_empty() {
+            return Ok(());
+        }
+        let pending = std::mem::take(&mut self.pending_finally);
+        let result = pending
+            .iter()
+            .rev()
+            .try_for_each(|block| self.compile_block(block, ctx));
+        self.pending_finally = pending;
+        result
+    }
+
     fn compile_try(
         &mut self,
         ts: &TryStmt,
@@ -3861,6 +3934,13 @@ impl Compiler {
 
         // TryBegin: patch target after body is compiled
         let try_begin_pos = ctx.emit(Instruction::TryBegin(0));
+
+        // From here until the inline copy below, a `<~` owes this finally a
+        // visit on its way out — the try body and every catch clause alike.
+        if has_finally {
+            self.pending_finally
+                .push(ts.finally_clause.as_ref().unwrap().block.clone());
+        }
 
         // Compile try body
         self.compile_block(&ts.try_block, ctx)?;
@@ -3936,8 +4016,11 @@ impl Compiler {
             ctx.patch_try_begin(try_begin_pos, finally_label);
         }
 
-        // Finally block: always executes
+        // Finally block: the copy taken by falling off the end of try/catch.
+        // Popped first, so a `<~` inside the finally itself does not emit it
+        // again.
         if has_finally {
+            self.pending_finally.pop();
             self.compile_block(&ts.finally_clause.as_ref().unwrap().block, ctx)?;
         }
 
