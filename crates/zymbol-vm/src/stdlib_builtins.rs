@@ -1079,6 +1079,130 @@ fn db_table_exists(args: Vec<Value>) -> Result<Value, String> {
     }))
 }
 
+// ── std/time ──────────────────────────────────────────────────────────────────
+//
+// Adapter only. The clock, the civil calendar and every rule about what a month
+// is live in `zymbol_intrinsics::time`, shared with the tree-walker: a table of
+// names can be kept in step between two engines by reading them side by side,
+// and a leap year cannot. What differs here is unboxing, and nothing else.
+//
+// A soft error is `##Time(...)`, catchable like `##IO`; a wrong argument type
+// is `Err`, which stops the program, because it is the caller's bug.
+
+use zymbol_intrinsics::time as zt;
+
+fn time_soft(message: String) -> Value {
+    Value::Error(ZyStr::new(format!("##Time({})", message)))
+}
+
+fn time_int(v: Option<&Value>) -> Option<i64> {
+    match v {
+        Some(Value::Int(i)) => Some(*i),
+        _ => None,
+    }
+}
+
+fn time_text(v: Option<&Value>) -> Option<&str> {
+    match v {
+        Some(Value::String(s)) => Some(s.as_str()),
+        _ => None,
+    }
+}
+
+/// The optional trailing zone: absent, or present and text. `Err(())` is a
+/// zone argument that is not a String, which is a call the caller got wrong.
+fn time_zone(args: &[Value], from: usize) -> Result<Option<&str>, ()> {
+    match args.get(from) {
+        None => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.as_str())),
+        Some(_) => Err(()),
+    }
+}
+
+fn time_now(_args: Vec<Value>) -> Result<Value, String> {
+    Ok(Value::Int(zt::now_ms()))
+}
+
+fn time_today(args: Vec<Value>) -> Result<Value, String> {
+    let zone = time_zone(&args, 0).map_err(|_| "time::today: expected an optional zone String".to_string())?;
+    Ok(match zt::call_today(zone) {
+        Ok(s) => Value::String(ZyStr::new(s)),
+        Err(e) => time_soft(e),
+    })
+}
+
+fn time_parts(args: Vec<Value>) -> Result<Value, String> {
+    let expected = "time::parts: expected (### epoch [, zone])";
+    let epoch = time_int(args.first()).ok_or_else(|| expected.to_string())?;
+    let zone = time_zone(&args, 1).map_err(|_| expected.to_string())?;
+    Ok(match zt::call_parts(epoch, zone) {
+        Ok(p) => Value::NamedTuple(Rc::new(
+            zt::parts_fields(&p)
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), Value::Int(v)))
+                .collect(),
+        )),
+        Err(e) => time_soft(e),
+    })
+}
+
+fn time_of(args: Vec<Value>) -> Result<Value, String> {
+    let expected = "time::of: expected (year, month, day) or (year, month, day, hour, minute, second), each ###, plus an optional zone";
+    // The zone is text and every field is a number, so a trailing String is the
+    // zone and nothing else can be — no counting of arguments decides it.
+    let cut = args.len().saturating_sub(1);
+    let (fields, zone) = match args.last() {
+        Some(Value::String(s)) => (&args[..cut], Some(s.as_str())),
+        _ => (&args[..], None),
+    };
+    let mut numbers = Vec::with_capacity(fields.len());
+    for v in fields {
+        match v {
+            Value::Int(i) => numbers.push(*i),
+            _ => return Err(expected.to_string()),
+        }
+    }
+    Ok(match zt::call_of(&numbers, zone) {
+        Ok(ms) => Value::Int(ms),
+        Err(e) => time_soft(e),
+    })
+}
+
+fn time_format(args: Vec<Value>) -> Result<Value, String> {
+    let expected = "time::format: expected (### epoch, \"pattern\" [, zone])";
+    let epoch = time_int(args.first()).ok_or_else(|| expected.to_string())?;
+    let pattern = time_text(args.get(1)).ok_or_else(|| expected.to_string())?;
+    let zone = time_zone(&args, 2).map_err(|_| expected.to_string())?;
+    Ok(match zt::call_format(epoch, pattern, zone) {
+        Ok(s) => Value::String(ZyStr::new(s)),
+        Err(e) => time_soft(e),
+    })
+}
+
+fn time_add(args: Vec<Value>) -> Result<Value, String> {
+    let expected = "time::add: expected (### epoch, ### count, \"unit\" [, zone])";
+    let epoch = time_int(args.first()).ok_or_else(|| expected.to_string())?;
+    let count = time_int(args.get(1)).ok_or_else(|| expected.to_string())?;
+    let unit = time_text(args.get(2)).ok_or_else(|| expected.to_string())?;
+    let zone = time_zone(&args, 3).map_err(|_| expected.to_string())?;
+    Ok(match zt::call_add(epoch, count, unit, zone) {
+        Ok(ms) => Value::Int(ms),
+        Err(e) => time_soft(e),
+    })
+}
+
+fn time_diff(args: Vec<Value>) -> Result<Value, String> {
+    let expected = "time::diff: expected (### a, ### b, \"unit\" [, zone])";
+    let a = time_int(args.first()).ok_or_else(|| expected.to_string())?;
+    let b = time_int(args.get(1)).ok_or_else(|| expected.to_string())?;
+    let unit = time_text(args.get(2)).ok_or_else(|| expected.to_string())?;
+    let zone = time_zone(&args, 3).map_err(|_| expected.to_string())?;
+    Ok(match zt::call_diff(a, b, unit, zone) {
+        Ok(n) => Value::Int(n),
+        Err(e) => time_soft(e),
+    })
+}
+
 // ── std/term ───────────────────────────────────────────────────────────────────
 //
 // Terminal display metrics. Mirrors zymbol-interpreter/src/stdlib/term.rs.
@@ -1211,6 +1335,13 @@ pub fn call(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
         B::TERM_PAD_RIGHT => term_pad_right(args),
         B::TERM_CENTER    => term_center(args),
         B::TERM_TRUNCATE  => term_truncate(args),
+        B::TIME_NOW       => time_now(args),
+        B::TIME_TODAY     => time_today(args),
+        B::TIME_PARTS     => time_parts(args),
+        B::TIME_OF        => time_of(args),
+        B::TIME_FORMAT    => time_format(args),
+        B::TIME_ADD       => time_add(args),
+        B::TIME_DIFF      => time_diff(args),
         id if (B::DB_CONNECT..=B::DB_TABLE_EXISTS).contains(&id) => db_dispatch(id, args),
         other => Err(format!("unknown builtin id {}", other)),
     }

@@ -19,6 +19,62 @@ those corrections ship inside it. See [WINDOWS_V009.md](WINDOWS_V009.md).
 
 ### Added
 
+**`std/time` — the clock and the civil calendar**
+
+```zymbol
+<# std/time => t
+ahora = t::now()                                  // milliseconds since the epoch, UTC
+>> t::today() ¶                                   // 2026-08-23
+>> t::format(ahora, "%F %T %z", "-0400") ¶
+>> t::format(t::add(ahora, -30, "day"), "%F") ¶   // the last thirty days
+>> t::diff(vence, ahora, "day") ¶                 // how many days overdue
+```
+
+Until now the date came from outside the language, `<\ "date +%F" \>`. That is not on
+Windows — which is exactly the platform where `std/db` *is* included, so the application
+that most needs a database was the one that could least get a date — is not in a browser at
+all, needs `#09#` forced before every call because otherwise the shell answers in whatever
+script the numeral mode selected and stops being ISO 8601, and answers nothing beyond "what
+day is it": *the last thirty days* cannot be asked of a string. Found by ZyBank
+(GAP-ZYB-002), where every ledger entry is a date.
+
+Seven functions: `now`, `today`, `parts`, `of`, `format`, `add`, `diff`. An **instant** is
+milliseconds since 1970-01-01T00:00:00Z and is always UTC; a **date** is a *reading* of an
+instant, and there is no reading without saying where the reader stands, so every function
+takes an optional trailing zone — `"UTC"` (the default), `"local"`, or a fixed `"+1000"` /
+`"-0400"`. Milliseconds and not nanoseconds because an epoch in nanoseconds is ~1.7e18 and
+the integer is ±(2⁵³−1); `zyquality/bench/lib_time.zy` had documented that since v0.0.7.
+
+**Below a day it is duration, from a day up it is calendar.** A minute is always 60 000
+milliseconds and a day is not always 86 400 000: a zone that observes daylight saving has
+one 23-hour day and one 25-hour day a year. `add(e, 1, "day", "local")` across the change
+gives the same wall clock 23 hours later, which is what a person means by "tomorrow"; a
+month lands on the same day of the month or on the last one there is, so 31 January + 1
+month is 28 February. `diff` counts whole units toward zero.
+
+**The digits are always ASCII**, which is the third of the shell's four problems answered
+directly: `format` and `today` do not follow the numeral mode, because a date is the one
+piece of text a program writes for a machine to read back and `२०२६-०८-२३` is not ISO 8601.
+A date for a person is built from `parts`, whose numbers do follow it.
+
+A date that does not exist — the 30th of February, month 13 — is a soft `##Time`, not a
+crash: dates arrive from forms, files and database columns, and that is data. A wrong
+argument type stays hard.
+
+The calendar itself (Howard Hinnant's era algorithms, exact over the proleptic Gregorian
+calendar) lives in `zymbol-intrinsics` and is shared by the tree-walker and the register
+VM, rather than written twice as `std/term` is: two engines can be kept agreeing about a
+padding rule by reading them side by side, and cannot be kept agreeing about leap years.
+`zymbol.js` ports it a third time rather than delegating to `Date`, which rolls 2026-13-01
+over into 2027 instead of refusing it. The three engines agree byte for byte, including
+across a daylight-saving boundary. The crate's one dependency, `time`, is used for a single
+thing no `std` API offers: reading the machine's own zone — and it fails rather than
+guessing, because a wrong date is worse than a caught error.
+
+Cases in `corpus/stdlib/stdlib_time.zy` (deterministic: every instant is built) and
+`corpus/stdlib/stdlib_time_clock.zy`, which puts a *clock* in a corpus that decides by
+comparing output — by printing only what has to hold whatever the answer was.
+
 **`() -> body` — a zero-parameter lambda**
 
 ```zymbol

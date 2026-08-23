@@ -320,7 +320,7 @@ Built-in modules accessible via `<#`:
 | `std/term` | `width pad_left pad_right center truncate` — display width in terminal **columns** (CJK/emoji count as 2), measured over grapheme clusters | ✅ v0.0.8 |
 | `std/env` | Environment variables, OS info | **dropped v0.0.7** — redundant: `<\ "printenv KEY" \>`, `><` (see `IMPL_V007.md`) |
 | `std/string` | Advanced string utilities | planned |
-| `std/time` | Timestamps, duration, formatting | planned |
+| `std/time` | `now today parts of format add diff` — instants in milliseconds, the civil calendar, zones (`UTC`/`local`/`±HHMM`), calendar arithmetic — soft `##Time` errors | ✅ v0.0.9 |
 
 #### Package Manager
 

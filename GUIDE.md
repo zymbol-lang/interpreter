@@ -3661,6 +3661,7 @@ the i18n pattern with no special handling:
 | `std/net` | `get` `post` `post_json` `head` | v0.0.7 |
 | `std/db` | `connect` `disconnect` `exec` `query` `query_one` `query_value` `tx` `begin` `commit` `rollback` `savepoint` `release` `rollback_to` `exec_script` `table_exists` | v0.0.7 |
 | `std/term` | `width` `pad_left` `pad_right` `center` `truncate` | v0.0.8 |
+| `std/time` | `now` `today` `parts` `of` `format` `add` `diff` | v0.0.9 |
 
 **`std/term` — display width in terminal columns.** `width` counts **columns**, not
 graphemes: CJK ideographs, kana, hangul and most emoji take two columns each, so a
@@ -3680,6 +3681,93 @@ right); `truncate` cuts to at most N columns without splitting a wide glyph.
 This is a **screen** metric. Operating on a string's *content* — split, slice, replace,
 repeat — stays in the language's symbols (`$/`, `$[..]`, `$~~`, `$*`); `std/term` never
 duplicates them.
+
+**`std/time` — the clock and the civil calendar.** Before v0.0.9 the only way to learn the
+date was to leave the language, `<\ "date +%F" \>`, which is absent on Windows, absent in a
+browser, needs `#09#` forced first — otherwise the shell's answer comes back in whatever
+script the numeral mode selected and stops being ISO 8601 — and answers nothing beyond
+"what day is it": *the last thirty days* cannot be asked of a string.
+
+An **instant** is milliseconds since 1970-01-01T00:00:00Z, always UTC, and that is what
+every function passes around. A **date** is a *reading* of an instant, and there is no
+reading without saying where the reader is standing, so every function takes an optional
+trailing zone — `"UTC"` (the default), `"local"`, or a fixed offset written `"+1000"` /
+`"-0400"`.
+
+```zymbol
+<# std/time => t
+
+fijo = t::of(2026, 8, 23, 14, 5, 9)     // year, month, day [, hour, minute, second]
+>> t::format(fijo, "%F %T") ¶           // → 2026-08-23 14:05:09
+>> t::format(fijo, "%F %T", "-0400") ¶  // → 2026-08-23 10:05:09
+>> t::format(fijo, "%F", "+1000") ¶     // → 2026-08-24
+>> t::parts(fijo).weekday ¶             // → 7
+```
+
+`parts` returns a dictionary — `year month day hour minute second millisecond weekday
+offset` — with `weekday` numbered as ISO 8601 does it, 1 for Monday. `now()` is the current
+instant and `today()` the current date as `YYYY-MM-DD`.
+
+**Below a day it is duration; from a day up it is calendar.** A minute is always 60 000
+milliseconds, and a *day* is not always 86 400 000 — a zone that observes daylight saving
+has one 23-hour day and one 25-hour day every year. "Tomorrow at the same time" and "24
+hours from now" are different questions, and `add`/`diff` answer the first:
+
+```zymbol
+<# std/time => t
+fijo = t::of(2026, 8, 23, 14, 5, 9)
+
+>> t::format(t::add(fijo, 90, "minute"), "%T") ¶            // → 15:35:09
+>> t::format(t::add(fijo, -30, "day"), "%F") ¶              // → 2026-07-24
+>> t::format(t::add(t::of(2026, 1, 31), 1, "month"), "%F") ¶ // → 2026-02-28
+
+>> t::diff(t::of(2026, 8, 23), t::of(2026, 7, 24), "day") ¶  // → 30
+>> t::diff(t::of(2026, 8, 23), t::of(2026, 7, 24), "month") ¶ // → 0
+```
+
+The units are `millisecond second minute hour day week month year`, one spelling each and
+in full. Adding a month lands on the same day of the month or on the last one there is —
+one month after the 31st of January is the 28th of February, because there is no 31st, and
+rolling into March would turn "next month" into the one after. `diff` counts **whole**
+units toward zero, which is why the 23rd of August is 0 months after the 24th of July: the
+day of the month has not come round yet.
+
+**The digits are always ASCII.** `format` and `today` do not follow the numeral mode, and
+that is the point: a date is the one piece of text a program writes for a *machine* to read
+back — a filename, a database column, an ISO 8601 field — and `२०२६-०८-२३` is not ISO 8601.
+Text for a person is built from `parts`, whose numbers print in whatever script is active.
+
+```zymbol
+<# std/time => t
+fijo = t::of(2026, 8, 23)
+p = t::parts(fijo)
+#०९#
+>> t::format(fijo, "%F") ¶          // → 2026-08-23
+>> p.year "-" p.month "-" p.day ¶   // → २०२६-८-२३
+#09#
+```
+
+Patterns are the POSIX `date` codes, and only these: `%Y %m %d %H %M %S %L %j %u %z %F %T`
+and `%%`. `%F` is `%Y-%m-%d`, `%T` is `%H:%M:%S`, `%L` is the milliseconds, `%j` the day of
+the year, `%u` the weekday and `%z` the offset as `±HHMM`. Anything else is refused rather
+than passed through.
+
+Bad **data** — month 13, the 29th of a February that has 28, an unknown zone, `%Q` — is a
+soft `##Time(...)` you test with `$!`, because a date arriving from a form, a file or a
+database column is exactly where that happens. A wrong argument **type** is the program's
+own bug and stops it.
+
+```zymbol
+<# std/time => t
+mal = t::of(2026, 2, 30)
+? mal$! {
+    >> "esa fecha no existe" ¶      // → esa fecha no existe
+}
+```
+
+`"local"` is the only part that asks the machine anything, and it is read **at the
+instant** rather than once, so a date in January and one in July get their own offsets.
+Where the zone cannot be determined it returns a soft error instead of guessing.
 
 **Error convention.** Type/arity mistakes raise a hard `RuntimeError` (the program is
 malformed). Recoverable environmental failures — file not found, network timeout, malformed
