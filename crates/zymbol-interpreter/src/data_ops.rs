@@ -120,10 +120,22 @@ fn cast_to_int(f: f64, cast: &str, span: zymbol_span::Span) -> Result<Value> {
 impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_numeric_eval(&mut self, op: &NumericEvalExpr) -> Result<Value> {
         let value = self.eval_expr(&op.expr)?;
-        if let Value::String(s) = value {
-            Ok(parse_numeric_string(s))
-        } else {
-            Ok(value)
+        match value {
+            Value::String(s) => Ok(parse_numeric_string(s)),
+            // GAP-ZYB-012: a Char reads like the one-character string it is.
+            //
+            // `#|"७"|` gave 7 and `#|'७'|` gave back the glyph — the same
+            // operator, the same character, two answers depending on which of
+            // the two ways it had been written. `#|'7'|` did not convert
+            // either. `parse_numeric_string` already knows all 69 digit
+            // scripts, so this is the same reading applied to the same
+            // character, and a Char that is not a digit comes back untouched,
+            // which is what "safe conversion" means for a string too.
+            Value::Char(c) => Ok(match parse_numeric_string(c.to_string()) {
+                Value::String(_) => Value::Char(c),
+                converted => converted,
+            }),
+            other => Ok(other),
         }
     }
 
