@@ -491,6 +491,24 @@ fn vm_number_from(v: &Value) -> Result<f64, VmError> {
     }
 }
 
+/// A Char read as the one-character string it is, for `#|c|` (GAP-ZYB-012).
+///
+/// Mirrors the String arm above, including the 69 digit scripts, and returns
+/// the character unchanged when it is not a number — which is what "safe
+/// conversion" means for a string too.
+fn vm_char_as_number(c: char) -> Value {
+    let s = c.to_string();
+    match num::parse(&s) {
+        num::Num::Int(i) => Value::Int(i),
+        num::Num::Float(f) => Value::Float(f),
+        num::Num::None => match normalize_unicode_digits(&s).map(|n| num::parse(&n)) {
+            Some(num::Num::Int(i)) => Value::Int(i),
+            Some(num::Num::Float(f)) => Value::Float(f),
+            _ => Value::Char(c),
+        },
+    }
+}
+
 fn vm_fmt_thousands(num: f64, prec_kind: u8, prec_n: u32) -> String {
     let num = match prec_kind {
         1 => { let m = 10f64.powi(prec_n as i32); (num * m).round() / m }
@@ -2919,6 +2937,10 @@ impl<W: Write> VM<W> {
                         }
                         Value::Int(n) => Value::Int(*n),
                         Value::Float(f) => Value::Float(*f),
+                        // GAP-ZYB-012: a Char reads like the one-character
+                        // string it is — `#|'७'|` is 7, as `#|"७"|` already
+                        // was. A Char that is not a digit comes back untouched.
+                        Value::Char(c) => vm_char_as_number(*c),
                         other => other.clone(),
                     };
                     self.reg_set(dst, result);
@@ -4335,6 +4357,10 @@ impl<W: Write> VM<W> {
                         }
                         Value::Int(n) => Value::Int(*n),
                         Value::Float(f) => Value::Float(*f),
+                        // GAP-ZYB-012: a Char reads like the one-character
+                        // string it is — `#|'७'|` is 7, as `#|"७"|` already
+                        // was. A Char that is not a digit comes back untouched.
+                        Value::Char(c) => vm_char_as_number(*c),
                         other => other.clone(),
                     };
                     w!(dst, result);
