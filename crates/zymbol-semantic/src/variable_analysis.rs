@@ -900,15 +900,26 @@ impl VariableAnalyzer {
             // Format expressions
             Expr::Format(op) => {
                 self.analyze_expr(&op.expr);
+                if let Some(p) = &op.precision {
+                    if let zymbol_ast::Precision::Dynamic(e) = p.precision() {
+                        self.analyze_expr(e);
+                    }
+                }
             }
 
             // Precision expressions
             Expr::Round(op) => {
                 self.analyze_expr(&op.expr);
+                if let zymbol_ast::Precision::Dynamic(e) = &op.precision {
+                    self.analyze_expr(e);
+                }
             }
 
             Expr::Trunc(op) => {
                 self.analyze_expr(&op.expr);
+                if let zymbol_ast::Precision::Dynamic(e) = &op.precision {
+                    self.analyze_expr(e);
+                }
             }
 
             Expr::Literal(lit) => {

@@ -1192,15 +1192,28 @@ impl TypeChecker {
                 let right_param = self.get_param_name(&binary.right, params);
 
                 match binary.op {
-                    // Juxtaposition constrains parameters to be string-compatible
-                    BinaryOp::Concat => {
-                        if let Some(param) = left_param {
-                            self.env.add_param_constraint(&param, TypeConstraint::CompatibleWith(ZymbolType::String));
-                        }
-                        if let Some(param) = right_param {
-                            self.env.add_param_constraint(&param, TypeConstraint::CompatibleWith(ZymbolType::String));
-                        }
-                    }
+                    // Juxtaposition constrains NOTHING. Every value has a
+                    // string form — the one `>>` prints — so a parameter that
+                    // is juxtaposed can still be an Int, a Float, a Bool, a
+                    // Char, an array, a dictionary or an error.
+                    //
+                    // This used to record `CompatibleWith(String)`, which
+                    // resolved the parameter to String and then rejected every
+                    // other type at the call site:
+                    //
+                    //     g(b) { <~ "[" b "]" }
+                    //     >> g(42) ¶      // error: argument 1 has type Int
+                    //
+                    // while `>> "[" n "]" ¶` with the same 42 printed `[42]`
+                    // one line away. Both Rust engines refused a correct
+                    // program and the browser engine ran it — a divergence
+                    // that rejected, rather than mis-ran, so no golden could
+                    // see it. Any function that builds a message out of a
+                    // number was affected, which is most functions that build
+                    // a message. (The report reached this through
+                    // GAP-ZYB-007, which blamed juxtaposition in call
+                    // arguments; that part was never true.)
+                    BinaryOp::Concat => {}
                     // Arithmetic operations constrain parameters to be numeric
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div |
                     BinaryOp::Mod | BinaryOp::Pow => {

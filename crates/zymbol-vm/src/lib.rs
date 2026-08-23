@@ -460,6 +460,37 @@ fn fmt_comma_int(n: i64) -> String {
 }
 
 /// Format with thousands separators: prec_kind 0=none, 1=round, 2=truncate
+/// The decimal count held in a register, for the `*Dyn` format opcodes.
+fn vm_precision_from(v: &Value) -> Result<u32, VmError> {
+    match v {
+        Value::Int(n) if *n >= 0 => Ok(*n as u32),
+        Value::Int(n) => Err(VmError::TypeError {
+            expected: "a decimal count that is not negative",
+            got: n.to_string(),
+        }),
+        other => Err(VmError::TypeError {
+            expected: "a whole number as the decimal count",
+            got: other.type_name().to_string(),
+        }),
+    }
+}
+
+/// The number a format opcode operates on. Mirrors the immediate path, which
+/// also accepts a string that parses — the tree-walker rejects a non-number and
+/// returning 0.0 silently made the two engines disagree.
+fn vm_number_from(v: &Value) -> Result<f64, VmError> {
+    match v {
+        Value::Int(n) => Ok(*n as f64),
+        Value::Float(f) => Ok(*f),
+        other => ascii_digits(other.to_string().trim())
+            .parse::<f64>()
+            .map_err(|_| VmError::TypeError {
+                expected: "number",
+                got: other.type_name().to_string(),
+            }),
+    }
+}
+
 fn vm_fmt_thousands(num: f64, prec_kind: u8, prec_n: u32) -> String {
     let num = match prec_kind {
         1 => { let m = 10f64.powi(prec_n as i32); (num * m).round() / m }
@@ -1981,7 +2012,7 @@ impl<W: Write> VM<W> {
                             self.value_stack[base + arr_reg as usize] = Value::Tuple(Rc::new(tup));
                         }
                         Value::NamedTuple(rc_nt) => {
-                            let mut fields = rc_nt.as_ref().clone();
+                            let fields = rc_nt.as_ref().clone();
                             let _ = (lo, hi);
                             let first = fields.first().map(|(k, _)| k.clone());
                             raise!(VmError::Generic(dict_not_positional("d$-[a..b]", first.as_deref())));
@@ -3039,6 +3070,57 @@ impl<W: Write> VM<W> {
                 }
 
                 // ── Format ops ────────────────────────────────────────────────
+                // GAP-ZYB-001: the same four operations with the decimal count
+                // in a register. The count is read, checked, and the immediate
+                // path below does the rest.
+                &Instruction::FmtThousandsDyn(dst, src, prec_kind, prec_reg) => {
+                    let n = match vm_precision_from(self.reg_get(prec_reg)) {
+                        Ok(n) => n,
+                        Err(e) => raise!(e),
+                    };
+                    let f = match vm_number_from(self.reg_get(src)) {
+                        Ok(f) => f,
+                        Err(e) => raise!(e),
+                    };
+                    let s = vm_fmt_thousands(f, prec_kind, n);
+                    self.reg_set(dst, Value::String(ZyStr::new(s)));
+                }
+                &Instruction::FmtScientificDyn(dst, src, prec_kind, prec_reg) => {
+                    let n = match vm_precision_from(self.reg_get(prec_reg)) {
+                        Ok(n) => n,
+                        Err(e) => raise!(e),
+                    };
+                    let f = match vm_number_from(self.reg_get(src)) {
+                        Ok(f) => f,
+                        Err(e) => raise!(e),
+                    };
+                    let s = vm_fmt_scientific(f, prec_kind, n);
+                    self.reg_set(dst, Value::String(ZyStr::new(s)));
+                }
+                &Instruction::RoundFloatDyn(dst, src, prec_reg) => {
+                    let n = match vm_precision_from(self.reg_get(prec_reg)) {
+                        Ok(n) => n,
+                        Err(e) => raise!(e),
+                    };
+                    let f = match vm_number_from(self.reg_get(src)) {
+                        Ok(f) => f,
+                        Err(e) => raise!(e),
+                    };
+                    let m = 10f64.powi(n as i32);
+                    self.reg_set(dst, Value::Float((f * m).round() / m));
+                }
+                &Instruction::TruncFloatDyn(dst, src, prec_reg) => {
+                    let n = match vm_precision_from(self.reg_get(prec_reg)) {
+                        Ok(n) => n,
+                        Err(e) => raise!(e),
+                    };
+                    let f = match vm_number_from(self.reg_get(src)) {
+                        Ok(f) => f,
+                        Err(e) => raise!(e),
+                    };
+                    let m = 10f64.powi(n as i32);
+                    self.reg_set(dst, Value::Float((f * m).trunc() / m));
+                }
                 &Instruction::FmtThousands(dst, src, prec_kind, prec_n) => {
                     let f = match self.reg_get(src) {
                         Value::Int(n) => *n as f64,

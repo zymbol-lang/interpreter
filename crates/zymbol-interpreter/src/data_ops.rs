@@ -240,6 +240,43 @@ impl<W: Write> Interpreter<W> {
         ]))
     }
 
+    /// The decimal count a precision operator was given, evaluated if it was
+    /// written as an expression (GAP-ZYB-001).
+    fn eval_precision(&mut self, p: &zymbol_ast::Precision, span: zymbol_span::Span) -> Result<u32> {
+        match p {
+            zymbol_ast::Precision::Literal(n) => Ok(*n),
+            zymbol_ast::Precision::Dynamic(expr) => match self.eval_expr(expr)? {
+                Value::Int(n) if n >= 0 => Ok(n as u32),
+                Value::Int(n) => Err(RuntimeError::Generic {
+                    message: format!("decimal count must not be negative, got {}", n),
+                    span,
+                }),
+                other => Err(RuntimeError::Generic {
+                    message: format!(
+                        "decimal count must be a whole number, got {}",
+                        other.type_name()
+                    ),
+                    span,
+                }),
+            },
+        }
+    }
+
+    fn eval_precision_op(
+        &mut self,
+        op: &Option<zymbol_ast::PrecisionOp>,
+        span: zymbol_span::Span,
+    ) -> Result<Option<zymbol_ast::ResolvedPrecision>> {
+        use zymbol_ast::{PrecisionOp, ResolvedPrecision};
+        Ok(match op {
+            None => None,
+            Some(PrecisionOp::Round(p)) => Some(ResolvedPrecision::Round(self.eval_precision(p, span)?)),
+            Some(PrecisionOp::Truncate(p)) => {
+                Some(ResolvedPrecision::Truncate(self.eval_precision(p, span)?))
+            }
+        })
+    }
+
     /// Evaluate format expression: #,|expr| or #^|expr| with optional precision.
     /// Always returns a String value.
     pub(crate) fn eval_format(&mut self, op: &FormatExpr) -> Result<Value> {
@@ -261,9 +298,10 @@ impl<W: Write> Interpreter<W> {
             }
         };
 
+        let precision = self.eval_precision_op(&op.precision, op.span)?;
         let formatted = match op.kind {
-            FormatKind::Thousands => interp_fmt_thousands(f, op.precision),
-            FormatKind::Scientific => interp_fmt_scientific(f, op.precision),
+            FormatKind::Thousands => interp_fmt_thousands(f, precision),
+            FormatKind::Scientific => interp_fmt_scientific(f, precision),
         };
 
         Ok(Value::String(formatted))
@@ -410,7 +448,8 @@ impl<W: Write> Interpreter<W> {
         };
 
         // Round to N decimal places
-        let multiplier = 10_f64.powi(op.precision as i32);
+        let digits = self.eval_precision(&op.precision, op.span)?;
+        let multiplier = 10_f64.powi(digits as i32);
         let rounded = (float_val * multiplier).round() / multiplier;
 
         Ok(Value::Float(rounded))
@@ -459,7 +498,8 @@ impl<W: Write> Interpreter<W> {
         };
 
         // Truncate to N decimal places
-        let multiplier = 10_f64.powi(op.precision as i32);
+        let digits = self.eval_precision(&op.precision, op.span)?;
+        let multiplier = 10_f64.powi(digits as i32);
         let truncated = (float_val * multiplier).trunc() / multiplier;
 
         Ok(Value::Float(truncated))
@@ -469,8 +509,8 @@ impl<W: Write> Interpreter<W> {
 // ── Format helpers (free functions) ──────────────────────────────────────────
 
 /// Format number with thousands separators and optional precision.
-fn interp_fmt_thousands(num: f64, precision: Option<zymbol_ast::PrecisionOp>) -> String {
-    use zymbol_ast::PrecisionOp;
+fn interp_fmt_thousands(num: f64, precision: Option<zymbol_ast::ResolvedPrecision>) -> String {
+    use zymbol_ast::ResolvedPrecision as PrecisionOp;
 
     // Apply precision first
     let num = match precision {
@@ -527,8 +567,8 @@ fn interp_fmt_thousands(num: f64, precision: Option<zymbol_ast::PrecisionOp>) ->
 }
 
 /// Format number in scientific notation with optional precision.
-fn interp_fmt_scientific(num: f64, precision: Option<zymbol_ast::PrecisionOp>) -> String {
-    use zymbol_ast::PrecisionOp;
+fn interp_fmt_scientific(num: f64, precision: Option<zymbol_ast::ResolvedPrecision>) -> String {
+    use zymbol_ast::ResolvedPrecision as PrecisionOp;
     match precision {
         None => format!("{:e}", num),
         Some(PrecisionOp::Round(n)) => format!("{:.prec$e}", num, prec = n as usize),

@@ -167,7 +167,7 @@ impl<W: Write> Interpreter<W> {
             Value::String(mut s) => {
                 for item in &op.items {
                     let v = self.eval_expr(item)?;
-                    let part = self.value_to_concat_str(&v, &op.span)?;
+                    let part = self.value_to_concat_str(&v);
                     s.push_str(&part);
                 }
                 Ok(Value::String(s))

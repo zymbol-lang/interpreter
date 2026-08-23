@@ -857,10 +857,25 @@ fn collect_refs_in_expr(
         }
         Expr::NumericEval(op)    => collect_refs_in_expr(&op.expr, locals, refs),
         Expr::TypeMetadata(op)   => collect_refs_in_expr(&op.expr, locals, refs),
-        Expr::Format(op)         => collect_refs_in_expr(&op.expr, locals, refs),
+        Expr::Format(op)         => {
+            collect_refs_in_expr(&op.expr, locals, refs);
+            if let Some(zymbol_ast::Precision::Dynamic(e)) = op.precision.as_ref().map(|p| p.precision()) {
+                collect_refs_in_expr(e, locals, refs);
+            }
+        }
         Expr::BaseConversion(op) => collect_refs_in_expr(&op.expr, locals, refs),
-        Expr::Round(op)          => collect_refs_in_expr(&op.expr, locals, refs),
-        Expr::Trunc(op)          => collect_refs_in_expr(&op.expr, locals, refs),
+        Expr::Round(op)          => {
+            collect_refs_in_expr(&op.expr, locals, refs);
+            if let zymbol_ast::Precision::Dynamic(e) = &op.precision {
+                collect_refs_in_expr(e, locals, refs);
+            }
+        }
+        Expr::Trunc(op)          => {
+            collect_refs_in_expr(&op.expr, locals, refs);
+            if let zymbol_ast::Precision::Dynamic(e) = &op.precision {
+                collect_refs_in_expr(e, locals, refs);
+            }
+        }
         Expr::ErrorCheck(op)     => collect_refs_in_expr(&op.expr, locals, refs),
         Expr::ErrorPropagate(op) => collect_refs_in_expr(&op.expr, locals, refs),
         Expr::Pipe(pipe) => {

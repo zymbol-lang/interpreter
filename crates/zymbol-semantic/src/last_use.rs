@@ -251,6 +251,24 @@ fn scan_match(mx: &zymbol_ast::MatchExpr, m: &mut Mentions) {
     }
 }
 
+/// Walk the expression a precision operator carries, if it has one.
+///
+/// GAP-ZYB-001: the decimal count can be computed, and a name used there is a
+/// use like any other. Missing it lets the last-use analyzer free the variable
+/// before the operator reads it, which surfaced as
+/// "use of 'n' after auto-destruction".
+fn scan_precision(p: &zymbol_ast::Precision, f: &mut dyn FnMut(&Expr)) {
+    if let zymbol_ast::Precision::Dynamic(e) = p {
+        f(e);
+    }
+}
+
+fn scan_precision_op(op: &Option<zymbol_ast::PrecisionOp>, f: &mut dyn FnMut(&Expr)) {
+    if let Some(op) = op {
+        scan_precision(op.precision(), f);
+    }
+}
+
 fn scan_expr(expr: &Expr, m: &mut Mentions) {
     match expr {
         Expr::Literal(lit) => scan_literal(&lit.value, m),
@@ -378,7 +396,10 @@ fn scan_expr(expr: &Expr, m: &mut Mentions) {
         }
         Expr::NumericEval(op) => scan_expr(&op.expr, m),
         Expr::TypeMetadata(op) => scan_expr(&op.expr, m),
-        Expr::Format(op) => scan_expr(&op.expr, m),
+        Expr::Format(op) => {
+            scan_expr(&op.expr, m);
+            scan_precision_op(&op.precision, &mut |e| scan_expr(e, m));
+        }
         Expr::BaseConversion(op) => scan_expr(&op.expr, m),
         Expr::Lambda(lambda) => {
             // Capture-by-value happens where the lambda literal appears: every
@@ -423,8 +444,14 @@ fn scan_expr(expr: &Expr, m: &mut Mentions) {
                 scan_expr(arg, m);
             }
         }
-        Expr::Round(op) => scan_expr(&op.expr, m),
-        Expr::Trunc(op) => scan_expr(&op.expr, m),
+        Expr::Round(op) => {
+            scan_expr(&op.expr, m);
+            scan_precision(&op.precision, &mut |e| scan_expr(e, m));
+        }
+        Expr::Trunc(op) => {
+            scan_expr(&op.expr, m);
+            scan_precision(&op.precision, &mut |e| scan_expr(e, m));
+        }
         Expr::NumericCast(op) => scan_expr(&op.expr, m),
         Expr::ErrorCheck(op) => scan_expr(&op.expr, m),
         Expr::ErrorPropagate(op) => scan_expr(&op.expr, m),
@@ -951,7 +978,10 @@ pub(crate) fn walk_sub_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
         }
         Expr::NumericEval(op) => f(&op.expr),
         Expr::TypeMetadata(op) => f(&op.expr),
-        Expr::Format(op) => f(&op.expr),
+        Expr::Format(op) => {
+            f(&op.expr);
+            scan_precision_op(&op.precision, f);
+        }
         Expr::BaseConversion(op) => f(&op.expr),
         Expr::Lambda(lambda) => match &lambda.body {
             zymbol_ast::LambdaBody::Expr(x) => f(x),
@@ -994,8 +1024,14 @@ pub(crate) fn walk_sub_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
                 f(a);
             }
         }
-        Expr::Round(op) => f(&op.expr),
-        Expr::Trunc(op) => f(&op.expr),
+        Expr::Round(op) => {
+            f(&op.expr);
+            scan_precision(&op.precision, f);
+        }
+        Expr::Trunc(op) => {
+            f(&op.expr);
+            scan_precision(&op.precision, f);
+        }
         Expr::NumericCast(op) => f(&op.expr),
         Expr::ErrorCheck(op) => f(&op.expr),
         Expr::ErrorPropagate(op) => f(&op.expr),
