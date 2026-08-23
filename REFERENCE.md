@@ -196,15 +196,15 @@ mixto = #[#0, 1, '2', "tres", 4.0]     // ✅ the mix is declared
 
 ```zymbol
 // ✅ Dictionary — heterogeneous, mutable, key-addressed:
-record = (lang: "English", file: "en.zy", active: #1)
+record = #(lang: "English", file: "en.zy", active: #1)
 >> record.lang ¶
 >> record.active ¶
 
 // ✅ Array of dictionaries — uniform container of heterogeneous records:
 langs = [
-    (lang: "English", file: "en.zy",  active: #1),
-    (lang: "Spanish", file: "es.zy",  active: #1),
-    (lang: "Chinese", file: "zh.zy",  active: #0)
+    #(lang: "English", file: "en.zy",  active: #1),
+    #(lang: "Spanish", file: "es.zy",  active: #1),
+    #(lang: "Chinese", file: "zh.zy",  active: #0)
 ]
 @ entry:langs {
     ? entry.active { >> entry.lang " → " entry.file ¶ }
@@ -773,7 +773,7 @@ were refused as module state, at any nesting depth:
 
 ```zymbol
 # catalogo {
-    tabla = (es: "hola", en: "hi")   // E013: variable initializer in module
+    tabla = #(es: "hola", en: "hi")   // E013: variable initializer in module
     LADOS := [10, 20, 30]            //       must be a literal
 }
 ```
@@ -829,7 +829,7 @@ way, and the form is in `reject/modules/02_computed_module_initializer.zy`.
 
 ```zymbol
 busca(d, k) { <~ d[k] }
->> busca((es: "hola"), "es") ¶
+>> busca(#(es: "hola"), "es") ¶
 ```
 
 ```
@@ -1243,7 +1243,7 @@ on digits past it returns the string unchanged rather than a rounded number.
 or through the bracket, since it is the same lookup:
 
 ```zymbol
-u = (nombre: "Ana", edad: 30)
+u = #(nombre: "Ana", edad: 30)
 !? {
     >> u["sueldo"] ¶
 } :! ##Key {

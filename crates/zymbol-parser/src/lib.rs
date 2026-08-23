@@ -375,6 +375,21 @@ impl Parser {
                         .with_help("use '[a, b] = expr' for array destructuring"))
                 }
             }
+            // `#(name: n) = …` — destructuring a dictionary. The pattern is
+            // written the way the literal is: if `#(` says "this is a
+            // dictionary" when building one, it says the same when taking one
+            // apart, and a reader should not have to remember that the two
+            // sides of `=` spell it differently (GAP-ZYB-003/004).
+            TokenKind::HashLParen => {
+                if self.is_tuple_destructure() {
+                    self.parse_destructure_assign()
+                } else {
+                    let span = self.peek().span;
+                    Err(Diagnostic::error("unexpected '#(' at statement level")
+                        .with_span(span)
+                        .with_help("use '#(name: n) = expr' to destructure a dictionary"))
+                }
+            }
             TokenKind::LParen => {
                 // Could be tuple destructure: (a, b) = expr or (name: n) = expr
                 if self.is_tuple_destructure() {
@@ -1202,6 +1217,10 @@ impl Parser {
                 // Parse array literal: [expr1, expr2, ...]
                 self.parse_array_literal()
             }
+            // `#(…)` — dictionary literal (GAP-ZYB-003/004). The mark says
+            // which of the two things the parentheses open, so `#()` is the
+            // empty dictionary and no lookahead decides anything.
+            TokenKind::HashLParen => self.parse_dict_literal(),
             // `#[…]` — declared-mixed array (decision 15). A bare `#` at
             // expression position is otherwise the module mark, and `#` followed
             // by `[` is unambiguous.

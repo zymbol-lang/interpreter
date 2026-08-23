@@ -247,7 +247,7 @@ with `$!`, not as raised errors; type/arity mistakes raise.
 
 One file, one closed block. Only imports, the export block, literal-initialised bindings
 and function definitions may appear in a module body — any executable statement is **E013**.
-A collection literal counts as a literal (`tabla = (es: "hola", en: "hi")`), recursively;
+A collection literal counts as a literal (`tabla = #(es: "hola", en: "hi")`), recursively;
 anything that computes does not.
 
 ```zymbol

@@ -13,13 +13,38 @@ applied three times.
 [1, 2, 3]              array        ordered, resizable, homogeneous, mutable
 #[1, "dos", 3.0]       array        the same type, with the mix DECLARED
 (1, 2)                 tuple        ordered, fixed size, mixed types, IMMUTABLE
-(a: 1, b: 2)           dictionary   keyed, insertion-ordered, mutable
+#(a: 1, b: 2)          dictionary   keyed, insertion-ordered, mutable
+#()                    dictionary   the empty one
 ```
 
-`(1, 2)` and `(a: 1, b: 2)` share the parentheses and not the semantics. The
-colon is the whole of what separates them, and that is accepted deliberately: the
-alternative was a notation of its own, and `{}` is not available — it is the
+**`#(…)` and not `(a: 1)`** (v0.0.9). The two used to share the parentheses and
+differ only by the colon, which this document accepted deliberately — the
+alternative was a notation of its own, and `{}` is not available, it is the
 block delimiter of the entire language.
+
+What forced the notation was the **empty** one. `()` would have to be both the
+empty tuple and the empty dictionary, and they are not the same value: one takes
+`d["k"]$~ v`, the other answers *tuples are immutable*. The empty dictionary was
+reachable — take the only key out of `(a: 1)` and `$#` is 0 — and could not be
+written, so a program that filled one at run time had to start it with an
+invented key and remove it afterwards.
+
+`#` is the meta/type mark, the same one `#[…]` uses to declare an array's mix:
+saying which of the two a pair of parentheses opens is a statement about its
+type. And the pattern spells it the way the literal does — `#(a: x) = d`.
+
+**Keys may be strings.** `d["gasto.alimentación"]$~ v` always added such a key
+and only the literal could not spell it, which left out exactly the keys a
+program needs: the ones stored in a database, the ones from JSON, the ones
+carrying a domain prefix.
+
+```text
+#("gasto.alimentación": "Alimentación")   // a key an identifier cannot be
+```
+
+The bare `(a: 1)` is **refused**, not accepted as a second spelling: two ways to
+write one thing is what the mark was introduced to end. 276 literals were
+migrated across the corpus, the applications and the examples when this landed.
 
 ---
 
@@ -265,7 +290,7 @@ defensible name the moment the thing could change — a tuple is immutable by
 definition.
 
 ```zymbol
-u = (nombre: "Ana", edad: 30)
+u = #(nombre: "Ana", edad: 30)
 ```
 
 Keys are unique, insertion order is preserved (as in Python's `dict` since 3.7
@@ -274,7 +299,7 @@ and in a JS object), and values mix types freely — the opposite of the array.
 ### Reading, including a computed key
 
 ```zymbol
-u = (nombre: "Ana", edad: 30)
+u = #(nombre: "Ana", edad: 30)
 >> u.nombre ¶          // the dot reaches keys that are identifiers
 >> u["nombre"] ¶       // the bracket reaches ANY key
 
@@ -299,7 +324,7 @@ which is also an error rather than a silently wrong answer — and it is *why*
 `$?` has to exist:
 
 ```zymbol
-u = (nombre: "Ana", edad: 30)
+u = #(nombre: "Ana", edad: 30)
 ? u$? "sueldo" {
     >> u["sueldo"] ¶
 }
@@ -311,7 +336,7 @@ Asking about a value is a different operation and would need its own sign.
 ### Modifying, adding, removing
 
 ```zymbol
-u = (nombre: "Ana", edad: 30)
+u = #(nombre: "Ana", edad: 30)
 u["edad"]$~ 31            // modifies in place (§ 1)
 otro = u["edad"]$~ 32     // builds; u untouched
 >> u " " otro ¶
@@ -334,7 +359,7 @@ both collections.
 ### Walking
 
 ```zymbol
-d = (alfa: 10, beta: 20)
+d = #(alfa: 10, beta: 20)
 @ clave:d {                       // keys, in insertion order
     >> clave " = " d[clave] ¶
 }
@@ -350,8 +375,8 @@ to be forced into `@`. The pattern form is how you ask for both halves.
 ### Nesting — this is already JSON
 
 ```zymbol
-config = (
-    servidor: (host: "localhost", puerto: 8080),
+config = #(
+    servidor: #(host: "localhost", puerto: 8080),
     etiquetas: ["web", "api"]
 )
 
@@ -382,7 +407,7 @@ which also avoids the copy that passing a collection to a function costs.
     #> { IDIOMAS, texto, claves }
 
     IDIOMAS := ["es", "en"]
-    tabla = (es: "hola", en: "hi")
+    tabla = #(es: "hola", en: "hi")
 
     texto(k) {
         c = k

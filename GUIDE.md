@@ -2279,9 +2279,9 @@ sorting named or positional tuple arrays by field:
 
 ```zymbol
 db = [
-    (name: "Carla", age: 28),
-    (name: "Ana",   age: 25),
-    (name: "Bob",   age: 30)
+    #(name: "Carla", age: 28),
+    #(name: "Ana",   age: 25),
+    #(name: "Bob",   age: 30)
 ]
 
 // Sort by age ascending (< means ascending)
@@ -2515,13 +2515,13 @@ other way to get several values out, and it needs no destructuring at all.
 ### Named Tuple Destructuring
 
 ```zymbol
-person = (name: "Ana", age: 25, city: "Madrid")
+person = #(name: "Ana", age: 25, city: "Madrid")
 
 // Bind each field to a local variable
-(name: n, age: a) = person    // n="Ana"  a=25
+#(name: n, age: a) = person    // n="Ana"  a=25
 
 // Rename fields freely
-(name: who, city: where) = person   // who="Ana"  where="Madrid"
+#(name: who, city: where) = person   // who="Ana"  where="Madrid"
 ```
 
 ### Semantics on Existing Variables
@@ -2779,7 +2779,7 @@ data = (42, "hello", #1, 3.14)
 ### Named Tuple
 
 ```zymbol
-person = (name: "Alice", age: 25, active: #1)
+person = #(name: "Alice", age: 25, active: #1)
 
 // Access by field name
 >> person.name ¶    // → Alice
@@ -2791,8 +2791,8 @@ campo = "age"
 >> person[campo] ¶  // → 25
 
 // Nested dictionaries
-pos = (x: 10, y: 20)
-p = (pos: pos, label: "origin")
+pos = #(x: 10, y: 20)
+p = #(pos: pos, label: "origin")
 >> p.label ¶        // → origin
 >> p.pos.x ¶        // → 10
 ```
@@ -2839,8 +2839,8 @@ t3 = t$+ 40
 Rebuilding explicitly remains valid when several fields change at once:
 
 ```zymbol
-person = (name: "Alice", age: 25)
-other  = (name: person.name, age: 26)
+person = #(name: "Alice", age: 25)
+other  = #(name: person.name, age: 26)
 ```
 
 > **Constants vs immutability**: `:=` makes the *variable binding* constant (the name
@@ -2861,7 +2861,7 @@ It is addressed **by key, and only by key**.
 ### Reading
 
 ```zymbol
-u = (nombre: "Ana", edad: 30)
+u = #(nombre: "Ana", edad: 30)
 
 >> u.nombre ¶          // the dot reaches keys that are identifiers
 >> u["nombre"] ¶       // the bracket reaches ANY key
@@ -2919,7 +2919,7 @@ u$-["ciudad"]             // removed by its address, which IS the key
 it. With `d[k]` available the key is enough to reach the value:
 
 ```zymbol
-d = (alfa: 10, beta: 20)
+d = #(alfa: 10, beta: 20)
 @ clave:d {
     >> clave " = " d[clave] ¶
 }
@@ -2936,8 +2936,8 @@ And the pattern form asks for both halves at once:
 ### Nesting — this is already JSON
 
 ```zymbol
-config = (
-    servidor: (host: "localhost", puerto: 8080),
+config = #(
+    servidor: #(host: "localhost", puerto: 8080),
     etiquetas: ["web", "api"]
 )
 
@@ -3484,7 +3484,7 @@ computes — a call, a name, an operator, an interpolated string — at any dept
 # catalogo {
     #> { texto }
     IDIOMAS := ["es", "en"]                    // ✓ exported constant
-    tabla = (es: "hola", en: "hi")             // ✓ private state
+    tabla = #(es: "hola", en: "hi")             // ✓ private state
     // tabla = json::decode(io::read("x"))     // ✗ E013 — a call computes
     texto(k) { c = k
         ? (tabla$? c) { <~ tabla[c] }
@@ -3715,7 +3715,7 @@ makes `decode_map` behave like `decode`.
 <# std/json => json
 
 datos = json::decode_map(respuesta,
-    (candidates: "候选", content: "内容", parts: "片段", text: "文本"))
+    #(candidates: "候选", content: "内容", parts: "片段", text: "文本"))
 >> datos.候选[1].内容.片段[1].文本 ¶   // no English API key leaks into the logic
 ```
 

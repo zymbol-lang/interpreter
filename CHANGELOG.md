@@ -37,7 +37,7 @@ follow a callable. Grammar widened, all four engines agree. See REFERENCE.md L30
 
 **A module could not hold a collection**
 
-`tabla = (es: "hola", en: "hi")` and `LADOS := [10, 20, 30]` in a module body were
+`tabla = #(es: "hola", en: "hi")` and `LADOS := [10, 20, 30]` in a module body were
 E013, "variable initializer in module must be a literal". A collection literal *is* a
 literal — it names a value, it does not compute one — but `is_literal_expr` matched
 `Expr::Literal` and a signed literal and nothing else, a rule written before the
@@ -226,11 +226,41 @@ and every golden held afterwards.
 finally has a spelling. `[…]` stays checked; a homogeneous `#[…]` warns.
 
 **The named tuple is the dictionary**, and the vocabulary follows: a tuple is
-immutable by definition and this is not. `(1, 2)` is a positional tuple, `(a: 1)`
-is a dictionary, and the colon is all that separates them. It gained computed
-keys (`d[k]`), key insertion, `d$? "k"`, `d$-["k"]`, `@ k:d` over keys, and
-`##Key` on an absent one — six pieces, each of which alone was enough to keep a
-JSON built piece by piece from being built at all.
+immutable by definition and this is not. `(1, 2)` is a positional tuple and
+`#(a: 1)` is a dictionary. It gained computed keys (`d[k]`), key insertion,
+`d$? "k"`, `d$-["k"]`, `@ k:d` over keys, and `##Key` on an absent one — six
+pieces, each of which alone was enough to keep a JSON built piece by piece from
+being built at all.
+
+**`#(…)` — the dictionary has a notation of its own**, and the bare `(a: 1)` is
+refused. The two used to share the parentheses and differ only by the colon,
+which COLLECTIONS.md accepted deliberately: the alternative was a notation of its
+own, and `{}` is the block delimiter of the entire language.
+
+What forced it was the **empty** one. `()` would have to be both the empty tuple
+and the empty dictionary, and they are not the same value: one takes `d["k"]$~ v`
+and the other answers *tuples are immutable*. The empty dictionary was reachable
+— take the only key out of `#(a: 1)` and `$#` is 0 — and could not be written, so
+every program that filled one at run time started it with an invented key and
+removed it afterwards.
+
+```zymbol
+d = #(a: 1, b: 2)
+v = #()                                   // the empty one, now writable
+c = #("gasto.alimentación": "Alimentación")   // a key an identifier cannot be
+#(a: uno, b: dos) = d                     // the pattern spells it the same way
+```
+
+`#` is the meta/type mark, the same one `#[…]` uses to declare an array's mix:
+saying which of the two a pair of parentheses opens is a statement about its
+type. **Keys may be strings** as well as bare names — `d["gasto.alimentación"]$~ v`
+always added such a key and only the literal could not spell it, which left out
+exactly the keys a program needs: the ones stored in a database, the ones from
+JSON, the ones carrying a domain prefix. Both spellings would have been worse
+than either, so the bare form is an error; 276 literals were migrated across the
+corpus, the applications and the examples. Found by ZyBank (GAP-ZYB-003 and
+GAP-ZYB-004). See `corpus/collections/dict_marcado.zy` and
+`reject/collections/06_dict_sin_marca.zy`.
 
 Its whole positional family went with `d[2]`: `d[-1]`, `d[2]$~ v`, `d$-[2]`,
 `d$[1:2]`. In a mutable dictionary a position is not a stable address, and a

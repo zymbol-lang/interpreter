@@ -167,6 +167,7 @@ fn classify_token(kind: &TokenKind) -> Option<u32> {
 
         // Format and base operators
         TokenKind::HashPipe          // #|
+        | TokenKind::HashLParen      // #( — dictionary literal
         | TokenKind::HashQuestion    // #?
         | TokenKind::HashDot         // #.
         | TokenKind::HashExclaim     // #!
@@ -319,6 +320,7 @@ fn token_length(kind: &TokenKind) -> u32 {
         | TokenKind::DollarSlash    // $/
         | TokenKind::DollarStar     // $* (string repeat)
         | TokenKind::HashPipe       // #|
+        | TokenKind::HashLParen     // #( — dictionary literal
         | TokenKind::HashQuestion   // #?
         | TokenKind::HashDot        // #.
         | TokenKind::HashExclaim    // #!
