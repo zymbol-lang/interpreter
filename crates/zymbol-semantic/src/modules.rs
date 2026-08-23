@@ -18,7 +18,7 @@ use zymbol_common::UnaryOp;
 /// Semantic validation errors
 #[derive(Debug, Error)]
 pub enum SemanticError {
-    #[error("E001: Module name '{module_name}' does not match file name '{file_name}'")]
+    #[error("E001: module '{module_name}' should be named '{file_name}' for its path")]
     ModuleNameMismatch {
         module_name: String,
         file_name: String,
@@ -84,7 +84,11 @@ impl SemanticError {
         match self {
             SemanticError::ModuleNameMismatch { span, .. } => Diagnostic::error(self.to_string())
                 .with_span(*span)
-                .with_help("The module name must match the filename (without .zy extension)"),
+                .with_help(
+                    "a bare name matches the file stem (`# util` in util.zy); a \
+                     leading dot names the whole path, joined with `_` \
+                     (`# .lib_util` in lib/util.zy). See DOT_CONVENTION.md",
+                ),
 
             SemanticError::ModuleNotFound { span, .. } => Diagnostic::error(self.to_string())
                 .with_span(*span)
@@ -413,6 +417,12 @@ impl ModuleAnalyzer {
         let declared = module_decl.name.strip_prefix('.').unwrap_or(&module_decl.name);
 
         if declared != expected {
+            // The name in `file_name` is the module name the convention asks
+            // for, and it used to be reported as "does not match file name
+            // 'lib_util'" — which reads as though a file by that name were
+            // missing. There is no such file: `lib_util` is what a module in
+            // `lib/util.zy` is called when it uses the dotted form. The
+            // message now says what to write instead.
             return Err(SemanticError::ModuleNameMismatch {
                 module_name: module_decl.name.clone(),
                 file_name: expected,

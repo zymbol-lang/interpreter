@@ -1729,10 +1729,19 @@ impl<W: Write> Interpreter<W> {
             let pending = std::mem::replace(&mut self.control_flow, ControlFlow::None);
             let pending_flag = std::mem::replace(&mut self.has_control_flow, false);
             let finally_result = self.execute_block(&finally.block);
-            if matches!(self.control_flow, ControlFlow::None) {
-                self.control_flow = pending;
-                self.has_control_flow = pending_flag;
-            }
+            // BUG-ZYB-011: a `:>` is cleanup, and cleanup does not decide what
+            // the function returns. A `<~` written inside it is discarded, and
+            // the return the try block was carrying continues — which is what
+            // the browser engine has always done, and what makes this clause
+            // safe to read: whatever it contains, the value coming back is the
+            // one the reader saw at the `<~` above it.
+            //
+            // Java and Python do the opposite and let the finally win; both
+            // warn against relying on it in their own style guides. Zymbol
+            // takes the warning instead of the feature, and the analyzer says
+            // so at the `<~` rather than letting it look like it did something.
+            self.control_flow = pending;
+            self.has_control_flow = pending_flag;
             finally_result?;
         }
 

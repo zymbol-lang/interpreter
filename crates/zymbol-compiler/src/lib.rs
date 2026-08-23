@@ -369,6 +369,14 @@ pub struct Compiler {
     /// The list is empty for the overwhelming majority of returns, and that is
     /// the case that costs nothing.
     pending_finally: Vec<zymbol_ast::Block>,
+    /// True while compiling the body of a `:>` clause.
+    ///
+    /// BUG-ZYB-011: a `:>` is cleanup and does not decide the return value, so
+    /// a `<~` inside one evaluates its expression (for the side effects it may
+    /// have) and then does nothing. Without this the block, emitted inline,
+    /// would return from the function and discard the value the try block was
+    /// carrying — and it would do it differently in each engine.
+    in_finally: bool,
     /// Source of named functions: name → (param_names, body_statements).
     /// Used to recompile named functions as closures when they capture outer variables.
     fn_source: HashMap<String, (Vec<String>, Vec<Statement>)>,
@@ -415,6 +423,7 @@ impl Compiler {
             global_var_inits: Vec::new(),
             known_module_aliases: HashSet::new(),
             pending_finally: Vec::new(),
+            in_finally: false,
             fn_source: HashMap::new(),
             compiled_modules: HashMap::new(),
             builtin_map: HashMap::new(),
@@ -1021,6 +1030,15 @@ impl Compiler {
             Statement::Break(b) => self.compile_break(b, ctx),
             Statement::Continue(c) => self.compile_continue(c, ctx),
             Statement::Return(r) => {
+                // BUG-ZYB-011: inside a `:>`, `<~` is not a return. The value
+                // is still computed — it may call something with an effect —
+                // and then dropped.
+                if self.in_finally {
+                    if let Some(val) = &r.value {
+                        self.compile_expr(val, ctx)?;
+                    }
+                    return Ok(());
+                }
                 // TCO: if `<~ f(args)` where f is the current function → TailCall.
                 // Suppressed inside a `!?` that has a finally: the call must not
                 // replace this frame while there is still cleanup owed on it.
@@ -2024,14 +2042,30 @@ impl Compiler {
                 let src = self.compile_expr(&r.expr, ctx)?;
                 let dst = ctx.alloc_temp()?;
                 ctx.set_reg_type(dst, StaticType::Float);
-                ctx.emit(Instruction::RoundFloat(dst, src, r.precision));
+                match &r.precision {
+                    zymbol_ast::Precision::Literal(n) => {
+                        ctx.emit(Instruction::RoundFloat(dst, src, *n))
+                    }
+                    zymbol_ast::Precision::Dynamic(e) => {
+                        let pr = self.compile_expr(e, ctx)?;
+                        ctx.emit(Instruction::RoundFloatDyn(dst, src, pr))
+                    }
+                };
                 Ok(dst)
             }
             Expr::Trunc(t) => {
                 let src = self.compile_expr(&t.expr, ctx)?;
                 let dst = ctx.alloc_temp()?;
                 ctx.set_reg_type(dst, StaticType::Float);
-                ctx.emit(Instruction::TruncFloat(dst, src, t.precision));
+                match &t.precision {
+                    zymbol_ast::Precision::Literal(n) => {
+                        ctx.emit(Instruction::TruncFloat(dst, src, *n))
+                    }
+                    zymbol_ast::Precision::Dynamic(e) => {
+                        let pr = self.compile_expr(e, ctx)?;
+                        ctx.emit(Instruction::TruncFloatDyn(dst, src, pr))
+                    }
+                };
                 Ok(dst)
             }
             Expr::ErrorCheck(ec) => {
@@ -3913,10 +3947,12 @@ impl Compiler {
             return Ok(());
         }
         let pending = std::mem::take(&mut self.pending_finally);
+        let was_in_finally = std::mem::replace(&mut self.in_finally, true);
         let result = pending
             .iter()
             .rev()
             .try_for_each(|block| self.compile_block(block, ctx));
+        self.in_finally = was_in_finally;
         self.pending_finally = pending;
         result
     }
@@ -4021,7 +4057,10 @@ impl Compiler {
         // again.
         if has_finally {
             self.pending_finally.pop();
-            self.compile_block(&ts.finally_clause.as_ref().unwrap().block, ctx)?;
+            let was_in_finally = std::mem::replace(&mut self.in_finally, true);
+            let r = self.compile_block(&ts.finally_clause.as_ref().unwrap().block, ctx);
+            self.in_finally = was_in_finally;
+            r?;
         }
 
         Ok(())
@@ -4056,15 +4095,32 @@ impl Compiler {
         let r = self.compile_expr(&fe.expr, ctx)?;
         let dst = ctx.alloc_temp()?;
 
-        let (prec_kind, prec_n) = match fe.precision {
-            None => (0u8, 0u32),
-            Some(PrecisionOp::Round(n)) => (1u8, n),
-            Some(PrecisionOp::Truncate(n)) => (2u8, n),
+        // A written count becomes an immediate; a computed one is evaluated
+        // into a register and the `*Dyn` opcode reads it (GAP-ZYB-001).
+        let (prec_kind, prec) = match &fe.precision {
+            None => (0u8, None),
+            Some(PrecisionOp::Round(p)) => (1u8, Some(p)),
+            Some(PrecisionOp::Truncate(p)) => (2u8, Some(p)),
+        };
+        let prec_literal = prec.and_then(|p| p.literal());
+        let prec_reg = match (prec, prec_literal) {
+            (Some(zymbol_ast::Precision::Dynamic(e)), _) => Some(self.compile_expr(e, ctx)?),
+            _ => None,
         };
 
-        match fe.kind {
-            FormatKind::Thousands => ctx.emit(Instruction::FmtThousands(dst, r, prec_kind, prec_n)),
-            FormatKind::Scientific => ctx.emit(Instruction::FmtScientific(dst, r, prec_kind, prec_n)),
+        match (fe.kind, prec_reg) {
+            (FormatKind::Thousands, None) => {
+                ctx.emit(Instruction::FmtThousands(dst, r, prec_kind, prec_literal.unwrap_or(0)))
+            }
+            (FormatKind::Scientific, None) => {
+                ctx.emit(Instruction::FmtScientific(dst, r, prec_kind, prec_literal.unwrap_or(0)))
+            }
+            (FormatKind::Thousands, Some(pr)) => {
+                ctx.emit(Instruction::FmtThousandsDyn(dst, r, prec_kind, pr))
+            }
+            (FormatKind::Scientific, Some(pr)) => {
+                ctx.emit(Instruction::FmtScientificDyn(dst, r, prec_kind, pr))
+            }
         };
         ctx.set_reg_type(dst, StaticType::String);
         Ok(dst)
@@ -4289,10 +4345,25 @@ fn collect_free_in_expr(
         }
         Expr::NumericEval(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
         Expr::TypeMetadata(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
-        Expr::Format(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
+        Expr::Format(op) => {
+            collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free);
+            if let Some(zymbol_ast::Precision::Dynamic(e)) = op.precision.as_ref().map(|p| p.precision()) {
+                collect_free_in_expr(e, locals, outer_ctx, seen, free);
+            }
+        }
         Expr::BaseConversion(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
-        Expr::Round(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
-        Expr::Trunc(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
+        Expr::Round(op) => {
+            collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free);
+            if let zymbol_ast::Precision::Dynamic(e) = &op.precision {
+                collect_free_in_expr(e, locals, outer_ctx, seen, free);
+            }
+        }
+        Expr::Trunc(op) => {
+            collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free);
+            if let zymbol_ast::Precision::Dynamic(e) = &op.precision {
+                collect_free_in_expr(e, locals, outer_ctx, seen, free);
+            }
+        }
         Expr::ErrorCheck(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
         Expr::ErrorPropagate(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
         Expr::Pipe(pipe) => {
@@ -4754,6 +4825,12 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::NamedTupleGet(d, t, _) => { upd(*d); upd(*t); }
             Instruction::BashExec(d, _) | Instruction::BuildStr(d, _)
             | Instruction::Execute(d, _) => upd(*d),
+            Instruction::FmtThousandsDyn(d, s, _, p) | Instruction::FmtScientificDyn(d, s, _, p) => {
+                upd(*d); upd(*s); upd(*p);
+            }
+            Instruction::RoundFloatDyn(d, s, p) | Instruction::TruncFloatDyn(d, s, p) => {
+                upd(*d); upd(*s); upd(*p);
+            }
             Instruction::FmtThousands(d, s, _, _) | Instruction::FmtScientific(d, s, _, _)
             | Instruction::NumericEval(d, s) | Instruction::TypeOf(d, s)
             | Instruction::IsError(d, s) | Instruction::IsArray(d, s)

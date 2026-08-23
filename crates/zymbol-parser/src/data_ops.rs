@@ -89,8 +89,14 @@ impl Parser {
         Ok(Expr::Format(FormatExpr::new(kind, precision, expr, span)))
     }
 
-    /// Parse precision integer after '.' or '!' in a format expression.
-    fn parse_format_precision(&mut self, prefix_str: &str) -> Result<u32, Diagnostic> {
+    /// Parse the decimal count after '.' or '!' in a format expression.
+    ///
+    /// A literal keeps its fast path. Anything else — a name, a call, a
+    /// parenthesised expression — is kept as an expression and evaluated when
+    /// the program runs (GAP-ZYB-001): the number of decimals a money amount
+    /// takes belongs to the currency, so it is configuration and cannot always
+    /// be written in the source.
+    fn parse_format_precision(&mut self, prefix_str: &str) -> Result<zymbol_ast::Precision, Diagnostic> {
         let precision_token = self.peek().clone();
         match &precision_token.kind {
             TokenKind::Integer(n) => {
@@ -101,11 +107,34 @@ impl Parser {
                 }
                 let n = *n as u32;
                 self.advance(); // consume integer
-                Ok(n)
+                Ok(zymbol_ast::Precision::Literal(n))
             }
-            _ => Err(Diagnostic::error(format!("expected integer precision after '{}'", prefix_str))
+            // A computed count, written as a plain name.
+            //
+            // A name and not an expression, deliberately. The `|` that opens
+            // the value is also how bitwise-or is spelled, so a general
+            // expression here would have to stop at a delimiter that is itself
+            // an operator — and the browser engine lexes this count as part of
+            // the token, so anything it cannot scan in one pass would diverge.
+            // A computed count comes from a variable or a parameter in every
+            // case this exists for; compute it into a name first if it is more:
+            //
+            //     ancho = exp + 1
+            //     >> #,.ancho|importe| ¶
+            TokenKind::Ident(name) => {
+                let name = name.clone();
+                let span = precision_token.span;
+                self.advance();
+                Ok(zymbol_ast::Precision::Dynamic(Box::new(Expr::Identifier(
+                    zymbol_ast::IdentifierExpr::new(name, span),
+                ))))
+            }
+            _ => Err(Diagnostic::error(format!("expected a decimal count after '{}'", prefix_str))
                 .with_span(precision_token.span)
-                .with_help(format!("format expression syntax: {}.N|expr| (e.g., {}.2|value|)", prefix_str, prefix_str))),
+                .with_help(format!(
+                    "write the count or the name of a variable holding it: {}.2|value| or {}.n|value|",
+                    prefix_str, prefix_str
+                ))),
         }
     }
 
@@ -156,24 +185,9 @@ impl Parser {
     pub(crate) fn parse_round_expr(&mut self) -> Result<Expr, Diagnostic> {
         let start_token = self.advance(); // consume #.
 
-        // Expect integer for precision
-        let precision_token = self.peek().clone();
-        let precision = match &precision_token.kind {
-            TokenKind::Integer(n) => {
-                if *n < 0 {
-                    return Err(Diagnostic::error("precision must be a non-negative integer")
-                        .with_span(precision_token.span)
-                        .with_help("round expression syntax: #.N|expr| where N >= 0"));
-                }
-                *n as u32
-            }
-            _ => {
-                return Err(Diagnostic::error("expected integer precision after '#.'")
-                    .with_span(precision_token.span)
-                    .with_help("round expression syntax: #.N|expr| (e.g., #.2|price|)"));
-            }
-        };
-        self.advance(); // consume precision
+        // The decimal count: a literal, or an expression evaluated at run time
+        // (GAP-ZYB-001 — see `Precision`).
+        let precision = self.parse_format_precision("#.")?;
 
         // Expect opening |
         let pipe_token = self.peek().clone();
@@ -205,24 +219,9 @@ impl Parser {
     pub(crate) fn parse_trunc_expr(&mut self) -> Result<Expr, Diagnostic> {
         let start_token = self.advance(); // consume #!
 
-        // Expect integer for precision
-        let precision_token = self.peek().clone();
-        let precision = match &precision_token.kind {
-            TokenKind::Integer(n) => {
-                if *n < 0 {
-                    return Err(Diagnostic::error("precision must be a non-negative integer")
-                        .with_span(precision_token.span)
-                        .with_help("truncate expression syntax: #!N|expr| where N >= 0"));
-                }
-                *n as u32
-            }
-            _ => {
-                return Err(Diagnostic::error("expected integer precision after '#!'")
-                    .with_span(precision_token.span)
-                    .with_help("truncate expression syntax: #!N|expr| (e.g., #!2|price|)"));
-            }
-        };
-        self.advance(); // consume precision
+        // The decimal count: a literal, or an expression evaluated at run time
+        // (GAP-ZYB-001 — see `Precision`).
+        let precision = self.parse_format_precision("#!")?;
 
         // Expect opening |
         let pipe_token = self.peek().clone();

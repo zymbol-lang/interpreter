@@ -68,30 +68,35 @@ impl<W: Write> Interpreter<W> {
     /// Evaluate juxtaposition concatenation (implicit, no explicit operator)
     /// Converts all values to their string representation and concatenates.
     pub(crate) fn eval_concat(&self, left: &Value, right: &Value, span: &Span) -> Result<Value> {
-        let l = self.value_to_concat_str(left, span)?;
-        let r = self.value_to_concat_str(right, span)?;
+        let _ = span;
+        let l = self.value_to_concat_str(left);
+        let r = self.value_to_concat_str(right);
         Ok(Value::String(format!("{}{}", l, r)))
     }
 
-    pub(crate) fn value_to_concat_str(&self, v: &Value, span: &Span) -> Result<String> {
+    /// The string a value contributes to a juxtaposition. Cannot fail: every
+    /// value has one, and it is the one `>>` prints.
+    pub(crate) fn value_to_concat_str(&self, v: &Value) -> String {
         match v {
-            Value::String(s) => Ok(s.clone()),
-            Value::Char(c) => Ok(c.to_string()),
-            Value::Int(n) => Ok(to_numeral_int(*n, self.numeral_mode)),
-            Value::Float(f) => Ok(to_numeral_float(*f, self.numeral_mode)),
-            Value::Bool(b) => Ok(to_numeral_bool(*b, self.numeral_mode)),
-            // BUG-ZYB-003: a soft error must reach a string. `>>` has always
-            // rendered one, and both the register VM and the browser engine
-            // concatenate it; only the tree-walker aborted — on the line that
-            // *handles* the failure, which is the one place a program must not
-            // acquire a second way to fail. `r = f(); ? r$! { <~ (#0, "" r) }`
-            // is the ordinary shape of propagating an error upwards, and it
-            // died in the branch that tests exercise least.
-            Value::Error(_) => Ok(v.to_display_string_in(self.numeral_mode)),
-            _ => Err(RuntimeError::Generic {
-                message: format!("cannot juxtapose value of type {:?} in string context", v),
-                span: *span,
-            }),
+            Value::String(s) => s.clone(),
+            Value::Char(c) => c.to_string(),
+            Value::Int(n) => to_numeral_int(*n, self.numeral_mode),
+            Value::Float(f) => to_numeral_float(*f, self.numeral_mode),
+            Value::Bool(b) => to_numeral_bool(*b, self.numeral_mode),
+            // GAP-ZYB-008 (and BUG-ZYB-003 before it): every value juxtaposes,
+            // and to exactly what `>>` prints.
+            //
+            // There used to be a whitelist here, and `>>` did not use it — so
+            // the same juxtaposition of the same value gave two answers
+            // depending on where it was written. `>> "arr: " a ¶` printed
+            // `arr: [1, 2, 3]` and `s = "" a` aborted, which meant an array
+            // could not go into a log line, an error message, a stored value or
+            // a test comparison. Only printed, once, and never kept.
+            //
+            // The register VM and the browser engine had no whitelist and never
+            // had the split; this is the tree-walker catching up to them and to
+            // its own `>>`.
+            _ => v.to_display_string_in(self.numeral_mode),
         }
     }
 

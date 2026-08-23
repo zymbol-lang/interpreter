@@ -83,6 +83,23 @@ pub struct DefUseChain {
     pub last_uses: HashSet<NodeId>,
     /// Is this variable ambiguous (needs explicit lifetime)?
     pub is_ambiguous: bool,
+    /// Is this variable a loop iterator, whose lifetime the loop owns?
+    ///
+    /// Kept apart from `is_ambiguous` because the two are read by different
+    /// consumers: this one excludes the variable from the destruction schedule
+    /// (the loop already bounds it), while `is_ambiguous` is reported to the
+    /// programmer as a warning.
+    ///
+    /// They used to be the same flag, and every `@ c:coleccion` written in a
+    /// file body therefore produced `warning: ambiguous lifetime for 'c'` with
+    /// the note "variable is modified inside a loop" — about a variable nothing
+    /// modifies, in the most ordinary construct the language has
+    /// (ERROR-ZYB-003). The only thing that silenced it was renaming `c` to
+    /// `_c`, which is the prefix for *unused*: lying in the code to quiet a
+    /// warning that was itself a lie. A false warning on a common form teaches
+    /// people to stop reading warnings, and this analyzer's other ones are
+    /// good.
+    pub loop_bound: bool,
     /// Ambiguity details if ambiguous
     pub ambiguity: Option<AmbiguousLifetime>,
 }
@@ -96,6 +113,7 @@ impl DefUseChain {
             uses: Vec::new(),
             last_uses: HashSet::new(),
             is_ambiguous: false,
+            loop_bound: false,
             ambiguity: None,
         }
     }
@@ -339,6 +357,11 @@ impl DefUseAnalyzer {
                 continue;
             }
 
+            // Skip loop iterators - the loop owns their lifetime.
+            if chain.loop_bound {
+                continue;
+            }
+
             // Skip underscore variables - they're destroyed at block end via scoping
             if var_name.starts_with('_') {
                 continue;
@@ -529,28 +552,27 @@ impl DefUseAnalyzer {
 
                 self.scope_depth += 1;
 
-                // Note: Iterator variables are NOT tracked for automatic destruction.
-                // They have special loop-bound lifetime managed by the interpreter.
-                // We mark them as ambiguous by setting is_underscore=true so they're
-                // excluded from destruction schedules.
+                // Iterator variables are NOT tracked for automatic destruction:
+                // the loop owns their lifetime. That is all `loop_bound` marks —
+                // it is not a finding, and nothing is reported about it.
                 if let Some(ref iter_var) = loop_stmt.iterator_var {
-                    // Suppress ambiguous-lifetime warning in two cases:
-                    // 1. _ prefix: programmer explicitly signals "I know this is loop-scoped"
-                    // 2. Variable already defined before the loop: deliberate reuse, not ambiguous
-                    let already_defined = self.chains.contains_key(iter_var);
-                    let suppress = iter_var.starts_with('_') || already_defined;
-
                     let chain = self.chains.entry(iter_var.clone()).or_insert_with(|| {
                         DefUseChain::new(iter_var.clone())
                     });
-
-                    if !suppress {
-                        chain.is_ambiguous = true;
-                        chain.ambiguity = Some(AmbiguousLifetime {
-                            variable: iter_var.clone(),
-                            reason: AmbiguityReason::LoopVariant,
-                            nodes: HashSet::new(),
-                            suggested_span: loop_stmt.body.span,
+                    chain.loop_bound = true;
+                    // The loop DEFINES the iterator, and recording that is what
+                    // makes a later `i = …` in the body read as a reassignment
+                    // rather than as the variable's first definition. Without
+                    // it the body's write looked like the only definition there
+                    // was, and the check below could not tell
+                    // `@ i:1..3 { >> i ¶ }` from `@ i:1..3 { i = i + 1 }`.
+                    if chain.definitions.is_empty() {
+                        chain.add_definition(Definition {
+                            var_name: iter_var.clone(),
+                            node: node_index,
+                            span: loop_stmt.body.span,
+                            is_underscore: iter_var.starts_with('_'),
+                            scope_depth: self.scope_depth,
                         });
                     }
                 }
@@ -561,6 +583,39 @@ impl DefUseAnalyzer {
                 }
 
                 self.scope_depth -= 1;
+
+                // An iterator the body WRITES is ambiguous for real, and this
+                // is the finding the warning exists for:
+                //
+                //     @ i:1..3 { >> i ¶  i = i + 1 }
+                //
+                // It used to be reported for every iterator, written to or not,
+                // because the same flag did double duty (ERROR-ZYB-003). Now it
+                // is reported only when the body assigns to the name the loop
+                // is also advancing — two writers, and no way to say which one
+                // the reader after the loop is seeing.
+                if let Some(ref iter_var) = loop_stmt.iterator_var {
+                    let written = self
+                        .chains
+                        .get(iter_var)
+                        .map(|c| {
+                            c.uses.iter().any(|u| {
+                                matches!(u.use_type, UseType::Write | UseType::ReadWrite)
+                            })
+                        })
+                        .unwrap_or(false);
+                    if written && !iter_var.starts_with('_') {
+                        if let Some(chain) = self.chains.get_mut(iter_var) {
+                            chain.is_ambiguous = true;
+                            chain.ambiguity = Some(AmbiguousLifetime {
+                                variable: iter_var.clone(),
+                                reason: AmbiguityReason::LoopVariant,
+                                nodes: HashSet::new(),
+                                suggested_span: loop_stmt.body.span,
+                            });
+                        }
+                    }
+                }
             }
 
             Statement::Match(match_stmt) => {
@@ -886,6 +941,12 @@ impl DefUseAnalyzer {
 
             Expr::Format(format) => {
                 self.analyze_expr(&format.expr, node_index);
+                // GAP-ZYB-001: a computed decimal count is a use like any other.
+                if let Some(zymbol_ast::Precision::Dynamic(e)) =
+                    format.precision.as_ref().map(|p| p.precision())
+                {
+                    self.analyze_expr(e, node_index);
+                }
             }
 
             Expr::BaseConversion(base_conv) => {
@@ -894,10 +955,16 @@ impl DefUseAnalyzer {
 
             Expr::Round(round) => {
                 self.analyze_expr(&round.expr, node_index);
+                if let zymbol_ast::Precision::Dynamic(e) = &round.precision {
+                    self.analyze_expr(e, node_index);
+                }
             }
 
             Expr::Trunc(trunc) => {
                 self.analyze_expr(&trunc.expr, node_index);
+                if let zymbol_ast::Precision::Dynamic(e) = &trunc.precision {
+                    self.analyze_expr(e, node_index);
+                }
             }
 
             Expr::Pipe(pipe) => {

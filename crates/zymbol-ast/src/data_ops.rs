@@ -54,13 +54,68 @@ pub enum FormatKind {
     Scientific,
 }
 
+/// How many decimal places a format or precision operator was given.
+///
+/// GAP-ZYB-001: this used to be a bare `u32`, so the count had to be written in
+/// the source. A formatter whose precision arrives at run time could not use
+/// these operators at all — and for money the count IS configuration: the peso
+/// has no minor unit in circulation (exponent 0), the euro has two, the Kuwaiti
+/// dinar three. The exponent belongs to the currency, not to the program, so
+/// ZyBank wrote forty lines of integer arithmetic instead of `#,.exp|…|`.
+///
+/// `Literal` is kept apart from `Dynamic` rather than storing every count as an
+/// expression: it is the overwhelmingly common case, the VM encodes it as an
+/// immediate operand, and the formatter reprints `#.2` rather than `#.(2)`.
+#[derive(Debug, Clone)]
+pub enum Precision {
+    /// `#.2|…|` — written in the source.
+    Literal(u32),
+    /// `#.n|…|` or `#.(a + 1)|…|` — computed when the program runs. Must
+    /// evaluate to a non-negative integer.
+    Dynamic(Box<Expr>),
+}
+
+impl Precision {
+    /// The count if it was written in the source, `None` if it is computed.
+    pub fn literal(&self) -> Option<u32> {
+        match self {
+            Precision::Literal(n) => Some(*n),
+            Precision::Dynamic(_) => None,
+        }
+    }
+}
+
 /// Optional precision modifier appended to #, or #^
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum PrecisionOp {
     /// .N — round to N decimal places (same semantics as #.N|..|)
-    Round(u32),
+    Round(Precision),
     /// !N — truncate to N decimal places (same semantics as #!N|..|)
+    Truncate(Precision),
+}
+
+impl PrecisionOp {
+    pub fn precision(&self) -> &Precision {
+        match self {
+            PrecisionOp::Round(p) | PrecisionOp::Truncate(p) => p,
+        }
+    }
+}
+
+/// A precision modifier whose count is already known — what every engine works
+/// with once a `Dynamic` count has been evaluated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedPrecision {
+    Round(u32),
     Truncate(u32),
+}
+
+impl ResolvedPrecision {
+    pub fn digits(self) -> u32 {
+        match self {
+            ResolvedPrecision::Round(n) | ResolvedPrecision::Truncate(n) => n,
+        }
+    }
 }
 
 /// Base conversion expression: 0x|expr| or 0b|expr| or 0o|expr| or 0d|expr|
@@ -95,7 +150,7 @@ pub enum BasePrefix {
 #[derive(Debug, Clone)]
 pub struct RoundExpr {
     /// Number of decimal places to round to
-    pub precision: u32,
+    pub precision: Precision,
     /// Expression to evaluate and round
     pub expr: Box<Expr>,
     pub span: Span,
@@ -110,7 +165,7 @@ pub struct RoundExpr {
 #[derive(Debug, Clone)]
 pub struct TruncExpr {
     /// Number of decimal places to truncate to
-    pub precision: u32,
+    pub precision: Precision,
     /// Expression to evaluate and truncate
     pub expr: Box<Expr>,
     pub span: Span,
@@ -148,13 +203,13 @@ impl BaseConversionExpr {
 }
 
 impl RoundExpr {
-    pub fn new(precision: u32, expr: Box<Expr>, span: Span) -> Self {
+    pub fn new(precision: Precision, expr: Box<Expr>, span: Span) -> Self {
         Self { precision, expr, span }
     }
 }
 
 impl TruncExpr {
-    pub fn new(precision: u32, expr: Box<Expr>, span: Span) -> Self {
+    pub fn new(precision: Precision, expr: Box<Expr>, span: Span) -> Self {
         Self { precision, expr, span }
     }
 }

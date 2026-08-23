@@ -1752,15 +1752,32 @@ impl<'a> FormatVisitor<'a> {
         self.output.write("#?");
     }
 
+    /// Reprint a decimal count: the digits if it was written, the expression if
+    /// it is computed. A `Dynamic` count came in as a postfix expression, so it
+    /// reprints without parentheses of its own — `#,.n|x|`, `#,.(a+1)|x|` keeps
+    /// the parentheses it was written with because they are a `Group`.
+    fn format_precision(&mut self, p: &zymbol_ast::Precision) {
+        match p {
+            zymbol_ast::Precision::Literal(n) => self.output.write(&n.to_string()),
+            zymbol_ast::Precision::Dynamic(e) => self.format_expr(e),
+        }
+    }
+
     /// Format format expression: #,|expr|, #^|expr|, #,.2|expr|, etc.
     fn format_format_expr(&mut self, op: &FormatExpr) {
         match op.kind {
             FormatKind::Thousands => self.output.write("#,"),
             FormatKind::Scientific => self.output.write("#^"),
         }
-        match op.precision {
-            Some(PrecisionOp::Round(n)) => self.output.write(&format!(".{}", n)),
-            Some(PrecisionOp::Truncate(n)) => self.output.write(&format!("!{}", n)),
+        match &op.precision {
+            Some(PrecisionOp::Round(n)) => {
+                self.output.write(".");
+                self.format_precision(n);
+            }
+            Some(PrecisionOp::Truncate(n)) => {
+                self.output.write("!");
+                self.format_precision(n);
+            }
             None => {}
         }
         self.output.write("|");
@@ -1905,7 +1922,7 @@ impl<'a> FormatVisitor<'a> {
     /// Format round expression
     fn format_round(&mut self, round: &RoundExpr) {
         self.output.write("#.");
-        self.output.write(&round.precision.to_string());
+        self.format_precision(&round.precision);
         self.output.write("|");
         self.format_expr(&round.expr);
         self.output.write("|");
@@ -1914,7 +1931,7 @@ impl<'a> FormatVisitor<'a> {
     /// Format trunc expression
     fn format_trunc(&mut self, trunc: &TruncExpr) {
         self.output.write("#!");
-        self.output.write(&trunc.precision.to_string());
+        self.format_precision(&trunc.precision);
         self.output.write("|");
         self.format_expr(&trunc.expr);
         self.output.write("|");

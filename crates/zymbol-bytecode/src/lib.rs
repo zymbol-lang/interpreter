@@ -252,6 +252,16 @@ pub enum Instruction {
     // ── Precision ops ────────────────────────────────────────────────────
     /// Round dst = #.precision|src|  (standard rounding)
     RoundFloat(Reg, Reg, u32),
+    /// The same four operations with the decimal count taken from a register
+    /// instead of an immediate: `#,.n|x|`, `#.n|x|`, … (GAP-ZYB-001).
+    ///
+    /// Separate opcodes rather than making the count a register everywhere: a
+    /// written count is the overwhelmingly common case and stays one operand
+    /// wide, with no register spent and no load before it.
+    FmtThousandsDyn(Reg, Reg, u8, Reg),
+    FmtScientificDyn(Reg, Reg, u8, Reg),
+    RoundFloatDyn(Reg, Reg, Reg),
+    TruncFloatDyn(Reg, Reg, Reg),
     /// Truncate dst = #!precision|src|  (floor toward zero)
     TruncFloat(Reg, Reg, u32),
 

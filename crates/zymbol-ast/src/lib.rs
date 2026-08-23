@@ -48,7 +48,7 @@ pub use string_ops::{StringReplaceExpr, StringSplitExpr, StringRepeatExpr, Conca
 
 mod data_ops;
 pub use data_ops::{
-    NumericEvalExpr, TypeMetadataExpr, FormatExpr, FormatKind, PrecisionOp,
+    NumericEvalExpr, TypeMetadataExpr, FormatExpr, FormatKind, Precision, PrecisionOp, ResolvedPrecision,
     BaseConversionExpr, BasePrefix, RoundExpr, TruncExpr,
     NumericCastExpr, CastKind,
 };
