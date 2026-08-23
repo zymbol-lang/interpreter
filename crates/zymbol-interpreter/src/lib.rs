@@ -435,6 +435,14 @@ pub struct Interpreter<W: Write> {
     current_file: Option<PathBuf>,
     /// Base directory for module resolution
     base_dir: PathBuf,
+    /// The code a top-level `<~ n` asked the program to end with (GAP-ZYB-006).
+    ///
+    /// `<~` hands a value back to whoever called; a program is called by the
+    /// operating system, so a value handed back at the top level is its exit
+    /// status. That derivation is why this needed no new symbol — and the
+    /// register VM and the browser engine already stopped the program here,
+    /// while this engine walked past it and ran the rest of the file.
+    exit_code: Option<i64>,
     /// CLI arguments passed to the script
     cli_args: Option<Vec<Value>>,
     /// Auto-free (v0.0.8): top-level statement index → variables to destroy
@@ -902,6 +910,7 @@ impl Interpreter<std::io::Stdout> {
             frame_module_vars: HashMap::new(),
             current_file: None,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            exit_code: None,
             cli_args: None,
             destruction_schedule: HashMap::new(),
             dead_variables: HashSet::new(),
@@ -955,6 +964,7 @@ impl<W: Write> Interpreter<W> {
             frame_module_vars: HashMap::new(),
             current_file: None,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            exit_code: None,
             cli_args: None,
             destruction_schedule: HashMap::new(),
             dead_variables: HashSet::new(),
@@ -1003,6 +1013,12 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Set the base directory for module resolution
+    /// The exit status a top-level `<~ n` asked for, if the program asked
+    /// (GAP-ZYB-006).
+    pub fn exit_code(&self) -> Option<i64> {
+        self.exit_code
+    }
+
     pub fn set_base_dir<P: AsRef<Path>>(&mut self, path: P) {
         self.base_dir = path.as_ref().to_path_buf();
     }
@@ -1316,6 +1332,24 @@ impl<W: Write> Interpreter<W> {
         // Execute statements with auto-destruction after each one's last uses
         for (i, statement) in program.statements.iter().enumerate() {
             self.execute_statement(statement)?;
+
+            // GAP-ZYB-006: a `<~` that reaches the top level ends the program,
+            // and its value is the exit status. The other two engines already
+            // stopped here; this one used to walk past and keep going, so the
+            // same file printed different things under `--vm`.
+            if let ControlFlow::Return(value) = &self.control_flow {
+                self.exit_code = Some(match value {
+                    Some(Value::Int(n)) => *n,
+                    // No value: ended deliberately, with nothing to report.
+                    None => 0,
+                    // Rejected by the analyzer before running; if one arrives
+                    // anyway, saying "something went wrong" beats inventing a
+                    // number out of a value that is not one.
+                    Some(_) => 1,
+                });
+                self.clear_control_flow();
+                break;
+            }
 
             // Pending control flow (shouldn't reach top level): teardown owns cleanup
             if self.is_control_flow_pending() {

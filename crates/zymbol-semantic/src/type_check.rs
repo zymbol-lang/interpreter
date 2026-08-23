@@ -529,10 +529,96 @@ impl TypeChecker {
             self.check_statement(stmt);
         }
 
+        // GAP-ZYB-006: a `<~` at the top level ends the program, and its value
+        // is the exit status the operating system receives — a number, and
+        // nothing else. Caught here rather than at run time because it is
+        // decidable without running, and because the branch that exits is
+        // typically the branch that runs least.
+        for stmt in &program.statements {
+            self.check_top_level_exit(stmt);
+        }
+
         // Return all diagnostics combined
         let mut all = std::mem::take(&mut self.errors);
         all.extend(std::mem::take(&mut self.warnings));
         all
+    }
+
+    /// Walk the statements a top-level `<~` can be reached from — everything
+    /// except a function body, which returns to its caller and not to the
+    /// operating system — and require its value to be a whole number.
+    fn check_top_level_exit(&mut self, stmt: &Statement) {
+        match stmt {
+            // A function's `<~` returns to whoever called the function.
+            Statement::FunctionDecl(_) => {}
+            Statement::Return(ret) => {
+                let Some(value) = &ret.value else { return };
+                let t = self.infer_expr(value);
+                if !matches!(t, ZymbolType::Int | ZymbolType::Any) {
+                    self.errors.push(
+                        Diagnostic::error(format!(
+                            "a top-level `<~` ends the program, so its value is the exit status and must be a whole number — this one is {}",
+                            t.name()
+                        ))
+                        .with_span(ret.span)
+                        .with_help(
+                            "`<~ 0` for success and `<~ 1` (or another number) for failure; \
+                             to print something before leaving, use `>>` on the line above",
+                        ),
+                    );
+                }
+            }
+            Statement::If(if_stmt) => {
+                for st in &if_stmt.then_block.statements {
+                    self.check_top_level_exit(st);
+                }
+                for branch in &if_stmt.else_if_branches {
+                    for st in &branch.block.statements {
+                        self.check_top_level_exit(st);
+                    }
+                }
+                if let Some(block) = &if_stmt.else_block {
+                    for st in &block.statements {
+                        self.check_top_level_exit(st);
+                    }
+                }
+            }
+            Statement::Loop(loop_stmt) => {
+                for st in &loop_stmt.body.statements {
+                    self.check_top_level_exit(st);
+                }
+            }
+            Statement::Try(try_stmt) => {
+                for st in &try_stmt.try_block.statements {
+                    self.check_top_level_exit(st);
+                }
+                for clause in &try_stmt.catch_clauses {
+                    for st in &clause.block.statements {
+                        self.check_top_level_exit(st);
+                    }
+                }
+                if let Some(fin) = &try_stmt.finally_clause {
+                    for st in &fin.block.statements {
+                        self.check_top_level_exit(st);
+                    }
+                }
+            }
+            Statement::Match(m) => {
+                for case in &m.cases {
+                    if let Some(block) = &case.block {
+                        for st in &block.statements {
+                            self.check_top_level_exit(st);
+                        }
+                    }
+                }
+            }
+            Statement::TuiBlock(tb) => {
+                for st in &tb.body.statements {
+                    self.check_top_level_exit(st);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Check a program and return only errors (fatal type errors)
@@ -568,6 +654,13 @@ impl TypeChecker {
         // Third pass: check statements with inferred types
         for stmt in &program.statements {
             self.check_statement(stmt);
+        }
+
+        // GAP-ZYB-006 — see `check`. Both entry points run it: `zymbol check`
+        // calls this one, and a finding only the other reports is a finding
+        // the command line never shows.
+        for stmt in &program.statements {
+            self.check_top_level_exit(stmt);
         }
 
         std::mem::take(&mut self.errors)

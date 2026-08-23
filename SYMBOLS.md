@@ -1253,8 +1253,24 @@ is listed here; anything absent is unspent.
 |---|---|
 | `=>` | match arm, import alias, export rename |
 | `->` | lambda |
-| `<~` | return |
+| `<~` | return; **at the top level, the program's exit status** |
 | `\|>` | pipe |
+
+> `<~` at the top level (v0.0.9) is a derivation, not a second meaning, so rule
+> 6 is not engaged: the contract is "hand this value back to whoever called".
+> A function's caller is the code around it; a program's caller is the operating
+> system, and what the operating system receives from a program is its exit
+> status. One contract, read in two positions.
+>
+> The value must be a whole number, and `zymbol check` refuses anything else:
+> the exit status is a number to the system, and the branch that exits is
+> typically the branch that runs least, so a run-time error there would surface
+> on the day something had already gone wrong.
+>
+> This was reached by consulting §18 for a free combination and then not
+> spending one. Two of the three engines already stopped the program at a
+> top-level `<~` and dropped its value; the third walked past it. The form was
+> in the language and only its meaning was missing.
 
 #### Unassigned but reachable
 `&` (simplex) is a lex error today and is therefore free. `>>=`, `<<=`, `@?`, `$&`, `#&` and
