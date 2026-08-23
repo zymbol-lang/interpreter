@@ -280,7 +280,19 @@ min max sin cos tan asin acos atan atan2 sinh cosh tanh sigmoid`, `PI` `E`) · `
 append exists delete list mkdir`) · `std/net` (`get post post_json head`) · `std/db`
 (`connect exec query query_one query_value tx begin commit rollback …`) · `std/term`
 (`width pad_left pad_right center truncate` — **display columns**, not graphemes: CJK and
-most emoji are 2 columns, so lay TUI out with `t::width`, never `$#`).
+most emoji are 2 columns, so lay TUI out with `t::width`, never `$#`) · `std/time`
+(`now today parts of format add diff`).
+
+`std/time`: an instant is **milliseconds** since the epoch, always UTC; a date is a
+*reading* of one, so every function takes an optional trailing zone — `"UTC"` (default),
+`"local"`, or `"+1000"`/`"-0400"`. `of(y, m, d [, h, mi, s])` builds one, `parts` reads one
+into a dictionary (`year month day hour minute second millisecond weekday offset`, weekday
+1 = Monday), `format` renders POSIX codes (`%Y %m %d %H %M %S %L %j %u %z %F %T %%`) in
+**ASCII digits whatever the numeral mode** — a localized date is built from `parts` instead.
+`add`/`diff` take a unit in full (`millisecond second minute hour day week month year`):
+below a day it is duration, from a day up it is calendar, so a month lands on the same day
+of the month (clamped: 31 Jan + 1 month = 28 Feb) and a day across a daylight-saving change
+is still a day. A date that does not exist is a soft `##Time`, not a crash.
 
 ---
 

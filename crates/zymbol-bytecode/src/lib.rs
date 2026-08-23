@@ -514,6 +514,14 @@ pub mod builtins {
     pub const TERM_PAD_RIGHT: u16 = 602;
     pub const TERM_CENTER:    u16 = 603;
     pub const TERM_TRUNCATE:  u16 = 604;
+    // std/time functions (the clock and the civil calendar)
+    pub const TIME_NOW:    u16 = 700;
+    pub const TIME_TODAY:  u16 = 701;
+    pub const TIME_PARTS:  u16 = 702;
+    pub const TIME_OF:     u16 = 703;
+    pub const TIME_FORMAT: u16 = 704;
+    pub const TIME_ADD:    u16 = 705;
+    pub const TIME_DIFF:   u16 = 706;
 }
 
 #[derive(Debug, Serialize, Deserialize)]

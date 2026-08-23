@@ -16,6 +16,7 @@ mod math;
 mod net;
 mod random;
 mod term;
+mod time;
 
 /// Build a `LoadedModule` for the requested stdlib path.
 /// Returns `None` if the path is not a recognized stdlib module.
@@ -49,6 +50,16 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
         "std/term" => Some(LoadedModule {
             name: "std/term".to_string(),
             functions: term::register(),
+            all_functions: HashMap::new(),
+            constants: HashMap::new(),
+            all_variables: HashMap::new(),
+            import_aliases: crate::ModuleAliases::default(),
+            loaded_modules_refs: HashMap::new(),
+            const_names: std::collections::HashSet::new(),
+        }),
+        "std/time" => Some(LoadedModule {
+            name: "std/time".to_string(),
+            functions: time::register(),
             all_functions: HashMap::new(),
             constants: HashMap::new(),
             all_variables: HashMap::new(),

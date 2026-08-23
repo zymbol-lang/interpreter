@@ -4712,6 +4712,15 @@ pub fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16
             ("list",   B::IO_LIST),
             ("mkdir",  B::IO_MKDIR),
         ]),
+        "std/time" => Some(vec![
+            ("now",    B::TIME_NOW),
+            ("today",  B::TIME_TODAY),
+            ("parts",  B::TIME_PARTS),
+            ("of",     B::TIME_OF),
+            ("format", B::TIME_FORMAT),
+            ("add",    B::TIME_ADD),
+            ("diff",   B::TIME_DIFF),
+        ]),
         "std/net" => Some(vec![
             ("get",       B::NET_GET),
             ("post",      B::NET_POST),

@@ -14,7 +14,14 @@
 //! the C functions receive raw `char*`/`Py_ssize_t`, the Python runtime handles boxing.
 //! The intrinsics are independently optimizable (SIMD, Aho-Corasick, etc.) without
 //! touching the VM dispatch layer.
+//!
+//! [`time`] joined on the same terms and for a second reason: the civil calendar
+//! is an *answer*, not a table of names, and the two Rust engines cannot be kept
+//! agreeing about leap years by inspection the way they are kept agreeing about
+//! `std/term`. It carries the crate's only dependency, for reading the machine's
+//! own time zone.
 
 pub mod split;
 pub mod search;
 pub mod transform;
+pub mod time;

@@ -1238,6 +1238,7 @@ on digits past it returns the string unchanged rather than a rounded number.
 | `##IO(...)` | `std/io` functions on filesystem failure |
 | `##Network(...)` | `std/net` functions on HTTP/connection failure |
 | `##DB(...)` | `std/db` functions on SQL/ODBC failure |
+| `##Time(...)` | `std/time` on a date that does not exist, an unknown zone or unit, an unreadable pattern, or a local zone the machine cannot report |
 
 `##Key` is raised by reading a dictionary key that is not there — through the dot
 or through the bracket, since it is the same lookup:
@@ -1258,6 +1259,13 @@ askable before it is read.
 
 `std/term` (v0.0.8) has no soft-error channel: its five functions are pure measurements
 over a string and cannot fail environmentally.
+
+`##Time` (v0.0.9) is the one soft channel that is mostly not environmental: a date arrives
+from a form, a file or a database column, and the 30th of February is *data* that a program
+has to be able to handle rather than a bug that should stop it. Only the `"local"` zone can
+fail for the usual environmental reason — the machine's zone could not be read — and it
+fails rather than guessing, because a wrong date is worse than a caught error. A wrong
+argument **type** stays hard, as everywhere else in `std/`.
 
 ```zymbol
 <# std/io => io
