@@ -283,8 +283,8 @@ mod tests {
 
     #[test]
     fn test_format_named_tuple() {
-        let result = format("p=(name:\"Alice\",age:25)").unwrap();
-        assert_eq!(result, "p = (name: \"Alice\", age: 25)\n");
+        let result = format("p=#(name:\"Alice\",age:25)").unwrap();
+        assert_eq!(result, "p = #(name: \"Alice\", age: 25)\n");
     }
 
     #[test]
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn test_named_tuple_breaks() {
         let config = FormatterConfig::new().with_max_line_length(30);
-        let result = format_with_config("p = (name: \"Alice Smith\", age: 25, city: \"New York\")", config).unwrap();
+        let result = format_with_config("p = #(name: \"Alice Smith\", age: 25, city: \"New York\")", config).unwrap();
         // Should break due to length
         assert!(result.contains('\n'), "Long named tuple should break: {}", result);
     }

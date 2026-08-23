@@ -261,6 +261,8 @@ pub enum TokenKind {
     HashPipe,
     /// #? (type metadata - returns tuple with type, count, value)
     HashQuestion,
+    /// `#(` — opens a dictionary literal (GAP-ZYB-003/004).
+    HashLParen,
     /// #. (round prefix - for precision rounding: #.2|expr|)
     HashDot,
     /// #! (trunc prefix - for precision truncation: #!2|expr|)
@@ -712,6 +714,20 @@ impl Lexer {
                     self.advance(); // consume #
                     self.advance(); // consume |
                     return Token::new(TokenKind::HashPipe, self.span(start));
+                }
+                // Check for #( (dictionary literal)
+                //
+                // GAP-ZYB-003/004: `(a: 1)` and `(1, 2)` share the parentheses
+                // and not the semantics — the colon was the whole of what told
+                // them apart, and an EMPTY one could not be written at all,
+                // because `()` would have to mean both. `#(` marks the
+                // dictionary the way `#[` marks an array with a declared mix:
+                // `#` is the meta/type mark, and saying which of the two a pair
+                // of parentheses opens is a statement about its type.
+                else if next == '(' {
+                    self.advance(); // consume #
+                    self.advance(); // consume (
+                    return Token::new(TokenKind::HashLParen, self.span(start));
                 }
                 // Check for #? (type metadata)
                 else if next == '?' {

@@ -355,11 +355,14 @@ impl Parser {
     /// Uses save/restore to look past the paren group and check for `=`.
     pub(crate) fn is_tuple_destructure(&mut self) -> bool {
         let saved = self.current;
-        self.advance(); // consume (
+        self.advance(); // consume `(` or `#(`
         let mut depth = 1i32;
         while depth > 0 && !self.is_at_end() {
             match self.peek().kind {
-                TokenKind::LParen => { depth += 1; self.advance(); }
+                // `#(` opens as surely as `(` does, and a dictionary literal
+                // nested inside the pattern's right-hand side must not close
+                // it early.
+                TokenKind::LParen | TokenKind::HashLParen => { depth += 1; self.advance(); }
                 TokenKind::RParen => { depth -= 1; self.advance(); }
                 _ => { self.advance(); }
             }
@@ -431,7 +434,7 @@ impl Parser {
     }
 
     pub(crate) fn parse_tuple_destructure_pattern(&mut self) -> Result<DestructurePattern, Diagnostic> {
-        self.advance(); // consume (
+        self.advance(); // consume `(` or `#(`
 
         // Determine named vs positional: if first content is `ident :` → named
         let is_named = matches!(

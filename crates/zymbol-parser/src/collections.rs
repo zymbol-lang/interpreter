@@ -74,6 +74,93 @@ impl Parser {
         Ok(Expr::ArrayLiteral(ArrayLiteralExpr::new(elements, span)))
     }
 
+    /// Parse a dictionary literal opened by `#(` (GAP-ZYB-003/004).
+    ///
+    /// `#(` says which of the two things a pair of parentheses opens, so no
+    /// lookahead decides it and an empty one is writable: `#()` is the empty
+    /// dictionary and `()` is not it. Keys may be strings as well as bare
+    /// names — `d["gasto.alimentación"]$~ v` always added such a key and only
+    /// the literal could not spell it, which left the keys a program actually
+    /// needs (the ones from a database, from JSON, with a domain prefix)
+    /// outside the notation.
+    pub(crate) fn parse_dict_literal(&mut self) -> Result<Expr, Diagnostic> {
+        let hash_lparen = self.advance(); // consume #(
+        self.parse_dict_fields(hash_lparen, true)
+    }
+
+    /// The fields of a dictionary, shared by `#(…)` and the legacy `(a: 1)`.
+    ///
+    /// `allow_empty` is what `#(` buys: `#()` is the empty dictionary, while a
+    /// bare `()` cannot be one — it would have to be the empty tuple as well,
+    /// and the two are not the same value. The empty dictionary was reachable
+    /// before this (take the only key out of `(a: 1)` and `$#` is 0) and simply
+    /// could not be written, so every program that built one at run time had to
+    /// start it with an invented key and remove it afterwards.
+    fn parse_dict_fields(
+        &mut self,
+        open_token: zymbol_lexer::Token,
+        allow_empty: bool,
+    ) -> Result<Expr, Diagnostic> {
+        let mut fields = Vec::new();
+
+        if allow_empty && matches!(self.peek().kind, TokenKind::RParen) {
+            let rparen = self.advance();
+            let span = open_token.span.to(&rparen.span);
+            return Ok(Expr::NamedTuple(NamedTupleExpr::new(fields, span)));
+        }
+
+        loop {
+            // A key is a bare name or a string. `COLLECTIONS.md` § 5 calls the
+            // computed key "what makes this a dictionary and not a record", and
+            // the bracket exists because "a JSON key can be any string" — the
+            // literal had stayed on the record's side of that line.
+            let field_token = self.peek().clone();
+            let field_name = match &field_token.kind {
+                TokenKind::Ident(name) => name.clone(),
+                TokenKind::String(text) => text.clone(),
+                _ => {
+                    return Err(Diagnostic::error("expected a key in the dictionary")
+                        .with_span(field_token.span)
+                        .with_help(
+                            "a key is a name or a string: #(nombre: valor) or \
+                             #(\"gasto.alimentación\": valor)",
+                        ));
+                }
+            };
+            self.advance(); // consume the key
+
+            if !matches!(self.peek().kind, TokenKind::Colon) {
+                return Err(Diagnostic::error("expected ':' after the key")
+                    .with_span(self.peek().span));
+            }
+            self.advance(); // consume :
+
+            let value_expr = self.parse_expr()?;
+            fields.push((field_name, value_expr));
+
+            if matches!(self.peek().kind, TokenKind::Comma) {
+                self.advance(); // consume ,
+                // A trailing comma before `)` closes the literal.
+                if matches!(self.peek().kind, TokenKind::RParen) {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        let rparen_token = self.peek().clone();
+        if !matches!(rparen_token.kind, TokenKind::RParen) {
+            return Err(Diagnostic::error("expected ')' to close the dictionary")
+                .with_span(rparen_token.span)
+                .with_help("a dictionary is written #(key: value, key2: value2)"));
+        }
+        let rparen_token = self.advance(); // consume )
+
+        let span = open_token.span.to(&rparen_token.span);
+        Ok(Expr::NamedTuple(NamedTupleExpr::new(fields, span)))
+    }
+
     /// Parse tuple, named tuple, or grouped expression
     /// Handles: (expr), (expr, expr), (name: value, ...)
     pub(crate) fn parse_tuple_or_grouped(&mut self) -> Result<Expr, Diagnostic> {
@@ -92,58 +179,23 @@ impl Parser {
         };
 
         if is_named_tuple {
-            // Parse named tuple: (name: expr, name2: expr2, ...)
-            let mut fields = Vec::new();
+            // A dictionary is written `#(…)`. The bare form was how it was
+            // written until v0.0.9, when the colon was the whole of what told
+            // `(a: 1)` from `(1, 2)` — and the empty dictionary could not be
+            // written at all, because `()` would have to be both. Refused
+            // rather than accepted quietly, because two spellings for one thing
+            // is what the mark was introduced to end.
+            return Err(Diagnostic::error("a dictionary is written `#(…)`")
+                .with_span(lparen_token.span)
+                .with_help(
+                    "write `#(` here: `#(nombre: valor)`. A bare `(…)` is a \
+                     positional tuple, and `#()` is the empty dictionary — \
+                     which `()` cannot be, since it would have to be the empty \
+                     tuple as well",
+                ));
+        }
 
-            loop {
-                // Parse field name
-                let field_token = self.peek().clone();
-                let field_name = if let TokenKind::Ident(ref name) = field_token.kind {
-                    name.clone()
-                } else {
-                    return Err(Diagnostic::error("expected field name in named tuple")
-                        .with_span(field_token.span)
-                        .with_help("named tuples require field names: (name: value, name2: value2)"));
-                };
-                self.advance(); // consume identifier
-
-                // Expect colon
-                if !matches!(self.peek().kind, TokenKind::Colon) {
-                    return Err(Diagnostic::error("expected ':' after field name in named tuple")
-                        .with_span(self.peek().span));
-                }
-                self.advance(); // consume :
-
-                // Parse value expression
-                let value_expr = self.parse_expr()?;
-                fields.push((field_name, value_expr));
-
-                // Check for comma (more fields) or closing paren
-                if matches!(self.peek().kind, TokenKind::Comma) {
-                    self.advance(); // consume ,
-
-                    // Check for trailing comma before )
-                    if matches!(self.peek().kind, TokenKind::RParen) {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-
-            // Expect closing )
-            let rparen_token = self.peek().clone();
-            if !matches!(rparen_token.kind, TokenKind::RParen) {
-                return Err(Diagnostic::error("expected ')' to close named tuple")
-                    .with_span(rparen_token.span)
-                    .with_help("named tuples must be enclosed in parentheses: (name: value, ...)"));
-            }
-            let rparen_token = self.advance(); // consume )
-
-            // Create named tuple with span from ( to )
-            let span = lparen_token.span.to(&rparen_token.span);
-            Ok(Expr::NamedTuple(NamedTupleExpr::new(fields, span)))
-        } else {
+        {
             // Parse positional tuple or grouped expression
             let first_expr = self.parse_expr_juxt()?;
 

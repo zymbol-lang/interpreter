@@ -349,8 +349,8 @@ nums[2]$~ (nums[2] + 10)
 // Destructuring
 [first, *rest] = nums    // first=99, rest=[...remaining]
 
-// Dictionaries — a tuple with named fields
-person = (name: "Alice", age: 25)
+// Dictionaries — keyed, insertion-ordered, mutable; `#(` marks the notation
+person = #(name: "Alice", age: 25)
 >> person.name ¶         // Alice
 >> person["age"] ¶       // 25 — the bracket takes a computed key too
 
@@ -729,9 +729,9 @@ history = []
 @:chat {
     << prompt
     ? prompt == "quit" { @:chat! }
-    history = history$+ (role: "user", content: prompt)
+    history = history$+ #(role: "user", content: prompt)
     response = ai::complete(MODEL, history)
-    history  = history$+ (role: "assistant", content: response)
+    history  = history$+ #(role: "assistant", content: response)
     >> response ¶
 }
 ```
@@ -752,7 +752,7 @@ named tuples, HOF arguments, and string operators.
     内容  = <\ "cat {源码路径}" \>
     符号  = 词法::分析(内容)
     问题  = 符号$| (项 -> 项.类型 == "警告")
-    <~ (路径: 源码路径, 问题数: 问题$#, 列表: 问题)
+    <~ #(路径: 源码路径, 问题数: 问题$#, 列表: 问题)
 }
 
 @ 文件:目标列表 {
@@ -1117,8 +1117,8 @@ and the euro have two, the Kuwaiti dinar has three. The same stored `1050` is `$
 
 ```zymbol
 // A currency is a dictionary; `exponente` is what says what the integer MEANS
-CLP: (código: "CLP", exponente: 0, símbolo: "$",   posición: "antes",   miles: ".", decimal: ",", espacio: #0, nombre: "Peso chileno"),
-KWD: (código: "KWD", exponente: 3, símbolo: "د.ك", posición: "después", miles: ",", decimal: ".", espacio: #1, nombre: "Dinar kuwaití")
+CLP: #(código: "CLP", exponente: 0, símbolo: "$",   posición: "antes",   miles: ".", decimal: ",", espacio: #0, nombre: "Peso chileno"),
+KWD: #(código: "KWD", exponente: 3, símbolo: "د.ك", posición: "después", miles: ",", decimal: ".", espacio: #1, nombre: "Dinar kuwaití")
 
 // The padding zero is obtained by converting 0 HERE, not written as a literal:
 // under `#०९#` zero is «०», and a fixed "0" would mix two scripts inside one

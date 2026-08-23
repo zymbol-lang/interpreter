@@ -384,7 +384,7 @@ slice = arr$[2..4]
 #[test]
 fn test_named_tuple() {
     let out = run(r#"
-person = (name: "Alice", age: 25)
+person = #(name: "Alice", age: 25)
 >> person.name ¶
 >> person.age ¶
 "#);
@@ -931,7 +931,7 @@ slice = arr$[2..4]
 #[test]
 fn test_named_tuple_vm() {
     let src = r#"
-person = (name: "Alice", age: 25)
+person = #(name: "Alice", age: 25)
 >> person.name ¶
 >> person.age ¶
 "#;

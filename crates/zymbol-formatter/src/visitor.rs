@@ -567,7 +567,8 @@ impl<'a> FormatVisitor<'a> {
                 self.output.write(")");
             }
             DestructurePattern::NamedTuple(fields) => {
-                self.output.write("(");
+                // The pattern spells the dictionary the way the literal does.
+                self.output.write("#(");
                 for (i, (field, var)) in fields.iter().enumerate() {
                     if i > 0 {
                         self.output.write(", ");
@@ -1301,8 +1302,30 @@ impl<'a> FormatVisitor<'a> {
     }
 
     /// Format a named tuple expression
+    /// A dictionary key as it has to be written back: bare when it is a name,
+    /// quoted when it is not.
+    ///
+    /// `#("gasto.alimentación": v)` is a key the literal accepts and an
+    /// identifier cannot spell; reprinting it bare would produce a file that
+    /// does not parse, which the formatter's own safety gate would then refuse
+    /// — correctly, but only after the fact.
+    fn dict_key(name: &str) -> String {
+        let is_name = !name.is_empty()
+            && name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_alphanumeric() || c == '_');
+        if is_name {
+            name.to_string()
+        } else {
+            format!("{:?}", name)
+        }
+    }
+
     fn format_named_tuple(&mut self, named_tuple: &NamedTupleExpr) {
-        self.output.write("(");
+        // `#(` and not `(` — the mark says which of the two things the
+        // parentheses open, and it is what makes the empty one writable
+        // (GAP-ZYB-003/004). A key that is not a bare name is quoted, because
+        // that is how it has to be written back.
+        self.output.write("#(");
 
         let estimated_len: usize = named_tuple.fields.iter()
             .map(|(name, value)| name.len() + 2 + self.estimate_expr_length(value) + 2)
@@ -1314,7 +1337,7 @@ impl<'a> FormatVisitor<'a> {
             self.output.newline();
             self.output.indent();
             for (i, (name, value)) in named_tuple.fields.iter().enumerate() {
-                self.output.write(name);
+                self.output.write(&Self::dict_key(name));
                 self.output.write(": ");
                 self.format_expr(value);
                 if i < named_tuple.fields.len() - 1 {
@@ -1328,7 +1351,7 @@ impl<'a> FormatVisitor<'a> {
         } else {
             // Inline named tuple
             for (i, (name, value)) in named_tuple.fields.iter().enumerate() {
-                self.output.write(name);
+                self.output.write(&Self::dict_key(name));
                 self.output.write(": ");
                 self.format_expr(value);
                 if i < named_tuple.fields.len() - 1 {
