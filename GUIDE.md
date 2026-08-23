@@ -581,6 +581,41 @@ Both engines (tree-walker and `--vm`) validate identically. A leading sign is al
 
 `><` works in both engines (tree-walker and `--vm`).
 
+### Exit Status — `<~` at the top level
+
+A `<~` written outside any function ends the program, and its value is the exit
+status the shell sees. It is the same return arrow: `<~` hands a value back to
+whoever called, and a program is called by the operating system.
+
+```zymbol
+>< args
+? args$# < 1 {
+    >> "falta el nombre de la cuenta" ¶
+    <~ 2                       // wrong usage
+}
+>> "trabajando" ¶
+// falling off the end is exit 0
+```
+
+```bash
+zymbol run cuenta.zy && echo "ok"     # the `&&` now means something
+```
+
+- **The value must be a whole number.** `zymbol check` refuses anything else —
+  the exit status is a number to the operating system, and the branch that exits
+  is usually the branch that runs least, so a run-time error there would surface
+  on the day something had already gone wrong.
+- **`<~` with no value** at the top level exits 0.
+- **Falling off the end** exits 0, unchanged.
+- Inside a function, `<~` returns to the caller as it always has. Only the top
+  level reaches the operating system.
+
+> Before v0.0.9 this was a divergence nobody had reported, because nobody writes
+> `<~` in a file body: the register VM and the browser engine stopped the
+> program and dropped the value, and the tree-walker ignored it and ran the rest
+> of the file. Every suite in this project decides by comparing output, and a
+> project that only tests by golden never misses an exit code.
+
 ---
 
 ## 3b. TUI Primitives

@@ -891,6 +891,8 @@ pub struct VM<W: Write> {
     global_vars: Vec<Value>,
     /// CLI arguments passed after the script path (argv[1..], skipping --vm flags)
     cli_args: Vec<String>,
+    /// The code a top-level `<~ n` asked the program to end with (GAP-ZYB-006).
+    exit_code: Option<i64>,
     output: W,
 }
 
@@ -905,6 +907,7 @@ impl<W: Write> VM<W> {
             numeral_mode: 0x0030, // ASCII_BASE default
             global_vars: Vec::new(),
             cli_args: Vec::new(),
+            exit_code: None,
             output,
         }
     }
@@ -912,6 +915,12 @@ impl<W: Write> VM<W> {
     /// Set CLI arguments before running (argv after the script path, minus VM flags).
     pub fn set_cli_args(&mut self, args: Vec<String>) {
         self.cli_args = args;
+    }
+
+    /// The exit status a top-level `<~ n` asked for, if the program asked
+    /// (GAP-ZYB-006).
+    pub fn exit_code(&self) -> Option<i64> {
+        self.exit_code
     }
 
     /// Stringify a value under the active numeral mode.
@@ -1558,6 +1567,18 @@ impl<W: Write> VM<W> {
                     );
 
                     if self.frame_stack.is_empty() {
+                        // GAP-ZYB-006: a `<~` that reaches the top level ends
+                        // the program, and its value is the exit status. The
+                        // stop was already here — only the value was being
+                        // dropped on the floor.
+                        self.exit_code = Some(match &result {
+                            Value::Int(n) => *n,
+                            Value::Unit => 0,
+                            // The analyzer rejects a non-integer before this
+                            // runs; if one arrives anyway, "something went
+                            // wrong" beats inventing a number.
+                            _ => 1,
+                        });
                         return Ok(());
                     }
 

@@ -122,7 +122,19 @@ impl<W: Write> Interpreter<W> {
                 };
                 // Pop the scope on the error path too, or the lambda's params
                 // leak into the caller's scope view (L16 family).
-                let result = self.eval_expr(expr);
+                let mut result = self.eval_expr(expr);
+                // A `$!!` in the body raised an early return. This path skips
+                // take_call_state, so nothing else clears it, and the pending
+                // Return used to travel out with the value — harmless while the
+                // top level ignored a stray Return, and not harmless once a
+                // top-level Return became the program's exit status
+                // (GAP-ZYB-006): `h = (x -> x$!!)` ended the program mid-file.
+                if let ControlFlow::Return(value) = &self.control_flow {
+                    if result.is_ok() {
+                        result = Ok(value.clone().unwrap_or(Value::Unit));
+                    }
+                    self.clear_control_flow();
+                }
                 if let Some(saved) = saved_aliases {
                     self.import_aliases = saved;
                 }

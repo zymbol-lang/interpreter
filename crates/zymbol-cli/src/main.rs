@@ -525,6 +525,10 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
             eprintln!("Runtime error: {}", e);
             return Ok(1);
         }
+        // GAP-ZYB-006: a top-level `<~ n` is the program's exit status.
+        if let Some(code) = vm.exit_code() {
+            return Ok(code as i32);
+        }
     } else {
         // Execute with tree-walker interpreter
         let mut interpreter = Interpreter::new();
@@ -543,6 +547,10 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         if let Err(e) = interpreter.execute(&program) {
             eprintln!("Runtime error: {}", e);
             return Ok(1);
+        }
+        // GAP-ZYB-006: a top-level `<~ n` is the program's exit status.
+        if let Some(code) = interpreter.exit_code() {
+            return Ok(code as i32);
         }
     }
 
