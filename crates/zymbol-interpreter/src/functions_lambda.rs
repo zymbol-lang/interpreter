@@ -28,6 +28,11 @@ impl<W: Write> Interpreter<W> {
             body: lambda.body.clone(),
             captures: Rc::new(captures),
             is_named_fn: false,
+            // This evaluation is what the value IS: two names for it agree
+            // because assignment clones, and evaluating the expression again —
+            // next time round a loop, say — makes a different closure, which is
+            // what it is (BUG-ZYB-012).
+            identity: crate::FnIdentity::Lambda(crate::next_lambda_identity()),
             // BUG-ZYB-001: a lambda carries the aliases of the scope it was
             // written in, exactly as a named function does. Leaving this empty
             // made the lambda borrow whatever aliases the *call site* happened
@@ -300,6 +305,7 @@ impl<W: Write> Interpreter<W> {
         let FunctionDef::Zymbol { parameters, body, .. } = func_def.as_ref() else {
             // Native functions cannot be used as first-class values in v0.0.6.
             return FunctionValue {
+                identity: crate::FnIdentity::Native,
                 params: vec![],
                 body: zymbol_ast::LambdaBody::Block(
                     zymbol_ast::Block::new(vec![], zymbol_span::Span::new(
@@ -318,6 +324,11 @@ impl<W: Write> Interpreter<W> {
         collect_refs_in_stmts(&body.statements, &mut locals, &mut refs);
         let captures = self.capture_only(&refs);
         FunctionValue {
+            // The DEFINITION, not this conversion: a named function becomes a
+            // value afresh on every lookup, so `a = uno` and `b = uno` build two
+            // `FunctionValue`s. They are one function because they came from one
+            // `Rc<FunctionDef>` (BUG-ZYB-012).
+            identity: crate::FnIdentity::Named(Rc::clone(func_def)),
             params: parameters.iter().map(|p| p.name.clone()).collect(),
             body: zymbol_ast::LambdaBody::Block(body.clone()),
             captures: Rc::new(captures),

@@ -19,6 +19,46 @@ those corrections ship inside it. See [WINDOWS_V009.md](WINDOWS_V009.md).
 
 ### Added
 
+**`==` on a function is identity**
+
+```zymbol
+uno(x) { <~ x + 1 }
+dos(x) { <~ x + 1 }     // el mismo cuerpo, otra función
+a = uno
+>> (a == uno) ¶         // #1
+>> (uno == dos) ¶       // #0
+```
+
+Two names for one function are equal; two functions with the same body are not.
+It is what Python, JavaScript and Rust answer about a function reference, and
+what the language had never decided.
+
+Both Rust engines answered `#0` to every comparison between two functions,
+including a function against **itself** — a thing that is not equal to itself.
+`zymbol.js` answered `#1` to every one of them, a named function against a
+lambda included, because its fallback compared `a.v === b.v` and a function has
+no `v`: two `undefined`s. It looked right on the only case anybody had tried and
+was wrong on the rest.
+
+Neither had been decided and nothing documented it. What kept it invisible is
+worth writing down: `zyq consensus` compares what programs print, and **no
+corpus file compared two functions**. The divergence was not hidden — it was
+somewhere nobody had looked, which is the other way a green gate means nothing.
+
+Identity, and not structure. A named function is the definition it came from: it
+is turned into a value afresh on every lookup, with new captures and a cloned
+body, so the value carries the `Rc<FunctionDef>` it was built from and two
+lookups agree. A lambda is the *evaluation* that made it, so one written inside
+a loop is a new function each turn, each closing over its own values and each
+equal to itself alone. In the register VM the same two answers fall out of the
+function index and, for a closure, the captured-upvalue `Rc`.
+
+The VM needed the arm in **two** places, `Value::equals` and `cmp_direct`,
+because its two dispatch loops reach equality through different doors — the same
+shape as the missing `Array` arm that was DM-02. Found by ZyBank while retiring
+GAP-ZYB-005 (BUG-ZYB-012); pinned in
+`corpus/functions/igualdad_de_funciones.zy`.
+
 **`##(` and `##[` — `#?` can tell the four collections apart**
 
 ```text

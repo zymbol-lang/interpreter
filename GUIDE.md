@@ -1127,6 +1127,30 @@ Chars compare by code point and Bools order `#0 < #1`.
 Equality is *not* part of this rule: `==` never coerces, so `"5" == 5` is `#0`
 in every engine, and so is `"५" == 5`.
 
+**Collections compare by value; functions compare by identity.** Two arrays,
+tuples or dictionaries are equal when they hold the same things — for a
+dictionary, the same keys with the same values, in whatever order they were
+inserted. A **function** is equal only to *itself*: two names for one function
+agree, and two functions with the same body do not, because they are two
+functions.
+
+```zymbol
+uno(x) { <~ x + 1 }
+dos(x) { <~ x + 1 }     // el mismo cuerpo, otra función
+a = uno
+>> (a == uno) ¶         // → #1
+>> (uno == dos) ¶       // → #0
+
+l = (x -> x)
+m = l                   // el mismo cierre, otro nombre
+>> (l == m) ¶           // → #1
+>> (l == (x -> x)) ¶    // → #0
+```
+
+A lambda is the *evaluation* that made it, so one written inside a loop is a new
+function each time round — each closing over its own values, and each equal to
+itself alone.
+
 ### Logical
 
 ```zymbol

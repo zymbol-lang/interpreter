@@ -358,6 +358,20 @@ impl Value {
             (Value::Char(a), Value::Char(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Unit, Value::Unit) => true,
+            // Two functions are equal when they are THE SAME function
+            // (BUG-ZYB-012). A named one is its index in the function table,
+            // which is stable however many names point at it; a closure is its
+            // index AND the upvalues it captured, because the same lambda
+            // evaluated twice — next time round a loop — is two closures.
+            //
+            // Same shape as the missing `Array` arm above: no arm meant
+            // `_ => false`, so a function never equalled itself, while the
+            // browser engine said `#1` to any two functions at all. Neither had
+            // been decided; identity is what was.
+            (Value::Function(ia, aa), Value::Function(ib, ab)) => ia == ib && aa == ab,
+            (Value::Closure(ia, aa, ua), Value::Closure(ib, ab, ub)) => {
+                ia == ib && aa == ab && Rc::ptr_eq(ua, ub)
+            }
             (Value::Tuple(a), Value::Tuple(b)) => {
                 a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.equals(y))
             }
@@ -775,6 +789,19 @@ fn cmp_direct(va: &Value, vb: &Value) -> i32 {
                 }
             }
             0
+        }
+        // Two functions are equal when they are THE SAME function (BUG-ZYB-012)
+        // — see `Value::equals`, which this has to agree with, because the two
+        // dispatch loops of this VM reach equality through different doors:
+        // one calls `equals` and the other calls this.
+        //
+        // There is no ORDER on functions and none is implied: `1` only means
+        // "not equal", which is what `==` and `<>` read.
+        (Value::Function(ia, aa), Value::Function(ib, ab)) => {
+            if ia == ib && aa == ab { 0 } else { 1 }
+        }
+        (Value::Closure(ia, aa, ua), Value::Closure(ib, ab, ub)) => {
+            if ia == ib && aa == ab && Rc::ptr_eq(ua, ub) { 0 } else { 1 }
         }
         _ => 1,
     }
