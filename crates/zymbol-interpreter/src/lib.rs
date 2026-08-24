@@ -625,6 +625,23 @@ pub struct Interpreter<W: Write> {
     /// MM-9: call-frame depth — 0 while executing top-level statements.
     /// Distinguishes the root scope from a function frame's bottom scope.
     call_depth: usize,
+    /// The file body's variables, reachable at any call depth.
+    ///
+    /// A named function CAPTURES what its body reads from the scope it was
+    /// written in, exactly as a lambda does (ERROR-ZYB-002). That scope is the
+    /// file body — and `take_call_state` swaps the whole scope stack away on
+    /// every call, so by the time a function two frames down is entered there is
+    /// nothing left to read it from.
+    ///
+    /// Mirroring on write costs O(1) per top-level assignment, which is the
+    /// cheap side of the trade: the alternative was cloning the scope stack on
+    /// every call, and a program that calls in a loop would pay it every
+    /// iteration.
+    ///
+    /// Only writes that land in the file body itself are mirrored — a block's
+    /// locals are not the file's, and a named function is written at file level
+    /// so it cannot see them anyway.
+    file_vars: HashMap<String, Value>,
     /// Auto-free (v0.0.8): names destroyed by the last-use schedule in the
     /// CURRENT frame. Separate from `dead_variables` so an analyzer bug
     /// surfaces as a distinctive internal error, never as a user-facing `\`
@@ -744,8 +761,12 @@ impl<W: Write> Interpreter<W> {
         if !self.auto_dead_variables.is_empty() {
             self.auto_dead_variables.remove(name);
         }
+        let at_file_level = self.call_depth == 0 && self.scope_stack.len() == 1;
         if let Some(scope) = self.scope_stack.last_mut() {
-            scope.insert(name.to_string(), value);
+            scope.insert(name.to_string(), value.clone());
+        }
+        if at_file_level {
+            self.file_vars.insert(name.to_string(), value);
         }
     }
 
@@ -777,14 +798,22 @@ impl<W: Write> Interpreter<W> {
         if !self.auto_dead_variables.is_empty() {
             self.auto_dead_variables.remove(name);
         }
-        for scope in self.scope_stack.iter_mut().rev() {
+        let at_depth_zero = self.call_depth == 0;
+        for (i, scope) in self.scope_stack.iter_mut().enumerate().rev() {
             if let Some(existing) = scope.get_mut(name) {
-                *existing = value;
+                *existing = value.clone();
+                if at_depth_zero && i == 0 {
+                    self.file_vars.insert(name.to_string(), value);
+                }
                 return;
             }
         }
+        let at_file_level = at_depth_zero && self.scope_stack.len() == 1;
         if let Some(scope) = self.scope_stack.last_mut() {
-            scope.insert(name.to_string(), value);
+            scope.insert(name.to_string(), value.clone());
+        }
+        if at_file_level {
+            self.file_vars.insert(name.to_string(), value);
         }
     }
 
@@ -995,6 +1024,7 @@ impl Interpreter<std::io::Stdout> {
         Self {
             output: std::io::stdout(),
             scope_stack: vec![HashMap::new()],  // Start with one global scope
+            file_vars: HashMap::new(),
             loop_scope_depths: Vec::new(),
             functions: HashMap::new(),
             control_flow: ControlFlow::None,
@@ -1049,6 +1079,7 @@ impl<W: Write> Interpreter<W> {
         Self {
             output,
             scope_stack: vec![HashMap::new()],  // Start with one global scope
+            file_vars: HashMap::new(),
             loop_scope_depths: Vec::new(),
             functions: HashMap::new(),
             control_flow: ControlFlow::None,
