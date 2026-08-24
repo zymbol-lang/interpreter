@@ -19,6 +19,66 @@ those corrections ship inside it. See [WINDOWS_V009.md](WINDOWS_V009.md).
 
 ### Added
 
+**`##_` — the Unit literal, and `==` stops constraining a parameter**
+
+```zymbol
+es_nulo(v) { <~ v == ##_ }        // the question, finally writable
+```
+
+Unit was the ONLY type in the language whose value could not be written. It is
+reachable everywhere — a function without `<~` returns it, `json::decode("null")`
+produces it, a `NULL` column out of `std/db` arrives as it, `io::write` answers
+with it — and there was no way to name what had arrived. Exactly the shape the
+empty dictionary had before `#()`: a value a program can hold and cannot spell.
+
+No new mark. `##_` was already Unit's type symbol and already the "any kind"
+mark in `:! ##_`, and both are the reading `_` has in all of its eight other
+positions: the one that is not specified. Unit has one value, so naming the type
+and naming the value cannot be told apart and need not be. It is one token in
+all three engines now, in both positions.
+
+**What forced it** is that the workaround was wrong, and wrong in a way that
+looked right. Asking "did this column arrive NULL" meant taking `#?` apart, and
+the obvious field to read is the count — which is **0 for four values**: Unit,
+`""`, `[]` and `#()`. ZyBank's `es_nulo("")` answered that the column was NULL,
+and `movimientos.glosa` is a TEXT column where `''` is an everyday value. When
+the right way to ask a question does not exist, the way each program invents
+resembles it closely enough to pass the tests anybody thinks of.
+
+**`==` no longer constrains a parameter's type**, which the literal made
+unavoidable and which was already wrong on its own:
+
+```zymbol
+es_cinco(v) { <~ v == 5 }
+>> es_cinco("hola") ¶       // was: error: argument 1 has type String
+>> ("hola" == 5) ¶          // one line away: #0
+```
+
+Equality never coerces — `"5" == 5` is `#0`, and REFERENCE says so — so a
+parameter compared against a known type can still be any type. Both Rust engines
+refused a correct program and the browser engine ran it: the same shape as
+ERROR-ZYB-005, and invisible for the same reason — a divergence that *rejects*
+rather than mis-runs prints nothing for a golden to compare. Ordering keeps its
+constraint: `<`, `>`, `<=`, `>=` do fail at run time when a number meets text.
+
+**Three more divergences closed on the way**, all found by measuring rather than
+by a suite (`ZyBank/TIPOS.md` § 6):
+
+- `Unit == Unit` was `#0` in the register VM — a Unit was not equal to itself.
+  `cmp_direct` had no `Unit` arm, the fourth to go missing from that function
+  after `Array` (DM-02), `NamedTuple` (DM-22) and `Function` (BUG-ZYB-012).
+- Juxtaposing a Unit built `"()"` in the VM and `""` in the other two. A
+  standalone Unit is nothing and only a nested one is `()`; the VM's
+  string-building path used the nested form for both.
+- `f#?` on a NAMED function answered `##_` in both Rust engines — it called a
+  function Unit — while `g = f` then `g#?` answered `##(), 2`. Each engine
+  carried a special case that returned Unit metadata for an identifier it could
+  not find, "so variable existence can be checked". The case is unreachable: an
+  undefined name is refused by the analyzer before anything runs. What it did
+  reach was a named function, which is not a variable. All three are gone.
+
+Cases in `corpus/collections/unidad_literal.zy`. Found by ZyBank (GAP-ZYB-009).
+
 **`==` on a function is identity**
 
 ```zymbol

@@ -205,6 +205,14 @@ impl Value {
     fn to_string_repr(&self) -> String {
         match self {
             Value::String(s) => s.to_string(),
+            // A standalone Unit is nothing, and only INSIDE a collection is it
+            // `()` — `[1, , 3]` reads like a typo. `Display` renders the nested
+            // form, so this arm is what tells the two apart.
+            //
+            // Without it, `"" u` built `"()"` in this engine and `""` in the
+            // other two: a program composing a message with a NULL column
+            // printed something different depending on which one ran it.
+            Value::Unit => String::new(),
             other => other.to_string(),
         }
     }
@@ -216,25 +224,35 @@ impl Value {
     /// Mirrors `Value::to_display_string_in` in the tree-walker; the two must
     /// agree character for character.
     fn to_display_in(&self, block_base: u32) -> String {
+        // Standalone Unit is nothing; nested Unit is `()`. Mirrors
+        // `to_display_string_in` in the tree-walker, which spells the rule the
+        // same way and for the same reason.
+        fn nested(v: &Value, block_base: u32) -> String {
+            match v {
+                Value::Unit => "()".to_string(),
+                other => other.to_display_in(block_base),
+            }
+        }
         match self {
+            Value::Unit     => String::new(),
             Value::Int(n)   => numeral_int(*n, block_base),
             Value::Float(f) => numeral_float(*f, block_base),
             Value::Bool(b)  => numeral_bool(*b, block_base),
             Value::String(s) => s.to_string(),
             Value::Array(arr) => {
                 let contents: Vec<String> =
-                    arr.iter().map(|v| v.to_display_in(block_base)).collect();
+                    arr.iter().map(|v| nested(v, block_base)).collect();
                 format!("[{}]", contents.join(", "))
             }
             Value::Tuple(items) => {
                 let contents: Vec<String> =
-                    items.iter().map(|v| v.to_display_in(block_base)).collect();
+                    items.iter().map(|v| nested(v, block_base)).collect();
                 format!("({})", contents.join(", "))
             }
             Value::NamedTuple(fields) => {
                 let contents: Vec<String> = fields
                     .iter()
-                    .map(|(name, v)| format!("{}: {}", name, v.to_display_in(block_base)))
+                    .map(|(name, v)| format!("{}: {}", name, nested(v, block_base)))
                     .collect();
                 format!("({})", contents.join(", "))
             }
@@ -753,6 +771,16 @@ fn cmp_direct(va: &Value, vb: &Value) -> i32 {
         (Value::String(x), Value::String(y)) => ord(x.as_str().cmp(y.as_str())),
         (Value::Char(x), Value::Char(y))   => ord(x.cmp(y)),
         (Value::Bool(x), Value::Bool(y))   => ord(x.cmp(y)),
+        // Unit is equal to Unit. There is one Unit value, so this is both the
+        // type test and the value test, and `##_ == ##_` had better be `#1` now
+        // that `##_` can be written (GAP-ZYB-009).
+        //
+        // Missing here, this VM said a Unit was not equal to ITSELF while the
+        // other two engines said it was — the fourth arm to go missing from a
+        // comparison in this file, after `Array` (DM-02), `NamedTuple` (DM-22)
+        // and `Function` (BUG-ZYB-012). `Value::equals` had it; this does not
+        // share code with it, and that is the whole defect.
+        (Value::Unit, Value::Unit)         => 0,
         (Value::Tuple(x), Value::Tuple(y)) => {
             if x.len() != y.len() { return 1; }
             for (a, b) in x.iter().zip(y.iter()) {

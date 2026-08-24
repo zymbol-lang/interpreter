@@ -296,6 +296,8 @@ fn emit_auto_free(ctx: &mut FunctionCtx, names: &[String]) {
 
 #[derive(Clone)]
 enum ModuleConst {
+    /// `##_` — the absence of a value, which is a literal like any other.
+    Unit,
     Int(i64),
     Float(f64),
     String(String),
@@ -2006,20 +2008,18 @@ impl Compiler {
                 ctx.emit(Instruction::NumericEval(dst, r));
                 Ok(dst)
             }
+            // The operand compiles like any other expression.
+            //
+            // There used to be a special case mirroring one in the tree-walker:
+            // an identifier with no register and no global constant compiled to
+            // `LoadUnit`, so `nonexistent#?` answered `("##_", 0, Unit)` rather
+            // than erroring. It is unreachable — the semantic analyzer refuses
+            // an undefined name before anything compiles — and what it did reach
+            // was a NAMED FUNCTION, which has neither a register nor a global
+            // constant, so `f#?` reported that a function was Unit while
+            // `g = f` then `g#?` reported `##(), 2` (GAP-ZYB-009 § 6, D-4).
             Expr::TypeMetadata(tm) => {
-                // If the inner expr is an undefined identifier, treat as Unit (##_ type)
-                // This matches tree-walker behavior: nonexistent#? → ("##_", 0, Unit)
-                let r = if let Expr::Identifier(id) = tm.expr.unwrap_group() {
-                    if ctx.get_reg(&id.name).is_err() && !self.global_consts.contains_key(&id.name) {
-                        let tmp = ctx.alloc_temp()?;
-                        ctx.emit(Instruction::LoadUnit(tmp));
-                        tmp
-                    } else {
-                        self.compile_expr(&tm.expr, ctx)?
-                    }
-                } else {
-                    self.compile_expr(&tm.expr, ctx)?
-                };
+                let r = self.compile_expr(&tm.expr, ctx)?;
                 let dst = ctx.alloc_temp()?;
                 ctx.emit(Instruction::TypeOf(dst, r));
                 Ok(dst)
@@ -2344,6 +2344,12 @@ impl Compiler {
     ) -> Result<Reg, CompileError> {
         let dst = ctx.alloc_temp()?;
         match &lit.value {
+            // `##_` — the Unit literal. `LoadUnit` already existed: the value
+            // was reachable long before it could be written.
+            Literal::Unit => {
+                ctx.emit(Instruction::LoadUnit(dst));
+                ctx.set_reg_type(dst, StaticType::Unknown);
+            }
             Literal::Int(n) => {
                 ctx.emit(Instruction::LoadInt(dst, *n));
                 ctx.set_reg_type(dst, StaticType::Int);
@@ -2756,6 +2762,7 @@ impl Compiler {
                 Literal::String(s) | Literal::InterpolatedString(s) => Some(ModuleConst::String(s.replace('\x01', "{").replace('\x02', "}"))),
                 Literal::Bool(b) => Some(ModuleConst::Bool(*b)),
                 Literal::Char(c) => Some(ModuleConst::Char(*c)),
+                Literal::Unit => Some(ModuleConst::Unit),
             },
             Expr::Unary(un) if un.op == UnaryOp::Neg => {
                 if let Expr::Literal(lit) = un.operand.unwrap_group() {
@@ -2809,6 +2816,9 @@ impl Compiler {
     ) -> Result<Reg, CompileError> {
         let dst = ctx.alloc_temp()?;
         match mc {
+            ModuleConst::Unit => {
+                ctx.emit(Instruction::LoadUnit(dst));
+            }
             ModuleConst::Int(n) => {
                 ctx.emit(Instruction::LoadInt(dst, *n));
             }
@@ -2862,6 +2872,7 @@ impl Compiler {
     fn global_init_of(mc: &ModuleConst) -> zymbol_bytecode::GlobalInit {
         use zymbol_bytecode::GlobalInit as G;
         match mc {
+            ModuleConst::Unit => G::Unit,
             ModuleConst::Int(n) => G::Int(*n),
             ModuleConst::Float(f) => G::Float(*f),
             ModuleConst::Bool(b) => G::Bool(*b),

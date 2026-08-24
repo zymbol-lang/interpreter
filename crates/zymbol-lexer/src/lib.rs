@@ -267,6 +267,8 @@ pub enum TokenKind {
     HashDot,
     /// #! (trunc prefix - for precision truncation: #!2|expr|)
     HashExclaim,
+    /// `##_` — the Unit literal, and the "any kind" mark in `:! ##_`.
+    HashHashUnderscore,
     /// ##. (cast to Float: ##.expr)
     HashHashDot,
     /// ### (cast to Int rounding: ###expr)
@@ -763,6 +765,18 @@ impl Lexer {
                         self.advance(); // consume second #
                         self.advance(); // consume '
                         return Token::new(TokenKind::HashHashApos, self.span(start));
+                    } else if third == Some('_') && !matches!(self.peek_ahead(3), Some(c) if Self::is_ident_continue(c)) {
+                        // `##_` — the Unit literal, and the "any kind" mark in
+                        // `:! ##_`. One token for both, because they are one
+                        // reading: `_` is what is not specified.
+                        //
+                        // The lookahead keeps `##_algo` an error kind: a name
+                        // beginning with an underscore is still an identifier,
+                        // and `##_` is only the bare mark.
+                        self.advance(); // consume first #
+                        self.advance(); // consume second #
+                        self.advance(); // consume _
+                        return Token::new(TokenKind::HashHashUnderscore, self.span(start));
                     }
                     // unrecognized ##X — fall through to emit lone Hash
                 }

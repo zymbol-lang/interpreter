@@ -1014,6 +1014,7 @@ impl<'a> FormatVisitor<'a> {
     /// the quotes and the formatted file no longer lexed.
     fn format_literal_value(&mut self, value: &Literal) {
         match value {
+            Literal::Unit => self.output.write("##_"),
             Literal::Int(n) => self.output.write(&n.to_string()),
             Literal::Float(f) => self.output.write(&format_float(*f)),
             Literal::String(s) | Literal::InterpolatedString(s) => {
@@ -1256,6 +1257,7 @@ impl<'a> FormatVisitor<'a> {
                 Literal::String(s) | Literal::InterpolatedString(s) => s.len() + 2,
                 Literal::Char(_) => 3,
                 Literal::Bool(_) => 2,
+                Literal::Unit => 3,
             },
             Expr::Identifier(ident) => ident.name.len(),
             Expr::ArrayLiteral(arr) => self.estimate_array_length(arr),

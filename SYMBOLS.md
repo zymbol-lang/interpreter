@@ -580,7 +580,9 @@ type's own notation, which is why they need no table to learn:
 | `##"` | String | the quote that delimits one |
 | `##'` | Char | the quote that delimits one |
 | `##]` | Array | the bracket that closes one |
-| `##)` | Tuple / NamedTuple | the paren that closes one |
+| `##[` | List | the bracket that opens the marked one, `#[…]` |
+| `##)` | Tuple | the paren that closes one |
+| `##(` | Dictionary | the paren that opens the marked one, `#(…)` |
 | `##()` | Function | call syntax |
 | `##->` | Lambda | definition syntax |
 | `##.` | Float | the decimal point |
@@ -589,8 +591,15 @@ type's own notation, which is why they need no table to learn:
 | `###` | Int | — **not iconic**; Int has no notation to depict |
 | `##<Ident>` | Error kind | — **not iconic**; see §15 |
 
-Two of eleven are not iconic, and both are named. `###` is arbitrary and must be memorised;
+Two of thirteen are not iconic, and both are named. `###` is arbitrary and must be memorised;
 `##Index` is a word.
+
+The four aggregates follow a rule of their own, added in v0.0.9 when the dictionary stopped
+sharing a symbol with the tuple: **the unmarked collection takes the closing delimiter and
+the marked one takes the opening delimiter.** It is the literal's own mark with a `#` in
+front, which is what the mark already meant. Note that `##(` (dictionary) and `##()` (named
+function) differ by the closing paren and are distinct strings; the second predates the
+first by five versions.
 
 #### 8.4 `>>` — OUT, the outward stream
 
@@ -762,10 +771,18 @@ introduces a name into scope.
 | `[a, _, c] = arr` | destructuring, element skipped |
 | `x \|> f(_, 2)` | pipe placeholder |
 | `_name` | declared-but-unused identifier prefix |
-| `##_` | the Unit type symbol |
+| `##_` | the Unit type symbol, and since v0.0.9 the Unit **literal** |
 | `:! ##_ { }` | catch any error kind |
 
 This is the most regular mark in the language: eight uses, one meaning, no exceptions.
+
+`##_` earning a ninth position — the literal — cost no new mark and no second
+reading. Unit has exactly one value, so naming the type and naming the value
+cannot be told apart and do not need to be; and "the value that is not
+specified" is the same sentence as "the kind that is not specified" in
+`:! ##_`. It closed the last hole in the type paradigm: Unit was the only type
+whose value could not be written, which is what forced every program that reads
+a `NULL` column to take `#?` apart to ask about it (GAP-ZYB-009).
 
 #### 9.4 `:` — BND, binding and naming
 
@@ -1209,7 +1226,8 @@ is listed here; anything absent is unspent.
 | `#d₀d₉#` | numeral mode |
 | `##.` / `###` / `##!` | casts |
 | `##"` / `##'` | String / Char markers — input typespec position only |
-| `##]` `##)` `##()` `##->` `##?` `##_` | type symbols, `#?` results only |
+| `##]` `##[` `##)` `##(` `##()` `##->` `##?` | type symbols, `#?` results only |
+| `##_` | type symbol, Unit **literal**, and the any-kind mark in `:! ##_` |
 | `##<Ident>` | error kind |
 
 #### `$` — collection

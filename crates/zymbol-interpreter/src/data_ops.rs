@@ -8,7 +8,7 @@
 //! - Precision expressions: #.N|expr| (round), #!N|expr| (truncate)
 
 use std::io::Write;
-use zymbol_ast::{BaseConversionExpr, CastKind, Expr, FormatExpr, NumericCastExpr, NumericEvalExpr, RoundExpr, TruncExpr, TypeMetadataExpr};
+use zymbol_ast::{BaseConversionExpr, CastKind, FormatExpr, NumericCastExpr, NumericEvalExpr, RoundExpr, TruncExpr, TypeMetadataExpr};
 use zymbol_common::num;
 use zymbol_lexer::digit_blocks::digit_value;
 
@@ -183,27 +183,22 @@ impl<W: Write> Interpreter<W> {
     /// Type symbols are language-agnostic with ## prefix:
     /// ###, ##., ##", ##', ##?, ##], ##), ##_
     ///
-    /// SAFE ACCESS: If expr is an undefined variable, returns ("##_", 0, Unit)
-    /// instead of throwing an error. This allows checking variable existence.
+    /// The operand is evaluated like any other expression.
+    ///
+    /// There used to be a special case here: an `Expr::Identifier` was looked up
+    /// with `get_variable` and, when that found nothing, `#?` answered
+    /// `("##_", 0, Unit)` instead of erroring — "so variable existence can be
+    /// checked". That case is unreachable: an undefined name is refused by the
+    /// semantic analyzer before anything runs, so nothing ever arrived at it.
+    ///
+    /// What it did reach was a **named function**, which is not a variable — it
+    /// lives in the function table — so the lookup failed and `f#?` reported
+    /// that a function was Unit, while `g = f` then `g#?` reported `##(), 2`.
+    /// The browser engine, which has no such case, was right about both.
+    /// A workaround for a situation that cannot happen, paid for with a false
+    /// answer to one that does (GAP-ZYB-009 § 6, D-4).
     pub(crate) fn eval_type_metadata(&mut self, op: &TypeMetadataExpr) -> Result<Value> {
-        // Special handling for identifiers - check if variable exists
-        let value = if let Expr::Identifier(ident) = op.expr.unwrap_group() {
-            // Try to get variable safely
-            match self.get_variable(&ident.name) {
-                Some(v) => v.clone(),
-                None => {
-                    // Variable undefined - return Unit metadata without error
-                    return Ok(Value::Tuple(vec![
-                        Value::String("##_".to_string()),  // Unit type symbol
-                        Value::Int(0),                      // Count: 0
-                        Value::Unit,                        // Value: Unit
-                    ]));
-                }
-            }
-        } else {
-            // For other expressions, evaluate normally (can still error)
-            self.eval_expr(&op.expr)?
-        };
+        let value = self.eval_expr(&op.expr)?;
 
         // The symbol comes from `type_symbol_of`, which every engine shares
         // through `zymbol_common::typesym`; only the count is decided here,
