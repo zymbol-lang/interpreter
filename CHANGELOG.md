@@ -19,6 +19,28 @@ those corrections ship inside it. See [WINDOWS_V009.md](WINDOWS_V009.md).
 
 ### Added
 
+**The homogeneity rule now covers the whole edit family**
+
+Decision 15 says `[…]` is homogeneous **and gets checked**. It was checked on
+the literal and on `$+`, and on none of `$++`, `$+[i]` or `[i]$~` — so a `[…]`
+became heterogeneous with nobody declaring it and nobody complaining, in all
+three engines, and `#?` then answered `##[`: a list nobody wrote. A `[…]` was
+not homogeneous, it was homogeneous *when written* (REFERENCE L46).
+
+    a = [1, 2]
+    a $++ "tres"      // cannot append String to [Int]
+    a $+[1] "x"       // cannot insert String to [Int]
+    a[1]$~ "x"        // cannot write String to [Int]
+
+One function decides for all four now, in each engine. The measurement is the
+part worth keeping: 27 sites of `$+[i]` and 186 of `[i]$~` across 61 files of
+the corpus and the applications, and **not one of them mixed types**. The only
+file that stopped passing was the one written to document the hole.
+
+`#[…]` still takes anything, Int and Float still mix at any depth, and the deep
+form `m[i>j]$~ v` is not decided — the outer type says nothing about what lands
+two levels down.
+
 **The browser engine checks array homogeneity where the others do**
 
 `[1, 2] $+ "x"` ran in the playground and failed outside it, and so did
