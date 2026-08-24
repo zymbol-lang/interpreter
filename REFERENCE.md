@@ -960,7 +960,7 @@ produce anyway. Two corpus files do.
 parenthesise only at statement level. Found while adding `##(` and `##[`, not
 caused by it — the form has never formatted.
 
-### L46 — la homogeneidad se comprueba en el literal y en `$+`, y en nada más
+### ~~L46 — la homogeneidad se comprobaba en el literal y en `$+`, y en nada más~~ Corregido en v0.0.9
 
 ```zymbol
 a = [1, 2]
@@ -977,17 +977,28 @@ mix. The check runs on the literal — including nested, since v0.0.9 — and on
 becomes heterogeneous with nobody declaring it and nobody complaining, and `#?`
 then reports `##[`: a list nobody wrote.
 
-All three engines agree, which is why this is a **hole in the rule** and not a
-divergence. Closing it would newly reject programs that run today — a decision,
-not a parity fix — so it is written down rather than closed. The accepted edges
-are pinned in `corpus/collections/homogeneidad_bordes.zy`; the refused ones in
-`reject/collections/04`, `07` and `08`.
+All three engines agreed, which is why this was a **hole in the rule** and not a
+divergence: a `[…]` was not homogeneous, it was homogeneous *when written*.
 
-**Fix, when it is decided**: the analyzer already knows an array's element type
-where it knows anything at all (that is what makes `$+` catchable), so the same
-comparison applies to `$++`, `$+[i]` and `[i]$~`. The cost is that a program
-that has been quietly building a mixed `[…]` starts failing, and the migration
-is to write `#[…]` where the mix was meant.
+**Closed in v0.0.9.** The analyzer already knew an array's element type wherever
+it knew anything at all — that is what made `$+` catchable — so the same
+comparison now runs for `$++`, `$+[i]` and `[i]$~`, through one function rather
+than four copies. The browser engine got the same three, including `[i]$~`,
+which is a node of its own there (`FuncUpdate`) because the bracket is consumed
+before the `$~` is seen.
+
+**What it cost, measured before deciding**: 27 sites of `$+[i]` and 186 of
+`[i]$~` across 61 files of the corpus and the applications. **Not one of them
+mixed types.** The only file that stopped passing was the one written to
+document the hole — which is the outcome a check should have: it fires on the
+defect and nowhere else.
+
+Two escapes are untouched: `#[…]` declares its mix and takes anything, and Int
+and Float mix freely at any depth. The deep form `m[i>j]$~ v` is not decided —
+the outer type says nothing about what lands two levels down.
+
+The accepted edges are pinned in `corpus/collections/homogeneidad_bordes.zy`;
+the refused ones in `reject/collections/04`, `07`, `08` and `10`.
 
 ### L39 — `>>` takes arithmetic, not comparison — **by design**
 

@@ -621,6 +621,41 @@ impl TypeChecker {
         }
     }
 
+    /// Does this value fit as an element of this collection? (L46)
+    ///
+    /// One place for the whole edit family, because it had been one place for
+    /// one member of it: decision 15 says `[…]` is homogeneous **and gets
+    /// checked**, and until v0.0.9 the check ran on the literal and on `$+`
+    /// only. `$++`, `$+[i]` and `[i]$~` each turned a `[…]` heterogeneous with
+    /// nobody declaring it, in all three engines, and `#?` then answered `##[`
+    /// — a list nobody wrote.
+    ///
+    /// Says nothing where it knows nothing: a collection that is not a
+    /// statically known array, or an element whose type could not be inferred,
+    /// passes. `#[…]` declares its mix and is `Array(Any)`, which every type is
+    /// compatible with, so the escape hatch keeps working.
+    fn check_element_fits(
+        &mut self,
+        verb: &str,
+        collection_type: &ZymbolType,
+        element_type: &ZymbolType,
+        span: zymbol_span::Span,
+    ) {
+        let ZymbolType::Array(elem_type) = collection_type else { return };
+        if self.types_compatible(element_type, elem_type) {
+            return;
+        }
+        self.errors.push(
+            Diagnostic::error(format!(
+                "cannot {verb} {} to {}: type mismatch",
+                element_type.name(),
+                collection_type.name()
+            ))
+            .with_span(span)
+            .with_help(format!("expected element of type {}", elem_type.name())),
+        );
+    }
+
     /// Check a program and return only errors (fatal type errors)
     pub fn check_errors(&mut self, program: &Program) -> Vec<Diagnostic> {
         self.errors.clear();
@@ -2291,24 +2326,21 @@ impl TypeChecker {
             Expr::CollectionAppend(op) => {
                 let collection_type = self.infer_expr(&op.collection);
                 let element_type = self.infer_expr(&op.element);
-
-                // Validate element type matches array element type
-                if let ZymbolType::Array(elem_type) = &collection_type {
-                    if !self.types_compatible(&element_type, elem_type) {
-                        self.errors.push(
-                            Diagnostic::error(format!(
-                                "cannot append {} to {}: type mismatch",
-                                element_type.name(), collection_type.name()
-                            ))
-                            .with_span(op.element.span())
-                            .with_help(format!("expected element of type {}", elem_type.name()))
-                        );
-                    }
-                }
-
+                self.check_element_fits("append", &collection_type, &element_type, op.element.span());
                 collection_type
             }
-            Expr::CollectionInsert(op) => self.infer_expr(&op.collection),
+            // `$+[i]` puts an element INTO an array, so it is checked like `$+`
+            // (L46). Until v0.0.9 only the literal and `$+` were checked, so
+            // three of the four edit operations could turn a `[…]` heterogeneous
+            // with nobody declaring it — and `#?` then answered `##[`, a list
+            // nobody wrote. `[…]` is homogeneous AND CHECKED, or it is only
+            // homogeneous when you write it.
+            Expr::CollectionInsert(op) => {
+                let collection_type = self.infer_expr(&op.collection);
+                let element_type = self.infer_expr(&op.element);
+                self.check_element_fits("insert", &collection_type, &element_type, op.element.span());
+                collection_type
+            }
             Expr::CollectionRemoveValue(op) => self.infer_expr(&op.collection),
             Expr::CollectionRemoveAll(op) => self.infer_expr(&op.collection),
             Expr::CollectionRemoveAt(op) => self.infer_expr(&op.collection),
@@ -2319,11 +2351,24 @@ impl TypeChecker {
                 // target is IndexExpr(collection[index]) — return the collection type,
                 // not the element type (which would cause false type-mismatch warnings
                 // on `arr[i] = val` desugared as `arr = arr[i]$~ val`).
-                if let Expr::Index(idx_expr) = op.target.unwrap_group() {
+                let collection_type = if let Expr::Index(idx_expr) = op.target.unwrap_group() {
                     self.infer_expr(&idx_expr.array)
                 } else {
                     self.infer_expr(&op.target)
+                };
+                // `[i]$~ v` writes an element, so the element has to fit (L46).
+                // A multi-step navigation (`m[i>j]$~ v`) reaches inside a nested
+                // array and the outer type says nothing about what lands there,
+                // so only the single-step form is decided here.
+                // A single-step `arr[i]$~ v` writes an element of `arr`, so the
+                // value has to fit. A multi-step navigation (`m[i>j]$~ v`) is a
+                // different node, and the outer type says nothing about what
+                // lands inside — so it is not decided here.
+                if matches!(op.target.unwrap_group(), Expr::Index(_)) {
+                    let value_type = self.infer_expr(&op.value);
+                    self.check_element_fits("write", &collection_type, &value_type, op.value.span());
                 }
+                collection_type
             }
             Expr::CollectionSlice(op) => self.infer_expr(&op.collection),
             Expr::CollectionMap(op) => {
@@ -2455,9 +2500,16 @@ impl TypeChecker {
             Expr::StringSplit(_) => ZymbolType::Array(Box::new(ZymbolType::String)),
             Expr::ConcatBuild(op) => {
                 // Type depends on base: String base → String, Array base → Array
-                match self.infer_expr(&op.base) {
-                    ZymbolType::Array(_) => ZymbolType::Array(Box::new(ZymbolType::Any)),
-                    _ => ZymbolType::String,
+                let base_type = self.infer_expr(&op.base);
+                if let ZymbolType::Array(_) = &base_type {
+                    // Every item joins the array, so every item has to fit (L46).
+                    for item in &op.items {
+                        let item_type = self.infer_expr(item);
+                        self.check_element_fits("append", &base_type, &item_type, item.span());
+                    }
+                    ZymbolType::Array(Box::new(ZymbolType::Any))
+                } else {
+                    ZymbolType::String
                 }
             }
 
