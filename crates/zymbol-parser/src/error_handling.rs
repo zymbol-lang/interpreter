@@ -85,7 +85,16 @@ impl Parser {
         self.advance();
 
         // Check for optional error type: ##Type
-        let error_type = if matches!(self.peek().kind, TokenKind::Hash) {
+        //
+        // `##_` is one token since it became the Unit literal, so the wildcard
+        // is matched here rather than inside `parse_error_type`, which reads
+        // `Hash Hash <ident>`. One reading either way: "the kind that is not
+        // specified", which is what `_` says everywhere in this language.
+        let error_type = if matches!(self.peek().kind, TokenKind::HashHashUnderscore) {
+            let span = self.peek().span;
+            self.advance();
+            Some(ErrorType::new("_".to_string(), span))
+        } else if matches!(self.peek().kind, TokenKind::Hash) {
             Some(self.parse_error_type()?)
         } else {
             None

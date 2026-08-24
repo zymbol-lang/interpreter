@@ -1221,6 +1221,27 @@ impl Parser {
             // which of the two things the parentheses open, so `#()` is the
             // empty dictionary and no lookahead decides anything.
             TokenKind::HashLParen => self.parse_dict_literal(),
+            // `##_` — the Unit literal (GAP-ZYB-009).
+            //
+            // Unit was the only type in the language whose value could not be
+            // written: a function without `<~` returns it, `json::decode("null")`
+            // produces it and a `NULL` column arrives as it, and there was no
+            // way to name what had arrived. Asking took destructuring the type
+            // reflection, and the obvious way to do that was wrong — the count
+            // is 0 for an empty string, an empty array and an empty dictionary
+            // as well.
+            //
+            // No new mark: `##_` is already the Unit type symbol and already the
+            // "any kind" mark in `:! ##_`, and both are the reading `_` has
+            // everywhere — the one that is not specified.
+            TokenKind::HashHashUnderscore => {
+                let span = self.peek().span;
+                self.advance();
+                Ok(Expr::Literal(zymbol_ast::LiteralExpr {
+                    value: zymbol_common::Literal::Unit,
+                    span,
+                }))
+            }
             // `#[…]` — declared-mixed array (decision 15). A bare `#` at
             // expression position is otherwise the module mark, and `#` followed
             // by `[` is unambiguous.

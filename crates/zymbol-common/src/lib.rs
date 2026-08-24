@@ -94,11 +94,23 @@ pub enum Literal {
     InterpolatedString(String),
     Char(char),
     Bool(bool),
+    /// `##_` — the absence of a value.
+    ///
+    /// Unit was the only type in the language whose value could not be written:
+    /// reachable (a function without `<~` returns it, `json::decode("null")`
+    /// produces it, a `NULL` column arrives as it) and unspellable. Exactly the
+    /// shape the empty dictionary had before `#()`.
+    ///
+    /// `##_` is not a new mark. It is already the Unit type symbol and already
+    /// the "any error kind" wildcard in `:! ##_`, and both readings are the one
+    /// `_` has everywhere in this language: the one that is not specified.
+    Unit,
 }
 
 impl fmt::Display for Literal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Literal::Unit => write!(f, "##_"),
             Literal::Int(n) => write!(f, "{}", n),
             Literal::Float(n) => write!(f, "{}", n),
             Literal::String(s) => write!(f, "\"{}\"", s),

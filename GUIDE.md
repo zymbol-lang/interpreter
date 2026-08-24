@@ -290,7 +290,7 @@ The following identifiers have conventional meaning but are not reserved: `_err`
 | Function | named function ref | `##()` | First-class since v0.0.4; display `<funct/N>` |
 | Lambda | `x -> x * 2` | `##->` | Lambda definition symbol; display `<lambd/N>` |
 | Error | _(runtime value)_ | `##<Kind>` | Type IS the kind: `##Index`, `##Div`, `##IO`, … |
-| Unit | _(void return)_ | `##_` | Returned by functions with no `<~`; display is empty |
+| Unit | `##_` | `##_` | The absence of a value: returned by a function with no `<~`, produced by `json::decode("null")`, and what a `NULL` column arrives as. Displays as nothing on its own and as `()` inside a collection |
 
 ### The number model
 
@@ -1126,6 +1126,30 @@ Chars compare by code point and Bools order `#0 < #1`.
 
 Equality is *not* part of this rule: `==` never coerces, so `"5" == 5` is `#0`
 in every engine, and so is `"५" == 5`.
+
+**`##_` is the Unit literal** (v0.0.9), and it is how you ask whether something
+is absent. Unit was the only type in the language whose value could not be
+written: reachable everywhere — a function without `<~`, `json::decode("null")`,
+a `NULL` column out of `std/db` — and unspellable, so asking meant taking the
+type reflection apart. `##_` is not a new mark: it was already Unit's type
+symbol and already the "any kind" mark in `:! ##_`, and both are the reading `_`
+has throughout the language — the one that is not specified.
+
+```zymbol
+nada() { }
+u = nada()
+>> (u == ##_) ¶            // → #1
+>> (##_ == "") ¶           // → #0
+>> "[" ##_ "]" ¶           // → []
+```
+
+Do not ask it by the count. `#?`'s second field is 0 for **four** values — Unit,
+`""`, `[]` and `#()` — so a predicate written on it answers yes to all four, and
+an empty text column is an everyday thing. Compare instead:
+
+```zymbol
+es_nulo(v) { <~ v == ##_ }
+```
 
 **Collections compare by value; functions compare by identity.** Two arrays,
 tuples or dictionaries are equal when they hold the same things — for a

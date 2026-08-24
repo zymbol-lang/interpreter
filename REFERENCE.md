@@ -1193,7 +1193,7 @@ host language does" and had to be made so in all four engines:
 
 | | Rule |
 | --- | --- |
-| `==` | **Exact.** No tolerance. `0.1 + 0.2 == 0.3` is `#0`. Int/Float promotion applies first, so `1.0 == 1` is `#1`. Collections compare **by value** (a dictionary by keys and values, order irrelevant); a function compares **by identity** — two names for one function are equal, two functions with the same body are not (v0.0.9). |
+| `==` | **Exact.** No tolerance. `0.1 + 0.2 == 0.3` is `#0`. Int/Float promotion applies first, so `1.0 == 1` is `#1`. Collections compare **by value** (a dictionary by keys and values, order irrelevant); a function compares **by identity** — two names for one function are equal, two functions with the same body are not (v0.0.9). `==` **never coerces and never constrains**: `"5" == 5` is `#0`, and a parameter compared against a known type is not thereby that type. |
 | `NaN` | False in **every** direction, itself included: `n == n`, `n < 1.0`, `n <= 1.0` and `n >= 1.0` are all `#0`; only `n <> n` is `#1`. |
 | `-0.0` | Keeps its sign in output: prints `-0`. |
 | Output | Always plain digits, never an exponent — `1.0e21` prints `1000000000000000000000`. Ask for scientific notation with `#^`. |

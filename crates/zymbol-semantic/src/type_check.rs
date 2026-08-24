@@ -1326,9 +1326,33 @@ impl TypeChecker {
                             self.env.add_param_constraint(&param, TypeConstraint::Boolean);
                         }
                     }
-                    // Comparison with known type constrains parameter
-                    BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Lt | BinaryOp::Le |
-                    BinaryOp::Gt | BinaryOp::Ge => {
+                    // EQUALITY constrains nothing, for the same reason
+                    // juxtaposition does not: `==` never coerces. `"5" == 5` is
+                    // a legal expression that answers `#0`, and GUIDE.md says so
+                    // in as many words, so a parameter compared against a known
+                    // type can still be any type at all.
+                    //
+                    // This used to record `CompatibleWith`, and the result was
+                    // the same shape as ERROR-ZYB-005:
+                    //
+                    //     es_cinco(v) { <~ v == 5 }
+                    //     >> es_cinco("hola") ¶   // error: argument 1 has type String
+                    //
+                    // while `>> ("hola" == 5) ¶` one line away printed `#0`.
+                    // Both Rust engines refused a correct program and the
+                    // browser engine ran it — a divergence that REJECTS rather
+                    // than mis-runs, so neither a golden nor `zyq consensus`
+                    // could see it.
+                    //
+                    // It became unavoidable with `##_`: the predicate everybody
+                    // writes is `es_nulo(v) { <~ v == ##_ }`, and the constraint
+                    // made it callable only with something already Unit —
+                    // useless for the one question it exists to answer.
+                    BinaryOp::Eq | BinaryOp::Neq => {}
+                    // ORDERING keeps the constraint: `<`, `>`, `<=` and `>=` do
+                    // error at run time when a number meets text that is not a
+                    // number, so the analyzer is right to say so first.
+                    BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
                         if let Some(param) = &left_param {
                             let right_type = self.infer_expr_for_constraint(&binary.right, params);
                             if !matches!(right_type, ZymbolType::Any | ZymbolType::Unknown) {
@@ -1521,6 +1545,7 @@ impl TypeChecker {
                 Literal::String(_) | Literal::InterpolatedString(_) => ZymbolType::String,
                 Literal::Char(_) => ZymbolType::Char,
                 Literal::Bool(_) => ZymbolType::Bool,
+                Literal::Unit => ZymbolType::Unit,
             },
             Expr::Identifier(ident) => {
                 self.env.lookup_var(&ident.name)
@@ -1620,6 +1645,7 @@ impl TypeChecker {
                     Literal::String(_) | Literal::InterpolatedString(_) => ZymbolType::String,
                     Literal::Char(_) => ZymbolType::Char,
                     Literal::Bool(_) => ZymbolType::Bool,
+                    Literal::Unit => ZymbolType::Unit,
                 };
 
                 if !self.types_compatible(&pattern_type, scrutinee_type) {
@@ -1807,6 +1833,7 @@ impl TypeChecker {
                 Literal::String(_) | Literal::InterpolatedString(_) => ZymbolType::String,
                 Literal::Char(_) => ZymbolType::Char,
                 Literal::Bool(_) => ZymbolType::Bool,
+                Literal::Unit => ZymbolType::Unit,
             },
 
             Expr::Identifier(ident) => {

@@ -20,6 +20,8 @@ impl<W: Write> Interpreter<W> {
             Literal::InterpolatedString(s) => {
                 Value::String(self.interpolate_string(s, &lit.span)?.replace('\x01', "{").replace('\x02', "}"))
             }
+            // `##_` — the absence of a value, written.
+            Literal::Unit => Value::Unit,
             Literal::Int(n) => Value::Int(*n),
             Literal::Float(f) => Value::Float(*f),
             Literal::Char(c) => Value::Char(*c),
