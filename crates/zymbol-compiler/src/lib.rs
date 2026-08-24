@@ -353,6 +353,15 @@ pub struct Compiler {
     global_var_map: HashMap<String, u16>,
     /// Initial values for global module variables (indexed by u16)
     global_var_inits: Vec<zymbol_bytecode::GlobalInit>,
+    /// A SCRIPT's file-level variables: name → global var index.
+    ///
+    /// Separate from `global_var_map` because the semantics differ. Module state
+    /// is SHARED — a module function writes it and the write persists, which is
+    /// what module state is for. A script's file variables are CAPTURED: a
+    /// function reads them and a write stays inside the call, exactly as a
+    /// lambda behaves (ERROR-ZYB-002). So these emit `LoadGlobal` on a read and
+    /// never `StoreGlobal` from inside a function body.
+    file_var_map: HashMap<String, u16>,
     /// Known module aliases (registered via import). Used to distinguish
     /// "private function" errors from "completely unknown" errors at call sites.
     known_module_aliases: HashSet<String>,
@@ -423,6 +432,7 @@ impl Compiler {
             module_scope: HashMap::new(),
             global_var_map: HashMap::new(),
             global_var_inits: Vec::new(),
+            file_var_map: HashMap::new(),
             known_module_aliases: HashSet::new(),
             pending_finally: Vec::new(),
             in_finally: false,
@@ -486,6 +496,32 @@ impl Compiler {
                     } else {
                         compiler.global_consts.insert(c.name.clone(), mc);
                     }
+                }
+            }
+        }
+
+        // Register the SCRIPT's file-level variables as globals, so a function
+        // body can read them (ERROR-ZYB-002). Reading is all they are for: the
+        // write-back happens only from `<main>`, so a write inside a function
+        // stays in that call.
+        //
+        // Registered BEFORE the function bodies are compiled, because that is
+        // when the reads are emitted. Only in a script — a module's own state
+        // already goes through `global_var_map`, and it is shared rather than
+        // captured.
+        if program.module_decl.is_none() {
+            for stmt in &program.statements {
+                if let Statement::Assignment(a) = stmt {
+                    if compiler.global_var_map.contains_key(&a.name)
+                        || compiler.file_var_map.contains_key(&a.name)
+                    {
+                        continue;
+                    }
+                    let idx = compiler.global_var_inits.len() as u16;
+                    compiler
+                        .global_var_inits
+                        .push(zymbol_bytecode::GlobalInit::Unit);
+                    compiler.file_var_map.insert(a.name.clone(), idx);
                 }
             }
         }
@@ -1305,6 +1341,18 @@ impl Compiler {
             return Ok(());
         }
 
+        // A SCRIPT's file variable is written back ONLY from the file body, so
+        // the functions that capture it see the current value. Inside a function
+        // the assignment falls through to a local register and dies with the
+        // call — which is the write isolation a lambda has, and what makes this
+        // capture and not shared state.
+        if ctx.name == "<main>" {
+            if let Some(&gvar_idx) = self.file_var_map.get(name) {
+                ctx.emit(Instruction::StoreGlobal(gvar_idx, src));
+                // and fall through: the file body reads it from its own register
+            }
+        }
+
         // If re-assignment, get existing dst register; otherwise allocate new.
         let dst = if let Ok(existing) = ctx.get_reg(name) {
             existing
@@ -1906,6 +1954,13 @@ impl Compiler {
                 }
                 // Fall back to module global variable (mutable state shared across calls)
                 if let Some(&gvar_idx) = self.global_var_map.get(&id.name) {
+                    let dst = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::LoadGlobal(dst, gvar_idx));
+                    return Ok(dst);
+                }
+                // And then a SCRIPT's file variable, which a function captures:
+                // read here, never written back (ERROR-ZYB-002).
+                if let Some(&gvar_idx) = self.file_var_map.get(&id.name) {
                     let dst = ctx.alloc_temp()?;
                     ctx.emit(Instruction::LoadGlobal(dst, gvar_idx));
                     return Ok(dst);

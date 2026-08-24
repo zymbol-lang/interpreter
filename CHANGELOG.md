@@ -19,6 +19,54 @@ those corrections ship inside it. See [WINDOWS_V009.md](WINDOWS_V009.md).
 
 ### Added
 
+**A named function captures the file's variables, like a lambda**
+
+```zymbol
+base = 10
+adder(n) { <~ n + base }
+>> adder(5) ¶        // 15 — was: undefined variable 'base'
+```
+
+One body meant TWO things until now, depending on how it was reached: a direct
+call ran in an isolated scope and the same function taken as a value captured.
+`adder(5)` failed and `f = adder` then `f(5)` answered 15, with nothing in the
+source to say which one you were looking at. GUIDE.md § 10b documented the
+isolation as deliberate; it is retired with it (ERROR-ZYB-002).
+
+The rule is the lambda's, and there is only one: **by value, with the write
+isolated.** A function reads the file's variables when it is CALLED; assigning
+to one of those names inside the body writes a local copy that dies with the
+call. It is capture and not sharing, and module state stays the other thing —
+a module's functions share its variables and their writes persist, which is what
+module state is for and the only shared mutable state the language has.
+
+It is not dynamic scoping: the values come from the FILE, never from the caller,
+so a function called inside another does not see that one's locals. There is a
+corpus case for exactly that, because it is the mistake this shape invites.
+
+Each engine needed a different thing, and all three needed something:
+
+  · The tree-walker swaps the entire scope stack away on every call, so by the
+    time a function two frames down runs there is nothing left to read the file
+    from. It now mirrors file-level writes into a map of their own — O(1) per
+    top-level assignment, against cloning the scope stack on every call, which a
+    program that calls in a loop would have paid every iteration.
+
+  · The register VM already had the machinery for a module's shared state
+    (`LoadGlobal`/`StoreGlobal`). A script's file variables get their own map
+    with the other half of the contract: read from anywhere, written back only
+    from `<main>`, so an assignment inside a function falls through to a local
+    register and stays there.
+
+  · `zymbol.js` collects the body's free names once per function and reads their
+    values from the global scope at each call, copying them into the frame.
+
+Three corpus files existed BECAUSE the direct call failed, and all three are
+rewritten: two asserted the isolation, and `bugs/bug_l16_try_scope_restore.zy`
+used it as a convenient way to make a function fail inside a `!?` and needed
+another. The new rule is pinned in `corpus/functions/captura_del_archivo.zy`,
+nine assertions identical in all three engines.
+
 **The homogeneity rule now covers the whole edit family**
 
 Decision 15 says `[…]` is homogeneous **and gets checked**. It was checked on

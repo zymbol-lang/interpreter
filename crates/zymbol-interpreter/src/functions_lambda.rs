@@ -432,12 +432,42 @@ impl<W: Write> Interpreter<W> {
             arg_values.push(self.eval_expr(arg)?);
         }
 
+        // A named function CAPTURES what its body reads from the file, exactly
+        // as a lambda does (ERROR-ZYB-002). Computed BEFORE `take_call_state`,
+        // which swaps the scope stack away — and read from `file_vars` rather
+        // than from the caller's scope, because capturing from the CALLER would
+        // be dynamic scoping: `f` called inside `g` would see `g`'s locals.
+        //
+        // The body's free names are collected the same way `func_def_to_value`
+        // collects them, so the two paths agree about what a function sees.
+        // A function that names nothing from outside collects nothing and pays
+        // nothing, which is almost all of them.
+        let captured: Vec<(String, Value)> = if self.file_vars.is_empty() {
+            Vec::new()
+        } else {
+            let mut refs = HashSet::new();
+            let mut locals: HashSet<String> =
+                parameters.iter().map(|p| p.name.clone()).collect();
+            collect_refs_in_stmts(&body.statements, &mut locals, &mut refs);
+            refs.iter()
+                .filter_map(|name| {
+                    self.file_vars.get(name).map(|v| (name.clone(), v.clone()))
+                })
+                .collect()
+        };
+
         // B2: zero-copy save + fresh isolated scope (see take_call_state)
         let saved = self.take_call_state();
 
         // B4: pre-alloc scope capacity to avoid rehashing on parameter binding
         if let Some(scope) = self.scope_stack.last_mut() {
-            scope.reserve(parameters.len());
+            scope.reserve(parameters.len() + captured.len());
+        }
+
+        // Captures go in BEFORE the parameters, so a parameter of the same name
+        // shadows one — the order `func_def_to_value`'s path already uses.
+        for (name, value) in captured {
+            self.set_variable_new(&name, value);
         }
 
         // Determine the module whose state this frame executes against (MM-2):

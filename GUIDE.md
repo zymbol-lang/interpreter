@@ -1846,19 +1846,24 @@ positionally.
 
 ### Function Scope
 
-Functions called **directly by name** have isolated scope — only their parameters are in scope:
+A function **captures** what its body reads from the file, by value, and a write
+inside it stays inside the call:
 
 ```zymbol
 global = 100
 
 test() {
-    // 'global' is not accessible here when called directly
-    x = 42        // local
-    <~ x
+    <~ global + 1
 }
 
->> test() ¶    // → 42
+>> test() ¶       // → 101
 ```
+
+Captured, not shared: the value is read when the function is **called**, and
+assigning to that name inside the body writes a local copy that dies with the
+call. Module state is the other thing — a module's functions share it and their
+writes persist — and that difference is what makes one of them state and the
+other capture.
 
 > **Exception — constants pierce the isolation.** Top-level `:=` constants are
 > globally scoped by design: they are readable (never writable) inside any
@@ -2121,36 +2126,45 @@ To share mutable state across calls, use a named function with a module-level va
 
 ### Named Functions vs Lambdas
 
-Named functions (`name(params) { }`) called **directly by name** execute in a **fully isolated scope** — they cannot read or write outer variables. Their only inputs are their parameters:
+Named functions and lambdas capture the same way (v0.0.9): **by value, with the
+write isolated**.
 
 ```zymbol
 x = 42
-peek() { <~ x }    // runtime error: undefined variable: 'x'
+peek() { <~ x }
+>> peek() ¶        // → 42
 ```
 
-> ⚠ **Asymmetric capture**: a named function's behavior depends on how it is used, not only on how it is defined.
->
-> | Usage | Scope | Outer variables |
-> |-------|-------|-----------------|
-> | `fn(args)` — direct call | isolated | not accessible |
-> | `f = fn` then `f(args)` — as first-class value | captures at assignment | snapshot, read-only |
+> **This was asymmetric until v0.0.9**, and the asymmetry is worth knowing about
+> because programs were written around it. A direct call was *isolated* and the
+> same function taken as a value *captured*, so one body meant two things
+> depending on how it was reached:
 >
 > ```zymbol
 > base = 10
 > adder(n) { <~ n + base }
 >
-> adder(5)       // runtime error: undefined variable: 'base'
->
-> f = adder      // captures current scope: { base: 10 }
-> >> f(5) ¶      // → 15
+> adder(5)       // was: runtime error: undefined variable: 'base'
+> f = adder
+> >> f(5) ¶      // → 15, then as now
 >
 > base = 99
 > >> f(5) ¶      // → 15  (snapshot — change to base does not affect f)
 > ```
 >
-> This means `adder(5)` and `(f = adder)(5)` are **not equivalent** when the function body references outer names. If you need a function that always has access to outer state regardless of how it is called, use a lambda.
+> So `adder(5)` and `(f = adder)(5)` were **not equivalent** when the body named
+> anything from outside, and nothing in the source said which one you were
+> looking at. That is why it went: one rule now, and it is the lambda's.
 
-Use lambdas when you need to close over outer state; use named functions when you want strict isolation on direct calls.
+**The one difference that remains** is *when* the value is read, and it follows
+from what each form is. A function taken as a value is a snapshot of that
+moment, so a later change to the file does not reach it; a direct call reads the
+file when it is called. Both are by value, and neither lets a write escape.
+
+**Module state is the other thing.** A module's functions *share* its variables
+and their writes persist — that is what module state is for, and it is the only
+shared mutable state the language has. A script's file variables are captured,
+not shared.
 
 ---
 
