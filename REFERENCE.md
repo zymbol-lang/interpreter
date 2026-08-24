@@ -186,7 +186,10 @@ record = ["English", "en.zy", #0]    // ❌ String + String + Bool
 **Why**: arrays are Zymbol's ordered mutable collection for uniform data — sequences of the same kind of value. This constraint enables type-safe collection operations (`$>`, `$|`, `$<`, `$^`) without runtime type dispatch.
 
 A deliberate mix in an array is **declared** with `#[…]`, which is the same type
-(`#?` answers `##]` for both) and is not checked:
+and is not checked. `#?` tells them apart from v0.0.9 — `##]` when the elements
+are all one type and `##[` when they are not — and that is a reading of the
+value, not a second type: an array out of `json::decode` answers `##[` with no
+mark written anywhere, and `#[1, "dos"]$-[2]` answers `##]`:
 
 ```zymbol
 mixto = #[#0, 1, '2', "tres", 4.0]     // ✅ the mix is declared
@@ -505,8 +508,8 @@ model. Its practical cost is that a function returning `<~ (a, b)` is routinely 
 with `[a, b]`, and nothing marks the mismatch: `serpiente/` does this 35 times.
 
 **Fixed.** The pattern is typed: `[ … ]` accepts only an array, `( … )` only a tuple, and a
-mismatch is a runtime error — `array pattern '[ … ]' requires an array, got ##)`, spelled
-identically in all four engines (`zyq consensus` compares the text, and the VM's
+mismatch is a runtime error — `array pattern '[ … ]' requires an array, got ##(`, spelled
+identically in every engine (`zyq consensus` compares the text, and the VM's
 `zymbol_type_name` had to be bypassed because it writes `##[]` where the tree-walker writes
 `##]`).
 
@@ -927,6 +930,35 @@ between 10× and 20× faster on the same programs. Making the tree-walker's
 collections reference counted is the real fix and is not this release's.
 
 ---
+
+### L45 — `zymbol fmt` refuses `expr#?[i]`, which runs
+
+```zymbol
+x = [1, 2]
+>> x#?[1] ¶            // runs, in all three engines
+```
+
+```text
+safety gate: token stream changed at token #8: source has "Ident(\"x\")",
+formatted output has "LParen"
+```
+
+`format_index` parenthesises unconditionally when the indexed expression is a
+`#?`, on the grounds that *"without parens the parser sees `expr#?` as a complete
+statement and then `[i]` at statement level"*. That is true where a statement
+starts and false inside an expression, which is where this form actually appears
+— and the visitor does not know which of the two it is in.
+
+The added parenthesis changes the token stream, so the fail-closed gate refuses
+the file rather than rewriting it. Nothing is corrupted; the file simply cannot
+be formatted, silently unless somebody was formatting. Same shape as L43.
+
+**Workaround**: write `(expr#?)[i]`, which is what the formatter wanted to
+produce anyway. Two corpus files do.
+
+**Fix**: thread the statement-versus-expression position into `format_index` and
+parenthesise only at statement level. Found while adding `##(` and `##[`, not
+caused by it — the form has never formatted.
 
 ### L39 — `>>` takes arithmetic, not comparison — **by design**
 

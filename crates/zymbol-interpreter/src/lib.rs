@@ -126,6 +126,8 @@ pub struct ErrorValue {
     pub message: String,
 }
 
+use zymbol_common::typesym;
+
 impl ErrorValue {
     pub fn new(error_type: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
@@ -185,6 +187,45 @@ impl ErrorValue {
     /// rather than a silently wrong answer.
     pub fn key(message: impl Into<String>) -> Self {
         Self::new("Key", message)
+    }
+}
+
+/// The type symbol a value carries, before any refinement.
+///
+/// "Base" because an array is always [`typesym::ARRAY`] here, whatever its
+/// elements hold: this is what error messages name, and a failed destructuring
+/// is about the shape rather than about the mix. `#?` refines it —
+/// [`type_symbol_of`] — and is the only thing that does.
+pub(crate) fn base_type_symbol(value: &Value) -> String {
+    match value {
+        Value::Int(_) => typesym::INT.to_string(),
+        Value::Float(_) => typesym::FLOAT.to_string(),
+        Value::String(_) => typesym::STRING.to_string(),
+        Value::Char(_) => typesym::CHAR.to_string(),
+        Value::Bool(_) => typesym::BOOL.to_string(),
+        Value::Array(_) => typesym::ARRAY.to_string(),
+        Value::Tuple(_) => typesym::TUPLE.to_string(),
+        Value::NamedTuple(_) => typesym::DICT.to_string(),
+        Value::Function(f) => if f.is_named_fn { typesym::FUNCTION.to_string() } else { typesym::LAMBDA.to_string() },
+        Value::Error(err) => format!("##{}", err.error_type),
+        Value::Unit => typesym::UNIT.to_string(),
+    }
+}
+
+/// What `#?` answers: [`base_type_symbol`], except that an array whose elements
+/// are not all one type is a list, [`typesym::LIST`].
+///
+/// The mix is read from the value **now**, not from how the literal was written:
+/// `#[…]` declares a mix to the analyzer and leaves no trace on the value, so
+/// `json::decode`'s heterogeneous array answers `##[` without any mark, and
+/// `#[1, "dos"]$-[2]` answers `##]` because a single Int is not a mix.
+pub(crate) fn type_symbol_of(value: &Value) -> String {
+    match value {
+        Value::Array(items) => {
+            typesym::array_symbol(items.iter().map(|v| base_type_symbol(v))
+                .collect::<Vec<_>>().iter().map(String::as_str)).to_string()
+        }
+        other => base_type_symbol(other),
     }
 }
 
@@ -1203,14 +1244,14 @@ impl<W: Write> Interpreter<W> {
                 }
                 Value::Tuple(elements) => {
                     let types: Vec<String> = elements.iter().map(|v| self.value_type_name(v)).collect();
-                    format!("##)({})", types.join(", "))
+                    format!("{}({})", typesym::TUPLE, types.join(", "))
                 }
                 Value::NamedTuple(fields) => {
                     let types: Vec<String> = fields
                         .iter()
                         .map(|(name, val)| format!("{}: {}", name, self.value_type_name(val)))
                         .collect();
-                    format!("##)({})", types.join(", "))
+                    format!("{}({})", typesym::DICT, types.join(", "))
                 }
                 Value::Function(f) => if f.is_named_fn { "##()".to_string() } else { "##->".to_string() },
                 Value::Error(err) => format!("##{}", err.error_type),
@@ -1222,19 +1263,7 @@ impl<W: Write> Interpreter<W> {
 
     /// Helper to get type name for a value (symbolic notation)
     fn value_type_name(&self, value: &Value) -> String {
-        match value {
-            Value::Int(_) => "###".to_string(),
-            Value::Float(_) => "##.".to_string(),
-            Value::String(_) => "##\"".to_string(),
-            Value::Char(_) => "##'".to_string(),
-            Value::Bool(_) => "##?".to_string(),
-            Value::Array(_) => "##]".to_string(),
-            Value::Tuple(_) => "##)".to_string(),
-            Value::NamedTuple(_) => "##)".to_string(),
-            Value::Function(f) => if f.is_named_fn { "##()".to_string() } else { "##->".to_string() },
-            Value::Error(err) => format!("##{}", err.error_type),
-            Value::Unit => "##_".to_string(),
-        }
+        base_type_symbol(value).to_string()
     }
 
     /// Format a value for display using the current active numeral mode.

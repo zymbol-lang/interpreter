@@ -104,7 +104,7 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 | Dictionary update `d["k"]$~ val` | ✅ | ✅ | v0.0.6; v0.0.9 **adds** the key when absent, and the positional form `d[i]$~` was withdrawn |
 | Dictionary read by computed key `d[k]` | ✅ | ✅ | v0.0.9 — it was `array index must be Int, got String` before, which made the thing a record rather than a dictionary |
 | Dictionary key ops `d$? "k"` / `d$-["k"]` / `@ k:d` | ✅ | ✅ | v0.0.9 — ask, remove, walk. Absent key raises `##Key` |
-| Declared-mixed array `#[…]` | ✅ | ✅ | v0.0.9 — same type as `[…]` (`#?` → `##]`); `[…]` is checked, `#[…]` is not, and a homogeneous `#[…]` warns |
+| Declared-mixed array `#[…]` | ✅ | ✅ | v0.0.9 — same type as `[…]`; `[…]` is checked, `#[…]` is not, and a homogeneous `#[…]` warns. `#?` answers `##[` when the array HOLDS more than one type and `##]` when it does not — read from the value, not from the literal |
 | Edit `$` as a statement | ✅ | ✅ | v0.0.9 — the rule of the result: result used → builds, result discarded → modifies in place. Replaces the withdrawn `arr[i] = v` |
 | `<<` input (prompt, numeric cast) in VM | ✅ | ✅ | v0.0.6 (`ReadLine` instruction) |
 | Typed/validated input `<< ##.(T,D) "p" var` | ✅ | ✅ | v0.0.7 — re-prompts until valid; `##.` `###` `##"` `##'` typespecs |

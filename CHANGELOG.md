@@ -19,6 +19,46 @@ those corrections ship inside it. See [WINDOWS_V009.md](WINDOWS_V009.md).
 
 ### Added
 
+**`##(` and `##[` — `#?` can tell the four collections apart**
+
+```text
+[1, 2]      ##]   array          (1, 2)      ##)   tuple
+#[1, "a"]   ##[   list           #(a: 1)     ##(   dictionary
+```
+
+The rule: the unmarked collection takes the **closing** delimiter and the marked
+one takes the **opening** delimiter. It is the literal's own mark with a `#` in
+front, which is what the mark already meant.
+
+`##)` had meant both the tuple and the dictionary, deliberately, from when the
+dictionary was called a named tuple and spelled `(a: 1)`. Two things in this
+release ended that: `#(…)` made them different to write, and `#()` made them
+different values — one takes `d["k"]$~ v` and the other answers *tuples are
+immutable*. A type symbol that cannot separate them lies to every generic
+function that asks, and there was no other way to ask.
+
+`##(` is a **type**, so it is what a dictionary is called everywhere a type is
+named, error messages included: `array pattern '[ … ]' requires an array, got
+##(`. Note that `##()` — with the closing parenthesis — remains the *named
+function*, as it has been since v0.0.4.
+
+`##[` is a **reading**, not a type. `#[…]` and `[…]` are one type by decision 15,
+so that `json::decode`'s heterogeneous array had somewhere to land, and the mark
+on the literal is a compile-time declaration that leaves no trace: `[1, 2]` and
+`#[1, 2]` are still equal. So the mix is read from what the array **holds when
+asked** — which is also the question a caller has. An array out of
+`json::decode` answers `##[` with no mark written anywhere in the program, and
+`#[1, "dos"]$-[2]` answers `##]`, because one Int is not a mix. Elements are
+compared by their own base type, so an array of arrays is uniform whatever those
+inner arrays hold: the answer describes one level.
+
+Ten sites across the two Rust engines had each written the symbol table out by
+hand, two of them the same twenty lines of the register VM copied twice — which
+is how `##)` came to mean two things long after they stopped being one. The
+table is now `zymbol-common::typesym`, which every engine reads, and the VM's
+duplicated `#?` block is one function. Three goldens moved, each of them a place
+that had asserted the old rule.
+
 **`std/time` — the clock and the civil calendar**
 
 ```zymbol
