@@ -1058,6 +1058,29 @@ impl TypeChecker {
             }
 
             Statement::Expr(expr_stmt) => {
+                // A statement that is only a NAME does nothing, and saying so
+                // matters for a reason that is not tidiness (ERROR-ZYB-001).
+                //
+                // It is the mechanism that made BUG-ZYB-002 silent: when the
+                // parse of `d[k]$~ "" v` split in two, the remainder landed in
+                // a statement with no effect and vanished. A warning would have
+                // shown it where it was written instead of three modules later.
+                //
+                // Only a bare identifier: an expression with a call in it may be
+                // there for its effect, and `arr$+ 4` as a statement is the
+                // documented way to modify in place (the rule of the result).
+                if let Expr::Identifier(ident) = expr_stmt.expr.unwrap_group() {
+                    if !ident.hot {
+                        self.warnings.push(
+                            Diagnostic::warning(format!(
+                                "this statement does nothing: '{}' is read and discarded",
+                                ident.name
+                            ))
+                            .with_span(ident.span)
+                            .with_help("remove it, or use it — `>> name ¶` to print it"),
+                        );
+                    }
+                }
                 self.infer_expr(&expr_stmt.expr);
             }
 
