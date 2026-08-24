@@ -253,6 +253,50 @@ pub enum Value {
 /// creating a lambda inside a loop would deep-copy the map on each iteration.
 pub type ModuleAliases = std::rc::Rc<std::collections::HashMap<String, std::path::PathBuf>>;
 
+/// What makes two function values **the same function** (BUG-ZYB-012).
+///
+/// `a = uno` and `b = uno` name one function and must compare equal; two
+/// functions with identical bodies must not. Neither answer falls out of the
+/// data by itself: a named function is turned into a value afresh on every
+/// lookup — new captures, cloned body — so pointer equality on the value fails,
+/// and structural equality would call two identical definitions the same
+/// function, which is exactly what identity is for.
+///
+/// So identity is carried explicitly, and it is the thing that was *written*:
+/// the definition for a named function, the evaluation for a lambda.
+#[derive(Debug, Clone)]
+pub(crate) enum FnIdentity {
+    /// A named function: the `FunctionDef` it came from. Looking the name up
+    /// twice yields the same `Rc`, so two values built from it are one function.
+    Named(std::rc::Rc<FunctionDef>),
+    /// A lambda: the evaluation that created it. Cloning the value keeps the
+    /// number, so two names for one lambda agree; evaluating the expression a
+    /// second time makes a different closure, which it is.
+    Lambda(u64),
+    /// A native `std/` function reached as a value — not constructible today.
+    Native,
+}
+
+impl PartialEq for FnIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (FnIdentity::Named(a), FnIdentity::Named(b)) => std::rc::Rc::ptr_eq(a, b),
+            (FnIdentity::Lambda(a), FnIdentity::Lambda(b)) => a == b,
+            // A named function and a lambda are never the same function, and
+            // two natives have nothing to compare.
+            _ => false,
+        }
+    }
+}
+
+/// The next lambda identity. One counter for the process: a lambda evaluated in
+/// a loop is a new closure each time round, and each one is itself.
+pub(crate) fn next_lambda_identity() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Function value for lambdas and closures
 #[derive(Debug, Clone)]
 pub struct FunctionValue {
@@ -262,6 +306,11 @@ pub struct FunctionValue {
     /// True when this value was created from a named FunctionDecl used as a first-class value.
     /// Named functions may complete their block without <~ and return Unit (unlike block lambdas).
     pub is_named_fn: bool,
+    /// What makes this the same function as another — see [`FnIdentity`].
+    ///
+    /// Crate-private because it names `FunctionDef`, which is: the identity is
+    /// something the engine decides and nothing outside constructs.
+    pub(crate) identity: FnIdentity,
     /// The module aliases visible where this function was written.
     ///
     /// Restored for the duration of the call, so `alias::fn` inside the body
@@ -273,8 +322,14 @@ pub struct FunctionValue {
 }
 
 impl PartialEq for FunctionValue {
+    /// Two function values are equal when they are the same function.
+    ///
+    /// This compared `params` until v0.0.9, which made every one-argument
+    /// function equal to every other — and no caller ever saw it, because
+    /// `values_equal_static` had no arm for `Function` and answered `#0` to all
+    /// of them, including a function against itself (BUG-ZYB-012).
     fn eq(&self, other: &Self) -> bool {
-        self.params == other.params
+        self.identity == other.identity
     }
 }
 

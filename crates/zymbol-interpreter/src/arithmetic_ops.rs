@@ -283,6 +283,19 @@ impl<W: Write> Interpreter<W> {
                     })
             }
             (Value::Unit, Value::Unit) => true,
+            // Two functions are equal when they are THE SAME function — the
+            // same definition for a named one, the same evaluation for a lambda
+            // (BUG-ZYB-012). There was no arm here at all, so every comparison
+            // between two functions answered `#0`, including a function against
+            // itself; the browser engine answered `#1` to every one of them,
+            // including a named function against a lambda, because its fallback
+            // compared two `undefined`s. Neither had been decided: nothing
+            // documented what `==` means on a function, and no corpus file
+            // compared two, so the gate could not see it.
+            //
+            // Identity and not structure: two functions with identical bodies
+            // are two functions. See `FnIdentity`.
+            (Value::Function(a), Value::Function(b)) => a == b,
             _ => false,
         }
     }
