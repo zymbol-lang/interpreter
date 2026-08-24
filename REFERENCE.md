@@ -960,6 +960,35 @@ produce anyway. Two corpus files do.
 parenthesise only at statement level. Found while adding `##(` and `##[`, not
 caused by it — the form has never formatted.
 
+### L46 — la homogeneidad se comprueba en el literal y en `$+`, y en nada más
+
+```zymbol
+a = [1, 2]
+b = a $++ "tres"       // aceptado, en los tres motores
+c = [1, 2]
+d = c $+[1] "x"        // aceptado
+e = [1, 2]
+f = e[1]$~ "x"         // aceptado — `[x, 2]`, y `#?` contesta `##[`
+```
+
+Decision 15 says `[…]` is homogeneous and **gets checked**, and `#[…]` declares a
+mix. The check runs on the literal — including nested, since v0.0.9 — and on
+`$+`. The other three members of the edit family do not run it, so a `[…]`
+becomes heterogeneous with nobody declaring it and nobody complaining, and `#?`
+then reports `##[`: a list nobody wrote.
+
+All three engines agree, which is why this is a **hole in the rule** and not a
+divergence. Closing it would newly reject programs that run today — a decision,
+not a parity fix — so it is written down rather than closed. The accepted edges
+are pinned in `corpus/collections/homogeneidad_bordes.zy`; the refused ones in
+`reject/collections/04`, `07` and `08`.
+
+**Fix, when it is decided**: the analyzer already knows an array's element type
+where it knows anything at all (that is what makes `$+` catchable), so the same
+comparison applies to `$++`, `$+[i]` and `[i]$~`. The cost is that a program
+that has been quietly building a mixed `[…]` starts failing, and the migration
+is to write `#[…]` where the mix was meant.
+
 ### L39 — `>>` takes arithmetic, not comparison — **by design**
 
 The output operator has a narrower grammar than the rest of the language. Everything up to and
