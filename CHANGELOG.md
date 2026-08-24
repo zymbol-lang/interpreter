@@ -19,6 +19,28 @@ those corrections ship inside it. See [WINDOWS_V009.md](WINDOWS_V009.md).
 
 ### Added
 
+**The browser engine checks array homogeneity where the others do**
+
+`[1, 2] $+ "x"` ran in the playground and failed outside it, and so did
+`[[1], ["x"]]`. Both Rust engines refused them; `zymbol.js` decided element
+types from scalar literals only, so it could not name a nested array's type and
+had no check on `$+` at all. Same shape as DM-04 — the heterogeneous *literal*,
+closed in v0.0.9 — one operation and one level of nesting later.
+
+The checker now remembers an array's element type across an assignment, which is
+what the real form needs: `a = [1, 2]` then `a $+ "x"` is the shape code has,
+not a literal with an operator hanging off it. Int and Float still mix freely at
+any depth, and a declared `#[…]` still takes anything. Pinned in
+`reject/collections/07_append_mixes_array.zy` and `08_nested_literal_mixes.zy`.
+
+**And the measuring found a hole all three share**, now REFERENCE L46: the rule
+runs on the literal and on `$+`, and not on `$++`, `$+[i]` or `[i]$~`. Each of
+those turns a `[…]` heterogeneous with nobody declaring it, in every engine, and
+`#?` then answers `##[` — a list nobody wrote. Left open on purpose: closing it
+newly rejects programs that run today, which is a decision rather than a parity
+fix. The edges that *are* accepted are recorded in
+`corpus/collections/homogeneidad_bordes.zy` so the hole has a shape.
+
 **`##_` — the Unit literal, and `==` stops constraining a parameter**
 
 ```zymbol
