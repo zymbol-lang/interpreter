@@ -280,24 +280,69 @@ impl Value {
     /// The type name spelled as the tree-walker's `value_type_name` spells it.
     ///
     /// Destructuring errors are compared verbatim across engines by `zyq consensus`, so the
-    /// two must agree to the character. `zymbol_type_name` above uses a different spelling
-    /// for the same types (`##[]` against `##]`, `##()` against `##)`) and cannot be reused
-    /// here.
+    /// two must agree to the character — which is why the spellings come from
+    /// `zymbol_common::typesym` rather than from a table written out here. This is the
+    /// BASE symbol: an array is `##]` whatever it holds, because a failed destructuring is
+    /// about the shape and not about the mix. `#?` refines it; see `refined_type_symbol`.
+    ///
+    /// `zymbol_type_name` above uses a different spelling for the same types (`##[]`
+    /// against `##]`, `##()` against `##)`) and cannot be reused here.
     fn tw_type_name(&self) -> &'static str {
+        use zymbol_common::typesym as ts;
         match self {
-            Value::Int(_)           => "###",
-            Value::Float(_)         => "##.",
-            Value::String(_)        => "##\"",
-            Value::Char(_)          => "##'",
-            Value::Bool(_)          => "##?",
-            Value::Array(_)         => "##]",
-            Value::Tuple(_)         => "##)",
-            Value::NamedTuple(_)    => "##)",
-            Value::Function(_, _)   => "##()",
-            Value::Closure(_, _, _) => "##->",
-            Value::Unit             => "##_",
+            Value::Int(_)           => ts::INT,
+            Value::Float(_)         => ts::FLOAT,
+            Value::String(_)        => ts::STRING,
+            Value::Char(_)          => ts::CHAR,
+            Value::Bool(_)          => ts::BOOL,
+            Value::Array(_)         => ts::ARRAY,
+            Value::Tuple(_)         => ts::TUPLE,
+            Value::NamedTuple(_)    => ts::DICT,
+            Value::Function(_, _)   => ts::FUNCTION,
+            Value::Closure(_, _, _) => ts::LAMBDA,
+            Value::Unit             => ts::UNIT,
             Value::Error(_)         => "##!",
         }
+    }
+
+    /// What `#?` answers: `tw_type_name`, except that an array whose elements are not all
+    /// one type is a list, `##[`.
+    ///
+    /// The mix is read from the value NOW, not from how the literal was written: `#[…]`
+    /// declares a mix to the analyzer and leaves no trace on the value, so a heterogeneous
+    /// array out of `json::decode` answers `##[` with no mark anywhere, and
+    /// `#[1, "dos"]$-[2]` answers `##]` because a single Int is not a mix.
+    fn refined_type_symbol(&self) -> &'static str {
+        match self {
+            Value::Array(items) => {
+                let bases: Vec<&'static str> = items.iter().map(Value::tw_type_name).collect();
+                zymbol_common::typesym::array_symbol(bases.into_iter())
+            }
+            other => other.tw_type_name(),
+        }
+    }
+
+    /// The `(symbol, count)` pair `#?` builds its tuple from. Written once because it had
+    /// been written twice — the two dispatch paths below each carried their own copy, and
+    /// a table kept in two places is a table that eventually disagrees with itself.
+    fn type_metadata(&self) -> (&'static str, i64) {
+        let count = match self {
+            Value::Int(n) => n.to_string().len() as i64,
+            Value::Float(fl) => fl.to_string().len() as i64,
+            Value::String(s) => s.as_ref().chars().count() as i64,
+            Value::Char(_) | Value::Bool(_) => 1,
+            Value::Array(a) => a.as_ref().len() as i64,
+            Value::Tuple(t) => t.as_ref().len() as i64,
+            Value::NamedTuple(f) => f.as_ref().len() as i64,
+            Value::Function(_, arity) => *arity as i64,
+            Value::Closure(_, arity, _) => *arity as i64,
+            _ => 0,
+        };
+        let symbol = match self {
+            Value::Unit | Value::Error(_) => zymbol_common::typesym::UNIT,
+            other => other.refined_type_symbol(),
+        };
+        (symbol, count)
     }
 
     /// Equality for pattern matching and $? operator
@@ -2960,19 +3005,7 @@ impl<W: Write> VM<W> {
                             val.clone(),
                         ]))
                     } else {
-                        let (type_sym, len) = match &val {
-                            Value::Int(n) => ("###", n.to_string().len() as i64),
-                            Value::Float(fl) => ("##.", fl.to_string().len() as i64),
-                            Value::String(s) => ("##\"", s.as_ref().chars().count() as i64),
-                            Value::Char(_) => ("##'", 1),
-                            Value::Bool(_) => ("##?", 1),
-                            Value::Array(a) => ("##]", a.as_ref().len() as i64),
-                            Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
-                            Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
-                            Value::Function(_, arity) => ("##()", *arity as i64),
-                            Value::Closure(_, arity, _) => ("##->", *arity as i64),
-                            _ => ("##_", 0),
-                        };
+                        let (type_sym, len) = val.type_metadata();
                         Value::Tuple(Rc::new(vec![
                             Value::String(ZyStr::new(type_sym.to_string())),
                             Value::Int(len),
@@ -4380,19 +4413,7 @@ impl<W: Write> VM<W> {
                             val.clone(),
                         ]))
                     } else {
-                        let (type_sym, len) = match &val {
-                            Value::Int(n) => ("###", n.to_string().len() as i64),
-                            Value::Float(fl) => ("##.", fl.to_string().len() as i64),
-                            Value::String(s) => ("##\"", s.as_ref().chars().count() as i64),
-                            Value::Char(_) => ("##'", 1),
-                            Value::Bool(_) => ("##?", 1),
-                            Value::Array(a) => ("##]", a.as_ref().len() as i64),
-                            Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
-                            Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
-                            Value::Function(_, arity) => ("##()", *arity as i64),
-                            Value::Closure(_, arity, _) => ("##->", *arity as i64),
-                            _ => ("##_", 0),
-                        };
+                        let (type_sym, len) = val.type_metadata();
                         Value::Tuple(Rc::new(vec![val.clone(), Value::String(ZyStr::new(type_sym.to_string())), Value::Int(len)]))
                     };
                     w!(dst, result);

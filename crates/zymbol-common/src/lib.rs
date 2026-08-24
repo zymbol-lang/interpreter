@@ -6,11 +6,13 @@
 //! - Operator types (Binary, Unary, Collection)
 //! - The numeric model — the integer range every engine must agree on (`num`)
 //! - The `std/` export table (`stdlib`), shared by the engines and the tooling
+//! - The type symbols `#?` answers with (`typesym`), likewise shared
 //! - Locating the POSIX shell that `<\ \>` runs through (`shell`)
 
 pub mod num;
 pub mod shell;
 pub mod stdlib;
+pub mod typesym;
 
 use indexmap::IndexMap;
 use std::fmt;

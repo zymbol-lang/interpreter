@@ -205,43 +205,21 @@ impl<W: Write> Interpreter<W> {
             self.eval_expr(&op.expr)?
         };
 
-        let (type_symbol, count) = match &value {
-            Value::Int(n) => {
-                let count = n.to_string().len() as i64;
-                ("###".to_string(), count)
-            }
-            Value::Float(f) => {
-                let count = f.to_string().len() as i64;
-                ("##.".to_string(), count)
-            }
-            Value::String(s) => {
-                let count = s.len() as i64;
-                ("##\"".to_string(), count)
-            }
-            Value::Char(_) => ("##'".to_string(), 1),
-            Value::Bool(_) => ("##?".to_string(), 1),
-            Value::Array(arr) => {
-                let count = arr.len() as i64;
-                ("##]".to_string(), count)
-            }
-            Value::Tuple(tup) => {
-                let count = tup.len() as i64;
-                ("##)".to_string(), count)
-            }
-            Value::NamedTuple(fields) => {
-                let count = fields.len() as i64;
-                ("##)".to_string(), count)  // Same symbol as positional tuples
-            }
-            Value::Function(func) => {
-                let count = func.params.len() as i64;
-                let sym = if func.is_named_fn { "##()" } else { "##->" };
-                (sym.to_string(), count)
-            }
-            Value::Error(err) => {
-                let count = err.message.len() as i64;
-                (format!("##{}", err.error_type), count)  // Error type symbol
-            }
-            Value::Unit => ("##_".to_string(), 0),
+        // The symbol comes from `type_symbol_of`, which every engine shares
+        // through `zymbol_common::typesym`; only the count is decided here,
+        // because what "how many" means differs per type.
+        let type_symbol = crate::type_symbol_of(&value);
+        let count: i64 = match &value {
+            Value::Int(n) => n.to_string().len() as i64,
+            Value::Float(f) => f.to_string().len() as i64,
+            Value::String(s) => s.len() as i64,
+            Value::Char(_) | Value::Bool(_) => 1,
+            Value::Array(arr) => arr.len() as i64,
+            Value::Tuple(tup) => tup.len() as i64,
+            Value::NamedTuple(fields) => fields.len() as i64,
+            Value::Function(func) => func.params.len() as i64,
+            Value::Error(err) => err.message.len() as i64,
+            Value::Unit => 0,
         };
 
         // Return tuple: (type_symbol, count, value)

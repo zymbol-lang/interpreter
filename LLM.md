@@ -50,8 +50,9 @@ retired on 2026-08-17; it appears in this document only as history.
 | Char | `'A'`, `'↑'` | `##'` | |
 | Bool | `#1` / `#0` | `##?` | `#0 < #1` |
 | Array | `[1,2,3]` | `##]` | homogeneous by design |
+| List | `#[1,"dos"]` | `##[` | an array holding >1 type. NOT a second type — `#?` reads it from the contents, so `json::decode` answers `##[` with no mark written |
 | Tuple | `(10, 20)` | `##)` | immutable; `t[1]` |
-| NamedTuple | `(name:"Ana", age:25)` | `##)` | `t.name`, `t[2]` |
+| Dictionary | `#(name:"Ana", age:25)` | `##(` | `d.name`, `d["k"]`, mutable; `#()` is the empty one. Careful: `##()` with the closing paren is a named FUNCTION |
 | Function / Lambda | `f(a){}` / `x -> x*2` | `##()` / `##->` | first-class; `count` = arity |
 | Error | — | `##Kind` | the kind *is* the type symbol |
 | Unit | — | `##_` | empty absorption, no-value |

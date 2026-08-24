@@ -284,8 +284,9 @@ The following identifiers have conventional meaning but are not reserved: `_err`
 | Char | `'A'` | `##'` | Single Unicode character |
 | Bool | `#1`, `#0` | `##?` | NOT numeric — `#1` ≠ `1` |
 | Array | `[1, 2, 3]` | `##]` | Homogeneous (same type) |
-| Tuple | `(a, b)` | `##)` | Positional |
-| NamedTuple | `(x: 1, y: 2)` | `##)` | Named fields |
+| List | `#[1, "dos"]` | `##[` | An array holding more than one type — the same type as `[…]`, see below |
+| Tuple | `(a, b)` | `##)` | Positional, immutable |
+| Dictionary | `#(x: 1, y: 2)` | `##(` | Keyed, mutable; `#()` is the empty one |
 | Function | named function ref | `##()` | First-class since v0.0.4; display `<funct/N>` |
 | Lambda | `x -> x * 2` | `##->` | Lambda definition symbol; display `<lambd/N>` |
 | Error | _(runtime value)_ | `##<Kind>` | Type IS the kind: `##Index`, `##Div`, `##IO`, … |
@@ -415,8 +416,10 @@ The `#?` postfix operator returns a 3-tuple: `(type_symbol, count, display)`.
 | String | `(##", N, val)` | character length |
 | Char | `(##', 1, val)` | always 1 |
 | Bool | `(##?, 1, val)` | always 1 |
-| Array | `(##], N, val)` | element count |
-| Tuple / NamedTuple | `(##), N, val)` | field count |
+| Array | `(##], N, val)` | element count — every element the same type |
+| List | `(##[, N, val)` | element count — the elements are **not** all one type |
+| Tuple | `(##), N, val)` | element count |
+| Dictionary | `(##(, N, val)` | key count |
 | Function | `(##(), N, <funct/N>)` | arity |
 | Lambda | `(##->, N, <lambd/N>)` | arity |
 | Error | `(##Kind, N, ##Kind(msg))` | message length |
@@ -2300,14 +2303,26 @@ by_name_desc = db$^ (a, b -> a.name > b.name)
 ### Declaring a mix — `#[…]`
 
 `[…]` is homogeneous and gets checked; a deliberate mix is **declared** with
-`#[…]` and is not checked. **They are the same type** — `#?` answers `##]` for
-both, and every operator behaves the same:
+`#[…]` and is not checked. **They are the same type** and every operator behaves
+the same — `[1, 2] == #[1, 2]`:
 
 ```zymbol
 mixto = #[#0, 1, '2', "tres", 4.0]
 homog = [1, 2, 3]
->> mixto#? ¶       // → (##], 5, [#0, 1, 2, tres, 4])
+>> mixto#? ¶       // → (##[, 5, [#0, 1, 2, tres, 4])
 >> homog#? ¶       // → (##], 3, [1, 2, 3])
+```
+
+`#?` tells them apart — `##]` when the elements are all one type, `##[` when
+they are not — and **that is not a second type**. It is read from what the array
+*holds when asked*, never from how the literal was written, which is also the
+question a caller actually has. So an array out of `json::decode` answers `##[`
+with no mark anywhere in the program, and taking the mix out of a `#[…]` leaves
+something that answers `##]`, because one element is not a mix:
+
+```zymbol
+sin_mezcla = #[1, "dos"]$-[2]
+>> sin_mezcla " " (sin_mezcla#?)[1] ¶   // → [1] ##]
 ```
 
 What `[…]` refuses, and what the refusal now names:

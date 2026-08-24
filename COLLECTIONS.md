@@ -166,8 +166,8 @@ no negative subscript at all.
 #[#0, 1, '2', "tres", 4.0]      // the mix is DECLARED, and not checked
 ```
 
-**They are the same type.** `#?` answers `##]` for both and every operator behaves
-the same. `#` is the meta/type mark and `##]` is already the array type's symbol,
+**They are the same type**, and every operator behaves the same. `#` is the
+meta/type mark and `##]` is already the array type's symbol,
 so declaring that an array has an open element type *is* a statement about its
 type.
 
