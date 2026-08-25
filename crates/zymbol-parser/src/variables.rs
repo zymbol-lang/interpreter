@@ -143,7 +143,7 @@ impl Parser {
                 span,
             ));
 
-            return Ok(Statement::Assignment(Assignment { name, value: update_expr, span, hot, pre_hot, sugar: compound_op.map(AssignSugar::IndexedCompound).unwrap_or(AssignSugar::IndexedAssign) }));
+            return Ok(Statement::Assignment(Assignment { name, value: update_expr, span, hot, pre_hot, written: None, sugar: compound_op.map(AssignSugar::IndexedCompound).unwrap_or(AssignSugar::IndexedAssign) }));
         }
 
         let assign_token = self.peek();
@@ -183,7 +183,7 @@ impl Parser {
             } else {
                 AssignSugar::Decrement
             };
-            return Ok(Statement::Assignment(Assignment { name, value: binary_expr, span, hot, pre_hot, sugar }));
+            return Ok(Statement::Assignment(Assignment { name, value: binary_expr, span, hot, pre_hot, sugar, written: None }));
         }
 
         // Check for compound assignment (+=, -=, *=, /=, %=, ^=)
@@ -224,6 +224,7 @@ impl Parser {
                 hot,
                 pre_hot,
                 sugar: AssignSugar::Compound(op),
+                written: None,
             }))
         } else {
             // Regular assignment: name = expr [expr ...]
@@ -232,7 +233,7 @@ impl Parser {
             let first = self.parse_expr()?;
             let value = self.parse_juxtapose_chain(first)?;
             let span = ident_token.span.to(&value.span());
-            Ok(Statement::Assignment(Assignment { name, value, span, hot, pre_hot, sugar: AssignSugar::None }))
+            Ok(Statement::Assignment(Assignment { name, value, span, hot, pre_hot, sugar: AssignSugar::None, written: None }))
         }
     }
 

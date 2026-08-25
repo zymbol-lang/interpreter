@@ -454,7 +454,10 @@ impl<'a> FormatVisitor<'a> {
         // as — `arr$+ 3`, not `arr = arr$+ 3`. The receiver is already inside
         // `value`, so this has to run before the name is written.
         if assign.sugar == AssignSugar::InPlaceEdit {
-            self.format_expr(&assign.value);
+            // `written` holds the edit as the author spelled it when `value` is
+            // a rewritten form of it — `d.x["y"]$~ 5` runs as a deep write at
+            // `d["x">"y"]`, which is not what was written (§2.1, §12).
+            self.format_expr(assign.written.as_deref().unwrap_or(&assign.value));
             return;
         }
         if assign.pre_hot {
