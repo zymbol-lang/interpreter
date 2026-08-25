@@ -107,6 +107,41 @@ d["b"]$~ (f(x) * 2)       // parentheses are allowed and never wrong
 `$|` (filter) and `$[..]` (slice) are the same kind of operation — selecting a
 subset — which is why both build.
 
+**Both halves are enforced.** A consulting `$` alone on a line throws away what
+it just built, and says so:
+
+```text
+s$~~["a":"X"]
+warning: this statement does nothing: `$~~` builds a value and it is discarded
+  = help: remove it, or use the result — assign it, print it, or pass it on
+```
+
+> Until v0.0.9 it was documented here and enforced nowhere: that line ran,
+> changed nothing, and no engine said a word — the same shape that made
+> BUG-ZYB-002 silent, and the one already closed for a bare identifier
+> (ERROR-ZYB-001). Ten operators, one warning each, identical in all three
+> engines. Pinned in `corpus/errors/semantic/decision19_consulta_descartada.zy`.
+>
+> The operator is pure, so the warning holds even with a call inside it: the
+> call's effect still happens and the `$#` wrapped around it is still pointless.
+> It points at the operator, not at the call.
+
+The editing half is the whole family, not just `$~`: **every one of them writes
+back at its receiver's path.**
+
+```zymbol
+d = #(l: [3, 1], n: #(l: [5, 4]))
+d.l$+ 9              // the dot        → d.l is [3, 1, 9]
+d["l"]$^-            // the bracket    → d.l is [9, 3, 1]
+d["n">"l"]$+[1] 0    // the navigator  → d.n.l is [0, 5, 4]
+d.n["l"]$-[1]        // mixed          → d.n.l is [5, 4]
+```
+
+> Until v0.0.9 any receiver other than the bare name **destroyed data**:
+> `d["l"]$+ 3` left `d` holding the list. Exit 0, no diagnostic, all three
+> engines agreeing. `corpus/collections/edicion_modelo_completo.zy` is every
+> operator against every receiver shape.
+
 ---
 
 ## 2. `=` never writes into a collection
