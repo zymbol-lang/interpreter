@@ -468,6 +468,23 @@ the same token as `#1`. Integer literals likewise accept any single script consi
 (`४२` is `42`). One morpheme, sixty-nine graphemic realizations, selected by the author's
 script rather than by grammatical context.
 
+**The separators go with the script, the pair does not.** A numeral script also selects how a
+number's separators are drawn, where it has a drawing of its own: `#٠٩#` writes `١٬٢٣٤٬٥٦٧٫٨٩`,
+with U+066C ARABIC THOUSANDS SEPARATOR and U+066B ARABIC DECIMAL SEPARATOR. The admission bar
+is that **Unicode name the character a numeric separator for that script**, and only Arabic
+clears it — for both of its digit blocks. The other 67 scripts write ASCII `.` and `,`.
+
+What the script does *not* select is which of the two means what. `,` groups and `.` divides,
+in every script; the pair never inverts, and there is no mode or argument that inverts it.
+That is rule 1 of §17 applied to a place where it is tempting to break it: a settable pair
+would make every number ambiguous until you knew the setting it was written under, which is a
+cost paid by every reader to spare one writer. A program that needs `100.000,00` builds it.
+
+Reading stays script-blind while writing does not: `٤٫٧٥` and `٤.٧٥` are one number, as a
+literal and through `#|…|`. Only `#,` ever emits a thousands separator, because it is the only
+operator whose result is text rather than a number — and text is the one thing `#|…|` hands
+back unparsed.
+
 #### 6.3 `@label` ~ `@:label` — the fused form
 
 A loop label may be written fused (`@label`) or with the binder made visible (`@:label`).

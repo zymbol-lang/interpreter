@@ -480,6 +480,25 @@ contexto las distingue.
 único de forma consistente (`४२` es `42`). Un morfema, sesenta y nueve realizaciones gráficas,
 seleccionadas por el sistema del autor y no por el contexto gramatical.
 
+**Los separadores van con la escritura; el par, no.** Un sistema numérico elige también cómo
+se dibujan los separadores de un número, cuando tiene un dibujo propio: `#٠٩#` escribe
+`١٬٢٣٤٬٥٦٧٫٨٩`, con U+066C ARABIC THOUSANDS SEPARATOR y U+066B ARABIC DECIMAL SEPARATOR. El
+listón de admisión es que **Unicode nombre el carácter separador numérico de esa escritura**, y
+solo el árabe lo pasa —para sus dos bloques de cifras—. Las otras 67 escrituras escriben `.` y
+`,` en ASCII.
+
+Lo que la escritura *no* elige es cuál de los dos significa qué. La `,` agrupa y el `.` divide,
+en toda escritura; el par nunca se invierte, y no hay modo ni argumento que lo invierta. Es la
+regla 1 del §17 aplicada a un sitio donde apetece romperla: un par configurable volvería
+ambiguo todo número hasta saber bajo qué ajuste se escribió, y ese es un coste que pagan todos
+los lectores para ahorrárselo a un escritor. Un programa que necesite `100.000,00` se lo
+construye.
+
+Leer sigue siendo ciego a la escritura aunque escribir no lo sea: `٤٫٧٥` y `٤.٧٥` son un mismo
+número, como literal y a través de `#|…|`. Solo `#,` emite un separador de miles, porque es el
+único operador cuyo resultado es texto y no un número —y el texto es lo único que `#|…|`
+devuelve sin analizar—.
+
 #### 6.3 `@etiqueta` ~ `@:etiqueta` — la forma fusionada
 
 Una etiqueta de bucle puede escribirse fusionada (`@etiqueta`) o con el vinculador visible

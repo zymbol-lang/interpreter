@@ -445,11 +445,9 @@ impl<W: Write> Interpreter<W> {
         let captured: Vec<(String, Value)> = if self.file_vars.is_empty() {
             Vec::new()
         } else {
-            let mut refs = HashSet::new();
-            let mut locals: HashSet<String> =
-                parameters.iter().map(|p| p.name.clone()).collect();
-            collect_refs_in_stmts(&body.statements, &mut locals, &mut refs);
-            refs.iter()
+            let free_names = self.free_names_of(&func_def, parameters, body);
+            free_names
+                .iter()
                 .filter_map(|name| {
                     self.file_vars.get(name).map(|v| (name.clone(), v.clone()))
                 })
@@ -990,6 +988,38 @@ fn collect_refs_in_expr(
         }
         // Literals and shell exprs have no capturable sub-expressions
         Expr::Literal(_) | Expr::Execute(_) | Expr::BashExec(_) | Expr::TerminalSize(_) => {}
+    }
+}
+
+impl<W: Write> Interpreter<W> {
+    /// The names a named function's body reads from outside itself, computed
+    /// once per definition and cached against it.
+    ///
+    /// Walking the body is O(body); doing it per call made a recursive function
+    /// re-derive its own answer on every invocation, which cost
+    /// `bench_recursion` 32% the day named functions started capturing
+    /// (ERROR-ZYB-002). The answer depends on the definition alone, so it is
+    /// computed from it once. Sorted, so a capture set is the same on every
+    /// run: a `HashSet`'s iteration order is not.
+    fn free_names_of(
+        &mut self,
+        func_def: &Rc<FunctionDef>,
+        parameters: &[zymbol_ast::Parameter],
+        body: &zymbol_ast::Block,
+    ) -> Rc<Vec<String>> {
+        let key = Rc::as_ptr(func_def) as usize;
+        if let Some((_, names)) = self.free_names_cache.get(&key) {
+            return Rc::clone(names);
+        }
+        let mut refs = HashSet::new();
+        let mut locals: HashSet<String> = parameters.iter().map(|p| p.name.clone()).collect();
+        collect_refs_in_stmts(&body.statements, &mut locals, &mut refs);
+        let mut names: Vec<String> = refs.into_iter().collect();
+        names.sort_unstable();
+        let names = Rc::new(names);
+        self.free_names_cache
+            .insert(key, (Rc::clone(func_def), Rc::clone(&names)));
+        names
     }
 }
 

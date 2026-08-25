@@ -134,6 +134,93 @@ pub fn digit_block_base(ch: char) -> Option<u32> {
     DIGIT_BLOCKS.iter().map(|&(base, _)| base).find(|&base| cp >= base && cp <= base + 9)
 }
 
+// ── Script separators ────────────────────────────────────────────────────────
+
+/// `(block_base, decimal_separator, thousands_separator)` for the scripts that
+/// encode their own.
+///
+/// The admission bar is deliberately narrow and objective: **Unicode itself must
+/// name the character a numeric separator for that script.** Exactly one script
+/// clears it — Arabic, through U+066B ARABIC DECIMAL SEPARATOR and U+066C ARABIC
+/// THOUSANDS SEPARATOR — and it clears it for both of its digit blocks: the
+/// Arabic-Indic one and the Extended block that Persian and Urdu use.
+///
+/// Every other entry in `DIGIT_BLOCKS` writes ASCII `.` and `,`, which is what
+/// they do in practice. A Devanagari-specific decimal point would be an
+/// invention, and a script whose separator is settled by locale preference
+/// rather than by Unicode belongs to a locale table — which this language does
+/// not carry and is not going to grow. A script joins this list the day Unicode
+/// names its separator, not the day a locale prefers one.
+const SCRIPT_SEPARATORS: &[(u32, char, char)] = &[
+    (0x0660, '\u{066B}', '\u{066C}'), // Arabic-Indic
+    (0x06F0, '\u{066B}', '\u{066C}'), // Extended Arabic-Indic (Persian, Urdu)
+];
+
+/// The decimal separator of the script identified by `block_base`; ASCII `.`
+/// for every script that does not encode one of its own.
+pub fn decimal_separator(block_base: u32) -> char {
+    SCRIPT_SEPARATORS
+        .iter()
+        .find(|&&(base, _, _)| base == block_base)
+        .map_or('.', |&(_, dec, _)| dec)
+}
+
+/// The thousands separator of the script identified by `block_base`; ASCII `,`
+/// for every script that does not encode one of its own.
+///
+/// Only `#,` ever emits one: it is the single operator whose output is text
+/// rather than a number.
+pub fn thousands_separator(block_base: u32) -> char {
+    SCRIPT_SEPARATORS
+        .iter()
+        .find(|&&(base, _, _)| base == block_base)
+        .map_or(',', |&(_, _, thousands)| thousands)
+}
+
+/// Whether `ch` reads as a decimal point: ASCII `.` or any script's own.
+///
+/// Reading is script-blind on purpose, exactly as `digit_value` is. Writing
+/// picks one separator, from the active numeral mode; reading accepts them all,
+/// so `٣٫٥` and `٣.٥` are the same number and a rendered value parses back.
+pub fn is_decimal_separator(ch: char) -> bool {
+    ch == '.' || SCRIPT_SEPARATORS.iter().any(|&(_, dec, _)| dec == ch)
+}
+
+/// The ASCII form of a numeric string written in any supported digit script,
+/// or `None` if the string is not a number at all.
+///
+/// Accepts an optional leading `-`, digits from any supported script, and at
+/// most one decimal separator — ASCII or the script's own, because a number
+/// rendered under an active numeral mode has to read back
+/// (`corpus/i18n/numeral_mode_round_trip.zy`). A thousands separator is *not*
+/// accepted, in any script: `#|"1,234"|` hands the text back untouched today
+/// and `#|"١٬٢٣٤"|` does the same, which is the symmetry that matters.
+///
+/// Both engines call this. It used to be two hand-written copies, one per
+/// engine — the shape a divergence takes before anybody notices it.
+pub fn ascii_number(s: &str) -> Option<String> {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    if chars.peek() == Some(&'-') {
+        result.push('-');
+        chars.next();
+    }
+    let mut has_digit = false;
+    let mut has_dot = false;
+    for ch in chars {
+        if let Some(dv) = digit_value(ch) {
+            result.push(char::from_digit(dv as u32, 10).unwrap());
+            has_digit = true;
+        } else if is_decimal_separator(ch) && !has_dot {
+            result.push('.');
+            has_dot = true;
+        } else {
+            return None; // non-numeric character — not a number
+        }
+    }
+    if has_digit { Some(result) } else { None }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,5 +364,82 @@ mod tests {
     fn different_scripts_have_different_block_bases() {
         assert_ne!(digit_block_base('0'), digit_block_base('०'));   // ASCII vs Devanagari
         assert_ne!(digit_block_base('٠'), digit_block_base('۰'));   // Arabic-Indic vs Extended
+    }
+
+    // ── separators ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn only_arabic_encodes_its_own_separators() {
+        assert_eq!(decimal_separator(0x0660), '\u{066B}');
+        assert_eq!(thousands_separator(0x0660), '\u{066C}');
+        assert_eq!(decimal_separator(0x06F0), '\u{066B}');
+        assert_eq!(thousands_separator(0x06F0), '\u{066C}');
+    }
+
+    #[test]
+    fn every_other_script_writes_ascii_separators() {
+        // The bar is that Unicode name the character a numeric separator FOR
+        // the script. Only Arabic clears it; a new entry here means a new
+        // Unicode fact, not a new locale preference.
+        for &(base, name) in DIGIT_BLOCKS {
+            if base == 0x0660 || base == 0x06F0 {
+                continue;
+            }
+            assert_eq!(decimal_separator(base), '.', "{name} decimal");
+            assert_eq!(thousands_separator(base), ',', "{name} thousands");
+        }
+    }
+
+    #[test]
+    fn reading_a_separator_is_script_blind() {
+        // Writing picks one separator from the active mode; reading accepts
+        // them all, which is what lets a rendered number parse back.
+        assert!(is_decimal_separator('.'));
+        assert!(is_decimal_separator('\u{066B}'));
+        assert!(!is_decimal_separator('\u{066C}')); // thousands is not a decimal point
+        assert!(!is_decimal_separator(','));
+        assert!(!is_decimal_separator('a'));
+    }
+
+    // ── ascii_number ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn ascii_number_normalizes_any_script() {
+        assert_eq!(ascii_number("४२").as_deref(), Some("42"));
+        assert_eq!(ascii_number("42").as_deref(), Some("42"));
+        assert_eq!(ascii_number("-٧").as_deref(), Some("-7"));
+        assert_eq!(ascii_number("๓.๕").as_deref(), Some("3.5"));
+    }
+
+    #[test]
+    fn ascii_number_accepts_the_scripts_own_decimal_point() {
+        // What an active numeral mode writes has to read back.
+        assert_eq!(ascii_number("٤٫٧٥").as_deref(), Some("4.75"));
+        assert_eq!(ascii_number("٤.٧٥").as_deref(), Some("4.75"));
+        assert_eq!(ascii_number("۳٫۵").as_deref(), Some("3.5"));
+    }
+
+    #[test]
+    fn ascii_number_rejects_a_thousands_separator_in_every_script() {
+        // `#|"1,234"|` hands the text back untouched, and the Arabic spelling
+        // does the same. That symmetry is the point: `#,` is the one operator
+        // whose result is text, and text is not read back.
+        assert_eq!(ascii_number("1,234"), None);
+        assert_eq!(ascii_number("١٬٢٣٤"), None);
+    }
+
+    #[test]
+    fn ascii_number_rejects_two_decimal_points() {
+        assert_eq!(ascii_number("1.2.3"), None);
+        assert_eq!(ascii_number("١٫٢٫٣"), None);
+        assert_eq!(ascii_number("١.٢٫٣"), None);
+    }
+
+    #[test]
+    fn ascii_number_rejects_what_is_not_a_number() {
+        assert_eq!(ascii_number("hola"), None);
+        assert_eq!(ascii_number(""), None);
+        assert_eq!(ascii_number("-"), None);
+        assert_eq!(ascii_number("."), None);
     }
 }

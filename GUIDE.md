@@ -4231,6 +4231,47 @@ sci = #^|xsci|
 >> #^!3|xsci| ¶    // → 1.234e4  (truncate to 3 significant digits)
 ```
 
+#### Separators and the numeral mode
+
+A formatted number's digits follow the active numeral mode, exactly as `>>` does
+— and so do its separators, where the script has separators of its own.
+
+```zymbol
+sep = 1234567.89
+
+#٠٩#
+>> sep ¶           // → ١٢٣٤٥٦٧٫٨٩
+>> #,.2|sep| ¶     // → ١٬٢٣٤٬٥٦٧٫٨٩
+
+#०९#
+>> #,.2|sep| ¶     // → १,२३४,५६७.८९
+#09#
+```
+
+Two rules, to be read together:
+
+- **The language fixes the pair.** `,` groups the thousands and `.` divides the
+  decimals, in every script, and it never inverts. A program that wants
+  `100.000,00` builds it; no mode and no argument makes the engine do it. This
+  is deliberate — the moment the pair becomes settable, every program that reads
+  a number has to ask which way round it was written.
+- **The script chooses how that pair is drawn**, when it has a drawing of its
+  own. The bar is that Unicode name the character a numeric separator *for that
+  script*, and exactly one script clears it: Arabic, through U+066B ARABIC
+  DECIMAL SEPARATOR and U+066C ARABIC THOUSANDS SEPARATOR, for both of its digit
+  blocks. The other 67 scripts write `.` and `,`, which is what they do in
+  practice; a Devanagari-specific decimal point would be an invention.
+
+Reading is script-blind, writing is not. `٤٫٧٥` and `٤.٧٥` are the same number —
+as a literal and through `#|…|` — and only the active mode decides which one is
+written. That is what keeps *what the program writes, the program can read back*
+true for floats.
+
+`#,` is the only operator in the language that emits a thousands separator,
+because it is the only one whose result is text rather than a number. That is
+also why its output is the one thing `#|…|` hands straight back instead of
+parsing.
+
 ### Base Literals and Conversions
 
 ```zymbol

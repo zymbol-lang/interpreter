@@ -1000,6 +1000,39 @@ the outer type says nothing about what lands two levels down.
 The accepted edges are pinned in `corpus/collections/homogeneidad_bordes.zy`;
 the refused ones in `reject/collections/04`, `07`, `08` and `10`.
 
+### L47 — `zymbol fmt` rewrites a numeric literal into ASCII, erasing its script
+
+```zymbol
+n = ४२
+>> n ¶
+```
+
+```text
+$ zymbol fmt file.zy
+n = 42
+>> n ¶
+```
+
+A program written entirely in Devanagari — identifiers, literals, output — is a
+first-class Zymbol program (`GUIDE.md`, and it is the founding principle stated
+outright). The formatter does not know that. A numeric literal reaches it as a
+token carrying a **value**, not the text it was written as, so the printer emits
+the value in ASCII and the script is gone. `४२` becomes `42`, `٣٫٥` becomes
+`3.5`, and the file still means the same thing — which is exactly why nothing
+catches it: the fail-closed token gate compares tokens, and `Num(42)` equals
+`Num(42)` whichever script it was spelled in.
+
+**Pre-existing and unrelated to the separators**: the ASCII rewrite predates
+them and applies to plain integers too. Found while checking that a literal
+written `٣٫٥` survives a format, which it does not — but neither did `٣.٥`.
+
+**Not fixed, and not decided.** The fix is to carry the source script on the
+token (a block base, which the lexer already computes and discards) and print
+back into it. That is a lexer/AST change for a cosmetic defect, and the
+alternative reading — that the formatter *normalizes* to ASCII on purpose, the
+way it normalizes indentation — has not been ruled out by anybody who gets to
+rule on it. Worth a decision before it is worth a patch.
+
 ### L39 — `>>` takes arithmetic, not comparison — **by design**
 
 The output operator has a narrower grammar than the rest of the language. Everything up to and
