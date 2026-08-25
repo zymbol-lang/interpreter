@@ -347,21 +347,31 @@ impl<W: Write> Interpreter<W> {
             return deep_update_value(root, &indices, new_val, op.span);
         }
 
-        // Single-level update path: arr[i]$~ val or tuple["campo"]$~ val
-        let index_expr = match op.target.unwrap_group() {
-            Expr::Index(idx) => idx,
+        // Single-level update path: arr[i]$~ val, d["k"]$~ val, or d.k$~ val.
+        //
+        // The dot is the same access as the bracket with a literal key — it is
+        // how COLLECTIONS.md spells reading a key that is an identifier — so it
+        // resolves to the very same String index and every rule below applies
+        // unchanged. Evaluation order is receiver, then index, then value, as
+        // it already was.
+        let (collection, index_value) = match op.target.unwrap_group() {
+            Expr::Index(idx) => {
+                let c = self.eval_expr(&idx.array)?;
+                let i = self.eval_expr(&idx.index)?;
+                (c, i)
+            }
+            Expr::MemberAccess(ma) if !ma.is_module_access => {
+                let c = self.eval_expr(&ma.object)?;
+                (c, Value::String(ma.field.clone()))
+            }
             _ => {
                 return Err(RuntimeError::Generic {
-                    message: "update operator ($~) requires an indexed expression like arr[i]$~ val or arr[i>j]$~ val"
+                    message: "update operator ($~) requires a place to write like arr[i]$~ val, arr[i>j]$~ val or d.key$~ val"
                         .to_string(),
                     span: op.span,
                 });
             }
         };
-
-        // Evaluate the collection, index, and new value
-        let collection = self.eval_expr(&index_expr.array)?;
-        let index_value = self.eval_expr(&index_expr.index)?;
         let new_value = self.eval_expr(&op.value)?;
 
         // Resolve 1-based or negative integer index to a 0-based usize.

@@ -19,6 +19,57 @@ those corrections ship inside it. See [WINDOWS_V009.md](WINDOWS_V009.md).
 
 ### Added
 
+**The dot writes what the dot reads — and a deep write has one form**
+
+```zymbol
+d = #(a: 1, x: #(y: 2))
+d.a$~ 9              // ✓ new: exactly `d["a"]$~ 9`
+d["x">"y"]$~ 5       // ✓ the deep write
+d["x"]["y"]$~ 5      // ✗ error: this edit has nothing to write into
+d.x["y"]$~ 5         // ✗ the same error
+```
+
+COLLECTIONS.md documents two ways to reach a key — `u.nombre` for keys that are
+identifiers, `u["nombre"]` for any key. Both read; only one wrote, and nothing
+anywhere said why. The asymmetry was inherited, not decided. `d.k$~ v` is now
+exactly `d["k"]$~ v`: same place, same rule of the result, same key added when it
+was not there. `::` stays out — it addresses a module's namespace, which is not
+a place to write.
+
+**Found while closing that: a silent data-destruction bug the gate could not
+see.** `d["x"]["y"]$~ 9` did not fail — it replaced `d` with its own inner
+dictionary and every other key vanished, with exit 0 and no diagnostic. The
+statement form desugars to `name = <the same expression>` and the expression
+returns the receiver it updated; the anchor search recursed the whole chain, so
+it found `d` and assigned the *inner* collection to it. All three engines agreed,
+so no consensus run could see it.
+
+The receiver of an in-place edit is now a name plus **exactly one** access. Deep
+writes have one form, `d[i>j]$~ v` — the rule already recorded for `m[i][j] = v`,
+that it breaks navigation and intent, now enforced for `$~`. The functional form
+is untouched, because nothing is written back:
+`a2 = a["meta"]$~ (a.meta["code"]$~ 200)` composes as it always did.
+
+**And decision 20, promised in a comment and never implemented.** `f()[1]$~ 5`
+and `d.x["y"]$~ 9` edit something nobody holds. The comment on
+`in_place_edit_target` had said they are "refused rather than silently doing
+nothing" since it was written; nothing refused them — the statement fell through
+to `Statement::Expr`, ran, and threw the result away. The browser engine *did*
+refuse them, so this was a live three-engine divergence as well. Now refused
+everywhere, with two different helps: a chain from a name wanted the navigator,
+anything else wanted a variable.
+
+**What it cost, measured before deciding**: across the corpus, the applications
+and the playground examples there are 170 one-level writes and 14 deep `[i>j]`
+ones — and **zero** chained `[a][b]` writes and **zero** dot writes. Both halves
+of this change cost nothing to migrate. The one mixed-form occurrence,
+`a.meta["code"]$~ 200` in `corpus/collections/named_tuple_update.zy`, is the
+functional form and still parses.
+
+Pinned in `corpus/collections/escritura_por_punto.zy`, `reject/collections/11`
+and `reject/collections/12`. Reported from zyCoin.
+
+
 **`#,` and `#^` write their digits in the active numeral script**
 
 ```zymbol

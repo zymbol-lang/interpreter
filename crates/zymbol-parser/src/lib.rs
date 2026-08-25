@@ -310,6 +310,19 @@ impl Parser {
                                 sugar: AssignSugar::InPlaceEdit,
                             }));
                         }
+                        // Decision 20, finally enforced: an edit with nowhere
+                        // to write is refused. The comment on
+                        // `in_place_edit_target` had promised this since it was
+                        // written, and nothing did it — the statement fell
+                        // through to `Statement::Expr`, ran, and threw the
+                        // result away in silence.
+                        if let Some(help) = unanchored_edit_help(&expr) {
+                            return Err(Diagnostic::error(
+                                "this edit has nothing to write into",
+                            )
+                            .with_span(span)
+                            .with_help(help));
+                        }
                         Ok(Statement::Expr(ExprStatement::new(expr, span)))
                     }
                 }
@@ -1531,14 +1544,84 @@ mod tests {
 /// result is dead code and belongs to decision 19, not here.
 ///
 /// Returning `None` for a receiver that is not a name is decision 20: `f()[1]$~ 5`
-/// would modify a temporary nobody holds, so it stays an expression statement and
-/// is refused rather than silently doing nothing.
+/// would modify a temporary nobody holds, so it is refused (see
+/// `refuse_unanchored_edit`) rather than silently doing nothing.
+///
+/// The receiver must be a name plus **exactly one** access — `d[k]`, `d.k`, or
+/// the deep form `d[i>j]`. It used to recurse, and that was the whole of a
+/// silent data-destruction bug: `d["x"]["y"]$~ 9` found the base name `d` and
+/// desugared to `d = d["x"]["y"]$~ 9`. The expression returns the RECEIVER it
+/// updated — the inner dictionary — so `d` was replaced by its own child and
+/// every other key vanished. Exit 0, no diagnostic, and all three engines
+/// agreed, so no consensus run could see it.
+///
+/// Assigning the result back is only sound when the receiver IS the name, which
+/// is what "exactly one access" means. Deeper writes have one form, `d[i>j]$~`,
+/// and that is the decision recorded for `m[i][j] = v`: it breaks navigation
+/// and intent.
+/// Why a statement-level edit has nowhere to write, as help text — or `None`
+/// when the expression is not an edit at all.
+///
+/// Called only after `in_place_edit_target` has already said there is no
+/// anchor, so reaching here means the edit would modify something nobody holds.
+/// The two reasons need different help, because they are different mistakes:
+/// a chain from a name wanted the deep form, and everything else wanted a
+/// variable.
+///
+/// The consulting half of the `$` family never reaches here: discarding the
+/// result of `$#` or `$?` is dead code, which is decision 19 and a warning, not
+/// this.
+fn unanchored_edit_help(expr: &Expr) -> Option<&'static str> {
+    fn receiver(e: &Expr) -> Option<&Expr> {
+        Some(match e.unwrap_group() {
+            Expr::CollectionAppend(x) => &x.collection,
+            Expr::CollectionInsert(x) => &x.collection,
+            Expr::CollectionRemoveValue(x) => &x.collection,
+            Expr::CollectionRemoveAll(x) => &x.collection,
+            Expr::CollectionRemoveAt(x) => &x.collection,
+            Expr::CollectionRemoveRange(x) => &x.collection,
+            Expr::CollectionSortAsc(x)
+            | Expr::CollectionSortDesc(x)
+            | Expr::CollectionSortCustom(x) => &x.collection,
+            Expr::CollectionUpdate(x) => &x.target,
+            Expr::ConcatBuild(x) => &x.base,
+            _ => return None,
+        })
+    }
+    /// Does this chain of accesses bottom out at a plain name?
+    fn rooted_at_name(e: &Expr) -> bool {
+        match e.unwrap_group() {
+            Expr::Identifier(_) => true,
+            Expr::Index(ix) => rooted_at_name(&ix.array),
+            Expr::DeepIndex(di) => rooted_at_name(&di.array),
+            Expr::MemberAccess(ma) => !ma.is_module_access && rooted_at_name(&ma.object),
+            _ => false,
+        }
+    }
+    let r = receiver(expr)?;
+    Some(if rooted_at_name(r) {
+        "a write reaches one step from a name; for a deeper one use the navigator: `d[\"x\">\"y\"]$~ value`"
+    } else {
+        "this edits what the expression produced, and nothing holds it — assign the result to a name first"
+    })
+}
+
 fn in_place_edit_target(expr: &Expr) -> Option<String> {
     fn base_name(e: &Expr) -> Option<String> {
+        fn anchor(e: &Expr) -> Option<String> {
+            match e.unwrap_group() {
+                Expr::Identifier(i) => Some(i.name.clone()),
+                _ => None,
+            }
+        }
         match e.unwrap_group() {
             Expr::Identifier(i) => Some(i.name.clone()),
-            Expr::Index(ix) => base_name(&ix.array),
-            Expr::DeepIndex(di) => base_name(&di.array),
+            Expr::Index(ix) => anchor(&ix.array),
+            Expr::DeepIndex(di) => anchor(&di.array),
+            // `d.k$~ v` writes exactly as `d["k"]$~ v` does: the dot is a
+            // documented way to reach a key (COLLECTIONS.md), and nothing said
+            // it could only read.
+            Expr::MemberAccess(ma) if !ma.is_module_access => anchor(&ma.object),
             _ => None,
         }
     }

@@ -335,6 +335,45 @@ Asking about a value is a different operation and would need its own sign.
 
 ### Modifying, adding, removing
 
+The dot writes what the dot reads:
+
+```zymbol
+u = #(nombre: "Ana", edad: 30)
+u.edad$~ 31               // exactly `u["edad"]$~ 31`
+u.sueldo$~ 1200           // a key that is not there gets ADDED, as the bracket does
+```
+
+Both spellings reach the same place under the same rules — the rule of the
+result included, so `otra = u.edad$~ 31` builds and leaves `u` alone. Only the
+bracket reaches a key that is not an identifier (`u["dos palabras"]`), which is
+the same limit reading already had. `::` is not a place: it addresses a module's
+namespace, so `m::x$~ v` stays refused.
+
+> Until v0.0.9 the dot **read** and could not **write**, and nothing said why.
+> The asymmetry was inherited rather than decided.
+
+### Deep writes have one form, and it is the navigator
+
+```zymbol
+m["x">"y"]$~ 9            // ✓ the deep write
+m["x"]["y"]$~ 9           // ✗ error: this edit has nothing to write into
+m.x["y"]$~ 9              // ✗ the same error
+```
+
+This is the rule already stated for `m[i][j] = v` — it breaks navigation and
+intent — now enforced for `$~` too. A write reaches **one step from a name**,
+because the statement form desugars to `name = <the same expression>` and the
+expression returns the receiver it updated. Assigning that back is sound only
+when the receiver IS the name.
+
+> `m["x"]["y"]$~ 9` did not merely fail: it **destroyed data**. It found the
+> base name `m`, so `m` was replaced by its own inner collection and every other
+> key vanished — exit 0, no diagnostic, and all three engines agreed, so no
+> consensus run could see it. `reject/collections/11` and `12` hold both forms.
+>
+> The functional form is untouched, because nothing is written back:
+> `a2 = a["meta"]$~ (a.meta["code"]$~ 200)` composes as it always did.
+
 ```zymbol
 u = #(nombre: "Ana", edad: 30)
 u["edad"]$~ 31            // modifies in place (§ 1)
