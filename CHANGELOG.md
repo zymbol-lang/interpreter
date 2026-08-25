@@ -39,12 +39,47 @@ money formatter reimplemented thousands-grouping by hand — sixteen lines
 rewriting an operator the language already had — precisely because the one that
 existed could not be used under a locale.
 
-Only the digits map: the separators are not ASCII digits and pass through
-unchanged, which is what leaves room for choosing them separately. That part —
-`#,` being wired to `1,234,567.89` and unusable by a program that writes
-`1.234.567,89` — is a gap and not a defect, and it is still open.
+Pinned in `corpus/i18n/formato_sigue_al_modo.zy`. The separators followed in a
+second pass — the entry below.
 
-Pinned in `corpus/i18n/formato_sigue_al_modo.zy`.
+**The separators follow the script too, and the pair never inverts**
+
+```zymbol
+#٠٩#
+>> 1234567.89 ¶        // ١٢٣٤٥٦٧٫٨٩   was ١٢٣٤٥٦٧.٨٩
+>> #,.2|f| ¶           // ١٬٢٣٤٬٥٦٧٫٨٩  was ١٬٢٣٤٬٥٦٧.٨٩
+```
+
+Rendering the digits in a script and then punctuating them with ASCII was half a
+translation. A numeral script now selects the separators as well, **where it has
+separators of its own** — and the bar for that is objective: Unicode must name
+the character a numeric separator *for that script*. Exactly one script clears
+it, Arabic, through U+066B ARABIC DECIMAL SEPARATOR and U+066C ARABIC THOUSANDS
+SEPARATOR, for both of its digit blocks. The other 67 write ASCII `.` and `,`,
+which is what they do in practice; a Devanagari-specific decimal point would be
+an invention, and a script whose separator is settled by locale preference
+belongs to a locale table this language does not carry.
+
+**What did not change is the pair.** `,` groups and `.` divides, in every
+script. There is no mode and no argument that inverts them, and a program that
+wants `100.000,00` builds it. A settable pair would make every number ambiguous
+until you knew the setting it was written under — a cost paid by every reader to
+spare one writer. This closes IDEA-ZYB-001 as a decision, not as an
+implementation.
+
+Reading stayed script-blind while writing stopped being so, which is what keeps
+`corpus/i18n/numeral_mode_round_trip.zy` true: `٤٫٧٥` and `٤.٧٥` are one number,
+as a literal and through `#|…|`. The thousands separator is refused on input in
+every script, exactly as `#|"1,234"|` already refused it — `#,` is the one
+operator whose result is text, and text is not read back.
+
+Two goldens moved, both floats under an active Arabic mode. Pinned in
+`corpus/i18n/separadores_de_la_escritura.zy`.
+
+While measuring this, `zymbol fmt` turned out to rewrite `४२` to `42`, erasing
+the script of every numeric literal. It predates the separators and is not
+fixed — recorded as REFERENCE L47, because whether that is a defect or a
+deliberate normalization has not been decided by anybody entitled to decide it.
 
 **A named function captures the file's variables, like a lambda**
 
@@ -93,6 +128,15 @@ rewritten: two asserted the isolation, and `bugs/bug_l16_try_scope_restore.zy`
 used it as a convenient way to make a function fail inside a `!?` and needed
 another. The new rule is pinned in `corpus/functions/captura_del_archivo.zy`,
 nine assertions identical in all three engines.
+
+**It also cost 44% of `bench_recursion`, now recovered.** Knowing what a body
+reads from outside itself walks the whole body AST, and the tree-walker did that
+per CALL — so a recursive function re-derived its own answer on every
+invocation: 2371 ms against a 1644 ms baseline. The set depends on the
+DEFINITION alone, so it is computed once and cached against it, which is what
+the JavaScript engine had been doing on the function object all along. Back to
+1531 ms, *below* the baseline the capture work started from. The benchmark gate
+is what caught it; nothing else would have.
 
 **The homogeneity rule now covers the whole edit family**
 

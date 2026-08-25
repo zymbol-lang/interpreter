@@ -642,6 +642,19 @@ pub struct Interpreter<W: Write> {
     /// locals are not the file's, and a named function is written at file level
     /// so it cannot see them anyway.
     file_vars: HashMap<String, Value>,
+    /// The free names of each named function's body, computed once per
+    /// definition instead of once per call.
+    ///
+    /// Capturing (above) needs to know what a body reads from outside itself,
+    /// and that answer walks the whole body AST. It depends on the DEFINITION
+    /// alone, so a recursive function was re-deriving its own answer on every
+    /// invocation: `bench_recursion` lost 32% the day named functions started
+    /// capturing. The JavaScript engine already cached it on the function
+    /// object; this is the same cache, keyed by definition address.
+    ///
+    /// The `Rc` is kept in the map so that address cannot be reused by a later
+    /// allocation while an entry for it is still live.
+    free_names_cache: HashMap<usize, (Rc<FunctionDef>, Rc<Vec<String>>)>,
     /// Auto-free (v0.0.8): names destroyed by the last-use schedule in the
     /// CURRENT frame. Separate from `dead_variables` so an analyzer bug
     /// surfaces as a distinctive internal error, never as a user-facing `\`
@@ -1025,6 +1038,7 @@ impl Interpreter<std::io::Stdout> {
             output: std::io::stdout(),
             scope_stack: vec![HashMap::new()],  // Start with one global scope
             file_vars: HashMap::new(),
+            free_names_cache: HashMap::new(),
             loop_scope_depths: Vec::new(),
             functions: HashMap::new(),
             control_flow: ControlFlow::None,
@@ -1080,6 +1094,7 @@ impl<W: Write> Interpreter<W> {
             output,
             scope_stack: vec![HashMap::new()],  // Start with one global scope
             file_vars: HashMap::new(),
+            free_names_cache: HashMap::new(),
             loop_scope_depths: Vec::new(),
             functions: HashMap::new(),
             control_flow: ControlFlow::None,

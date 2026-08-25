@@ -25,7 +25,6 @@ use std::rc::Rc;
 use thiserror::Error;
 use zymbol_bytecode::{BuildPart, Chunk, CompiledProgram, FuncIdx, InputKind, Instruction, Reg};
 use zymbol_common::num;
-use zymbol_lexer::digit_blocks::digit_value;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Numeral-mode helpers (mirrors zymbol-interpreter::numeral_mode)
@@ -33,25 +32,35 @@ use zymbol_lexer::digit_blocks::digit_value;
 
 const ASCII_BASE: u32 = 0x0030;
 
+/// Rewrites one **formatted number** into the script identified by `block_base`
+/// (mirrors zymbol-interpreter::numeral_mode::map_numeral_number): digits, the
+/// decimal separator and the thousands separator all follow the script.
+///
+/// The argument must be a single number and nothing else — the separators are
+/// ordinary punctuation, so running this over composite text would rewrite
+/// marks that were never separators. Composite text never reaches here: a list,
+/// an interpolation and a concatenation each map their numbers one at a time.
+///
 /// Takes `s` by value so the ASCII fast-path hands the buffer straight back
-/// instead of re-allocating it (mirrors zymbol-interpreter::numeral_mode).
-fn map_ascii_digits(s: String, block_base: u32) -> String {
+/// instead of re-allocating it.
+fn map_numeral_number(s: String, block_base: u32) -> String {
     if block_base == ASCII_BASE {
         return s;
     }
+    let decimal = zymbol_lexer::digit_blocks::decimal_separator(block_base);
+    let thousands = zymbol_lexer::digit_blocks::thousands_separator(block_base);
     s.chars()
-        .map(|ch| {
-            if ch.is_ascii_digit() {
-                char::from_u32(block_base + (ch as u32 - ASCII_BASE)).unwrap_or(ch)
-            } else {
-                ch
-            }
+        .map(|ch| match ch {
+            '0'..='9' => char::from_u32(block_base + (ch as u32 - ASCII_BASE)).unwrap_or(ch),
+            '.' => decimal,
+            ',' => thousands,
+            _ => ch,
         })
         .collect()
 }
 
-fn numeral_int(value: i64, base: u32) -> String { map_ascii_digits(value.to_string(), base) }
-fn numeral_float(value: f64, base: u32) -> String { map_ascii_digits(value.to_string(), base) }
+fn numeral_int(value: i64, base: u32) -> String { map_numeral_number(value.to_string(), base) }
+fn numeral_float(value: f64, base: u32) -> String { map_numeral_number(value.to_string(), base) }
 fn numeral_bool(value: bool, base: u32) -> String { format!("#{}", numeral_int(if value { 1 } else { 0 }, base)) }
 
 /// Append `n` to `s` in the active script. In ASCII mode — the default, and the
@@ -587,29 +596,6 @@ fn vm_char_as_number(c: char) -> Value {
 }
 
 /// Map the ASCII digits of a formatted number into the active numeral script.
-///
-/// `#,` and `#^` build their text with Rust's formatter, which writes ASCII, so
-/// without this a program printed `१२३४५६७.८९` with `>>` and `1,234,567.89` one
-/// line later with `#,` — two spellings of the digits inside one output. The
-/// precision operators already followed the mode; these two did not, in every
-/// engine, so no consensus run could see it.
-///
-/// Only the digits map: separators are not ASCII digits and pass through.
-fn vm_numeral_digits(s: String, block_base: u32) -> String {
-    if block_base == ASCII_BASE {
-        return s;
-    }
-    s.chars()
-        .map(|ch| {
-            if ch.is_ascii_digit() {
-                char::from_u32(block_base + (ch as u32 - ASCII_BASE)).unwrap_or(ch)
-            } else {
-                ch
-            }
-        })
-        .collect()
-}
-
 fn vm_fmt_thousands(num: f64, prec_kind: u8, prec_n: u32) -> String {
     let num = match prec_kind {
         1 => { let m = 10f64.powi(prec_n as i32); (num * m).round() / m }
@@ -964,28 +950,9 @@ fn ascii_digits(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-fn normalize_unicode_digits(s: &str) -> Option<String> {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    if chars.peek() == Some(&'-') {
-        result.push('-');
-        chars.next();
-    }
-    let mut has_digit = false;
-    let mut has_dot = false;
-    for ch in chars {
-        if let Some(dv) = digit_value(ch) {
-            result.push(char::from_digit(dv as u32, 10).unwrap());
-            has_digit = true;
-        } else if ch == '.' && !has_dot {
-            result.push('.');
-            has_dot = true;
-        } else {
-            return None;
-        }
-    }
-    if has_digit { Some(result) } else { None }
-}
+// The one normalizer, shared with the tree-walker and with the lexer's own
+// literal scanner — see `zymbol_lexer::digit_blocks::ascii_number`.
+use zymbol_lexer::digit_blocks::ascii_number as normalize_unicode_digits;
 
 #[inline(always)]
 fn get_chunk(program: &CompiledProgram, chunk_idx: usize) -> &Chunk {
@@ -3237,7 +3204,7 @@ impl<W: Write> VM<W> {
                         Ok(f) => f,
                         Err(e) => raise!(e),
                     };
-                    let s = vm_numeral_digits(vm_fmt_thousands(f, prec_kind, n), self.numeral_mode);
+                    let s = map_numeral_number(vm_fmt_thousands(f, prec_kind, n), self.numeral_mode);
                     self.reg_set(dst, Value::String(ZyStr::new(s)));
                 }
                 &Instruction::FmtScientificDyn(dst, src, prec_kind, prec_reg) => {
@@ -3249,7 +3216,7 @@ impl<W: Write> VM<W> {
                         Ok(f) => f,
                         Err(e) => raise!(e),
                     };
-                    let s = vm_numeral_digits(vm_fmt_scientific(f, prec_kind, n), self.numeral_mode);
+                    let s = map_numeral_number(vm_fmt_scientific(f, prec_kind, n), self.numeral_mode);
                     self.reg_set(dst, Value::String(ZyStr::new(s)));
                 }
                 &Instruction::RoundFloatDyn(dst, src, prec_reg) => {
@@ -3289,7 +3256,7 @@ impl<W: Write> VM<W> {
                             }),
                         },
                     };
-                    let s = vm_numeral_digits(vm_fmt_thousands(f, prec_kind, prec_n), self.numeral_mode);
+                    let s = map_numeral_number(vm_fmt_thousands(f, prec_kind, prec_n), self.numeral_mode);
                     self.reg_set(dst, Value::String(ZyStr::new(s)));
                 }
                 &Instruction::FmtScientific(dst, src, prec_kind, prec_n) => {
@@ -3303,7 +3270,7 @@ impl<W: Write> VM<W> {
                             }),
                         },
                     };
-                    let s = vm_numeral_digits(vm_fmt_scientific(f, prec_kind, prec_n), self.numeral_mode);
+                    let s = map_numeral_number(vm_fmt_scientific(f, prec_kind, prec_n), self.numeral_mode);
                     self.reg_set(dst, Value::String(ZyStr::new(s)));
                 }
 

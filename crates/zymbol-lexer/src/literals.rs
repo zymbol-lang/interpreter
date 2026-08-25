@@ -10,7 +10,7 @@
 use zymbol_error::Diagnostic;
 use zymbol_span::Position;
 
-use crate::digit_blocks::{digit_block_base, digit_value};
+use crate::digit_blocks::{decimal_separator, digit_block_base, digit_value};
 use crate::{Lexer, Token, TokenKind};
 
 /// Parts of an interpolated string
@@ -312,14 +312,24 @@ impl Lexer {
         }
 
         // ── decimal point ─────────────────────────────────────────────────────
-        // Require the char after '.' to be a recognised digit (any script) to
-        // avoid mistaking the range operator `..` for a float separator.
-        if !self.is_at_end() && self.current_char() == '.' {
+        // Require the char after the separator to be a recognised digit (any
+        // script) to avoid mistaking the range operator `..` for a float.
+        //
+        // The separator is ASCII `.` or the one the digits' own script encodes
+        // (`٣٫٥`): that is what an active numeral mode now writes, and a number
+        // the program writes has to read back. A separator belonging to some
+        // *other* script is not a decimal point here — it falls through to the
+        // same place any other stray character does, so single-script
+        // consistency covers the separator exactly as it covers the digits.
+        let own_separator = active_block.map(decimal_separator);
+        let at_separator = !self.is_at_end()
+            && (self.current_char() == '.' || Some(self.current_char()) == own_separator);
+        if at_separator {
             if let Some(next_ch) = self.peek() {
                 if digit_value(next_ch).is_some() {
                     is_float = true;
                     number_str.push('.');
-                    self.advance(); // consume '.'
+                    self.advance(); // consume the separator
 
                     while !self.is_at_end() {
                         let ch = self.current_char();

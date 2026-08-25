@@ -10,7 +10,6 @@
 use std::io::Write;
 use zymbol_ast::{BaseConversionExpr, CastKind, FormatExpr, NumericCastExpr, NumericEvalExpr, RoundExpr, TruncExpr, TypeMetadataExpr};
 use zymbol_common::num;
-use zymbol_lexer::digit_blocks::digit_value;
 
 use crate::{Interpreter, Result, RuntimeError, Value};
 
@@ -29,32 +28,10 @@ fn value_type(v: Value) -> &'static str {
     }
 }
 
-/// Normalize a string containing Unicode numerals to ASCII digits.
-/// Accepts: Unicode decimal digits (any of 69 scripts), '.', '-' (leading only).
-/// Returns None if any non-numeric character is found.
-fn normalize_unicode_digits(s: &str) -> Option<String> {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    // Optional leading minus
-    if chars.peek() == Some(&'-') {
-        result.push('-');
-        chars.next();
-    }
-    let mut has_digit = false;
-    let mut has_dot = false;
-    for ch in chars {
-        if let Some(dv) = digit_value(ch) {
-            result.push(char::from_digit(dv as u32, 10).unwrap());
-            has_digit = true;
-        } else if ch == '.' && !has_dot {
-            result.push('.');
-            has_dot = true;
-        } else {
-            return None; // non-numeric character — not a number
-        }
-    }
-    if has_digit { Some(result) } else { None }
-}
+// The one normalizer, shared with the VM and with the lexer's own literal
+// scanner. It used to be a hand-written copy in each engine; they agreed, which
+// is exactly what makes that shape dangerous — nothing would have said so.
+use zymbol_lexer::digit_blocks::ascii_number as normalize_unicode_digits;
 
 /// The ASCII form of a numeric string written in any of the 69 supported digit
 /// scripts: `"४२"` → `"42"`, `"42"` → `"42"` (borrowed, no allocation).
@@ -289,17 +266,17 @@ impl<W: Write> Interpreter<W> {
             FormatKind::Scientific => interp_fmt_scientific(f, precision),
         };
 
-        // The digits follow the active numeral mode, as `>>` and the precision
-        // operators do. They did not: `#,` and `#^` build their text with
-        // `format!`, which writes ASCII, so under `#०९#` a program printed
-        // `१२३४५६७.८९` with `>>` and `1,234,567.89` one line later with `#,` —
-        // two spellings of the digits inside one output. The same in all three
-        // engines, so no consensus run could see it, and no corpus file printed
-        // `#,` under an active mode.
+        // Digits *and* separators follow the active numeral mode, as `>>` and
+        // the precision operators do. They did not: `#,` and `#^` build their
+        // text with `format!`, which writes ASCII, so under `#०९#` a program
+        // printed `१२३४५६७.८९` with `>>` and `1,234,567.89` one line later with
+        // `#,` — two spellings of one number inside one output. The same in all
+        // three engines, so no consensus run could see it.
         //
-        // Only the digits map: the separators are not ASCII digits and pass
-        // through, which is what leaves room for choosing them separately.
-        Ok(Value::String(crate::numeral_mode::map_ascii_digits(
+        // `#,` is the only operator in the language that emits a thousands
+        // separator at all, because it is the only one whose result is text
+        // rather than a number.
+        Ok(Value::String(crate::numeral_mode::map_numeral_number(
             formatted,
             self.numeral_mode,
         )))
