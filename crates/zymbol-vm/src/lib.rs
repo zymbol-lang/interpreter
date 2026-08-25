@@ -586,6 +586,30 @@ fn vm_char_as_number(c: char) -> Value {
     }
 }
 
+/// Map the ASCII digits of a formatted number into the active numeral script.
+///
+/// `#,` and `#^` build their text with Rust's formatter, which writes ASCII, so
+/// without this a program printed `१२३४५६७.८९` with `>>` and `1,234,567.89` one
+/// line later with `#,` — two spellings of the digits inside one output. The
+/// precision operators already followed the mode; these two did not, in every
+/// engine, so no consensus run could see it.
+///
+/// Only the digits map: separators are not ASCII digits and pass through.
+fn vm_numeral_digits(s: String, block_base: u32) -> String {
+    if block_base == ASCII_BASE {
+        return s;
+    }
+    s.chars()
+        .map(|ch| {
+            if ch.is_ascii_digit() {
+                char::from_u32(block_base + (ch as u32 - ASCII_BASE)).unwrap_or(ch)
+            } else {
+                ch
+            }
+        })
+        .collect()
+}
+
 fn vm_fmt_thousands(num: f64, prec_kind: u8, prec_n: u32) -> String {
     let num = match prec_kind {
         1 => { let m = 10f64.powi(prec_n as i32); (num * m).round() / m }
@@ -3213,7 +3237,7 @@ impl<W: Write> VM<W> {
                         Ok(f) => f,
                         Err(e) => raise!(e),
                     };
-                    let s = vm_fmt_thousands(f, prec_kind, n);
+                    let s = vm_numeral_digits(vm_fmt_thousands(f, prec_kind, n), self.numeral_mode);
                     self.reg_set(dst, Value::String(ZyStr::new(s)));
                 }
                 &Instruction::FmtScientificDyn(dst, src, prec_kind, prec_reg) => {
@@ -3225,7 +3249,7 @@ impl<W: Write> VM<W> {
                         Ok(f) => f,
                         Err(e) => raise!(e),
                     };
-                    let s = vm_fmt_scientific(f, prec_kind, n);
+                    let s = vm_numeral_digits(vm_fmt_scientific(f, prec_kind, n), self.numeral_mode);
                     self.reg_set(dst, Value::String(ZyStr::new(s)));
                 }
                 &Instruction::RoundFloatDyn(dst, src, prec_reg) => {
@@ -3265,7 +3289,7 @@ impl<W: Write> VM<W> {
                             }),
                         },
                     };
-                    let s = vm_fmt_thousands(f, prec_kind, prec_n);
+                    let s = vm_numeral_digits(vm_fmt_thousands(f, prec_kind, prec_n), self.numeral_mode);
                     self.reg_set(dst, Value::String(ZyStr::new(s)));
                 }
                 &Instruction::FmtScientific(dst, src, prec_kind, prec_n) => {
@@ -3279,7 +3303,7 @@ impl<W: Write> VM<W> {
                             }),
                         },
                     };
-                    let s = vm_fmt_scientific(f, prec_kind, prec_n);
+                    let s = vm_numeral_digits(vm_fmt_scientific(f, prec_kind, prec_n), self.numeral_mode);
                     self.reg_set(dst, Value::String(ZyStr::new(s)));
                 }
 
