@@ -1026,7 +1026,21 @@ impl VariableAnalyzer {
     /// Generate diagnostics for all unused variables
     fn generate_diagnostics(&mut self) {
         let mut vars: Vec<&VariableInfo> = self.variables.values().collect();
-        vars.sort_by_key(|v| (v.declaration_span.start.line, v.declaration_span.start.column));
+        // The name breaks the tie, and it has to: `self.variables` is a HashMap,
+        // whose iteration order Rust randomizes per process, and `sort_by_key`
+        // is stable — so any two variables sharing a position kept that random
+        // order and the warnings came out shuffled between runs of the SAME
+        // file. Positions collide whenever one statement declares several
+        // names: `(a, b, c) = t9` gives all three the span of the statement.
+        //
+        // Nothing in the corpus goldens captures a warning order, so this was
+        // invisible there; it surfaced in the formatter's P3 property, which
+        // compares `2>&1` and was intermittently blaming `fmt` for a shuffle it
+        // had not caused.
+        vars.sort_by(|a, b| {
+            (a.declaration_span.start.line, a.declaration_span.start.column, &a.name)
+                .cmp(&(b.declaration_span.start.line, b.declaration_span.start.column, &b.name))
+        });
         for var_info in vars {
             // Skip underscore-prefixed variables (intentionally unused)
             if var_info.name.starts_with('_') {

@@ -76,10 +76,55 @@ operator whose result is text, and text is not read back.
 Two goldens moved, both floats under an active Arabic mode. Pinned in
 `corpus/i18n/separadores_de_la_escritura.zy`.
 
-While measuring this, `zymbol fmt` turned out to rewrite `४२` to `42`, erasing
-the script of every numeric literal. It predates the separators and is not
-fixed — recorded as REFERENCE L47, because whether that is a defect or a
-deliberate normalization has not been decided by anybody entitled to decide it.
+While measuring this, `zymbol fmt` turned out to rewrite `४२` to `42`. It
+predates the separators; it is fixed in the entry below, and it was far bigger
+than that one line said.
+
+**`zymbol fmt` prints a literal as it was WRITTEN, not as its value renders**
+
+```zymbol
+a = ४२          // → 42
+b = ٣٫٥         // → 3.5
+d = 0xFF        // → 'ÿ'
+f = 0o17        // → '' — a raw U+000F, written into the source file
+g = 1e10        // → 10000000000.0
+i = 007         // → 7
+```
+
+**Eleven of sixteen literal forms did not survive a format.** A literal reaches
+the AST as a *value*, and many source forms share one value — `४२`, `0x2A`,
+`0b101010` and `42` are all `Int(42)` — so printing the value picked one
+spelling and threw the author's away. A program written entirely in Devanagari,
+which GUIDE.md calls a first-class Zymbol program, stopped being one the moment
+it was formatted. `0o17` was the sharp end: its value is a `Char`, so the
+formatter wrote a quoted raw U+000F into the file.
+
+FORMATTER_RULES.md already settled whether this is a defect. §1 says the
+formatter is a whitespace normalizer and is NOT an expression transformer, and
+§10 lists the *only* intentional differences between input and output — the
+spelling of a literal is not among them. §12 names the remedy too: make the
+surface form the AST would lose recoverable.
+
+It was recoverable already. The span was on the node and nothing read it, so
+the fix is to print the literal's own source text, accepted only when re-lexing
+the slice yields exactly that literal and nothing else — a wrong span falls back
+to the old behaviour instead of emitting something new. No AST or parser change.
+
+**A real byte offset had to come first.** `Position::byte_offset` is documented
+as "byte offset from start of file" and was being handed the lexer's *char*
+index — the same number only while the source is ASCII, which is the one thing a
+Zymbol source is not obliged to be. Nothing read the field, so nothing had
+noticed; slicing with it returned garbage the moment a multi-byte character
+appeared earlier in the file. It is now a byte offset, from a prefix table built
+once per lex.
+
+**Why four properties and a safety gate all missed it.** The gate compares
+*tokens*, and `Integer(42)` is `Integer(42)` whichever script spelled it, so G1
+passed legitimately. P1–P4 check reparse, idempotence, runtime output and
+comment count; a surface rewrite breaks none of the four. The same blind spot
+that hid the `x ->  {` double space (FORMATTER_RULES §4.7). Held now by seven
+unit tests in `zymbol-formatter`, which is where a surface property has to be
+checked — the corpus structurally cannot see it. REFERENCE L47.
 
 **A named function captures the file's variables, like a lambda**
 
@@ -393,6 +438,24 @@ follow a callable. Grammar widened, all four engines agree. See REFERENCE.md L30
 `tests/lambdas/29_zero_param_thunk.zy`.
 
 ### Fixed
+
+**Unused-variable warnings came out in a different order on every run**
+
+`generate_diagnostics` sorted by `(line, column)` over a `HashMap`'s values.
+Rust randomizes that iteration order per process and `sort_by_key` is stable, so
+any two variables sharing a position kept the random order — and one statement
+declaring several names gives them all the same span: `(a, b, c) = t9` is one
+position for three variables.
+
+No corpus golden captures a warning order, so nothing saw it there. The
+formatter's P3 property compares `2>&1`, so it saw it as an intermittent
+`fmt` regression on `collections/33_destructure_absorb.zy` — blaming the
+formatter for a shuffle it had not caused. The harness's nondeterminism guard
+re-runs the original once, which is not enough when the shuffle is a coin flip.
+
+The name now breaks the tie, so the order is total and deterministic. Giving
+each destructured name a span of its own is the better fix and is not done: it
+would also put the diagnostic's caret on the name instead of the statement.
 
 **A module could not hold a collection**
 
