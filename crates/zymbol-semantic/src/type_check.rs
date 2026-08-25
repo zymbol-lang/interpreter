@@ -2351,10 +2351,14 @@ impl TypeChecker {
                 // target is IndexExpr(collection[index]) — return the collection type,
                 // not the element type (which would cause false type-mismatch warnings
                 // on `arr[i] = val` desugared as `arr = arr[i]$~ val`).
-                let collection_type = if let Expr::Index(idx_expr) = op.target.unwrap_group() {
-                    self.infer_expr(&idx_expr.array)
-                } else {
-                    self.infer_expr(&op.target)
+                let collection_type = match op.target.unwrap_group() {
+                    Expr::Index(idx_expr) => self.infer_expr(&idx_expr.array),
+                    // `d.k$~ v` is the same write as `d["k"]$~ v`, so it yields
+                    // the RECEIVER's type too. Inferring the target would give
+                    // the field's, and the desugared `d = d.k$~ v` then warned
+                    // that a dictionary was being assigned an Int.
+                    Expr::MemberAccess(ma) if !ma.is_module_access => self.infer_expr(&ma.object),
+                    _ => self.infer_expr(&op.target),
                 };
                 // `[i]$~ v` writes an element, so the element has to fit (L46).
                 // A multi-step navigation (`m[i>j]$~ v`) reaches inside a nested

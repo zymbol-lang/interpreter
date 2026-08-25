@@ -3537,6 +3537,24 @@ impl Compiler {
                 ctx.emit(deep_set(dst, r_path, r_val));
                 Ok(dst)
             }
+            // By name: d.k$~ val — the same access as d["k"]$~ val, so it
+            // builds the same one-step path with the field as its key. The
+            // tree-walker resolves it to `Value::String(field)`; this is that,
+            // interned.
+            Expr::MemberAccess(ma) if !ma.is_module_access => {
+                let r_obj = self.compile_expr(&ma.object, ctx)?;
+                let r_key = ctx.alloc_temp()?;
+                let key_idx = self.intern_string(&ma.field);
+                ctx.emit(Instruction::LoadStr(r_key, key_idx));
+                let r_path = ctx.alloc_temp()?;
+                ctx.emit(Instruction::NewArray(r_path));
+                ctx.emit(Instruction::ArrayPush(r_path, r_key));
+                let r_val = self.compile_expr(&cu.value, ctx)?;
+                let dst = ctx.alloc_temp()?;
+                ctx.emit(Instruction::CopyReg(dst, r_obj));
+                ctx.emit(deep_set(dst, r_path, r_val));
+                Ok(dst)
+            }
             _ => Err(CompileError::Unsupported("collection update on non-index expr".into())),
         }
     }

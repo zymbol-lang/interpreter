@@ -228,11 +228,21 @@ impl Parser {
     pub(crate) fn parse_collection_update(&mut self, target: Expr) -> Result<Expr, Diagnostic> {
         let start_span = target.span();
 
-        // Target must be an IndexExpr (arr[i]) or DeepIndexExpr (arr[i>j>k])
-        if !matches!(target.unwrap_group(), Expr::Index(_) | Expr::DeepIndex(_)) {
-            return Err(Diagnostic::error("collection update ($~) requires indexed expression")
+        // Target must name one place: `arr[i]`, `arr[i>j>k]` or `d.k`.
+        //
+        // The dot was missing, and only here — it reaches a dictionary key
+        // everywhere else in the language, reading included (COLLECTIONS.md).
+        // Nothing said it could not write; the asymmetry was inherited, not
+        // decided. A module access (`m::f`) is not a place and stays out.
+        let is_place = match target.unwrap_group() {
+            Expr::Index(_) | Expr::DeepIndex(_) => true,
+            Expr::MemberAccess(ma) => !ma.is_module_access,
+            _ => false,
+        };
+        if !is_place {
+            return Err(Diagnostic::error("collection update ($~) requires a place to write")
                 .with_span(start_span)
-                .with_help("use: arr[i]$~ value  or  arr[i>j]$~ value"));
+                .with_help("use: arr[i]$~ value, arr[i>j]$~ value, or d.key$~ value"));
         }
 
         self.advance(); // consume $~
