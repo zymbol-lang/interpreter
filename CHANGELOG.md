@@ -19,6 +19,59 @@ those corrections ship inside it. See [WINDOWS_V009.md](WINDOWS_V009.md).
 
 ### Added
 
+**Decision 19 enforced: discarding a consulting `$` is dead code, and says so**
+
+```text
+s$~~["a":"X"]
+warning: this statement does nothing: `$~~` builds a value and it is discarded
+```
+
+COLLECTIONS.md § 1 splits the `$` family in two: the editing half modifies when
+its result is discarded (decision 12), and the consulting half always builds, so
+discarding one is dead code. The second half was documented and enforced
+nowhere — that line ran, changed nothing, and none of the three engines said a
+word. The same shape that made BUG-ZYB-002 silent, and the one already closed
+for a bare identifier (ERROR-ZYB-001).
+
+Ten operators — `$#` `$?` `$??` `$[..]` `$>` `$|` `$<` `$/` `$*` `$~~` — one
+warning each, identical wording in all three engines. A list rather than "not an
+edit", so a new operator has to be classified deliberately instead of falling
+into a default. `$!`/`$!!` are not in it: propagating an error is an effect.
+
+Found by walking the whole edit model operator by operator, which is also what
+turned up the rest of this entry.
+
+**Two false type warnings, on the documented way to sort and to concat-build**
+
+```zymbol
+arr = [3, 1, 2]
+arr$^+          // warning: 'arr' was [Int] but assigned [?]
+b = [1, 2]
+b$++ 7 8        // warning: 'b' was [Int] but assigned [Any]
+```
+
+Sorting reorders; it does not retype — the inference answered
+`Array(Unknown)`. And `$++` answered `Array(Any)` one line after checking that
+every item fits the base, contradicting its own check. Both fired on the
+documented in-place form, in the two Rust engines only, so they were live
+divergences as well as false.
+
+**The browser engine could not parse a deep path at statement position, except
+after `$~`**
+
+`d["n">"l"]$+ 9` raised "a navigation step is a position or a key, got bool"
+while both Rust engines navigated two levels: at statement position the bracket
+is consumed before the nav parser sees it, so `i>j` arrives as a comparison.
+The `$~` branch already rebuilt the path from it; every other edit fell through
+with a boolean for an index. Same rebuild, one branch earlier, and the two
+copies of the flattening are now one named helper.
+
+**The whole model, measured**: every editing operator against every receiver
+shape — bare name, dot, bracket, navigator, and mixed — is
+`corpus/collections/edicion_modelo_completo.zy`, and all three engines agree on
+every line.
+
+
 **The dot writes what the dot reads — and a deep write has one form**
 
 ```zymbol

@@ -50,6 +50,29 @@ pub enum ZymbolType {
     Any,
 }
 
+/// The name of the CONSULTING `$` operator this expression is, or `None`.
+///
+/// The two halves of the family are in COLLECTIONS.md § 1: the editing half
+/// modifies when its result is discarded (decision 12), and the consulting half
+/// always builds, so discarding it is dead code (decision 19). This is the
+/// consulting half, and the reason it is a list rather than a negation: a new
+/// operator has to be classified deliberately, not fall into a default.
+fn consulting_op_name(expr: &Expr) -> Option<&'static str> {
+    Some(match expr {
+        Expr::CollectionLength(_) => "$#",
+        Expr::CollectionContains(_) => "$?",
+        Expr::CollectionFindAll(_) => "$??",
+        Expr::CollectionSlice(_) => "$[..]",
+        Expr::CollectionMap(_) => "$>",
+        Expr::CollectionFilter(_) => "$|",
+        Expr::CollectionReduce(_) => "$<",
+        Expr::StringSplit(_) => "$/",
+        Expr::StringRepeat(_) => "$*",
+        Expr::StringReplace(_) => "$~~",
+        _ => return None,
+    })
+}
+
 impl ZymbolType {
     /// Get a human-readable name for this type
     pub fn name(&self) -> String {
@@ -1115,6 +1138,27 @@ impl TypeChecker {
                             .with_help("remove it, or use it — `>> name ¶` to print it"),
                         );
                     }
+                }
+                // Decision 19, the other half of the rule of the result: the
+                // CONSULTING `$` operators always build and never modify, so
+                // discarding one is dead code. COLLECTIONS.md § 1 says so and
+                // nothing enforced it — `s$~~["a":"X"]` on its own line ran and
+                // changed nothing, in all three engines, with no diagnostic.
+                //
+                // The operator itself is pure, so this is sound even when a
+                // call sits inside it: the call's effect still happens, and the
+                // `$#` wrapped around it is still pointless. The warning points
+                // at the operator, not at the call.
+                if let Some(op) = consulting_op_name(expr_stmt.expr.unwrap_group()) {
+                    self.warnings.push(
+                        Diagnostic::warning(format!(
+                            "this statement does nothing: `{op}` builds a value and it is discarded"
+                        ))
+                        .with_span(expr_stmt.expr.span())
+                        .with_help(
+                            "remove it, or use the result — assign it, print it, or pass it on",
+                        ),
+                    );
                 }
                 self.infer_expr(&expr_stmt.expr);
             }
@@ -2491,11 +2535,15 @@ impl TypeChecker {
             }
 
             Expr::CollectionSortAsc(op) | Expr::CollectionSortDesc(op) | Expr::CollectionSortCustom(op) => {
-                let _collection_type = self.infer_expr(&op.collection);
+                // Sorting reorders; it does not retype. Answering
+                // `Array(Unknown)` made `arr$^+` warn that `[Int]` had been
+                // assigned `[?]` — a false diagnostic on the documented way to
+                // sort in place, and one the browser engine did not emit.
+                let collection_type = self.infer_expr(&op.collection);
                 if let Some(ref cmp) = op.comparator {
                     let _cmp_type = self.infer_expr(cmp);
                 }
-                ZymbolType::Array(Box::new(ZymbolType::Unknown))
+                collection_type
             }
 
             // String operations
@@ -2511,7 +2559,11 @@ impl TypeChecker {
                         let item_type = self.infer_expr(item);
                         self.check_element_fits("append", &base_type, &item_type, item.span());
                     }
-                    ZymbolType::Array(Box::new(ZymbolType::Any))
+                    // The base's type, not `[Any]`: every item was just checked
+                    // to fit it, so widening here contradicted the check one
+                    // line above and made `a$++ 7 8` warn that `[Int]` had been
+                    // assigned `[Any]`.
+                    base_type
                 } else {
                     ZymbolType::String
                 }
