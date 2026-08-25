@@ -36,19 +36,39 @@ exactly `d["k"]$~ v`: same place, same rule of the result, same key added when i
 was not there. `::` stays out — it addresses a module's namespace, which is not
 a place to write.
 
-**Found while closing that: a silent data-destruction bug the gate could not
-see.** `d["x"]["y"]$~ 9` did not fail — it replaced `d` with its own inner
-dictionary and every other key vanished, with exit 0 and no diagnostic. The
-statement form desugars to `name = <the same expression>` and the expression
-returns the receiver it updated; the anchor search recursed the whole chain, so
-it found `d` and assigned the *inner* collection to it. All three engines agreed,
-so no consensus run could see it.
+A path may mix the two spellings in any order — `d.x["y"]`, `d["x"].y`,
+`d.x.y` — because the dot is a *different syntax*, not a second spelling of the
+same one. Only a bracket directly after a bracket is refused: `d["x"]["y"]` is
+the navigator written twice, and `d["x">"y"]` is the form.
 
-The receiver of an in-place edit is now a name plus **exactly one** access. Deep
-writes have one form, `d[i>j]$~ v` — the rule already recorded for `m[i][j] = v`,
-that it breaks navigation and intent, now enforced for `$~`. The functional form
-is untouched, because nothing is written back:
+**Found while closing that: a silent data-destruction bug across the whole
+editing family, which the gate could not see.** A statement-level edit desugars
+to `name = <the same expression>`, and the expression returns the *receiver* it
+edited — which is exact only when the receiver IS the name. It was not checked,
+so:
+
+```zymbol
+d = #(a: 1, x: #(y: 2), lista: [1, 2])
+d["x"]["y"]$~ 9      // d became (y: 9) — every other key gone
+d["lista"]$+ 3       // d became [1, 2, 3]
+```
+
+Exit 0, no diagnostic, and all three engines agreed, so no consensus run could
+see it. `$~` was the visible corner; `$+`, `$++`, `$-`, `$^` and the rest had it
+too, with any indexed receiver.
+
+A receiver that lives inside the name is now rewritten into a **deep write at
+its path**, which is machinery all three engines already had. So
+`d.lista$+ 3` appends to the list and leaves the other keys alone, and
+`d.x["y"]$~ 5` writes three levels down. The functional form is untouched,
+because nothing is written back:
 `a2 = a["meta"]$~ (a.meta["code"]$~ 200)` composes as it always did.
+
+**The rewrite made the formatter refuse two files**, which is FORMATTER_RULES
+§12 doing its job: the parser produced a shape the author had not written, and
+the token gate saw it. `Assignment` now carries `written` — the edit as it was
+spelled — and the formatter reprints that. Same remedy as the literal fix above,
+and the same rule: record the surface form the AST would otherwise lose.
 
 **And decision 20, promised in a comment and never implemented.** `f()[1]$~ 5`
 and `d.x["y"]$~ 9` edit something nobody holds. The comment on
@@ -66,8 +86,11 @@ of this change cost nothing to migrate. The one mixed-form occurrence,
 `a.meta["code"]$~ 200` in `corpus/collections/named_tuple_update.zy`, is the
 functional form and still parses.
 
-Pinned in `corpus/collections/escritura_por_punto.zy`, `reject/collections/11`
-and `reject/collections/12`. Reported from zyCoin.
+Pinned in `corpus/collections/escritura_por_punto.zy` (every spelling, and the
+whole editing family), `corpus/modules_scope/escritura_profunda.zy` (deep writes
+into module state, direct and through a re-export layer), `reject/collections/11`
+(chained brackets) and `reject/collections/12` (an edit with no name at all).
+Reported from zyCoin.
 
 
 **`#,` and `#^` write their digits in the active numeral script**

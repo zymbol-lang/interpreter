@@ -664,4 +664,16 @@ mod tests {
         let once = format("a = 0xFF\nb = \u{096A}\u{0968}\n").unwrap();
         assert_eq!(format(&once).unwrap(), once);
     }
+
+    #[test]
+    fn a_rewritten_edit_reprints_as_written() {
+        // `d.x["y"]$~ 5` RUNS as a deep write at `d["x">"y"]` — the only shape
+        // that can be assigned back to `d` without replacing it — but that is
+        // not what the author wrote. `Assignment::written` carries the surface
+        // form; without it the token gate refuses the file (§2.1, §12).
+        unchanged("d = #(a: 1)\nd.x[\"y\"]$~ 5\n");
+        unchanged("d = #(a: 1)\nd[\"x\"].y$~ 5\n");
+        unchanged("d = #(a: 1)\nd.x.y$~ 5\n");
+        unchanged("d = #(a: 1)\nd.lista $+ 3\n");
+    }
 }

@@ -9,6 +9,7 @@ use zymbol_ast::{
     FunctionCallExpr, IdentifierExpr, IndexExpr, LiteralExpr,
     NumericCastExpr, Program, RangeExpr, Statement, TypeMetadataExpr,
 };
+use zymbol_ast::{CollectionUpdateExpr, DeepIndexExpr, NavPath, NavStep};
 use zymbol_common::Literal;
 use zymbol_error::Diagnostic;
 use zymbol_lexer::{StringPart, Token, TokenKind};
@@ -300,28 +301,40 @@ impl Parser {
                         //
                         // Before this, a bare `arr$+ 3` parsed, ran, and did
                         // nothing at all, with no warning (DI-01).
-                        if let Some(name) = in_place_edit_target(&expr) {
-                            return Ok(Statement::Assignment(Assignment {
+                        let mk = |name: String, value: Expr, written: Option<Box<Expr>>| {
+                            Ok(Statement::Assignment(Assignment {
                                 name,
-                                value: expr,
+                                value,
                                 span,
                                 hot: false,
                                 pre_hot: false,
                                 sugar: AssignSugar::InPlaceEdit,
-                            }));
-                        }
-                        // Decision 20, finally enforced: an edit with nowhere
-                        // to write is refused. The comment on
-                        // `in_place_edit_target` had promised this since it was
-                        // written, and nothing did it — the statement fell
-                        // through to `Statement::Expr`, ran, and threw the
-                        // result away in silence.
-                        if let Some(help) = unanchored_edit_help(&expr) {
-                            return Err(Diagnostic::error(
-                                "this edit has nothing to write into",
-                            )
-                            .with_span(span)
-                            .with_help(help));
+                                written,
+                            }))
+                        };
+                        match classify_edit(&expr) {
+                            EditAnchor::Whole(name) => return mk(name, expr, None),
+                            EditAnchor::Path(name, steps) => {
+                                // The rewrite is what runs; the original is what
+                                // the formatter reprints (FORMATTER_RULES §2.1).
+                                let written = Box::new(expr.clone());
+                                let value = rewrite_edit_at_path(expr, &name, steps, span);
+                                return mk(name, value, Some(written));
+                            }
+                            // Decision 20, finally enforced: an edit with
+                            // nowhere to write is refused. The comment on the
+                            // old `in_place_edit_target` had promised this
+                            // since it was written and nothing did it — the
+                            // statement fell through to `Statement::Expr`, ran,
+                            // and threw the result away in silence.
+                            EditAnchor::Unanchored(help) => {
+                                return Err(Diagnostic::error(
+                                    "this edit has nothing to write into",
+                                )
+                                .with_span(span)
+                                .with_help(help));
+                            }
+                            EditAnchor::NotAnEdit => {}
                         }
                         Ok(Statement::Expr(ExprStatement::new(expr, span)))
                     }
@@ -1559,87 +1572,156 @@ mod tests {
 /// is what "exactly one access" means. Deeper writes have one form, `d[i>j]$~`,
 /// and that is the decision recorded for `m[i][j] = v`: it breaks navigation
 /// and intent.
-/// Why a statement-level edit has nowhere to write, as help text — or `None`
-/// when the expression is not an edit at all.
+/// What a statement-level `$` edit writes into.
 ///
-/// Called only after `in_place_edit_target` has already said there is no
-/// anchor, so reaching here means the edit would modify something nobody holds.
-/// The two reasons need different help, because they are different mistakes:
-/// a chain from a name wanted the deep form, and everything else wanted a
-/// variable.
+/// Decision 12, the rule of the result: an edit whose result is the whole
+/// statement modifies in place. That is done by desugaring to
+/// `name = <the same expression>`, which is only sound when the thing the
+/// expression RETURNS is what `name` should hold.
 ///
-/// The consulting half of the `$` family never reaches here: discarding the
-/// result of `$#` or `$?` is dead code, which is decision 19 and a warning, not
-/// this.
-fn unanchored_edit_help(expr: &Expr) -> Option<&'static str> {
-    fn receiver(e: &Expr) -> Option<&Expr> {
-        Some(match e.unwrap_group() {
-            Expr::CollectionAppend(x) => &x.collection,
-            Expr::CollectionInsert(x) => &x.collection,
-            Expr::CollectionRemoveValue(x) => &x.collection,
-            Expr::CollectionRemoveAll(x) => &x.collection,
-            Expr::CollectionRemoveAt(x) => &x.collection,
-            Expr::CollectionRemoveRange(x) => &x.collection,
-            Expr::CollectionSortAsc(x)
-            | Expr::CollectionSortDesc(x)
-            | Expr::CollectionSortCustom(x) => &x.collection,
-            Expr::CollectionUpdate(x) => &x.target,
-            Expr::ConcatBuild(x) => &x.base,
-            _ => return None,
-        })
-    }
-    /// Does this chain of accesses bottom out at a plain name?
-    fn rooted_at_name(e: &Expr) -> bool {
-        match e.unwrap_group() {
-            Expr::Identifier(_) => true,
-            Expr::Index(ix) => rooted_at_name(&ix.array),
-            Expr::DeepIndex(di) => rooted_at_name(&di.array),
-            Expr::MemberAccess(ma) => !ma.is_module_access && rooted_at_name(&ma.object),
-            _ => false,
-        }
-    }
-    let r = receiver(expr)?;
-    Some(if rooted_at_name(r) {
-        "a write reaches one step from a name; for a deeper one use the navigator: `d[\"x\">\"y\"]$~ value`"
-    } else {
-        "this edits what the expression produced, and nothing holds it — assign the result to a name first"
+/// It returns the receiver it edited. So when the receiver is the name itself
+/// (`arr$+ 3`) the desugaring is exact, and when the receiver is somewhere
+/// *inside* the name (`d.x$+ 3`, `d.x["y"]$~ 5`) it is not: assigning the inner
+/// collection to the outer name replaces the whole thing. That was a silent
+/// data-destruction bug — `d["x"]["y"]$~ 9` left `d` holding `(y: 9)` with
+/// every other key gone, exit 0, no diagnostic, all three engines agreeing.
+///
+/// So a receiver with a path is rewritten into a deep write at that path, which
+/// is machinery all three engines already have.
+enum EditAnchor {
+    /// Not an editing `$` at all — the consulting half never modifies anything,
+    /// so discarding its result is dead code (decision 19), not this.
+    NotAnEdit,
+    /// The receiver IS the name: `arr$+ 3`, `arr[i]$~ v`, `d.k$~ v`.
+    Whole(String),
+    /// The receiver is inside the name, at this path: `d.x$+ 3`, `d.x["y"]$~ 5`.
+    Path(String, Vec<Box<Expr>>),
+    /// An edit with nowhere to write, and why.
+    Unanchored(&'static str),
+}
+
+const CHAINED_BRACKETS: &str = "a bracket after a bracket is what the navigator is for: write `d[\"x\">\"y\"]$~ value`";
+const RANGE_IN_PATH: &str = "a write reaches one place, so its path has no ranges";
+const NO_NAME: &str = "this edits what the expression produced, and nothing holds it — assign the result to a name first";
+
+/// The receiver of an editing `$`, or `None` when the expression is not one.
+fn edit_receiver(expr: &Expr) -> Option<&Expr> {
+    Some(match expr.unwrap_group() {
+        Expr::CollectionAppend(x) => &x.collection,
+        Expr::CollectionInsert(x) => &x.collection,
+        Expr::CollectionRemoveValue(x) => &x.collection,
+        Expr::CollectionRemoveAll(x) => &x.collection,
+        Expr::CollectionRemoveAt(x) => &x.collection,
+        Expr::CollectionRemoveRange(x) => &x.collection,
+        Expr::CollectionSortAsc(x)
+        | Expr::CollectionSortDesc(x)
+        | Expr::CollectionSortCustom(x) => &x.collection,
+        Expr::CollectionUpdate(x) => &x.target,
+        Expr::ConcatBuild(x) => &x.base,
+        _ => return None,
     })
 }
 
-fn in_place_edit_target(expr: &Expr) -> Option<String> {
-    fn base_name(e: &Expr) -> Option<String> {
-        fn anchor(e: &Expr) -> Option<String> {
-            match e.unwrap_group() {
-                Expr::Identifier(i) => Some(i.name.clone()),
-                _ => None,
-            }
-        }
+/// Walks a receiver chain to its root, collecting one step per access.
+///
+/// A bracket directly after a bracket is refused: `d["x"]["y"]` is the deep
+/// navigator spelled twice, and `d["x">"y"]` is the form. The dot composes
+/// freely — it is a different syntax, not a second spelling of the same one —
+/// so `d.x["y"]`, `d["x"].y` and `d.x.y` all name a place.
+fn flatten_receiver(e: &Expr) -> Result<(String, Vec<Box<Expr>>), &'static str> {
+    fn go(e: &Expr, out: &mut Vec<Box<Expr>>) -> Result<String, &'static str> {
         match e.unwrap_group() {
-            Expr::Identifier(i) => Some(i.name.clone()),
-            Expr::Index(ix) => anchor(&ix.array),
-            Expr::DeepIndex(di) => anchor(&di.array),
-            // `d.k$~ v` writes exactly as `d["k"]$~ v` does: the dot is a
-            // documented way to reach a key (COLLECTIONS.md), and nothing said
-            // it could only read.
-            Expr::MemberAccess(ma) if !ma.is_module_access => anchor(&ma.object),
-            _ => None,
+            Expr::Identifier(i) => Ok(i.name.clone()),
+            Expr::Index(ix) => {
+                if matches!(ix.array.unwrap_group(), Expr::Index(_) | Expr::DeepIndex(_)) {
+                    return Err(CHAINED_BRACKETS);
+                }
+                let root = go(&ix.array, out)?;
+                out.push(ix.index.clone());
+                Ok(root)
+            }
+            Expr::DeepIndex(di) => {
+                if matches!(di.array.unwrap_group(), Expr::Index(_) | Expr::DeepIndex(_)) {
+                    return Err(CHAINED_BRACKETS);
+                }
+                let root = go(&di.array, out)?;
+                for step in &di.path.steps {
+                    if step.range_end.is_some() {
+                        return Err(RANGE_IN_PATH);
+                    }
+                    out.push(step.index.clone());
+                }
+                Ok(root)
+            }
+            // `d.k` is the same access as `d["k"]`, so it becomes the same step.
+            Expr::MemberAccess(ma) if !ma.is_module_access => {
+                let root = go(&ma.object, out)?;
+                out.push(Box::new(Expr::Literal(LiteralExpr::new(
+                    Literal::String(ma.field.clone()),
+                    ma.span,
+                ))));
+                Ok(root)
+            }
+            _ => Err(NO_NAME),
         }
     }
-    match expr.unwrap_group() {
-        Expr::CollectionAppend(e) => base_name(&e.collection),
-        Expr::CollectionInsert(e) => base_name(&e.collection),
-        Expr::CollectionRemoveValue(e) => base_name(&e.collection),
-        Expr::CollectionRemoveAll(e) => base_name(&e.collection),
-        Expr::CollectionRemoveAt(e) => base_name(&e.collection),
-        Expr::CollectionRemoveRange(e) => base_name(&e.collection),
-        Expr::CollectionSortAsc(e)
-        | Expr::CollectionSortDesc(e)
-        | Expr::CollectionSortCustom(e) => base_name(&e.collection),
-        Expr::CollectionUpdate(e) => base_name(&e.target),
-        // `$++` adds several at once, or concatenates a string (decision 12b).
-        // It builds a ConcatBuild rather than a Collection* node, which is why
-        // it needs naming here explicitly.
-        Expr::ConcatBuild(e) => base_name(&e.base),
-        _ => None,
+    let mut steps = Vec::new();
+    let root = go(e, &mut steps)?;
+    Ok((root, steps))
+}
+
+fn classify_edit(expr: &Expr) -> EditAnchor {
+    let Some(receiver) = edit_receiver(expr) else {
+        return EditAnchor::NotAnEdit;
+    };
+    let (root, steps) = match flatten_receiver(receiver) {
+        Ok(v) => v,
+        Err(why) => return EditAnchor::Unanchored(why),
+    };
+    // `$~` carries the final access inside its own target, so one step means the
+    // receiver is the name. Every other edit takes the collection whole, so any
+    // step at all puts the receiver inside the name.
+    let carries_its_index = matches!(expr.unwrap_group(), Expr::CollectionUpdate(_));
+    let exact = if carries_its_index { steps.len() <= 1 } else { steps.is_empty() };
+    if exact {
+        EditAnchor::Whole(root)
+    } else {
+        EditAnchor::Path(root, steps)
     }
 }
+
+/// Rewrites an edit whose receiver lives inside `root` into a deep write there.
+///
+/// `d.x["y"]$~ 5` becomes `d = d[<x>><y>]$~ 5` — the update moves onto the whole
+/// path. Any other edit keeps its own shape and is placed back at its path:
+/// `d.x$+ 3` becomes `d = d[<x>]$~ (d.x$+ 3)`, so the append still happens on
+/// `d.x` and what lands in `d` is `d` with that key replaced.
+fn rewrite_edit_at_path(
+    expr: Expr,
+    root: &str,
+    steps: Vec<Box<Expr>>,
+    span: zymbol_span::Span,
+) -> Expr {
+    let root_expr = Expr::Identifier(IdentifierExpr::new(root.to_string(), span));
+    let path = NavPath {
+        steps: steps
+            .into_iter()
+            .map(|index| NavStep { index, range_end: None })
+            .collect(),
+    };
+    let place = Expr::DeepIndex(DeepIndexExpr {
+        array: Box::new(root_expr),
+        path,
+        span,
+    });
+    let value = match expr {
+        Expr::CollectionUpdate(cu) => *cu.value,
+        other => other,
+    };
+    Expr::CollectionUpdate(CollectionUpdateExpr::new(
+        Box::new(place),
+        Box::new(value),
+        span,
+    ))
+}
+

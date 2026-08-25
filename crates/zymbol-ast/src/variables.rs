@@ -59,6 +59,16 @@ pub struct Assignment {
     pub pre_hot: bool,
     /// Surface form this assignment was written in (`+=`, `++`, …)
     pub sugar: AssignSugar,
+    /// The edit exactly as it was WRITTEN, when `value` is a rewritten form.
+    ///
+    /// A statement-level edit whose receiver lives inside the name — `d.x$+ 3`,
+    /// `d.x["y"]$~ 5` — is executed as a deep write at that path, because that
+    /// is the only shape that can be assigned back to `d` without replacing it.
+    /// That is not what the author wrote, and FORMATTER_RULES §2.1 says the
+    /// surface reprints as written; §12 names this remedy — record the form the
+    /// AST would otherwise lose. `None` everywhere else, which is every
+    /// assignment that was not rewritten.
+    pub written: Option<Box<Expr>>,
 }
 
 /// Constant declaration: name := expr (immutable)
@@ -78,15 +88,15 @@ pub struct LifetimeEnd {
 
 impl Assignment {
     pub fn new(name: String, value: Expr, span: Span) -> Self {
-        Self { name, value, span, hot: false, pre_hot: false, sugar: AssignSugar::None }
+        Self { name, value, span, hot: false, pre_hot: false, sugar: AssignSugar::None, written: None }
     }
 
     pub fn new_hot(name: String, value: Expr, span: Span) -> Self {
-        Self { name, value, span, hot: true, pre_hot: false, sugar: AssignSugar::None }
+        Self { name, value, span, hot: true, pre_hot: false, sugar: AssignSugar::None, written: None }
     }
 
     pub fn new_pre_hot(name: String, value: Expr, span: Span) -> Self {
-        Self { name, value, span, hot: false, pre_hot: true, sugar: AssignSugar::None }
+        Self { name, value, span, hot: false, pre_hot: true, sugar: AssignSugar::None, written: None }
     }
 }
 

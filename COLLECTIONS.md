@@ -352,27 +352,46 @@ namespace, so `m::x$~ v` stays refused.
 > Until v0.0.9 the dot **read** and could not **write**, and nothing said why.
 > The asymmetry was inherited rather than decided.
 
-### Deep writes have one form, and it is the navigator
+### A path may mix the two spellings — but not two brackets
 
 ```zymbol
-m["x">"y"]$~ 9            // ✓ the deep write
+m["x">"y"]$~ 9            // ✓ the navigator
+m.x["y"]$~ 9              // ✓ dot then bracket
+m["x"].y$~ 9              // ✓ bracket then dot
+m.x.y$~ 9                 // ✓ dot then dot
 m["x"]["y"]$~ 9           // ✗ error: this edit has nothing to write into
-m.x["y"]$~ 9              // ✗ the same error
 ```
 
-This is the rule already stated for `m[i][j] = v` — it breaks navigation and
-intent — now enforced for `$~` too. A write reaches **one step from a name**,
-because the statement form desugars to `name = <the same expression>` and the
-expression returns the receiver it updated. Assigning that back is sound only
-when the receiver IS the name.
+The dot composes freely: it is a **different syntax**, not a second spelling of
+the same one. A bracket directly after a bracket is refused, because
+`m["x"]["y"]` is the navigator written twice and `m["x">"y"]` is the form —
+the rule already stated for `m[i][j] = v`, that it breaks navigation and intent.
 
-> `m["x"]["y"]$~ 9` did not merely fail: it **destroyed data**. It found the
-> base name `m`, so `m` was replaced by its own inner collection and every other
-> key vanished — exit 0, no diagnostic, and all three engines agreed, so no
-> consensus run could see it. `reject/collections/11` and `12` hold both forms.
+**This is not only about `$~`.** Every editing `$` writes back at its receiver's
+path, so the receiver may live inside the name:
+
+```zymbol
+d = #(a: 1, lista: [1, 2])
+d.lista$+ 3               // d is (a: 1, lista: [1, 2, 3])
+d["lista"]$+ 4            // and now [1, 2, 3, 4]
+d.lista[1]$~ 99           // and now [99, 2, 3, 4]
+```
+
+> Until v0.0.9 all of these **destroyed data**. A statement-level edit desugars
+> to `name = <the same expression>`, and the expression returns the *receiver*
+> it edited — so `d["lista"]$+ 3` assigned the list to `d`, and
+> `m["x"]["y"]$~ 9` left `m` holding its own inner collection with every other
+> key gone. Exit 0, no diagnostic, and all three engines agreed, so no consensus
+> run could see it. A receiver with a path is now rewritten into a deep write at
+> that path.
 >
 > The functional form is untouched, because nothing is written back:
 > `a2 = a["meta"]$~ (a.meta["code"]$~ 200)` composes as it always did.
+>
+> An edit with no name at all is refused rather than run for a result nobody
+> holds: `f()[1]$~ 5` (`reject/collections/12`). Deep writes into **module
+> state**, direct and through a re-export layer, are in
+> `corpus/modules_scope/escritura_profunda.zy`.
 
 ```zymbol
 u = #(nombre: "Ana", edad: 30)
