@@ -351,6 +351,18 @@ impl Token {
 /// Lexer for Zymbol source code
 pub struct Lexer {
     source: Vec<char>,
+    /// Byte offset of each char in `source`, plus a final entry for the end.
+    ///
+    /// The cursor counts CHARS, because every rule in this lexer is written in
+    /// terms of characters. `Position::byte_offset` is documented as a byte
+    /// offset, though, and it was being handed the char index — equal only
+    /// while the source is ASCII, which is the one thing a Zymbol source is not
+    /// obliged to be. Nothing read the field, so nothing had noticed; the
+    /// formatter reads it now, to reprint a literal as it was written.
+    ///
+    /// A prefix table rather than a second cursor: `advance` is called from
+    /// dozens of places and every one of them would have had to maintain it.
+    byte_offsets: Vec<u32>,
     current: usize,
     line: u32,
     column: u32,
@@ -361,8 +373,17 @@ pub struct Lexer {
 
 impl Lexer {
     pub fn new(source: &str, file_id: FileId) -> Self {
+        let chars: Vec<char> = source.chars().collect();
+        let mut byte_offsets = Vec::with_capacity(chars.len() + 1);
+        let mut offset = 0u32;
+        for ch in &chars {
+            byte_offsets.push(offset);
+            offset += ch.len_utf8() as u32;
+        }
+        byte_offsets.push(offset);
         Self {
-            source: source.chars().collect(),
+            source: chars,
+            byte_offsets,
             current: 0,
             line: 1,
             column: 1,
@@ -1095,7 +1116,12 @@ impl Lexer {
 
     /// Get current position
     fn position(&self) -> Position {
-        Position::new(self.line, self.column, self.current as u32)
+        let byte_offset = self
+            .byte_offsets
+            .get(self.current)
+            .copied()
+            .unwrap_or_else(|| self.byte_offsets.last().copied().unwrap_or(0));
+        Position::new(self.line, self.column, byte_offset)
     }
 
     /// Create a span from start to current position

@@ -1000,38 +1000,50 @@ the outer type says nothing about what lands two levels down.
 The accepted edges are pinned in `corpus/collections/homogeneidad_bordes.zy`;
 the refused ones in `reject/collections/04`, `07`, `08` and `10`.
 
-### L47 — `zymbol fmt` rewrites a numeric literal into ASCII, erasing its script
+### ~~L47 — `zymbol fmt` printed a literal's VALUE, not what was written~~ Corregido en v0.0.9
 
 ```zymbol
-n = ४२
->> n ¶
+a = ४२          // → 42
+b = ٣٫٥         // → 3.5
+d = 0xFF        // → 'ÿ'
+f = 0o17        // → '' — a raw U+000F, written into the source file
+g = 1e10        // → 10000000000.0
+i = 007         // → 7
 ```
 
-```text
-$ zymbol fmt file.zy
-n = 42
->> n ¶
-```
+Recorded first as "the formatter erases the numeral script", which understated
+it by a wide margin: **eleven of sixteen literal forms did not survive a
+format.** A literal reaches the AST as a *value*, and many source forms share
+one value — `४२`, `0x2A`, `0b101010` and `42` are all `Int(42)` — so printing
+the value picked one spelling and discarded the author's. A program written
+entirely in Devanagari, which `GUIDE.md` calls a first-class Zymbol program,
+stopped being one the moment it was formatted.
 
-A program written entirely in Devanagari — identifiers, literals, output — is a
-first-class Zymbol program (`GUIDE.md`, and it is the founding principle stated
-outright). The formatter does not know that. A numeric literal reaches it as a
-token carrying a **value**, not the text it was written as, so the printer emits
-the value in ASCII and the script is gone. `४२` becomes `42`, `٣٫٥` becomes
-`3.5`, and the file still means the same thing — which is exactly why nothing
-catches it: the fail-closed token gate compares tokens, and `Num(42)` equals
-`Num(42)` whichever script it was spelled in.
+`0o17` was the sharp end: its value is a `Char`, so the formatter emitted a
+quoted **raw U+000F** into the file.
 
-**Pre-existing and unrelated to the separators**: the ASCII rewrite predates
-them and applies to plain integers too. Found while checking that a literal
-written `٣٫٥` survives a format, which it does not — but neither did `٣.٥`.
+**Why nothing caught it.** The safety gate compares *tokens*, and
+`Integer(42)` is `Integer(42)` whichever script spelled it — G1 passed
+legitimately. The property harness checks reparse, idempotence, runtime output
+and comment count; a surface rewrite breaks none of the four. Same blind spot
+as the `x ->  {` double space in FORMATTER_RULES §4.7.
 
-**Not fixed, and not decided.** The fix is to carry the source script on the
-token (a block base, which the lexer already computes and discards) and print
-back into it. That is a lexer/AST change for a cosmetic defect, and the
-alternative reading — that the formatter *normalizes* to ASCII on purpose, the
-way it normalizes indentation — has not been ruled out by anybody who gets to
-rule on it. Worth a decision before it is worth a patch.
+**Fixed** by printing the literal's own source text, recovered from the span
+already on the node and verified by re-lexing it: the slice is used only if it
+yields exactly that literal and nothing else, so a wrong span falls back to the
+old behaviour rather than emitting something new
+(`zymbol-formatter/src/visitor.rs::literal_source_form`). No AST or parser
+change was needed — the record existed, nothing read it.
+
+**It needed a real byte offset first.** `Position::byte_offset` is documented as
+"byte offset from start of file" and was being handed the lexer's *char* index,
+which is the same number only while the source is ASCII — the one thing a Zymbol
+source is not obliged to be. Nothing read the field, so nothing had noticed. It
+is now a byte offset, from a prefix table built once per lex.
+
+Held by seven unit tests in `zymbol-formatter`, which is where a surface
+property has to be checked; the corpus and the four properties structurally
+cannot see it.
 
 ### L39 — `>>` takes arithmetic, not comparison — **by design**
 

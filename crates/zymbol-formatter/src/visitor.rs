@@ -40,13 +40,22 @@ fn compound_op_str(op: BinaryOp) -> Option<&'static str> {
     }
 }
 use zymbol_common::{BinaryOp, Literal, UnaryOp};
-use zymbol_lexer::StringPart;
+use zymbol_lexer::{Lexer, StringPart, TokenKind};
 
 use crate::output::OutputBuilder;
 
 /// AST visitor that formats Zymbol code
 pub struct FormatVisitor<'a> {
     output: &'a mut OutputBuilder,
+    /// The source being formatted, so a literal can be reprinted as it was
+    /// WRITTEN rather than as its value renders.
+    ///
+    /// A literal reaches the AST as a value: `४२`, `0x2A` and `42` all arrive
+    /// as `Int(42)`, and printing the value threw the other two away. The span
+    /// is still on the node, and §12 of FORMATTER_RULES.md names this exact
+    /// remedy — record the surface form the AST would otherwise lose. Here the
+    /// record already existed; nothing was reading it.
+    source: &'a str,
     /// Source comments in span order, consumed as statements are emitted.
     comments: CommentStream,
     /// Source end-line of the last emitted statement or comment; drives
@@ -59,8 +68,8 @@ pub struct FormatVisitor<'a> {
 
 impl<'a> FormatVisitor<'a> {
     /// Create a new format visitor
-    pub fn new(output: &'a mut OutputBuilder, comments: CommentStream) -> Self {
-        Self { output, comments, last_src_line: 0, last_had_trailing: false }
+    pub fn new(output: &'a mut OutputBuilder, comments: CommentStream, source: &'a str) -> Self {
+        Self { output, comments, source, last_src_line: 0, last_had_trailing: false }
     }
 
     // ── Comment emission (span-ordered; replaces the old merge_comments) ────
@@ -1004,7 +1013,21 @@ impl<'a> FormatVisitor<'a> {
 
     /// Format a literal expression
     fn format_literal(&mut self, lit: &LiteralExpr) {
-        self.format_literal_value(&lit.value);
+        self.write_literal(&lit.value, lit.span);
+    }
+
+    /// Write a literal as it was written in the source, falling back to its
+    /// value when the source form cannot be recovered and verified.
+    ///
+    /// `literal_source_form` re-lexes the slice and refuses it unless it yields
+    /// exactly this literal and nothing else, so the worst this can do is print
+    /// what the formatter printed before.
+    fn write_literal(&mut self, value: &Literal, span: zymbol_span::Span) {
+        let source: &str = self.source;
+        match literal_source_form(source, value, span) {
+            Some(raw) => self.output.write(raw),
+            None => self.format_literal_value(value),
+        }
     }
 
     /// Write a literal's source form, escapes included.
@@ -1595,8 +1618,8 @@ impl<'a> FormatVisitor<'a> {
     /// Format a pattern
     fn format_pattern(&mut self, pattern: &Pattern) {
         match pattern {
-            Pattern::Literal(lit, _) => {
-                self.format_literal_value(lit);
+            Pattern::Literal(lit, span) => {
+                self.write_literal(lit, *span);
             }
             Pattern::Range(start, end, _) => {
                 self.format_expr(start);
@@ -1994,6 +2017,52 @@ impl<'a> FormatVisitor<'a> {
 }
 
 /// Escape a string for output
+/// The literal exactly as it was written in the source, or `None` when that
+/// cannot be recovered and proved.
+///
+/// A literal reaches the AST as a VALUE, and several source forms share one
+/// value: `४२`, `0x2A`, `0b101010` and `42` are all `Int(42)`; `٣٫٥` and `3.5`
+/// are one `Float`; `0o17` is a `Char`. Printing the value picked one spelling
+/// and discarded the author's — which is not whitespace, so §10 of
+/// FORMATTER_RULES.md makes it a bug rather than a normalization. It also
+/// wrote a raw U+000F into the file, since the chosen spelling for that `Char`
+/// is a quoted control character.
+///
+/// The proof is the point. The slice is lexed again and accepted only if it
+/// yields exactly one token holding exactly this literal, so a span that were
+/// wrong falls back to the old behaviour instead of emitting something else.
+/// `Unit` and interpolated strings take the fallback deliberately: neither has
+/// a surface form the value loses.
+fn literal_source_form<'s>(source: &'s str, value: &Literal, span: zymbol_span::Span) -> Option<&'s str> {
+    let start = span.start.byte_offset as usize;
+    let end = span.end.byte_offset as usize;
+    if end <= start {
+        return None;
+    }
+    let raw = source.get(start..end)?;
+
+    let (tokens, errors) = Lexer::new(raw, span.file_id).tokenize();
+    if !errors.is_empty() {
+        return None;
+    }
+    let mut significant = tokens.iter().filter(|t| !matches!(t.kind, TokenKind::Eof));
+    let token = significant.next()?;
+    if significant.next().is_some() {
+        return None; // the slice holds more than the literal
+    }
+
+    let same = match (value, &token.kind) {
+        (Literal::Int(a), TokenKind::Integer(b)) => a == b,
+        // by bits, so `-0.0` and `0.0` are not swapped for one another
+        (Literal::Float(a), TokenKind::Float(b)) => a.to_bits() == b.to_bits(),
+        (Literal::Char(a), TokenKind::Char(b)) => a == b,
+        (Literal::Bool(a), TokenKind::Boolean(b)) => a == b,
+        (Literal::String(a), TokenKind::String(b)) => a == b,
+        _ => false,
+    };
+    same.then_some(raw)
+}
+
 fn escape_string(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for ch in s.chars() {

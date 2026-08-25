@@ -48,6 +48,22 @@ Everything else is untouchable. In particular:
   `##"`, `##'`, `#|var|`), interpolated strings `"a {b} c"`, `¶` vs `\\`,
   1-tuples `(1,)`, single vs double bracket extraction (`arr[i>a..b]` vs
   `arr[[path]]`), and export-block comma separators.
+- **Literals reprint as written.** A literal reaches the AST as a *value*, and
+  many source forms share one value: `४२`, `0x2A`, `0b101010` and `42` are all
+  `Int(42)`; `٣٫٥` and `3.5` are one `Float`; `#१` and `#1` are one `Bool`.
+  The formatter emits the literal's own source text, recovered from its span and
+  verified by re-lexing it (`visitor.rs::literal_source_form`) — so a script, a
+  base prefix, an exponent, and written leading or trailing zeros all survive.
+
+  > Until v0.0.9 it printed the *value*, so `४२` came out `42` and a program
+  > written entirely in Devanagari stopped being one the moment it was
+  > formatted. `0o17` came out as a quoted **U+000F**: the value is a `Char`, so
+  > the formatter wrote a raw control character into the source. None of P1–P4
+  > can see this — the output reparses, is idempotent, runs identically and
+  > keeps every comment — and G1 passes legitimately, because `Integer(42)` is
+  > `Integer(42)` whichever script spelled it. Held by unit tests in
+  > `crates/zymbol-formatter/src/lib.rs`, which is where a surface property has
+  > to be checked.
 
 ### 2.2 Never delete content
 
@@ -218,6 +234,11 @@ whitespace:
 If `fmt` changes anything not in this table, it is a bug — and the safety
 gate will normally have refused to emit it.
 
+**"Normally" is the load-bearing word.** The gate compares *tokens*, so a
+rewrite that preserves the token stream passes it: printing `42` for `४२` is
+one, and it stood for four releases. When output differs from input in a way
+this table does not list, the gate's silence is not evidence.
+
 ---
 
 ## 11. Configuration reference
@@ -242,9 +263,11 @@ learns to print it. This is deliberate.
 **Process rule:** a PR that adds parser syntax must, in the same PR:
 
 1. add the formatter arm (the compiler enforces this),
-2. make sure the parser records any surface form the AST would otherwise
-   lose (see `AssignSugar`, `Newline.backslash`, `FlatExtractExpr.double_bracket`,
-   `ExportBlock.commas`, `Expr::Group` for precedents),
+2. make sure the surface form the AST would otherwise lose is recoverable —
+   either recorded on the node (`AssignSugar`, `Newline.backslash`,
+   `FlatExtractExpr.double_bracket`, `ExportBlock.commas`, `Expr::Group`) or
+   readable back from the source through the node's span (`LiteralExpr`, §2.1);
+   note that a *value*-carrying node loses its spelling by construction,
 3. add at least one corpus file exercising the new syntax and keep
    `tests/scripts/fmt_property.sh` green.
 
