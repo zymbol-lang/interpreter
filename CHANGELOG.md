@@ -19,6 +19,33 @@ those corrections ship inside it. See [WINDOWS_V009.md](WINDOWS_V009.md).
 
 ### Added
 
+**`#,` and `#^` write their digits in the active numeral script**
+
+```zymbol
+#०९#
+>> f ¶            // १२३४५६७.८९   followed the mode
+>> #.2|f| ¶       // १२३४५६७.८९   followed it
+>> #,|n| ¶        // 1,234,567    did NOT
+```
+
+The two format operators built their text with the host's formatter, which
+writes ASCII, so a program printed the digits one way with `>>` and another way
+one line later — **two spellings inside the same output**. The precision
+operators had always followed the mode; these two never did.
+
+The same in all three engines, so `zyq consensus` could not see it, and no
+corpus file printed `#,` under an active mode. It surfaced from ZyBank, whose
+money formatter reimplemented thousands-grouping by hand — sixteen lines
+rewriting an operator the language already had — precisely because the one that
+existed could not be used under a locale.
+
+Only the digits map: the separators are not ASCII digits and pass through
+unchanged, which is what leaves room for choosing them separately. That part —
+`#,` being wired to `1,234,567.89` and unusable by a program that writes
+`1.234.567,89` — is a gap and not a defect, and it is still open.
+
+Pinned in `corpus/i18n/formato_sigue_al_modo.zy`.
+
 **A named function captures the file's variables, like a lambda**
 
 ```zymbol

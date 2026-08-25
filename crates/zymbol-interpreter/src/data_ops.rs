@@ -289,7 +289,20 @@ impl<W: Write> Interpreter<W> {
             FormatKind::Scientific => interp_fmt_scientific(f, precision),
         };
 
-        Ok(Value::String(formatted))
+        // The digits follow the active numeral mode, as `>>` and the precision
+        // operators do. They did not: `#,` and `#^` build their text with
+        // `format!`, which writes ASCII, so under `#०९#` a program printed
+        // `१२३४५६७.८९` with `>>` and `1,234,567.89` one line later with `#,` —
+        // two spellings of the digits inside one output. The same in all three
+        // engines, so no consensus run could see it, and no corpus file printed
+        // `#,` under an active mode.
+        //
+        // Only the digits map: the separators are not ASCII digits and pass
+        // through, which is what leaves room for choosing them separately.
+        Ok(Value::String(crate::numeral_mode::map_ascii_digits(
+            formatted,
+            self.numeral_mode,
+        )))
     }
 
     /// Evaluate base conversion expression: 0x|expr| or 0b|expr| or 0o|expr| or 0d|expr|

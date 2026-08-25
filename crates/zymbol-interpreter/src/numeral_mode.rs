@@ -43,7 +43,7 @@ pub fn to_numeral_bool(value: bool, block_base: u32) -> String {
 /// Takes `s` by value so the ASCII fast-path (`block_base == ASCII_BASE`, the
 /// default mode) hands the buffer straight back instead of re-allocating it —
 /// this runs on every number-to-string concatenation, mode active or not.
-fn map_ascii_digits(s: String, block_base: u32) -> String {
+pub fn map_ascii_digits(s: String, block_base: u32) -> String {
     if block_base == ASCII_BASE {
         return s;
     }
