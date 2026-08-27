@@ -375,17 +375,21 @@ impl<W: Write> Interpreter<W> {
         let new_value = self.eval_expr(&op.value)?;
 
         // Resolve 1-based or negative integer index to a 0-based usize.
-        let resolve_int = |index: i64, len: usize, span: zymbol_span::Span| -> Result<usize> {
+        // `container` names the thing that was too short, and the index-0 text
+        // carries the same parenthetical every other site carries: this local
+        // copy said "collection" and dropped the hint, so `a[0]$~ v` and `a[0]`
+        // answered differently in the same engine.
+        let resolve_int = |index: i64, len: usize, span: zymbol_span::Span, container: &str| -> Result<usize> {
             if index == 0 {
                 return Err(RuntimeError::Generic {
-                    message: "index 0 is invalid — Zymbol uses 1-based indexing".to_string(),
+                    message: "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)".to_string(),
                     span,
                 });
             }
             let i = if index < 0 { len as i64 + index } else { index - 1 };
             if i < 0 || i as usize >= len {
                 return Err(RuntimeError::Generic {
-                    message: format!("index out of bounds: index {} for collection of length {}", index, len),
+                    message: format!("{} index out of bounds: index {} for {} of length {}", container, index, container, len),
                     span,
                 });
             }
@@ -402,7 +406,7 @@ impl<W: Write> Interpreter<W> {
                     }),
                 };
                 let len = arr.len();
-                let i = resolve_int(index, len, op.span)?;
+                let i = resolve_int(index, len, op.span, "array")?;
                 arr[i] = new_value;
                 Ok(Value::Array(arr))
             }
@@ -491,8 +495,8 @@ impl<W: Write> Interpreter<W> {
             }
             _ => Err(RuntimeError::Generic {
                 message: format!(
-                    "cannot update {:?} - only arrays, tuples, and named tuples support $~",
-                    collection
+                    "$~ writes into a collection, and this is {}\nhelp: use a[1]$~ v on an array or tuple, d[\"key\"]$~ v on a #(…)",
+                    crate::base_type_symbol(&collection)
                 ),
                 span: op.span,
             }),

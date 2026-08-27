@@ -383,12 +383,15 @@ impl Value {
                 format!("({})", contents)
             }
             Value::NamedTuple(fields) => {
+                // `#(…)`, the way the literal is written. A dictionary printed as
+                // `(a: 1)` could not be typed back in: that spelling is refused
+                // since v0.0.9, and `()` would be the empty tuple as well.
                 let contents = fields
                     .iter()
                     .map(|(name, value)| format!("{}: {}", name, nested(value, block_base)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("({})", contents)
+                format!("#({})", contents)
             }
             Value::Function(f) => {
                 if f.is_named_fn {
@@ -439,7 +442,7 @@ impl Value {
                     .map(|(name, v)| format!("{}: {}", name, v.to_repr_string_in(block_base)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("({})", contents)
+                format!("#({})", contents)
             }
             _ => self.to_display_string_in(block_base),
         }
@@ -1696,17 +1699,26 @@ impl<W: Write> Interpreter<W> {
                     Value::NamedTuple(p) => p,
                     _ => return Err(RuntimeError::Generic {
                         message: format!(
-                            "named tuple destructure requires a named tuple, got {}",
-                            self.value_type_name(&rhs)
+                            "the pattern #(…) requires a dictionary, got {}\nhelp: #(key: name) = d unpacks a dictionary; use (a, b) for a tuple, [a, b] for an array",
+                            crate::base_type_symbol(&rhs)
                         ),
                         span,
                     }),
                 };
                 for (field, var_name) in fields {
-                    let val = pairs.iter()
-                        .find(|(k, _)| k == field)
-                        .map(|(_, v)| v.clone())
-                        .unwrap_or(Value::Unit);
+                    // A key the dictionary does not hold is `##Key`, never a silent
+                    // Unit: binding nothing made `#(zzz: n) = d` succeed with `n`
+                    // empty and exit 0, which is the very answer decision 10 exists
+                    // to refuse. The register VM already raised here.
+                    let Some(val) = pairs.iter().find(|(k, _)| k == field).map(|(_, v)| v.clone())
+                    else {
+                        let available: Vec<String> =
+                            pairs.iter().map(|(k, _)| k.clone()).collect();
+                        return Err(RuntimeError::Generic {
+                            message: crate::variables::missing_key_msg(field, &available),
+                            span,
+                        });
+                    };
                     self.set_variable(var_name, val);
                 }
             }

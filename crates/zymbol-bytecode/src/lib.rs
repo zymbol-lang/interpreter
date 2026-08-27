@@ -208,6 +208,11 @@ pub enum Instruction {
     MakeNamedTuple(Reg, Vec<StrIdx>, Vec<Reg>),
     /// dst = named_tuple.field_name (or positional index)
     NamedTupleGet(Reg, Reg, StrIdx),
+    /// Refuse anything that is not a dictionary, with the message a FAILED
+    /// PATTERN needs. A `#(k: n) = d` destructure compiles to one
+    /// `NamedTupleGet` per field, which cannot tell itself apart from a plain
+    /// `d.k`, so the two raised the same text where the tree-walker raises two.
+    RequireDict(Reg),
 
     // ── Pattern match ─────────────────────────────────────────────────────
     MatchInt(Reg, i64, Label),

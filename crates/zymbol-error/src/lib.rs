@@ -113,8 +113,20 @@ impl Diagnostic {
         }
 
         // Print help
+        //
+        // `= help:`, not a bare `help:`. rustc reserves the bare form for a
+        // SPANNED suggestion that brings its own snippet, and uses `= help:`
+        // for a trailing line of guidance — which is the only kind Zymbol has.
+        // Every other place that prints a diagnostic block already spelled it
+        // that way (twelve of them in zymbol-cli); this printer was the one
+        // that did not, so the same warning read differently depending on
+        // which path emitted it.
+        //
+        // It is also load-bearing for the corpus: `zyq`'s `strip_warnings`
+        // drops a diagnostic block by its `  =` lines, so a help line without
+        // the `=` leaks into the compared output of 75 goldens.
         if let Some(help) = &self.help {
-            eprintln!("  {} {}", "help:".green().bold(), help);
+            eprintln!("  {} {}", "= help:".green().bold(), help);
         }
 
         eprintln!();
