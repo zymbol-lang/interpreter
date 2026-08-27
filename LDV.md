@@ -11,6 +11,10 @@
 > **Method.** Every claim below was checked against the eight gap logs in the application
 > repositories, not against a previous edition of this document. Where the practice has
 > drifted from what it says about itself, § 5.2 says so instead of tidying it away.
+>
+> **Authorship.** The LDV applications, like the interpreter itself, are written with
+> **[Claude Code](https://claude.ai/code)** (Anthropic) as the engineering team, under the
+> author's direction. § 7 says what that changes about the method and what it does not.
 
 ---
 
@@ -22,6 +26,7 @@
 4. [The cycle](#4-the-cycle)
 5. [The gap logs](#5-the-gap-logs)
 6. [What LDV costs, and when not to use it](#6-what-ldv-costs-and-when-not-to-use-it)
+7. [Authorship & AI collaboration](#7-authorship--ai-collaboration)
 
 ---
 
@@ -248,6 +253,9 @@ The honest limits, so the method is not applied where it does not pay:
 
 - **It cannot be scheduled.** You cannot plan to find three silent VM bugs. You can only plan
   to build something big enough that they surface.
+- **The costs below are paid with AI assistance** (§ 7), which is what makes eight projects
+  possible rather than one. It changes the price of the instrument, not the nature of what the
+  instrument finds — and it introduces one failure mode of its own, § 7.3.
 - **It has poor resolution.** A failure points at a region, not a line. Reducing an application
   failure to a minimal `.zy` is real work, and it is the work that produces the value.
 - **It scales with domain distance, not with size.** A third terminal game would validate
@@ -261,10 +269,70 @@ The honest limits, so the method is not applied where it does not pay:
 
 ---
 
+## 7. Authorship & AI collaboration
+
+Zymbol is designed by
+**[OscarE.EspinozaB](https://github.com/zymbol-lang/interpreter/commits?author=OscarEEspinozaB)**.
+Every decision about the language originates from and is controlled by its author. The LDV
+applications — ZethyCLI, ZyAudit, Serpiente, Hov veS, Zofía, 囲碁, चतुरङ्गम्, ZyBank — are
+written with **[Claude Code](https://claude.ai/code)** (Anthropic) as the engineering team,
+under the author's direction, exactly as the interpreter is (`README.md` § Authorship & AI
+Collaboration). The use of AI is transparent and intentional — it is not concealed or
+minimized.
+
+Stating it here rather than only in the README matters, because LDV makes quantitative claims
+about cost, and those claims are only readable if the reader knows who is paying.
+
+### 7.1 What it changes
+
+**The cost of the instrument, and therefore how many exist.** § 2 records the cost of an LDV
+test as *"expensive; months of work, and it cannot be rerun"*, and § 6 opens with *"it cannot
+be scheduled"*. Both remain true of the **cycle** — a finding still closes against a release.
+What changed is the price of the *application*: eight of them exist across v0.0.3–v0.0.9, in
+five natural languages and five unrelated domains. Without AI assistance that number would be
+one or two, and § 6's warning that *"it scales with domain distance, not with size"* would be
+an untested principle instead of a measured result — a third terminal game validates almost
+nothing, and knowing that required building enough of them to see it.
+
+### 7.2 What it does not change
+
+**An unknown-unknown is unknown to the AI too.** LDV works because a real domain *resists* —
+a 361-point board threaded through cooperating modules made three silent VM defects surface
+that no amount of cleverness would have predicted. The method's value was never that someone
+thought hard enough about where bugs might be; it is that a genuine application goes where
+nobody was looking. Assistance lowers the cost of building the instrument. It does not lower
+the cost of knowing where to point it, and it does not substitute for a domain that pushes
+back.
+
+**Nor does it change what stays with the author**: the design rationale, the specification
+that guides each feature, the suite that defines correctness, the judgment on what to build
+and what to reject, and the final say on every merged change.
+
+### 7.3 The risk it introduces, named
+
+A fluent, fast implementer routes around an incapacity **smoothly**. Asked to write something
+the language cannot say, the path of least resistance is a workaround — a shell call, a
+hand-written table, a duplicated block — delivered without complaint, and the finding is never
+recorded. The application still works, so nothing looks wrong. That is the failure mode of
+LDV under assistance, and it is silent.
+
+Decalogue point 4 already anticipates it:
+
+> **A workaround counts as red:** if the program can only express the concept by leaving the
+> language, the language did not support it.
+
+That rule was written as a definition. Under AI assistance it has to be read as an
+**obligation on the implementer**: stop at the workaround and log it, rather than ship it and
+move on. It is the one part of the method that assistance makes harder rather than cheaper,
+and it is why § 5's logs — not the applications — are the primary artifact.
+
+---
+
 ## Related documents
 
 | Document | Answers |
 |----------|---------|
+| `README.md` § Authorship & AI Collaboration | The same disclosure for the interpreter, and what AI does not replace |
 | `README.md` § Language-Driven Validation | The projects, what each put under test, and the code that came out |
 | `SYMBOLS.md` § 17 | The rules a Green-state operator must satisfy before it can exist |
 | `zyquality/GOVERNANCE.md` (separate repository) | The verification layer: one corpus, four engines, one verdict |
