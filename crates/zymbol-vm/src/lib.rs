@@ -166,7 +166,8 @@ impl fmt::Display for Value {
                 write!(f, ")")
             }
             Value::NamedTuple(fields) => {
-                write!(f, "(")?;
+                // `#(…)` — see the note on the tree-walker's `to_display_string_in`.
+                write!(f, "#(")?;
                 for (i, (name, val)) in fields.as_ref().iter().enumerate() {
                     if i > 0 { write!(f, ", ")?; }
                     write!(f, "{}: {}", name, val)?;
@@ -259,11 +260,12 @@ impl Value {
                 format!("({})", contents.join(", "))
             }
             Value::NamedTuple(fields) => {
+                // `#(…)` — see the note on the tree-walker's `to_display_string_in`.
                 let contents: Vec<String> = fields
                     .iter()
                     .map(|(name, v)| format!("{}: {}", name, nested(v, block_base)))
                     .collect();
-                format!("({})", contents.join(", "))
+                format!("#({})", contents.join(", "))
             }
             other => other.to_string(),
         }
@@ -329,6 +331,42 @@ impl Value {
             Value::Closure(_, _, _) => ts::LAMBDA,
             Value::Unit             => ts::UNIT,
             Value::Error(_)         => "##!",
+        }
+    }
+
+    /// `tw_type_name`, except that an ERROR names its own kind — `##Index`, not the
+    /// generic `##!` — exactly as the tree-walker's `base_type_symbol` does.
+    ///
+    /// The kind is the prefix before `(` of the error's own text, which is where
+    /// `Instruction::TypeOf` already read it from to answer `#?`. Written once because
+    /// it had been written once and MISSED once: `#?` said `##Index` while a diagnostic
+    /// naming the same value said `##!`.
+    fn tw_type_name_owned(&self) -> String {
+        match self {
+            Value::Error(s) => {
+                let t = s.as_ref();
+                t.find('(').map(|i| &t[..i]).unwrap_or(t).to_string()
+            }
+            other => other.tw_type_name().to_string(),
+        }
+    }
+
+    /// The message inside an error's `##Kind(…)` text, which is what `#?` counts.
+    ///
+    /// The tree-walker keeps kind and message in separate fields and answers
+    /// `err.message.len()` (`data_ops.rs`); this engine keeps one string, so the message
+    /// is what sits between the first `(` and the final `)`. Answering 0 made the same
+    /// value report a length of 57 under one engine and 0 under the other.
+    fn error_message_len(&self) -> i64 {
+        match self {
+            Value::Error(s) => {
+                let t = s.as_ref();
+                match (t.find('('), t.strip_suffix(')')) {
+                    (Some(i), Some(no_paren)) => no_paren[i + 1..].len() as i64,
+                    _ => t.len() as i64,
+                }
+            }
+            _ => 0,
         }
     }
 
@@ -495,8 +533,12 @@ pub enum VmError {
     /// `###`/`##!` on a float with no integer form in range.
     #[error("integer overflow: {op} cannot represent this float")]
     CastOverflow { op: &'static str },
-    #[error("array index out of bounds: index {index} for array of length {length}")]
-    IndexOutOfBounds { index: i64, length: usize },
+    /// `container` is spelled as the tree-walker spells it — the read path there
+    /// names the thing that was too short, and one message that always said
+    /// "array" told a program indexing past the end of a STRING that its array
+    /// was short. `zyq consensus` compares the text.
+    #[error("{container} index out of bounds: index {index} for {container} of length {length}")]
+    IndexOutOfBounds { index: i64, length: usize, container: &'static str },
     #[error("index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)")]
     IndexZero,
     #[error("undefined function index {0}")]
@@ -1797,7 +1839,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
                             }
                             arr[i as usize].clone()
                         }
@@ -1805,7 +1847,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { items.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= items.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: items.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: items.len() , container: "tuple" });
                             }
                             items[i as usize].clone()
                         }
@@ -1813,7 +1855,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= fields.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() , container: "named tuple" });
                             }
                             fields[i as usize].1.clone()
                         }
@@ -1823,7 +1865,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { char_count as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= char_count {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: char_count });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: char_count , container: "string" });
                             }
                             let ch = s.chars().nth(i as usize).unwrap();
                             Value::Char(ch)
@@ -1901,7 +1943,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
                             }
                             arr[i as usize] = val;
                         }
@@ -1921,7 +1963,7 @@ impl<W: Write> VM<W> {
                                     let i = if idx == 0 { raise!(VmError::IndexZero);
                                     } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
                                     if i < 0 || i as usize >= fields.len() {
-                                        raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
+                                        raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() , container: "named tuple" });
                                     }
                                     fields[i as usize].1 = val;
                                 }
@@ -1978,7 +2020,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
                             }
                             arr.remove(i as usize);
                             Value::Array(rc_arr)
@@ -1988,7 +2030,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { tup.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= tup.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() , container: "tuple" });
                             }
                             tup.remove(i as usize);
                             Value::Tuple(Rc::new(tup))
@@ -2002,7 +2044,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { chars.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= chars.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() , container: "string" });
                             }
                             chars.remove(i as usize);
                             Value::String(ZyStr::new(chars.iter().collect()))
@@ -2086,7 +2128,7 @@ impl<W: Write> VM<W> {
                         Value::Array(rc_arr) => {
                             let mut arr = rc_arr.as_ref().clone();
                             if idx <= 0 || (idx - 1) as usize > arr.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
                             }
                             arr.insert((idx - 1) as usize, val);
                             self.value_stack[base + arr_reg as usize] = Value::Array(Rc::new(arr));
@@ -2094,7 +2136,7 @@ impl<W: Write> VM<W> {
                         Value::Tuple(rc_tup) => {
                             let mut tup = rc_tup.as_ref().clone();
                             if idx <= 0 || (idx - 1) as usize > tup.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() , container: "tuple" });
                             }
                             tup.insert((idx - 1) as usize, val);
                             self.value_stack[base + arr_reg as usize] = Value::Tuple(Rc::new(tup));
@@ -2102,7 +2144,7 @@ impl<W: Write> VM<W> {
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
                             if idx <= 0 || (idx - 1) as usize > chars.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() , container: "string" });
                             }
                             let i = (idx - 1) as usize;
                             match val {
@@ -2881,7 +2923,7 @@ impl<W: Write> VM<W> {
                         matches!(v, Value::Array(_))
                     };
                     if !ok {
-                        let got = v.tw_type_name();
+                        let got = v.tw_type_name_owned();
                         raise!(VmError::Generic(if wants_tuple {
                             format!("tuple pattern '( … )' requires a tuple, got {got}")
                         } else {
@@ -2971,6 +3013,16 @@ impl<W: Write> VM<W> {
                     }
                     self.reg_set(dst, Value::NamedTuple(Rc::new(fields)));
                 }
+                &Instruction::RequireDict(src) => {
+                    let v = self.reg_get(src);
+                    if !matches!(v, Value::NamedTuple(_)) {
+                        let got = v.tw_type_name_owned();
+                        raise!(VmError::Generic(format!(
+                            "the pattern #(…) requires a dictionary, got {}\nhelp: #(key: name) = d unpacks a dictionary; use (a, b) for a tuple, [a, b] for an array",
+                            got
+                        )));
+                    }
+                }
                 &Instruction::NamedTupleGet(dst, tuple_reg, field_idx) => {
                     let field_name = &program.string_pool[field_idx as usize];
                     let result = match self.reg_get(tuple_reg) {
@@ -2984,22 +3036,36 @@ impl<W: Write> VM<W> {
                                 }
                             }
                         }
-                        // positional index on array (tuple[0])
+                        // A numeric field name is unreachable from source — the
+                        // parser refuses `a.1` in every engine — so an array
+                        // reaching here is the dot on the wrong collection, and
+                        // it gets the same message the tree-walker gives.
                         Value::Array(arr) => {
                             if let Ok(i) = field_name.parse::<usize>() {
                                 arr.get(i).cloned().unwrap_or(Value::Unit)
                             } else {
-                                raise!(VmError::TypeError { expected: "Int index", got: field_name.clone() });
+                                let field_name = field_name.clone();
+                                raise!(VmError::Generic(format!(
+                                    "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
+                                    zymbol_common::typesym::ARRAY, field_name
+                                )));
                             }
                         }
                         Value::Tuple(_) => {
                             let field_name = field_name.clone();
                             raise!(VmError::Generic(format!(
-                                "Cannot access field '{}' on positional tuple. Use positional indexing like tuple[1]",
+                                "a positional tuple is addressed by position, not by name: '{}'\nhelp: use t[1] — names live in a dictionary, #(key: value)",
                                 field_name
                             )));
                         }
-                        other => raise!(VmError::TypeError { expected: "Tuple", got: other.type_name().to_string() }),
+                        other => {
+                            let got = other.tw_type_name_owned();
+                            let field_name = field_name.clone();
+                            raise!(VmError::Generic(format!(
+                                "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
+                                got, field_name
+                            )));
+                        }
                     };
                     self.reg_set(dst, result);
                 }
@@ -3042,12 +3108,10 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::TypeOf(dst, src) => {
                     let val = self.reg_get(src).clone();
-                    let tuple_val = if let Value::Error(s) = &val {
-                        let s_ref = s.as_ref();
-                        let kind = s_ref.find('(').map(|i| &s_ref[..i]).unwrap_or(s_ref);
+                    let tuple_val = if matches!(&val, Value::Error(_)) {
                         Value::Tuple(Rc::new(vec![
-                            Value::String(ZyStr::new(kind.to_string())),
-                            Value::Int(0),
+                            Value::String(ZyStr::new(val.tw_type_name_owned())),
+                            Value::Int(val.error_message_len()),
                             val.clone(),
                         ]))
                     } else {
@@ -3867,17 +3931,52 @@ impl<W: Write> VM<W> {
                     let res = ord_ge(ord_slow(r!(a), r!(b), "Ge")?);
                     w!(dst, Value::Bool(res));
                 }
+                &Instruction::RequireDict(src) => {
+                    let v = &self.value_stack[base + src as usize];
+                    if !matches!(v, Value::NamedTuple(_)) {
+                        let got = v.tw_type_name_owned();
+                        return Err(VmError::Generic(format!(
+                            "the pattern #(…) requires a dictionary, got {}\nhelp: #(key: name) = d unpacks a dictionary; use (a, b) for a tuple, [a, b] for an array",
+                            got
+                        )));
+                    }
+                }
                 &Instruction::NamedTupleGet(dst, tuple_reg, field_idx) => {
+                    // The dictionary rules, same as the main dispatch loop above.
+                    // This loop runs a CALLED function's body, which is where a
+                    // lambda handed to `$>`/`$|`/`$<` lives — and it answered a
+                    // missing key with Unit and carried on, so
+                    // `ds$> (d -> d.zzz)` returned `[(), ()]` and exited 0 where
+                    // both other engines raised `##Key`. That is the silent
+                    // undefined decision 10 exists to refuse.
                     let field_name = &program.string_pool[field_idx as usize];
                     let result = match &self.value_stack[base + tuple_reg as usize] {
                         Value::NamedTuple(fields) => {
                             let field_name = field_name.clone();
-                            fields.iter()
-                                .find(|(n, _)| *n == field_name)
-                                .map(|(_, v)| v.clone())
-                                .unwrap_or(Value::Unit)
+                            match fields.iter().find(|(n, _)| *n == field_name).map(|(_, v)| v.clone()) {
+                                Some(v) => v,
+                                None => {
+                                    let available: Vec<String> =
+                                        fields.iter().map(|(n, _)| n.clone()).collect();
+                                    return Err(VmError::Generic(missing_key_msg(&field_name, &available)));
+                                }
+                            }
                         }
-                        _ => Value::Unit,
+                        Value::Tuple(_) => {
+                            let field_name = field_name.clone();
+                            return Err(VmError::Generic(format!(
+                                "a positional tuple is addressed by position, not by name: '{}'\nhelp: use t[1] — names live in a dictionary, #(key: value)",
+                                field_name
+                            )));
+                        }
+                        other => {
+                            let got = other.tw_type_name_owned();
+                            let field_name = field_name.clone();
+                            return Err(VmError::Generic(format!(
+                                "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
+                                got, field_name
+                            )));
+                        }
                     };
                     self.value_stack[base + dst as usize] = result;
                 }
@@ -3922,19 +4021,19 @@ impl<W: Write> VM<W> {
                         Value::Array(arr) => {
                             let i = if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i >= 0 && (i as usize) < arr.len() { arr[i as usize].clone() } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
                             }
                         }
                         Value::Tuple(items) => {
                             let i = if idx < 0 { items.len() as i64 + idx } else { idx - 1 };
                             if i >= 0 && (i as usize) < items.len() { items[i as usize].clone() } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: items.len() });
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: items.len() , container: "tuple" });
                             }
                         }
                         Value::NamedTuple(fields) => {
                             let i = if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
                             if i >= 0 && (i as usize) < fields.len() { fields[i as usize].1.clone() } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: fields.len() , container: "named tuple" });
                             }
                         }
                         Value::String(s) => {
@@ -3943,7 +4042,7 @@ impl<W: Write> VM<W> {
                             if i >= 0 && (i as usize) < char_count {
                                 Value::Char(s.chars().nth(i as usize).unwrap())
                             } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: char_count });
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: char_count , container: "string" });
                             }
                         }
                         other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
@@ -4118,7 +4217,7 @@ impl<W: Write> VM<W> {
                         matches!(v, Value::Array(_))
                     };
                     if !ok {
-                        let got = v.tw_type_name();
+                        let got = v.tw_type_name_owned();
                         return Err(VmError::Generic(if wants_tuple {
                             format!("tuple pattern '( … )' requires a tuple, got {got}")
                         } else {
@@ -4450,17 +4549,25 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::TypeOf(dst, src) => {
                     let val = r!(src).clone();
-                    let result = if let Value::Error(s) = &val {
-                        let s_ref = s.as_ref();
-                        let kind = s_ref.find('(').map(|i| &s_ref[..i]).unwrap_or(s_ref);
+                    // `(symbol, count, value)`, in that order. This loop runs a CALLED
+                    // function's body — where a lambda handed to `$>`/`$|`/`$<` lives —
+                    // and it built `(value, symbol, count)`, so `x#?` answered a
+                    // scrambled tuple to every program that asked inside one. Same
+                    // shape as the main dispatch loop above, and the error case reads
+                    // its kind and length from the shared helpers rather than a copy.
+                    let result = if matches!(&val, Value::Error(_)) {
                         Value::Tuple(Rc::new(vec![
-                            Value::String(ZyStr::new(kind.to_string())),
-                            Value::Int(0),
+                            Value::String(ZyStr::new(val.tw_type_name_owned())),
+                            Value::Int(val.error_message_len()),
                             val.clone(),
                         ]))
                     } else {
                         let (type_sym, len) = val.type_metadata();
-                        Value::Tuple(Rc::new(vec![val.clone(), Value::String(ZyStr::new(type_sym.to_string())), Value::Int(len)]))
+                        Value::Tuple(Rc::new(vec![
+                            Value::String(ZyStr::new(type_sym.to_string())),
+                            Value::Int(len),
+                            val.clone(),
+                        ]))
                     };
                     w!(dst, result);
                 }
@@ -4591,13 +4698,13 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
     let Some((step, rest)) = path.split_first() else {
         return Ok(new_val);
     };
-    fn resolve(idx: i64, len: usize) -> Result<usize, VmError> {
+    fn resolve(idx: i64, len: usize, container: &'static str) -> Result<usize, VmError> {
         if idx == 0 {
             return Err(VmError::IndexZero);
         }
         let i = if idx < 0 { len as i64 + idx } else { idx - 1 };
         if i < 0 || i as usize >= len {
-            return Err(VmError::IndexOutOfBounds { index: idx, length: len });
+            return Err(VmError::IndexOutOfBounds { index: idx, length: len, container });
         }
         Ok(i as usize)
     }
@@ -4610,14 +4717,14 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
     match col {
         Value::Array(mut rc) => {
             let arr = Rc::make_mut(&mut rc);
-            let i = resolve(int_step(step)?, arr.len())?;
+            let i = resolve(int_step(step)?, arr.len(), "array")?;
             let sub = mem::replace(&mut arr[i], Value::Unit);
             arr[i] = vm_deep_set(sub, rest, new_val)?;
             Ok(Value::Array(rc))
         }
         Value::Tuple(mut rc) => {
             let tup = Rc::make_mut(&mut rc);
-            let i = resolve(int_step(step)?, tup.len())?;
+            let i = resolve(int_step(step)?, tup.len(), "tuple")?;
             let sub = mem::replace(&mut tup[i], Value::Unit);
             tup[i] = vm_deep_set(sub, rest, new_val)?;
             Ok(Value::Tuple(rc))
@@ -4650,10 +4757,10 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
             fields[i].1 = vm_deep_set(sub, rest, new_val)?;
             Ok(Value::NamedTuple(rc))
         }
-        other => Err(VmError::TypeError {
-            expected: "Array, Tuple, or NamedTuple",
-            got: other.type_name().to_string(),
-        }),
+        other => Err(VmError::Generic(format!(
+            "$~ writes into a collection, and this is {}\nhelp: use a[1]$~ v on an array or tuple, d[\"key\"]$~ v on a #(…)",
+            other.tw_type_name_owned()
+        ))),
     }
 }
 

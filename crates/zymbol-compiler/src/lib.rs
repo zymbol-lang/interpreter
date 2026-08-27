@@ -1443,6 +1443,10 @@ impl Compiler {
                 }
             }
             DestructurePattern::NamedTuple(fields) => {
+                // Once, before the fields: the receiver has to be a dictionary,
+                // and saying so here is what lets the per-field gets keep the
+                // wording of a plain `d.k`.
+                ctx.emit(Instruction::RequireDict(r_rhs));
                 for (field, var_name) in fields {
                     let field_idx = self.intern_string(field);
                     let dst = if let Ok(existing) = ctx.get_reg(var_name) {
@@ -4916,6 +4920,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::MakeTuple(d, elems) => { upd(*d); for &e in elems { upd(e); } }
             Instruction::MakeNamedTuple(d, _, fields) => { upd(*d); for &f in fields { upd(f); } }
             Instruction::NamedTupleGet(d, t, _) => { upd(*d); upd(*t); }
+            Instruction::RequireDict(t) => { upd(*t); }
             Instruction::BashExec(d, _) | Instruction::BuildStr(d, _)
             | Instruction::Execute(d, _) => upd(*d),
             Instruction::FmtThousandsDyn(d, s, _, p) | Instruction::FmtScientificDyn(d, s, _, p) => {

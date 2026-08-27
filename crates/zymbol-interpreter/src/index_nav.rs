@@ -245,23 +245,23 @@ fn descend(
     match collection {
         Value::Array(arr) => {
             let len = arr.len();
-            let i = resolve_index(index, len, op_span)?;
+            let i = resolve_index(index, len, op_span, "array")?;
             Ok(arr[i].clone())
         }
         Value::Tuple(elems) => {
             let len = elems.len();
-            let i = resolve_index(index, len, op_span)?;
+            let i = resolve_index(index, len, op_span, "tuple")?;
             Ok(elems[i].clone())
         }
         Value::NamedTuple(fields) => {
             let len = fields.len();
-            let i = resolve_index(index, len, op_span)?;
+            let i = resolve_index(index, len, op_span, "named tuple")?;
             Ok(fields[i].1.clone())
         }
         Value::String(s) => {
             let chars: Vec<char> = s.chars().collect();
             let len = chars.len();
-            let i = resolve_index(index, len, op_span)?;
+            let i = resolve_index(index, len, op_span, "string")?;
             Ok(Value::String(chars[i].to_string()))
         }
         other => Err(RuntimeError::Generic {
@@ -275,7 +275,18 @@ fn descend(
 }
 
 /// Convert a 1-based (or negative) index to a 0-based usize, checking bounds.
-fn resolve_index(index: i64, len: usize, span: zymbol_span::Span) -> Result<usize> {
+///
+/// `container` names the thing that was too short, because the read path
+/// (`expr_eval`) names it — "array index out of bounds … for array of length 2"
+/// — and this write path said "collection" for all four. Same program, two
+/// texts, decided by whether the index was being read or written; `zyq
+/// consensus` never saw it because no corpus file writes past the end.
+fn resolve_index(
+    index: i64,
+    len: usize,
+    span: zymbol_span::Span,
+    container: &str,
+) -> Result<usize> {
     let i = if index < 0 {
         len as i64 + index
     } else {
@@ -284,8 +295,8 @@ fn resolve_index(index: i64, len: usize, span: zymbol_span::Span) -> Result<usiz
     if i < 0 || i as usize >= len {
         return Err(RuntimeError::Generic {
             message: format!(
-                "index out of bounds: index {} for collection of length {}",
-                index, len
+                "{} index out of bounds: index {} for {} of length {}",
+                container, index, container, len
             ),
             span,
         });

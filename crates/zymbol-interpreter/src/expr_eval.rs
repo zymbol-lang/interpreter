@@ -184,6 +184,7 @@ impl<W: Write> Interpreter<W> {
 
         // Not a module access, evaluate as regular member access (for named tuples)
         let object = self.eval_expr(&member.object)?;
+        let got = crate::base_type_symbol(&object);
 
         match object {
             Value::NamedTuple(fields) => {
@@ -205,7 +206,7 @@ impl<W: Write> Interpreter<W> {
             Value::Tuple(_) => {
                 Err(RuntimeError::Generic {
                     message: format!(
-                        "Cannot access field '{}' on positional tuple. Use positional indexing like tuple[1]",
+                        "a positional tuple is addressed by position, not by name: '{}'\nhelp: use t[1] — names live in a dictionary, #(key: value)",
                         member.field
                     ),
                     span: member.span,
@@ -214,8 +215,8 @@ impl<W: Write> Interpreter<W> {
             _ => {
                 Err(RuntimeError::Generic {
                     message: format!(
-                        "Cannot access member '{}' on non-tuple value",
-                        member.field
+                        "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
+                        got, member.field
                     ),
                     span: member.span,
                 })
