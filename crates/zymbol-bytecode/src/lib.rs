@@ -213,6 +213,15 @@ pub enum Instruction {
     /// `NamedTupleGet` per field, which cannot tell itself apart from a plain
     /// `d.k`, so the two raised the same text where the tree-walker raises two.
     RequireDict(Reg),
+    /// Refuse a logical operand that is not a Bool — the guard `&&` / `||` need
+    /// BEFORE their short-circuit jump. `true` is `&&`, `false` is `||`, and
+    /// the flag is only there to spell the operator in the message.
+    ///
+    /// ZYVM-001: the short-circuit reads the left operand through truthiness,
+    /// so `0 && #1` answered `#0` and never reached `And` to be refused. The
+    /// jump cannot do the checking itself — `? 7 { … }` compiles to the same
+    /// JumpIfNot and is a warning, not an error.
+    RequireBool(Reg, bool),
 
     // ── Pattern match ─────────────────────────────────────────────────────
     MatchInt(Reg, i64, Label),

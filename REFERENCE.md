@@ -1059,6 +1059,14 @@ including arithmetic works; comparison and the logical operators do not:
 | `>> #1 && #0 ¶` | **parse error** |
 | `>> (1 == 1) ¶` | `#1` — parentheses always work |
 
+The refusal says so, in all three engines since v0.0.9:
+
+```text
+error: expected expression, found Eq
+  --> x.zy:3:6
+  = help: '>>' takes arithmetic; parenthesise a comparison  →  >> (a == b) ¶
+```
+
 **The cause.** Arguments are juxtaposed — `>> "x=" n " end" ¶` is three of them — so the parser
 must decide where one argument ends and the next begins. `<` and `>` are the same characters
 that open `<#` and `<~` and close `>>|`, and a comparison in argument position is ambiguous

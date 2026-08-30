@@ -280,7 +280,7 @@ impl Value {
             Value::Bool(_)          => "Bool",
             Value::Array(_)         => "Array",
             Value::Tuple(_)         => "Tuple",
-            Value::NamedTuple(_)    => "Tuple",
+            Value::NamedTuple(_)    => "Dict",
             Value::Function(_, _)   => "Function",
             Value::Closure(_, _, _) => "Function",
             Value::Unit             => "Unit",
@@ -755,17 +755,26 @@ fn cmp_order(va: &Value, vb: &Value) -> Option<i32> {
         },
         (Value::String(s), Value::Float(f)) => as_f64(s.as_str()).map(|n| f_ord(n, *f)),
         (Value::Float(f), Value::String(s)) => as_f64(s.as_str()).map(|n| f_ord(*f, n)),
-        (Value::Tuple(x), Value::Tuple(y)) => {
-            if x.len() != y.len() { return Some(1); }
-            for (a, b) in x.iter().zip(y.iter()) {
-                match cmp_order(a, b) {
-                    Some(0) => continue,
-                    other => return other,
-                }
-            }
-            Some(0)
-        }
+        // ZYVM-001: a tuple used to compare element by element here, so
+        // `(1, 2) < (3, 4)` answered `#1` under the VM and was refused by the
+        // tree-walker. The tuple is positional and heterogeneous — `(1, "a") <
+        // (2, #0)` has no defensible answer — so the language has no ordering
+        // for it, and the two engines now say so with one message. Equality is
+        // untouched: `==` does not go through here, and two tuples still
+        // compare equal element by element.
         _ => None,
+    }
+}
+
+/// `rb2!` for the call-frame interpreter loop, which has no `raise!` macro and
+/// propagates with `?`.
+fn bools_or_err(va: &Value, vb: &Value, op: &str) -> Result<(bool, bool), VmError> {
+    match (va, vb) {
+        (Value::Bool(x), Value::Bool(y)) => Ok((*x, *y)),
+        _ => Err(VmError::Generic(logical_type_error(
+            op,
+            if matches!(va, Value::Bool(_)) { vb } else { va },
+        ))),
     }
 }
 
@@ -790,6 +799,36 @@ fn cmp_order_error(va: &Value, vb: &Value, op: &str) -> String {
         (a, b) =>
             format!("cannot compare values with operator '{}': {} and {}", op, a.type_name(), b.type_name()),
     }
+}
+
+/// The tree-walker's refusal for an arithmetic operation whose operands are not
+/// numbers — **spelled per operator** (ZYVM-002).
+///
+/// It used to be one string, `+ is arithmetic only …`, reached from every
+/// arithmetic instruction through one shared macro. So `7 - "a"` was refused
+/// with guidance about an operator the program had not written, and `'a' + 'b'`
+/// — where that guidance is exactly right — got the generic "this needs a
+/// number" instead, because it took a different path. The message was tied to
+/// the code route, not to the operator; now it is tied to the operator.
+fn arith_type_error(op: &str, a: &Value, b: &Value) -> String {
+    match op {
+        "+" => "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\"".to_string(),
+        "/" => "/ requires numeric operands — use $/ to split strings".to_string(),
+        "^" => format!("power operator requires numeric operands: {}, {}", a.type_name(), b.type_name()),
+        _   => format!("arithmetic requires numeric operands: {}, {}", a.type_name(), b.type_name()),
+    }
+}
+
+/// The tree-walker's refusal for `&&` / `||` on an operand that is not a Bool.
+///
+/// ZYVM-001: the VM read both operands through `is_truthy()`, so `7 && 3`
+/// answered `#1` where the tree-walker refused — and the semantic analyser,
+/// which both engines share, had already emitted the warning in both. The
+/// language settled this for the loop specifier in v0.0.9 — there is no
+/// truthiness; a thing is what it is or it is refused — and the logical
+/// operators follow the same rule.
+fn logical_type_error(op: &str, v: &Value) -> String {
+    format!("logical {} requires boolean operands, got {}", op, v.type_name())
 }
 
 /// Returned by `cmp_direct` and `cmp_order` for values with no ordering at all
@@ -1135,26 +1174,25 @@ impl<W: Write> VM<W> {
         macro_rules! wreg {
             ($r:expr, $v:expr) => { unsafe { *self.value_stack.get_unchecked_mut(base + $r as usize) = $v } }
         }
-        // ri!: read register as Int for an ARITHMETIC operand.
+        // ri!: read register as Int for a POSITION — an index, a count, a
+        // repetition. Not for an arithmetic operand: those go through `ri2!`,
+        // which knows which operator asked and can therefore say so.
         //
-        // A String here is the commonest mistake in the language and has a
-        // teaching answer that the tree-walker has always given: `+` is
-        // arithmetic, and concatenation is juxtaposition. Saying "expected Int,
-        // got String" instead describes the check and leaves the reader to guess
-        // the rule — and the two engines then refuse the same program with
-        // different words (DM-08). The tree-walker is the message bench.
+        // This macro used to carry the `+ is arithmetic only …` guidance for a
+        // String, because it was the only Int reader and `+` was the commonest
+        // way to reach it. That made the message a property of the code route
+        // rather than of the operator (ZYVM-002): `7 - "a"` quoted the guidance
+        // for `+`, and `arr["x"]` would have quoted it too.
         macro_rules! ri {
             ($r:expr) => {
                 match unsafe { self.value_stack.get_unchecked(base + $r as usize) } {
                     Value::Int(n) => *n,
-                    Value::String(_) => raise!(VmError::Generic(
-                        "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\"".to_string()
-                    )),
                     other => raise!(VmError::TypeError { expected: "a number", got: other.type_name().to_string() }),
                 }
             }
         }
-        // rf!: read register as Float (Int coerced), raise TypeError on mismatch
+        // rf!: read register as Float (Int coerced), raise TypeError on mismatch.
+        // As with `ri!`, arithmetic operands use `rf2!` instead.
         macro_rules! rf {
             ($r:expr) => {
                 match unsafe { self.value_stack.get_unchecked(base + $r as usize) } {
@@ -1163,6 +1201,44 @@ impl<W: Write> VM<W> {
                     other => raise!(VmError::TypeError { expected: "Float", got: other.type_name().to_string() }),
                 }
             }
+        }
+        // ri2!/rf2!: read BOTH arithmetic operands, and on failure raise the
+        // tree-walker's message for the operator that asked (ZYVM-002).
+        //
+        // The message is built in a first step that ends the borrow of
+        // `value_stack`, because `raise!` needs `self` mutably — the reason
+        // these are not one expression.
+        macro_rules! ri2 {
+            ($a:expr, $b:expr, $op:expr) => {{
+                let read = match (rreg!($a), rreg!($b)) {
+                    (Value::Int(x), Value::Int(y)) => Ok((*x, *y)),
+                    (va, vb) => Err(arith_type_error($op, va, vb)),
+                };
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+            }}
+        }
+        macro_rules! rf2 {
+            ($a:expr, $b:expr, $op:expr) => {{
+                let read = match (rreg!($a), rreg!($b)) {
+                    (Value::Float(x), Value::Float(y)) => Ok((*x, *y)),
+                    (Value::Float(x), Value::Int(y))   => Ok((*x, *y as f64)),
+                    (Value::Int(x), Value::Float(y))   => Ok((*x as f64, *y)),
+                    (Value::Int(x), Value::Int(y))     => Ok((*x as f64, *y as f64)),
+                    (va, vb) => Err(arith_type_error($op, va, vb)),
+                };
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+            }}
+        }
+        // The immediate forms: the other operand is the literal the compiler
+        // folded in, so the message names it exactly as the general form would.
+        macro_rules! ri_imm {
+            ($r:expr, $imm:expr, $op:expr) => {{
+                let read = match rreg!($r) {
+                    Value::Int(x) => Ok(*x),
+                    va => Err(arith_type_error($op, va, &Value::Int($imm as i64))),
+                };
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+            }}
         }
 
         macro_rules! raise {
@@ -1226,6 +1302,29 @@ impl<W: Write> VM<W> {
 
         // Ordering comparison, raising the tree-walker's error when the two
         // values are not comparable (a number against non-numeric text).
+        // rb2!: both logical operands as Bool, or the tree-walker's refusal.
+        // The left operand is reported first, as there — `7 && "a"` names the 7.
+        macro_rules! rb2 {
+            ($a:expr, $b:expr, $op:expr) => {{
+                let read = match (rreg!($a), rreg!($b)) {
+                    (Value::Bool(x), Value::Bool(y)) => Ok((*x, *y)),
+                    (va, vb) => Err(logical_type_error($op, if matches!(va, Value::Bool(_)) { vb } else { va })),
+                };
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+            }}
+        }
+        // rn!: the operand of unary `-`. Its refusal used to come out of `ri!`
+        // as the guidance for `+` (ZYVM-002): `-"a"` was refused with advice
+        // about concatenation.
+        macro_rules! rn {
+            ($r:expr) => {{
+                let read = match rreg!($r) {
+                    Value::Int(n)   => Ok(*n),
+                    va => Err(format!("negation requires numeric operand, got {}", va.type_name())),
+                };
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+            }}
+        }
         macro_rules! ord_or_raise {
             ($a:expr, $b:expr, $op:expr) => {
                 match cmp_order(rreg!($a), rreg!($b)) {
@@ -1235,6 +1334,23 @@ impl<W: Write> VM<W> {
                     )),
                 }
             };
+        }
+        // The same rule against a folded literal. The Int case is answered
+        // without building a Value, so the loop counter pays nothing for it.
+        macro_rules! ord_imm_or_raise {
+            ($r:expr, $imm:expr, $op:expr) => {{
+                match rreg!($r) {
+                    Value::Int(n) => { let n = *n; let i = $imm as i64; if n < i { -1 } else if n > i { 1 } else { 0 } }
+                    _ => {
+                        let rhs = Value::Int($imm as i64);
+                        let read = match cmp_order(rreg!($r), &rhs) {
+                            Some(r) => Ok(r),
+                            None => Err(cmp_order_error(rreg!($r), &rhs, $op)),
+                        };
+                        match read { Ok(r) => r, Err(msg) => raise!(VmError::Generic(msg)) }
+                    }
+                }
+            }};
         }
 
         // TUI cleanup guards — dropped on any return path (Ok, Err, or panic).
@@ -1317,27 +1433,27 @@ impl<W: Write> VM<W> {
                 &Instruction::AddInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
-                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa + fb));
-                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(iop!(num::add(va, vb), va, "+", vb))); }
+                        let (fa, fb) = rf2!(a, b, "+"); wreg!(dst, Value::Float(fa + fb));
+                    } else { let (va, vb) = ri2!(a, b, "+"); wreg!(dst, Value::Int(iop!(num::add(va, vb), va, "+", vb))); }
                 }
                 &Instruction::SubInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
-                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa - fb));
-                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(iop!(num::sub(va, vb), va, "-", vb))); }
+                        let (fa, fb) = rf2!(a, b, "-"); wreg!(dst, Value::Float(fa - fb));
+                    } else { let (va, vb) = ri2!(a, b, "-"); wreg!(dst, Value::Int(iop!(num::sub(va, vb), va, "-", vb))); }
                 }
                 &Instruction::MulInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
-                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa * fb));
-                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(iop!(num::mul(va, vb), va, "*", vb))); }
+                        let (fa, fb) = rf2!(a, b, "*"); wreg!(dst, Value::Float(fa * fb));
+                    } else { let (va, vb) = ri2!(a, b, "*"); wreg!(dst, Value::Int(iop!(num::mul(va, vb), va, "*", vb))); }
                 }
                 &Instruction::DivInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
-                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa / fb));
+                        let (fa, fb) = rf2!(a, b, "/"); wreg!(dst, Value::Float(fa / fb));
                     } else {
-                        let (va, vb) = (ri!(a), ri!(b));
+                        let (va, vb) = ri2!(a, b, "/");
                         if vb == 0 { raise!(VmError::DivisionByZero); }
                         wreg!(dst, Value::Int(va / vb));
                     }
@@ -1345,14 +1461,14 @@ impl<W: Write> VM<W> {
                 &Instruction::ModInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
-                        let (fa, fb) = (rf!(a), rf!(b));
+                        let (fa, fb) = rf2!(a, b, "%");
                         // As in the integer branch below and in `DivFloat`: a
                         // zero divisor is an error whichever type it was written
                         // as, not a NaN.
                         if fb == 0.0 { raise!(VmError::ModuloByZero); }
                         wreg!(dst, Value::Float(fa % fb));
                     } else {
-                        let (va, vb) = (ri!(a), ri!(b));
+                        let (va, vb) = ri2!(a, b, "%");
                         if vb == 0 { raise!(VmError::ModuloByZero); }
                         wreg!(dst, Value::Int(va % vb));
                     }
@@ -1360,9 +1476,9 @@ impl<W: Write> VM<W> {
                 &Instruction::PowInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
-                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa.powf(fb)));
+                        let (fa, fb) = rf2!(a, b, "^"); wreg!(dst, Value::Float(fa.powf(fb)));
                     } else {
-                        let (va, vb) = (ri!(a), ri!(b));
+                        let (va, vb) = ri2!(a, b, "^");
                         // A negative exponent is a float operation, as in the
                         // tree-walker. This used to answer Int(0), so `2 ^ -2`
                         // was 0 here and 0.25 there.
@@ -1377,24 +1493,24 @@ impl<W: Write> VM<W> {
                 &Instruction::NegInt(dst, src) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
                         let v = rf!(src); wreg!(dst, Value::Float(-v));
-                    } else { let v = ri!(src); wreg!(dst, Value::Int(-v)); }
+                    } else { let v = rn!(src); wreg!(dst, Value::Int(-v)); }
                 }
 
                 // ── Integer immediate variants ──────────────────────────────
                 &Instruction::AddIntImm(dst, src, imm) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
                         let v = rf!(src); wreg!(dst, Value::Float(v + imm as f64));
-                    } else { let v = ri!(src); wreg!(dst, Value::Int(iop!(num::add(v, imm as i64), v, "+", imm as i64))); }
+                    } else { let v = ri_imm!(src, imm, "+"); wreg!(dst, Value::Int(iop!(num::add(v, imm as i64), v, "+", imm as i64))); }
                 }
                 &Instruction::SubIntImm(dst, src, imm) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
                         let v = rf!(src); wreg!(dst, Value::Float(v - imm as f64));
-                    } else { let v = ri!(src); wreg!(dst, Value::Int(iop!(num::sub(v, imm as i64), v, "-", imm as i64))); }
+                    } else { let v = ri_imm!(src, imm, "-"); wreg!(dst, Value::Int(iop!(num::sub(v, imm as i64), v, "-", imm as i64))); }
                 }
                 &Instruction::MulIntImm(dst, src, imm) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
                         let v = rf!(src); wreg!(dst, Value::Float(v * imm as f64));
-                    } else { let v = ri!(src); wreg!(dst, Value::Int(iop!(num::mul(v, imm as i64), v, "*", imm as i64))); }
+                    } else { let v = ri_imm!(src, imm, "*"); wreg!(dst, Value::Int(iop!(num::mul(v, imm as i64), v, "*", imm as i64))); }
                 }
                 &Instruction::CmpEqImm(dst, src, imm) => {
                     match num_eq_imm(rreg!(src), imm as i64) {
@@ -1408,22 +1524,38 @@ impl<W: Write> VM<W> {
                         None => wreg!(dst, Value::Bool(true)),
                     }
                 }
-                &Instruction::CmpLtImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v  < imm as i64)); }
-                &Instruction::CmpLeImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v <= imm as i64)); }
-                &Instruction::CmpGtImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v  > imm as i64)); }
-                &Instruction::CmpGeImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v >= imm as i64)); }
+                // The immediate comparisons keep the Int fast path — this is
+                // the loop counter's instruction — and hand everything else to
+                // the same ordering rule the general form uses. They used to
+                // read the register through `ri!`, so `'a' < 7` was refused
+                // here as "this needs a number and got Char" and there as
+                // "cannot compare values with operator 'Lt': Char and Int":
+                // one comparison, two refusals, decided by whether the
+                // right-hand side happened to be a literal small enough to fold.
+                &Instruction::CmpLtImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Lt"); wreg!(dst, Value::Bool(ord_lt(r))); }
+                &Instruction::CmpLeImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Le"); wreg!(dst, Value::Bool(ord_le(r))); }
+                &Instruction::CmpGtImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Gt"); wreg!(dst, Value::Bool(ord_gt(r))); }
+                &Instruction::CmpGeImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Ge"); wreg!(dst, Value::Bool(ord_ge(r))); }
 
                 // ── Float arithmetic ────────────────────────────────────────
-                &Instruction::AddFloat(dst, a, b) => { let (va, vb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(va + vb)); }
-                &Instruction::SubFloat(dst, a, b) => { let (va, vb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(va - vb)); }
-                &Instruction::MulFloat(dst, a, b) => { let (va, vb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(va * vb)); }
+                &Instruction::AddFloat(dst, a, b) => { let (va, vb) = rf2!(a, b, "+"); wreg!(dst, Value::Float(va + vb)); }
+                &Instruction::SubFloat(dst, a, b) => { let (va, vb) = rf2!(a, b, "-"); wreg!(dst, Value::Float(va - vb)); }
+                &Instruction::MulFloat(dst, a, b) => { let (va, vb) = rf2!(a, b, "*"); wreg!(dst, Value::Float(va * vb)); }
                 &Instruction::DivFloat(dst, a, b) => {
                     let (va, vb) = (rf!(a), rf!(b));
                     if vb == 0.0 { raise!(VmError::DivisionByZero); }
                     wreg!(dst, Value::Float(va / vb));
                 }
-                &Instruction::PowFloat(dst, a, b) => { let (va, vb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(va.powf(vb))); }
-                &Instruction::NegFloat(dst, src)  => { let v = rf!(src); wreg!(dst, Value::Float(-v)); }
+                &Instruction::PowFloat(dst, a, b) => { let (va, vb) = rf2!(a, b, "^"); wreg!(dst, Value::Float(va.powf(vb))); }
+                &Instruction::NegFloat(dst, src)  => {
+                    let read = match rreg!(src) {
+                        Value::Float(n) => Ok(*n),
+                        Value::Int(n)   => Ok(*n as f64),
+                        va => Err(format!("negation requires numeric operand, got {}", va.type_name())),
+                    };
+                    let v = match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) };
+                    wreg!(dst, Value::Float(-v));
+                }
 
                 // ── Type conversion ─────────────────────────────────────────
                 &Instruction::IntToFloat(dst, src) => {
@@ -1592,8 +1724,14 @@ impl<W: Write> VM<W> {
                 &Instruction::CmpGe(dst, a, b) => { let r = ord_or_raise!(a, b, "Ge"); wreg!(dst, Value::Bool(ord_ge(r))); }
 
                 // ── Logical ─────────────────────────────────────────────────
-                &Instruction::And(dst, a, b) => { let (va, vb) = (rreg!(a).is_truthy(), rreg!(b).is_truthy()); wreg!(dst, Value::Bool(va && vb)); }
-                &Instruction::Or (dst, a, b) => { let (va, vb) = (rreg!(a).is_truthy(), rreg!(b).is_truthy()); wreg!(dst, Value::Bool(va || vb)); }
+                // ZYVM-001: these read both operands through `is_truthy()`, so
+                // `7 && 3` answered `#1` here and was refused by the tree-walker
+                // — while the semantic analyser the two engines SHARE had
+                // already warned in both. There is no truthiness in Zymbol
+                // (the loop specifier settled it in v0.0.9), so a non-Bool
+                // operand is refused, with the tree-walker's words.
+                &Instruction::And(dst, a, b) => { let (va, vb) = rb2!(a, b, "AND"); wreg!(dst, Value::Bool(va && vb)); }
+                &Instruction::Or (dst, a, b) => { let (va, vb) = rb2!(a, b, "OR");  wreg!(dst, Value::Bool(va || vb)); }
                 &Instruction::Not(dst, src)  => { let v = rreg!(src).is_truthy(); wreg!(dst, Value::Bool(!v)); }
                 &Instruction::IsInt(dst, src) => { let v = matches!(rreg!(src), Value::Int(_)); wreg!(dst, Value::Bool(v)); }
                 &Instruction::AsLoopCond(dst, src) => {
@@ -3013,6 +3151,13 @@ impl<W: Write> VM<W> {
                     }
                     self.reg_set(dst, Value::NamedTuple(Rc::new(fields)));
                 }
+                &Instruction::RequireBool(src, is_and) => {
+                    let v = self.reg_get(src);
+                    if !matches!(v, Value::Bool(_)) {
+                        let msg = logical_type_error(if is_and { "AND" } else { "OR" }, v);
+                        raise!(VmError::Generic(msg));
+                    }
+                }
                 &Instruction::RequireDict(src) => {
                     let v = self.reg_get(src);
                     if !matches!(v, Value::NamedTuple(_)) {
@@ -3931,6 +4076,14 @@ impl<W: Write> VM<W> {
                     let res = ord_ge(ord_slow(r!(a), r!(b), "Ge")?);
                     w!(dst, Value::Bool(res));
                 }
+                &Instruction::RequireBool(src, is_and) => {
+                    let v = &self.value_stack[base + src as usize];
+                    if !matches!(v, Value::Bool(_)) {
+                        return Err(VmError::Generic(
+                            logical_type_error(if is_and { "AND" } else { "OR" }, v),
+                        ));
+                    }
+                }
                 &Instruction::RequireDict(src) => {
                     let v = &self.value_stack[base + src as usize];
                     if !matches!(v, Value::NamedTuple(_)) {
@@ -4199,13 +4352,15 @@ impl<W: Write> VM<W> {
                 }
 
                 // ── Logical ──────────────────────────────────────────────────
+                // ZYVM-001, in the call-frame loop as in the main one: a
+                // logical operand is a Bool or it is refused.
                 &Instruction::And(dst, a, b) => {
-                    let res = r!(a).is_truthy() && r!(b).is_truthy();
-                    w!(dst, Value::Bool(res));
+                    let (x, y) = bools_or_err(r!(a), r!(b), "AND")?;
+                    w!(dst, Value::Bool(x && y));
                 }
                 &Instruction::Or(dst, a, b) => {
-                    let res = r!(a).is_truthy() || r!(b).is_truthy();
-                    w!(dst, Value::Bool(res));
+                    let (x, y) = bools_or_err(r!(a), r!(b), "OR")?;
+                    w!(dst, Value::Bool(x || y));
                 }
 
                 // ── Destructuring ────────────────────────────────────────────

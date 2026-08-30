@@ -258,6 +258,23 @@ Immutability is checked **once, on the value**, not taught to each operator
 separately. That is why `$+`, `$-`, `$^` and every future edit are covered
 without a line each.
 
+### Equal, yes; ordered, no
+
+```zymbol
+>> ((1, 2) == (1, 2)) ¶     // #1 — element by element, at every depth
+>> ((1, 2) < (3, 4)) ¶      // Runtime error: cannot compare values with
+                            // operator 'Lt': Tuple and Tuple
+```
+
+Equality does not need an ordering, and an ordering is what a tuple cannot have:
+it is positional and heterogeneous, so `(1, "a") < (2, #0)` has no defensible
+answer and neither does a comparison between tuples of different lengths.
+
+The register VM used to answer `#1` here, comparing element by element, while the
+tree-walker refused — one program, two answers, decided by which engine ran it
+(ZYVM-001, closed 2026-08-30). It was never a documented feature; it was an arm
+in one engine's comparison function that the other did not have.
+
 ### The last name absorbs
 
 ```zymbol

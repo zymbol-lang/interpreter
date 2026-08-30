@@ -2366,7 +2366,24 @@ impl TypeChecker {
             Expr::Range(_) => ZymbolType::Array(Box::new(ZymbolType::Int)),
 
             // Collection operations
-            Expr::CollectionLength(_) => ZymbolType::Int,
+            //
+            // Every arm below must INFER ITS OPERANDS even when it does not need
+            // their types, because `infer_expr` is what performs the checks:
+            // "is this name defined", "does this call have the right number of
+            // arguments", "is its `<~` marked". Three arms here used to match
+            // `(_)` and return a type without descending, so everything written
+            // inside a `$#`, `$?` or `$??` operand went unchecked —
+            // `noexiste$#` was silent, `g(1,2,3)$#` was silent, and so was a
+            // qualified call missing its output mark.
+            //
+            // Found by validating against Chaturanga, whose alpha-beta test
+            // writes `(नि::वैधचालाः(मातस्थितिः, 2))$#`: the browser engine refused
+            // the file and both Rust engines accepted it, and the browser engine
+            // was the one that was right.
+            Expr::CollectionLength(op) => {
+                self.infer_expr(&op.collection);
+                ZymbolType::Int
+            }
             Expr::CollectionAppend(op) => {
                 let collection_type = self.infer_expr(&op.collection);
                 let element_type = self.infer_expr(&op.element);
@@ -2389,8 +2406,16 @@ impl TypeChecker {
             Expr::CollectionRemoveAll(op) => self.infer_expr(&op.collection),
             Expr::CollectionRemoveAt(op) => self.infer_expr(&op.collection),
             Expr::CollectionRemoveRange(op) => self.infer_expr(&op.collection),
-            Expr::CollectionContains(_) => ZymbolType::Bool,
-            Expr::CollectionFindAll(_) => ZymbolType::Array(Box::new(ZymbolType::Int)),
+            Expr::CollectionContains(op) => {
+                self.infer_expr(&op.collection);
+                self.infer_expr(&op.element);
+                ZymbolType::Bool
+            }
+            Expr::CollectionFindAll(op) => {
+                self.infer_expr(&op.collection);
+                self.infer_expr(&op.value);
+                ZymbolType::Array(Box::new(ZymbolType::Int))
+            }
             Expr::CollectionUpdate(op) => {
                 // target is IndexExpr(collection[index]) — return the collection type,
                 // not the element type (which would cause false type-mismatch warnings
