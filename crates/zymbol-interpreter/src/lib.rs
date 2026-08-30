@@ -467,6 +467,29 @@ impl Value {
         }
     }
 
+    /// The type as a diagnostic spells it — `Int`, `String`, `Char` — as
+    /// opposed to [`Self::type_word`] (prose: `integer`) and [`Self::type_name`]
+    /// (the language's `##` symbol).
+    ///
+    /// It is the VM's `type_name`, and it exists here so that a message naming
+    /// a type is one text across the engines rather than two that happen to
+    /// agree (GLOBAL-001).
+    pub fn type_ident(&self) -> &'static str {
+        match self {
+            Value::Int(_)        => "Int",
+            Value::Float(_)      => "Float",
+            Value::String(_)     => "String",
+            Value::Char(_)       => "Char",
+            Value::Bool(_)       => "Bool",
+            Value::Array(_)      => "Array",
+            Value::Tuple(_)      => "Tuple",
+            Value::NamedTuple(_) => "Dict",
+            Value::Function(_)   => "Function",
+            Value::Error(_)      => "Error",
+            Value::Unit          => "Unit",
+        }
+    }
+
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Int(_)        => "###",

@@ -2503,15 +2503,38 @@ impl Compiler {
             }
         }
 
-        let r_l = self.compile_expr(&bin.left, ctx)?;
+        // A hot identifier on the left of a JUXTAPOSITION starts at `""`.
+        //
+        // The generic identifier path (`compile_expr`, the `id.hot || id.pre_hot`
+        // branch) has no idea which operator it sits under, so it emitted
+        // `HotNeutral::Int` for everything — and `s = °s "x"` accumulated onto a
+        // `0`, giving `0xxx` where the tree-walker gives `xxx`. The neutral is a
+        // property of the operator, and the operator is only known here.
+        // GLB-002; the assignment path already knew (`hot_neutral_instr`).
+        let r_l = if bin.op == BinaryOp::Concat {
+            match bin.left.unwrap_group() {
+                Expr::Identifier(id)
+                    if (id.hot || id.pre_hot) && ctx.get_reg(&id.name).is_err() =>
+                {
+                    let dst = ctx.alloc_reg(&id.name)?;
+                    ctx.emit(Instruction::HotInit(dst, zymbol_bytecode::HotNeutral::String));
+                    ctx.hot_vars.insert(id.name.clone());
+                    if id.hot {
+                        ctx.postfix_hot_vars.insert(id.name.clone());
+                    }
+                    dst
+                }
+                _ => self.compile_expr(&bin.left, ctx)?,
+            }
+        } else {
+            self.compile_expr(&bin.left, ctx)?
+        };
         let r_r = self.compile_expr(&bin.right, ctx)?;
         let dst = ctx.alloc_temp()?;
 
         let ty_l = ctx.get_reg_type(r_l);
         let ty_r = ctx.get_reg_type(r_r);
         let is_float = ty_l == StaticType::Float || ty_r == StaticType::Float;
-        let is_string = ty_l == StaticType::String || ty_r == StaticType::String
-            || ty_l == StaticType::Char || ty_r == StaticType::Char;
 
         let instr = match bin.op {
             BinaryOp::Concat => {
@@ -2531,11 +2554,14 @@ impl Compiler {
             BinaryOp::Sub => if is_float { ctx.set_reg_type(dst, StaticType::Float); Instruction::SubFloat(dst, r_l, r_r) } else { Instruction::SubInt(dst, r_l, r_r) },
             BinaryOp::Mul => if is_float { ctx.set_reg_type(dst, StaticType::Float); Instruction::MulFloat(dst, r_l, r_r) } else { Instruction::MulInt(dst, r_l, r_r) },
             BinaryOp::Div => {
-                if is_string {
-                    // String split: "a,b" / ',' → Array
-                    ctx.set_reg_type(dst, StaticType::Unknown); // Array type
-                    Instruction::StrSplit(dst, r_l, r_r)
-                } else if is_float {
+                // ZYVM-001: `/` used to compile to StrSplit when either operand
+                // was statically a String or a Char, so `"ab" / "cd"` answered
+                // `[ab]` under the VM while the tree-walker refused it with the
+                // message that names the operator that DOES split — `$/`. The
+                // VM was not skipping a check; it was performing the operation
+                // the refusal tells the reader this is not. `$/` still compiles
+                // to StrSplit, from its own site.
+                if is_float {
                     ctx.set_reg_type(dst, StaticType::Float);
                     Instruction::DivFloat(dst, r_l, r_r)
                 } else {
@@ -2572,6 +2598,10 @@ impl Compiler {
     ) -> Result<Reg, CompileError> {
         let dst = ctx.alloc_temp()?;
         let r_l = self.compile_expr(&bin.left, ctx)?;
+        // The left operand is a Bool or the program is refused — checked HERE,
+        // before the jump, because the jump answers by truthiness and would
+        // otherwise settle `0 && #1` as `#0` (ZYVM-001).
+        ctx.emit(Instruction::RequireBool(r_l, true));
         // Short-circuit: if left is false, skip right
         let skip = ctx.emit_jump_if_not_placeholder(r_l);
         let r_r = self.compile_expr(&bin.right, ctx)?;
@@ -2593,6 +2623,8 @@ impl Compiler {
     ) -> Result<Reg, CompileError> {
         let dst = ctx.alloc_temp()?;
         let r_l = self.compile_expr(&bin.left, ctx)?;
+        // As in `compile_and`: the guard goes before the jump (ZYVM-001).
+        ctx.emit(Instruction::RequireBool(r_l, false));
         // Short-circuit: if left is true, skip right
         let skip = ctx.emit(Instruction::JumpIf(r_l, 0)); // placeholder
         let r_r = self.compile_expr(&bin.right, ctx)?;
@@ -4921,6 +4953,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::MakeNamedTuple(d, _, fields) => { upd(*d); for &f in fields { upd(f); } }
             Instruction::NamedTupleGet(d, t, _) => { upd(*d); upd(*t); }
             Instruction::RequireDict(t) => { upd(*t); }
+            Instruction::RequireBool(t, _) => { upd(*t); }
             Instruction::BashExec(d, _) | Instruction::BuildStr(d, _)
             | Instruction::Execute(d, _) => upd(*d),
             Instruction::FmtThousandsDyn(d, s, _, p) | Instruction::FmtScientificDyn(d, s, _, p) => {

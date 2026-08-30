@@ -120,7 +120,7 @@ impl<W: Write> Interpreter<W> {
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(float_op(*a as f64, *b))),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(float_op(*a, *b as f64))),
             _ => Err(RuntimeError::Generic {
-                message: format!("arithmetic requires numeric operands: {:?}, {:?}", left, right),
+                message: format!("arithmetic requires numeric operands: {}, {}", left.type_ident(), right.type_ident()),
                 span: *span,
             }),
         }
@@ -226,7 +226,7 @@ impl<W: Write> Interpreter<W> {
             (Value::Int(base), Value::Float(exp)) => Ok(Value::Float((*base as f64).powf(*exp))),
             (Value::Float(base), Value::Int(exp)) => Ok(Value::Float(base.powf(*exp as f64))),
             _ => Err(RuntimeError::Generic {
-                message: format!("power operator requires numeric operands: {:?}, {:?}", left, right),
+                message: format!("power operator requires numeric operands: {}, {}", left.type_ident(), right.type_ident()),
                 span: *span,
             }),
         }
@@ -421,9 +421,14 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             _ => Err(RuntimeError::Generic {
+                // GLOBAL-001: this used to interpolate the VALUES —
+                // `String("ab") and Char('c')` — where the VM had only the type
+                // names to hand and zyjs wrote a third form. One refusal, three
+                // wordings, and the documentation could only quote one. The
+                // family names types now, in all three engines.
                 message: format!(
-                    "cannot compare values with operator '{:?}': {:?} and {:?}",
-                    op, left, right
+                    "cannot compare values with operator '{:?}': {} and {}",
+                    op, left.type_ident(), right.type_ident()
                 ),
                 span: Span::new(
                     zymbol_span::Position::start(),

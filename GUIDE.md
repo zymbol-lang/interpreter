@@ -1183,8 +1183,23 @@ itself alone.
 !#1        // #0 (not)
 ```
 
-Logical operators always return a Bool. Under an active numeral mode the result
-is displayed with the active script digit:
+Logical operators always return a Bool, and they **only take** Bools. There is no
+truthiness in Zymbol: `7 && #1` is a runtime error, not `#1`, and so is
+`0 && #1` — a `0` is a number, not a false. The same rule the loop specifier
+follows (`@ <expr>` is a count or a condition, never a truthy value), and the
+same for the unary operators: `!7` and `-"a"` are refused, not coerced.
+
+```zymbol
+>> (7 && 3) ¶      // warning: logical operation on non-boolean type: Int
+                   // Runtime error: logical AND requires boolean operands, got Int
+>> (!7) ¶          // Runtime error: logical NOT requires boolean operand, got Int
+```
+
+`&&` and `||` **short-circuit**: `#0 && f()` does not call `f()`, and the
+right-hand operand is not even type-checked when it is not reached.
+
+Under an active numeral mode the result is displayed with the active script
+digit:
 
 ```zymbol
 #०९#

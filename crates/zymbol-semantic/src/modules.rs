@@ -402,13 +402,25 @@ impl ModuleAnalyzer {
         // its file, so it must be compared against `<parent>_<stem>` —
         // comparing it against the stem alone rejected every subdirectory
         // module the convention exists to support.
+        // The parent directory comes from the file's REAL location, not from the
+        // path as it happened to be spelled at the call site.
+        //
+        // It used to read `file_path.parent()` directly, so the same file asked
+        // for two different names: `zymbol check modules_scope/m.zy` from the
+        // corpus wanted `modules_scope_m`, and `zymbol check m.zy` from inside
+        // `modules_scope/` wanted `_m` — and nothing can satisfy both. Every
+        // application suite that runs from its own directory hit it, and it read
+        // as a violation when it was the checker moving the target (GLB-005).
         let expected = match module_decl.name.strip_prefix('.') {
             Some(_) => {
-                let parent = file_path
+                let absolute = std::fs::canonicalize(file_path)
+                    .unwrap_or_else(|_| file_path.to_path_buf());
+                let parent = absolute
                     .parent()
                     .and_then(|p| p.file_name())
                     .and_then(|s| s.to_str())
-                    .unwrap_or("");
+                    .unwrap_or("")
+                    .to_string();
                 format!("{parent}_{file_stem}")
             }
             None => file_stem.to_string(),

@@ -396,6 +396,34 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         }
     }
 
+    // Module analysis, before anything executes.
+    //
+    // GLB-005: only `zymbol check` used to run this, so `zymbol check` refused a
+    // program that `run`, `--vm` and the browser engine all executed happily. A
+    // convention that one tool out of four enforces is not a convention, it is a
+    // lint somebody can route around by using a different command.
+    // Module analysis over the whole program, before anything executes.
+    //
+    // GLB-005: only `zymbol check` used to do this, so it refused programs that
+    // `run`, `--vm` and the browser engine all executed happily. A convention
+    // one tool out of four enforces is not a convention — it is a lint anybody
+    // can route around by using a different command.
+    //
+    // Done HERE and not in each engine's module loader on purpose: the
+    // tree-walker and the VM have a loader each and the browser engine a third,
+    // and one rule written three times is how GLOBAL-001 happened. This covers
+    // both Rust engines from one place.
+    {
+        let mut bag = DiagnosticBag::new();
+        for err in module_name_errors(path, &program, &mut source_map) {
+            bag.add(err);
+        }
+        if !bag.is_empty() {
+            bag.emit_all(&source_map);
+            return Ok(1);
+        }
+    }
+
     // Loop-context analysis, before anything executes: `@!`/`@>` need an
     // enclosing loop and `@:L!` needs an enclosing loop labelled L. Fatal for
     // the same reason arity is — the four engines used to give four different
@@ -906,6 +934,66 @@ fn display_path(path: &Path) -> String {
         .ok()
         .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_string_lossy().into_owned()))
         .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Every module-name violation reachable from `entry`, transitively.
+///
+/// Mirrors `check_file`'s import walk and deliberately does far less: `check`
+/// runs the whole analysis on every module, which is right for a checker and
+/// wrong before executing — it would report a module's style warnings every
+/// time a program that imports it runs. This asks one question, the one the
+/// convention is about (GLB-005).
+///
+/// A module that cannot be read or parsed is skipped, not reported: the engine
+/// is about to load it and will say so itself, in its own words.
+fn module_name_errors(
+    entry: &Path,
+    program: &zymbol_ast::Program,
+    source_map: &mut SourceMap,
+) -> Vec<zymbol_error::Diagnostic> {
+    fn imports_of(program: &zymbol_ast::Program, base: &Path) -> Vec<PathBuf> {
+        program
+            .imports
+            .iter()
+            .filter(|i| !i.path.is_stdlib())
+            .filter_map(|i| i.path.resolve_from(base))
+            .collect()
+    }
+
+    let mut out = Vec::new();
+    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    visited.insert(canonical(entry));
+
+    let entry_base = entry.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut stack: Vec<PathBuf> = imports_of(program, &entry_base);
+
+    // The entry file itself, when it declares a module and is being run
+    // directly — the caller already refuses that case, but a `.zyp` script may
+    // legitimately carry one.
+    let mut analyzer = ModuleAnalyzer::new(&entry_base);
+    if let Err(errs) = analyzer.analyze(program, entry) {
+        out.extend(errs.into_iter().filter(|d| d.message.starts_with("E001:")));
+    }
+
+    while let Some(module_path) = stack.pop() {
+        if !visited.insert(canonical(&module_path)) {
+            continue;
+        }
+        let Ok(src) = fs::read_to_string(&module_path) else { continue };
+        let file_id = source_map.add_file(display_path(&module_path), src.clone());
+        let (tokens, _) = zymbol_lexer::Lexer::new(&src, file_id).tokenize();
+        let mut parser = zymbol_parser::Parser::new(tokens);
+        let Ok(module_program) = parser.parse() else { continue };
+
+        let base = module_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        stack.extend(imports_of(&module_program, &base));
+
+        let mut analyzer = ModuleAnalyzer::new(&base);
+        if let Err(errs) = analyzer.analyze(&module_program, &module_path) {
+            out.extend(errs.into_iter().filter(|d| d.message.starts_with("E001:")));
+        }
+    }
+    out
 }
 
 /// Check the whole program, not just the file named on the command line.

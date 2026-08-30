@@ -75,7 +75,7 @@ impl<W: Write> Interpreter<W> {
             let left_bool = match &left {
                 Value::Bool(b) => *b,
                 _ => return Err(RuntimeError::Generic {
-                    message: format!("logical {name} requires boolean operands, got {:?}", left),
+                    message: format!("logical {name} requires boolean operands, got {}", left.type_ident()),
                     span: binary.span,
                 }),
             };
@@ -89,7 +89,7 @@ impl<W: Write> Interpreter<W> {
             let right_bool = match &right {
                 Value::Bool(b) => *b,
                 _ => return Err(RuntimeError::Generic {
-                    message: format!("logical {name} requires boolean operands, got {:?}", right),
+                    message: format!("logical {name} requires boolean operands, got {}", right.type_ident()),
                     span: binary.span,
                 }),
             };
@@ -151,14 +151,30 @@ impl<W: Write> Interpreter<W> {
             }
         }
         // Hot/pre_hot RHS: c = c°/°c + a — eval right first to infer neutral type, then init left
-        if binary.op == BinaryOp::Add {
+        //
+        // `Concat` is here for the same reason `Add` is: `s = °s "x"` is the
+        // string accumulator GUIDE.md documents, and without this branch the
+        // `°s` was evaluated as a variable that does not exist yet — so the
+        // tree-walker refused the program while the VM answered `0xxx` and the
+        // browser engine answered `0`. Three engines, three answers, on a form
+        // the guide gives as an example (GLB-002).
+        //
+        // The neutral follows the OPERATOR, not the operand: juxtaposition
+        // joins text, so its neutral is the empty string whatever is on the
+        // right. `+` keeps inferring from the right-hand value, because there
+        // it is the operand that decides between Int and Float.
+        if matches!(binary.op, BinaryOp::Add | BinaryOp::Concat) {
             if let Expr::Identifier(ident) = binary.left.unwrap_group() {
                 if (ident.hot || ident.pre_hot) && self.get_variable(&ident.name).is_none() {
                     let right_val = self.eval_expr(&binary.right)?;
-                    let neutral = match &right_val {
-                        Value::String(_) => Value::String(String::new()),
-                        Value::Float(_)  => Value::Float(0.0),
-                        _                => Value::Int(0),
+                    let neutral = if binary.op == BinaryOp::Concat {
+                        Value::String(String::new())
+                    } else {
+                        match &right_val {
+                            Value::String(_) => Value::String(String::new()),
+                            Value::Float(_)  => Value::Float(0.0),
+                            _                => Value::Int(0),
+                        }
                     };
                     if ident.pre_hot {
                         self.set_above_nearest_loop(&ident.name, neutral);
@@ -166,7 +182,11 @@ impl<W: Write> Interpreter<W> {
                         self.set_variable(&ident.name, neutral);
                     }
                     let left_val = self.eval_expr(&binary.left)?;
-                    return self.eval_add(&left_val, &right_val, &binary.span);
+                    return if binary.op == BinaryOp::Concat {
+                        self.eval_concat(&left_val, &right_val, &binary.span)
+                    } else {
+                        self.eval_add(&left_val, &right_val, &binary.span)
+                    };
                 }
             }
         }
@@ -200,14 +220,14 @@ impl<W: Write> Interpreter<W> {
                 let left_bool = match &left {
                     Value::Bool(b) => *b,
                     _ => return Err(RuntimeError::Generic {
-                        message: format!("logical AND requires boolean operands, got {:?}", left),
+                        message: format!("logical AND requires boolean operands, got {}", left.type_ident()),
                         span: binary.span,
                     }),
                 };
                 let right_bool = match &right {
                     Value::Bool(b) => *b,
                     _ => return Err(RuntimeError::Generic {
-                        message: format!("logical AND requires boolean operands, got {:?}", right),
+                        message: format!("logical AND requires boolean operands, got {}", right.type_ident()),
                         span: binary.span,
                     }),
                 };
@@ -217,14 +237,14 @@ impl<W: Write> Interpreter<W> {
                 let left_bool = match &left {
                     Value::Bool(b) => *b,
                     _ => return Err(RuntimeError::Generic {
-                        message: format!("logical OR requires boolean operands, got {:?}", left),
+                        message: format!("logical OR requires boolean operands, got {}", left.type_ident()),
                         span: binary.span,
                     }),
                 };
                 let right_bool = match &right {
                     Value::Bool(b) => *b,
                     _ => return Err(RuntimeError::Generic {
-                        message: format!("logical OR requires boolean operands, got {:?}", right),
+                        message: format!("logical OR requires boolean operands, got {}", right.type_ident()),
                         span: binary.span,
                     }),
                 };
@@ -247,7 +267,7 @@ impl<W: Write> Interpreter<W> {
                 match operand {
                     Value::Bool(b) => Ok(Value::Bool(!b)),
                     _ => Err(RuntimeError::Generic {
-                        message: format!("logical NOT requires boolean operand, got {:?}", operand),
+                        message: format!("logical NOT requires boolean operand, got {}", operand.type_ident()),
                         span: unary.span,
                     }),
                 }
@@ -257,7 +277,7 @@ impl<W: Write> Interpreter<W> {
                     Value::Int(n) => Ok(Value::Int(-n)),
                     Value::Float(f) => Ok(Value::Float(-f)),
                     _ => Err(RuntimeError::Generic {
-                        message: format!("negation requires numeric operand, got {:?}", operand),
+                        message: format!("negation requires numeric operand, got {}", operand.type_ident()),
                         span: unary.span,
                     }),
                 }
