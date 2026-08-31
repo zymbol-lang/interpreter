@@ -64,12 +64,32 @@ pub struct FormatVisitor<'a> {
     /// The last emitted line ended with a trailing `// comment` — joining
     /// anything onto it would swallow the joined token into the comment.
     last_had_trailing: bool,
+    /// Inside an output statement, where a line break is not layout.
+    ///
+    /// `>>` and `>>~` are terminated by the end of the line, so wrapping a long
+    /// call across lines inside one does not reformat the statement — it ends
+    /// it, and leaves the rest as a fragment. `Chaturanga/दर्शनम्/चित्रणम्.zy`
+    /// has `>>~ (प, स) > "│" अक्ष::मध्यस्थम्(…) "│"` over the line budget; the
+    /// formatter broke the call open and the output stopped parsing at the
+    /// closing `"│"`. The gate refused it, correctly, and the file could not be
+    /// formatted at all.
+    ///
+    /// Line length is a preference. Producing a program that does not parse is
+    /// not a trade-off against it.
+    no_wrap: bool,
 }
 
 impl<'a> FormatVisitor<'a> {
     /// Create a new format visitor
     pub fn new(output: &'a mut OutputBuilder, comments: CommentStream, source: &'a str) -> Self {
-        Self { output, comments, source, last_src_line: 0, last_had_trailing: false }
+        Self {
+            output,
+            comments,
+            source,
+            last_src_line: 0,
+            last_had_trailing: false,
+            no_wrap: false,
+        }
     }
 
     // ── Comment emission (span-ordered; replaces the old merge_comments) ────
@@ -424,29 +444,9 @@ impl<'a> FormatVisitor<'a> {
                     self.output.write(&format!("<<|? {}", ki.variable));
                 }
             }
-            Statement::OutputPos(op) => {
-                if op.parenthesized {
-                    self.output.write(">>~ (");
-                    let mut first = true;
-                    for slot in &op.slots {
-                        if !first { self.output.write(", "); }
-                        first = false;
-                        if let Some(expr) = slot { self.format_expr(expr); }
-                    }
-                    self.output.write(") >");
-                } else {
-                    // Bare-variable form: >>~ pos > items
-                    self.output.write(">>~ ");
-                    if let Some(Some(expr)) = op.slots.first() {
-                        self.format_expr(expr);
-                    }
-                    self.output.write(" >");
-                }
-                for item in &op.items {
-                    self.output.write(" ");
-                    self.format_expr(item);
-                }
-            }
+            // Same rule as `>>`: the statement ends at the line, so nothing
+            // inside it may wrap. See `no_wrap`.
+            Statement::OutputPos(op) => self.format_output_pos(op),
             Statement::TuiBlock(tb) => {
                 self.output.write(">>| ");
                 self.format_block(&tb.body);
@@ -454,8 +454,40 @@ impl<'a> FormatVisitor<'a> {
         }
     }
 
+    fn format_output_pos(&mut self, op: &zymbol_ast::OutputPos) {
+        let outer = std::mem::replace(&mut self.no_wrap, true);
+        if op.parenthesized {
+            self.output.write(">>~ (");
+            let mut first = true;
+            for slot in &op.slots {
+                if !first { self.output.write(", "); }
+                first = false;
+                if let Some(expr) = slot { self.format_expr(expr); }
+            }
+            self.output.write(") >");
+        } else {
+            // Bare-variable form: >>~ pos > items
+            self.output.write(">>~ ");
+            if let Some(Some(expr)) = op.slots.first() {
+                self.format_expr(expr);
+            }
+            self.output.write(" >");
+        }
+        for item in &op.items {
+            self.output.write(" ");
+            self.format_expr(item);
+        }
+        self.no_wrap = outer;
+    }
+
     /// Format an output statement
     fn format_output(&mut self, output: &Output) {
+        let outer = std::mem::replace(&mut self.no_wrap, true);
+        self.format_output_inner(output);
+        self.no_wrap = outer;
+    }
+
+    fn format_output_inner(&mut self, output: &Output) {
         self.output.write(">>");
         for expr in &output.exprs {
             self.output.space();
@@ -1105,7 +1137,8 @@ impl<'a> FormatVisitor<'a> {
     fn format_binary(&mut self, binary: &BinaryExpr) {
         // Estimate total length to decide if we need line breaking
         let total_len = self.estimate_binary_length(binary);
-        let should_break = self.output.would_exceed_line_length(total_len)
+        let should_break = !self.no_wrap
+            && self.output.would_exceed_line_length(total_len)
             && !matches!(binary.op, BinaryOp::Range)
             && self.is_breakable_binary(binary);
 
@@ -1323,7 +1356,8 @@ impl<'a> FormatVisitor<'a> {
         self.output.write("(");
 
         let estimated_len = self.estimate_args_length(&tuple.elements);
-        let should_break = self.output.would_exceed_line_length(estimated_len + 1);
+        let should_break =
+            !self.no_wrap && self.output.would_exceed_line_length(estimated_len + 1);
 
         if should_break && tuple.elements.len() > 2 {
             // Multi-line tuple
@@ -1364,14 +1398,43 @@ impl<'a> FormatVisitor<'a> {
     /// identifier cannot spell; reprinting it bare would produce a file that
     /// does not parse, which the formatter's own safety gate would then refuse
     /// — correctly, but only after the fact.
+    fn dict_key_at(named_tuple: &NamedTupleExpr, i: usize, name: &str) -> String {
+        // The source's own answer first: a key written in quotes stays in
+        // quotes, whether or not it could go bare. `#("k": 1)` and `#(k: 1)`
+        // are a String token and an Ident token, and swapping one for the other
+        // is a token change however identical the value.
+        if named_tuple.quoted.get(i).copied().unwrap_or(false) {
+            return format!("\"{}\"", escape_string(name));
+        }
+        Self::dict_key(name)
+    }
+
     fn dict_key(name: &str) -> String {
-        let is_name = !name.is_empty()
-            && name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
-            && name.chars().all(|c| c.is_alphanumeric() || c == '_');
+        // Exactly what the lexer accepts as an identifier, and not a narrower
+        // guess: `is_alphanumeric()` excludes combining marks (category Mn), so
+        // `मुद्रा` — a bare key in `ZyBank`, and a perfectly good identifier
+        // everywhere else in the language — was judged to need quoting and came
+        // back as a String where the source had an Ident.
+        //
+        // `literals.rs` learnt this same lesson for `{…}` interpolation, and
+        // wrote it down: a narrower rule here rejects identifiers the rest of
+        // the language allows.
+        let mut chars = name.chars();
+        let is_name = match chars.next() {
+            None => false,
+            Some(first) => Lexer::is_ident_start(first) && chars.all(Lexer::is_ident_continue),
+        };
         if is_name {
             name.to_string()
         } else {
-            format!("{:?}", name)
+            // Zymbol's escaping, not Rust's. `format!("{:?}")` here spelled a
+            // combining mark as `\u{941}` — Rust syntax that this language does
+            // not have, and which its lexer then read as an interpolation with
+            // an invalid character inside. `ZyBank/configuración/preferencias.zy`
+            // has `#("मुद्रा": "moneda")`, and every Devanagari key in it came
+            // out that way; the gate refused the file, correctly, and the file
+            // could not be formatted at all.
+            format!("\"{}\"", escape_string(name))
         }
     }
 
@@ -1385,14 +1448,15 @@ impl<'a> FormatVisitor<'a> {
         let estimated_len: usize = named_tuple.fields.iter()
             .map(|(name, value)| name.len() + 2 + self.estimate_expr_length(value) + 2)
             .sum();
-        let should_break = self.output.would_exceed_line_length(estimated_len + 1);
+        let should_break =
+            !self.no_wrap && self.output.would_exceed_line_length(estimated_len + 1);
 
         if should_break && named_tuple.fields.len() > 1 {
             // Multi-line named tuple
             self.output.newline();
             self.output.indent();
             for (i, (name, value)) in named_tuple.fields.iter().enumerate() {
-                self.output.write(&Self::dict_key(name));
+                self.output.write(&Self::dict_key_at(named_tuple, i, name));
                 self.output.write(": ");
                 self.format_expr(value);
                 if i < named_tuple.fields.len() - 1 {
@@ -1406,7 +1470,7 @@ impl<'a> FormatVisitor<'a> {
         } else {
             // Inline named tuple
             for (i, (name, value)) in named_tuple.fields.iter().enumerate() {
-                self.output.write(&Self::dict_key(name));
+                self.output.write(&Self::dict_key_at(named_tuple, i, name));
                 self.output.write(": ");
                 self.format_expr(value);
                 if i < named_tuple.fields.len() - 1 {
@@ -1557,7 +1621,8 @@ impl<'a> FormatVisitor<'a> {
         // that marks an argument at all (REFERENCE.md L36, L43).
         let estimated_len =
             self.estimate_args_length(&call.arguments) + call.out_args.len() * 2;
-        let should_break = self.output.would_exceed_line_length(estimated_len + 1);
+        let should_break =
+            !self.no_wrap && self.output.would_exceed_line_length(estimated_len + 1);
 
         if should_break && !call.arguments.is_empty() {
             // Multi-line arguments

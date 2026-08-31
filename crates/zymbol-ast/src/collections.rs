@@ -41,6 +41,18 @@ pub struct TupleExpr {
 #[derive(Debug, Clone)]
 pub struct NamedTupleExpr {
     pub fields: Vec<(String, Expr)>,  // (field_name, value)
+    /// Which keys the source wrote in quotes.
+    ///
+    /// A key reaches the AST as a bare `String` either way, so `#("k": 1)` and
+    /// `#(k: 1)` are indistinguishable once parsed — and the formatter, having
+    /// to choose, printed every key that *could* be bare bare. That turned a
+    /// `String` token into an `Ident` token, which the safety gate refused, so
+    /// the file could not be formatted at all.
+    ///
+    /// §12 of FORMATTER_RULES.md names this remedy exactly: a surface form the
+    /// AST would otherwise lose is recorded on the node. Parallel to `fields`
+    /// rather than inside it so no consumer that destructures a pair breaks.
+    pub quoted: Vec<bool>,
     pub span: Span,
 }
 
@@ -77,7 +89,14 @@ impl TupleExpr {
 
 impl NamedTupleExpr {
     pub fn new(fields: Vec<(String, Expr)>, span: Span) -> Self {
-        Self { fields, span }
+        let quoted = vec![false; fields.len()];
+        Self { fields, quoted, span }
+    }
+
+    /// The same, recording which keys the source quoted.
+    pub fn with_quoted(fields: Vec<(String, Expr)>, quoted: Vec<bool>, span: Span) -> Self {
+        debug_assert_eq!(fields.len(), quoted.len());
+        Self { fields, quoted, span }
     }
 }
 
