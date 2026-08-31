@@ -239,6 +239,55 @@ rewrite that preserves the token stream passes it: printing `42` for `४२` is
 one, and it stood for four releases. When output differs from input in a way
 this table does not list, the gate's silence is not evidence.
 
+### 10.1 The table is executable
+
+This section is prose, and prose does not fail a build. The machine-readable
+copy is **`ZyFormatCheck/normalizations.toml`**, and `ZyFormatCheck/bin/zyfmtcheck`
+reads that and nothing else:
+
+1. **format** every `.zy` of a body in a *temporary copy* — never in place;
+2. **verify** that the code skeleton and the multiset of comments are unchanged,
+   and that every remaining difference is one the file declares;
+3. **run** the application's own suite from the copy and require the same output.
+
+It runs over the **LDV applications** rather than only the corpus, because a
+formatter's damage lives in what short files do not have: deep nesting,
+hand-aligned tables, comments in awkward places, five writing systems, modules
+importing each other. `--body corpus` asks the wider, shallower question.
+
+The point is not the check, it is where the list lives. Adding a normalization
+means adding an entry with a reason, in a file a reviewer reads — so a
+formatter cannot grow a new power quietly. §13's non-goals are a promise; this
+is the mechanism.
+
+It is a **separate project**, not a test in this repository, and that is
+deliberate: a contract that lives inside the thing it constrains is not a
+contract. `zyq suite` gates on it.
+
+> **First run, 2026-08-30 — two behaviours, both fixed.**
+>
+> **Interpolated strings were re-spelled.** A newline written inside `"…{x}…"`
+> came back as `\n`, and `\'` came back as `'`. `literal_source_form` had an arm
+> for `String` and none for `InterpolatedString`, so every interpolated literal
+> fell through to the re-writer. Same family as `४२` → `42`, and invisible to
+> P1–P4 and to G1 for the same reason.
+>
+> **The export block was moved.** A module opening with `#> { … }` and imports
+> underneath came back with the two swapped: the imports were printed first
+> unconditionally, while the export block was placed in source order relative to
+> the *statements* only. The gate caught it and refused the file — the right
+> failure, and still a failure: **fourteen** application files could not be
+> formatted at all, among them every `api/` re-export layer in GO and
+> Chaturanga. A formatter reorders nothing; where the author put it is where it
+> goes.
+>
+> **Still open: two files the gate refuses**, both string handling —
+> `Chaturanga/दर्शनम्/चित्रणम्.zy` (`formatted output no longer parses`) and
+> `ZyBank/configuración/preferencias.zy` (`invalid character in string
+> interpolation`, in a file that contains no interpolation). The refusal is
+> correct and is why the files are intact; they are still two real programs
+> `zymbol fmt` cannot format.
+
 ---
 
 ## 11. Configuration reference
