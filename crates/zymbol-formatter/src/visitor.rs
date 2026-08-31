@@ -153,6 +153,7 @@ impl<'a> FormatVisitor<'a> {
     /// Format an entire program
     pub fn format_program(&mut self, program: &Program) {
         let in_module = program.module_decl.is_some();
+        let mut export_emitted_before_imports = false;
 
         if let Some(ref module_decl) = program.module_decl {
             // Header comments above `# name {`
@@ -164,7 +165,33 @@ impl<'a> FormatVisitor<'a> {
             self.output.indent();
             self.last_src_line = module_decl.span.start.line;
 
-            // Imports first (as they appear in source), then export block
+            // The export block goes before the imports when the SOURCE puts it
+            // there. It was already emitted in source order relative to the
+            // module's STATEMENTS, but the imports were printed first
+            // unconditionally — so a module that opens with `#> { … }` and
+            // imports underneath came back with the two swapped.
+            //
+            // The gate caught it and refused the file, which is the right
+            // failure and still a failure: fourteen files across the
+            // applications could not be formatted at all, among them every
+            // `api/` re-export layer in GO and Chaturanga, whose whole shape is
+            // "export block first, imports under it".
+            //
+            // A formatter reorders nothing. Where the author put it is where it
+            // goes.
+            export_emitted_before_imports = program
+                .module_decl
+                .as_ref()
+                .and_then(|m| m.export_block.as_ref())
+                .zip(program.imports.first())
+                .is_some_and(|(eb, first)| eb.span.start.line < first.span.start.line);
+
+            if export_emitted_before_imports {
+                if let Some(eb) = module_decl.export_block.as_ref() {
+                    self.emit_export_block_stmt(eb);
+                }
+            }
+
             for import in &program.imports {
                 self.flush_comments_before(import.span.start.line);
                 self.format_import(import);
@@ -172,10 +199,6 @@ impl<'a> FormatVisitor<'a> {
                 self.emit_trailing_comments(import.span.end.line);
                 self.output.newline();
             }
-
-            // The export block is NOT printed here: it is emitted in source
-            // order relative to the module's statements (see the loop below),
-            // because modules may declare constants before `#> { ... }`.
         } else {
             // Non-module file: imports at top level
             for import in &program.imports {
@@ -192,10 +215,14 @@ impl<'a> FormatVisitor<'a> {
         // break idempotence).
 
         // Export block pending emission at its source position
-        let mut pending_export = program
-            .module_decl
-            .as_ref()
-            .and_then(|m| m.export_block.as_ref());
+        let mut pending_export = if export_emitted_before_imports {
+            None
+        } else {
+            program
+                .module_decl
+                .as_ref()
+                .and_then(|m| m.export_block.as_ref())
+        };
 
         // Format statements
         let mut prev_was_function = false;
@@ -2061,6 +2088,31 @@ fn literal_source_form<'s>(source: &'s str, value: &Literal, span: zymbol_span::
         (Literal::Char(a), TokenKind::Char(b)) => a == b,
         (Literal::Bool(a), TokenKind::Boolean(b)) => a == b,
         (Literal::String(a), TokenKind::String(b)) => a == b,
+        // An INTERPOLATED string had no arm here, so every `"…{x}…"` fell
+        // through to `format_literal_value` and was re-spelled: a newline
+        // written inside one came back as `\n`, and `\'` came back as `'`.
+        // Value-preserving, source-changing, and exactly the family of the
+        // `४२` → `42` bug — §2.1 says a literal reprints AS WRITTEN, and an
+        // interpolated string is a literal.
+        //
+        // The comparison rebuilds the parser's own reconstruction (`lib.rs`
+        // and `io.rs` both spell it this way) rather than inventing a second
+        // one: if the two ever disagree the arm simply stops matching, and the
+        // formatter falls back to what it printed before.
+        (Literal::InterpolatedString(a), TokenKind::StringInterpolated(parts)) => {
+            let mut rebuilt = String::new();
+            for part in parts {
+                match part {
+                    StringPart::Text(t) => rebuilt.push_str(t),
+                    StringPart::Variable(v) => {
+                        rebuilt.push('{');
+                        rebuilt.push_str(v);
+                        rebuilt.push('}');
+                    }
+                }
+            }
+            *a == rebuilt
+        }
         _ => false,
     };
     same.then_some(raw)
