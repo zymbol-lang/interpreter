@@ -4,13 +4,17 @@
 > what counts as a failure, what has to happen before the cycle closes, and where the record
 > of every finding lives.
 >
-> **What it is not.** Not the test suite (`README.md` § Testing, `zyquality/GOVERNANCE.md`),
-> which is the *verification* layer this method feeds. Not a list of the projects — the
+> **What it is not.** Not the test suite (`README.md` § Testing, `zyquality/GOVERNANCE.md`,
+> `ZyDDT/CHARTER.md`), which is the *verification* layer this method feeds — and which the
+> applications then join, rather than leaving (§ 1). Not a list of the projects — the
 > `README.md` § Language-Driven Validation table is that, and § 5 here indexes their logs.
 >
 > **Method.** Every claim below was checked against the eight gap logs in the application
-> repositories, not against a previous edition of this document. Where the practice has
-> drifted from what it says about itself, § 5.2 says so instead of tidying it away.
+> repositories and against the harness that runs them — `zyquality/suites.toml`,
+> `zyquality/project/apps.toml`, `ZyFmtCheck/`, `ZyDDT/` — not against a previous edition of
+> this document. Where the practice has drifted from what it says about itself, § 5.2 says so
+> instead of tidying it away; where a previous edition was simply wrong about the
+> applications' life after the release, § 1 says that instead of quietly restating it.
 >
 > **Authorship.** The LDV applications, like the interpreter itself, are written with
 > **[Claude Code](https://claude.ai/code)** (Anthropic) as the engineering team, under the
@@ -45,7 +49,10 @@ Zymbol's automated suites are verification, all of them:
 | `zyq consensus` (`vm_compare.sh`, `engine_compare.sh`) | that the engines agree with each other |
 | `zyq expect` (`expected_compare.sh`) | that output matches a recorded golden |
 | `zyq reject` | that malformed programs are refused |
-| `fmt_property.sh` | that formatting is reparseable, idempotent and meaning-preserving |
+| `zyq suite --only fmt` (`fmt_property.sh`) | that formatting is reparseable, idempotent and meaning-preserving |
+| `zyq suite --only messages` | that no engine defines a diagnostic another does not |
+| `zyfmtcheck` (`ZyFmtCheck/`) | that the formatter moved things and changed nothing |
+| `zyddt suite` (`ZyDDT/`) | a declared axis, covered exhaustively rather than sampled |
 
 Every one of them takes a program that already exists and asks whether the implementation
 handles it correctly. **None of them can tell you that the language cannot express a Go
@@ -55,6 +62,35 @@ failing test, because there is no test — that is what "missing" means.
 That is the gap LDV fills, and the reason the method is named for validation rather than for
 testing. The unit under test is the language: its syntax, its semantics, its standard library
 and its tooling. The instrument is a complete application built in it.
+
+### The instrument does not stop when the release ships
+
+Everything above is about what a *new* application discovers. It says nothing about that
+application's life afterwards, and earlier editions of this document conflated the two — they
+called an LDV project un-rerunnable, said it would be superseded, and said nothing in CI ran
+one *and nothing should*. None of that survived contact with the workspace. Once built, an LDV
+application becomes part of the verification layer it was defined against:
+
+- `zyquality/project/apps.toml` registers seven of the eight, and `zyquality/suites.toml`
+  declares the `project` suite with **`gate = true`**. It runs ~40 goldens through both
+  engines, and a red there fails `zyq suite`. Only ZethyCLI is absent, because it never grew a
+  suite of its own.
+- **`ZyFmtCheck`'s default body is the applications**, not the corpus: `./bin/zyfmtcheck` with
+  no arguments formats them in a copy, compares code and comments, and re-runs their suites
+  from that copy. Its README says why the corpus could not do this job — *"they are the richest
+  Zymbol there is: real nesting, hand-aligned tables, comments in awkward places, five writing
+  systems, modules importing each other. A formatter's damage lives in exactly what a short
+  file does not have."* It found five formatter defects on its first run, every one of them
+  invisible to the token gate and to P1–P4.
+- `ZyDDT` graded the three engines over the applications *after* its own 394 declared cells,
+  the 661-file corpus and 222 example programs were all green, and opened **nine further
+  findings** (§ 3, point 12). They were not reachable from a corpus, and the reason is
+  structural rather than accidental.
+
+So an application is two things, and the second is permanent: the microscope that found the
+defect, and afterwards a body of real Zymbol that every later change is measured against.
+`apps.toml` states the difference from the corpus in one line — *"a test case failing says a
+feature broke, an application failing says something people rely on broke."*
 
 ---
 
@@ -70,11 +106,12 @@ reason it is not called Test-Driven Language Development.
 | **The test** | an assertion written before the code | an application written *as if the language already supported it* |
 | **Red** | an assertion fails | the language cannot express the concept — or expresses it and returns a silently wrong answer |
 | **Green** | the code changes | the *language* changes: an operator derived under `SYMBOLS.md` § 17, a semantic fix, a TW/VM divergence closed, or a `std/` module |
-| **Cycle time** | seconds | a release |
-| **Cost of the test** | cheap; rerun on every save | expensive; months of work, and it cannot be rerun |
+| **Cycle time** | seconds | a release to discover; a commit to re-run |
+| **Cost of the test** | cheap; rerun on every save | expensive to build — months of work — then re-run on every commit like any other suite. What cannot be rerun is the *discovery* |
 | **What it finds** | known-unknowns — the case you thought of when you wrote the assertion | unknown-unknowns — the case nobody could think of until a real domain forced it |
 | **Primary artifact** | the passing suite | the gap log |
-| **Regression protection** | the test itself is the protection | a separate, cheap layer, distilled from the finding (§ 4, Refactor) |
+| **Regression protection** | the test itself is the protection | first a separate cheap layer distilled from the finding (§ 4, Refactor); then the application itself, kept in the gate as a second and coarser body (§ 1) |
+| **After it passes** | delete it or keep it; either costs nothing | maintained across every breaking change — and the migration finds more (§ 3, point 12) |
 
 The two are not rivals. TDD is how the interpreter's crates are written; LDV is how it is
 discovered *what to write*. The output of an LDV cycle is, among other things, more TDD tests.
@@ -114,14 +151,19 @@ gap log: every friction, bug, missing capability and idea, each with an ID, a ty
 reproduction and a status (§ 5). A finished application with no log has validated nothing,
 because nothing is left that anyone else can act on.
 
-**7 — Regressions belong to a different layer.** Each finding is distilled into a minimal,
-fast, automated case in the corpus and the unit suites. The application is never the
-regression test; it is where the regression test came from.
+**7 — Regressions belong to a different layer first.** Each finding is distilled into a
+minimal, fast, automated case in the corpus and the unit suites, and a finding is not closed
+until it is there. That layer is the first line and it is the one that *names* what broke: the
+application answers "something changed in 囲碁", the minimal case answers "the
+interpolated-string arm is gone", and only the second is a diagnosis. The rule this point
+exists to enforce is that no finding may live **only** in the application — not that the
+application stops being run. It does not stop being run (§ 1, point 12).
 
-**8 — Validation is expensive, verification is cheap.** An LDV project costs weeks of work and
-cannot be rerun. Its value is entirely in discovering unknown-unknowns. Once one is found, the
-knowledge has to be moved into something that costs milliseconds, or it will be lost the next
-time somebody refactors the thing that caused it.
+**8 — Validation is expensive, verification is cheap.** An LDV project costs weeks of work,
+and the *discovery* cannot be rerun — nobody finds the same unknown-unknown twice. Once one is
+found, the knowledge has to be moved into something that costs milliseconds, or it will be
+lost the next time somebody refactors the thing that caused it. The application, once written,
+is cheap to re-run and is re-run; what stays expensive is building the next one.
 
 **9 — Culture is a test case.** Writing each project in a different natural language —
 English, Mandarin, Spanish, Klingon pIqaD, Japanese — is a deliberate validation of the
@@ -140,6 +182,30 @@ rejected with a reason. 囲碁's eleven findings were all closed in v0.0.8, each
 regression test. This is the point where the method stops being a story about having written a
 big program: an open-ended list of complaints validates nothing, and a rule that nothing
 enforces is not a rule.
+
+**12 — The application is maintained, not archived, and it keeps finding things.** A language
+change is not validated until the applications have been carried across it, and the carrying is
+a validation act in its own right: it exercises the change under real load, it walks the
+migration path a user will walk, and it finds what the original cycle could not. Nineteen
+migration commits across the eight projects say so, in four campaigns — v0.0.4's closed-block
+modules, v0.0.5's `<=` → `:` and then `=>`, the v0.0.7 standard library, and four separate
+v0.0.9 changes, of which the dictionary's `#(…)` notation touched four applications in a single
+day.
+
+The measured case is ZyDDT's. With its 394 declared cells green, the 661-file corpus green and
+222 example programs green, running the same engines over the **LDV applications** opened
+**nine further findings** — `ZYJS-007`, `ZYJS-009`–`011` and `GLB-001`–`005`, all since fixed.
+Its own index states why, and it is this document's § 1 in two lines: *"a complete application
+finds what no corpus can, because a corpus is written one file at a time and these defects need
+two parts of a program to get in each other's way."* `ZYJS-007` is the clean example — `zyjs`
+continued an identifier with ASCII digits only, so चतुरङ्गम्'s `कार्यस्थितिः२` parsed wrongly in the
+browser and correctly under both Rust engines. **No file in the corpus is named that way**, and
+no file was going to be.
+
+So an application has a third use beyond discovery and regression: it is the reference body
+against which anything *new* is graded — a fourth engine, a highlighter, a formatter, a
+grammar. An instrument left to rot is a museum piece. None of the eight has been left to rot,
+ZethyCLI included: a v0.0.3 project still being carried forward six releases later.
 
 ---
 
@@ -169,11 +235,26 @@ enforces is not a rule.
    └──────────────────────┬───────────────────────────────┘
                           ▼
               the release ships with the log closed
+                          │
+                          ▼
+   ┌──── MIGRATE ─────────────────────────────────────────┐
+   │  the application enters the gate and stays there.    │
+   │  When the language moves again, carry it across the  │
+   │  change — and log what the migration itself finds.   │
+   └──────────────────────┬───────────────────────────────┘
+                          │
+                          └──► back to GREEN, carrying a finding
+                               nobody set out to look for
 ```
 
-The refactor step is not optional bookkeeping — it is the only part that survives. The
-application will be superseded; the corpus entry will be run by every engine on every commit
-for the rest of the project.
+The first three steps are the cycle that discovers. The fourth is the one that keeps: it runs
+for the rest of the project's life, on every commit, and it is why the eight applications are
+not eight finished artefacts but eight live ones.
+
+The refactor step is not optional bookkeeping — it is the part that turns a symptom into a
+diagnosis. The corpus entry will be run by every engine on every commit for the rest of the
+project, and it is what makes "囲碁 went red" mean something specific. It does not *replace*
+the application: no LDV project has been superseded, and the migrate step is the reason.
 
 **Why the intersections matter.** The three worst v0.0.8 findings are the argument for
 building an application rather than extending the suite: under `--vm`, output parameters of
@@ -189,7 +270,7 @@ cooperating modules; there was nowhere else for it to live, so it hit all three.
 
 ### 5.1 The index
 
-Eight published projects, eight logs, ~4,100 lines of recorded findings. This table is the only
+Eight published projects, eight logs, ~5,800 lines of recorded findings. This table is the only
 index of them that exists.
 
 | Project | Version | Log | ID scheme |
@@ -263,9 +344,18 @@ The honest limits, so the method is not applied where it does not pay:
   then a TUI, then scientific computing, then a persistent 361-point data structure threaded
   through modules with recursive traversal. Choosing a domain the language has already served
   is the one reliable way to run the method and learn nothing.
-- **It is not a gate.** Nothing in CI runs an LDV project, and nothing should. If a finding
-  matters, it is in the corpus; if it is not in the corpus, it is not protected. The
-  application is the microscope, not the alarm.
+- **It is not the *first* alarm, and it has poor resolution as one.** The application is the
+  microscope; the cheap layer is the alarm. A finding that lives only in the application is
+  not protected, and that is decalogue point 7 — it stands. What does not stand is the
+  absolute this document used to state. Seven of the eight applications *are* in a gate
+  (`zyquality/project`, `gate = true`), and `ZyFmtCheck`'s default body is the applications
+  rather than the corpus. They are a second alarm, coarser and slower, and coarse is not the
+  same as absent.
+- **The instrument has a maintenance bill, and it recurs.** An application in the gate must be
+  carried across every breaking change to the language, in every project, before the release
+  can close — nineteen migration commits so far, and the figure grows with each project added.
+  It is worth paying, and point 12 says why, but it is the reason a ninth project is a larger
+  decision than the first was.
 
 ---
 
@@ -286,8 +376,9 @@ about cost, and those claims are only readable if the reader knows who is paying
 ### 7.1 What it changes
 
 **The cost of the instrument, and therefore how many exist.** § 2 records the cost of an LDV
-test as *"expensive; months of work, and it cannot be rerun"*, and § 6 opens with *"it cannot
-be scheduled"*. Both remain true of the **cycle** — a finding still closes against a release.
+test as *"expensive to build — months of work"*, and § 6 opens with *"it cannot be
+scheduled"*. Both remain true of the **discovery** — a finding still closes against a release,
+and no amount of assistance schedules an unknown-unknown.
 What changed is the price of the *application*: eight of them exist across v0.0.3–v0.0.9, in
 five natural languages and five unrelated domains. Without AI assistance that number would be
 one or two, and § 6's warning that *"it scales with domain distance, not with size"* would be
@@ -335,7 +426,9 @@ and it is why § 5's logs — not the applications — are the primary artifact.
 | `README.md` § Authorship & AI Collaboration | The same disclosure for the interpreter, and what AI does not replace |
 | `README.md` § Language-Driven Validation | The projects, what each put under test, and the code that came out |
 | `SYMBOLS.md` § 17 | The rules a Green-state operator must satisfy before it can exist |
-| `zyquality/GOVERNANCE.md` (separate repository) | The verification layer: one corpus, four engines, one verdict |
+| `zyquality/GOVERNANCE.md` (separate repository) | The verification layer today: one corpus, three engines, one verdict — and `project/apps.toml`, where the applications are gated |
+| `ZyDDT/CHARTER.md` (separate repository) | The layer points 7 and 8 ask for, named and given an admission rule. It supersedes ZyQuality, which stays authoritative until it can answer everything ZyQuality answers |
+| `ZyFmtCheck/README.md` (separate repository) | Why the applications, and not the corpus, are the body that shows what a formatter damaged |
 | `USERAPPI18N.md` | Decalogue point 10 in its clearest form — 囲碁's i18n architecture as doctrine |
 | `ROADMAP.md` | Where the still-open findings went |
 | `CHANGELOG.md` | Which release closed which log |
