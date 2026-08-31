@@ -264,7 +264,7 @@ It is a **separate project**, not a test in this repository, and that is
 deliberate: a contract that lives inside the thing it constrains is not a
 contract. `zyq suite` gates on it.
 
-> **First run, 2026-08-30 — two behaviours, both fixed.**
+> **First run, 2026-08-30 — four behaviours, all fixed.**
 >
 > **Interpolated strings were re-spelled.** A newline written inside `"…{x}…"`
 > came back as `\n`, and `\'` came back as `'`. `literal_source_form` had an arm
@@ -273,61 +273,24 @@ contract. `zyq suite` gates on it.
 > P1–P4 and to G1 for the same reason.
 >
 > **The export block was moved.** A module opening with `#> { … }` and imports
-> underneath came back with the two swapped: the imports were printed first
+> underneath came back with the two swapped: imports were printed first
 > unconditionally, while the export block was placed in source order relative to
-> the *statements* only. The gate caught it and refused the file — the right
-> failure, and still a failure: **fourteen** application files could not be
-> formatted at all, among them every `api/` re-export layer in GO and
-> Chaturanga. A formatter reorders nothing; where the author put it is where it
-> goes.
+> the *statements* only.
 >
-> **Still open: two files the gate refuses**, both string handling —
-> `Chaturanga/दर्शनम्/चित्रणम्.zy` (`formatted output no longer parses`) and
-> `ZyBank/configuración/preferencias.zy` (`invalid character in string
-> interpolation`, in a file that contains no interpolation). The refusal is
-> correct and is why the files are intact; they are still two real programs
-> `zymbol fmt` cannot format.
-
----
-
-## 11. Configuration reference
-
-| Option | Default | CLI flag | Description |
-|--------|---------|----------|-------------|
-| `indent_size` | 4 | `--indent N` | Spaces per indent level |
-| `use_spaces` | true | — | Tabs via `FormatterConfig::with_tabs()` |
-| `max_line_length` | 100 | — | Target line length |
-| `max_inline_array_length` | — | — | Character budget for inline arrays |
-| `inline_single_statement` | true | — | Collapse single-stmt blocks (§5.4) |
-| `brace_same_line` | true | — | Opening brace placement |
-
----
-
-## 12. Syntax coverage policy
-
-The formatter's `format_statement` / `format_expr` matches are **exhaustive**:
-adding a `Statement` or `Expr` variant fails compilation until the formatter
-learns to print it. This is deliberate.
-
-**Process rule:** a PR that adds parser syntax must, in the same PR:
-
-1. add the formatter arm (the compiler enforces this),
-2. make sure the surface form the AST would otherwise lose is recoverable —
-   either recorded on the node (`AssignSugar`, `Newline.backslash`,
-   `FlatExtractExpr.double_bracket`, `ExportBlock.commas`, `Expr::Group`) or
-   readable back from the source through the node's span (`LiteralExpr`, §2.1);
-   note that a *value*-carrying node loses its spelling by construction,
-3. add at least one corpus file exercising the new syntax and keep
-   `tests/scripts/fmt_property.sh` green.
-
-The property harness runs P1 (reparse), P2 (idempotence), P3 (runtime output
-equality) and P4 (comment counts) over every `.zy` file in `tests/` and
-`examples/`; `--baseline` mode gates CI on regressions.
-
----
-
-## 13. Non-goals (explicit)
-
-- **Linting** — use `zymbol check`
-- **Style enforcement beyond layout** — naming conventions, idioms
-- **Auto-import or auto-fix** — the formatter never adds new code
+> **A dictionary key was re-spelled twice over.** The quoted form used Rust's
+> `{:?}`, which writes a combining mark as `\u{941}` — Rust syntax this language
+> does not have, and which its own lexer then read as an interpolation with an
+> invalid character. And the bare/quoted decision used `is_alphanumeric()`,
+> narrower than the lexer's identifier rule, so `मुद्रा` — a bare key, and a
+> valid identifier everywhere else — was judged to need quoting. Both directions
+> changed a token. The remaining half needed the AST: a key arrives as a bare
+> `String` either way, so `NamedTupleExpr` now records `quoted`, per §12.
+>
+> **An output statement was wrapped.** `>>` and `>>~` end at the line, so
+> breaking a long call across lines inside one does not reformat the statement —
+> it ends it and leaves the rest as a fragment. The visitor carries a `no_wrap`
+> flag now. Line length is a preference; producing a program that does not parse
+> is not a trade-off against it.
+>
+> Refusals across the seven LDV applications: **fourteen → zero**. The corpus's
+> thirteen are files that do not parse, which is the correct refusal.

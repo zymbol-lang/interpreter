@@ -102,6 +102,10 @@ impl Parser {
         allow_empty: bool,
     ) -> Result<Expr, Diagnostic> {
         let mut fields = Vec::new();
+        // Which keys the source quoted — the one thing about a key that the
+        // pair `(String, Expr)` cannot carry, and the formatter has to know
+        // (see `NamedTupleExpr::quoted`).
+        let mut quoted = Vec::new();
 
         if allow_empty && matches!(self.peek().kind, TokenKind::RParen) {
             let rparen = self.advance();
@@ -116,8 +120,14 @@ impl Parser {
             // literal had stayed on the record's side of that line.
             let field_token = self.peek().clone();
             let field_name = match &field_token.kind {
-                TokenKind::Ident(name) => name.clone(),
-                TokenKind::String(text) => text.clone(),
+                TokenKind::Ident(name) => {
+                    quoted.push(false);
+                    name.clone()
+                }
+                TokenKind::String(text) => {
+                    quoted.push(true);
+                    text.clone()
+                }
                 _ => {
                     return Err(Diagnostic::error("expected a key in the dictionary")
                         .with_span(field_token.span)
@@ -158,7 +168,7 @@ impl Parser {
         let rparen_token = self.advance(); // consume )
 
         let span = open_token.span.to(&rparen_token.span);
-        Ok(Expr::NamedTuple(NamedTupleExpr::new(fields, span)))
+        Ok(Expr::NamedTuple(NamedTupleExpr::with_quoted(fields, quoted, span)))
     }
 
     /// Parse tuple, named tuple, or grouped expression
