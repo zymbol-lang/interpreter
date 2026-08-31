@@ -583,7 +583,7 @@ cargo test
 # Tree-walker vs VM parity          → zyq consensus --engines zytw,zyvm
 bash tests/scripts/vm_compare.sh
 
-# All four engines                  → zyq consensus
+# All three engines                 → zyq consensus
 bash tests/scripts/engine_compare.sh
 bash tests/scripts/engine_compare.sh loops/labels
 
@@ -675,10 +675,19 @@ This is validation, not verification, and the difference is the whole point. `ca
 parity runs and the golden files verify — they take a program that exists and check that the
 implementation handles it correctly. None of them can report that the language cannot express a
 Go board, because a missing capability produces no failing test; only writing the board does.
-The cost is inverted from ordinary TDD: here the test is expensive and cannot be rerun, so a
-project is a *discovery* mechanism and never a gate. Every finding is distilled into a minimal
-`.zy` case, a golden and a unit test, and it is that cheap layer — not the application — that
-protects against regression afterwards.
+The cost is inverted from ordinary TDD: the test is expensive to build and the *discovery*
+cannot be rerun, so a project earns its keep as a discovery mechanism first. Every finding is
+distilled into a minimal `.zy` case, a golden and a unit test, and it is that cheap layer that
+names what broke when something does.
+
+The application is not retired afterwards. Seven of the eight are registered in
+`zyquality/project/apps.toml` and run as a gate (`gate = true`, ~40 goldens through both
+engines); `ZyFmtCheck` runs over the LDV applications **by default**, because a formatter's
+damage shows up in hand-aligned tables, five writing systems and modules importing each other,
+and not in a corpus of short files — which is how it found five formatter defects the token
+gate could not see. Carrying an application across a breaking language change is itself a
+validation act, and two findings so far were born inside a migration rather than inside a
+cycle. `LDV.md` § 1 and decalogue point 12 state both halves.
 
 Each project keeps a **gap log**: every friction, bug, missing capability and idea, with an ID,
 a reproduction and a status. The log closes against the release — 囲碁's eleven findings were
