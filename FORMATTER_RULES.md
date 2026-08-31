@@ -242,7 +242,7 @@ this table does not list, the gate's silence is not evidence.
 ### 10.1 The table is executable
 
 This section is prose, and prose does not fail a build. The machine-readable
-copy is **`ZyFormatCheck/normalizations.toml`**, and `ZyFormatCheck/bin/zyfmtcheck`
+copy is **`ZyFmtCheck/normalizations.toml`**, and `ZyFmtCheck/bin/zyfmtcheck`
 reads that and nothing else:
 
 1. **format** every `.zy` of a body in a *temporary copy* — never in place;
