@@ -1,10 +1,18 @@
 # Implementation Plan — v0.0.8 Memory Model, Auto-Free, and Validation-Driven Fixes
 
-> **Status: code and documentation complete on branch `v0.0.8`; the tag is not cut.**
-> `Cargo.toml` reads `version = "0.0.8"` and the CHANGELOG entry is dated `2026-08-01`.
-> `main` has not been merged and there is no `v0.0.8` tag — that is the remaining step,
-> and it is the trigger for the four release workflows. Part II below is the closure
-> checklist.
+> **Status: RELEASED in v0.0.8 (2026-08-02).** Merged to `main` and tagged `v0.0.8`; the
+> tag fired the four release workflows. Kept as the v0.0.8 record — Part I is what
+> shipped — and as the origin of the two auto-free debts in § B, which outlived the
+> release and are tracked in [ROADMAP.md](ROADMAP.md).
+>
+> Part II was the closure checklist *before* the release. It is annotated in place rather
+> than deleted: § A is done, § C is superseded, and § D and the verification commands were
+> measured through the old in-repo harness, before the corpus moved to `zyquality/`.
+>
+> *Superseded status, left for the record: until 2026-08-02 this block read "code and
+> documentation complete on branch `v0.0.8`; the tag is not cut", and named cutting the
+> tag as the remaining step. It was true when written. A plan that keeps saying it after
+> the tag exists invites someone to cut it twice.*
 >
 > **Documentation pass — 2026-07-29.** Every document listed in Part II § A was reconciled
 > against the code, and feature #11 (`.zyp` packages) was documented across CHANGELOG /
@@ -506,7 +514,12 @@ Two properties of this audit are worth carrying into v0.0.9:
 
 ---
 
-# Part II — What remains to close v0.0.8
+# Part II — What remained to close v0.0.8
+
+> **Closed 2026-08-02.** Everything in § A is done. The three rows that were still open
+> when the release was cut — Git, `web/` distribution, VS Code — are marked below with
+> what actually happened, not struck out: a checklist whose last open items are deleted
+> cannot be told from one nobody finished.
 
 ## A. Release closure
 
@@ -525,13 +538,19 @@ because the branch touched features that five documents describe.
 | `MEMORY_MODEL.md` | already covers the v0.0.8 features | No action |
 | `CHANGELOG.md` | ✅ **done 2026-08-01** — dated `[0.0.8] — 2026-08-01`; new `### Changed` section (`ModulePath::resolve_from`, recursive `check`); the static-tooling audit added under Fixed; header figures re-measured; the stale `web/zymbol.js` / `web/zyp.js` / `web/test_zyp.mjs` paths and the "one tab per source file" claim corrected | — |
 | `IMPL_V008.md` | ✅ **done 2026-08-01** — features #12–#14 documented in Part I; § E.2 closed; all figures re-measured | — |
-| Git | `main` not merged; no tag | Merge to `main`, tag `v0.0.8` (branch naming: version only, no prefix). **The tag is the trigger** for all four release workflows (`release: published`) |
-| `web/` distribution | `install.html`, `index.html` and `changelog.html` are already bumped to v0.0.8 with `pending` SHA256 — **those download links 404 until the tag exists**. `web/README.md`'s banner still claims they point at v0.0.7 | Merge `web/v0.0.8` to `main` (GitHub Pages) **only after** the release assets exist; fill the hashes in the same change; fix the README banner |
-| VS Code extension | v0.1.5, README reviewed for v0.0.5. No `.zyp` file association, no `std/term` snippets, no `##!`-on-Char snippet. `\|\|` colours by accident (it is in the logical-operator rule) | Not a release blocker; do it with `bash build-extension.sh` (that script only) |
+| Git | ✅ **done 2026-08-02** — merged to `main` and tagged `v0.0.8`; the four release workflows fired off the tag. Branch closed per `agents/release_merge.md` | — |
+| `web/` distribution | ✅ **done** — the release assets exist, so the download links resolve and the SHA256 values are no longer `pending`. See `agents/web_release.md` for the procedure | — |
+| VS Code extension | Extension is now **v0.1.6** and its README is reviewed for v0.0.8 — but that README still prints `extension v0.1.5`, one behind its own `package.json`. The v0.0.8 surface gaps stand: no `.zyp` file association, no `std/term` snippets, no `##!`-on-Char snippet. `\|\|` colours by accident (it is in the logical-operator rule) | Still open, still not a release blocker; do it with `bash build-extension.sh` (that script only) |
 | JS mirror parity | 7 open gaps — see § E.3 | Decide port-or-declare before the next distribution refresh |
 | `/usr/bin/zymbol`, `/usr/bin/zymbol-lsp` | ✅ both are symlinks into `interpreter/target/release/`, so they track the local build. The "stale system install" note from 2026-07-29 no longer applies | Run `cargo build --release` before relying on the IDE — `zymbol-lsp`'s binary predates the last two commits |
 
 ## B. Auto-free debt
+
+> **Moved to [ROADMAP.md](ROADMAP.md) § Known Gaps on 2026-08-31, still undecided.** The
+> deadline this section set for itself — "decided explicitly before v0.0.9" — passed with
+> v0.0.9 already in flight. Neither item is a regression and neither blocks anything; they
+> are tracked in the ROADMAP now because a released plan is not a place anyone looks for
+> open decisions. The text below is the original statement of both.
 
 Both items are **known and accepted**, not regressions. Neither blocks the release; both
 should be decided explicitly before v0.0.9 rather than inherited silently.
@@ -551,23 +570,30 @@ should be decided explicitly before v0.0.9 rather than inherited silently.
 
 ## C. Language gaps still open
 
-Two, both from the ROADMAP gaps table. Neither has been designed; both are subject to
-the symbol-vs-module rubric and to the "a new symbol enters the grammar reluctantly"
-rule in `SYMBOLS.md`.
+> **Superseded.** Both gaps listed here have since been answered, and each was answered
+> the way § C said they would be — by a project needing them, not by a wish list.
+> [ROADMAP.md](ROADMAP.md) § gaps is the live table; this one is the v0.0.8 snapshot.
 
-| Gap | Description | Current idiom |
-|-----|-------------|---------------|
-| **Match multi-value arms** `[NI02]` | `1, 2 => "low"` — one arm, several values — is not parsed | `[1, 2] => "low"` (list containment) |
-| **Dict / map literal** `[NI05]` | No `key: value` collection literal | Named tuples, or arrays of `(k, v)` pairs |
+| Gap | v0.0.8 snapshot | Answered by |
+|-----|-----------------|-------------|
+| **Match multi-value arms** `[NI02]` | `1, 2 => "low"` — one arm, several values — is not parsed. Idiom: `[1, 2] => "low"` (list containment) | **Or-patterns `p1 \|\| p2` (v0.0.8)** — `1 \|\| 2 => "low"`, and unlike list containment they work for non-literal patterns. Shipped in this very release; § C was written before feature #10 landed and never revised |
+| **Dict / map literal** `[NI05]` | No `key: value` collection literal. Idiom: named tuples, or arrays of `(k, v)` pairs | **The dictionary `#(a: 1)` (v0.0.9)** — with `#()` for the empty one, which the named tuple could not spell, and `##(` as its type. `[COLLECTIONS.md](COLLECTIONS.md)` is the point of record |
 
 Already **dismissed** (2026-06-12, with the language author) and not to be reopened
 without new evidence: `do-while ~>` `[NI01]` and match identifier binding `[NI03]`.
 
-Neither open gap has been requested by a validation project yet. Per the cycle above,
-**the next move is not to implement them — it is to see whether the next project needs
-them.** `std/term` earned its way in that order.
+The reasoning that closed them is worth keeping even though the rows are: *the next move
+is not to implement a gap — it is to see whether the next project needs it.* `std/term`
+earned its way in that order, and so did the dictionary, which ZyBank forced.
 
 ## D. VM parity — the ROADMAP is out of date
+
+> **Done; both bullets were corrected in ROADMAP.md on 2026-07-29.** Read below for the
+> evidence, not for the instruction. One detail has since become wrong on its own terms:
+> the parenthesis about `@vm-skip` describes a marker that **no longer exists anywhere** —
+> no corpus file carries it, and `corpus.toml` names it only in its history of the five
+> mechanisms it replaced. `tests/gaps/gap_key_input_type_check.zy` now lives at
+> `zyquality/corpus/gaps/gap_key_input_type_check.zy` and carries no marker at all.
 
 Measured on this branch, both ROADMAP "VM completeness" bullets are stale:
 
@@ -600,6 +626,15 @@ before HLZ-008 was found.
 ---
 
 ## Verification commands
+
+> **Historical — do not run these to check v0.0.9.** Every command below reads the corpus
+> from `interpreter/tests/`, which no longer holds a single `.zy`. The corpus moved to the
+> `zyquality/` repository, which is now the point of record for all three engines; the
+> scripts named here survive as thin wrappers that delegate to `zyq` and are kept for
+> their names, flags and exit codes. Today's equivalent is `cd ../zyquality && ./zyq suite`.
+> The figures below are the v0.0.8 measurement and are left exactly as recorded — see the
+> 2026-08-09 correction in the status block for why re-deriving a count in a fresh clone
+> is now a rule.
 
 Measured 2026-08-01 on `v0.0.8` @ `85eedf9`:
 
@@ -703,6 +738,35 @@ Affects string patterns too: `?? s { "a\nb" => ... }` takes the same unescaped p
 `format_literal` rather than through `Display`. Needs a regression test that formats a file
 with an escaped char pattern and reparses it — the property suite already catches it, so
 adding the fixture to the corpus is enough once the fix lands. *(Done exactly this way.)*
+
+### E.3 — Seven divergences between the JS mirror and the Rust engines
+
+> **Closed. Re-measured 2026-08-31 on `v0.0.9`, and the count is zero.** This section is
+> kept because it is the v0.0.8 record and because the header comment in
+> `web/src/zymbol/zymbol.js` still points at it — that comment is stale in the same way
+> and is corrected with this pass.
+>
+> ```
+> zyq consensus --engines zytw,zyjs                   661 files: 631 agree, 0 diverge
+> zyq consensus --engines zytw,zyjs --corpus examples 222 files: 216 agree, 0 diverge
+> zyq consensus --engines zytw,zyjs --filter bugs/bug_mm    12 files: 12 agree, 0 diverge
+> ```
+>
+> The residue in each run is *excused, not divergent*: 30 corpus files and 6 examples that
+> `corpus.toml` excludes for `zyjs` with a written reason (`std/db` is ODBC, `<\ cmd \>`
+> entropy, TUI needs a real TTY), plus the skip markers the examples carry themselves.
+>
+> Two of the seven were spot-checked directly rather than trusted to the aggregate,
+> because they were the ones that reached users:
+>
+> - **Float literals.** `>> 3.14159265 ¶` now prints `3.14159265` in both engines. This
+>   was the worst of the seven — it affected *every* float literal, not one example.
+> - **HLZ-KL-001.** `f(mI') { <~ mI' }` returns `7` in both engines; the JS lexer accepts
+>   `'` inside an identifier, so ordinary tlhIngan Hol parses in the browser.
+>
+> The measurement below is left as written. It is what the mirror looked like on
+> 2026-08-01, and the two suites named in it have since been replaced by the one above:
+> `test_runner.mjs` is now a wrapper that delegates to `zyq`.
 
 ### E.3 — Seven divergences between the JS mirror and the Rust engines
 
