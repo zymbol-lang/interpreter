@@ -122,7 +122,7 @@ By contributing to this project, you agree that:
 
 Zymbol-Lang is designed as a **minimalist symbolic programming language** with:
 
-- No keywords (pure symbolic syntax).
+- No words in the grammar (pure symbolic syntax).
 - Language-agnostic design (works across cultures).
 - Full Unicode support.
 - Functional programming paradigms.

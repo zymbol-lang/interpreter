@@ -2,7 +2,7 @@
 pkgname=zymbol-lang
 pkgver={{VERSION}}
 pkgrel=1
-pkgdesc="Zymbol symbolic programming language — keyword-free, symbol-driven"
+pkgdesc="Zymbol symbolic programming language — no words, symbol-driven"
 arch=('x86_64' 'aarch64')
 url="https://github.com/your-username/zymbol-lang"
 license=('AGPL-3.0-only')

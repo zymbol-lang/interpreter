@@ -7,7 +7,7 @@ Section: devel
 Priority: optional
 Homepage: https://github.com/your-username/zymbol-lang
 Description: Zymbol symbolic programming language
- Zymbol is a keyword-free symbolic programming language where every
+ Zymbol is a symbolic programming language with no words in its grammar, where every
  construct (conditionals, loops, functions, I/O, error handling) is
  expressed using pure symbols such as ?, @, ->, >> and others.
  .

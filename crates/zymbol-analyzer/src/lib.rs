@@ -1133,7 +1133,10 @@ impl Analyzer {
         // Add import alias completions
         items.extend(self.get_import_alias_completions(uri));
 
-        // Add Zymbol operators/keywords as snippets
+        // Add Zymbol operators as snippets. Those filed below as
+        // CompletionItemKind::KEYWORD are marks, not words — KEYWORD is the LSP
+        // completion kind for a reserved construct, and the protocol has no other.
+        // See semantic_tokens.rs and SYMBOLS.md §1.2.
         items.extend(builtin_completions());
 
         items

@@ -60,7 +60,18 @@ mod token_type_index {
 /// Classify a Zymbol token kind to LSP semantic token type
 fn classify_token(kind: &TokenKind) -> Option<u32> {
     match kind {
-        // Control flow keywords
+        // Control flow keywords.
+        //
+        // "Keyword" here is the LSP semantic-token type, not a claim about the language.
+        // Zymbol's grammar contains no words (SYMBOLS.md §1.2); these are marks. They are
+        // filed under KEYWORD because the protocol offers a fixed set of token types and
+        // this is the one that means "reserved construct of the grammar" — the alternative,
+        // OPERATOR, is used below for the arithmetic and collection marks, which is the
+        // distinction a reader of the coloured buffer actually wants.
+        //
+        // This is the exact spot SYMBOLS.md cites when it explains why the project claims
+        // "no words" and not "no keywords": under the tokenizer's sense of the term, Zymbol
+        // has plenty.
         TokenKind::Question          // ?  (if)
         | TokenKind::ElseIf          // _? (else if)
         | TokenKind::Underscore      // _  (else/wildcard)
