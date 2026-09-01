@@ -5,7 +5,7 @@
 <h1 align="center">Zymbol-Lang — Interpreter</h1>
 
 <p align="center">
-  A minimalist symbolic programming language with no keywords.<br/>
+  A minimalist symbolic programming language with no words in its grammar.<br/>
   Pure symbols for every construct. Full Unicode. Built in Rust.
 </p>
 
@@ -21,7 +21,7 @@
 ## What is Zymbol-Lang?
 
 Zymbol started as an **esoteric programming language** — a single tight question taken seriously:
-*what happens if you remove every keyword?* No `if`, no `while`, no `function`, no `return`.
+*what happens if you remove every word?* No `if`, no `while`, no `function`, no `return`.
 The original experiment is on [esolangs.org](https://esolangs.org). Then the idea grew.
 
 The reason the constraint matters is an old and uncontroversial one: notation travels.
@@ -89,7 +89,7 @@ segment and gloss it, or you cannot. [SYMBOLS.md](./SYMBOLS.md) does that count 
 inventory — transparent forms (the majority), semi-transparent (6, where the whole means more
 than the parts), and **opaque** (10, which must simply be learned: `¶`, `><`, `#1`/`#0`, the
 base prefixes, `###`, `°`). It also names the six declared homographs, the exact
-natural-language residue that "no keywords" does not cover (error kinds, `std/` names, `0x`),
+natural-language residue that "no words in the grammar" does not cover (error kinds, `std/` names, `0x`),
 and the eight rules a proposed operator has to pass before it can exist. A reader who has
 never seen Zymbol will guess `>>` and `->` correctly and will guess `$^-` never — the second
 kind is a memorisation cost, so the design keeps counting it instead of assuming it is small.
@@ -98,7 +98,11 @@ kind is a memorisation cost, so the design keeps counting it instead of assuming
 
 ## Features
 
-- **No keywords** — pure symbolic syntax (`?` if, `@` loop, `>>` output, `->` lambda)
+- **No words** — pure symbolic syntax (`?` if, `@` loop, `>>` output, `->` lambda). Not
+  "no keywords": *keyword* is a tokenizer's term for a reserved token, and by that
+  reading the language server files `?` and `@` under `KEYWORD` because LSP has no
+  other slot. The checkable claim is that **no construct of the grammar is a word**
+  ([`SYMBOLS.md`](SYMBOLS.md) §1.2)
 - **Dual execution** — tree-walker interpreter and register-based VM (`--vm`)
 - **Full Unicode** — identifiers, strings, and numerals support any Unicode script
 - **First-class functions** — named functions as values, HOF arguments, and closures
@@ -605,10 +609,13 @@ Or ask the whole question at once, from the zyquality checkout:
 ```
 
 Current status (v0.0.9 branch — 0.0.8 is the latest published release).
-**Re-measured 2026-08-17**: the corpus is now **599 files**; `cargo test` runs **975 tests,
-0 failed**; `zyq consensus --engines zytw,zyvm` reports **597 agreeing, 0 diverging**, the
-other 2 excluded by `corpus.toml`. The figures below are the 2026-08-12 measurement against
-the 585-file corpus, kept because the surrounding text explains what each number covers:
+**Re-measured 2026-08-31**: the corpus is **661 files**, 659 with a golden; `cargo test`
+runs **1026 tests, 0 failed, 4 ignored**; `zyq consensus` over all three engines reports
+**655 agreeing, 0 diverging**, the other 6 excused for every engine by a reason in
+`corpus.toml`; `zyq reject` refuses all **34** forms in every engine. The figures below are
+the 2026-08-12 measurement against the 585-file corpus, kept because the surrounding text
+explains what each number covers — re-derive a count in a fresh clone before quoting it,
+which is the rule that came out of the 544/536 correction:
 
 - **969 `#[test]` functions** across the 19 crates via `cargo test`.
 - Tree-walker vs VM: **583 agree, 0 diverge**, 2 files excused for every engine
@@ -700,7 +707,7 @@ eight logs are in **[LDV.md](./LDV.md)**.
 
 The projects carry a second load at the same time. They are written across six natural
 languages — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese, Sanskrit — which is what
-turns "keyword-free means language-neutral" from a claim into a result: no flags, no special
+turns "a wordless grammar means language-neutral" from a claim into a result: no flags, no special
 modes, no translation layer at the syntax level. Sanskrit adds the case the earlier six could
 not make: Devanagari is the first script where a single identifier needs combining marks to be
 spelled at all, so `मन्त्री` and `अश्वः` are not "Unicode support" in the sense CJK was — they

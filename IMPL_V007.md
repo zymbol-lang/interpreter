@@ -29,7 +29,7 @@ same pattern in both execution engines.
 
 ## Symbol vs module — the design rubric
 
-Zymbol is keyword-free and symbolic. Before adding any capability, decide whether it is
+Zymbol is symbolic and has no words in its grammar. Before adding any capability, decide whether it is
 a **symbol** or a **`std/` module**, using the contract already established by the language:
 
 - **Symbol** if it is a *flow/channel of the running process itself* — anonymous, ambient,

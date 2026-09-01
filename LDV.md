@@ -167,7 +167,7 @@ is cheap to re-run and is re-run; what stays expensive is building the next one.
 
 **9 — Culture is a test case.** Writing each project in a different natural language —
 English, Mandarin, Spanish, Klingon pIqaD, Japanese — is a deliberate validation of the
-keyword-free claim, of Unicode handling end to end, and of application-level i18n. It is what
+wordless-grammar claim, of Unicode handling end to end, and of application-level i18n. It is what
 turned "language-neutral" from a design intention into a result, and it is how the
 double-width glyph, pIqaD interpolation and numeral-mode defects were found at all.
 

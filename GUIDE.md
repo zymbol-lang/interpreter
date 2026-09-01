@@ -60,15 +60,15 @@ See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar, coverage stat
 
 ### Origin: An Esolang That Grew
 
-Zymbol started as an **esoteric programming language** — a small, experimental construct with a single guiding question: *what happens if you remove every keyword from a programming language?* No `if`, no `while`, no `function`, no `return`. Nothing borrowed from English or any other natural language. Just symbols.
+Zymbol started as an **esoteric programming language** — a small, experimental construct with a single guiding question: *what happens if you remove every word from a programming language?* No `if`, no `while`, no `function`, no `return`. Nothing borrowed from English or any other natural language. Just symbols.
 
 That constraint was minimalist by design, in the tradition of esolangs: a tight idea taken seriously, with no ambition beyond exploring whether it worked. The original publication is on [esolangs.org](https://esolangs.org). It was a toy with a point.
 
-Then the idea grew — like a little monster. Not because features were added for their own sake, but because the founding constraint turned out to have more depth than expected. Once you commit to "no keywords", you discover that symbols can carry consistent meaning across very different contexts (`_` is always non-binding, `#` is always meta-level), and that Unicode support is not an afterthought but a natural consequence of the same principle. The language kept growing as each piece clicked into place.
+Then the idea grew — like a little monster. Not because features were added for their own sake, but because the founding constraint turned out to have more depth than expected. Once you commit to "no words", you discover that symbols can carry consistent meaning across very different contexts (`_` is always non-binding, `#` is always meta-level), and that Unicode support is not an afterthought but a natural consequence of the same principle. The language kept growing as each piece clicked into place.
 
 **The founding question**, now stated plainly: notation travels further than vocabulary. Mathematics writes `∑` and `∫`; a musical stave fixes pitch and duration in a single mark; a road sign is read correctly at speed by a driver who has never studied the local language. None of these replace words or compete with them — they sit *beside* language, and the same mark carries the same meaning to everyone who has learned the notation. A language built entirely from marks inherits that property.
 
-Removing keywords entirely is what makes it available. A symbol carries no etymology. `?` does not say *if* in English — it says *condition* in the visual grammar of the program. A developer writing `? edad >= 18` and one writing `? age >= 18` are doing exactly the same thing, and neither is translating.
+Removing words from the grammar entirely is what makes it available. A symbol carries no etymology. `?` does not say *if* in English — it says *condition* in the visual grammar of the program. A developer writing `? edad >= 18` and one writing `? age >= 18` are doing exactly the same thing, and neither is translating.
 
 The practical result: any human language can be the *native* language of a Zymbol program. Spanish with full accents (`función`, `índice`), Devanagari (`सक्रिय`, `फलन`), Arabic (`متغير`, `دالة`), Korean (`변수`, `함수`), and yes — Klingon pIqaD for the ones who want to program in the language of the Empire. The digit block is registered (CSUR U+F8F0–U+F8F9) and the interpreter supports it completely. No judgment. It is the logical endpoint of the principle.
 
@@ -121,7 +121,7 @@ Types, modules, and numeral modes share `#` because all three are about *what so
 
 Zymbol's symbolic vocabulary is its own. The symbols have no external standard to conform to — their meaning is defined by the language itself and built up through consistent use. A programmer learns Zymbol by reading Zymbol, not by mapping it onto another language.
 
-This creates an initial learning curve. It also means the language can evolve its symbol system with full internal consistency: there is no inherited keyword vocabulary — English or otherwise — that a new construct has to stay compatible with.
+This creates an initial learning curve. It also means the language can evolve its symbol system with full internal consistency: there is no inherited word vocabulary — English or otherwise — that a new construct has to stay compatible with.
 
 ### The Numeral Modes as Proof of Concept
 
@@ -266,7 +266,7 @@ Zymbol has two ways to emit a newline in output — both produce a literal newli
 
 ### Reserved Symbols
 
-Zymbol is keyword-free — there are no reserved English words. All control-flow, I/O, and type constructs use symbolic operators. The complete operator set is listed in §21.
+Zymbol has no words in its grammar — no reserved English words, and none in any other language. All control-flow, I/O, and type constructs use symbolic operators. The complete operator set is listed in §21.
 
 The following identifiers have conventional meaning but are not reserved: `_err` (caught error in `:!` blocks).
 
@@ -2681,7 +2681,7 @@ postfix `[...]`, the `>` character is always a **depth separator**, not a compar
 
 All forms are fully supported by **both** the tree-walker and the register VM (`--vm`).
 
-> **Design note**: using `>` as depth separator inside `[...]` is intentional. Context resolves any ambiguity: `arr[a>b]` (no spaces, plain identifiers) is always navigation; `arr[(a > b)]` is a parenthesized comparison. Alternatives evaluated (`:`, `>>`, `,`) conflicted with other grammar rules or added more visual noise. The current syntax is the most readable form achievable within the keyword-free constraint.
+> **Design note**: using `>` as depth separator inside `[...]` is intentional. Context resolves any ambiguity: `arr[a>b]` (no spaces, plain identifiers) is always navigation; `arr[(a > b)]` is a parenthesized comparison. Alternatives evaluated (`:`, `>>`, `,`) conflicted with other grammar rules or added more visual noise. The current syntax is the most readable form achievable within the wordless constraint.
 
 ---
 
@@ -3547,6 +3547,17 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 ```
 
 **Recommended ordering inside the block**: `<#` imports → `#>` export block → constants/variables → function definitions. The parser accepts any ordering, but `<#` aliases used in `#>` re-exports must appear before the `#>` block.
+
+> ⚠ **Always write the `#>` block.** The grammar lets you leave it out, and what happens then
+> is **not defined**: the tree-walker exports everything, the register VM and the browser
+> engine export nothing, and `zymbol check` reports neither — so a module without `#>` runs
+> under `zymbol run` and fails under `zymbol run --vm` and in the playground, with a message
+> that blames the function rather than the missing block. The behaviour will be pinned down;
+> until it is, a module that does not declare its public surface is not portable between
+> engines. See REFERENCE.md L48.
+>
+> The block goes **inside** `# name { … }`. A `#>` at file top level is not valid Zymbol,
+> even though the browser engine currently runs it.
 
 ### Allowed and Forbidden Inside a Module Body
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Zymbol-Lang is a minimalist symbolic programming language with no keywords. This document
+Zymbol-Lang is a minimalist symbolic programming language with no words in its grammar. This document
 describes the architecture of its Rust implementation: a workspace of 19 crates organized
 by compilation phase, execution mode, and tooling.
 
@@ -19,7 +19,8 @@ The interpreter supports two independent execution strategies:
 1. **Modularity** — each compilation phase is an isolated crate with clear boundaries
 2. **Dual execution** — tree-walker and VM coexist without shared runtime state
 3. **Unicode-first** — identifiers, strings, and operators support full Unicode including emojis
-4. **No keywords** — all language constructs use pure symbolic operators
+4. **No words** — all language constructs use pure symbolic operators (not "no keywords":
+   see `SYMBOLS.md` §1.2 for why the precise claim is about words)
 5. **Explicit over implicit** — no hidden coercions, no automatic newlines, no magic
 
 ---
@@ -200,7 +201,7 @@ struct Interpreter {
 - Tail-call optimization (TCO): detects `<~ f(same_args)` and restarts without stack growth
 - Module system: file-based imports with alias resolution and circular dep detection
 - Native stdlib (`src/stdlib/`): `std/math`, `std/random` (v0.0.6); `std/json`, `std/io`,
-  `std/net`, `std/db` (v0.0.7); `std/term` (v0.0.8). Each module registers
+  `std/net`, `std/db` (v0.0.7); `std/term` (v0.0.8); `std/time` (v0.0.9). Each module registers
   `FunctionDef::Native` entries; `std/*` import paths resolve in-process (no filesystem
   lookup)
 - Auto-free (v0.0.8): a variable is destroyed right after the statement holding its last
@@ -501,14 +502,18 @@ embeds the interpreter, `package` produces a `.zyp` archive of source that still
 | Native stdlib (`std/*`, incl. `std/term`) | ✓ | ✓ |
 | Auto-free (destruction at last use) | ✓ | ✓ (see note) |
 
-Measured 2026-08-17 on v0.0.9: `zyq consensus --engines zytw,zyvm` (what
-`tests/scripts/vm_compare.sh` now delegates to) reports **597 of 599 corpus files agreeing
-and 0 diverging**, the other 2 excluded for a reason declared in `zyquality/corpus.toml`. The three rows that used to read "partial"/"—" (module system,
+Measured 2026-08-31 on v0.0.9: `zyq consensus --engines zytw,zyvm` (what
+`tests/scripts/vm_compare.sh` now delegates to) reports **655 of 661 corpus files agreeing
+and 0 diverging**, the other 6 excused for every engine by a reason declared in
+`zyquality/corpus.toml`. Adding `zyjs` does not change the agreement count — all three
+engines reach the same 655. The three rows that used to read "partial"/"—" (module system,
 CLI args, format expressions) were verified and are at parity; the last known divergences
 were closed by HLZ-008/009/010 and MM-10/MM-11.
 
-Exactly one test carries `@vm-skip` — `zyquality/corpus/gaps/gap_key_input_type_check.zy` — and it is
-skipped by design: it is a `zymbol check` test that never executes.
+**No corpus file carries an in-file skip marker.** `@vm-skip` was one of five incompatible
+exclusion mechanisms that `zyquality/corpus.toml` replaced; nothing reads it any more.
+Every exclusion is declared there, naming the engine, a tag and a required reason — an
+exclusion nobody justified cannot be told from a bug somebody hid.
 
 **Auto-free note**: both engines implement it, but the VM's peak-memory win is currently
 smaller. `emit_auto_free` clears the *named* variable's register, while a temporary holding

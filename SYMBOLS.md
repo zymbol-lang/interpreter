@@ -70,21 +70,36 @@
 
 #### 1.1 Notation beside language
 
-Zymbol's founding constraint — no keywords, in any natural language — is argued in
+Zymbol's founding constraint — no words, in any natural language — is argued in
 `GUIDE.md` §0 and not re-argued here. The consequence that matters for this document is
 structural: because no construct may be a word, every construct must be a **mark or a
 sequence of marks**, and the language therefore needs an explicit account of what its marks
-mean and how they combine. Natural-language keywords carry their meaning in from outside;
-marks do not. A keyword-free language has to supply that meaning itself, in a document like
-this one, or the coherence is only asserted.
+mean and how they combine. A natural-language keyword carries its meaning in from outside;
+a mark does not. A language without words has to supply that meaning itself, in a document
+like this one, or the coherence is only asserted.
 
-#### 1.2 The keyword-free claim, stated precisely
+#### 1.2 The claim, stated precisely: words, not keywords
 
 The claim that survives contact with the implementation is:
 
 > **No construct of the grammar is a word.** Control flow, I/O, typing, module structure,
 > collection operations and error handling are expressed entirely by marks from a closed
 > inventory (§2.1), and that inventory contains no letters.
+
+**It is deliberately not "Zymbol has no keywords."** That formulation is the popular one
+and it is only nearly true, because *keyword* is not a word about words: in a tokenizer it
+names a reserved token of the grammar, whatever its shape. Under that reading Zymbol has a
+great many keywords, and its own tooling says so — `crates/zymbol-analyzer/src/semantic_tokens.rs`
+classifies `?`, `@` and `<~` as `token_type_index::KEYWORD`, under the comment *"Control flow
+keywords"*, because the Language Server Protocol offers no other semantic-token slot to put
+them in. The same is true of the TextMate grammar the editors use, where every operator sits
+under a `keyword.control.zymbol` scope.
+
+So "no keywords" is a claim that a reader can falsify by opening the analyser. "No word of any
+natural language is a construct of the grammar" cannot be falsified that way, because it is
+about the inventory in §2.1, and that inventory is 29 characters with no letters among them.
+Both readings of *keyword* are legitimate; only one of them is what this language is about, and
+naming the wrong one invites the objection instead of answering it.
 
 Three things the claim does **not** cover, all of them real and all of them lexicon rather
 than grammar:
@@ -96,7 +111,7 @@ than grammar:
 | Conventional identifiers | `_err` | Not reserved; conventional only |
 
 §15 gives the full residue and argues why eliminating it would cost more than it buys. The
-important discipline is that the boundary be **stated**, so that "Zymbol has no keywords"
+important discipline is that the boundary be **stated**, so that "no word of the grammar"
 means something checkable instead of something aspirational.
 
 #### 1.3 Icon, index, symbol
