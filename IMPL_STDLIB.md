@@ -1,5 +1,16 @@
 # Implementation Plan — Zymbol Standard Library Infrastructure + std/math
 
+> **Status: IMPLEMENTED in v0.0.7.** Steps 0–4 shipped: `enum FunctionDef` is in
+> `crates/zymbol-interpreter/src/lib.rs`, and `NativeFn` and the `native_fns` field on
+> `LoadedModule` are gone from every crate — the migration described under "Relation to
+> IMPL_V007.md" was carried out, not deferred. Kept as the architecture reference for
+> adding a stdlib module: it is the document that explains *why* the dispatch looks the
+> way it does, which `IMPL_V007.md` (the per-module checklist) assumes rather than states.
+>
+> The stdlib has grown past what this plan names. Today: `math`, `random`, `json`, `io`,
+> `net`, `db`, `term`, `time` — `std/env` was dropped by design, and `std/term` (v0.0.8),
+> `std/db` (v0.0.7, see `DESIGN_STD_DB.md`) and `std/time` (v0.0.9) arrived after.
+
 > **Architecture:** `enum FunctionDef` — native functions as a variant of the existing
 > function definition type. Zero new syntax. Full i18n re-export support.
 >
@@ -918,9 +929,15 @@ Parser · AST · Lexer · VM · CLI · Formatter · LSP: **no changes required.*
 
 ## Relation to IMPL_V007.md
 
+> **Done.** The three steps below were carried out; `IMPL_V007.md` has since been rewritten
+> against the resulting architecture rather than the `NativeFn` one it originally described.
+> Verified 2026-08-31: `enum FunctionDef` exists at `crates/zymbol-interpreter/src/lib.rs`,
+> and `grep -rn "native_fns\|NativeFn" crates/` returns nothing. The list is kept because it
+> records what the migration actually consisted of.
+
 IMPL_V007 documents `std/env`, `std/io`, `std/json`, `std/net` using a `NativeFn`
-field added to `LoadedModule`. After this document's Steps 0–4 are implemented,
-those four modules can be ported by:
+field added to `LoadedModule`. After this document's Steps 0–4 were implemented,
+those four modules were ported by:
 
 1. Replacing each `NativeFn(Rc::new(|args, span| { ... }))` with a top-level
    `fn module_funcname(args: Vec<Value>, span: Span) -> Result<Value>` and
@@ -930,4 +947,4 @@ those four modules can be ported by:
    that IMPL_V007 added (Step 5 of that document) — the enum dispatch already covers it.
 
 The IMPL_V007 plan remains valid as a reference for the function signatures and
-argument validation logic of those four modules. Only the wiring changes.
+argument validation logic of those four modules. Only the wiring changed.

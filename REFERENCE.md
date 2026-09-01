@@ -1122,6 +1122,71 @@ this entry exists. Gate: `zyquality/reject/modules/01_import_after_code.zy`.
 Blank lines and comments before an import are fine — only statements close the import
 section.
 
+### L48 — a module with no `#>` means three different things — **undefined, open**
+
+The grammar marks the export block **optional** (`zymbol-lang.ebnf`: `module_block = "#" ,
+module_name , "{" , [ import_stmt ] , [ export_block ] , { module_member } , "}"`) and says
+it *"declares which functions are publicly visible"*. It never says what omitting it means.
+Three engines filled that silence three ways:
+
+```zymbol
+// m.zy — grammatically valid: [ export_block ] is optional
+# m {
+    TOPE := 7
+    privada() { <~ TOPE * 2 }
+    publica() { <~ privada() }
+}
+```
+
+```zymbol
+<# ./m => m
+>> m::publica() ¶
+```
+
+| engine | result |
+|---|---|
+| `zytw` (the default) | prints `14` — exports everything |
+| `zyvm` | `Runtime error: module 'm' does not export function 'publica'` |
+| `zyjs` | same as the VM |
+| `zymbol check` | **`No errors or warnings`** |
+
+The cause is the same missing branch in three crates, and only one of them made a decision:
+
+- `zymbol-interpreter/src/modules.rs:284,289` — two explicit `else` branches, both commented
+  *"No export block - export everything"* / *"No module declaration - export everything"*.
+- `zymbol-compiler/src/lib.rs:737` — `if let Some(decl) … if let Some(export_block) …` with
+  **no `else` at either level**, so the export lists stay empty. Nobody wrote "export
+  nothing"; the case was not written at all.
+- `zymbol-semantic/src/modules.rs:586` — same shape, and this is why `check` is silent: with
+  no export block the export table is never built, so **E012** (*"Module does not export
+  item"*) has nothing to compare against and never fires. A program that fails at runtime in
+  two engines of three passes static analysis clean.
+
+**Why the gate cannot see it**: of every module in `zyquality/corpus/` and in the six LDV
+applications, **zero** omit the export block. There is no file for the engines to disagree
+on. That also means **no existing code depends on either default** — the semantics can still
+be defined freely, and the cost of deciding only rises with time.
+
+**How the two defects feed each other.** The VM and JS message names the wrong cause: it says
+the *function* is not exported, so a reader adds `#> { publica }` where they can — at file
+level, outside the module block. That form is not in the grammar either; both Rust engines
+refuse it and the browser engine runs it (`zyquality/reject/modules/export_block_at_file_level_m.zy`).
+The misleading diagnostic teaches the invalid form.
+
+**Open decision.** Three candidates, none implemented consistently:
+
+1. *Export everything* (what the tree-walker does) makes `#>` decorative and privacy opt-in —
+   a module author who forgets the block leaks internals silently, which contradicts what the
+   grammar says the symbol is for.
+2. *Export nothing* (VM and JS) leaves the module silently useless — the same shape as the
+   defects v0.0.9 has been closing (the discarded consulting `$`, the `$~` that assigned and
+   dropped its value): doing nothing without saying so.
+3. *Make omission a semantic error* — "a module must declare its public surface". Fail-closed,
+   consistent with the rest of the language, and free today because nothing omits it.
+
+Whichever is chosen, the rule belongs in `zymbol-semantic` so that `check` sees it and all
+three engines inherit it, and the VM/JS message must name the real cause. Found 2026-08-31.
+
 ---
 
 ## 20b. Error Taxonomy

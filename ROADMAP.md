@@ -142,6 +142,18 @@ They are documented in the manual as known limitations.
 | `arithmetic on non-numeric` for string `/` split | Analyzer cannot distinguish `/` operators by context |
 | `type mismatch` for `arr[i] = val` | Analyzer does not model indexed assignment |
 
+### Auto-free debt — inherited from v0.0.8, still undecided
+
+Both were recorded in `IMPL_V008.md` § B as "known and accepted, not regressions", with
+the note that they *should be decided explicitly before v0.0.9 rather than inherited
+silently*. v0.0.9 is the branch in flight and neither has been decided, so they are moved
+here — a debt whose deadline passed inside a released plan is a debt nobody is looking at.
+
+| Debt | What it costs | Shape of the fix |
+|------|---------------|------------------|
+| **VM expression temporaries** | `emit_auto_free` clears the *named* variable's register; a temporary holding the same large value lives until its register is reused, so the VM's peak-memory win is measurably smaller than the tree-walker's | Teach the register allocator to release temporaries at their last read — a change to allocation, not to the analysis. Worth a before/after measurement on the same 30 MB benchmark used for the tree-walker |
+| **Flat regions only** | A variable created inside a nested block, loop body or lambda body is attributed to the enclosing statement and freed there — correct, but later than necessary in long loop bodies | Extending regions into blocks needs the analysis to model block lifetimes, which is exactly the complexity the current design avoids. **Standing recommendation: leave it, and write the reason into `last_use.rs`** so the next reader does not rediscover it as a bug |
+
 ---
 
 ## Next Steps
@@ -215,9 +227,10 @@ zy-GO did before HLZ-008 was found.
 
 - ~~**Module system in VM**~~ — HLZ-008, HLZ-009, HLZ-010, MM-10 and MM-11 closed the known
   divergences. The TW/VM consensus reports **597 of 599** corpus files byte-identical under
-  both engines (2026-08-17), `zyquality/corpus/modules_scope/` included. Exactly one test carries `@vm-skip`
-  (`zyquality/corpus/gaps/gap_key_input_type_check.zy`) and it is skipped by design — it is a
-  `zymbol check` test that never executes.
+  both engines (2026-08-17), `zyquality/corpus/modules_scope/` included. **No corpus file
+  carries an in-file skip marker**: `@vm-skip` was retired along with the four other
+  exclusion mechanisms `zyquality/corpus.toml` replaced, and every exclusion now names the
+  engine, the tag and the reason in that one file.
 - ~~**Format expressions in VM**~~ — already done, and that line's syntax predated v0.0.6.
   Verified on the v0.0.8 binary, TW == VM for `#,|x|` → `12,345.678`, `#^|x|` →
   `1.2345678e4`, `#^.3|x|` → `1.235e4`, `#,.2|x|` → `12,345.68`. `compile_format`

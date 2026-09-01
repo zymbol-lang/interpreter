@@ -135,6 +135,19 @@ path_segment = identifier ;
 (*
   Export block: declares which functions are publicly visible.
   Placed inside the module block, before any member declarations.
+
+  OPTIONAL IN THE GRAMMAR, UNDEFINED IN SEMANTICS.  This production is reached
+  through  [ export_block ]  in module_block, so a module without one parses.
+  What it then exports is not specified here and the three engines disagree:
+  the tree-walker exports everything, the register VM and the JavaScript engine
+  export nothing, and `zymbol check` reports neither.  See REFERENCE.md L48.
+  The decision is open; no module in the corpus or in the six LDV applications
+  omits the block, so nothing depends on either behaviour yet.
+
+  The block belongs INSIDE the module block.  A "#>" at file top level, with no
+  enclosing module_block, is not in this grammar — both Rust engines refuse it
+  at parse time and the JavaScript engine accepts it.
+  Gate: zyquality/reject/modules/export_block_at_file_level_m.zy
 *)
 export_block = "#>" , "{" , export_item , { "," , export_item } , "}" ;
 
