@@ -415,7 +415,7 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
     // both Rust engines from one place.
     {
         let mut bag = DiagnosticBag::new();
-        for err in module_name_errors(path, &program, &mut source_map) {
+        for err in module_decl_errors(path, &program, &mut source_map) {
             bag.add(err);
         }
         if !bag.is_empty() {
@@ -936,17 +936,19 @@ fn display_path(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// Every module-name violation reachable from `entry`, transitively.
+/// Every module **declaration** violation reachable from `entry`, transitively:
+/// a name that breaks the dot convention (E001), and a module that never says
+/// what it exports (E014).
 ///
 /// Mirrors `check_file`'s import walk and deliberately does far less: `check`
 /// runs the whole analysis on every module, which is right for a checker and
 /// wrong before executing — it would report a module's style warnings every
-/// time a program that imports it runs. This asks one question, the one the
-/// convention is about (GLB-005).
+/// time a program that imports it runs. This asks only the questions that make
+/// a module unusable rather than untidy (GLB-005, L48).
 ///
 /// A module that cannot be read or parsed is skipped, not reported: the engine
 /// is about to load it and will say so itself, in its own words.
-fn module_name_errors(
+fn module_decl_errors(
     entry: &Path,
     program: &zymbol_ast::Program,
     source_map: &mut SourceMap,
@@ -972,7 +974,7 @@ fn module_name_errors(
     // legitimately carry one.
     let mut analyzer = ModuleAnalyzer::new(&entry_base);
     if let Err(errs) = analyzer.analyze(program, entry) {
-        out.extend(errs.into_iter().filter(|d| d.message.starts_with("E001:")));
+        out.extend(errs.into_iter().filter(|d| is_module_decl_error(d)));
     }
 
     while let Some(module_path) = stack.pop() {
@@ -990,10 +992,17 @@ fn module_name_errors(
 
         let mut analyzer = ModuleAnalyzer::new(&base);
         if let Err(errs) = analyzer.analyze(&module_program, &module_path) {
-            out.extend(errs.into_iter().filter(|d| d.message.starts_with("E001:")));
+            out.extend(errs.into_iter().filter(|d| is_module_decl_error(d)));
         }
     }
     out
+}
+
+/// The two findings that make a module unusable rather than untidy, and so are
+/// worth stopping a `run` for: E001, a name that breaks the dot convention, and
+/// E014, a module that never declares what it exports.
+fn is_module_decl_error(d: &zymbol_error::Diagnostic) -> bool {
+    d.message.starts_with("E001:") || d.message.starts_with("E014:")
 }
 
 /// Check the whole program, not just the file named on the command line.

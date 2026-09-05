@@ -139,6 +139,31 @@ impl Parser {
         }
     }
 
+    /// Consume a `#>` and the braced list that follows it, matching braces.
+    ///
+    /// Used by the refusal above: the block is one construct and refusing it is
+    /// one diagnostic, so its body must not be read as statements.
+    fn skip_export_block(&mut self) {
+        if self.is_at_end() { return; }
+        self.advance(); // the `#>`
+        if !matches!(self.peek().kind, TokenKind::LBrace) { return; }
+        let mut depth = 0usize;
+        while !self.is_at_end() {
+            match self.peek().kind {
+                TokenKind::LBrace => depth += 1,
+                TokenKind::RBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.advance();
+                        return;
+                    }
+                }
+                _ => {}
+            }
+            self.advance();
+        }
+    }
+
     /// True when `name[…]` at statement position is an indexed *assignment*
     /// (`arr[i] = v`, `arr[i] += v`) rather than an edit statement
     /// (`arr[i]$~ v`) or anything else that merely starts with a bracket.
@@ -179,6 +204,28 @@ impl Parser {
 
     /// Parse a single statement
     fn parse_statement(&mut self) -> Result<Statement, Diagnostic> {
+        // Same shape as the `ModuleImport` arm below, and the same reason. An
+        // export block is only ever read inside `# name { … }`, so one that
+        // arrives here is at file level; the generic arm said `unexpected token:
+        // ExportBlock` with `help: expected statement`, which names the token
+        // and not the rule — while the browser engine ran the file
+        // (`reject/modules/export_block_at_file_level_m.zy`). It is the other
+        // half of L48: a module that omitted `#>` was told its *function* was
+        // not exported, so a reader added the block where they could, and this
+        // is where.
+        //
+        // Handled before the match rather than inside it because the whole block
+        // has to be consumed: leaving its body behind reported a second error
+        // about the closing `}`, which is the cascade `skip_statement` exists to
+        // prevent, and `skip_statement` stops at the end of the LINE.
+        if matches!(self.peek().kind, TokenKind::ExportBlock) {
+            let span = self.peek().span;
+            self.skip_export_block();
+            return Err(Diagnostic::error("an export block belongs inside a module block")
+                .with_span(span)
+                .with_help("move this `#>` inside `# name { … }` — a module declares what it exports, and only a module can"));
+        }
+
         let token = self.peek();
 
         match &token.kind {

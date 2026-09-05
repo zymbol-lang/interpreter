@@ -1122,7 +1122,7 @@ this entry exists. Gate: `zyquality/reject/modules/01_import_after_code.zy`.
 Blank lines and comments before an import are fine — only statements close the import
 section.
 
-### L48 — a module with no `#>` means three different things — **undefined, open**
+### L48 — a module declares what it exports — **decided 2026-09-04**
 
 The grammar marks the export block **optional** (`zymbol-lang.ebnf`: `module_block = "#" ,
 module_name , "{" , [ import_stmt ] , [ export_block ] , { module_member } , "}"`) and says
@@ -1173,19 +1173,46 @@ level, outside the module block. That form is not in the grammar either; both Ru
 refuse it and the browser engine runs it (`zyquality/reject/modules/export_block_at_file_level_m.zy`).
 The misleading diagnostic teaches the invalid form.
 
-**Open decision.** Three candidates, none implemented consistently:
+**The rule: a module declares what it exports.** Omitting `#>` is a semantic error, E014:
 
-1. *Export everything* (what the tree-walker does) makes `#>` decorative and privacy opt-in —
+```
+error: E014: module 'm' does not declare what it exports
+  --> m.zy:1:1
+  = help: add '#> { … }' inside the module block, naming what it exports — an empty
+          '#> { }' says it exports nothing
+```
+
+The two rejected candidates and why:
+
+1. *Export everything* (what the tree-walker did) makes `#>` decorative and privacy opt-in —
    a module author who forgets the block leaks internals silently, which contradicts what the
    grammar says the symbol is for.
 2. *Export nothing* (VM and JS) leaves the module silently useless — the same shape as the
    defects v0.0.9 has been closing (the discarded consulting `$`, the `$~` that assigned and
    dropped its value): doing nothing without saying so.
-3. *Make omission a semantic error* — "a module must declare its public surface". Fail-closed,
-   consistent with the rest of the language, and free today because nothing omits it.
 
-Whichever is chosen, the rule belongs in `zymbol-semantic` so that `check` sees it and all
-three engines inherit it, and the VM/JS message must name the real cause. Found 2026-08-31.
+Fail-closed was the third, and it was **free**: of every module in `zyquality/corpus/` and in
+the six LDV applications, none omitted the block, so no existing code had to change.
+
+**Where it lives.** `zymbol-semantic/src/modules.rs` — `build_export_table` refuses a
+`ModuleDecl` with no export block, so `zymbol check` reports it and both Rust engines inherit
+it through the pre-run module pass (`module_decl_errors` in the CLI, which now carries E001
+and E014). The browser engine has the same rule in `moduleDeclErrorsFor`, beside its E001.
+Corpus: `reject/modules/04_module_without_export_block{,_m}.zy` for the refusal and
+`corpus/modules_scope/exporta_nada.zy` for the empty block that says "nothing", out loud.
+
+**An empty surface is sayable.** `#> { }` loads, holds its state, and exports nothing — which
+is what the omission used to mean in two engines of three, except that now it is written
+rather than guessed. Without it the rule would forbid a legitimate module: a namespace, or one
+mid-refactor whose surface is not decided yet.
+
+**The other half went with it.** The VM and JS message named the wrong cause — it said the
+*function* was not exported, so a reader added `#> { … }` where they could, at file level,
+outside the module block. That form is not in the grammar either, and the browser engine ran
+it while both Rust parsers refused it with `unexpected token: ExportBlock` — the token, not the
+rule. All three now say **"an export block belongs inside a module block"**, with
+`help: move this '#>' inside '# name { … }'`, and refuse it once rather than cascading
+(`reject/modules/export_block_at_file_level_m.zy`). Found 2026-08-31, decided 2026-09-04.
 
 ---
 
