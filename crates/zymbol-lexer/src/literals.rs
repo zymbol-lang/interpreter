@@ -23,6 +23,30 @@ pub enum StringPart {
 }
 
 impl Lexer {
+    /// Skip to the end of a string literal that has already been refused, so the
+    /// scanner resumes AFTER it.
+    ///
+    /// A bad literal is one defect, and it used to be reported as three: the
+    /// lexer returned from inside the quotes, so the rest of the literal was
+    /// read as ordinary source — the `}` became "unmatched '}' in string" and
+    /// the closing `"` opened a new string that never ended. `js::decode("{…}")`
+    /// printed a cascade of three errors here and one in the browser engine
+    /// (DM-10). Only the first of the three was about anything the program did.
+    fn skip_rest_of_string(&mut self) {
+        while !self.is_at_end() && self.current_char() != '"' {
+            if self.current_char() == '\\' {
+                self.advance();
+                if self.is_at_end() {
+                    break;
+                }
+            }
+            self.advance();
+        }
+        if !self.is_at_end() {
+            self.advance(); // the closing quote
+        }
+    }
+
     /// Lex a string literal
     pub(crate) fn lex_string(&mut self, start: Position) -> Token {
         self.advance(); // consume opening "
@@ -105,6 +129,7 @@ impl Lexer {
                                 .with_span(span)
                                 .with_help("interpolation must be {identifier} — use \\{ for a literal brace"),
                         );
+                        self.skip_rest_of_string();
                         return Token::new(TokenKind::Error("invalid interpolation".to_string()), span);
                     }
                 }
@@ -116,6 +141,7 @@ impl Lexer {
                             .with_span(span)
                             .with_help("provide a variable name: {varname}"),
                     );
+                    self.skip_rest_of_string();
                     return Token::new(TokenKind::Error("empty interpolation".to_string()), span);
                 }
 
@@ -135,6 +161,7 @@ impl Lexer {
                         .with_span(span)
                         .with_help("the escape is symmetric — write \\} for a literal brace, as \\{ is for the opening one"),
                 );
+                self.skip_rest_of_string();
                 return Token::new(TokenKind::Error("unmatched close brace".to_string()), span);
             } else {
                 current_text.push(ch);
