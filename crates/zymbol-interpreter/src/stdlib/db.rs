@@ -128,7 +128,7 @@ fn take_string(v: Option<Value>, what: &str, span: Span) -> Result<String> {
 fn take_params(v: Option<Value>, span: Span) -> Result<Vec<Value>> {
     match v {
         None => Ok(Vec::new()),
-        Some(Value::Tuple(items)) | Some(Value::Array(items)) => Ok(items),
+        Some(Value::Tuple(items)) | Some(Value::Array(items)) => Ok(crate::own_elements(items)),
         Some(
             s @ (Value::Int(_)
             | Value::Float(_)
@@ -247,7 +247,7 @@ fn rows_from_cursor(
             };
             fields.push((names[idx as usize].clone(), value));
         }
-        rows.push(Value::NamedTuple(fields));
+        rows.push(Value::named_tuple(fields));
         if only_first {
             break;
         }
@@ -337,11 +337,11 @@ fn run_query(
         };
         match res {
             Ok(Some(mut cursor)) => match rows_from_cursor(&mut cursor, only_first, single_col) {
-                Ok(rows) => Value::Array(rows),
+                Ok(rows) => Value::array(rows),
                 Err(e) => e,
             },
             // No result set (e.g. a statement that returns nothing): empty.
-            Ok(None) => Value::Array(Vec::new()),
+            Ok(None) => Value::array(Vec::new()),
             Err(e) => odbc_err(e),
         }
     })
@@ -363,7 +363,7 @@ fn db_query_one(args: Vec<Value>, span: Span) -> Result<Value> {
     let sql = take_string(it.next(), "sql", span)?;
     let bound = bind_params(take_params(it.next(), span)?, span)?;
     Ok(match run_query(&name, &sql, bound, true, false) {
-        Value::Array(mut rows) => rows.drain(..).next().unwrap_or_else(no_rows),
+        Value::Array(rows) => crate::own_elements(rows).into_iter().next().unwrap_or_else(no_rows),
         other => other, // soft error passes through
     })
 }
@@ -375,9 +375,9 @@ fn db_query_value(args: Vec<Value>, span: Span) -> Result<Value> {
     let sql = take_string(it.next(), "sql", span)?;
     let bound = bind_params(take_params(it.next(), span)?, span)?;
     Ok(match run_query(&name, &sql, bound, true, true) {
-        Value::Array(mut rows) => match rows.drain(..).next() {
-            Some(Value::NamedTuple(mut fields)) => {
-                fields.drain(..).next().map(|(_, v)| v).unwrap_or(Value::Unit)
+        Value::Array(rows) => match crate::own_elements(rows).into_iter().next() {
+            Some(Value::NamedTuple(fields)) => {
+                crate::own_fields(fields).into_iter().next().map(|(_, v)| v).unwrap_or(Value::Unit)
             }
             _ => Value::Unit,
         },
@@ -396,10 +396,10 @@ fn db_tx(args: Vec<Value>, span: Span) -> Result<Value> {
 
     // Validate + pre-bind every statement before opening the transaction.
     let mut prepared: Vec<(String, Vec<Box<dyn InputParameter>>)> = Vec::with_capacity(statements.len());
-    for st in statements {
+    for st in crate::own_elements(statements) {
         match st {
             Value::Tuple(pair) if pair.len() == 2 => {
-                let mut p = pair.into_iter();
+                let mut p = crate::own_elements(pair).into_iter();
                 let sql = match p.next() {
                     Some(Value::String(s)) => s,
                     _ => return Err(type_err("db::tx: each statement is (String sql, Array params)", span)),

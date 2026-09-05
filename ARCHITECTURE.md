@@ -544,13 +544,26 @@ and per scope, and the microbenchmarks are shallow:
 
 | Real workload (Chaturanga) | Tree-walker | VM | VM speedup |
 |---------------|:-----------:|:--:|:----------:|
-| `perft(3)`, 4448 nodes | 6.11 s | 0.146 s | **42x** |
-| full alpha-beta suite | 43.5 s | 0.949 s | **46x** |
+| `perft(3)`, 4448 nodes | 1.94 s | 0.171 s | **11x** |
+| full alpha-beta suite | 12.78 s | 0.989 s | **13x** |
 
-The go engine (囲碁) reported 8–14× on its own workload; alpha-beta search sits
-higher still, because it is recursion with output parameters and array indexing
-in the innermost loop — exactly where the tree-walker pays most, once per frame
-and once per scope. Quote the workload, not a bare multiplier.
+The go engine (囲碁) reports 4.1× at 19×19 on its seeded self-play game;
+alpha-beta search sits higher still, because it is recursion with output
+parameters and array indexing in the innermost loop — exactly where the
+tree-walker pays most, once per frame and once per scope. Quote the workload,
+not a bare multiplier.
+
+**Those two rows read 6.11 s / 42× and 43.5 s / 46× until 2026-09-02**, and the
+go row read 8–14×. The VM did not change. The tree-walker copied aggregates it
+had no reason to copy, in two places, and both are now closed (zy-GO's HLZ-012
+and HLZ-014): reading one element cloned the whole collection, and so did handing
+it to a function. `Value` now holds `Array`/`Tuple`/`NamedTuple` behind an `Rc`
+and copies **when written** (`Rc::make_mut`, 32 sites) — the model this VM has
+had all along, ported to the other engine. The tree-walker came out 3.4× faster
+on this workload with nothing on the VM side moving at all.
+
+A ratio between two engines measures both of them, on the day it was taken. Take
+it again before quoting it.
 
 An earlier revision of this table reported Collections as ~14 s under the
 tree-walker (a HashMap-clone-per-scope limitation). That was fixed; it is 71 ms

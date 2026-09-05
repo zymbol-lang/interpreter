@@ -42,7 +42,7 @@ fn parse_headers(arg: Option<Value>, fname: &str, span: Span) -> Result<Vec<(Str
     match value {
         Value::Array(items) => {
             let mut out = Vec::with_capacity(items.len());
-            for item in items {
+            for item in crate::own_elements(items) {
                 match item {
                     Value::Tuple(pair) if pair.len() == 2 => match (&pair[0], &pair[1]) {
                         (Value::String(k), Value::String(v)) => out.push((k.clone(), v.clone())),

@@ -230,6 +230,26 @@ pub(crate) fn type_symbol_of(value: &Value) -> String {
 }
 
 /// Runtime value
+///
+/// The three aggregates sit behind an `Rc` and are **copied when written**, not
+/// when passed (zy-GO's HLZ-014). Binding one to a name, handing it to a
+/// function or returning it shares the allocation; the first writer calls
+/// `Rc::make_mut`, which clones only if somebody else is still holding it.
+///
+/// The semantics do not change and must not: a plain parameter is a COPY — the
+/// body may reassign it and may edit it with `$~`, and neither reaches the
+/// caller. Sharing is invisible precisely because every write detaches first.
+///
+/// This is the register VM's value model, ported (`zymbol-vm/src/lib.rs`): the
+/// two engines are compared file by file on every `zyq consensus`, and the one
+/// that copied on every call was the tree-walker alone. The browser engine
+/// reaches the same place by a third route — it shares the JavaScript array and
+/// rebuilds it on write (`deepUpdateValue`).
+///
+/// `String` is deliberately NOT behind an `Rc` here. The VM has `ZyStr` for it
+/// (7 bytes inline, `Rc<String>` above that), which is unsafe code earning its
+/// keep in a bytecode loop; a string clone is one allocation, not one per
+/// element, so the tree-walker pays a bounded price and keeps the simple type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     String(String),
@@ -237,9 +257,9 @@ pub enum Value {
     Float(f64),
     Char(char),
     Bool(bool),
-    Array(Vec<Value>),
-    Tuple(Vec<Value>),
-    NamedTuple(Vec<(String, Value)>),  // (field_name, value) pairs
+    Array(Rc<Vec<Value>>),
+    Tuple(Rc<Vec<Value>>),
+    NamedTuple(Rc<Vec<(String, Value)>>),  // (field_name, value) pairs
     Function(FunctionValue),
     /// Error value for try-catch error handling
     Error(ErrorValue),
@@ -333,7 +353,43 @@ impl PartialEq for FunctionValue {
     }
 }
 
+/// Take the elements out of a shared aggregate: free when this was the last
+/// holder, a copy when it was not.
+///
+/// The read-side twin of `Rc::make_mut`. Code that consumes a collection —
+/// `$>` mapping over it, `json::encode` walking it — wants owned values, and
+/// this hands them over without a copy whenever the value was a temporary.
+#[inline]
+pub(crate) fn own_elements(rc: Rc<Vec<Value>>) -> Vec<Value> {
+    Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone())
+}
+
+/// `own_elements` for a dictionary's `(key, value)` pairs.
+#[inline]
+pub(crate) fn own_fields(rc: Rc<Vec<(String, Value)>>) -> Vec<(String, Value)> {
+    Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone())
+}
+
 impl Value {
+    /// Build an array. The `Rc` is an implementation detail of how a value is
+    /// SHARED, so nothing outside this module should have to spell it.
+    #[inline]
+    pub fn array(elements: Vec<Value>) -> Value {
+        Value::Array(Rc::new(elements))
+    }
+
+    /// Build a positional tuple.
+    #[inline]
+    pub fn tuple(elements: Vec<Value>) -> Value {
+        Value::Tuple(Rc::new(elements))
+    }
+
+    /// Build a dictionary (named tuple), from its `(key, value)` pairs in order.
+    #[inline]
+    pub fn named_tuple(fields: Vec<(String, Value)>) -> Value {
+        Value::NamedTuple(Rc::new(fields))
+    }
+
     /// Convert value to displayable string, in ASCII numerals.
     ///
     /// Callers with access to the active numeral mode should use
@@ -1626,7 +1682,7 @@ impl<W: Write> Interpreter<W> {
                 // For now, we'll need to pass CLI args through the interpreter context
                 // This will be implemented when we add CLI args support to the interpreter
                 let args_array = self.cli_args.clone().unwrap_or_default();
-                self.set_variable(&cli_args.variable_name, Value::Array(args_array));
+                self.set_variable(&cli_args.variable_name, Value::array(args_array));
                 Ok(())
             }
             Statement::LifetimeEnd(lifetime_end) => {
@@ -1693,7 +1749,7 @@ impl<W: Write> Interpreter<W> {
             // A mismatch is an error rather than a silent reinterpretation (REFERENCE.md L32).
             DestructurePattern::Array(items) => {
                 let elements: Vec<Value> = match &rhs {
-                    Value::Array(arr) => arr.clone(),
+                    Value::Array(arr) => (**arr).clone(),
                     _ => return Err(RuntimeError::Generic {
                         message: format!(
                             "array pattern '[ … ]' requires an array, got {}",
@@ -1706,7 +1762,7 @@ impl<W: Write> Interpreter<W> {
             }
             DestructurePattern::Positional(items) => {
                 let elements: Vec<Value> = match &rhs {
-                    Value::Tuple(tup) => tup.clone(),
+                    Value::Tuple(tup) => (**tup).clone(),
                     _ => return Err(RuntimeError::Generic {
                         message: format!(
                             "tuple pattern '( … )' requires a tuple, got {}",
@@ -1760,7 +1816,7 @@ impl<W: Write> Interpreter<W> {
     /// An explicit `*rest` opts out of absorption: it already governs how the values are
     /// shared out, and its binding is always a collection, even of one element or none.
     fn bind_positional(&mut self, items: &[DestructureItem], elements: Vec<Value>, is_tuple: bool) {
-        let wrap = |vals: Vec<Value>| if is_tuple { Value::Tuple(vals) } else { Value::Array(vals) };
+        let wrap = |vals: Vec<Value>| if is_tuple { Value::tuple(vals) } else { Value::array(vals) };
         let has_rest = items.iter().any(|i| matches!(i, DestructureItem::Rest(_)));
         let mut idx = 0usize;
 

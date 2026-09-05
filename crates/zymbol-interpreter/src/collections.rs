@@ -16,7 +16,7 @@ impl<W: Write> Interpreter<W> {
         for expr in &arr.elements {
             elements.push(self.eval_expr(expr)?);
         }
-        Ok(Value::Array(elements))
+        Ok(Value::array(elements))
     }
 
     /// Evaluate tuple expression: (expr1, expr2, ...)
@@ -25,7 +25,7 @@ impl<W: Write> Interpreter<W> {
         for expr in &tuple.elements {
             elements.push(self.eval_expr(expr)?);
         }
-        Ok(Value::Tuple(elements))
+        Ok(Value::tuple(elements))
     }
 
     /// Evaluate named tuple expression: (name: expr, name2: expr2, ...)
@@ -35,7 +35,7 @@ impl<W: Write> Interpreter<W> {
             let value = self.eval_expr(expr)?;
             fields.push((name.clone(), value));
         }
-        Ok(Value::NamedTuple(fields))
+        Ok(Value::named_tuple(fields))
     }
 }
 

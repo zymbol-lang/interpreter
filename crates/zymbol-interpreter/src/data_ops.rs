@@ -195,7 +195,7 @@ impl<W: Write> Interpreter<W> {
         };
 
         // Return tuple: (type_symbol, count, value)
-        Ok(Value::Tuple(vec![
+        Ok(Value::tuple(vec![
             Value::String(type_symbol),
             Value::Int(count),
             value,

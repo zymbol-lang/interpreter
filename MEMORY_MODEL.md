@@ -57,14 +57,30 @@ The tree-walker holds all program state inside the `Interpreter` struct
 | `import_aliases: HashMap<String, PathBuf>` | Alias → module path. Call-scoped (saved/restored per call). |
 | `dead_variables: HashSet<String>` | Names destroyed by `\` (use-after-destruction detection). **Global, not call-scoped** — see MM-3. |
 
-Values have **value semantics**: assignment, argument passing, and capture copy the
-`Value` (with fast paths that mutate in place when the interpreter can prove the target
-is the same variable, e.g. `arr = arr$+ x`). There are no references or aliasing at the
-language level; the only shared-identity structure is `LoadedModule`.
+Values have **value semantics**: assignment, argument passing, and capture give the
+callee a copy. There are no references or aliasing at the language level; the only
+shared-identity structure is `LoadedModule`.
 
-Performance machinery that is *semantically neutral* (verified): scope-map pooling
-(B10/B13), scope elision for blocks that declare no variables (QW7 in `if_stmt.rs:16`,
-QW16 in `loops.rs:36`), self-assign fast paths (B3/B12), and move-on-return (MoveOrClone).
+**How that copy is paid for is not part of the semantics.** Since v0.0.9 the three
+aggregates are `Rc<Vec<…>>` and are **copied when written, not when passed**:
+binding one to a name, handing it to a function or returning it shares the
+allocation, and the first writer calls `Rc::make_mut`, which clones only if
+somebody else is still holding it. Sharing is invisible precisely because every
+write detaches first — the 14-case battery in zy-GO's HLZ-014 checks each door
+(reassign the parameter, `$~` inside the callee, `b = a` then write, an array
+inside an array, `~` and `<~` marks, the dictionary in both spellings) and the
+three engines answer alike. This is the register VM's model, ported; the browser
+engine reaches the same place by sharing the JavaScript array and rebuilding it
+on write.
+
+`String` is deliberately not shared this way in the tree-walker: a string clone
+is one allocation, not one per element, and the VM's `ZyStr` is unsafe code that
+earns its keep in a bytecode loop and not here.
+
+Performance machinery that is *semantically neutral* (verified): copy-on-write for
+the aggregates (HLZ-012/HLZ-014), scope-map pooling (B10/B13), scope elision for
+blocks that declare no variables (QW7 in `if_stmt.rs:16`, QW16 in `loops.rs:36`),
+self-assign fast paths (B3/B12), and move-on-return (MoveOrClone).
 
 ---
 

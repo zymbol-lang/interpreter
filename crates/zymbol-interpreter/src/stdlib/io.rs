@@ -114,7 +114,7 @@ fn io_list(args: Vec<Value>, span: Span) -> Result<Value> {
                 for entry in entries.flatten() {
                     names.push(Value::String(entry.file_name().to_string_lossy().into_owned()));
                 }
-                Ok(Value::Array(names))
+                Ok(Value::array(names))
             }
             Err(e) => Ok(Value::Error(ErrorValue::io(e.to_string()))),
         },
