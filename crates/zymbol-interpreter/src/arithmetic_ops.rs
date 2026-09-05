@@ -262,10 +262,10 @@ impl<W: Write> Interpreter<W> {
             (Value::Float(a), Value::Int(b)) => *a == *b as f64,
             (Value::Char(a), Value::Char(b)) => a == b,
             (Value::Array(a), Value::Array(b)) => {
-                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| Self::values_equal_static(x, y))
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| Self::values_equal_static(x, y))
             }
             (Value::Tuple(a), Value::Tuple(b)) => {
-                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| Self::values_equal_static(x, y))
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| Self::values_equal_static(x, y))
             }
             // Two dictionaries are equal when they hold the same keys with the
             // same values (DM-22). They compared as `#0` here while the browser

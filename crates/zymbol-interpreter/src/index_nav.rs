@@ -52,7 +52,7 @@ impl<W: Write> Interpreter<W> {
             result.extend(values);
         }
 
-        Ok(Value::Array(result))
+        Ok(Value::array(result))
     }
 
     // ── Structured extraction ─────────────────────────────────────────────────
@@ -64,10 +64,10 @@ impl<W: Write> Interpreter<W> {
 
         for group in &se.groups {
             let sub = self.eval_extract_group(base.clone(), group, se.span)?;
-            groups_out.push(Value::Array(sub));
+            groups_out.push(Value::array(sub));
         }
 
-        Ok(Value::Array(groups_out))
+        Ok(Value::array(groups_out))
     }
 
     fn eval_extract_group(

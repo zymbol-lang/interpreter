@@ -554,16 +554,23 @@ wider, because the tree-walker's cost is per call frame and per scope:
 
 | Real workload | Tree-walker | VM | VM speedup |
 |---------------|:-----------:|:--:|:----------:|
-| zy-GO, full 19x19 game | 6m40s | **49.8s** | 8-14x |
-| Chaturanga, `perft(3)`, 4448 nodes | 6.11s | **0.146s** | 42x |
-| Chaturanga, full alpha-beta suite | 43.5s | **0.949s** | 46x |
+| zy-GO, 19x19 game from a fixed seed | 15.5s | **3.78s** | 4.1x |
+| Chaturanga, `perft(3)`, 4448 nodes | 1.94s | **0.171s** | 11x |
+| Chaturanga, full alpha-beta suite | 12.78s | **0.989s** | 13x |
 
 (The go engine is [囲碁](https://github.com/zymbol-lang/zy-GO); the chess-ancestor
 engine is चतुरङ्गम्.)
 
-**Quote the workload, not a single number.** "~4×" circulated for a long time as
-if it were the language's speedup; it is the low end of the microbenchmarks and
-roughly a tenth of what a search-shaped program sees.
+**Quote the workload, not a single number** — and take the measurement, do not
+copy it. Those three rows read 8–14×, 42× and 46× until 2026-09-02, and the VM
+did not change: the tree-walker stopped cloning a whole collection to read one
+element of it, and then stopped cloning it to hand it to a function (zy-GO's
+HLZ-012 and HLZ-014). It came out 2.3× faster on the go game and 3.4× on the
+search. A ratio between two engines measures both.
+
+"~4×" circulated for a long time as if it were the language's speedup; it is the
+low end of the microbenchmarks and a fraction of what a search-shaped program
+sees.
 
 ---
 
@@ -1059,10 +1066,12 @@ Its log held five entries, **all closed against v0.0.9**:
   process — which is the useful behaviour, and the one the game depends on. The guide says
   so now, and the technique is written up as a third i18n mechanism in
   [USERAPPI18N.md](./USERAPPI18N.md) §14, traps included.
-- **The VM is 42–46× the tree-walker on this workload**, not the ~4× that had been quoted
+- **The VM is 14–17× the tree-walker on this workload**, not the ~4× that had been quoted
   for years. A search is recursion with output parameters and array indexing in the
   innermost loop, which is where the tree-walker pays per frame. Every performance figure
-  in this repository was re-measured; see [Performance](#performance).
+  in this repository was re-measured; see [Performance](#performance). It read 42–46× when
+  first measured: the tree-walker cloned a collection to read one element of it (zy-GO's
+  HLZ-012), and closing that made the slower engine 2.7× faster on this same workload.
 
 ```zymbol
 // मूल/मतिः.zy — negamax with alpha-beta, scored from the mover's side.

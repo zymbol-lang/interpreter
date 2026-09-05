@@ -81,7 +81,7 @@ fn trailing_zone(args: &[Value], from: usize) -> std::result::Result<Option<&str
 /// decide, because it is a dictionary's iteration order and both engines have
 /// to walk it the same way.
 fn parts_value(p: &t::Parts) -> Value {
-    Value::NamedTuple(
+    Value::named_tuple(
         t::parts_fields(p)
             .into_iter()
             .map(|(k, v)| (k.to_string(), Value::Int(v)))

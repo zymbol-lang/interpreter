@@ -10,6 +10,7 @@
 use zymbol_ast::{ConcatBuildExpr, StringRepeatExpr, StringReplaceExpr, StringSplitExpr};
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
+use std::rc::Rc;
 
 impl<W: Write> Interpreter<W> {
     /// Evaluate string repeat operator: string$* n → string repeated n times
@@ -175,7 +176,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(mut arr) => {
                 for item in &op.items {
                     let v = self.eval_expr(item)?;
-                    arr.push(v);
+                    Rc::make_mut(&mut arr).push(v);
                 }
                 Ok(Value::Array(arr))
             }
@@ -208,6 +209,6 @@ impl<W: Write> Interpreter<W> {
             }),
         };
 
-        Ok(Value::Array(parts))
+        Ok(Value::array(parts))
     }
 }

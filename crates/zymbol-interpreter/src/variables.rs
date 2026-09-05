@@ -10,6 +10,7 @@ use zymbol_common::num;
 use zymbol_common::BinaryOp;
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
+use std::rc::Rc;
 
 /// The refusal of an in-place edit on a positional tuple, in one place.
 ///
@@ -47,7 +48,7 @@ fn hot_neutral_from_value(value: &Expr, name: &str) -> Value {
         Expr::CollectionAppend(op) => {
             if let Expr::Identifier(ident) = op.collection.unwrap_group() {
                 if ident.name == name {
-                    return Value::Array(Vec::new());
+                    return Value::array(Vec::new());
                 }
             }
             Value::Int(0)
@@ -152,7 +153,7 @@ impl<W: Write> Interpreter<W> {
                             let neutral = if matches!(element, Value::Char(_)) {
                                 Value::String(String::new())
                             } else {
-                                Value::Array(Vec::new())
+                                Value::array(Vec::new())
                             };
                             if ident.pre_hot {
                                 self.set_above_nearest_loop(&assign.name, neutral);
@@ -162,7 +163,7 @@ impl<W: Write> Interpreter<W> {
                         }
                         // Array $+ Value
                         if let Some(Value::Array(arr)) = self.get_variable_mut(&assign.name) {
-                            arr.push(element);
+                            Rc::make_mut(arr).push(element);
                             return Ok(());
                         }
                         // String $+ Char
@@ -185,7 +186,7 @@ impl<W: Write> Interpreter<W> {
                                 if let Some(Value::Array(arr)) = self.get_variable_mut(&assign.name) {
                                     let idx = (*i - 1) as usize;
                                     if idx < arr.len() {
-                                        arr.remove(idx);
+                                        Rc::make_mut(arr).remove(idx);
                                         return Ok(());
                                     }
                                 }
@@ -222,7 +223,7 @@ impl<W: Write> Interpreter<W> {
                                     if let Some(Value::Array(arr)) = self.get_variable_mut(&assign.name) {
                                         let idx_pos = (*i - 1) as usize;
                                         if idx_pos < arr.len() {
-                                            arr[idx_pos] = new_value;
+                                            Rc::make_mut(arr)[idx_pos] = new_value;
                                             return Ok(());
                                         }
                                     }

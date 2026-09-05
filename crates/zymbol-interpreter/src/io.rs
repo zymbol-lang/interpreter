@@ -148,7 +148,7 @@ impl<W: Write> Interpreter<W> {
     /// parity suite never saw it until it ran inside a container.
     pub(crate) fn eval_terminal_size(&mut self, _span: Span) -> Result<Value> {
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-        Ok(Value::Tuple(vec![Value::Int(rows as i64), Value::Int(cols as i64)]))
+        Ok(Value::tuple(vec![Value::Int(rows as i64), Value::Int(cols as i64)]))
     }
 
     /// Blocking / non-blocking key input: <<| var  or  <<|? var

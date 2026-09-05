@@ -24,6 +24,7 @@ use zymbol_ast::{
 };
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
+use std::rc::Rc;
 
 /// The refusal of a positional address on a dictionary, in one place.
 ///
@@ -75,11 +76,11 @@ impl<W: Write> Interpreter<W> {
 
         match collection {
             Value::Array(mut arr) => {
-                arr.push(element);
+                Rc::make_mut(&mut arr).push(element);
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
-                tup.push(element);
+                Rc::make_mut(&mut tup).push(element);
                 Ok(Value::Tuple(tup))
             }
             Value::NamedTuple(_) => Err(RuntimeError::Generic {
@@ -131,7 +132,7 @@ impl<W: Write> Interpreter<W> {
                     });
                 }
             }
-            return Ok(Value::NamedTuple(out));
+            return Ok(Value::named_tuple(out));
         }
 
         if let (Value::NamedTuple(fields), Value::Int(_)) = (&collection, &index_value) {
@@ -171,7 +172,7 @@ impl<W: Write> Interpreter<W> {
                         span: op.span,
                     });
                 }
-                arr.remove(i as usize);
+                Rc::make_mut(&mut arr).remove(i as usize);
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
@@ -192,7 +193,7 @@ impl<W: Write> Interpreter<W> {
                         span: op.span,
                     });
                 }
-                tup.remove(i as usize);
+                Rc::make_mut(&mut tup).remove(i as usize);
                 Ok(Value::Tuple(tup))
             }
             Value::NamedTuple(mut fields) => {
@@ -213,7 +214,7 @@ impl<W: Write> Interpreter<W> {
                         span: op.span,
                     });
                 }
-                fields.remove(i as usize);
+                Rc::make_mut(&mut fields).remove(i as usize);
                 Ok(Value::NamedTuple(fields))
             }
             Value::String(s) => {
@@ -407,7 +408,7 @@ impl<W: Write> Interpreter<W> {
                 };
                 let len = arr.len();
                 let i = resolve_int(index, len, op.span, "array")?;
-                arr[i] = new_value;
+                Rc::make_mut(&mut arr)[i] = new_value;
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
@@ -444,7 +445,7 @@ impl<W: Write> Interpreter<W> {
                     i
                 };
                 // Create a new tuple with the value updated (immutability)
-                tup[i] = new_value;
+                Rc::make_mut(&mut tup)[i] = new_value;
                 Ok(Value::Tuple(tup))
             }
             Value::NamedTuple(mut fields) => {
@@ -462,7 +463,7 @@ impl<W: Write> Interpreter<W> {
                         span: op.span,
                     }),
                     Value::String(name) => {
-                        for (field_name, field_value) in &mut fields {
+                        for (field_name, field_value) in std::rc::Rc::make_mut(&mut fields) {
                             if *field_name == name {
                                 *field_value = new_value;
                                 return Ok(Value::NamedTuple(fields));
@@ -481,7 +482,7 @@ impl<W: Write> Interpreter<W> {
                         //
                         // Without this, a JSON built piece by piece — the normal
                         // case — could not be built at all.
-                        fields.push((name.clone(), new_value));
+                        Rc::make_mut(&mut fields).push((name.clone(), new_value));
                         Ok(Value::NamedTuple(fields))
                     }
                     _ => Err(RuntimeError::Generic {
@@ -603,11 +604,11 @@ impl<W: Write> Interpreter<W> {
         match collection {
             Value::Array(arr) => {
                 let slice = arr[(start as usize)..(end as usize)].to_vec();
-                Ok(Value::Array(slice))
+                Ok(Value::array(slice))
             }
             Value::Tuple(tup) => {
                 let slice = tup[(start as usize)..(end as usize)].to_vec();
-                Ok(Value::Tuple(slice))
+                Ok(Value::tuple(slice))
             }
             // No key-based replacement, and it does not get one: "the first
             // two keys" is not a question a dictionary should answer, which is
@@ -646,7 +647,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(arr) => {
                 let mut result = Vec::new();
 
-                for element in arr {
+                for element in crate::own_elements(arr) {
                     // Call lambda with element
                     let transformed = self.eval_lambda_call(
                         func.clone(),
@@ -656,7 +657,7 @@ impl<W: Write> Interpreter<W> {
                     result.push(transformed);
                 }
 
-                Ok(Value::Array(result))
+                Ok(Value::array(result))
             }
             _ => Err(RuntimeError::Generic {
                 message: format!("map requires array, got {:?}", collection),
@@ -684,7 +685,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(arr) => {
                 let mut result = Vec::new();
 
-                for element in arr {
+                for element in crate::own_elements(arr) {
                     // Call lambda with element
                     let keep = self.eval_lambda_call(
                         func.clone(),
@@ -705,7 +706,7 @@ impl<W: Write> Interpreter<W> {
                     }
                 }
 
-                Ok(Value::Array(result))
+                Ok(Value::array(result))
             }
             _ => Err(RuntimeError::Generic {
                 message: format!("filter requires array, got {:?}", collection),
@@ -745,7 +746,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(arr) => {
                 let mut accumulator = initial;
 
-                for element in arr {
+                for element in crate::own_elements(arr) {
                     // Call lambda with (accumulator, element)
                     accumulator = self.eval_lambda_call(
                         func.clone(),
@@ -793,17 +794,17 @@ impl<W: Write> Interpreter<W> {
                             )?;
                             let a_before_b = matches!(keep, Value::Bool(true));
                             if !a_before_b {
-                                items.swap(j, j + 1);
+                                Rc::make_mut(&mut items).swap(j, j + 1);
                             }
                         }
                     }
                 } else {
                     // Natural order
-                    items.sort_by(|a, b| {
+                    Rc::make_mut(&mut items).sort_by(|a, b| {
                         natural_cmp(a, b).unwrap_or(std::cmp::Ordering::Equal)
                     });
                     if !op.ascending {
-                        items.reverse();
+                        Rc::make_mut(&mut items).reverse();
                     }
                 }
 
@@ -845,7 +846,7 @@ impl<W: Write> Interpreter<W> {
                         span: op.span,
                     });
                 }
-                arr.insert(i, element);
+                Rc::make_mut(&mut arr).insert(i, element);
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
@@ -855,7 +856,7 @@ impl<W: Write> Interpreter<W> {
                         span: op.span,
                     });
                 }
-                tup.insert(i, element);
+                Rc::make_mut(&mut tup).insert(i, element);
                 Ok(Value::Tuple(tup))
             }
             Value::NamedTuple(_) => Err(RuntimeError::Generic {
@@ -901,19 +902,19 @@ impl<W: Write> Interpreter<W> {
         match collection {
             Value::Array(mut arr) => {
                 if let Some(pos) = arr.iter().position(|item| self.values_equal(item, &value)) {
-                    arr.remove(pos);
+                    Rc::make_mut(&mut arr).remove(pos);
                 }
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
                 if let Some(pos) = tup.iter().position(|item| self.values_equal(item, &value)) {
-                    tup.remove(pos);
+                    Rc::make_mut(&mut tup).remove(pos);
                 }
                 Ok(Value::Tuple(tup))
             }
             Value::NamedTuple(mut fields) => {
                 if let Some(pos) = fields.iter().position(|(_, v)| self.values_equal(v, &value)) {
-                    fields.remove(pos);
+                    Rc::make_mut(&mut fields).remove(pos);
                 }
                 Ok(Value::NamedTuple(fields))
             }
@@ -963,22 +964,22 @@ impl<W: Write> Interpreter<W> {
 
         match collection {
             Value::Array(arr) => {
-                let result: Vec<Value> = arr.into_iter()
+                let result: Vec<Value> = crate::own_elements(arr).into_iter()
                     .filter(|item| !self.values_equal(item, &value))
                     .collect();
-                Ok(Value::Array(result))
+                Ok(Value::array(result))
             }
             Value::Tuple(tup) => {
-                let result: Vec<Value> = tup.into_iter()
+                let result: Vec<Value> = crate::own_elements(tup).into_iter()
                     .filter(|item| !self.values_equal(item, &value))
                     .collect();
-                Ok(Value::Tuple(result))
+                Ok(Value::tuple(result))
             }
             Value::NamedTuple(fields) => {
-                let result: Vec<(String, Value)> = fields.into_iter()
+                let result: Vec<(String, Value)> = crate::own_fields(fields).into_iter()
                     .filter(|(_, v)| !self.values_equal(v, &value))
                     .collect();
-                Ok(Value::NamedTuple(result))
+                Ok(Value::named_tuple(result))
             }
             Value::String(s) => {
                 let result = match value {
@@ -1078,8 +1079,8 @@ impl<W: Write> Interpreter<W> {
         }
 
         match collection {
-            Value::Array(mut arr) => { arr.drain(start..end); Ok(Value::Array(arr)) }
-            Value::Tuple(mut tup) => { tup.drain(start..end); Ok(Value::Tuple(tup)) }
+            Value::Array(mut arr) => { Rc::make_mut(&mut arr).drain(start..end); Ok(Value::Array(arr)) }
+            Value::Tuple(mut tup) => { Rc::make_mut(&mut tup).drain(start..end); Ok(Value::Tuple(tup)) }
             // Removing a RUN of keys by position: same family, same refusal.
             Value::NamedTuple(fields) => Err(RuntimeError::Generic {
                 message: dict_not_positional("d$-[a..b]", fields.first().map(|(k, _)| k.as_str())),
@@ -1108,7 +1109,7 @@ impl<W: Write> Interpreter<W> {
                     .filter(|(_, item)| self.values_equal(item, &value))
                     .map(|(i, _)| Value::Int((i + 1) as i64))
                     .collect();
-                Ok(Value::Array(indices))
+                Ok(Value::array(indices))
             }
             Value::Tuple(ref tup) => {
                 let indices: Vec<Value> = tup.iter()
@@ -1116,7 +1117,7 @@ impl<W: Write> Interpreter<W> {
                     .filter(|(_, item)| self.values_equal(item, &value))
                     .map(|(i, _)| Value::Int((i + 1) as i64))
                     .collect();
-                Ok(Value::Array(indices))
+                Ok(Value::array(indices))
             }
             Value::String(ref s) => {
                 let string_chars: Vec<char> = s.chars().collect();
@@ -1124,7 +1125,7 @@ impl<W: Write> Interpreter<W> {
                     Value::String(ref pattern) => {
                         let pattern_chars: Vec<char> = pattern.chars().collect();
                         if pattern_chars.is_empty() {
-                            return Ok(Value::Array(vec![]));
+                            return Ok(Value::array(vec![]));
                         }
                         let mut positions = Vec::new();
                         for i in 0..=(string_chars.len().saturating_sub(pattern_chars.len())) {
@@ -1151,7 +1152,7 @@ impl<W: Write> Interpreter<W> {
                         })
                     }
                 };
-                Ok(Value::Array(positions))
+                Ok(Value::array(positions))
             }
             _ => Err(RuntimeError::Generic {
                 message: format!(
@@ -1228,9 +1229,9 @@ fn get_at_step(col: &Value, step: &Value, span: zymbol_span::Span) -> Result<Val
 /// there, exactly as the single-level `d["k"]$~ v` does.
 fn set_at_step(col: Value, step: &Value, new_val: Value, span: zymbol_span::Span) -> Result<Value> {
     if let (Value::NamedTuple(mut fields), Value::String(key)) = (col.clone(), step) {
-        match fields.iter_mut().find(|(k, _)| k == key) {
+        match Rc::make_mut(&mut fields).iter_mut().find(|(k, _)| k == key) {
             Some(f) => f.1 = new_val,
-            None => fields.push((key.clone(), new_val)),
+            None => Rc::make_mut(&mut fields).push((key.clone(), new_val)),
         }
         return Ok(Value::NamedTuple(fields));
     }
@@ -1270,19 +1271,19 @@ fn set_at_idx(col: Value, index: i64, new_val: Value, span: zymbol_span::Span) -
         Value::Array(mut arr) => {
             let len = arr.len();
             let i = resolve_idx(index, len, span)?;
-            arr[i] = new_val;
+            Rc::make_mut(&mut arr)[i] = new_val;
             Ok(Value::Array(arr))
         }
         Value::Tuple(mut tup) => {
             let len = tup.len();
             let i = resolve_idx(index, len, span)?;
-            tup[i] = new_val;
+            Rc::make_mut(&mut tup)[i] = new_val;
             Ok(Value::Tuple(tup))
         }
         Value::NamedTuple(mut fields) => {
             let len = fields.len();
             let i = resolve_idx(index, len, span)?;
-            fields[i].1 = new_val;
+            Rc::make_mut(&mut fields)[i].1 = new_val;
             Ok(Value::NamedTuple(fields))
         }
         other => Err(RuntimeError::Generic {
