@@ -3548,16 +3548,23 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 
 **Recommended ordering inside the block**: `<#` imports → `#>` export block → constants/variables → function definitions. The parser accepts any ordering, but `<#` aliases used in `#>` re-exports must appear before the `#>` block.
 
-> ⚠ **Always write the `#>` block.** The grammar lets you leave it out, and what happens then
-> is **not defined**: the tree-walker exports everything, the register VM and the browser
-> engine export nothing, and `zymbol check` reports neither — so a module without `#>` runs
-> under `zymbol run` and fails under `zymbol run --vm` and in the playground, with a message
-> that blames the function rather than the missing block. The behaviour will be pinned down;
-> until it is, a module that does not declare its public surface is not portable between
-> engines. See REFERENCE.md L48.
+> ⚠ **A module declares what it exports.** Leaving `#>` out is an error, in every engine:
 >
-> The block goes **inside** `# name { … }`. A `#>` at file top level is not valid Zymbol,
-> even though the browser engine currently runs it.
+> ```
+> error: E014: module 'm' does not declare what it exports
+>   = help: add '#> { … }' inside the module block, naming what it exports — an empty
+>           '#> { }' says it exports nothing
+> ```
+>
+> **`#> { }` is how a module says it exports nothing** — it loads, holds its state, and keeps
+> every name private. That is a module with no public surface, not a module with no rule.
+>
+> Until 2026-09-04 the omission was undefined and the three engines filled the silence three
+> ways: the tree-walker exported everything, the register VM and the browser engine exported
+> nothing, and `zymbol check` reported neither. See REFERENCE.md L48.
+>
+> The block goes **inside** `# name { … }`. A `#>` at file top level is refused by all three
+> engines: *an export block belongs inside a module block*.
 
 ### Allowed and Forbidden Inside a Module Body
 

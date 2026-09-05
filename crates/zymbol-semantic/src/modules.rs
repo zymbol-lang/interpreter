@@ -76,6 +76,9 @@ pub enum SemanticError {
 
     #[error("E013: executable statement '{stmt_kind}' is not allowed in a module body")]
     ExecutableStatementInModule { stmt_kind: String, span: Span },
+
+    #[error("E014: module '{module}' does not declare what it exports")]
+    MissingExportBlock { module: String, span: Span },
 }
 
 impl SemanticError {
@@ -132,6 +135,18 @@ impl SemanticError {
             SemanticError::DuplicateExport { span, .. } => Diagnostic::error(self.to_string())
                 .with_span(*span)
                 .with_help("Each item can only be exported once"),
+
+            // L48. The grammar marks the export block optional and never said
+            // what omitting it meant, so the three engines answered three ways:
+            // the tree-walker exported everything, the VM and the browser engine
+            // exported nothing, and `check` said nothing at all. The rule is now
+            // that a module declares its public surface — refused here, once, so
+            // all three inherit it.
+            SemanticError::MissingExportBlock { span, .. } => Diagnostic::error(self.to_string())
+                .with_span(*span)
+                .with_help(
+                    "add '#> { … }' inside the module block, naming what it exports — an empty '#> { }' says it exports nothing",
+                ),
 
             SemanticError::ReExportPrivateItem { span, .. } => {
                 Diagnostic::error(self.to_string())
@@ -583,7 +598,20 @@ impl ModuleAnalyzer {
             import_map.insert(import.alias.clone(), resolved);
         }
 
-        if let Some(ref export_block) = module_decl.export_block {
+        // L48: a module says what it exports. Omitting `#>` used to mean three
+        // different things — everything, nothing, or no opinion — because the
+        // grammar marks the block optional and nothing said what the omission
+        // meant. Refusing it here is what makes the three engines agree: they
+        // all run this analysis before executing anything.
+        let Some(ref export_block) = module_decl.export_block else {
+            errors.push(SemanticError::MissingExportBlock {
+                module: module_decl.name.clone(),
+                span: module_decl.span,
+            });
+            return Err(errors);
+        };
+
+        {
             let mut exported_names = HashSet::new();
 
             for export_item in &export_block.items {
