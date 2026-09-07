@@ -753,6 +753,53 @@ arr[2] = 99      // error: indexed assignment does not exist
 arr[2]$~ 99      // the form that exists
 ```
 
+**The chained index is refused for reading too.** `m[2][3]` is
+`chained index does not exist: 'm[…][…]' is not a form of Zymbol`, with
+`help: nesting is navigated with '>', so this is 'm[i>j]'` — the same wording in
+all three engines, from each parser, before anything runs.
+
+```zymbol
+>> m[2>3] ¶      // → 6
+>> m[2][3] ¶     // error: chained index does not exist
+```
+
+The *write* had been withdrawn above; the read had been deprecated since v0.0.4
+and refused by nothing. GUIDE.md said it "still parses" and that "a semantic
+warning may be added in a future version", so the rule lived in the prose and in
+no executable: the language had two spellings of one access and shipped nothing
+that could tell them apart, which is the argument that closed the write.
+
+It never gave a wrong answer — all three engines returned the same value for
+`m[2][3]` as for `m[2>3]`, at every depth, on arrays, tuples and dictionaries.
+What is withdrawn is the second spelling, not a defect.
+
+Indexing something that is not itself an access is untouched, because it is one
+bracket group and not a chain: `[1,2,3][2]`, `f()[2]`, and `m[[1>2]][1]`, where
+the extraction builds a new collection before the index reaches it.
+
+**The rule is about how an element is addressed, not about what is done with
+it.** The chain is refused as soon as it is read, whatever follows the group:
+`>> arr[1][1]`, `arr[1][1]$~ 0`, `x = arr[1][1]$~ 0`, `arr[1][1]$+ 5` and
+`arr[1][1] = 0` are one rule and not five.
+
+The first cut of this got that wrong. It let `$~` past so that
+`d["x"]["y"]$~ 9` would keep printing *this edit has nothing to write into*, the
+wording already recorded for `reject/collections/11` — and that exception opened
+two doors: `arr[1][1]$~ 0` and `x = arr[1][1]$~ 0` both **have** somewhere to put
+their result, so neither ever reached the edit refusal meant to catch them. They
+returned `[0, 2, 3]` in all three engines and said nothing. Both are now
+`reject/collections/14` and `15`, so the gate holds the door shut.
+
+So `d["x"]["y"]$~ 9` now reports the chain instead, which is its first cause —
+the edit has no destination *because* the brackets were chained.
+`f()[1]$~ 5` (`reject/collections/12`) keeps *modifying requires a destination
+with a name*: there is no chain there, only a call nothing holds.
+
+Migration was 16 files across the corpus, the examples, the course and Zofia, and
+`corpus/v0.0.4_review/nav_chained_deprecated.zy` — a case whose entire purpose
+was to assert the chained read still worked — moved to
+`reject/collections/13_lectura_encadenada.zy`.
+
 **The rule of the result.** A `$` edit whose result is **used** builds and leaves
 the original alone; one that **is** the whole statement modifies in place.
 

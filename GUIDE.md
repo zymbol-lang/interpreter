@@ -2825,16 +2825,64 @@ cubo = [
 // → [[1, 2, 3], [4, 5, 6], [10, 11, 12], [13, 14, 15]]
 ```
 
-### Deprecated: Chained `arr[i][j]`
+### Refused: chained `arr[i][j]`
 
-The old C/Python-style chained index `arr[i][j]` still parses, but `arr[i>j]` is the
-canonical form. A semantic warning may be added in a future version.
+The C/Python-style chained index is **not a form of Zymbol**. One bracket group
+addresses one element, however deep it lies, and `>` is what goes between the
+steps.
 
 ```zymbol
 m = [[1,2,3], [4,5,6], [7,8,9]]
->> m[2][3] ¶    // → 6  (still works, deprecated)
->> m[2>3] ¶     // → 6  (canonical form)
+>> m[2>3] ¶     // → 6
+>> m[2][3] ¶    // error: chained index does not exist: 'm[…][…]' is not a
+                //        form of Zymbol
+                //   help: nesting is navigated with '>', so this is 'm[i>j]'
 ```
+
+**The rule governs how an element is addressed, not what is done with it.** The
+chain is refused as soon as it is read, whatever follows the group — so these are
+one rule and not five:
+
+```zymbol
+>> m[2][3] ¶         // read
+x = m[2][3]          // read into a name
+m[2][3]$~ 0          // edit
+x = m[2][3]$~ 0      // build
+m[2][3]$+ 5          // any other `$`
+m[2][3] = 0          // (this one keeps the older `indexed assignment` message)
+```
+
+It was deprecated in v0.0.4 and refused in v0.0.9. In between it parsed and ran,
+and this page said a warning "may be added in a future version" — so the rule
+existed in the prose and in no engine, which left the language with two spellings
+of one access and nothing to tell them apart. That is the same argument that had
+already withdrawn the chained *write* (`m[i][j] = v`, `d["x"]["y"]$~ v`); the read
+was the half that had been left.
+
+### Where the line falls
+
+What is refused is **navigating in two hops**: both groups walking down the same
+structure, which is what `>` does in one. A bracket after something that is not
+itself an access is one group, not a chain, and stays legal:
+
+```zymbol
+>> [1,2,3][2] ¶                        // → 2      indexing a literal
+>> f()[2] ¶                            // → …      indexing what a call returned
+>> m[[1>1, 1>3] ; [3>1, 3>3]][1] ¶     // → [1, 3] indexing what an extraction built
+```
+
+The last one is the interesting one. An extraction does not *descend* into `m` —
+it collects values from several paths and **builds a new collection** that was
+nowhere in `m`:
+
+```zymbol
+m = [[1,2,3], [4,5,6], [7,8,9]]
+esquinas = m[[1>1, 1>3] ; [3>1, 3>3]]     // → [[1, 3], [7, 9]]  — a new value
+>> esquinas[1] ¶                          // → [1, 3]            — one access
+```
+
+Indexing that is the same act as indexing `f()`'s result, so it is written the
+same way.
 
 ### Error Cases
 

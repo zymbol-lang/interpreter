@@ -28,7 +28,7 @@ matrix = [
 }
 
 >> ¶
->> "Element at [2][3]: " matrix[2][3] ¶
+>> "Element at [2>3]: " matrix[2>3] ¶
 
 // Tuples
 point = (10, 20)

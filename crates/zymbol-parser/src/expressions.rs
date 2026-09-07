@@ -485,6 +485,7 @@ impl Parser {
             match token.kind {
                 // ── Structural postfix ────────────────────────────────────────
                 TokenKind::LBracket => {
+                    self.reject_chained_index(&expr)?;
                     if self.is_nav_index() {
                         expr = self.parse_nav_index(expr)?;
                     } else {
