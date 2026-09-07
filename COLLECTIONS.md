@@ -418,6 +418,13 @@ The dot composes freely: it is a **different syntax**, not a second spelling of
 the same one. A bracket directly after a bracket is refused, because
 `m["x"]["y"]` is the navigator written twice and `m["x">"y"]` is the form —
 the rule already stated for `m[i][j] = v`, that it breaks navigation and intent.
+Since v0.0.9 that holds for **reading** as well, and the chain is refused as soon
+as it is read — whatever follows the group. `m["x"]["y"]`, `m["x"]["y"]$~ 9`,
+`x = m["x"]["y"]$~ 9` and `m["x"]["y"]$+ 3` are one rule: it governs how an
+element is addressed, not what is done with it. So the line above now reports
+`chained index does not exist`, which is its first cause — the edit has no
+destination *because* the brackets were chained. `f()[1]$~ 5` still reports
+`modifying requires a destination with a name`, since there is no chain in it.
 
 **This is not only about `$~`.** Every editing `$` writes back at its receiver's
 path, so the receiver may live inside the name:

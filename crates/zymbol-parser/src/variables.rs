@@ -42,7 +42,9 @@ impl Parser {
             // who wrote this needs to know the notation as well as the rule.
             if matches!(self.peek().kind, TokenKind::LBracket) {
                 let span = ident_token.span.to(&self.peek().span);
-                self.skip_statement();
+                // Recovery belongs to the loop that catches this — see
+                // `skip_statement` and GLB-007. Skipping here too ran it twice
+                // and the second run took the block's closing brace.
                 return Err(Diagnostic::error(format!(
                     "indexed assignment does not exist: '{}[…] =' is not a form of Zymbol",
                     name
@@ -78,7 +80,9 @@ impl Parser {
                     | TokenKind::PercentAssign
                     | TokenKind::CaretAssign
             ) {
-                self.skip_statement();
+                // Recovery belongs to the loop that catches this — see
+                // `skip_statement` and GLB-007. Skipping here too ran it twice
+                // and the second run took the block's closing brace.
                 return Err(Diagnostic::error(format!(
                     "indexed assignment does not exist: '{}[…] =' is not a form of Zymbol",
                     name

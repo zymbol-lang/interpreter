@@ -175,7 +175,7 @@ a[2]$~ 99      the ONE update form. `a[2] = 99` does not exist, in any collectio
                result thrown → modifies in place:            a[2]$~ 99
 ```
 
-**Deep access / update — `>` navigates, and is the intended form; `a[i][j]` is deprecated:**
+**Deep access / update — `>` navigates, and is the only form; `a[i][j]` is refused:**
 
 ```zymbol
 m[2>3]              // scalar at row 2, col 3        m[row>col]   m[-1>-1]   m[(n)>(n)]

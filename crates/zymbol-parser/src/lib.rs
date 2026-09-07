@@ -13,6 +13,7 @@ use zymbol_ast::{CollectionUpdateExpr, DeepIndexExpr, NavPath, NavStep};
 use zymbol_common::Literal;
 use zymbol_error::Diagnostic;
 use zymbol_lexer::{StringPart, Token, TokenKind};
+use zymbol_span::Span;
 
 mod literals;
 mod io;
@@ -129,12 +130,46 @@ impl Parser {
         // loop. `}` and `;` end a statement, so stopping ON them is right —
         // stopping on them without having moved is not.
         if self.is_at_end() { return; }
-        let line = self.peek().span.start.line;
+        let mut line = self.peek().span.start.line;
         self.advance();
-        while !self.is_at_end()
-            && self.peek().span.start.line == line
-            && !matches!(self.peek().kind, TokenKind::RBrace | TokenKind::Semicolon)
-        {
+        // A statement that has a BODY is not over at its head, and the body's
+        // braces have to be counted or the skip stops inside it (GLB-007).
+        // `? m[1][1] == 1 { >> "si" ¶ }` fails in the CONDITION, so no
+        // `parse_block` is running to own the `{ … }`; the old skip walked to
+        // the `}`, stopped there, and the next round read a lone brace as a
+        // statement — `unexpected token: RBrace`, a second error about the
+        // first one's leftovers. Which is this function's whole purpose.
+        //
+        // `depth` is what tells the two braces apart: one this statement opened
+        // (skip it, body and all) from one that closes the block we are inside
+        // (leave it — it belongs to `parse_block`, which stops on it).
+        let mut depth = 0usize;
+        while !self.is_at_end() {
+            match self.peek().kind {
+                TokenKind::LBrace => depth += 1,
+                TokenKind::RBrace => {
+                    if depth == 0 { break; }
+                    depth -= 1;
+                    // Consume the brace that closed the body, and carry the
+                    // line rule on from ITS line. Falling through to the check
+                    // below would compare the brace's line with the statement's
+                    // and break here, leaving behind the very brace this arm
+                    // exists to swallow — which is what the multi-line `?` did.
+                    // Resuming from here also keeps whatever continues the
+                    // statement (`?? { … }` on the same line) inside the skip.
+                    line = self.peek().span.start.line;
+                    self.advance();
+                    continue;
+                }
+                TokenKind::Semicolon if depth == 0 => break,
+                _ => {}
+            }
+            // The line rule holds outside a body and not inside one: a block
+            // spans lines by definition, and stopping at its first newline
+            // would leave the same lone brace behind, further down.
+            if depth == 0 && self.peek().span.start.line != line {
+                break;
+            }
             self.advance();
         }
     }
@@ -200,6 +235,93 @@ impl Parser {
         );
         self.current = saved;
         answer
+    }
+
+    /// Refuse `arr[i][j]` — chained brackets, at any depth and in any position.
+    ///
+    /// Nesting is navigated with `>`: `arr[i>j]`. The *write* form was withdrawn
+    /// first (`m[i][j] = v` in `parse_variable`, `d["x"]["y"]$~ v` in
+    /// `reject/collections/11`), on the argument that reaching inside a
+    /// structure and naming a variable are two operations and must not share a
+    /// notation. The read was left parsing and documented as deprecated, which
+    /// gave the language two ways to spell the same access with nothing in any
+    /// engine to tell them apart — a deprecation that lived only in prose.
+    ///
+    /// Called with the base expression *before* the next `[` is consumed, so the
+    /// refusal is this diagnostic and not a cascade of leftovers — and before
+    /// the group is read, so it lands whatever follows it. A chained access is
+    /// refused for READING and for every action alike: `arr[1][1]`,
+    /// `arr[1][1]$~ 0`, `x = arr[1][1]$~ 0` and `arr[1][1]$+ 5` are one rule,
+    /// not four. Letting `$~` through so the edit could reach its own refusal
+    /// left exactly two ways past it — the two forms above that have somewhere
+    /// to put the result, so they never reached that refusal at all and ran.
+    ///
+    /// `Index` and `DeepIndex` only: those are the two element accesses, and
+    /// `arr[[i>j]]` / `arr[p ; q]` build a new collection rather than reach into
+    /// one.
+    pub(crate) fn reject_chained_index(&mut self, base: &Expr) -> Result<(), Diagnostic> {
+        if !matches!(base, Expr::Index(_) | Expr::DeepIndex(_)) {
+            return Ok(());
+        }
+        let span = base.span().to(&self.bracket_group_end_span());
+        let name = Self::index_root_name(base);
+        // GLB-007: the refusal does NOT skip the statement, though every other
+        // one here used to. Both recovery loops — `parse_block`'s and the
+        // top-level one — already call `skip_statement` in their `Err` arm, so
+        // skipping here made it run twice, and the second run's unconditional
+        // `advance()` ate the `}` closing the block. `@ i:1..2 { >> m[i][1] ¶ }`
+        // then reported `expected '}' to close block` about a brace that was
+        // there: the cascade `skip_statement` exists to prevent, one token
+        // further along.
+        Err(Diagnostic::error(format!(
+            "chained index does not exist: '{}[…][…]' is not a form of Zymbol",
+            name
+        ))
+        .with_span(span)
+        .with_help(format!(
+            "nesting is navigated with '>', so this is '{}[i>j]' — one bracket group addresses one element, however deep it lies",
+            name
+        )))
+    }
+
+    /// Span of the `]` closing the bracket group that starts at `peek()`.
+    ///
+    /// Looks ahead without consuming: the caller is building a diagnostic and
+    /// still owns the token stream. Falls back to the `[` itself at end of
+    /// input, so an unterminated group cannot panic here — it is the lexer's
+    /// and the caller's error to report, not this helper's.
+    fn bracket_group_end_span(&self) -> Span {
+        let mut depth = 0usize;
+        let mut i = 0usize;
+        while let Some(tok) = self.peek_ahead(i) {
+            match tok.kind {
+                TokenKind::LBracket => depth += 1,
+                TokenKind::RBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return tok.span;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        self.peek().span
+    }
+
+    /// The name the chained access hangs off, for the message and its `help`.
+    ///
+    /// Walks down the accesses to the identifier at the root. Anything else at
+    /// the root — a literal, a call — has no name to quote, and the rule is
+    /// about the notation rather than the receiver, so it is written as the
+    /// notation itself.
+    fn index_root_name(expr: &Expr) -> String {
+        match expr {
+            Expr::Identifier(id) => id.name.clone(),
+            Expr::Index(ix) => Self::index_root_name(&ix.array),
+            Expr::DeepIndex(dx) => Self::index_root_name(&dx.array),
+            _ => "…".to_string(),
+        }
     }
 
     /// Parse a single statement
@@ -623,6 +745,7 @@ impl Parser {
             match self.peek().kind {
                 TokenKind::LBracket => {
                     if self.peek().span.start.line != expr.span().end.line { break; }
+                    self.reject_chained_index(&expr)?;
                     if self.is_nav_index() {
                         expr = self.parse_nav_index(expr)?;
                     } else {
@@ -705,6 +828,7 @@ impl Parser {
                     if self.peek().span.start.line != expr.span().end.line {
                         break;
                     }
+                    self.reject_chained_index(&expr)?;
                     if self.is_nav_index() {
                         expr = self.parse_nav_index(expr)?;
                     } else {
@@ -948,6 +1072,7 @@ impl Parser {
                     if self.peek().span.start.line != expr.span().end.line {
                         break;
                     }
+                    self.reject_chained_index(&expr)?;
                     if self.is_nav_index() {
                         expr = self.parse_nav_index(expr)?;
                     } else {
