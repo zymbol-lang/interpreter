@@ -502,11 +502,13 @@ embeds the interpreter, `package` produces a `.zyp` archive of source that still
 | Native stdlib (`std/*`, incl. `std/term`) | ✓ | ✓ |
 | Auto-free (destruction at last use) | ✓ | ✓ (see note) |
 
-Measured 2026-08-31 on v0.0.9: `zyq consensus --engines zytw,zyvm` (what
-`tests/scripts/vm_compare.sh` now delegates to) reports **655 of 661 corpus files agreeing
+Measured 2026-09-07 on v0.0.9: `zyq consensus --engines zytw,zyvm` (what
+`tests/scripts/vm_compare.sh` now delegates to) reports **660 of 666 corpus files agreeing
 and 0 diverging**, the other 6 excused for every engine by a reason declared in
 `zyquality/corpus.toml`. Adding `zyjs` does not change the agreement count — all three
-engines reach the same 655. The three rows that used to read "partial"/"—" (module system,
+engines reach the same 660. Against the browser engine alone the pair agrees on 636, the
+30 in the difference being the files `corpus.toml` excuses for `zyjs` (`std/db` is ODBC,
+`<\ cmd \>` entropy, TUI needs a real TTY) — excused, not divergent. The three rows that used to read "partial"/"—" (module system,
 CLI args, format expressions) were verified and are at parity; the last known divergences
 were closed by HLZ-008/009/010 and MM-10/MM-11.
 

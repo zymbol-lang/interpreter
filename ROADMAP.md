@@ -1,10 +1,14 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **v0.0.9 (in development)** — the Windows branch that was going to be
-> a hotfix, plus the argument-count rule (REFERENCE.md L28). See `WINDOWS_V009.md`.
-> Validation (measured 2026-08-17): 597/599 TW/VM consensus with 0 divergences,
-> 975 unit tests. **0.0.8 is the latest published
-> release**; every figure on this page is measured on the `v0.0.9` branch.
+> Current status: **v0.0.9 (in development)** — a *decision* release: rules that existed
+> in the prose and in no engine, or in three engines three ways, decided once and enforced
+> in all three. The collections (`COLLECTIONS.md`), the dictionary's own notation `#(…)`,
+> the withdrawn chained index, `std/time`, the safe integer, and the eleven Windows
+> findings. See `IMPL_V009.md` and `WINDOWS_V009.md`.
+> Validation (measured 2026-09-07): **666 corpus files, 660 agreeing, 0 diverging** across
+> all three engines; **1026 unit tests**, 0 failed; `zyq suite` reports **all gates pass**.
+> **0.0.8 is the latest published release**; every figure on this page is measured on the
+> `v0.0.9` branch.
 >
 > Previously: **v0.0.8 (released 2026-08-02)** — a *debt* release, scoped by evidence rather
 > than by a feature wish list: the design-vs-implementation audit in `MEMORY_MODEL.md`
@@ -54,8 +58,8 @@
 | Negative indices `arr[-1]` (tree-walker + VM parity) | ✅ |
 | **1-based indexing** — `arr[1]` is first element; index 0 = runtime error | ✅ |
 | Sort `$^+` (ascending) / `$^-` (descending), natural + custom comparator | ✅ |
-| Destructuring assignment: `[a, b, *rest] = arr`, `(name: n) = t` | ✅ |
-| Named tuples with `.field` access | ✅ |
+| Destructuring assignment: `[a, b, *rest] = arr`, `(a, b) = t`, `#(name: n) = d` | ✅ |
+| Dictionaries `#(k: v)` with `.field` and computed-key `d[k]` access | ✅ v0.0.9 |
 | String operators: split, slice, find, insert, remove, replace | ✅ |
 | Error handling: `!?` / `:!` / `:>` with typed catch | ✅ |
 | Module system: `#` / `#>` / `<#` with aliases | ✅ |
@@ -74,7 +78,7 @@
 | Tree-walker interpreter | ✅ | Default mode, best error messages |
 | Scope pool recycling | ✅ | Zero allocation per scope push/pop |
 | Tail-call optimization (TCO) | ✅ | Detects `<~ f(same_args)` restart |
-| Register VM | ✅ | `--vm` flag, 4.4× faster than tree-walker on fib(35) |
+| Register VM | ✅ | `--vm` flag. No single speedup factor — 1.4–6× on the microbenchmarks, 11–13× on an alpha-beta search. Quote the workload |
 | Flat register stack | ✅ | All frames share one `Vec<Value>`, zero alloc per call |
 | `sizeof(Value)` = 16 bytes | ✅ | Via `Rc<T>` heap payloads (was 40 bytes) |
 | String pool pre-interning | ✅ | `LoadStr` = O(1) `Rc::clone` |
@@ -97,12 +101,18 @@
 
 | Suite | Status |
 |-------|--------|
-| Unit + integration (`cargo test`) | ✅ 975 passed, 0 failed |
-| TW/VM consensus (`zyq consensus --engines zytw,zyvm`) | ✅ 597 of 599 agree, 0 diverge (2 excluded by `corpus.toml`) |
-| Golden files (`expected_compare.sh`) | ⚠️ 530/532 — two stale hand-written `.expected` fixtures, not interpreter regressions (see `IMPL_V008.md` § E.1) |
-| Formatter property suite (`fmt_property.sh`) | ✅ 602 PASS / 48 SKIP / 0 FAIL over 650 files, no regressions vs. baseline (the pattern-escaping bug, § E.2, is fixed) |
-| JS mirror parity (`web/tests/test_runner.mjs`) | ⚠️ 516/521 + 208/210 on the example pool — seven gaps in `web/src/zymbol/zymbol.js` (see `IMPL_V008.md` § E.3) |
+| Unit + integration (`cargo test`) | ✅ 1026 passed, 0 failed, 4 ignored |
+| TW/VM consensus (`zyq consensus --engines zytw,zyvm`) | ✅ 660 of 666 agree, 0 diverge (6 excused for every engine by a reason in `corpus.toml`) |
+| Three-engine consensus (`zyq consensus`) | ✅ 660 agree, 0 diverge — the browser engine included |
+| Golden files (`zyq expect`) | ✅ 635/639 via `run`, **0 stale**, 4 unchecked · 25/25 via `check` |
+| Rejection corpus (`zyq reject`) | ✅ 41 forms, all refused in every engine |
+| Formatter property suite (`zyq suite --only fmt`) | ✅ 710 PASS / 55 SKIP / 0 FAIL over 764 files, P1–P4 all zero, no regressions vs. baseline |
+| JS mirror parity (`zyq consensus --engines zytw,zyjs`) | ✅ 636 of 666 agree, **0 diverge** — the 30 excused for `zyjs` in `corpus.toml`. The seven gaps of `IMPL_V008.md` § E.3 are closed |
+| Benchmark gate | ✅ 16/16 within tolerance, no performance regressions |
 | RosettaStone i18n suite (105 languages) | ✅ PASS |
+
+The whole question at once: `cd ../zyquality && ./zyq suite` — **all gates pass** as of
+2026-09-07.
 
 ---
 
@@ -119,7 +129,7 @@ They are documented in the manual as known limitations.
 | **Match identifier binding** | `pattern as name` — `[NI03]` — **dismissed 2026-06-12** | Extract the value before the match (the idiom) |
 | ~~**`$!!` from lambdas**~~ | **Resolved** — verified 2026-06-12: `$!!` propagates from lambdas identically to named functions (`zyquality/corpus/lambdas/error_propagate_lambda.zy`) | — |
 | **`do-while ~>`** | Post-condition loop `[NI01]` — **dismissed 2026-06-12** | Infinite loop with `@!` break at end (the idiom) |
-| ~~**Dict / map literal**~~ | **Resolved in v0.0.9** — `(clave: valor)` IS the dictionary: computed keys, insertion, removal, `@ k:d`, `##Key`. No new type and no new notation; see [COLLECTIONS.md](COLLECTIONS.md) § 5 | — |
+| ~~**Dict / map literal**~~ | **Resolved in v0.0.9** — the dictionary is `#(clave: valor)`: computed keys, insertion, removal, `@ k:d`, `##Key`, and `#()` for the empty one. No new *type* — it is the old named tuple — but it did get **a notation of its own**, and the bare `(a: 1)` is refused: the empty dictionary is what forced it, since `()` cannot be both that and the empty tuple. See [COLLECTIONS.md](COLLECTIONS.md) § 5 | — |
 
 > **Dismissed 2026-06-12** (validated with the language author): `do-while ~>` and
 > match identifier binding will NOT be implemented. Their workarounds are the
@@ -140,7 +150,7 @@ They are documented in the manual as known limitations.
 | `unused variable` for interpolation `"{x}"` | Analyzer does not track string interpolation usage |
 | `unused variable` for BashExec `<\ {x} \>` | Analyzer does not track BashExec variable usage |
 | `arithmetic on non-numeric` for string `/` split | Analyzer cannot distinguish `/` operators by context |
-| `type mismatch` for `arr[i] = val` | Analyzer does not model indexed assignment |
+| ~~`type mismatch` for `arr[i] = val`~~ | **Moot since v0.0.9** — indexed assignment was withdrawn, so there is nothing to model: the form is refused in all three engines |
 
 ### Auto-free debt — inherited from v0.0.8, still undecided
 
@@ -217,7 +227,7 @@ the planned Clippy-style lint pass is what proposes the out-parameter form where
 Verified 2026-06-12: variables used only inside string interpolation or BashExec
 no longer warn (regression test: `zyquality/corpus/errors/semantic/no_false_positive_unused.zy`).
 - Distinguish string split `/` from arithmetic `/` in type checker
-- Model `arr[i] = val` as a mutation rather than a type mismatch
+- ~~Model `arr[i] = val` as a mutation~~ — moot: the form was withdrawn in v0.0.9
 
 #### ~~VM completeness~~ Reached in v0.0.8
 
@@ -226,8 +236,8 @@ worse than no line: it sends projects to the tree-walker by default, which is ex
 zy-GO did before HLZ-008 was found.
 
 - ~~**Module system in VM**~~ — HLZ-008, HLZ-009, HLZ-010, MM-10 and MM-11 closed the known
-  divergences. The TW/VM consensus reports **597 of 599** corpus files byte-identical under
-  both engines (2026-08-17), `zyquality/corpus/modules_scope/` included. **No corpus file
+  divergences. The TW/VM consensus reports **660 of 666** corpus files byte-identical under
+  both engines (2026-09-07), `zyquality/corpus/modules_scope/` included. **No corpus file
   carries an in-file skip marker**: `@vm-skip` was retired along with the four other
   exclusion mechanisms `zyquality/corpus.toml` replaced, and every exclusion now names the
   engine, the tag and the reason in that one file.
@@ -327,7 +337,7 @@ Built-in modules accessible via `<#`:
 | `std/math` | `sqrt exp ln log pow sin cos abs max min floor ceil round` + `PI E` | ✅ v0.0.6 |
 | `std/random` | `entero rango peso_f64` (xoshiro256++) | ✅ v0.0.6 |
 | `std/io` | `read write append exists delete list mkdir` — soft `##IO` errors | ✅ v0.0.7 |
-| `std/json` | `decode encode` — object↔NamedTuple, soft `##Parse` errors | ✅ v0.0.7 |
+| `std/json` | `decode decode_map encode` — JSON object ↔ **dictionary** `#(…)`, soft `##Parse` errors | ✅ v0.0.7 |
 | `std/net` | `get post post_json head` (sync, optional headers arg) — soft `##Network` errors | ✅ v0.0.7 |
 | `std/db` | Vendor-neutral DB access via ODBC (connect/exec/query/tx/savepoints) — soft `##DB` errors | ✅ v0.0.7 |
 | `std/term` | `width pad_left pad_right center truncate` — display width in terminal **columns** (CJK/emoji count as 2), measured over grapheme clusters | ✅ v0.0.8 |
@@ -365,18 +375,22 @@ What a package manager still needs on top:
 
 ## Performance Targets
 
-Current benchmarks (release build, post-Sprint 5D+):
+Measured 2026-09-07 by the benchmark gate (median of 5 runs), which reports
+**16/16 within tolerance, no regressions**:
 
-| Benchmark | Tree-walker | VM (now) | VM (target) |
-|-----------|:-----------:|:--------:|:-----------:|
-| Stress | ~200ms | **67ms** | <60ms |
-| Match | ~165ms | **50ms** | <50ms |
-| Collections | ~14s | **33ms** | <30ms |
-| Strings | ~43ms | 36ms | <25ms |
-| Recursion | ~1480ms | 308ms | <200ms |
+| Benchmark | Tree-walker | VM | VM (target) |
+|-----------|:-----------:|:--:|:-----------:|
+| Stress | 236ms | **101ms** | <60ms |
+| Match | 182ms | **67ms** | <50ms |
+| Collections | 72ms | **58ms** | <30ms |
+| Strings | 92ms | **73ms** | <25ms |
+| Recursion | 1648ms | **271ms** | <200ms |
+| Index read | 140ms | **96ms** | — |
 
-Recursion and strings are the remaining performance targets.
-Both are addressed by the Cranelift JIT milestone.
+Recursion and strings are the remaining performance targets; both are addressed by the
+Cranelift JIT milestone. These are gate timings on one machine, not the isolated
+microbenchmark numbers in `README.md` § Performance — a gate measures against its own
+recorded baseline, which is what makes a regression visible.
 
 ---
 

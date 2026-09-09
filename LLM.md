@@ -26,7 +26,7 @@ retired on 2026-08-17; it appears in this document only as history.
 2. **`>>` never adds a newline.** End with `¶` (or `\\`). `>> ¶` = blank line.
 3. **Juxtaposition concatenates in `>>`; `+` does not.** `>> "n=" n ¶`. `"a" + b` is a type error.
 4. **Unary minus loses to juxtaposition:** `>> "x=" -n ¶` parses as subtraction → error. Write `(-n)`.
-5. **Functions see none of the caller's variables.** Isolated scope, not lexical fallback. Only top-level `:=` constants pierce it. Pass everything else as parameters.
+5. **A function sees the file's variables, never another frame's locals.** A named function reads a file-level name at **call** time, by value, and a write inside stays inside the call. A lambda captures the same names at **creation**. Neither sees the caller's locals — pass those as parameters.
 6. **`??` is pattern matching, never a boolean chain.** An arm is *operator + value* (`< 0 =>`, `90..100 =>`), subject implicit. Booleans go through `?` / `_?` / `_`.
 7. **Booleans are `#1` / `#0`. There is no null.** Absence is `##_` (Unit).
 8. **`==` never coerces; ordering does.** `"5" == 5` → `#0`, but `"5" > 4` → `#1` (numeric text in any of 69 digit scripts).
@@ -92,8 +92,8 @@ frames. Auto-free releases a value right after its last use — invisible, never
 ## 4. I/O
 
 ```zymbol
->> "a=" a " b=" b ¶          // juxtaposition; postfix on a NAME needs no parens: >> "len=" arr$# ¶
-                             // postfix on a literal does not parse: [1,2]#? → bind it first
+>> "a=" a " b=" b ¶          // juxtaposition; postfix needs no parens, on a name or a literal:
+                             //   >> "len=" arr$# ¶     >> [1,2]#? ¶     >> 42#?[1] ¶
 >> "eq=" (a == b) ¶          // parenthesised expressions are single items
 << name                      // read
 << "Name: " name             // with prompt
@@ -147,7 +147,7 @@ No binding patterns (`n => n * 2` is not implemented).
 @ { }               // infinite
 ```
 
-A specifier that is neither Int nor Bool (array, float) is a runtime error in all four
+A specifier that is neither Int nor Bool (array, float) is a runtime error in all three
 engines — there is no truthiness. `@!` break, `@>` continue. Labels: `@:outer i:1..4 { … @:outer! … @:outer> }`.
 Both are checked statically: they need an enclosing loop, a label must resolve to an
 **ancestor** (a sibling is an error), and a function/lambda body is a hard boundary.
@@ -192,7 +192,7 @@ the remainder**, taking the container's shape, or `##_` when nothing is left:
 (a, b, c) = (1,2)          // c = ##_          (a, b, c) = (1,2,3)       // c = 3  (scalar)
 (a, b, *c) = (1,2,3)       // c = (3) — '*' forces a collection, always
 [solo] = [1,2,3]           // solo = [1,2,3] — a single name absorbs too
-(name: n, age: y) = person // named-tuple destructuring
+#(name: n, age: y) = person // dictionary destructuring
 ```
 
 Strings share the `$` operators, plus: `s$~~["l":"L"]` replace all, `s$~~["l":"L":1]` first N,
@@ -290,7 +290,9 @@ most emoji are 2 columns, so lay TUI out with `t::width`, never `$#`) · `std/ti
 into a dictionary (`year month day hour minute second millisecond weekday offset`, weekday
 1 = Monday), `format` renders POSIX codes (`%Y %m %d %H %M %S %L %j %u %z %F %T %%`) in
 **ASCII digits whatever the numeral mode** — a localized date is built from `parts` instead.
-`add`/`diff` take a unit in full (`millisecond second minute hour day week month year`):
+`add`/`diff` take a unit in full (`millisecond second minute hour day week month year`).
+**`diff(a, b)` is `a - b`**, so the earlier instant first gives a *negative* answer —
+`diff(of(2026,1,1), of(2026,3,1), "day")` → `-59`, and swapping them → `59`. Beyond that:
 below a day it is duration, from a day up it is calendar, so a month lands on the same day
 of the month (clamped: 31 Jan + 1 month = 28 Feb) and a day across a daylight-saving change
 is still a day. A date that does not exist is a soft `##Time`, not a crash.

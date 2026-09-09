@@ -537,6 +537,13 @@ Re-measured at the v0.0.8 release (2026-08-01), still with no auto-free-attribut
 failure: 936 unit tests, 544/544 TW/VM parity, 523/525 golden (two stale fixtures —
 `IMPL_V008.md` § E.1), formatter property 600 PASS / 0 FAIL, benchmark gate 14/14.
 
+Re-measured on the `v0.0.9` branch (2026-09-07), same conclusion and now on the corpus
+that moved to `zyquality/`: **1026 unit tests**, 660/666 TW/VM consensus with **0
+diverging**, goldens **0 stale**, formatter property **710 PASS / 0 FAIL**, benchmark
+gate **16/16**, `zyq suite` **all gates pass**. The two auto-free debts of `IMPL_V008.md`
+§ B are still open and still undecided — they are tracked in [ROADMAP.md](ROADMAP.md)
+§ Known Gaps, and neither is a regression.
+
 ---
 
 *Related docs: [GUIDE.md](GUIDE.md) · [REFERENCE.md](REFERENCE.md) ·

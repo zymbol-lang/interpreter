@@ -108,7 +108,7 @@ kind is a memorisation cost, so the design keeps counting it instead of assuming
 - **First-class functions** — named functions as values, HOF arguments, and closures
 - **Pattern matching** — `??` with literals, ranges, comparisons, ident, list and or-patterns (`'p' || 'P'`)
 - **Multi-dimensional indexing** — `arr[i>j]`, flat/structured extraction, ranges on nav steps
-- **Destructuring** — `[a, *rest] = arr`, `(name: n, age: a) = tuple`
+- **Destructuring** — `[a, *rest] = arr`, `(a, b) = tuple`, `#(name: n, age: a) = dict`
 - **Module system** — file-based imports with aliases, re-exports, and i18n translation layers
 - **Error handling** — `!?` try / `:!` catch (typed or generic) / `:>` finally
 - **Higher-order functions** — `$>` map, `$|` filter, `$<` reduce, `$^` sort with comparator
@@ -360,8 +360,8 @@ person = #(name: "Alice", age: 25)
 
 // Array of dictionaries
 people = [
-    (name: "Alice", age: 25),
-    (name: "Bob",   age: 30)
+    #(name: "Alice", age: 25),
+    #(name: "Bob",   age: 30)
 ]
 sorted = people$^ (a, b -> a.age < b.age)
 ```
@@ -616,32 +616,22 @@ Or ask the whole question at once, from the zyquality checkout:
 ```
 
 Current status (v0.0.9 branch — 0.0.8 is the latest published release).
-**Re-measured 2026-08-31**: the corpus is **661 files**, 659 with a golden; `cargo test`
-runs **1026 tests, 0 failed, 4 ignored**; `zyq consensus` over all three engines reports
-**655 agreeing, 0 diverging**, the other 6 excused for every engine by a reason in
-`corpus.toml`; `zyq reject` refuses all **34** forms in every engine. The figures below are
-the 2026-08-12 measurement against the 585-file corpus, kept because the surrounding text
-explains what each number covers — re-derive a count in a fresh clone before quoting it,
-which is the rule that came out of the 544/536 correction:
+**Re-measured 2026-09-07**, every figure below on the same tree, with `./zyq suite`
+reporting **all gates pass**. Re-derive a count in a fresh clone before quoting it in
+release notes — that is the rule that came out of the 544/536 correction:
 
-- **969 `#[test]` functions** across the 19 crates via `cargo test`.
-- Tree-walker vs VM: **583 agree, 0 diverge**, 2 files excused for every engine
-  (a re-export module, and an interactive tool that waits for a person). This is
-  32 more files than the 551 the old runner saw: the corpus gained `arity/`,
-  `loops/labels/` and zyml's 22-file smoke suite, and the 14 `input/` tests are
-  compared now that the runner feeds each engine its `.input`.
-- Golden files: **583/583 match, nothing unchecked**, via `zyq expect`. The two
-  that used to fail were stale fixtures written before the output filter
-  existed, not regressions; 47 more carried the path the corpus had when they
-  were recorded and would have failed in any other checkout. All were
-  re-recorded once, and `zyq` now strips the corpus root before comparing, so a
-  golden says the same thing everywhere.
-- Formatter properties: **627 PASS / 0 FAIL** over 682 files, 55 skipped.
-- Benchmarks: **14/14 within tolerance** of the recorded baseline via
-  `tests/scripts/bench_gate.sh`. The programs moved to `../zyquality/bench/` — they print
-  elapsed wall time, so they are not tests and never were; the only suite that
-  had been running them was the browser parity runner, where all of them
-  failed.
+- **1026 `#[test]` functions** across the 19 crates via `cargo test` — 0 failed, 4 ignored.
+- Corpus: **666 `.zy`**, 664 with a golden, 6 excused for every engine by a written reason
+  in `corpus.toml`. `zyq audit` reports no hygiene problems.
+- Tree-walker vs VM: **660 agree, 0 diverge**.
+- All three engines: **660 agree, 0 diverge**. Against the browser engine alone,
+  **636 agree, 0 diverge** — the 30 in the difference are excused for `zyjs` in
+  `corpus.toml` (`std/db` is ODBC, `<\ cmd \>` entropy, TUI needs a real TTY).
+- Goldens: **635 of 639 match via `run`, 0 stale**, 4 unchecked; **25 of 25 via `check`**.
+- `zyq reject`: **41 forms refused in every engine**, 0 accepted anywhere.
+- Formatter properties: **710 PASS / 0 FAIL** over 764 files, 55 skipped — P1–P4 all zero.
+- Benchmarks: **16/16 within tolerance** of the recorded baseline, no regressions.
+- LSP against `zymbol check`: 666 files, 16 disagreements, **0 outside the baseline**.
 
 `ZYMBOL_BIN=/usr/bin/zymbol` still points the suite at an installed package
 rather than the build tree. `VM_COMPARE_EXCLUDE` is gone — exclusions are
@@ -707,10 +697,10 @@ Each project keeps a **gap log**: every friction, bug, missing capability and id
 a reproduction and a status. The log closes against the release — 囲碁's eleven findings were
 all fixed in v0.0.8, each with its own regression test. चतुरङ्गम्'s five were all resolved on
 2026-08-13, against the same v0.0.9 — fixed, documented or warned, each with the decision
-recorded at the foot of its entry. ZyBank's twenty-five are **open** against that release, which
-is the state an LDV project ships in: closing one is a language change or a reasoned rejection,
-and neither is the application author's call. The method, its decalogue, and the index of the
-eight logs are in **[LDV.md](./LDV.md)**.
+recorded at the foot of its entry. ZyBank's thirty-three closed against that same release, which
+is what an LDV log looks like once the cycle completes: closing one is a language change or a
+reasoned rejection, and neither is the application author's call. The method, its decalogue, and
+the index of the eight logs are in **[LDV.md](./LDV.md)**.
 
 The projects carry a second load at the same time. They are written across six natural
 languages — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese, Sanskrit — which is what
@@ -726,7 +716,7 @@ once.
 | Project | Version | Code language | What it put under test |
 |---------|---------|---------------|------------------------|
 | [ZethyCLI](https://github.com/zymbol-lang/zy-ZethyCLI) | **v0.0.3** | English | Modules, `<\cmd\>` shell exec, HTTP via Ollama, multi-turn state, string building |
-| [ZyAudit](https://github.com/zymbol-lang/zy-ZyAudit) | **v0.0.4** | 中文 (Mandarin) | CJK identifiers as first-class citizens, named tuples, HOF pipeline, `$~~` replace |
+| [ZyAudit](https://github.com/zymbol-lang/zy-ZyAudit) | **v0.0.4** | 中文 (Mandarin) | CJK identifiers as first-class citizens, dictionaries, HOF pipeline, `$~~` replace |
 | [Serpiente](https://github.com/zymbol-lang/zy-Serpiente) | **v0.0.5** | Español | TUI primitives, register VM, hot-definition `°`, tuple equality, labeled loops |
 | [Hov veS](https://github.com/zymbol-lang/zyKlingonGalaxy) | **v0.0.5** | pIqaD (Klingon) | Multi-module orchestration, Galaxian formation AI, delta rendering, dual projectiles, 3-language i18n |
 | [Zofía](https://github.com/zymbol-lang/zy-Zofia) | **v0.0.6** | Español | Scientific computing, transformer AI from scratch, `^` float exponents, global `:=` scope fix, `#.N\|x\|` formatting |
@@ -765,7 +755,7 @@ history = []
 
 Static code auditing tool. Written entirely in Mandarin identifiers — validates that
 CJK characters work as first-class symbols in every language construct: functions,
-named tuples, HOF arguments, and string operators.
+dictionaries, HOF arguments, and string operators.
 
 ```zymbol
 // ZyAudit — 代码审计工具
@@ -993,7 +983,7 @@ Building it drove a substantial part of v0.0.8. Findings that became interpreter
 _探索(局面, 路, 点, 色, 訪問<~, 結果<~) {
     ? 訪問[点] == 1 { <~ 0 }
     ? 局面[点] <> 色 { <~ 0 }
-    訪問[点] = 1
+    訪問[点]$~ 1                 // the edit form: result discarded → modifies in place
     結果 = 結果 $+ 点
     @ 隣点 : 隣(路, 点) { _探索(局面, 路, 隣点, 色, 訪問, 結果) }
     <~ 0
@@ -1053,8 +1043,8 @@ Its log held five entries, **all closed against v0.0.9**:
   A second pass closed the other half: the *condition* path still read the specifier
   through truthiness, which no two engines agreed on — `@ []` ran zero times in the
   tree-walker, forever in the VM and raised in zyml. **A specifier is a count or a
-  condition; anything else is refused at run time**, with one message across all four
-  engines. `zyquality/corpus/loops/13_specifier_forms.zy` holds them to the forms that
+  condition; anything else is refused at run time**, with one message across every
+  engine. `zyquality/corpus/loops/13_specifier_forms.zy` holds them to the forms that
   run and `zyquality/reject/loops/` to the ones that must not; there was no corpus file
   writing any of these forms before.
 - **A range infers its direction, so `@ i:2..n` counts *down* when `n < 2`** instead of not
@@ -1172,9 +1162,11 @@ Four capabilities were under test for the first time:
   text, of the digit script and of the currency. Hindi with Kuwaiti dinars gives `-२५.९९० د.ك`,
   and that is correct: the language someone reads does not say which currency their money is in.
 
-Its log holds **twenty-five** findings — 8 BUG, 12 GAP, 3 ERROR, 2 IDEA — and it is the first
+Its log holds **thirty-three** findings — 12 BUG, 13 GAP, 6 ERROR, 2 IDEA — and it is the first
 written against the canonical form of [LDV.md](./LDV.md) § 5.2 entire, `HALLAZGOS.md` included.
-**Three are engine divergences**, in a language whose gate reports zero over 616 corpus files.
+All thirty-three are closed against v0.0.9: 22 fixed, 5 withdrawn, and the rest resolved with the
+decision recorded at the foot of the entry. **Three were engine divergences**, in a language whose
+gate reports zero over 666 corpus files.
 Two of them are symmetric:
 
 | what is passed to another module | zytw | zyvm | zyjs |
@@ -1253,7 +1245,7 @@ interpreter/
 ├── zymbol-lang.ebnf     # Formal grammar (EBNF, v3.1.0)
 ├── install-zymbol.sh    # Install script
 ├── crates/              # Rust source crates
-├── tests/               # End-to-end test suite (544 vm-compare files; 525 golden .expected pairs)
+├── tests/               # Wrappers over `zyq` and the formatter corpus — the .zy corpus lives in ../zyquality/
 ├── docs/                # Extended documentation
 ├── LICENSE
 ├── LICENSE-AGPL-3.0     # AGPL-3.0 (interpreter source)

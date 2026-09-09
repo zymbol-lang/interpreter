@@ -215,8 +215,10 @@ langs = [
 ```
 
 The design distinction maps cleanly: **`[…]` = typed sequences**, **`#[…]` = a
-declared mix**, **`(a: 1)` = key-addressed records**, **`(1, 2)` = a fixed,
-immutable group of values that travel together.
+declared mix**, **`#(a: 1)` = key-addressed records**, **`(1, 2)` = a fixed,
+immutable group of values that travel together. The `#` on the dictionary is not
+decoration: `()` cannot be both the empty tuple and the empty dictionary, and those
+are not the same value.
 
 ---
 
@@ -1352,7 +1354,7 @@ Related operators:
 - Index out of bounds: `arr[99]` when array has fewer elements
 - Division by zero: `x / 0`; modulo by zero: `x % 0`
 - Integer overflow: any result outside ±(2⁵³ − 1) — see [Numeric limits](#numeric-limits)
-- Named tuple field not found: `t.nonexistent`
+- Dictionary key not found: `d.nonexistent` — `##Key`
 
 Runtime errors carry a **kind** (e.g., `##Index`, `##Div`, `##Type`, `##Range`, `##Key`) and a **message** string. The value in `_err` has the format `##Kind(message)`. The `#?` type symbol of an error value is the kind itself — `(##Index, N, ...)` — there is no generic error type symbol.
 
@@ -1577,7 +1579,7 @@ them will hunt for a bug that is not there (verified 2026-08-17, both engines).
 | `=` | Assignment | `x = 5` |
 | `[..] =` | Array destructure | `[a, b, *rest] = arr` |
 | `(..) =` | Positional tuple destructure | `(a, b) = t` — the form that receives a `<~ (a, b)` return |
-| `(n: ..) =` | Named tuple destructure | `(name: n, age: a) = t` |
+| `#(n: ..) =` | Dictionary destructure | `#(name: n, age: a) = d` |
 | `:=` | Constant | `PI := 3.14` |
 | `>>` | Output | `>> "hello" ¶` |
 | `<<` | Input | `<< "prompt: " var` |
