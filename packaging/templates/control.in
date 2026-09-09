@@ -5,7 +5,7 @@ Maintainer: Zymbol-Lang Contributors
 Depends: {{DEPENDS}}
 Section: devel
 Priority: optional
-Homepage: https://github.com/your-username/zymbol-lang
+Homepage: https://zymbol-lang.org
 Description: Zymbol symbolic programming language
  Zymbol is a symbolic programming language with no words in its grammar, where every
  construct (conditionals, loops, functions, I/O, error handling) is
