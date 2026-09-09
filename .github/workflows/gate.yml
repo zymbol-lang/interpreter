@@ -65,7 +65,22 @@ jobs:
       - name: Build (release, as packaged)
         run: cargo build --release
 
+      # `cargo test` is not self-contained, on purpose: zymbol-analyzer's
+      # diagnostic tests read their fixtures out of the corpus, so that the
+      # editor's answer is graded against the same files as everything else.
+      # `doc_from_fixture` panics rather than skips when the corpus is absent —
+      # a gate must not read "nothing ran" as "nothing failed" — and it takes
+      # ZYQUALITY_DIR the way engines.toml takes every path it reaches back
+      # through. A clone of this repository alone therefore cannot run its own
+      # test suite, which is worth knowing and is not something this workflow
+      # should paper over.
+      - name: The corpus, for the analyzer's fixtures
+        run: git clone --depth 1 https://github.com/zymbol-lang/zyquality.git
+          "${{ runner.temp }}/zyquality"
+
       - name: Unit and integration tests
+        env:
+          ZYQUALITY_DIR: ${{ runner.temp }}/zyquality
         run: cargo test --workspace --release
 
   gate:
@@ -121,6 +136,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      # Named rather than inherited from the image: ZyDDT reads its axes with
+      # `tomllib`, which is 3.11 and up, and ubuntu-22.04 ships 3.10. The first
+      # run of this workflow died there. Pinning it here means the gate does not
+      # depend on which Python a runner image happens to carry that month.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: OCaml, for zyq itself
         # `zyq` is written in OCaml with no dune and no opam switch — ocamlopt
