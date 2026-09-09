@@ -83,7 +83,7 @@ application becomes part of the verification layer it was defined against:
   file does not have."* It found five formatter defects on its first run, every one of them
   invisible to the token gate and to P1–P4.
 - `ZyDDT` graded the three engines over the applications *after* its own 394 declared cells,
-  the 661-file corpus and 222 example programs were all green, and opened **nine further
+  the 661-file corpus of the day and 222 example programs were all green, and opened **nine further
   findings** (§ 3, point 12). They were not reachable from a corpus, and the reason is
   structural rather than accidental.
 
@@ -192,7 +192,7 @@ modules, v0.0.5's `<=` → `:` and then `=>`, the v0.0.7 standard library, and f
 v0.0.9 changes, of which the dictionary's `#(…)` notation touched four applications in a single
 day.
 
-The measured case is ZyDDT's. With its 394 declared cells green, the 661-file corpus green and
+The measured case is ZyDDT's. With its 394 declared cells green, the corpus of the day (661 files) green and
 222 example programs green, running the same engines over the **LDV applications** opened
 **nine further findings** — `ZYJS-007`, `ZYJS-009`–`011` and `GLB-001`–`005`, all since fixed.
 Its own index states why, and it is this document's § 1 in two lines: *"a complete application

@@ -1,27 +1,56 @@
 (*
   Zymbol-Lang EBNF Grammar
-  Version:    3.2.0
+  Version:    3.3.0
   Generated:  2026-06-12
-  Sprint:     v0.0.7, with a targeted v0.0.9 correction pass (2026-08-09)
+  Sprint:     v0.0.7, with three v0.0.9 correction passes
+              (2026-08-09 targeted; 2026-09-07 collections; 2026-09-07 verified)
   Test counts: authoritative via the test suite, not this header.
-    E2E / VM parity:  bash tests/scripts/vm_compare.sh
-    Unit tests:       cargo test
+    Three-engine consensus:  cd ../zyquality && ./zyq suite
+    Unit tests:              cargo test
 
-  SCOPE OF THE v0.0.9 PASS — read this before trusting a rule.
+  THE IMPLEMENTATION IS NORMATIVE, NOT THIS FILE.  Where they disagreed, the
+  parser was right and this grammar was corrected to match it — never the other
+  way round.  Every rule changed in the 2026-09-07 verification pass was probed
+  against the installed binary, and the probe is named in the comment beside it.
 
-  This file spent v0.0.8 describing v0.0.7.  Two features with grammar surface had
-  landed and were never written down, so the normative grammar rejected programs the
-  implementation runs:
+  SCOPE OF THE 2026-09-07 VERIFICATION PASS.
 
-    - or-patterns in a match arm (`1 || 2 || 3 => …`), added v0.0.8
-    - juxtaposition inside delimited positions — call arguments, array elements,
-      tuple elements and grouped expressions (REFERENCE.md L25), added v0.0.8
+  The earlier passes were *targeted*: they wrote down features known to have
+  landed.  This one asked the opposite question of every rule — does the parser
+  actually do this? — and found the grammar wrong in both directions.
 
-  Both are corrected above.  The pass was *targeted*: each feature that
-  IMPLEMENTATION.md marks as landing in v0.0.8/v0.0.9 was checked against the
-  implementation, not every rule in this file.  A full re-derivation from the parser
-  is `agents/ebnf_regen.md`, and has not been run since v0.0.7 — so treat an
-  unexercised corner of this grammar as unverified rather than as normative.
+  ADMITTED WHAT THE PARSER REFUSES (the dangerous direction: a normative grammar
+  that blesses programs no engine runs):
+    - the indexed assignment  a[i] = v  and all six compound forms  a[i] += v .
+      Withdrawn in v0.0.9; compound_assign_op went with it
+    - the chained index  m[1][2] , which this file's repeatable postfix_op
+      admitted.  Refused since v0.0.9 for reading as well as writing
+    - the bare dictionary literal  (a: 1) , refused since v0.0.9 in favour of
+      #(a: 1)  (corrected in the collections pass earlier the same day)
+
+  DESCRIBED THE IMPLEMENTATION WRONGLY:
+    - "#,|" was documented as an ELEMENT COUNT and "#^|" as a MAXIMUM VALUE.
+      They are the two number formats — thousands separators and scientific
+      notation.  This had been wrong for as long as the file existed
+    - the times loop said "Int expr > 0"; a count of 0 or less runs the body
+      zero times and is not an error.  And the condition path no longer reads
+      the specifier through truthiness at all
+    - id_start / id_continue were given as "letter or symbol"; the real rule is
+      stated by exclusion, which is why it takes every script without listing one
+
+  MISSING ALTOGETHER (the parser accepts these; the grammar did not have them):
+    - ##_ , the Unit literal          - 0d , the decimal base literal
+    - @ (k, v) : pairs , a pattern in the loop head
+    - the edit statement  a[2]$~ 99   - a String as a nav step (a dictionary key)
+
+  DANGLING SYMBOLS, now resolved: arg_list (meant call_arg_list), arm_pipe_expr
+  (used by match_arm_value and never defined), letter and unicode_symbol_char
+  (used by id_start and never declared as terminals).
+
+  A full re-derivation from the parser is `agents/ebnf_regen.md` and still has
+  not been run.  What this pass gives is different and weaker: every rule it
+  touched is verified, and an untouched corner remains unverified rather than
+  normative.
 
   Source of truth: Rust implementation in interpreter/crates/
     zymbol-lexer   (TokenKind catalog)
@@ -200,7 +229,8 @@ statement =
   | function_decl            (* name(params) { } *)
   | const_decl               (* name := expr *)
   | assignment_stmt          (* name = expr  and compound forms *)
-  | destructure_assign       (* [a,b]=expr  or  (a,b)=expr *)
+  | destructure_assign       (* [a,b]=expr, (a,b)=expr  or  #(k: v)=expr *)
+  | collection_update_stmt   (* a[2]$~ 99 — the edit statement (v0.0.9) *)
   | set_numeral_mode         (* #09#  (numeral-system switch) *)
   | bash_exec_stmt           (* <\ args \> *)
   | expr_stmt                (* function call as void statement *)
@@ -256,7 +286,7 @@ output_item_postfix =
     "[" , expr , "]"                       (* indexing *)
   | nav_index                               (* deep / flat / structured extract *)
   | "." , identifier                        (* member access *)
-  | "(" , arg_list , ")"                   (* call — only if base is not a literal *)
+  | "(" , call_arg_list , ")"              (* call — only if base is not a literal *)
   | collection_postfix
   | string_postfix
   | data_postfix
@@ -397,6 +427,26 @@ match_arm_block = block ;
 match_arm_value = arm_pipe_expr ;
 
 (*
+  arm_pipe_expr is  pipe_expr  with the bare comparison operators removed at top
+  level, so an arm's value cannot be mistaken for the next arm's comparison
+  pattern.  Parenthesised comparisons are unaffected: `_ => (a == b)` is fine.
+*)
+arm_pipe_expr =
+    arm_logic_or_expr
+  | arm_pipe_expr , "|>" , postfix_expr , [ "(" , pipe_arg_list , ")" ]
+  ;
+
+arm_logic_or_expr =
+    arm_logic_and_expr
+  | arm_logic_or_expr , "||" , arm_logic_and_expr
+  ;
+
+arm_logic_and_expr =
+    addition_expr
+  | arm_logic_and_expr , "&&" , addition_expr
+  ;
+
+(*
   TRY / CATCH / FINALLY.
   At least !? { } is required.  Multiple typed catch clauses are allowed.
   ##_ is a wildcard error type (catches any error).
@@ -415,9 +465,10 @@ try_stmt =
 (*
   Infinite loop: @ { body }
   While loop:   @ cond { body }       (Bool expr, re-evaluated each iteration)
-  Times loop:   @ n { body }          (Int expr > 0, evaluated ONCE -> n executions)
+  Times loop:   @ n { body }          (Int expr, evaluated ONCE -> n executions)
   For-each: @ item : iterable { body }
   For-range: @ i : start..end { body }  or  @ i : start..end:step { body }
+  With a pattern: @ (k, v) : pairs { body }   (v0.0.9)
   Labeled: @:label { body }   (the label token is @:identifier)
 
   Legacy fused labels (@label, merged with @ at lex time) are still accepted
@@ -435,10 +486,41 @@ loop_label = "@:" , identifier ;    (* lexed as a single AtColonLabel token *)
 
 loop_spec =
     loop_binding         (* for-each / for-range:  item : iterable *)
-  | expr                 (* Bool -> while; positive Int -> times  [C02] *)
+  | expr                 (* AN INT IS A COUNT, ANYTHING ELSE A CONDITION  [C02] *)
   ;
 
-loop_binding = identifier , ":" , expr ;    (* item : iterable *)
+(*
+  A SPECIFIER IS A COUNT OR A CONDITION — there is no truthiness (v0.0.9).
+
+    @ 5     Int  -> a count, evaluated ONCE.  n <= 0 runs the body zero times;
+                   it is not an error and it is not "positive Int" as this
+                   grammar said until v0.0.9.
+    @ cond  Bool -> a condition, re-evaluated each iteration.
+    anything else (array, float, string, Unit) -> a RUN-TIME ERROR,
+                   "loop expects a count or a condition, got <type>",
+                   and a static warning where the analyser can tell.
+
+  Truthiness used to be applied here and no two engines agreed on what it meant:
+  `@ []` ran zero times in the tree-walker, forever in the register VM, and
+  raised in the fourth engine.  Refusing the form is the only answer that is the
+  same everywhere.  To walk a collection use  @ x:items ; to count its elements,
+  @ items$# .
+  Gates: zyquality/corpus/loops/13_specifier_forms.zy (the forms that run)
+         zyquality/reject/loops/                      (the ones that must not)
+*)
+
+(*
+  The binding is a NAME or a PATTERN (v0.0.9): the same pattern language the
+  destructuring assignment uses, in the loop head.  On a dictionary,
+  `@ (k, v):d` hands over (key, value) pairs while `@ k:d` yields keys.
+*)
+loop_binding = ( identifier | loop_pattern ) , ":" , expr ;
+
+loop_pattern =
+    array_destructure_pattern
+  | positional_tuple_destructure
+  | dictionary_destructure
+  ;
 
 (*
   Break: exits the nearest loop or the named ancestor.
@@ -562,12 +644,44 @@ assignment_stmt =
   | lhs , "^=" , expr
   | identifier , "++"                  (* expands to  name = name + 1 *)
   | identifier , "--"                  (* expands to  name = name - 1 *)
-  | identifier , "[" , expr , "]" , compound_assign_op , expr  (* indexed assignment *)
   ;
 
 lhs = identifier | hot_identifier ;
 
-compound_assign_op = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "^=" ;
+(*
+  THE INDEXED ASSIGNMENT IS WITHDRAWN (v0.0.9).  This grammar carried
+
+      identifier , "[" , expr , "]" , compound_assign_op , expr
+
+  with compound_assign_op = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "^=" .
+  The parser refuses ALL SEVEN (zymbol-parser/src/variables.rs:49,87):
+
+      a[1] = 9    a[1] += 9    a[1] ^= 9
+      → error: indexed assignment does not exist: 'a[…] =' is not a form of Zymbol
+
+  "=" means "this NAME now holds this value", and  a[1] = 9  names nothing: it
+  reaches inside a structure and changes a part.  Modifying is  $~ , which says
+  so, and it is one rule for the array, the dictionary and (as a refusal) the
+  positional tuple.  See collection_update_stmt below and COLLECTIONS.md.
+  Gate: zyquality/reject/collections/ (05_indexed_assign_dict.zy and siblings)
+
+  compound_assign_op is gone with it: no production uses it any more.
+*)
+
+(*
+  Edit statement (v0.0.9): a collection_update used for its effect.  This is what
+  replaced the indexed assignment, and it had to land FIRST — refusing the old
+  form while the new one did not parse would have left the language with no way
+  to change an element at all.
+
+  The rule of the result: the same operator answers differently depending on what
+  the surrounding code does with it.  Discarded (a statement) it MODIFIES in
+  place; used (an expression) it BUILDS and leaves the original alone.
+
+      a[2]$~ 99            — statement: modifies a
+      b = a[2]$~ 99        — expression: builds b, a untouched
+*)
+collection_update_stmt = collection_update ;
 
 (*
   Constant declaration: name := expr
@@ -579,12 +693,18 @@ const_decl = identifier , ":=" , juxtapose_chain ;
   Destructure assignment.
   Array form: [a, b, *rest, _] = expr
   Positional tuple form: (a, b, *rest) = expr
-  Named tuple form: (field1: var1, field2: var2) = expr
+  Dictionary form: #(field1: var1, field2: var2) = expr
+
+  The bracket shape is TYPED and checked at run time (REFERENCE.md L32): an
+  array pattern requires an array, a tuple pattern a tuple.  The last name
+  ABSORBS the remainder (L33), taking the container's shape, or  ##_  when
+  nothing is left — destructuring never fails on length.
+  Only one  *rest  per pattern; two are ambiguous by definition.
 *)
 destructure_assign =
     array_destructure_pattern , "=" , expr
   | positional_tuple_destructure , "=" , expr
-  | named_tuple_destructure , "=" , expr
+  | dictionary_destructure , "=" , expr
   ;
 
 array_destructure_pattern =
@@ -595,8 +715,8 @@ positional_tuple_destructure =
     "(" , positional_destructure_item , { "," , positional_destructure_item } , ")"
   ;
 
-named_tuple_destructure =
-    "(" , identifier , ":" , identifier , { "," , identifier , ":" , identifier } , ")"
+dictionary_destructure =
+    "#(" , identifier , ":" , identifier , { "," , identifier , ":" , identifier } , ")"
   ;
 
 destructure_item =
@@ -724,8 +844,23 @@ unary_expr =
 *)
 postfix_expr = unary_expr , { postfix_op } ;
 
+(*
+  ONE BRACKET GROUP PER ACCESS.  This production is repeatable, so the grammar
+  alone would admit  m[1][2] .  The parser REFUSES it (v0.0.9):
+    error: chained index does not exist: 'm[…][…]' is not a form of Zymbol
+    help:  nesting is navigated with '>', so this is 'm[i>j]'
+
+  The rule governs how an element is ADDRESSED, not what is done with it, so the
+  chain is refused as soon as it is read — read, bind, edit, build, any other $.
+  What stays legal is a bracket after something that is not itself an access:
+  `[1,2,3][2]`, `f()[2]`, and indexing what an extraction BUILT — an extraction
+  does not descend into m, it collects paths into a new collection.
+  Gates: zyquality/reject/collections/11_corchetes_encadenados.zy
+         zyquality/addressing/  (24 cells: every chained receiver refused,
+                                 every navigator receiver accepted)
+*)
 postfix_op =
-    "[" , expr , "]"                (* regular indexing *)
+    "[" , expr , "]"                (* regular indexing — not chainable *)
   | nav_index                        (* deep / flat / structured navigation *)
   | "." , identifier                 (* member access  obj.field *)
   | "::" , identifier , [ "(" , call_arg_list , ")" ]  (* module call  alias::fn(args) *)
@@ -785,8 +920,9 @@ collection_remove_positional =
   collection_update — requires an already-indexed LHS; returns a NEW collection.  [C04]
   The  $~  token is only valid when the left-hand expression is an index expr:
     arr[i]$~ val           — array element (1-based, negative allowed)
-    tuple[i]$~ val         — positional/named tuple by index
-    nt["field"]$~ val      — named tuple by field-name string (v0.0.6)
+    tuple[i]$~ val         — positional tuple by index (builds; a tuple never changes)
+    d["field"]$~ val       — dictionary by key (v0.0.6); adds the key if absent (v0.0.9).
+                             A dictionary is NOT addressed by position: d[1] is an error
     arr[i>j>…]$~ val       — deep update through a nav path (scalar steps only;
                              ranges (..) are not allowed in a $~ path)
 *)
@@ -857,12 +993,30 @@ data_postfix =
     "#?"                                   (* type metadata:  expr#? *)
   ;
 
+(*
+  VERIFIED 2026-09-07 against the binary.  Two of these were described wrongly
+  for as long as this file has existed: "#,|" is NOT an element count and "#^|"
+  is NOT a maximum value.  They are the two number FORMATS.
+
+    #|expr|          numeric eval / cast — parses text to Int/Float.  Reads a
+                     digit in ANY of the 69 supported scripts, and a Char too
+                     (v0.0.9): #|'७'| is 7.  Fail-safe: returns its input
+                     unchanged when it cannot convert.
+    #,|12345.678|    → 12,345.678     thousands separators
+    #^|12345.678|    → 1.2345678e4    scientific notation
+    #.2|x|           → round to 2 decimals
+    #!2|x|           → truncate to 2 decimals
+
+  #, and #^ write their digits in the ACTIVE numeral script (v0.0.9), and the
+  separators follow the script; the pair never inverts — "," groups and "."
+  divides, in every script.
+*)
 data_wrapped_expr =
     "#|" , expr , "|"                     (* numeric eval / cast:  #|expr| *)
-  | "#,|" , expr , "|"                   (* element count *)
-  | "#^|" , expr , "|"                   (* maximum value *)
+  | "#,|" , expr , "|"                   (* thousands separators *)
+  | "#^|" , expr , "|"                   (* scientific notation *)
   | "#." , integer_literal , "|" , expr , "|"  (* round to N decimals: #.N|expr| *)
-  | "#!" , integer_literal , "|" , expr , "|"  (* format to N decimal places: #!N|expr| *)
+  | "#!" , integer_literal , "|" , expr , "|"  (* truncate to N decimals: #!N|expr| *)
   ;
 
 (*
@@ -873,7 +1027,15 @@ base_literal =
     "0x" , hex_digits      (* hexadecimal *)
   | "0b" , bin_digits      (* binary *)
   | "0o" , oct_digits      (* octal *)
+  | "0d" , { digit }       (* explicit decimal *)
   ;
+
+(*
+  A base literal in the ASCII range is a CHARACTER literal, not an Int:
+  0d65 == 'A'  is #1  and  0d65 == 65  is #0 .  All four bases spell the same
+  character — 0d27, 0x1b, 0o33, 0b11011 are ESC.  This is the written form of
+  what  ##!'c'  reads back (a Char's code point).
+*)
 
 (*
   Error check / propagate postfix.
@@ -915,11 +1077,17 @@ nav_path = nav_step , { ">" , nav_step } ;
 
 nav_step = nav_atom , [ ".." , nav_atom ] ;  (* range step within a dimension *)
 
+(*
+  A step's VALUE decides what it means (v0.0.9): an Int is a position and a
+  String is a key, so one nav path walks arrays and dictionaries alike —
+  d["x">"y"] reaches through two dictionaries, m[1>2] through two arrays.
+*)
 nav_atom =
     integer_literal
   | "-" , integer_literal     (* negative index *)
+  | string_literal            (* dictionary key (v0.0.9) *)
   | identifier
-  | "(" , expr , ")"         (* computed index *)
+  | "(" , expr , ")"         (* computed index or key *)
   ;
 
 extract_group = "[" , nav_path , { "," , nav_path } , "]" ;
@@ -967,6 +1135,8 @@ primary_expr =
   | "(" , expr , ")"                      (* grouped expression *)
   | tuple_or_grouped
   | array_literal
+  | declared_mix_literal                   (* #[ … ]  (v0.0.9) *)
+  | dictionary_literal                     (* #( … )  (v0.0.9) *)
   | match_expr                             (* ?? expr { cases } *)
   | lambda_expr                            (* x -> expr  or  (a,b) -> expr *)
   | terminal_size_expr                     (* >>? — returns (cols, rows) *)
@@ -978,14 +1148,37 @@ primary_expr =
   ;
 
 (*
-  Grouped expression and tuple share the same leading  ( .
-  Named tuple is detected when the first token is  Ident  followed by  : .
+  Grouped expression and positional tuple share the same leading  ( .
+  Since v0.0.9 the dictionary does NOT: it is  #( … ) , so the parser no longer
+  decides between the two by looking for an  Ident  followed by  ":" .  A bare
+  "(" ident ":" … ")" is refused outright — see dictionary_literal below.
+  There is no empty tuple: "()" is only ever a zero-parameter lambda's head.
 *)
 tuple_or_grouped =
     "(" , juxtapose_chain , ")"            (* grouped (single expr) *)
   | "(" , juxtapose_chain , "," , juxtapose_chain , { "," , juxtapose_chain } , ")"  (* positional tuple *)
-  | "(" , identifier , ":" , expr , { "," , identifier , ":" , expr } , ")"  (* named tuple *)
   ;
+
+(*
+  The DICTIONARY has a notation of its own since v0.0.9:  #( … ) .  The bare
+  "(" identifier ":" … ")" form is REFUSED ("a dictionary is written `#(…)`") --
+  one bracket shape carried two types that behave nothing alike, and the EMPTY
+  dictionary forced the split, since "()" cannot also be the empty tuple.
+  Keys may be strings as well as identifiers.
+*)
+dictionary_literal =
+    "#(" , ")"                                                   (* empty dictionary *)
+  | "#(" , dict_entry , { "," , dict_entry } , ")"
+  ;
+
+dict_entry = ( identifier | string_literal ) , ":" , expr ;
+
+(*
+  Declared-mixed array (v0.0.9): the same TYPE as array_literal -- [1,2] == #[1,2] --
+  and the mark is a statement about intent.  "[…]" is checked for homogeneity,
+  "#[…]" is not, and a "#[…]" that turns out homogeneous warns.
+*)
+declared_mix_literal = "#[" , [ juxtapose_chain , { "," , juxtapose_chain } , [ "," ] ] , "]" ;
 
 array_literal = "[" , [ juxtapose_chain , { "," , juxtapose_chain } , [ "," ] ] , "]" ;
 
@@ -1024,7 +1217,24 @@ literal =
   | integer_literal
   | float_literal
   | bool_literal
+  | unit_literal
   ;
+
+(*
+  Unit literal (v0.0.9): the value of absence, and how a program asks for it.
+  Unit was the only type whose value could not be WRITTEN — reachable everywhere
+  (a function with no <~, json::decode("null"), a NULL column out of std/db) and
+  unspellable, so asking meant taking the type reflection apart.
+
+  "##_" is not a new mark: it was already Unit's type symbol, and already the
+  "any kind" mark in  :! ##_ .  Both are the reading "_" has throughout the
+  language — the one that is not specified.
+
+  Do not ask by the count: #?'s second field is 0 for FOUR values (Unit, "",
+  [] and #()), so a predicate on it answers yes to all four.  Compare instead:
+  es_nulo(v) { <~ v == ##_ } .
+*)
+unit_literal = "##_" ;
 
 (*
   String literal: delimited by double quotes.
@@ -1067,6 +1277,12 @@ char_escape  = "\\n" | "\\t" | "\\r" | "\\'" | "\\\\" | "\\0" ;
   Integer literal: decimal digits.  Underscores are allowed as separators.
   Also includes Unicode digit blocks (Devanagari, Bengali, …) when the
   active numeral mode is set.
+
+  The grammar admits any number of digits; the *value* must fall in the safe
+  integer range ±(2^53 - 1), and one outside it is a lexical error
+  ("integer literal out of range").  The bound is not a property of the syntax
+  but of the language's integer type -- see REFERENCE.md, Numeric limits, and
+  zymbol-common/src/num.rs, which every engine implements.
 *)
 integer_literal = digit , { digit | "_" } ;
 
@@ -1103,6 +1319,35 @@ identifier = id_start , { id_continue } ;
 
 id_start    = letter | unicode_symbol_char ;
 id_continue = letter | digit | "_" | unicode_symbol_char ;
+
+(*
+  Both are LEXICAL terminals, decided by one function pair and no other:
+  Lexer::is_ident_start / Lexer::is_ident_continue (zymbol-lexer/src/lib.rs:422,444),
+  which the semantic analyser and the LSP defer to rather than re-derive.
+
+  The real rule is stated by EXCLUSION, which is wider than "letter or symbol"
+  and is why it takes every script without a list of scripts:
+
+    is_ident_start(c)     '_', or c.is_alphabetic(), or — for emoji and other
+                          symbols — any c that is NOT whitespace, NOT a digit in
+                          ANY of the 69 numeral blocks, and NOT an operator char
+    is_ident_continue(c)  c.is_alphanumeric() or '_', or any c that is NOT
+                          whitespace and NOT an operator char
+
+    operator chars        > < = ! + - * / % ^ & | ? : . , ; ( ) [ ] { } @ ~ # $ ¶ \
+
+  So 漢字, देवनागरी and ελληνικά are ordinary identifiers because they are
+  alphabetic; Klingon pIqaD (CSUR U+F8D0–F8FF, category Co) qualifies through the
+  exclusion clause; and the apostrophe inside a word — which tlhIngan Hol needs
+  for mI' — continues an identifier because it is neither whitespace nor an
+  operator character.  Verified: `f(mI') { <~ mI' }` returns 7.
+
+  Rule: never re-derive "is this an identifier character?" locally.  There is
+  one answer and it lives in the lexer (HLZ-KL-001, where a narrower local copy
+  cost hover, completion and a false "unused variable").
+*)
+letter              = (* c.is_alphabetic() — any Unicode letter *) ;
+unicode_symbol_char = (* the exclusion clause above; see the lexer *) ;
 
 (*
   Hot identifiers carry the ° (DEGREE SIGN, U+00B0) prefix or suffix.
@@ -1180,11 +1425,27 @@ block_comment = "/*" , { block_comment | (* any character *) } , "*/" ;
     $#   $+   $+[  $-   $-[  $--   $?   $??  $~~  $/   $*   $~
     $[   $>   $|   $<   $^+  $^-   $^   $++
 
+  COLLECTION LITERALS
+    [ … ]       array, homogeneous and checked
+    #[ … ]      array whose mix of element types is DECLARED (v0.0.9)
+    ( … )       positional tuple, immutable.  There is no empty tuple.
+    #( … )      dictionary; #() is the empty one (v0.0.9)
+
   ERROR
     $!   $!!
 
   TYPE / DATA
     ##.  ###  ##!   #|  #,|  #^|  #.N|  #!N|   #?
+    ##_         the Unit literal, and the wildcard error kind in  :! ##_  (v0.0.9)
+
+  TYPE SYMBOLS — what  x#?  answers in its first field (verified 2026-09-07)
+    ###  Int      ##.  Float    ##"  String   ##'  Char    ##?  Bool
+    ##]  Array    ##[  declared mix   ##)  tuple   ##(  dictionary
+    ##() named function          ##-> lambda
+    ##_  Unit     ##Kind  an error, whose symbol IS its kind (##IO, ##Key, …)
+
+    Note the collision worth knowing: "##(" is the DICTIONARY and "##()" — with
+    the closing paren — is a named FUNCTION.
 
   MODULE
     <#   #>   ::   =>
@@ -1209,9 +1470,14 @@ block_comment = "/*" , { block_comment | (* any character *) } , "*/" ;
     >   (dimension separator inside [...])
     ;   (path separator inside [...])
 
+  BASE LITERALS
+    0x  0o  0b  0d   — and in the ASCII range these are CHARACTER literals:
+                       0d65 == 'A' is #1, 0d65 == 65 is #0
+
   MISC
     ¶   \\   \   <~   ~   °
     </ />   <\ \>
+    <~ at the top level of a file is the program's EXIT STATUS (v0.0.9)
 
   NUMERAL MODE
     #09#  (any Unicode digit-block 0 and 9 in the same block)
@@ -1233,7 +1499,9 @@ block_comment = "/*" , { block_comment | (* any character *) } , "*/" ;
   [NI03] Match binding  pattern as name  — DISMISSED 2026-06-12: will not be
          implemented; bind the value before the match instead.
   [NI04] Lambda $!!  as a standalone HOF  — $!! is postfix on an expr, not HOF
-  [NI05] Dict / map literals  #{ key: val }  — not in current lexer or parser
+  [NI05] Dict / map literal — IMPLEMENTED in v0.0.9, spelled  #( key: val ) ,
+         not the  #{ … }  of this old note.  The empty one is  #() , and the
+         bare  ( key: val )  is refused.  See dictionary_literal above.
   [NI06] First-class function composition  :.  — not implemented
   [NI07] Sum types / variant constructors — not implemented
 *)
