@@ -984,7 +984,7 @@ fn module_decl_errors(
         let Ok(src) = fs::read_to_string(&module_path) else { continue };
         let file_id = source_map.add_file(display_path(&module_path), src.clone());
         let (tokens, _) = zymbol_lexer::Lexer::new(&src, file_id).tokenize();
-        let mut parser = zymbol_parser::Parser::new(tokens);
+        let parser = zymbol_parser::Parser::new(tokens);
         let Ok(module_program) = parser.parse() else { continue };
 
         let base = module_path.parent().unwrap_or(Path::new(".")).to_path_buf();
