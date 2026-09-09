@@ -145,13 +145,22 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: OCaml, for zyq itself
+      - name: OCaml for zyq, and the SQLite driver ZyBank keeps its money in
         # `zyq` is written in OCaml with no dune and no opam switch — ocamlopt
         # and the unix library that ships with it. It is not committed
         # (zyquality/.gitignore), so it is built here.
+        #
+        # ZyBank is a ledger and it stores the ledger in SQLite through std/db,
+        # which reaches it through unixODBC. Without the driver its suite does
+        # not fail interestingly, it fails at SQLDriverConnect — a runner that
+        # cannot open a database has nothing to say about double-entry
+        # bookkeeping. `libsqliteodbc` registers both spellings the code looks
+        # for (`SQLite` and `SQLite3`) in /etc/odbcinst.ini.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ocaml-nox
+          sudo apt-get install -y --no-install-recommends \
+            ocaml-nox unixodbc libsqliteodbc
+          odbcinst -q -d
 
       - uses: actions/cache@v4
         with:
