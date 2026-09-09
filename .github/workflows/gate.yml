@@ -1,0 +1,180 @@
+name: Gate
+
+# The gate is not in this repository, and that is the point.
+#
+# The corpus, the goldens and the three-engine comparison live in ZyQuality; the
+# formatter's contract lives in ZyFmtCheck, outside the thing it constrains; the
+# declared matrix and the two lexer surfaces live in ZyDDT. Each is a separate
+# repository on purpose. The cost of that arrangement is this file: something has
+# to assemble the workspace they expect, or "the gate is green" stays a fact about
+# somebody's laptop instead of a fact about a commit.
+#
+# Until this existed, nothing in `interpreter/` ran on push at all — the release
+# workflows were the only automation, and they build packages rather than ask
+# whether the language still works. A release was gated on a suite that only ever
+# ran where somebody remembered to run it.
+#
+# Exit codes are the project's own contract: 0 clean, 1 found something, 2 could
+# not run. A step that cannot run fails; a gate must not read "nothing ran" as
+# "nothing failed".
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # ubuntu-22.04 for the same reason the release builds on it: its glibc (2.35)
+  # is older than debian:12's, so anything compiled here starts everywhere the
+  # packages are meant to run.
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust — tests, formatting, build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: gate-cargo-${{ hashFiles('Cargo.lock') }}
+
+      # `cargo fmt --check` is deliberately NOT here, and this is the reason
+      # rather than an oversight. The repository pins no toolchain — there is no
+      # rust-toolchain.toml — so every machine formats with whatever stable it
+      # has that week, and rustfmt's output moves between releases: running
+      # `cargo fmt` on this tree with rustfmt 1.9.0 (2026-09-01) rewrites 131
+      # files and 9,376 lines, none of it anybody's change. A gate that goes red
+      # on the day a runner updates is a gate people learn to ignore.
+      #
+      # Making it a gate means pinning the toolchain first, for the release
+      # builds as well as for this job. That is a decision about the project,
+      # not about this workflow.
+
+      - name: Build (release, as packaged)
+        run: cargo build --release
+
+      - name: Unit and integration tests
+        run: cargo test --workspace --release
+
+  gate:
+    name: ZyQuality + ZyFmtCheck + ZyDDT
+    runs-on: ubuntu-22.04
+    steps:
+      # Everything is checked out under $GITHUB_WORKSPACE as siblings, because
+      # that is the layout every one of these repositories resolves against:
+      # zyquality reaches ../interpreter and ../web, ZyDDT reaches ../web and
+      # ../vscode, zyquality/project/apps.toml names ../GO/試験 and its kin.
+      - name: Interpreter
+        uses: actions/checkout@v4
+        with:
+          path: interpreter
+
+      - name: The QA repositories
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          clone() { git clone --depth 1 "https://github.com/zymbol-lang/$1.git" "$2"; }
+          clone zyquality  zyquality
+          clone ZyDDT      ZyDDT
+          clone ZyFmtCheck ZyFmtCheck
+
+      # The browser engine and the VS Code grammar are two of the five surfaces
+      # ZyDDT grades. Without them it reports them BLOCKED rather than passing —
+      # which is correct and is also two thirds of the question going unasked.
+      - name: The other two surfaces
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          git clone --depth 1 https://github.com/zymbol-lang/web.git    web
+          git clone --depth 1 https://github.com/zymbol-lang/vscode.git vscode
+
+      # The applications ZyQuality's `project` suite and ZyFmtCheck's default
+      # body run over. An application whose checkout is absent is reported absent
+      # and not counted, so a failure to clone one would quietly shrink the gate:
+      # `set -e` makes it fail here instead.
+      - name: The applications written in Zymbol
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          git clone --depth 1 https://github.com/zymbol-lang/zy-GO.git           GO
+          git clone --depth 1 https://github.com/zymbol-lang/zyChaturanga.git    Chaturanga
+          git clone --depth 1 https://github.com/zymbol-lang/zy-Serpiente.git    serpiente
+          git clone --depth 1 https://github.com/zymbol-lang/zyKlingonGalaxy.git klingon_galaxy
+          git clone --depth 1 https://github.com/zymbol-lang/zy-Zofia.git        Zofia
+          git clone --depth 1 https://github.com/zymbol-lang/zy-ZyAudit.git      ZyAudit
+          git clone --depth 1 https://github.com/zymbol-lang/ZyBank.git          ZyBank
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: OCaml, for zyq itself
+        # `zyq` is written in OCaml with no dune and no opam switch — ocamlopt
+        # and the unix library that ships with it. It is not committed
+        # (zyquality/.gitignore), so it is built here.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ocaml-nox
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            interpreter/target
+          key: gate-cargo-${{ hashFiles('interpreter/Cargo.lock') }}
+
+      - name: Build the interpreter
+        working-directory: interpreter
+        run: cargo build --release
+
+      - name: The VS Code grammar's tokeniser
+        # tmgrammar_scopes.mjs tokenises with real vscode-textmate over
+        # Oniguruma, which is the whole reason that surface is worth grading:
+        # a hand-rolled regex reader would agree with the grammar by
+        # construction.
+        working-directory: vscode
+        run: npm ci
+
+      - name: Put the built interpreter on PATH
+        run: |
+          echo "ZYMBOL_BIN=$GITHUB_WORKSPACE/interpreter/target/release/zymbol" >> "$GITHUB_ENV"
+          echo "$GITHUB_WORKSPACE/interpreter/target/release" >> "$GITHUB_PATH"
+
+      - name: Build zyq
+        working-directory: zyquality
+        run: make
+
+      # One command, one verdict. `zyq suite` runs the differential questions it
+      # asks itself and every suite registered in suites.toml — which now
+      # includes ZyFmtCheck and ZyDDT, so this single step is the whole layer.
+      - name: zyq suite — the corpus, the goldens, ZyFmtCheck, ZyDDT
+        working-directory: zyquality
+        run: ./zyq suite
+
+      # Run again on its own so a failure names the layer in the job list rather
+      # than only inside a report, and so ZyDDT is still exercised if it is ever
+      # unregistered from suites.toml. It is seconds; the corpus above is
+      # minutes.
+      - name: ZyDDT — the declared matrix, on its own
+        working-directory: ZyDDT
+        run: ./bin/zyddt suite
+
+      - name: What each layer said
+        if: always()
+        working-directory: zyquality
+        run: ./zyq suites >> "$GITHUB_STEP_SUMMARY"
