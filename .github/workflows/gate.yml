@@ -162,6 +162,17 @@ jobs:
             ocaml-nox unixodbc libsqliteodbc
           odbcinst -q -d
 
+          # The three std/db tests connect through a data source named
+          # `zymbol_sqlite`, not through a driver name: unixODBC calls the driver
+          # `SQLite3` and the Windows installer calls it `SQLite3 ODBC Driver`,
+          # so a connection string naming the driver could only ever work on the
+          # platform it was written on. corpus/stdlib/README-odbc.md is where
+          # that decision lives, and this is its Linux stanza, verbatim.
+          # `Database` stays empty: each test names its own file, so they cannot
+          # collide.
+          printf '\n[zymbol_sqlite]\nDriver = SQLite3\nDatabase =\n' >> ~/.odbc.ini
+          odbcinst -q -s
+
       - uses: actions/cache@v4
         with:
           path: |
