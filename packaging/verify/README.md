@@ -10,6 +10,7 @@ uploaded. Nothing ever installed the result. This directory closes that gap.
 |-------|-------|----------------|
 | `build-linux` | `release-linux.yml` | The packages compile and are produced |
 | `verify-linux` | `verify-linux-packages.yml` → `verify-deb.sh` in `debian:12` | The `.deb` installs on a clean system and the installed binary works |
+| ↳ ZyQuality | built on the runner, mounted into the container | The corpus that section 6 runs — it is not in this repository |
 | `publish-linux` | `release-linux.yml` | Only reached if verification passed |
 
 Publication is gated: `gh release upload` now lives in a job that `needs`
@@ -29,6 +30,10 @@ bash packaging/verify/run-local.sh
 `.deb`, and hands it to the same script and the same `debian:12` image CI uses —
 a failure here is the failure CI would report. `--no-build` reuses what is
 already built; `--scope smoke` skips the E2E suite.
+
+`--scope full` also needs a **built** ZyQuality checkout (`make -C ../zyquality`,
+or `ZYQ_ROOT` pointing at one) — see [the corpus is not in this
+repository](#the-corpus-is-not-in-this-repository) below.
 
 **Where it compiles.** A binary runs on its build machine's glibc or newer,
 never older. On a host newer than the verification image — Debian 13 is glibc
@@ -57,7 +62,7 @@ package has. Exit 0 means all checks passed.
 
 | Section | Checks |
 |---------|--------|
-| 1. Metadata | `Package`, `Version` vs `Cargo.toml`, `Architecture`, `Maintainer`, `Description`, `Depends: libc6`, filename matches the release convention |
+| 1. Metadata | `Package`, `Version` vs `Cargo.toml`, `Architecture`, `Maintainer`, `Description`, `Depends: libc6`, `Homepage` is not still the template's placeholder, filename matches the release convention |
 | 2. Contents | `/usr/bin/zymbol` (mode 755), desktop entry, copyright, icon; nothing under `/usr/local` or `/opt` |
 | 3. Installation | `dpkg -i` on a pristine Debian with no unmet dependencies, `dpkg --audit` clean, `zymbol` on `PATH`, `--version` agrees with `Cargo.toml` |
 | 4. Linkage | Every `.so` the binary needs is covered by `Depends` — see below |
@@ -101,6 +106,42 @@ and then fail to start. That is why every release build passes
 dropping that flag: anything outside `libc / libm / libgcc / libdl / libpthread
 / librt / vdso / ld-linux` fails the release.
 
+### The corpus is not in this repository
+
+Section 6 runs `tests/scripts/vm_compare.sh`, and that script is a **wrapper**:
+the corpus, the goldens and the comparison live in the sibling `zyquality`
+repository, where all three engines are graded on the same files. The wrapper
+finds it at `../zyquality`, or wherever `ZYQ_ROOT` says.
+
+Inside a container it is a sibling of nothing. A checkout of this repository
+alone has no corpus, the wrapper exits **2** — its contract for "could not run" —
+and section 6 fails for a reason that has nothing to do with the package. So CI
+clones ZyQuality, builds `zyq` on the runner, and mounts it:
+
+```bash
+-v "$ZYQ:/zyquality" -e ZYQ_ROOT=/zyquality
+```
+
+Three things follow from where each part is built, and all three were found by
+running it rather than by reading it:
+
+- **`ocaml-nox` is installed on the runner, never in the image.** `zyq` is
+  OCaml and is not committed. Installing a compiler into `debian:12` would end
+  the one claim the container exists to make — that the package needs nothing
+  the base image lacks.
+- **`debian:12` ships no `python3`.** The wrapper used it to turn `zyq --json`
+  into the summary file this script reads; it now falls back to `sed` when there
+  is no interpreter, so the container stays untouched either way.
+- **`zyq` obeys the same glibc rule as everything else.** Built on Debian 13 it
+  will not start in `debian:12`. CI never meets this, because `ubuntu-22.04` is
+  older than the image; a current workstation always does, so `run-local.sh`
+  detects it and compiles a `zyq` inside the image, in a copy, mounting it over
+  the checkout's own so the host keeps the binary it uses for `zyq suite`.
+
+The alternative — running the corpus on the runner against a binary unpacked with
+`dpkg-deb -x` — was not taken. It is the same bytes, but it is no longer the
+binary *as installed*, and the point of this gate is the artefact a user gets.
+
 ### The E2E suite cannot judge a binary that does not run
 
 `vm_compare.sh` compares the two engines *against each other*. A binary that
@@ -139,7 +180,11 @@ ships in the packages, and the documented 544/544 never saw it because it is
 measured with a full-featured binary. Verifying the artefact users install is
 what surfaced it, so the suite stays unfiltered.
 
-Current numbers for a release `.deb`: 544 files, 544 pass, 0 fail, 0 skip.
+Current numbers for a release `.deb`: **666 files, 660 pass, 0 fail, 6 skip** —
+the six being files no two engines can run, each excused by a reason in
+`zyquality/corpus.toml`. The number moves as the corpus grows; the invariant the
+gate actually enforces does not (`fail == 0`, and every collected file accounted
+for).
 
 ## Suite entry points
 

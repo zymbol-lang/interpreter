@@ -8,7 +8,7 @@ Version:        {{VERSION}}
 Release:        1%{?dist}
 Summary:        Zymbol symbolic programming language
 License:        AGPL-3.0-only
-URL:            https://github.com/your-username/zymbol-lang
+URL:            https://zymbol-lang.org
 
 # Pre-built binary package — no compilation at install time.
 # Source0 is a tarball containing only the compiled binary.
