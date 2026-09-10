@@ -96,57 +96,81 @@ jobs:
         with:
           path: interpreter
 
-      - name: The QA repositories
+      # One helper, one rule: take THIS branch when the sibling has it, and its
+      # default branch otherwise.
+      #
+      # Cloning `main` unconditionally is what the first runs did, and it grades
+      # the branch against last release's engines. web's `main` still ACCEPTS
+      # `arr[i][j]`, which v0.0.9 refuses, so `addressing` reported four zyjs
+      # failures and `messages` counted 101 of the 197 diagnostics that branch
+      # defines — neither a defect in anything here. A sibling with no branch of
+      # this name is not a problem: most track `main`, and only the engines
+      # carry a version branch.
+      #
+      # It follows that CI grades what is PUSHED. Uncommitted work on a sibling
+      # is invisible here, which is the point of a gate, and is worth
+      # remembering the day a local run and this one disagree.
+      - name: The workspace every one of these repositories resolves against
+        env:
+          BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
-          clone() { git clone --depth 1 "https://github.com/zymbol-lang/$1.git" "$2"; }
+          clone() {
+            local repo="$1" dir="$2" url="https://github.com/zymbol-lang/$1.git"
+            if git clone --depth 1 --branch "$BRANCH" "$url" "$dir" 2>/dev/null; then
+              echo "  $dir <- $repo@$BRANCH"
+            else
+              git clone --depth 1 "$url" "$dir"
+              echo "  $dir <- $repo@(default)"
+            fi
+          }
+
+          # QA: the corpus, and the two layers its suites.toml registers.
           clone zyquality  zyquality
           clone ZyDDT      ZyDDT
           clone ZyFmtCheck ZyFmtCheck
 
-      # The browser engine and the VS Code grammar are two of the five surfaces
-      # ZyDDT grades. Without them it reports them BLOCKED rather than passing —
-      # which is correct and is also two thirds of the question going unasked.
-      - name: The other two surfaces
-        run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
-          git clone --depth 1 https://github.com/zymbol-lang/web.git    web
-          git clone --depth 1 https://github.com/zymbol-lang/vscode.git vscode
+          # The browser engine and the VS Code grammar — two of the five
+          # surfaces ZyDDT grades. Absent, it reports them BLOCKED rather than
+          # passing, which is correct and is also two thirds of the question
+          # going unasked.
+          clone web    web
+          clone vscode vscode
 
-      # The applications ZyQuality's `project` suite and ZyFmtCheck's default
-      # body run over. An application whose checkout is absent is reported absent
-      # and not counted, so a failure to clone one would quietly shrink the gate:
-      # `set -e` makes it fail here instead.
+          # The applications ZyQuality's `project` suite and ZyFmtCheck's
+          # default body run over. An app whose checkout is absent is reported
+          # ABSENT and not counted, so a failed clone would quietly shrink the
+          # gate rather than fail it; `set -e` makes it fail instead.
+          clone zy-GO           GO
+          clone zyChaturanga    Chaturanga
+          clone zy-Serpiente    serpiente
+          clone zyKlingonGalaxy klingon_galaxy
+          clone zy-Zofia        Zofia
+          clone zy-ZyAudit      ZyAudit
+          clone ZyBank          ZyBank
+
+      # ZyAudit is cloned — ZyFmtCheck formats it and compares against the same
+      # machine's own output, which no service can perturb — but four of its
+      # eight goldens record the machine that WROTE them:
       #
-      # ZyAudit is deliberately NOT cloned, and its absence is the mechanism
-      # apps.toml documents for exactly this. Four of its eight goldens record
-      # the machine that wrote them rather than the program:
+      #   test_召模   `已安装: #1`: that Ollama is installed and answering on
+      #               localhost:11434. `模_已装()` checks the binary,
+      #               `模_检查()` the service.
+      #   test_构提   the other three shell out and keep the system's error text
+      #   test_解析   in the golden, in Spanish — "No existe el fichero o el
+      #   test_计量   directorio" — where a runner answers in English.
       #
-      #   test_召模      `已安装: #1` — that Ollama is installed and answering
-      #                  on localhost:11434. `模_已装()` checks the binary and
-      #                  `模_检查()` the service.
-      #   test_构提      the other three shell out, and the golden holds the
-      #   test_解析      system's error text: "No existe el fichero o el
-      #   test_计量      directorio". A runner answers in English, so the
-      #                  goldens encode a Spanish locale.
-      #
-      # Neither is something a runner should fake — installing a language model
-      # on CI to turn one golden green answers the wrong question. They stay
-      # covered by the local run before a merge, which is where the service and
-      # the locale actually are. Cloning it again is one line, once the four
-      # goldens stop recording their machine.
-      - name: The applications written in Zymbol
+      # Removing the golden leaves the program: `zyq` still runs all eight
+      # through both engines and still requires them to agree, which is the part
+      # that is about Zymbol. Only the comparison against a recorded machine
+      # goes, and that stays in the local run before a merge — which is where
+      # the service and the locale actually are.
+      - name: Retire the four ZyAudit goldens that record a machine
         run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
-          git clone --depth 1 https://github.com/zymbol-lang/zy-GO.git           GO
-          git clone --depth 1 https://github.com/zymbol-lang/zyChaturanga.git    Chaturanga
-          git clone --depth 1 https://github.com/zymbol-lang/zy-Serpiente.git    serpiente
-          git clone --depth 1 https://github.com/zymbol-lang/zyKlingonGalaxy.git klingon_galaxy
-          git clone --depth 1 https://github.com/zymbol-lang/zy-Zofia.git        Zofia
-          git clone --depth 1 https://github.com/zymbol-lang/ZyBank.git          ZyBank
+          cd "$GITHUB_WORKSPACE/ZyAudit/测试"
+          rm -f test_召模.expected test_构提.expected \
+                test_解析.expected test_计量.expected
 
       - uses: dtolnay/rust-toolchain@stable
 
