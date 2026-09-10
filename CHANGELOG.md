@@ -7,6 +7,929 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
+## [0.0.9] — 2026-09-09
+
+The Windows work that began as `v0.0.8_HotFix01` belongs here. Eleven findings is not
+a patch on top of a release, so there is **no 0.0.8.1**: the branch became `v0.0.9` and
+those corrections ship inside it. See [WINDOWS_V009.md](WINDOWS_V009.md).
+
+This is also the first release with a gate that runs somewhere other than the author's
+machine. `.github/workflows/gate.yml` assembles the twelve checkouts ZyQuality, ZyDDT
+and ZyFmtCheck resolve against and runs them on every push, and `verify-linux-packages.yml`
+can reach the corpus again — it could not, once the corpus moved out of this repository,
+which would have published this release with no Linux package at all.
+
+### Added
+
+**Decision 19 enforced: discarding a consulting `$` is dead code, and says so**
+
+```text
+s$~~["a":"X"]
+warning: this statement does nothing: `$~~` builds a value and it is discarded
+```
+
+COLLECTIONS.md § 1 splits the `$` family in two: the editing half modifies when
+its result is discarded (decision 12), and the consulting half always builds, so
+discarding one is dead code. The second half was documented and enforced
+nowhere — that line ran, changed nothing, and none of the three engines said a
+word. The same shape that made BUG-ZYB-002 silent, and the one already closed
+for a bare identifier (ERROR-ZYB-001).
+
+Ten operators — `$#` `$?` `$??` `$[..]` `$>` `$|` `$<` `$/` `$*` `$~~` — one
+warning each, identical wording in all three engines. A list rather than "not an
+edit", so a new operator has to be classified deliberately instead of falling
+into a default. `$!`/`$!!` are not in it: propagating an error is an effect.
+
+Found by walking the whole edit model operator by operator, which is also what
+turned up the rest of this entry.
+
+**Two false type warnings, on the documented way to sort and to concat-build**
+
+```zymbol
+arr = [3, 1, 2]
+arr$^+          // warning: 'arr' was [Int] but assigned [?]
+b = [1, 2]
+b$++ 7 8        // warning: 'b' was [Int] but assigned [Any]
+```
+
+Sorting reorders; it does not retype — the inference answered
+`Array(Unknown)`. And `$++` answered `Array(Any)` one line after checking that
+every item fits the base, contradicting its own check. Both fired on the
+documented in-place form, in the two Rust engines only, so they were live
+divergences as well as false.
+
+**The browser engine could not parse a deep path at statement position, except
+after `$~`**
+
+`d["n">"l"]$+ 9` raised "a navigation step is a position or a key, got bool"
+while both Rust engines navigated two levels: at statement position the bracket
+is consumed before the nav parser sees it, so `i>j` arrives as a comparison.
+The `$~` branch already rebuilt the path from it; every other edit fell through
+with a boolean for an index. Same rebuild, one branch earlier, and the two
+copies of the flattening are now one named helper.
+
+**The whole model, measured**: every editing operator against every receiver
+shape — bare name, dot, bracket, navigator, and mixed — is
+`corpus/collections/edicion_modelo_completo.zy`, and all three engines agree on
+every line.
+
+
+**The dot writes what the dot reads — and a deep write has one form**
+
+```zymbol
+d = #(a: 1, x: #(y: 2))
+d.a$~ 9              // ✓ new: exactly `d["a"]$~ 9`
+d["x">"y"]$~ 5       // ✓ the deep write
+d["x"]["y"]$~ 5      // ✗ error: this edit has nothing to write into
+d.x["y"]$~ 5         // ✗ the same error
+```
+
+COLLECTIONS.md documents two ways to reach a key — `u.nombre` for keys that are
+identifiers, `u["nombre"]` for any key. Both read; only one wrote, and nothing
+anywhere said why. The asymmetry was inherited, not decided. `d.k$~ v` is now
+exactly `d["k"]$~ v`: same place, same rule of the result, same key added when it
+was not there. `::` stays out — it addresses a module's namespace, which is not
+a place to write.
+
+A path may mix the two spellings in any order — `d.x["y"]`, `d["x"].y`,
+`d.x.y` — because the dot is a *different syntax*, not a second spelling of the
+same one. Only a bracket directly after a bracket is refused: `d["x"]["y"]` is
+the navigator written twice, and `d["x">"y"]` is the form.
+
+**Found while closing that: a silent data-destruction bug across the whole
+editing family, which the gate could not see.** A statement-level edit desugars
+to `name = <the same expression>`, and the expression returns the *receiver* it
+edited — which is exact only when the receiver IS the name. It was not checked,
+so:
+
+```zymbol
+d = #(a: 1, x: #(y: 2), lista: [1, 2])
+d["x"]["y"]$~ 9      // d became (y: 9) — every other key gone
+d["lista"]$+ 3       // d became [1, 2, 3]
+```
+
+Exit 0, no diagnostic, and all three engines agreed, so no consensus run could
+see it. `$~` was the visible corner; `$+`, `$++`, `$-`, `$^` and the rest had it
+too, with any indexed receiver.
+
+A receiver that lives inside the name is now rewritten into a **deep write at
+its path**, which is machinery all three engines already had. So
+`d.lista$+ 3` appends to the list and leaves the other keys alone, and
+`d.x["y"]$~ 5` writes three levels down. The functional form is untouched,
+because nothing is written back:
+`a2 = a["meta"]$~ (a.meta["code"]$~ 200)` composes as it always did.
+
+**The rewrite made the formatter refuse two files**, which is FORMATTER_RULES
+§12 doing its job: the parser produced a shape the author had not written, and
+the token gate saw it. `Assignment` now carries `written` — the edit as it was
+spelled — and the formatter reprints that. Same remedy as the literal fix above,
+and the same rule: record the surface form the AST would otherwise lose.
+
+**And decision 20, promised in a comment and never implemented.** `f()[1]$~ 5`
+and `d.x["y"]$~ 9` edit something nobody holds. The comment on
+`in_place_edit_target` had said they are "refused rather than silently doing
+nothing" since it was written; nothing refused them — the statement fell through
+to `Statement::Expr`, ran, and threw the result away. The browser engine *did*
+refuse them, so this was a live three-engine divergence as well. Now refused
+everywhere, with two different helps: a chain from a name wanted the navigator,
+anything else wanted a variable.
+
+**What it cost, measured before deciding**: across the corpus, the applications
+and the playground examples there are 170 one-level writes and 14 deep `[i>j]`
+ones — and **zero** chained `[a][b]` writes and **zero** dot writes. Both halves
+of this change cost nothing to migrate. The one mixed-form occurrence,
+`a.meta["code"]$~ 200` in `corpus/collections/named_tuple_update.zy`, is the
+functional form and still parses.
+
+Pinned in `corpus/collections/escritura_por_punto.zy` (every spelling, and the
+whole editing family), `corpus/modules_scope/escritura_profunda.zy` (deep writes
+into module state, direct and through a re-export layer), `reject/collections/11`
+(chained brackets) and `reject/collections/12` (an edit with no name at all).
+Reported from zyCoin.
+
+
+**`#,` and `#^` write their digits in the active numeral script**
+
+```zymbol
+#०९#
+>> f ¶            // १२३४५६७.८९   followed the mode
+>> #.2|f| ¶       // १२३४५६७.८९   followed it
+>> #,|n| ¶        // 1,234,567    did NOT
+```
+
+The two format operators built their text with the host's formatter, which
+writes ASCII, so a program printed the digits one way with `>>` and another way
+one line later — **two spellings inside the same output**. The precision
+operators had always followed the mode; these two never did.
+
+The same in all three engines, so `zyq consensus` could not see it, and no
+corpus file printed `#,` under an active mode. It surfaced from ZyBank, whose
+money formatter reimplemented thousands-grouping by hand — sixteen lines
+rewriting an operator the language already had — precisely because the one that
+existed could not be used under a locale.
+
+Pinned in `corpus/i18n/formato_sigue_al_modo.zy`. The separators followed in a
+second pass — the entry below.
+
+**The separators follow the script too, and the pair never inverts**
+
+```zymbol
+#٠٩#
+>> 1234567.89 ¶        // ١٢٣٤٥٦٧٫٨٩   was ١٢٣٤٥٦٧.٨٩
+>> #,.2|f| ¶           // ١٬٢٣٤٬٥٦٧٫٨٩  was ١٬٢٣٤٬٥٦٧.٨٩
+```
+
+Rendering the digits in a script and then punctuating them with ASCII was half a
+translation. A numeral script now selects the separators as well, **where it has
+separators of its own** — and the bar for that is objective: Unicode must name
+the character a numeric separator *for that script*. Exactly one script clears
+it, Arabic, through U+066B ARABIC DECIMAL SEPARATOR and U+066C ARABIC THOUSANDS
+SEPARATOR, for both of its digit blocks. The other 67 write ASCII `.` and `,`,
+which is what they do in practice; a Devanagari-specific decimal point would be
+an invention, and a script whose separator is settled by locale preference
+belongs to a locale table this language does not carry.
+
+**What did not change is the pair.** `,` groups and `.` divides, in every
+script. There is no mode and no argument that inverts them, and a program that
+wants `100.000,00` builds it. A settable pair would make every number ambiguous
+until you knew the setting it was written under — a cost paid by every reader to
+spare one writer. This closes IDEA-ZYB-001 as a decision, not as an
+implementation.
+
+Reading stayed script-blind while writing stopped being so, which is what keeps
+`corpus/i18n/numeral_mode_round_trip.zy` true: `٤٫٧٥` and `٤.٧٥` are one number,
+as a literal and through `#|…|`. The thousands separator is refused on input in
+every script, exactly as `#|"1,234"|` already refused it — `#,` is the one
+operator whose result is text, and text is not read back.
+
+Two goldens moved, both floats under an active Arabic mode. Pinned in
+`corpus/i18n/separadores_de_la_escritura.zy`.
+
+While measuring this, `zymbol fmt` turned out to rewrite `४२` to `42`. It
+predates the separators; it is fixed in the entry below, and it was far bigger
+than that one line said.
+
+**`zymbol fmt` prints a literal as it was WRITTEN, not as its value renders**
+
+```zymbol
+a = ४२          // → 42
+b = ٣٫٥         // → 3.5
+d = 0xFF        // → 'ÿ'
+f = 0o17        // → '' — a raw U+000F, written into the source file
+g = 1e10        // → 10000000000.0
+i = 007         // → 7
+```
+
+**Eleven of sixteen literal forms did not survive a format.** A literal reaches
+the AST as a *value*, and many source forms share one value — `४२`, `0x2A`,
+`0b101010` and `42` are all `Int(42)` — so printing the value picked one
+spelling and threw the author's away. A program written entirely in Devanagari,
+which GUIDE.md calls a first-class Zymbol program, stopped being one the moment
+it was formatted. `0o17` was the sharp end: its value is a `Char`, so the
+formatter wrote a quoted raw U+000F into the file.
+
+FORMATTER_RULES.md already settled whether this is a defect. §1 says the
+formatter is a whitespace normalizer and is NOT an expression transformer, and
+§10 lists the *only* intentional differences between input and output — the
+spelling of a literal is not among them. §12 names the remedy too: make the
+surface form the AST would lose recoverable.
+
+It was recoverable already. The span was on the node and nothing read it, so
+the fix is to print the literal's own source text, accepted only when re-lexing
+the slice yields exactly that literal and nothing else — a wrong span falls back
+to the old behaviour instead of emitting something new. No AST or parser change.
+
+**A real byte offset had to come first.** `Position::byte_offset` is documented
+as "byte offset from start of file" and was being handed the lexer's *char*
+index — the same number only while the source is ASCII, which is the one thing a
+Zymbol source is not obliged to be. Nothing read the field, so nothing had
+noticed; slicing with it returned garbage the moment a multi-byte character
+appeared earlier in the file. It is now a byte offset, from a prefix table built
+once per lex.
+
+**Why four properties and a safety gate all missed it.** The gate compares
+*tokens*, and `Integer(42)` is `Integer(42)` whichever script spelled it, so G1
+passed legitimately. P1–P4 check reparse, idempotence, runtime output and
+comment count; a surface rewrite breaks none of the four. The same blind spot
+that hid the `x ->  {` double space (FORMATTER_RULES §4.7). Held now by seven
+unit tests in `zymbol-formatter`, which is where a surface property has to be
+checked — the corpus structurally cannot see it. REFERENCE L47.
+
+**A named function captures the file's variables, like a lambda**
+
+```zymbol
+base = 10
+adder(n) { <~ n + base }
+>> adder(5) ¶        // 15 — was: undefined variable 'base'
+```
+
+One body meant TWO things until now, depending on how it was reached: a direct
+call ran in an isolated scope and the same function taken as a value captured.
+`adder(5)` failed and `f = adder` then `f(5)` answered 15, with nothing in the
+source to say which one you were looking at. GUIDE.md § 10b documented the
+isolation as deliberate; it is retired with it (ERROR-ZYB-002).
+
+The rule is the lambda's, and there is only one: **by value, with the write
+isolated.** A function reads the file's variables when it is CALLED; assigning
+to one of those names inside the body writes a local copy that dies with the
+call. It is capture and not sharing, and module state stays the other thing —
+a module's functions share its variables and their writes persist, which is what
+module state is for and the only shared mutable state the language has.
+
+It is not dynamic scoping: the values come from the FILE, never from the caller,
+so a function called inside another does not see that one's locals. There is a
+corpus case for exactly that, because it is the mistake this shape invites.
+
+Each engine needed a different thing, and all three needed something:
+
+  · The tree-walker swaps the entire scope stack away on every call, so by the
+    time a function two frames down runs there is nothing left to read the file
+    from. It now mirrors file-level writes into a map of their own — O(1) per
+    top-level assignment, against cloning the scope stack on every call, which a
+    program that calls in a loop would have paid every iteration.
+
+  · The register VM already had the machinery for a module's shared state
+    (`LoadGlobal`/`StoreGlobal`). A script's file variables get their own map
+    with the other half of the contract: read from anywhere, written back only
+    from `<main>`, so an assignment inside a function falls through to a local
+    register and stays there.
+
+  · `zymbol.js` collects the body's free names once per function and reads their
+    values from the global scope at each call, copying them into the frame.
+
+Three corpus files existed BECAUSE the direct call failed, and all three are
+rewritten: two asserted the isolation, and `bugs/bug_l16_try_scope_restore.zy`
+used it as a convenient way to make a function fail inside a `!?` and needed
+another. The new rule is pinned in `corpus/functions/captura_del_archivo.zy`,
+nine assertions identical in all three engines.
+
+**It also cost 44% of `bench_recursion`, now recovered.** Knowing what a body
+reads from outside itself walks the whole body AST, and the tree-walker did that
+per CALL — so a recursive function re-derived its own answer on every
+invocation: 2371 ms against a 1644 ms baseline. The set depends on the
+DEFINITION alone, so it is computed once and cached against it, which is what
+the JavaScript engine had been doing on the function object all along. Back to
+1531 ms, *below* the baseline the capture work started from. The benchmark gate
+is what caught it; nothing else would have.
+
+**The homogeneity rule now covers the whole edit family**
+
+Decision 15 says `[…]` is homogeneous **and gets checked**. It was checked on
+the literal and on `$+`, and on none of `$++`, `$+[i]` or `[i]$~` — so a `[…]`
+became heterogeneous with nobody declaring it and nobody complaining, in all
+three engines, and `#?` then answered `##[`: a list nobody wrote. A `[…]` was
+not homogeneous, it was homogeneous *when written* (REFERENCE L46).
+
+    a = [1, 2]
+    a $++ "tres"      // cannot append String to [Int]
+    a $+[1] "x"       // cannot insert String to [Int]
+    a[1]$~ "x"        // cannot write String to [Int]
+
+One function decides for all four now, in each engine. The measurement is the
+part worth keeping: 27 sites of `$+[i]` and 186 of `[i]$~` across 61 files of
+the corpus and the applications, and **not one of them mixed types**. The only
+file that stopped passing was the one written to document the hole.
+
+`#[…]` still takes anything, Int and Float still mix at any depth, and the deep
+form `m[i>j]$~ v` is not decided — the outer type says nothing about what lands
+two levels down.
+
+**The browser engine checks array homogeneity where the others do**
+
+`[1, 2] $+ "x"` ran in the playground and failed outside it, and so did
+`[[1], ["x"]]`. Both Rust engines refused them; `zymbol.js` decided element
+types from scalar literals only, so it could not name a nested array's type and
+had no check on `$+` at all. Same shape as DM-04 — the heterogeneous *literal*,
+closed in v0.0.9 — one operation and one level of nesting later.
+
+The checker now remembers an array's element type across an assignment, which is
+what the real form needs: `a = [1, 2]` then `a $+ "x"` is the shape code has,
+not a literal with an operator hanging off it. Int and Float still mix freely at
+any depth, and a declared `#[…]` still takes anything. Pinned in
+`reject/collections/07_append_mixes_array.zy` and `08_nested_literal_mixes.zy`.
+
+**And the measuring found a hole all three share**, now REFERENCE L46: the rule
+runs on the literal and on `$+`, and not on `$++`, `$+[i]` or `[i]$~`. Each of
+those turns a `[…]` heterogeneous with nobody declaring it, in every engine, and
+`#?` then answers `##[` — a list nobody wrote. Left open on purpose: closing it
+newly rejects programs that run today, which is a decision rather than a parity
+fix. The edges that *are* accepted are recorded in
+`corpus/collections/homogeneidad_bordes.zy` so the hole has a shape.
+
+**`##_` — the Unit literal, and `==` stops constraining a parameter**
+
+```zymbol
+es_nulo(v) { <~ v == ##_ }        // the question, finally writable
+```
+
+Unit was the ONLY type in the language whose value could not be written. It is
+reachable everywhere — a function without `<~` returns it, `json::decode("null")`
+produces it, a `NULL` column out of `std/db` arrives as it, `io::write` answers
+with it — and there was no way to name what had arrived. Exactly the shape the
+empty dictionary had before `#()`: a value a program can hold and cannot spell.
+
+No new mark. `##_` was already Unit's type symbol and already the "any kind"
+mark in `:! ##_`, and both are the reading `_` has in all of its eight other
+positions: the one that is not specified. Unit has one value, so naming the type
+and naming the value cannot be told apart and need not be. It is one token in
+all three engines now, in both positions.
+
+**What forced it** is that the workaround was wrong, and wrong in a way that
+looked right. Asking "did this column arrive NULL" meant taking `#?` apart, and
+the obvious field to read is the count — which is **0 for four values**: Unit,
+`""`, `[]` and `#()`. ZyBank's `es_nulo("")` answered that the column was NULL,
+and `movimientos.glosa` is a TEXT column where `''` is an everyday value. When
+the right way to ask a question does not exist, the way each program invents
+resembles it closely enough to pass the tests anybody thinks of.
+
+**`==` no longer constrains a parameter's type**, which the literal made
+unavoidable and which was already wrong on its own:
+
+```zymbol
+es_cinco(v) { <~ v == 5 }
+>> es_cinco("hola") ¶       // was: error: argument 1 has type String
+>> ("hola" == 5) ¶          // one line away: #0
+```
+
+Equality never coerces — `"5" == 5` is `#0`, and REFERENCE says so — so a
+parameter compared against a known type can still be any type. Both Rust engines
+refused a correct program and the browser engine ran it: the same shape as
+ERROR-ZYB-005, and invisible for the same reason — a divergence that *rejects*
+rather than mis-runs prints nothing for a golden to compare. Ordering keeps its
+constraint: `<`, `>`, `<=`, `>=` do fail at run time when a number meets text.
+
+**Three more divergences closed on the way**, all found by measuring rather than
+by a suite (`ZyBank/TIPOS.md` § 6):
+
+- `Unit == Unit` was `#0` in the register VM — a Unit was not equal to itself.
+  `cmp_direct` had no `Unit` arm, the fourth to go missing from that function
+  after `Array` (DM-02), `NamedTuple` (DM-22) and `Function` (BUG-ZYB-012).
+- Juxtaposing a Unit built `"()"` in the VM and `""` in the other two. A
+  standalone Unit is nothing and only a nested one is `()`; the VM's
+  string-building path used the nested form for both.
+- `f#?` on a NAMED function answered `##_` in both Rust engines — it called a
+  function Unit — while `g = f` then `g#?` answered `##(), 2`. Each engine
+  carried a special case that returned Unit metadata for an identifier it could
+  not find, "so variable existence can be checked". The case is unreachable: an
+  undefined name is refused by the analyzer before anything runs. What it did
+  reach was a named function, which is not a variable. All three are gone.
+
+Cases in `corpus/collections/unidad_literal.zy`. Found by ZyBank (GAP-ZYB-009).
+
+**`==` on a function is identity**
+
+```zymbol
+uno(x) { <~ x + 1 }
+dos(x) { <~ x + 1 }     // el mismo cuerpo, otra función
+a = uno
+>> (a == uno) ¶         // #1
+>> (uno == dos) ¶       // #0
+```
+
+Two names for one function are equal; two functions with the same body are not.
+It is what Python, JavaScript and Rust answer about a function reference, and
+what the language had never decided.
+
+Both Rust engines answered `#0` to every comparison between two functions,
+including a function against **itself** — a thing that is not equal to itself.
+`zymbol.js` answered `#1` to every one of them, a named function against a
+lambda included, because its fallback compared `a.v === b.v` and a function has
+no `v`: two `undefined`s. It looked right on the only case anybody had tried and
+was wrong on the rest.
+
+Neither had been decided and nothing documented it. What kept it invisible is
+worth writing down: `zyq consensus` compares what programs print, and **no
+corpus file compared two functions**. The divergence was not hidden — it was
+somewhere nobody had looked, which is the other way a green gate means nothing.
+
+Identity, and not structure. A named function is the definition it came from: it
+is turned into a value afresh on every lookup, with new captures and a cloned
+body, so the value carries the `Rc<FunctionDef>` it was built from and two
+lookups agree. A lambda is the *evaluation* that made it, so one written inside
+a loop is a new function each turn, each closing over its own values and each
+equal to itself alone. In the register VM the same two answers fall out of the
+function index and, for a closure, the captured-upvalue `Rc`.
+
+The VM needed the arm in **two** places, `Value::equals` and `cmp_direct`,
+because its two dispatch loops reach equality through different doors — the same
+shape as the missing `Array` arm that was DM-02. Found by ZyBank while retiring
+GAP-ZYB-005 (BUG-ZYB-012); pinned in
+`corpus/functions/igualdad_de_funciones.zy`.
+
+**`##(` and `##[` — `#?` can tell the four collections apart**
+
+```text
+[1, 2]      ##]   array          (1, 2)      ##)   tuple
+#[1, "a"]   ##[   list           #(a: 1)     ##(   dictionary
+```
+
+The rule: the unmarked collection takes the **closing** delimiter and the marked
+one takes the **opening** delimiter. It is the literal's own mark with a `#` in
+front, which is what the mark already meant.
+
+`##)` had meant both the tuple and the dictionary, deliberately, from when the
+dictionary was called a named tuple and spelled `(a: 1)`. Two things in this
+release ended that: `#(…)` made them different to write, and `#()` made them
+different values — one takes `d["k"]$~ v` and the other answers *tuples are
+immutable*. A type symbol that cannot separate them lies to every generic
+function that asks, and there was no other way to ask.
+
+`##(` is a **type**, so it is what a dictionary is called everywhere a type is
+named, error messages included: `array pattern '[ … ]' requires an array, got
+##(`. Note that `##()` — with the closing parenthesis — remains the *named
+function*, as it has been since v0.0.4.
+
+`##[` is a **reading**, not a type. `#[…]` and `[…]` are one type by decision 15,
+so that `json::decode`'s heterogeneous array had somewhere to land, and the mark
+on the literal is a compile-time declaration that leaves no trace: `[1, 2]` and
+`#[1, 2]` are still equal. So the mix is read from what the array **holds when
+asked** — which is also the question a caller has. An array out of
+`json::decode` answers `##[` with no mark written anywhere in the program, and
+`#[1, "dos"]$-[2]` answers `##]`, because one Int is not a mix. Elements are
+compared by their own base type, so an array of arrays is uniform whatever those
+inner arrays hold: the answer describes one level.
+
+Ten sites across the two Rust engines had each written the symbol table out by
+hand, two of them the same twenty lines of the register VM copied twice — which
+is how `##)` came to mean two things long after they stopped being one. The
+table is now `zymbol-common::typesym`, which every engine reads, and the VM's
+duplicated `#?` block is one function. Three goldens moved, each of them a place
+that had asserted the old rule.
+
+**`std/time` — the clock and the civil calendar**
+
+```zymbol
+<# std/time => t
+ahora = t::now()                                  // milliseconds since the epoch, UTC
+>> t::today() ¶                                   // 2026-08-23
+>> t::format(ahora, "%F %T %z", "-0400") ¶
+>> t::format(t::add(ahora, -30, "day"), "%F") ¶   // the last thirty days
+>> t::diff(vence, ahora, "day") ¶                 // how many days overdue
+```
+
+Until now the date came from outside the language, `<\ "date +%F" \>`. That is not on
+Windows — which is exactly the platform where `std/db` *is* included, so the application
+that most needs a database was the one that could least get a date — is not in a browser at
+all, needs `#09#` forced before every call because otherwise the shell answers in whatever
+script the numeral mode selected and stops being ISO 8601, and answers nothing beyond "what
+day is it": *the last thirty days* cannot be asked of a string. Found by ZyBank
+(GAP-ZYB-002), where every ledger entry is a date.
+
+Seven functions: `now`, `today`, `parts`, `of`, `format`, `add`, `diff`. An **instant** is
+milliseconds since 1970-01-01T00:00:00Z and is always UTC; a **date** is a *reading* of an
+instant, and there is no reading without saying where the reader stands, so every function
+takes an optional trailing zone — `"UTC"` (the default), `"local"`, or a fixed `"+1000"` /
+`"-0400"`. Milliseconds and not nanoseconds because an epoch in nanoseconds is ~1.7e18 and
+the integer is ±(2⁵³−1); `zyquality/bench/lib_time.zy` had documented that since v0.0.7.
+
+**Below a day it is duration, from a day up it is calendar.** A minute is always 60 000
+milliseconds and a day is not always 86 400 000: a zone that observes daylight saving has
+one 23-hour day and one 25-hour day a year. `add(e, 1, "day", "local")` across the change
+gives the same wall clock 23 hours later, which is what a person means by "tomorrow"; a
+month lands on the same day of the month or on the last one there is, so 31 January + 1
+month is 28 February. `diff` counts whole units toward zero.
+
+**The digits are always ASCII**, which is the third of the shell's four problems answered
+directly: `format` and `today` do not follow the numeral mode, because a date is the one
+piece of text a program writes for a machine to read back and `२०२६-०८-२३` is not ISO 8601.
+A date for a person is built from `parts`, whose numbers do follow it.
+
+A date that does not exist — the 30th of February, month 13 — is a soft `##Time`, not a
+crash: dates arrive from forms, files and database columns, and that is data. A wrong
+argument type stays hard.
+
+The calendar itself (Howard Hinnant's era algorithms, exact over the proleptic Gregorian
+calendar) lives in `zymbol-intrinsics` and is shared by the tree-walker and the register
+VM, rather than written twice as `std/term` is: two engines can be kept agreeing about a
+padding rule by reading them side by side, and cannot be kept agreeing about leap years.
+`zymbol.js` ports it a third time rather than delegating to `Date`, which rolls 2026-13-01
+over into 2027 instead of refusing it. The three engines agree byte for byte, including
+across a daylight-saving boundary. The crate's one dependency, `time`, is used for a single
+thing no `std` API offers: reading the machine's own zone — and it fails rather than
+guessing, because a wrong date is worse than a caught error.
+
+Cases in `corpus/stdlib/stdlib_time.zy` (deterministic: every instant is built) and
+`corpus/stdlib/stdlib_time_clock.zy`, which puts a *clock* in a corpus that decides by
+comparing output — by printing only what has to hold whatever the answer was.
+
+**`() -> body` — a zero-parameter lambda**
+
+```zymbol
+answer = () -> { <~ 42 }
+acciones = [() -> 1, () -> 2]
+```
+
+It already ran in `zymbol.js` and zyml; the tree-walker and the VM rejected it at parse
+time, and the EBNF sided with them. Nothing had chosen that limit — `parse_lambda` already
+built an empty parameter list for the shape, and only `is_lambda_start` refused to hand it
+the input. `()` is unambiguous: there is no empty tuple, and a call's parentheses always
+follow a callable. Grammar widened, all four engines agree. See REFERENCE.md L30 and
+`tests/lambdas/29_zero_param_thunk.zy`.
+
+### Fixed
+
+**Unused-variable warnings came out in a different order on every run**
+
+`generate_diagnostics` sorted by `(line, column)` over a `HashMap`'s values.
+Rust randomizes that iteration order per process and `sort_by_key` is stable, so
+any two variables sharing a position kept the random order — and one statement
+declaring several names gives them all the same span: `(a, b, c) = t9` is one
+position for three variables.
+
+No corpus golden captures a warning order, so nothing saw it there. The
+formatter's P3 property compares `2>&1`, so it saw it as an intermittent
+`fmt` regression on `collections/33_destructure_absorb.zy` — blaming the
+formatter for a shuffle it had not caused. The harness's nondeterminism guard
+re-runs the original once, which is not enough when the shuffle is a coin flip.
+
+The name now breaks the tie, so the order is total and deterministic. Giving
+each destructured name a span of its own is the better fix and is not done: it
+would also put the diagnostic's caret on the name instead of the statement.
+
+**A module could not hold a collection**
+
+`tabla = #(es: "hola", en: "hi")` and `LADOS := [10, 20, 30]` in a module body were
+E013, "variable initializer in module must be a literal". A collection literal *is* a
+literal — it names a value, it does not compute one — but `is_literal_expr` matched
+`Expr::Literal` and a signed literal and nothing else, a rule written before the
+collections were what they are now.
+
+The cost was structural. A module is the language's only unit of shared state, so with
+tables locked out of it, the four game applications wrote their translation catalogues
+as `??` chains inside a function: 455 branches in zy-GO, 394 in Chaturanga, 96 in
+Hov veS, 68 in Serpiente, each with a hand-maintained list of its own keys beside it,
+because a `??` chain cannot be asked what it contains. The dictionary's computed key,
+`$?` and `@ k:d` made the table expressible in this release; E013 was what still kept
+it out of the only place it could live.
+
+`zymbol.js` never had the restriction — it checks the *shape* of a module statement and
+never looks at the initializer — so this was a live three-engine divergence that no
+suite could see: no corpus file put a collection in a module, because two engines out
+of three refused to parse one.
+
+The same blind spot hid the opposite error: `zymbol.js` checked the statement's *type*
+and never the value, so it was also accepting `x = 1 + 2` and `t = json::decode(raw)` and
+running them. It applies the same rule now, worded identically, and the form is in
+`reject/modules/02_computed_module_initializer.zy`.
+
+The rule is now recursive: an array, a positional tuple and a dictionary are literals
+when every element is, so a dictionary of dictionaries — a decoded JSON object's shape —
+is one initializer. Anything that computes is E013 as before, at any depth. The VM
+needed the machinery and not just the permission: `ModuleConst` and `GlobalInit` were
+scalar-only enums, and the four sites that turn a module constant into bytecode each
+emitted one `Load*`; they now share one emitter, since a collection needs a sequence and
+four hand-written copies of it could not stay in agreement. See REFERENCE.md L41 and
+`corpus/modules_scope/module_collection_state.zy`.
+
+**A module function call copied the whole module's state**
+
+Entering a module function cloned the entire `LoadedModule` — every value in it, deep,
+including a `constants` map the path never reads — and then cloned every module variable
+again into the frame, named by the body or not. Invisible while module state could only
+be a scalar; the moment a table could live in a module (above), the cost of a call became
+proportional to the biggest thing in the module rather than to what the function touches.
+Measured on 20 000 calls with a sixty-key table: 309 ms → 26 ms for a function that never
+names it, 502 ms → 395 ms for the accessor that does.
+
+Only what the frame needs is taken out of the module now, and only the bindings the body
+actually names are injected — from the same exhaustive mention walk auto-free uses,
+computed once per body. The tree-walker still copies a table into the one function that
+reads it, because its collections are not reference counted; the register VM reads its
+globals in place and is 10–20× faster on the same programs. See REFERENCE.md L44 and
+`corpus/modules_scope/module_state_mentions.zy`.
+
+**A parameter used as a dictionary key was declared an Int**
+
+`busca(d, k) { <~ d[k] }` ran correctly in every engine and was refused by `zymbol
+check`: "argument 2 has type String, but function 'busca' expects Int". The constraint
+collector had one rule for the bracket — *if indexing with a param, it should be Int* —
+from before the dictionary had a computed key. The bracket is two operations under one
+sign, and only the receiver says which: a position in an array, a string or a positional
+tuple is an Int; a key in a dictionary is a String.
+
+The constraint follows the receiver now, and constrains nothing where the receiver is
+unknown — the safe direction, since the index is still checked against its receiver at
+the use site. It gained a diagnostic as well: an Int where a dictionary key belongs is
+refused before the program runs, where it used to be accepted and fail at run time with
+a different message in each engine. See REFERENCE.md L42 and
+`corpus/collections/41_dict_key_parameter.zy`.
+
+**`zymbol fmt` refused every file that marks an output argument**
+
+L36 put the output mark at the call site, `f(x<~)`, and the formatter was never taught
+to print it: the mark is `out_args` on the call node, not part of the argument
+expression, so formatting dropped it and the safety gate refused the file rather than
+write a different program. Fail-closed worked — nothing was corrupted — but `zymbol fmt`
+stopped working on nine corpus files and on every application file that passes an
+argument by output, silently, because a refusal to format is only visible to whoever was
+formatting. The mark became *required* in this same release, so every file that has one
+is recent.
+
+The same run surfaced a second gap: an overflowing float literal (`1.0e400`) is already
+`inf` by the time the lexer is done, and `{:e}` prints that as `inf`, which reads back as
+an identifier. Any overflowing literal produces exactly that value, so `1.0e400` is now
+what the formatter writes for it. NaN is left refused on purpose — no literal produces
+one. Formatter suite: 9 P1 failures → 0. See REFERENCE.md L43.
+
+**`zymbol fmt` wrote two spaces after a block lambda's arrow**
+
+Every `x -> { … }` came out `x ->  { … }`. `format_block` supplies its own leading space and
+the arrow wrote one too, so they added up; in brace-next-line mode the same space landed at
+end of line instead. Cosmetic, and invisible to `fmt_property.sh` — P1 reparse, P2
+idempotence, P3 semantics and P4 comments all survive a stray space, which is how it sat
+there unnoticed. The arrow now writes its trailing space only for an expression body.
+Three unit tests hold it, including one that fails on any line ending in whitespace.
+
+**The browser engine checks argument counts**
+
+v0.0.8 made a wrong argument count fatal in the Rust engines and left `zymbol.js` alone, so
+`math::sqrt(4.0, 9.0)` printed `2` in the playground and was refused outright by the CLI —
+the same program, two answers, on the tool a visitor reaches for first. Five of the ten
+CLI ↔ browser parity failures were this one gap.
+
+All three call forms are checked now. `std/` arities ship with the engine as a copy of
+`zymbol-common::stdlib`, and `web/tests/test_check.mjs` compares that copy against the Rust
+source on every run, so it cannot drift unnoticed. User-module arities come from whoever has
+the resolver: `moduleAritiesFor` reads the imported modules and
+`checkSource(src, {moduleArities})` receives the table — the same split as `module_arities`
+/ `set_module_arities` in Rust. Parity: 527/537 → 533/538. See REFERENCE.md L31.
+
+**`@!`, `@>` and labelled jumps are checked before anything runs**
+
+Nothing verified that a break had a loop to break, or that `@:outer!` named a loop that
+enclosed it, and the four engines improvised four different answers. Given
+`@:outer i:1..3 { >> i ¶  @:nope! }`, the tree-walker printed `i=1`, unwound *every*
+enclosing loop and carried on; the VM refused to compile; `zymbol.js` unwound every loop
+and ended the program; zyml raised at run time. Three of the four were silent, and
+`zymbol check` said nothing in any case.
+
+No pairwise parity suite could see this — `vm_compare.sh` covers tree-walker/VM,
+`web/tests/test_runner.mjs` covers CLI/browser, `zyml/tests/parity.sh` covers CLI/zyml, and
+each pair contains at most two of the four answers. `tests/scripts/engine_compare.sh` is
+new and runs a file through all four at once.
+
+A label is lexical on both sides, so it is now a semantic error:
+`crates/zymbol-semantic/src/loop_context.rs`, fatal in `check`, `run` and `build`, in every
+engine, and underlined in the editor as you type. A function or lambda body is a boundary —
+`f() { @! }` is an error however its call sites are nested, which the VM and zyml already
+assumed. `cfg.rs` had resolved labels this way since it was written; its `build_break` still
+carries the comment "should be caught by semantic analysis".
+
+`@~` is deliberately not covered. `SYMBOLS.md` and `REFERENCE.md` described it as loop-only
+by inheritance from the `@` prefix; no engine ever enforced that and none should, since a
+pause does not act on control flow. The documentation was corrected instead.
+
+See REFERENCE.md L29 and `tests/loops/labels/` (9 cases, four engines in agreement).
+Zero false positives across the workspace's 1080 `.zy` files.
+
+**Argument counts are checked on every call form**
+
+`f("a","b")` was reported; the same mistake written `m::f("a","b")` was not, and neither
+was `math::sqrt(4.0, 9.0)` — even though every `std/` function's arity was already
+recorded and never read. The two engines then disagreed: the tree-walker raised, while
+the VM did not check at all, copying a surplus argument over one of the callee's own
+registers and continuing with corrupted state. A mismatch is now a semantic error,
+fatal before execution, in `check`, `run` and `build` alike, and in both engines.
+See REFERENCE.md L28 and `tests/arity/`.
+
+**Windows: the runtime's POSIX assumptions**
+
+Eleven findings, six of which Linux could never have surfaced and three of which were
+in the test suite itself — which is why the suite reported a healthy build right up to
+the moment a user tried to run it. Full record in [WINDOWS_V009.md](WINDOWS_V009.md).
+
+### Changed — the collections
+
+The three collections were redesigned as one piece rather than three, and the
+whole of it is set down in [COLLECTIONS.md](COLLECTIONS.md), which is the point
+of record. What follows is the summary; the reasoning, the measurements and the
+rejected alternatives are there.
+
+**The indexed assignment is withdrawn.** `arr[i] = v`, `m[i][j] = v` and
+`d["k"] = v` are errors in all three collections. `=` means "this NAME now holds
+this value", and `arr[2] = 99` names nothing: it reaches inside a structure and
+changes a part. Two different operations under one sign.
+
+```zymbol
+arr[2] = 99      // error: indexed assignment does not exist
+arr[2]$~ 99      // the form that exists
+```
+
+**The chained index is refused for reading too.** `m[2][3]` is
+`chained index does not exist: 'm[…][…]' is not a form of Zymbol`, with
+`help: nesting is navigated with '>', so this is 'm[i>j]'` — the same wording in
+all three engines, from each parser, before anything runs.
+
+```zymbol
+>> m[2>3] ¶      // → 6
+>> m[2][3] ¶     // error: chained index does not exist
+```
+
+The *write* had been withdrawn above; the read had been deprecated since v0.0.4
+and refused by nothing. GUIDE.md said it "still parses" and that "a semantic
+warning may be added in a future version", so the rule lived in the prose and in
+no executable: the language had two spellings of one access and shipped nothing
+that could tell them apart, which is the argument that closed the write.
+
+It never gave a wrong answer — all three engines returned the same value for
+`m[2][3]` as for `m[2>3]`, at every depth, on arrays, tuples and dictionaries.
+What is withdrawn is the second spelling, not a defect.
+
+Indexing something that is not itself an access is untouched, because it is one
+bracket group and not a chain: `[1,2,3][2]`, `f()[2]`, and `m[[1>2]][1]`, where
+the extraction builds a new collection before the index reaches it.
+
+**The rule is about how an element is addressed, not about what is done with
+it.** The chain is refused as soon as it is read, whatever follows the group:
+`>> arr[1][1]`, `arr[1][1]$~ 0`, `x = arr[1][1]$~ 0`, `arr[1][1]$+ 5` and
+`arr[1][1] = 0` are one rule and not five.
+
+The first cut of this got that wrong. It let `$~` past so that
+`d["x"]["y"]$~ 9` would keep printing *this edit has nothing to write into*, the
+wording already recorded for `reject/collections/11` — and that exception opened
+two doors: `arr[1][1]$~ 0` and `x = arr[1][1]$~ 0` both **have** somewhere to put
+their result, so neither ever reached the edit refusal meant to catch them. They
+returned `[0, 2, 3]` in all three engines and said nothing. Both are now
+`reject/collections/14` and `15`, so the gate holds the door shut.
+
+So `d["x"]["y"]$~ 9` now reports the chain instead, which is its first cause —
+the edit has no destination *because* the brackets were chained.
+`f()[1]$~ 5` (`reject/collections/12`) keeps *modifying requires a destination
+with a name*: there is no chain there, only a call nothing holds.
+
+Migration was 16 files across the corpus, the examples, the course and Zofia, and
+`corpus/v0.0.4_review/nav_chained_deprecated.zy` — a case whose entire purpose
+was to assert the chained read still worked — moved to
+`reject/collections/13_lectura_encadenada.zy`.
+
+**The rule of the result.** A `$` edit whose result is **used** builds and leaves
+the original alone; one that **is** the whole statement modifies in place.
+
+```zymbol
+otro = arr$+ 4       // result used      → builds; arr untouched
+arr$+ 4              // result discarded → modifies arr
+```
+
+The two cases are disjoint and are told apart by looking at the syntax, and
+discarding the result has no other possible use: if you were going to throw it
+away, you meant to modify. Before this, a bare `arr$+ 4` ran and did nothing at
+all, with no warning, and `arr[2]$~ 99` as a statement did not even parse.
+
+The order mattered: this had to exist before the indexed assignment could go, or
+the language would have had no way to change an element. Migration was 107 sites
+and every golden held afterwards.
+
+**`#[…]` — an array whose mix of element types is declared.** Same type as
+`[…]` — `#?` answers `##]` for both — so `json::decode`'s heterogeneous array
+finally has a spelling. `[…]` stays checked; a homogeneous `#[…]` warns.
+
+**The named tuple is the dictionary**, and the vocabulary follows: a tuple is
+immutable by definition and this is not. `(1, 2)` is a positional tuple and
+`#(a: 1)` is a dictionary. It gained computed keys (`d[k]`), key insertion,
+`d$? "k"`, `d$-["k"]`, `@ k:d` over keys, and `##Key` on an absent one — six
+pieces, each of which alone was enough to keep a JSON built piece by piece from
+being built at all.
+
+**`#(…)` — the dictionary has a notation of its own**, and the bare `(a: 1)` is
+refused. The two used to share the parentheses and differ only by the colon,
+which COLLECTIONS.md accepted deliberately: the alternative was a notation of its
+own, and `{}` is the block delimiter of the entire language.
+
+What forced it was the **empty** one. `()` would have to be both the empty tuple
+and the empty dictionary, and they are not the same value: one takes `d["k"]$~ v`
+and the other answers *tuples are immutable*. The empty dictionary was reachable
+— take the only key out of `#(a: 1)` and `$#` is 0 — and could not be written, so
+every program that filled one at run time started it with an invented key and
+removed it afterwards.
+
+```zymbol
+d = #(a: 1, b: 2)
+v = #()                                   // the empty one, now writable
+c = #("gasto.alimentación": "Alimentación")   // a key an identifier cannot be
+#(a: uno, b: dos) = d                     // the pattern spells it the same way
+```
+
+`#` is the meta/type mark, the same one `#[…]` uses to declare an array's mix:
+saying which of the two a pair of parentheses opens is a statement about its
+type. **Keys may be strings** as well as bare names — `d["gasto.alimentación"]$~ v`
+always added such a key and only the literal could not spell it, which left out
+exactly the keys a program needs: the ones stored in a database, the ones from
+JSON, the ones carrying a domain prefix. Both spellings would have been worse
+than either, so the bare form is an error; 276 literals were migrated across the
+corpus, the applications and the examples. Found by ZyBank (GAP-ZYB-003 and
+GAP-ZYB-004). See `corpus/collections/dict_marcado.zy` and
+`reject/collections/06_dict_sin_marca.zy`.
+
+Its whole positional family went with `d[2]`: `d[-1]`, `d[2]$~ v`, `d$-[2]`,
+`d$[1:2]`. In a mutable dictionary a position is not a stable address, and a
+positional *write* is strictly worse than a positional read — it corrupts data
+rather than returning the wrong value. This is Python's position: `dict` has no
+indexing and no slicing, and the slice gets no key-based replacement.
+
+**A pattern where a name goes.** `@ (k, v):pares { … }` binds each element as
+`(k, v) = par` would, because it is the same pattern language; it removes a line
+whose only job was to unpack. And `_` discards a position in the tuple pattern as
+it already did in the array one.
+
+**Only one `*rest` per pattern.** Two are ambiguous by definition, and the three
+engines invented three different splits — one of them returning an element twice.
+
+### Changed — diagnostics
+
+**The brace escape is symmetric.** `\{` and `\}` are the literal braces, and a
+brace that is neither escaped nor part of an interpolation is an error on either
+side. `"\{\"n\":1}"` used to print happily while the same JSON with neither
+escape was refused. GUIDE.md had documented the symmetric form all along; the
+implementation was what disagreed.
+
+**`x#?` requires its operand to exist.** Asking a variable its type is not an
+exception to "defined before use". `infer_expr` matched `Expr::TypeMetadata(_)`
+and returned the tuple type without inferring the operand, so the name was never
+looked up — which is why the LSP flagged `user_choice#?` in the editor while
+`zymbol check` said "No errors or warnings". This retires the `("##_", 0, ())`
+answer for an uncreated name.
+
+**`zymbol run` warns like `zymbol check`.** The def-use pass ran only in `check`,
+so `@ i:1..3 { … }` warned about `i` there and in the playground and said nothing
+on `run`.
+
+**Diagnostics stop naming the engine.** `VM compile error:` is now `error:`, and
+`type error: expected Int, got String` on an arithmetic operand is the
+tree-walker's `+ is arithmetic only — use juxtaposition`. A reader is told what
+the language refuses, not which of its three implementations noticed.
+
+### Fixed — two defects the comparison surfaced
+
+**One bad line reported 22 errors.** Parser recovery advanced by a single token
+after a failed statement, so the tail of the refused line was parsed as code and
+each fragment raised its own `unexpected token: X` with a `help:` listing every
+statement keyword. Only the first was real. Recovery now skips the statement;
+regenerating the goldens deleted 386 lines and added 4.
+
+**Diagnostics came out in HashMap order.** `get_ambiguous_variables()` walks a
+HashMap, so the same file reported `'k'` before `'w'` on one run and after it on
+the next. Harmless while only `check` printed them; the moment `run` did too,
+every differential comparison began to flap — the formatter audit reported the
+same failure count twice with different files among them. Both call sites sort by
+source position now.
+
+**`zymbol fmt` refused any file using `#[…]` or `@ (k, v):x`.** The safety gate
+declining to print `[…]` for `#[…]` — a different program, since the homogeneity
+check applies to one and not the other — rather than write something untrue.
+
+### Documentation
+
+[COLLECTIONS.md](COLLECTIONS.md) is new: one document for the three collections,
+the rules that govern them, and why each was decided the way it was.
+
+The grammar and the spec had drifted from the implementation. `zymbol-lang.ebnf` was
+still describing v0.0.7: or-patterns and juxtaposition inside delimited positions had
+landed in v0.0.8 without being written down, so the normative grammar rejected programs
+the implementation runs. Both corrected, and the test counts quoted across README,
+GUIDE, ARCHITECTURE and CLAUDE.md were re-measured rather than carried forward.
+
+---
+
 ## [0.0.8] — 2026-08-02
 
 Memory-model debt release: every divergence found by the design-vs-implementation
@@ -1703,6 +2626,7 @@ Initial release — Zymbol-Lang interpreter v5I.
 
 ---
 
+[0.0.9]: https://github.com/zymbol-lang/interpreter/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/zymbol-lang/interpreter/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/zymbol-lang/interpreter/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/zymbol-lang/interpreter/compare/v0.0.5...v0.0.6

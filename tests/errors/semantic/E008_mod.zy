@@ -1,6 +1,0 @@
-# E008_mod {
-    #> { public_fn }
-
-    public_fn() { <~ "public" }
-    private_fn() { <~ "private" }
-}

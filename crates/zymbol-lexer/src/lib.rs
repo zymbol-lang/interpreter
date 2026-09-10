@@ -215,7 +215,7 @@ pub enum TokenKind {
     AtBreak,
     /// @> (continue)
     AtContinue,
-    /// @~ (sleep — only valid inside @ block)
+    /// @~ (sleep — legal anywhere; unlike @! and @> it needs no enclosing loop)
     AtTilde,
     /// @label (labeled loop declaration, legacy — fused without colon)
     AtLabel(String),
@@ -261,10 +261,14 @@ pub enum TokenKind {
     HashPipe,
     /// #? (type metadata - returns tuple with type, count, value)
     HashQuestion,
+    /// `#(` — opens a dictionary literal (GAP-ZYB-003/004).
+    HashLParen,
     /// #. (round prefix - for precision rounding: #.2|expr|)
     HashDot,
     /// #! (trunc prefix - for precision truncation: #!2|expr|)
     HashExclaim,
+    /// `##_` — the Unit literal, and the "any kind" mark in `:! ##_`.
+    HashHashUnderscore,
     /// ##. (cast to Float: ##.expr)
     HashHashDot,
     /// ### (cast to Int rounding: ###expr)
@@ -347,6 +351,18 @@ impl Token {
 /// Lexer for Zymbol source code
 pub struct Lexer {
     source: Vec<char>,
+    /// Byte offset of each char in `source`, plus a final entry for the end.
+    ///
+    /// The cursor counts CHARS, because every rule in this lexer is written in
+    /// terms of characters. `Position::byte_offset` is documented as a byte
+    /// offset, though, and it was being handed the char index — equal only
+    /// while the source is ASCII, which is the one thing a Zymbol source is not
+    /// obliged to be. Nothing read the field, so nothing had noticed; the
+    /// formatter reads it now, to reprint a literal as it was written.
+    ///
+    /// A prefix table rather than a second cursor: `advance` is called from
+    /// dozens of places and every one of them would have had to maintain it.
+    byte_offsets: Vec<u32>,
     current: usize,
     line: u32,
     column: u32,
@@ -357,8 +373,17 @@ pub struct Lexer {
 
 impl Lexer {
     pub fn new(source: &str, file_id: FileId) -> Self {
+        let chars: Vec<char> = source.chars().collect();
+        let mut byte_offsets = Vec::with_capacity(chars.len() + 1);
+        let mut offset = 0u32;
+        for ch in &chars {
+            byte_offsets.push(offset);
+            offset += ch.len_utf8() as u32;
+        }
+        byte_offsets.push(offset);
         Self {
-            source: source.chars().collect(),
+            source: chars,
+            byte_offsets,
             current: 0,
             line: 1,
             column: 1,
@@ -713,6 +738,20 @@ impl Lexer {
                     self.advance(); // consume |
                     return Token::new(TokenKind::HashPipe, self.span(start));
                 }
+                // Check for #( (dictionary literal)
+                //
+                // GAP-ZYB-003/004: `(a: 1)` and `(1, 2)` share the parentheses
+                // and not the semantics — the colon was the whole of what told
+                // them apart, and an EMPTY one could not be written at all,
+                // because `()` would have to mean both. `#(` marks the
+                // dictionary the way `#[` marks an array with a declared mix:
+                // `#` is the meta/type mark, and saying which of the two a pair
+                // of parentheses opens is a statement about its type.
+                else if next == '(' {
+                    self.advance(); // consume #
+                    self.advance(); // consume (
+                    return Token::new(TokenKind::HashLParen, self.span(start));
+                }
                 // Check for #? (type metadata)
                 else if next == '?' {
                     self.advance(); // consume #
@@ -747,6 +786,18 @@ impl Lexer {
                         self.advance(); // consume second #
                         self.advance(); // consume '
                         return Token::new(TokenKind::HashHashApos, self.span(start));
+                    } else if third == Some('_') && !matches!(self.peek_ahead(3), Some(c) if Self::is_ident_continue(c)) {
+                        // `##_` — the Unit literal, and the "any kind" mark in
+                        // `:! ##_`. One token for both, because they are one
+                        // reading: `_` is what is not specified.
+                        //
+                        // The lookahead keeps `##_algo` an error kind: a name
+                        // beginning with an underscore is still an identifier,
+                        // and `##_` is only the bare mark.
+                        self.advance(); // consume first #
+                        self.advance(); // consume second #
+                        self.advance(); // consume _
+                        return Token::new(TokenKind::HashHashUnderscore, self.span(start));
                     }
                     // unrecognized ##X — fall through to emit lone Hash
                 }
@@ -1065,7 +1116,12 @@ impl Lexer {
 
     /// Get current position
     fn position(&self) -> Position {
-        Position::new(self.line, self.column, self.current as u32)
+        let byte_offset = self
+            .byte_offsets
+            .get(self.current)
+            .copied()
+            .unwrap_or_else(|| self.byte_offsets.last().copied().unwrap_or(0));
+        Position::new(self.line, self.column, byte_offset)
     }
 
     /// Create a span from start to current position

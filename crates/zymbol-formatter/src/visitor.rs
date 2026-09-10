@@ -40,13 +40,22 @@ fn compound_op_str(op: BinaryOp) -> Option<&'static str> {
     }
 }
 use zymbol_common::{BinaryOp, Literal, UnaryOp};
-use zymbol_lexer::StringPart;
+use zymbol_lexer::{Lexer, StringPart, TokenKind};
 
 use crate::output::OutputBuilder;
 
 /// AST visitor that formats Zymbol code
 pub struct FormatVisitor<'a> {
     output: &'a mut OutputBuilder,
+    /// The source being formatted, so a literal can be reprinted as it was
+    /// WRITTEN rather than as its value renders.
+    ///
+    /// A literal reaches the AST as a value: `४२`, `0x2A` and `42` all arrive
+    /// as `Int(42)`, and printing the value threw the other two away. The span
+    /// is still on the node, and §12 of FORMATTER_RULES.md names this exact
+    /// remedy — record the surface form the AST would otherwise lose. Here the
+    /// record already existed; nothing was reading it.
+    source: &'a str,
     /// Source comments in span order, consumed as statements are emitted.
     comments: CommentStream,
     /// Source end-line of the last emitted statement or comment; drives
@@ -55,12 +64,32 @@ pub struct FormatVisitor<'a> {
     /// The last emitted line ended with a trailing `// comment` — joining
     /// anything onto it would swallow the joined token into the comment.
     last_had_trailing: bool,
+    /// Inside an output statement, where a line break is not layout.
+    ///
+    /// `>>` and `>>~` are terminated by the end of the line, so wrapping a long
+    /// call across lines inside one does not reformat the statement — it ends
+    /// it, and leaves the rest as a fragment. `Chaturanga/दर्शनम्/चित्रणम्.zy`
+    /// has `>>~ (प, स) > "│" अक्ष::मध्यस्थम्(…) "│"` over the line budget; the
+    /// formatter broke the call open and the output stopped parsing at the
+    /// closing `"│"`. The gate refused it, correctly, and the file could not be
+    /// formatted at all.
+    ///
+    /// Line length is a preference. Producing a program that does not parse is
+    /// not a trade-off against it.
+    no_wrap: bool,
 }
 
 impl<'a> FormatVisitor<'a> {
     /// Create a new format visitor
-    pub fn new(output: &'a mut OutputBuilder, comments: CommentStream) -> Self {
-        Self { output, comments, last_src_line: 0, last_had_trailing: false }
+    pub fn new(output: &'a mut OutputBuilder, comments: CommentStream, source: &'a str) -> Self {
+        Self {
+            output,
+            comments,
+            source,
+            last_src_line: 0,
+            last_had_trailing: false,
+            no_wrap: false,
+        }
     }
 
     // ── Comment emission (span-ordered; replaces the old merge_comments) ────
@@ -144,6 +173,7 @@ impl<'a> FormatVisitor<'a> {
     /// Format an entire program
     pub fn format_program(&mut self, program: &Program) {
         let in_module = program.module_decl.is_some();
+        let mut export_emitted_before_imports = false;
 
         if let Some(ref module_decl) = program.module_decl {
             // Header comments above `# name {`
@@ -155,7 +185,33 @@ impl<'a> FormatVisitor<'a> {
             self.output.indent();
             self.last_src_line = module_decl.span.start.line;
 
-            // Imports first (as they appear in source), then export block
+            // The export block goes before the imports when the SOURCE puts it
+            // there. It was already emitted in source order relative to the
+            // module's STATEMENTS, but the imports were printed first
+            // unconditionally — so a module that opens with `#> { … }` and
+            // imports underneath came back with the two swapped.
+            //
+            // The gate caught it and refused the file, which is the right
+            // failure and still a failure: fourteen files across the
+            // applications could not be formatted at all, among them every
+            // `api/` re-export layer in GO and Chaturanga, whose whole shape is
+            // "export block first, imports under it".
+            //
+            // A formatter reorders nothing. Where the author put it is where it
+            // goes.
+            export_emitted_before_imports = program
+                .module_decl
+                .as_ref()
+                .and_then(|m| m.export_block.as_ref())
+                .zip(program.imports.first())
+                .is_some_and(|(eb, first)| eb.span.start.line < first.span.start.line);
+
+            if export_emitted_before_imports {
+                if let Some(eb) = module_decl.export_block.as_ref() {
+                    self.emit_export_block_stmt(eb);
+                }
+            }
+
             for import in &program.imports {
                 self.flush_comments_before(import.span.start.line);
                 self.format_import(import);
@@ -163,10 +219,6 @@ impl<'a> FormatVisitor<'a> {
                 self.emit_trailing_comments(import.span.end.line);
                 self.output.newline();
             }
-
-            // The export block is NOT printed here: it is emitted in source
-            // order relative to the module's statements (see the loop below),
-            // because modules may declare constants before `#> { ... }`.
         } else {
             // Non-module file: imports at top level
             for import in &program.imports {
@@ -183,10 +235,14 @@ impl<'a> FormatVisitor<'a> {
         // break idempotence).
 
         // Export block pending emission at its source position
-        let mut pending_export = program
-            .module_decl
-            .as_ref()
-            .and_then(|m| m.export_block.as_ref());
+        let mut pending_export = if export_emitted_before_imports {
+            None
+        } else {
+            program
+                .module_decl
+                .as_ref()
+                .and_then(|m| m.export_block.as_ref())
+        };
 
         // Format statements
         let mut prev_was_function = false;
@@ -388,29 +444,9 @@ impl<'a> FormatVisitor<'a> {
                     self.output.write(&format!("<<|? {}", ki.variable));
                 }
             }
-            Statement::OutputPos(op) => {
-                if op.parenthesized {
-                    self.output.write(">>~ (");
-                    let mut first = true;
-                    for slot in &op.slots {
-                        if !first { self.output.write(", "); }
-                        first = false;
-                        if let Some(expr) = slot { self.format_expr(expr); }
-                    }
-                    self.output.write(") >");
-                } else {
-                    // Bare-variable form: >>~ pos > items
-                    self.output.write(">>~ ");
-                    if let Some(Some(expr)) = op.slots.first() {
-                        self.format_expr(expr);
-                    }
-                    self.output.write(" >");
-                }
-                for item in &op.items {
-                    self.output.write(" ");
-                    self.format_expr(item);
-                }
-            }
+            // Same rule as `>>`: the statement ends at the line, so nothing
+            // inside it may wrap. See `no_wrap`.
+            Statement::OutputPos(op) => self.format_output_pos(op),
             Statement::TuiBlock(tb) => {
                 self.output.write(">>| ");
                 self.format_block(&tb.body);
@@ -418,8 +454,40 @@ impl<'a> FormatVisitor<'a> {
         }
     }
 
+    fn format_output_pos(&mut self, op: &zymbol_ast::OutputPos) {
+        let outer = std::mem::replace(&mut self.no_wrap, true);
+        if op.parenthesized {
+            self.output.write(">>~ (");
+            let mut first = true;
+            for slot in &op.slots {
+                if !first { self.output.write(", "); }
+                first = false;
+                if let Some(expr) = slot { self.format_expr(expr); }
+            }
+            self.output.write(") >");
+        } else {
+            // Bare-variable form: >>~ pos > items
+            self.output.write(">>~ ");
+            if let Some(Some(expr)) = op.slots.first() {
+                self.format_expr(expr);
+            }
+            self.output.write(" >");
+        }
+        for item in &op.items {
+            self.output.write(" ");
+            self.format_expr(item);
+        }
+        self.no_wrap = outer;
+    }
+
     /// Format an output statement
     fn format_output(&mut self, output: &Output) {
+        let outer = std::mem::replace(&mut self.no_wrap, true);
+        self.format_output_inner(output);
+        self.no_wrap = outer;
+    }
+
+    fn format_output_inner(&mut self, output: &Output) {
         self.output.write(">>");
         for expr in &output.exprs {
             self.output.space();
@@ -441,6 +509,16 @@ impl<'a> FormatVisitor<'a> {
     /// match (defensive), fall back to plain `=` printing — the safety gate
     /// rejects any unfaithful result.
     fn format_assignment(&mut self, assign: &Assignment) {
+        // A bare `$` edit statement reprints as the expression it was written
+        // as — `arr$+ 3`, not `arr = arr$+ 3`. The receiver is already inside
+        // `value`, so this has to run before the name is written.
+        if assign.sugar == AssignSugar::InPlaceEdit {
+            // `written` holds the edit as the author spelled it when `value` is
+            // a rewritten form of it — `d.x["y"]$~ 5` runs as a deep write at
+            // `d["x">"y"]`, which is not what was written (§2.1, §12).
+            self.format_expr(assign.written.as_deref().unwrap_or(&assign.value));
+            return;
+        }
         if assign.pre_hot {
             self.output.write("°");
         }
@@ -505,6 +583,7 @@ impl<'a> FormatVisitor<'a> {
                     }
                 }
             }
+            AssignSugar::InPlaceEdit => unreachable!("handled above"),
             AssignSugar::None => {}
         }
 
@@ -514,7 +593,16 @@ impl<'a> FormatVisitor<'a> {
 
     /// Format a destructure assignment statement
     fn format_destructure_assign(&mut self, d: &DestructureAssign) {
-        match &d.pattern {
+        self.format_destructure_pattern(&d.pattern);
+        self.output.write(" = ");
+        self.format_expr(&d.value);
+    }
+
+    /// Format a destructuring pattern on its own — shared by the assignment and
+    /// by a loop head, `@ (k, v):pares`, which uses the very same pattern
+    /// language and would otherwise have needed a second copy of this.
+    fn format_destructure_pattern(&mut self, pattern: &DestructurePattern) {
+        match pattern {
             DestructurePattern::Array(items) => {
                 self.output.write("[");
                 for (i, item) in items.iter().enumerate() {
@@ -550,7 +638,8 @@ impl<'a> FormatVisitor<'a> {
                 self.output.write(")");
             }
             DestructurePattern::NamedTuple(fields) => {
-                self.output.write("(");
+                // The pattern spells the dictionary the way the literal does.
+                self.output.write("#(");
                 for (i, (field, var)) in fields.iter().enumerate() {
                     if i > 0 {
                         self.output.write(", ");
@@ -562,8 +651,6 @@ impl<'a> FormatVisitor<'a> {
                 self.output.write(")");
             }
         }
-        self.output.write(" = ");
-        self.format_expr(&d.value);
     }
 
     /// Format a constant declaration
@@ -673,7 +760,15 @@ impl<'a> FormatVisitor<'a> {
         }
 
         // Handle for-each loop
-        if let Some(ref iter_var) = loop_stmt.iterator_var {
+        if let Some(ref pattern) = loop_stmt.iterator_pattern {
+            // `@ (k, v):pares` — a pattern where a single name would go.
+            self.output.space();
+            self.format_destructure_pattern(pattern);
+            self.output.write(":");
+            if let Some(ref iterable) = loop_stmt.iterable {
+                self.format_expr(iterable);
+            }
+        } else if let Some(ref iter_var) = loop_stmt.iterator_var {
             self.output.space();
             self.output.write(iter_var);
             self.output.write(":");
@@ -980,7 +1075,21 @@ impl<'a> FormatVisitor<'a> {
 
     /// Format a literal expression
     fn format_literal(&mut self, lit: &LiteralExpr) {
-        self.format_literal_value(&lit.value);
+        self.write_literal(&lit.value, lit.span);
+    }
+
+    /// Write a literal as it was written in the source, falling back to its
+    /// value when the source form cannot be recovered and verified.
+    ///
+    /// `literal_source_form` re-lexes the slice and refuses it unless it yields
+    /// exactly this literal and nothing else, so the worst this can do is print
+    /// what the formatter printed before.
+    fn write_literal(&mut self, value: &Literal, span: zymbol_span::Span) {
+        let source: &str = self.source;
+        match literal_source_form(source, value, span) {
+            Some(raw) => self.output.write(raw),
+            None => self.format_literal_value(value),
+        }
     }
 
     /// Write a literal's source form, escapes included.
@@ -990,6 +1099,7 @@ impl<'a> FormatVisitor<'a> {
     /// the quotes and the formatted file no longer lexed.
     fn format_literal_value(&mut self, value: &Literal) {
         match value {
+            Literal::Unit => self.output.write("##_"),
             Literal::Int(n) => self.output.write(&n.to_string()),
             Literal::Float(f) => self.output.write(&format_float(*f)),
             Literal::String(s) | Literal::InterpolatedString(s) => {
@@ -1027,7 +1137,8 @@ impl<'a> FormatVisitor<'a> {
     fn format_binary(&mut self, binary: &BinaryExpr) {
         // Estimate total length to decide if we need line breaking
         let total_len = self.estimate_binary_length(binary);
-        let should_break = self.output.would_exceed_line_length(total_len)
+        let should_break = !self.no_wrap
+            && self.output.would_exceed_line_length(total_len)
             && !matches!(binary.op, BinaryOp::Range)
             && self.is_breakable_binary(binary);
 
@@ -1173,6 +1284,15 @@ impl<'a> FormatVisitor<'a> {
         let config = self.output.config().clone();
         let should_inline = self.estimate_array_length(arr) <= config.max_inline_array_length;
 
+        // `#[…]` — the declared mix. Without the mark the formatter reprinted it
+        // as `[…]`, which is a DIFFERENT program: the homogeneity check applies
+        // to one and not the other. The safety gate caught it and refused to
+        // write the file, which is the gate doing its job — and the reason
+        // `zymbol fmt` simply failed on any file using the form.
+        if arr.declared_mixed {
+            self.output.write("#");
+        }
+
         if should_inline || arr.elements.is_empty() {
             // Inline format
             self.output.write("[");
@@ -1223,6 +1343,7 @@ impl<'a> FormatVisitor<'a> {
                 Literal::String(s) | Literal::InterpolatedString(s) => s.len() + 2,
                 Literal::Char(_) => 3,
                 Literal::Bool(_) => 2,
+                Literal::Unit => 3,
             },
             Expr::Identifier(ident) => ident.name.len(),
             Expr::ArrayLiteral(arr) => self.estimate_array_length(arr),
@@ -1235,7 +1356,8 @@ impl<'a> FormatVisitor<'a> {
         self.output.write("(");
 
         let estimated_len = self.estimate_args_length(&tuple.elements);
-        let should_break = self.output.would_exceed_line_length(estimated_len + 1);
+        let should_break =
+            !self.no_wrap && self.output.would_exceed_line_length(estimated_len + 1);
 
         if should_break && tuple.elements.len() > 2 {
             // Multi-line tuple
@@ -1269,20 +1391,72 @@ impl<'a> FormatVisitor<'a> {
     }
 
     /// Format a named tuple expression
+    /// A dictionary key as it has to be written back: bare when it is a name,
+    /// quoted when it is not.
+    ///
+    /// `#("gasto.alimentación": v)` is a key the literal accepts and an
+    /// identifier cannot spell; reprinting it bare would produce a file that
+    /// does not parse, which the formatter's own safety gate would then refuse
+    /// — correctly, but only after the fact.
+    fn dict_key_at(named_tuple: &NamedTupleExpr, i: usize, name: &str) -> String {
+        // The source's own answer first: a key written in quotes stays in
+        // quotes, whether or not it could go bare. `#("k": 1)` and `#(k: 1)`
+        // are a String token and an Ident token, and swapping one for the other
+        // is a token change however identical the value.
+        if named_tuple.quoted.get(i).copied().unwrap_or(false) {
+            return format!("\"{}\"", escape_string(name));
+        }
+        Self::dict_key(name)
+    }
+
+    fn dict_key(name: &str) -> String {
+        // Exactly what the lexer accepts as an identifier, and not a narrower
+        // guess: `is_alphanumeric()` excludes combining marks (category Mn), so
+        // `मुद्रा` — a bare key in `ZyBank`, and a perfectly good identifier
+        // everywhere else in the language — was judged to need quoting and came
+        // back as a String where the source had an Ident.
+        //
+        // `literals.rs` learnt this same lesson for `{…}` interpolation, and
+        // wrote it down: a narrower rule here rejects identifiers the rest of
+        // the language allows.
+        let mut chars = name.chars();
+        let is_name = match chars.next() {
+            None => false,
+            Some(first) => Lexer::is_ident_start(first) && chars.all(Lexer::is_ident_continue),
+        };
+        if is_name {
+            name.to_string()
+        } else {
+            // Zymbol's escaping, not Rust's. `format!("{:?}")` here spelled a
+            // combining mark as `\u{941}` — Rust syntax that this language does
+            // not have, and which its lexer then read as an interpolation with
+            // an invalid character inside. `ZyBank/configuración/preferencias.zy`
+            // has `#("मुद्रा": "moneda")`, and every Devanagari key in it came
+            // out that way; the gate refused the file, correctly, and the file
+            // could not be formatted at all.
+            format!("\"{}\"", escape_string(name))
+        }
+    }
+
     fn format_named_tuple(&mut self, named_tuple: &NamedTupleExpr) {
-        self.output.write("(");
+        // `#(` and not `(` — the mark says which of the two things the
+        // parentheses open, and it is what makes the empty one writable
+        // (GAP-ZYB-003/004). A key that is not a bare name is quoted, because
+        // that is how it has to be written back.
+        self.output.write("#(");
 
         let estimated_len: usize = named_tuple.fields.iter()
             .map(|(name, value)| name.len() + 2 + self.estimate_expr_length(value) + 2)
             .sum();
-        let should_break = self.output.would_exceed_line_length(estimated_len + 1);
+        let should_break =
+            !self.no_wrap && self.output.would_exceed_line_length(estimated_len + 1);
 
         if should_break && named_tuple.fields.len() > 1 {
             // Multi-line named tuple
             self.output.newline();
             self.output.indent();
             for (i, (name, value)) in named_tuple.fields.iter().enumerate() {
-                self.output.write(name);
+                self.output.write(&Self::dict_key_at(named_tuple, i, name));
                 self.output.write(": ");
                 self.format_expr(value);
                 if i < named_tuple.fields.len() - 1 {
@@ -1296,7 +1470,7 @@ impl<'a> FormatVisitor<'a> {
         } else {
             // Inline named tuple
             for (i, (name, value)) in named_tuple.fields.iter().enumerate() {
-                self.output.write(name);
+                self.output.write(&Self::dict_key_at(named_tuple, i, name));
                 self.output.write(": ");
                 self.format_expr(value);
                 if i < named_tuple.fields.len() - 1 {
@@ -1440,8 +1614,15 @@ impl<'a> FormatVisitor<'a> {
         if needs_parens { self.output.write(")"); }
         self.output.write("(");
 
-        let estimated_len = self.estimate_args_length(&call.arguments);
-        let should_break = self.output.would_exceed_line_length(estimated_len + 1);
+        // `x<~` — the call-site output mark. It is part of the call and not of
+        // the argument expression, so it lives in `out_args` and has to be
+        // written back here; without this the safety gate saw a `Return` token
+        // in the source and none in the output, and refused to format any file
+        // that marks an argument at all (REFERENCE.md L36, L43).
+        let estimated_len =
+            self.estimate_args_length(&call.arguments) + call.out_args.len() * 2;
+        let should_break =
+            !self.no_wrap && self.output.would_exceed_line_length(estimated_len + 1);
 
         if should_break && !call.arguments.is_empty() {
             // Multi-line arguments
@@ -1449,6 +1630,9 @@ impl<'a> FormatVisitor<'a> {
             self.output.indent();
             for (i, arg) in call.arguments.iter().enumerate() {
                 self.format_expr(arg);
+                if call.out_args.contains(&i) {
+                    self.output.write("<~");
+                }
                 if i < call.arguments.len() - 1 {
                     self.output.write(",");
                     self.output.newline();
@@ -1461,6 +1645,9 @@ impl<'a> FormatVisitor<'a> {
             // Inline arguments
             for (i, arg) in call.arguments.iter().enumerate() {
                 self.format_expr(arg);
+                if call.out_args.contains(&i) {
+                    self.output.write("<~");
+                }
                 if i < call.arguments.len() - 1 {
                     self.output.write(", ");
                 }
@@ -1526,8 +1713,8 @@ impl<'a> FormatVisitor<'a> {
     /// Format a pattern
     fn format_pattern(&mut self, pattern: &Pattern) {
         match pattern {
-            Pattern::Literal(lit, _) => {
-                self.format_literal_value(lit);
+            Pattern::Literal(lit, span) => {
+                self.write_literal(lit, *span);
             }
             Pattern::Range(start, end, _) => {
                 self.format_expr(start);
@@ -1708,15 +1895,32 @@ impl<'a> FormatVisitor<'a> {
         self.output.write("#?");
     }
 
+    /// Reprint a decimal count: the digits if it was written, the expression if
+    /// it is computed. A `Dynamic` count came in as a postfix expression, so it
+    /// reprints without parentheses of its own — `#,.n|x|`, `#,.(a+1)|x|` keeps
+    /// the parentheses it was written with because they are a `Group`.
+    fn format_precision(&mut self, p: &zymbol_ast::Precision) {
+        match p {
+            zymbol_ast::Precision::Literal(n) => self.output.write(&n.to_string()),
+            zymbol_ast::Precision::Dynamic(e) => self.format_expr(e),
+        }
+    }
+
     /// Format format expression: #,|expr|, #^|expr|, #,.2|expr|, etc.
     fn format_format_expr(&mut self, op: &FormatExpr) {
         match op.kind {
             FormatKind::Thousands => self.output.write("#,"),
             FormatKind::Scientific => self.output.write("#^"),
         }
-        match op.precision {
-            Some(PrecisionOp::Round(n)) => self.output.write(&format!(".{}", n)),
-            Some(PrecisionOp::Truncate(n)) => self.output.write(&format!("!{}", n)),
+        match &op.precision {
+            Some(PrecisionOp::Round(n)) => {
+                self.output.write(".");
+                self.format_precision(n);
+            }
+            Some(PrecisionOp::Truncate(n)) => {
+                self.output.write("!");
+                self.format_precision(n);
+            }
             None => {}
         }
         self.output.write("|");
@@ -1758,11 +1962,20 @@ impl<'a> FormatVisitor<'a> {
             }
         }
 
-        self.output.write(" -> ");
-
+        // `format_block` opens with its own leading space — `" { "` when it
+        // inlines, `" {"` from `open_brace`, or a newline in brace-next-line
+        // mode. So the arrow must not leave one behind, or the two add up:
+        // `x ->  { … }` in the default mode, and a trailing space at end of
+        // line in the other. An expression body has no such space of its own.
         match &lambda.body {
-            LambdaBody::Expr(expr) => self.format_expr(expr),
-            LambdaBody::Block(block) => self.format_block(block),
+            LambdaBody::Expr(expr) => {
+                self.output.write(" -> ");
+                self.format_expr(expr);
+            }
+            LambdaBody::Block(block) => {
+                self.output.write(" ->");
+                self.format_block(block);
+            }
         }
     }
 
@@ -1852,7 +2065,7 @@ impl<'a> FormatVisitor<'a> {
     /// Format round expression
     fn format_round(&mut self, round: &RoundExpr) {
         self.output.write("#.");
-        self.output.write(&round.precision.to_string());
+        self.format_precision(&round.precision);
         self.output.write("|");
         self.format_expr(&round.expr);
         self.output.write("|");
@@ -1861,7 +2074,7 @@ impl<'a> FormatVisitor<'a> {
     /// Format trunc expression
     fn format_trunc(&mut self, trunc: &TruncExpr) {
         self.output.write("#!");
-        self.output.write(&trunc.precision.to_string());
+        self.format_precision(&trunc.precision);
         self.output.write("|");
         self.format_expr(&trunc.expr);
         self.output.write("|");
@@ -1899,6 +2112,77 @@ impl<'a> FormatVisitor<'a> {
 }
 
 /// Escape a string for output
+/// The literal exactly as it was written in the source, or `None` when that
+/// cannot be recovered and proved.
+///
+/// A literal reaches the AST as a VALUE, and several source forms share one
+/// value: `४२`, `0x2A`, `0b101010` and `42` are all `Int(42)`; `٣٫٥` and `3.5`
+/// are one `Float`; `0o17` is a `Char`. Printing the value picked one spelling
+/// and discarded the author's — which is not whitespace, so §10 of
+/// FORMATTER_RULES.md makes it a bug rather than a normalization. It also
+/// wrote a raw U+000F into the file, since the chosen spelling for that `Char`
+/// is a quoted control character.
+///
+/// The proof is the point. The slice is lexed again and accepted only if it
+/// yields exactly one token holding exactly this literal, so a span that were
+/// wrong falls back to the old behaviour instead of emitting something else.
+/// `Unit` and interpolated strings take the fallback deliberately: neither has
+/// a surface form the value loses.
+fn literal_source_form<'s>(source: &'s str, value: &Literal, span: zymbol_span::Span) -> Option<&'s str> {
+    let start = span.start.byte_offset as usize;
+    let end = span.end.byte_offset as usize;
+    if end <= start {
+        return None;
+    }
+    let raw = source.get(start..end)?;
+
+    let (tokens, errors) = Lexer::new(raw, span.file_id).tokenize();
+    if !errors.is_empty() {
+        return None;
+    }
+    let mut significant = tokens.iter().filter(|t| !matches!(t.kind, TokenKind::Eof));
+    let token = significant.next()?;
+    if significant.next().is_some() {
+        return None; // the slice holds more than the literal
+    }
+
+    let same = match (value, &token.kind) {
+        (Literal::Int(a), TokenKind::Integer(b)) => a == b,
+        // by bits, so `-0.0` and `0.0` are not swapped for one another
+        (Literal::Float(a), TokenKind::Float(b)) => a.to_bits() == b.to_bits(),
+        (Literal::Char(a), TokenKind::Char(b)) => a == b,
+        (Literal::Bool(a), TokenKind::Boolean(b)) => a == b,
+        (Literal::String(a), TokenKind::String(b)) => a == b,
+        // An INTERPOLATED string had no arm here, so every `"…{x}…"` fell
+        // through to `format_literal_value` and was re-spelled: a newline
+        // written inside one came back as `\n`, and `\'` came back as `'`.
+        // Value-preserving, source-changing, and exactly the family of the
+        // `४२` → `42` bug — §2.1 says a literal reprints AS WRITTEN, and an
+        // interpolated string is a literal.
+        //
+        // The comparison rebuilds the parser's own reconstruction (`lib.rs`
+        // and `io.rs` both spell it this way) rather than inventing a second
+        // one: if the two ever disagree the arm simply stops matching, and the
+        // formatter falls back to what it printed before.
+        (Literal::InterpolatedString(a), TokenKind::StringInterpolated(parts)) => {
+            let mut rebuilt = String::new();
+            for part in parts {
+                match part {
+                    StringPart::Text(t) => rebuilt.push_str(t),
+                    StringPart::Variable(v) => {
+                        rebuilt.push('{');
+                        rebuilt.push_str(v);
+                        rebuilt.push('}');
+                    }
+                }
+            }
+            *a == rebuilt
+        }
+        _ => false,
+    };
+    same.then_some(raw)
+}
+
 fn escape_string(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for ch in s.chars() {
@@ -1933,6 +2217,19 @@ fn escape_char(c: char) -> String {
 
 /// Format a float, removing unnecessary trailing zeros
 fn format_float(f: f64) -> String {
+    // An overflowing literal — `1.0e400` — is already infinity by the time the
+    // lexer is done with it, and `{:e}` prints that as `inf`, which re-lexes as
+    // an identifier. The gate caught it and refused to format the file, which
+    // is the fail-closed behaviour working, but it left one corpus file
+    // unformattable over a value that does have a spelling: any literal that
+    // overflows produces exactly this value, so `1.0e400` is the canonical one.
+    //
+    // NaN is deliberately not handled: no literal produces it, so a NaN here
+    // could only come from somewhere the formatter should not be guessing
+    // about, and refusing is the right answer.
+    if f.is_infinite() {
+        return if f.is_sign_positive() { "1.0e400".to_string() } else { "-1.0e400".to_string() };
+    }
     // Check if it's a whole number
     if f.fract() == 0.0 && f.abs() < 1e15 {
         format!("{}.0", f as i64)
@@ -1950,6 +2247,14 @@ fn format_float(f: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_float_spells_infinity_as_a_literal() {
+        // `{:e}` gives "inf", which is an identifier when read back.
+        assert_eq!(format_float(f64::INFINITY), "1.0e400");
+        assert_eq!(format_float(f64::NEG_INFINITY), "-1.0e400");
+        assert_eq!("1.0e400".parse::<f64>().unwrap(), f64::INFINITY);
+    }
 
     #[test]
     fn test_escape_string() {
@@ -1981,6 +2286,69 @@ mod tests {
             !formatted.contains("'\n'"),
             "raw newline written inside a char literal: {formatted}"
         );
+    }
+
+    /// `format_block` supplies its own leading space, so the arrow must not
+    /// leave one too. It did, and every block lambda came out `x ->  { … }`
+    /// with two spaces — cosmetic, invisible to the property harness (which
+    /// checks reparse, idempotence, semantics and comments, none of which a
+    /// stray space breaks), and therefore able to sit there indefinitely.
+    #[test]
+    fn test_block_lambda_arrow_has_one_space() {
+        for src in [
+            "a = (x) -> { <~ x }\n",
+            "b = (x, y) -> { <~ x }\n",
+            "c = x -> { <~ x }\n",
+            "d = () -> { <~ 1 }\n",
+            "e = arr$> (x -> { <~ x })\n",
+        ] {
+            let formatted = crate::format(src).expect("formatting must succeed");
+            assert!(
+                !formatted.contains("->  "),
+                "double space after the arrow in {src:?}: {formatted:?}"
+            );
+            assert!(
+                formatted.contains("-> {"),
+                "arrow and brace should be one space apart in {src:?}: {formatted:?}"
+            );
+        }
+    }
+
+    /// An expression body has no leading space of its own, so there the arrow
+    /// keeps the one it always had.
+    #[test]
+    fn test_expr_lambda_arrow_keeps_its_space() {
+        let formatted = crate::format("e = x -> x + 1\n").expect("formatting must succeed");
+        assert!(
+            formatted.contains("x -> x + 1"),
+            "expression body lost its spacing: {formatted:?}"
+        );
+    }
+
+    /// No line may end in whitespace. In brace-next-line mode `open_brace`
+    /// writes the newline itself, so the arrow's trailing space landed at end
+    /// of line — the same defect wearing a different hat.
+    ///
+    /// The body needs more than one statement: with the default
+    /// `inline_single_statement`, a one-statement block takes the `" { … }"`
+    /// path and never reaches `open_brace` at all.
+    #[test]
+    fn test_no_trailing_whitespace_around_lambda_braces() {
+        let src = "a = (x) -> { <~ x }\nb = x -> {\n    y = x + 1\n    <~ y\n}\n";
+        for formatted in [
+            crate::format(src).expect("formatting must succeed"),
+            crate::format_with_config(src, crate::FormatterConfig::new().with_brace_new_line())
+                .expect("formatting must succeed"),
+        ] {
+            for (i, line) in formatted.lines().enumerate() {
+                assert_eq!(
+                    line.trim_end(),
+                    line,
+                    "line {} ends in whitespace: {line:?}",
+                    i + 1
+                );
+            }
+        }
     }
 
     #[test]

@@ -48,7 +48,7 @@ pub use string_ops::{StringReplaceExpr, StringSplitExpr, StringRepeatExpr, Conca
 
 mod data_ops;
 pub use data_ops::{
-    NumericEvalExpr, TypeMetadataExpr, FormatExpr, FormatKind, PrecisionOp,
+    NumericEvalExpr, TypeMetadataExpr, FormatExpr, FormatKind, Precision, PrecisionOp, ResolvedPrecision,
     BaseConversionExpr, BasePrefix, RoundExpr, TruncExpr,
     NumericCastExpr, CastKind,
 };
@@ -123,7 +123,8 @@ pub enum Statement {
     /// Sets the active output numeral system for all subsequent >> outputs.
     /// `base` is the block base codepoint of the chosen script.
     SetNumeralMode { base: u32, span: Span },
-    /// Sleep statement: @~ N (milliseconds, only valid inside @ block)
+    /// Sleep statement: @~ N (milliseconds). Carries no loop requirement —
+    /// see the note on [`Sleep`](crate::Sleep).
     Sleep(Sleep),
     /// Key input: <<| var (blocking) or <<|? var (non-blocking)
     KeyInput(KeyInput),
@@ -306,6 +307,12 @@ pub struct IndexExpr {
 pub struct FunctionCallExpr {
     pub callable: Box<Expr>,  // The expression being called (identifier, lambda, chained call, etc.)
     pub arguments: Vec<Expr>,
+    /// Indices of the arguments written `x<~` at the call site. The mark is
+    /// required wherever the callee declares an output parameter, so that a
+    /// reader can see which arguments come back changed without opening the
+    /// function (REFERENCE.md L36). It carries no run-time meaning: the callee's
+    /// signature is what makes a parameter an output.
+    pub out_args: Vec<usize>,
     pub span: Span,
 }
 
@@ -338,8 +345,19 @@ impl FunctionCallExpr {
         Self {
             callable,
             arguments,
+            out_args: Vec::new(),
             span,
         }
+    }
+
+    /// Same, for a call site that marked some of its arguments `x<~`.
+    pub fn new_with_out_args(
+        callable: Box<Expr>,
+        arguments: Vec<Expr>,
+        out_args: Vec<usize>,
+        span: Span,
+    ) -> Self {
+        Self { callable, arguments, out_args, span }
     }
 }
 

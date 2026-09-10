@@ -228,16 +228,48 @@ impl Parser {
     pub(crate) fn parse_collection_update(&mut self, target: Expr) -> Result<Expr, Diagnostic> {
         let start_span = target.span();
 
-        // Target must be an IndexExpr (arr[i]) or DeepIndexExpr (arr[i>j>k])
-        if !matches!(target.unwrap_group(), Expr::Index(_) | Expr::DeepIndex(_)) {
-            return Err(Diagnostic::error("collection update ($~) requires indexed expression")
+        // Target must name one place: `arr[i]`, `arr[i>j>k]` or `d.k`.
+        //
+        // The dot was missing, and only here — it reaches a dictionary key
+        // everywhere else in the language, reading included (COLLECTIONS.md).
+        // Nothing said it could not write; the asymmetry was inherited, not
+        // decided. A module access (`m::f`) is not a place and stays out.
+        let is_place = match target.unwrap_group() {
+            Expr::Index(_) | Expr::DeepIndex(_) => true,
+            Expr::MemberAccess(ma) => !ma.is_module_access,
+            _ => false,
+        };
+        if !is_place {
+            return Err(Diagnostic::error("collection update ($~) requires a place to write")
                 .with_span(start_span)
-                .with_help("use: arr[i]$~ value  or  arr[i>j]$~ value"));
+                .with_help("use: arr[i]$~ value, arr[i>j]$~ value, or d.key$~ value"));
         }
 
         self.advance(); // consume $~
 
-        let value = self.parse_postfix()?; // Parse the new value
+        // BUG-ZYB-002: the value is a full expression, juxtaposition included —
+        // the same thing the right-hand side of `=` accepts, because this is an
+        // assignment: `d[k]$~ v` is how a collection is written into.
+        //
+        // It used to be `parse_postfix()`, which stops after one postfix
+        // expression, and the rest of the line was left to be parsed as a
+        // separate statement. `d["a"]$~ "" v` therefore assigned `""` and left
+        // `v` behind as a bare identifier — a statement with no effect and no
+        // diagnostic (ERROR-ZYB-001), so the value vanished in silence. The
+        // three-piece form `d[k]$~ "pre" v "post"` did raise a parse error,
+        // because a string cannot begin a statement: the two-piece case was the
+        // only quiet one, and the common one.
+        //
+        // The cost was found in ZyBank: configuration read from a JSON file
+        // arrived with every value empty and the program started on defaults as
+        // though the file were missing. No error, no warning.
+        //
+        // `$+` was never the counter-example the first report took it for.
+        // `t = s$+ "" v` concatenates because the *assignment* juxtaposes, not
+        // because `$+` does — `a$+ "" v` on an array of Ints still fails on the
+        // `""` alone. The asymmetry was between an assignment and an edit
+        // statement, and this is the edit statement catching up.
+        let value = self.parse_expr_juxt()?;
         let span = start_span.to(&value.span());
 
         Ok(Expr::CollectionUpdate(CollectionUpdateExpr::new(

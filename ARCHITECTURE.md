@@ -2,7 +2,7 @@
 
 ## Overview
 
-Zymbol-Lang is a minimalist symbolic programming language with no keywords. This document
+Zymbol-Lang is a minimalist symbolic programming language with no words in its grammar. This document
 describes the architecture of its Rust implementation: a workspace of 19 crates organized
 by compilation phase, execution mode, and tooling.
 
@@ -19,7 +19,8 @@ The interpreter supports two independent execution strategies:
 1. **Modularity** — each compilation phase is an isolated crate with clear boundaries
 2. **Dual execution** — tree-walker and VM coexist without shared runtime state
 3. **Unicode-first** — identifiers, strings, and operators support full Unicode including emojis
-4. **No keywords** — all language constructs use pure symbolic operators
+4. **No words** — all language constructs use pure symbolic operators (not "no keywords":
+   see `SYMBOLS.md` §1.2 for why the precise claim is about words)
 5. **Explicit over implicit** — no hidden coercions, no automatic newlines, no magic
 
 ---
@@ -155,6 +156,13 @@ Static analysis passes over the AST:
 Walks the AST directly and evaluates it. This is the default execution mode.
 
 **Runtime `Value` enum**:
+
+> `Int` is stored in an `i64`, but the *language's* integer is narrower: the
+> safe-integer range ±(2⁵³ − 1) defined in `zymbol-common/src/num.rs`. The ten
+> spare bits are headroom for the checks, not range a program can use — every
+> operation that could produce a value outside it raises `##Range`. See
+> REFERENCE.md § Numeric limits.
+
 ```rust
 enum Value {
     Int(i64), Float(f64), Char(char), Bool(bool),
@@ -193,7 +201,7 @@ struct Interpreter {
 - Tail-call optimization (TCO): detects `<~ f(same_args)` and restarts without stack growth
 - Module system: file-based imports with alias resolution and circular dep detection
 - Native stdlib (`src/stdlib/`): `std/math`, `std/random` (v0.0.6); `std/json`, `std/io`,
-  `std/net`, `std/db` (v0.0.7); `std/term` (v0.0.8). Each module registers
+  `std/net`, `std/db` (v0.0.7); `std/term` (v0.0.8); `std/time` (v0.0.9). Each module registers
   `FunctionDef::Native` entries; `std/*` import paths resolve in-process (no filesystem
   lookup)
 - Auto-free (v0.0.8): a variable is destroyed right after the statement holding its last
@@ -494,13 +502,20 @@ embeds the interpreter, `package` produces a `.zyp` archive of source that still
 | Native stdlib (`std/*`, incl. `std/term`) | ✓ | ✓ |
 | Auto-free (destruction at last use) | ✓ | ✓ (see note) |
 
-Measured on v0.0.8: `tests/scripts/vm_compare.sh` reports 544/544 files with byte-identical
-output under both engines. The three rows that used to read "partial"/"—" (module system,
+Measured 2026-09-07 on v0.0.9: `zyq consensus --engines zytw,zyvm` (what
+`tests/scripts/vm_compare.sh` now delegates to) reports **660 of 666 corpus files agreeing
+and 0 diverging**, the other 6 excused for every engine by a reason declared in
+`zyquality/corpus.toml`. Adding `zyjs` does not change the agreement count — all three
+engines reach the same 660. Against the browser engine alone the pair agrees on 636, the
+30 in the difference being the files `corpus.toml` excuses for `zyjs` (`std/db` is ODBC,
+`<\ cmd \>` entropy, TUI needs a real TTY) — excused, not divergent. The three rows that used to read "partial"/"—" (module system,
 CLI args, format expressions) were verified and are at parity; the last known divergences
 were closed by HLZ-008/009/010 and MM-10/MM-11.
 
-Exactly one test carries `@vm-skip` — `tests/gaps/gap_key_input_type_check.zy` — and it is
-skipped by design: it is a `zymbol check` test that never executes.
+**No corpus file carries an in-file skip marker.** `@vm-skip` was one of five incompatible
+exclusion mechanisms that `zyquality/corpus.toml` replaced; nothing reads it any more.
+Every exclusion is declared there, naming the engine, a tag and a required reason — an
+exclusion nobody justified cannot be told from a bug somebody hid.
 
 **Auto-free note**: both engines implement it, but the VM's peak-memory win is currently
 smaller. `emit_auto_free` clears the *named* variable's register, while a temporary holding
@@ -511,18 +526,50 @@ allocator change, not an analysis change.
 
 ## Performance Notes
 
-Benchmarks vs CPython 3 (release build, post-Sprint 5D+):
+The microbenchmarks are `zyquality/bench/`, and `zyquality/bench/baseline.txt`
+is their recorded median — machine-specific, so the numbers below are one host's,
+re-measured for v0.0.9 (release build, best of 3, process startup subtracted:
+~5 ms tree-walker, ~3 ms VM):
 
-| Benchmark | Tree-walker | VM | Python |
-|-----------|:-----------:|:--:|:------:|
-| Stress loop | ~200ms | 67ms | 77ms |
-| Match | ~165ms | 50ms | 75ms |
-| Collections | ~14s | 33ms | 44ms |
-| Strings | ~43ms | 36ms | 25ms |
-| Recursion (fib) | ~1480ms | 308ms | 218ms |
+| Benchmark | Tree-walker | VM | VM speedup |
+|-----------|:-----------:|:--:|:----------:|
+| Strings | 76 ms | 51 ms | 1.4× |
+| Collections | 71 ms | 37 ms | 1.9× |
+| Stress loop | 236 ms | 78 ms | 3.0× |
+| Match | 171 ms | 54 ms | 3.1× |
+| Recursion (`fib`) | 1566 ms | 253 ms | 6.1× |
 
-VM is 4.4× faster than tree-walker on `fib(35)`. Collections improvement is dramatic
-(tree-walker limitation with HashMap cloning per scope).
+**There is no single speedup factor, and the widely-quoted "~4×" is the low end
+of the range, not its middle.** The microbenchmarks span 1.4×–6.1×; real
+programs sit far above them, because the tree-walker's cost is per call frame
+and per scope, and the microbenchmarks are shallow:
+
+| Real workload (Chaturanga) | Tree-walker | VM | VM speedup |
+|---------------|:-----------:|:--:|:----------:|
+| `perft(3)`, 4448 nodes | 1.94 s | 0.171 s | **11x** |
+| full alpha-beta suite | 12.78 s | 0.989 s | **13x** |
+
+The go engine (囲碁) reports 4.1× at 19×19 on its seeded self-play game;
+alpha-beta search sits higher still, because it is recursion with output
+parameters and array indexing in the innermost loop — exactly where the
+tree-walker pays most, once per frame and once per scope. Quote the workload,
+not a bare multiplier.
+
+**Those two rows read 6.11 s / 42× and 43.5 s / 46× until 2026-09-02**, and the
+go row read 8–14×. The VM did not change. The tree-walker copied aggregates it
+had no reason to copy, in two places, and both are now closed (zy-GO's HLZ-012
+and HLZ-014): reading one element cloned the whole collection, and so did handing
+it to a function. `Value` now holds `Array`/`Tuple`/`NamedTuple` behind an `Rc`
+and copies **when written** (`Rc::make_mut`, 32 sites) — the model this VM has
+had all along, ported to the other engine. The tree-walker came out 3.4× faster
+on this workload with nothing on the VM side moving at all.
+
+A ratio between two engines measures both of them, on the day it was taken. Take
+it again before quoting it.
+
+An earlier revision of this table reported Collections as ~14 s under the
+tree-walker (a HashMap-clone-per-scope limitation). That was fixed; it is 71 ms
+now, and the entry had outlived the defect it described.
 
 Key VM optimizations implemented:
 - **Sprint 5C**: flat register stack — zero allocation per call frame

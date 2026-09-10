@@ -28,11 +28,45 @@ impl<W: Write> Interpreter<W> {
             body: lambda.body.clone(),
             captures: Rc::new(captures),
             is_named_fn: false,
-            module_aliases: std::collections::HashMap::new(),
+            // This evaluation is what the value IS: two names for it agree
+            // because assignment clones, and evaluating the expression again —
+            // next time round a loop, say — makes a different closure, which is
+            // what it is (BUG-ZYB-012).
+            identity: crate::FnIdentity::Lambda(crate::next_lambda_identity()),
+            // BUG-ZYB-001: a lambda carries the aliases of the scope it was
+            // written in, exactly as a named function does. Leaving this empty
+            // made the lambda borrow whatever aliases the *call site* happened
+            // to have, which is only the same map while it is called from home.
+            // `Rc` clone, so a lambda built in a loop costs a refcount bump.
+            //
+            // Freezing the set here is safe because `<#` must precede every
+            // statement in a file (and in a module body) — the parser rejects
+            // an import written after one. So by the time any lambda is
+            // evaluated, every alias the file will ever have is already in.
+            module_aliases: self.import_aliases.clone(),
         }))
     }
 
     /// Capture only the variables in `names` from the current scope stack.
+    /// The module bindings a function body names, computed once per body.
+    ///
+    /// Keyed by the address of the `Rc<FunctionDef>`, which is stable for as
+    /// long as the module is loaded and is what every call to that function
+    /// shares. See `module_var_mentions`.
+    fn module_body_mentions(
+        &mut self,
+        func_def: &std::rc::Rc<FunctionDef>,
+        body: &zymbol_ast::Block,
+    ) -> std::rc::Rc<std::collections::HashSet<String>> {
+        let key = std::rc::Rc::as_ptr(func_def) as usize;
+        if let Some(cached) = self.module_var_mentions.get(&key) {
+            return cached.clone();
+        }
+        let set = std::rc::Rc::new(zymbol_semantic::mentioned_names(body));
+        self.module_var_mentions.insert(key, set.clone());
+        set
+    }
+
     fn capture_only(&self, names: &HashSet<String>) -> HashMap<String, Value> {
         if names.is_empty() {
             return HashMap::new();
@@ -81,9 +115,34 @@ impl<W: Write> Interpreter<W> {
                     let value = std::mem::replace(&mut arg_values[i], Value::Unit);
                     self.set_variable_new(param, value);
                 }
+                // This path deliberately skips take_call_state, so it must swap
+                // the aliases itself — a lambda called from inside another
+                // module sees that module's aliases otherwise (BUG-ZYB-001).
+                // `ptr_eq` is the common case: same map, nothing to swap.
+                let swap = !Rc::ptr_eq(&self.import_aliases, &func.module_aliases);
+                let saved_aliases = if swap {
+                    Some(std::mem::replace(&mut self.import_aliases, func.module_aliases.clone()))
+                } else {
+                    None
+                };
                 // Pop the scope on the error path too, or the lambda's params
                 // leak into the caller's scope view (L16 family).
-                let result = self.eval_expr(expr);
+                let mut result = self.eval_expr(expr);
+                // A `$!!` in the body raised an early return. This path skips
+                // take_call_state, so nothing else clears it, and the pending
+                // Return used to travel out with the value — harmless while the
+                // top level ignored a stray Return, and not harmless once a
+                // top-level Return became the program's exit status
+                // (GAP-ZYB-006): `h = (x -> x$!!)` ended the program mid-file.
+                if let ControlFlow::Return(value) = &self.control_flow {
+                    if result.is_ok() {
+                        result = Ok(value.clone().unwrap_or(Value::Unit));
+                    }
+                    self.clear_control_flow();
+                }
+                if let Some(saved) = saved_aliases {
+                    self.import_aliases = saved;
+                }
                 self.pop_scope();
                 return result;
             }
@@ -92,10 +151,16 @@ impl<W: Write> Interpreter<W> {
         // B2: zero-copy save + fresh isolated scope (see take_call_state)
         let saved = self.take_call_state();
 
-        // G7 fix: named functions carry module_aliases captured at definition time.
+        // G7 fix: functions carry module_aliases captured at definition time.
         // take_call_state() clears import_aliases; restore from the function's own
         // snapshot so that alias::fn calls work regardless of call depth.
-        if func.is_named_fn && !func.module_aliases.is_empty() {
+        //
+        // BUG-ZYB-001: this used to be gated on `is_named_fn`, which left every
+        // lambda reading the *caller's* aliases. A lambda that names a module
+        // then worked at home and failed the moment it was handed to a function
+        // in another module — the natural workaround for GAP-ZYB-005, so the
+        // workaround for a gap landed inside a bug.
+        if !func.module_aliases.is_empty() {
             self.import_aliases = func.module_aliases.clone();
         }
 
@@ -240,6 +305,7 @@ impl<W: Write> Interpreter<W> {
         let FunctionDef::Zymbol { parameters, body, .. } = func_def.as_ref() else {
             // Native functions cannot be used as first-class values in v0.0.6.
             return FunctionValue {
+                identity: crate::FnIdentity::Native,
                 params: vec![],
                 body: zymbol_ast::LambdaBody::Block(
                     zymbol_ast::Block::new(vec![], zymbol_span::Span::new(
@@ -250,7 +316,7 @@ impl<W: Write> Interpreter<W> {
                 ),
                 captures: Rc::new(std::collections::HashMap::new()),
                 is_named_fn: false,
-                module_aliases: std::collections::HashMap::new(),
+                module_aliases: crate::ModuleAliases::default(),
             };
         };
         let mut refs = HashSet::new();
@@ -258,11 +324,54 @@ impl<W: Write> Interpreter<W> {
         collect_refs_in_stmts(&body.statements, &mut locals, &mut refs);
         let captures = self.capture_only(&refs);
         FunctionValue {
+            // The DEFINITION, not this conversion: a named function becomes a
+            // value afresh on every lookup, so `a = uno` and `b = uno` build two
+            // `FunctionValue`s. They are one function because they came from one
+            // `Rc<FunctionDef>` (BUG-ZYB-012).
+            identity: crate::FnIdentity::Named(Rc::clone(func_def)),
             params: parameters.iter().map(|p| p.name.clone()).collect(),
             body: zymbol_ast::LambdaBody::Block(body.clone()),
             captures: Rc::new(captures),
             is_named_fn: true,
             module_aliases: self.import_aliases.clone(),
+        }
+    }
+
+    /// Publish the calling frame's module-state writes to the store (MM-12).
+    ///
+    /// Called on the way *into* a function of the module the caller is already
+    /// in. Without it a write is visible only to the frame that made it and to
+    /// whatever that frame calls directly; one function in between — one that
+    /// does not name the variable, so nothing of it is injected — and the call
+    /// after that reads the store, which has not heard about the write yet.
+    ///
+    /// Only keys that actually changed are published, diffed against the
+    /// snapshot the caller was given. That is the same rule the write-back on
+    /// return uses, and for the same reason: a frame holding an untouched copy
+    /// must not overwrite what a nested call has since stored (MM-2).
+    ///
+    /// Costs one comparison per module variable the *caller* had injected —
+    /// the names it mentions, not the module's whole table — and nothing at all
+    /// for a caller that had none, which is every call from outside the module.
+    fn flush_module_frame(&mut self, saved: &crate::SavedCallState, ctx_path: &std::path::Path) {
+        if saved.frame_module_vars.is_empty() {
+            return;
+        }
+        let mut updates: Vec<(String, Value)> = Vec::new();
+        for (key, injected) in &saved.frame_module_vars {
+            if let Some(live) = lookup_in_scopes(&saved.scope_stack, key) {
+                if live != injected {
+                    updates.push((key.clone(), live.clone()));
+                }
+            }
+        }
+        if updates.is_empty() {
+            return;
+        }
+        if let Some(module) = self.loaded_modules.get_mut(ctx_path) {
+            for (key, val) in updates {
+                module.all_variables.insert(key, val);
+            }
         }
     }
 
@@ -323,12 +432,40 @@ impl<W: Write> Interpreter<W> {
             arg_values.push(self.eval_expr(arg)?);
         }
 
+        // A named function CAPTURES what its body reads from the file, exactly
+        // as a lambda does (ERROR-ZYB-002). Computed BEFORE `take_call_state`,
+        // which swaps the scope stack away — and read from `file_vars` rather
+        // than from the caller's scope, because capturing from the CALLER would
+        // be dynamic scoping: `f` called inside `g` would see `g`'s locals.
+        //
+        // The body's free names are collected the same way `func_def_to_value`
+        // collects them, so the two paths agree about what a function sees.
+        // A function that names nothing from outside collects nothing and pays
+        // nothing, which is almost all of them.
+        let captured: Vec<(String, Value)> = if self.file_vars.is_empty() {
+            Vec::new()
+        } else {
+            let free_names = self.free_names_of(&func_def, parameters, body);
+            free_names
+                .iter()
+                .filter_map(|name| {
+                    self.file_vars.get(name).map(|v| (name.clone(), v.clone()))
+                })
+                .collect()
+        };
+
         // B2: zero-copy save + fresh isolated scope (see take_call_state)
         let saved = self.take_call_state();
 
         // B4: pre-alloc scope capacity to avoid rehashing on parameter binding
         if let Some(scope) = self.scope_stack.last_mut() {
-            scope.reserve(parameters.len());
+            scope.reserve(parameters.len() + captured.len());
+        }
+
+        // Captures go in BEFORE the parameters, so a parameter of the same name
+        // shadows one — the order `func_def_to_value`'s path already uses.
+        for (name, value) in captured {
+            self.set_variable_new(&name, value);
         }
 
         // Determine the module whose state this frame executes against (MM-2):
@@ -349,7 +486,9 @@ impl<W: Write> Interpreter<W> {
 
         // Snapshot of the module values injected into this frame. The write-back
         // below diffs against it, so keys this frame never modified cannot
-        // clobber changes written back by nested calls (MM-2).
+        // clobber changes written back by nested calls (MM-2). It lives on the
+        // interpreter rather than in this function so an intra-module call can
+        // flush it on the way in — see `flush_module_frame` (MM-12).
         let mut injected_module_vars: HashMap<String, Value> = HashMap::new();
 
         // If this is a module function call, restore the module's execution context.
@@ -358,37 +497,79 @@ impl<W: Write> Interpreter<W> {
         // G17 fix: script-level functions inherit the caller's import_aliases so
         // module calls (ollama::fn, ui::fn, etc.) resolve correctly.
         let saved_functions = if let Some(ctx_path) = &module_ctx_path {
-            if let Some(module) = self.loaded_modules.get(ctx_path).cloned() {
-                // MM-2: on a same-module nested call the caller's frame holds
-                // fresher values than the store (its own write-back has not run
-                // yet) — inject the caller's live copies instead of stale ones.
-                let same_module_caller =
-                    saved.current_module_path.as_deref() == Some(ctx_path.as_path());
-                for (name, value) in &module.all_variables {
+            // MM-2: on a same-module nested call the caller's frame holds
+            // fresher values than the store (its own write-back has not run
+            // yet) — inject the caller's live copies instead of stale ones.
+            let same_module_caller =
+                saved.current_module_path.as_deref() == Some(ctx_path.as_path());
+            // MM-12: publish what the CALLER has written before reading the
+            // store. A frame's writes only reached the store when that frame
+            // returned, so anything it called meanwhile read a stale value —
+            // unless it happened to be called directly, because then the
+            // `same_module_caller` lookup below found the live copy in the
+            // caller's own scope. One level of indirection lost it:
+            //
+            //     correr()  { v = "nuevo"  _lee()  _medio() }
+            //     _medio()  { _lee() }          // does not name `v`
+            //     _lee()    { >> v ¶ }          // "nuevo", then "viejo"
+            //
+            // `_medio` has no `v` of its own to be found, so `_lee` fell back
+            // to the store, which still held what was there before `correr`
+            // ran. The register VM and the browser engine keep module state in
+            // one place and never had the question.
+            self.flush_module_frame(&saved, ctx_path);
+            // Only the bindings this body actually names are injected, and
+            // nothing else is copied out of the module at all.
+            //
+            // This used to be `self.loaded_modules.get(path).cloned()` — a deep
+            // copy of the whole `LoadedModule`, every value in it, on every
+            // call — followed by a second deep copy of each variable into the
+            // frame. The tree-walker's collections are plain `Vec`s, so a module
+            // holding a sixty-key table paid for that table on every call to any
+            // of its functions, including ones that never name it. The mention
+            // set is an over-approximation, computed once per body; a name that
+            // is never written is also never diffed on the way out, which is the
+            // other half of the same copy. See REFERENCE.md L44.
+            let mentions = self.module_body_mentions(&func_def, body);
+            let want_functions = module_info.is_some();
+            let prepared = self.loaded_modules.get(ctx_path).map(|module| {
+                let vars: Vec<(String, Value)> = module
+                    .all_variables
+                    .iter()
+                    .filter(|(n, _)| mentions.contains(n.as_str()))
+                    .map(|(n, v)| (n.clone(), v.clone()))
+                    .collect();
+                let const_names: Vec<String> = module.const_names.iter().cloned().collect();
+                let import_aliases = module.import_aliases.clone();
+                let all_functions = if want_functions {
+                    Some(module.all_functions.clone())
+                } else {
+                    None
+                };
+                (vars, const_names, import_aliases, all_functions)
+            });
+            if let Some((vars, const_names, import_aliases, all_functions)) = prepared {
+                for (name, value) in vars {
                     let live = if same_module_caller {
-                        lookup_in_scopes(&saved.scope_stack, name)
+                        lookup_in_scopes(&saved.scope_stack, &name)
                             .cloned()
-                            .unwrap_or_else(|| value.clone())
+                            .unwrap_or(value)
                     } else {
-                        value.clone()
+                        value
                     };
                     injected_module_vars.insert(name.clone(), live.clone());
-                    self.set_variable(name, live);
+                    self.set_variable(&name, live);
                 }
                 // MM-4 runtime guard: module constants stay immutable inside
                 // module function bodies even when static analysis was skipped.
-                for const_name in &module.const_names {
-                    self.mark_const(const_name.clone());
+                for const_name in const_names {
+                    self.mark_const(const_name);
                 }
-                self.import_aliases = module.import_aliases.clone();
+                self.import_aliases = import_aliases;
                 self.current_module_path = Some(ctx_path.clone());
-                if module_info.is_some() {
-                    // Swap in the module's complete function table; save caller's table
-                    Some(std::mem::replace(&mut self.functions, module.all_functions.clone()))
-                } else {
-                    // Intra-module call: table already swapped by the outer alias:: call
-                    None
-                }
+                // Swap in the module's complete function table; save caller's.
+                // Intra-module calls need no swap — the outer alias:: call did it.
+                all_functions.map(|t| std::mem::replace(&mut self.functions, t))
             } else {
                 None
             }
@@ -456,6 +637,9 @@ impl<W: Write> Interpreter<W> {
         for name in injected_module_vars.keys() {
             self.move_guard_names.insert(name.clone());
         }
+        // Hand the snapshot to the frame, so a nested intra-module call can
+        // flush this frame's writes before it reads the store (MM-12).
+        self.frame_module_vars = injected_module_vars.clone();
 
         // QW1: execute_block_no_scope — take_call_state already owns scope[0] (params).
         // QW17: TCO loop — if tco_pending is set after execution, rebind params and restart.
@@ -560,6 +744,17 @@ impl<W: Write> Interpreter<W> {
             && self.current_module_path.as_deref() == module_ctx_path.as_deref()
         {
             for (key, val) in module_state_updates {
+                // MM-12: the caller's SNAPSHOT moves with its frame, or the two
+                // disagree about what "unchanged" means. The flush on the way
+                // into the next call diffs the live value against this snapshot
+                // — leave it behind and a caller that writes the value the
+                // snapshot happens to hold looks untouched, so its write is
+                // never published and the store keeps answering with what this
+                // frame just put there. That is the second half of BUG-ZYB-008:
+                // the aviso was painted, cleared by the caller, and painted
+                // again on the next turn from a store that never heard about
+                // the clearing.
+                self.frame_module_vars.insert(key.clone(), val.clone());
                 self.set_variable(&key, val);
             }
         }
@@ -713,10 +908,25 @@ fn collect_refs_in_expr(
         }
         Expr::NumericEval(op)    => collect_refs_in_expr(&op.expr, locals, refs),
         Expr::TypeMetadata(op)   => collect_refs_in_expr(&op.expr, locals, refs),
-        Expr::Format(op)         => collect_refs_in_expr(&op.expr, locals, refs),
+        Expr::Format(op)         => {
+            collect_refs_in_expr(&op.expr, locals, refs);
+            if let Some(zymbol_ast::Precision::Dynamic(e)) = op.precision.as_ref().map(|p| p.precision()) {
+                collect_refs_in_expr(e, locals, refs);
+            }
+        }
         Expr::BaseConversion(op) => collect_refs_in_expr(&op.expr, locals, refs),
-        Expr::Round(op)          => collect_refs_in_expr(&op.expr, locals, refs),
-        Expr::Trunc(op)          => collect_refs_in_expr(&op.expr, locals, refs),
+        Expr::Round(op)          => {
+            collect_refs_in_expr(&op.expr, locals, refs);
+            if let zymbol_ast::Precision::Dynamic(e) = &op.precision {
+                collect_refs_in_expr(e, locals, refs);
+            }
+        }
+        Expr::Trunc(op)          => {
+            collect_refs_in_expr(&op.expr, locals, refs);
+            if let zymbol_ast::Precision::Dynamic(e) = &op.precision {
+                collect_refs_in_expr(e, locals, refs);
+            }
+        }
         Expr::ErrorCheck(op)     => collect_refs_in_expr(&op.expr, locals, refs),
         Expr::ErrorPropagate(op) => collect_refs_in_expr(&op.expr, locals, refs),
         Expr::Pipe(pipe) => {
@@ -778,6 +988,38 @@ fn collect_refs_in_expr(
         }
         // Literals and shell exprs have no capturable sub-expressions
         Expr::Literal(_) | Expr::Execute(_) | Expr::BashExec(_) | Expr::TerminalSize(_) => {}
+    }
+}
+
+impl<W: Write> Interpreter<W> {
+    /// The names a named function's body reads from outside itself, computed
+    /// once per definition and cached against it.
+    ///
+    /// Walking the body is O(body); doing it per call made a recursive function
+    /// re-derive its own answer on every invocation, which cost
+    /// `bench_recursion` 32% the day named functions started capturing
+    /// (ERROR-ZYB-002). The answer depends on the definition alone, so it is
+    /// computed from it once. Sorted, so a capture set is the same on every
+    /// run: a `HashSet`'s iteration order is not.
+    fn free_names_of(
+        &mut self,
+        func_def: &Rc<FunctionDef>,
+        parameters: &[zymbol_ast::Parameter],
+        body: &zymbol_ast::Block,
+    ) -> Rc<Vec<String>> {
+        let key = Rc::as_ptr(func_def) as usize;
+        if let Some((_, names)) = self.free_names_cache.get(&key) {
+            return Rc::clone(names);
+        }
+        let mut refs = HashSet::new();
+        let mut locals: HashSet<String> = parameters.iter().map(|p| p.name.clone()).collect();
+        collect_refs_in_stmts(&body.statements, &mut locals, &mut refs);
+        let mut names: Vec<String> = refs.into_iter().collect();
+        names.sort_unstable();
+        let names = Rc::new(names);
+        self.free_names_cache
+            .insert(key, (Rc::clone(func_def), Rc::clone(&names)));
+        names
     }
 }
 

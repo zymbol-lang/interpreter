@@ -4,8 +4,20 @@
 > `zymbol run` (tree-walker) and `zymbol run --vm` (register VM).
 > If a construct is not documented here, it may not be implemented.
 
-**Interpreter version**: v0.0.8
-**Test coverage**: golden-file pairs verified on both engines (`vm_compare`); `@vm-skip` files excluded from VM parity
+**Interpreter version**: v0.0.9
+**Test coverage**: every annotated example below is executed by `zyquality/docs/guide_verify.py`.
+The language itself is graded on the corpus by `zyq suite`, where `zyquality/corpus.toml` — not a
+marker inside the file — says which engine may be judged on which file, and why not.
+
+**New in v0.0.9**: `##_`, the Unit literal ([§5](#the-unit-value)); the dictionary gets a
+notation of its own, `#(…)`, and `#?` tells the four collections apart — `##]` `##)` `##(` `##[`
+([§12b](#12b-dictionaries), [§Type Metadata](#type-metadata-expr)); `std/time`, the clock and the
+civil calendar ([§17](#standard-library-modules-std)); the chained index `m[i][j]` is refused for
+reading as well as writing ([§11c](#refused-chained-arrij)); a top-level `<~` is the program's exit
+status ([§3](#3-output-and-input)); `Int` is a safe integer, fail-closed in every engine
+([§2](#2-data-types)); a module must declare what it exports ([§17](#17-modules)); `@ <expr>` takes
+a count or a condition and never a truthy value ([§8](#8-loops)); and `#|c|` reads a digit in any of
+the 69 supported scripts, while `#,` and `#^` write theirs in the active one ([§18b](#18b-numeral-modes)).
 
 **New in v0.0.8**: `std/term` (terminal display metrics — column-accurate `width`, padding
 and truncation), `##!` on a `Char` (its Unicode code point), match or-patterns
@@ -44,6 +56,7 @@ See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar, coverage stat
 11b. [Destructuring Assignment](#11b-destructuring-assignment)
 11c. [Multi-dimensional Indexing](#11c-multi-dimensional-indexing)
 12. [Tuples](#12-tuples)
+12b. [Dictionaries](#12b-dictionaries)
 13. [Strings](#13-strings)
 14. [Higher-Order Functions](#14-higher-order-functions)
 15. [Pipe Operator](#15-pipe-operator)
@@ -52,7 +65,7 @@ See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar, coverage stat
 18. [Data Operators](#18-data-operators)
 18b. [Numeral Modes](#18b-numeral-modes)
 19. [Shell Integration](#19-shell-integration)
-22. [Verified Examples](#22-verified-examples)
+20. [Verified Examples](#20-verified-examples)
 
 ---
 
@@ -60,15 +73,15 @@ See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar, coverage stat
 
 ### Origin: An Esolang That Grew
 
-Zymbol started as an **esoteric programming language** — a small, experimental construct with a single guiding question: *what happens if you remove every keyword from a programming language?* No `if`, no `while`, no `function`, no `return`. Nothing borrowed from English or any other natural language. Just symbols.
+Zymbol started as an **esoteric programming language** — a small, experimental construct with a single guiding question: *what happens if you remove every word from a programming language?* No `if`, no `while`, no `function`, no `return`. Nothing borrowed from English or any other natural language. Just symbols.
 
 That constraint was minimalist by design, in the tradition of esolangs: a tight idea taken seriously, with no ambition beyond exploring whether it worked. The original publication is on [esolangs.org](https://esolangs.org). It was a toy with a point.
 
-Then the idea grew — like a little monster. Not because features were added for their own sake, but because the founding constraint turned out to have more depth than expected. Once you commit to "no keywords", you discover that symbols can carry consistent meaning across very different contexts (`_` is always non-binding, `#` is always meta-level), and that Unicode support is not an afterthought but a natural consequence of the same principle. The language kept growing as each piece clicked into place.
+Then the idea grew — like a little monster. Not because features were added for their own sake, but because the founding constraint turned out to have more depth than expected. Once you commit to "no words", you discover that symbols can carry consistent meaning across very different contexts (`_` is always non-binding, `#` is always meta-level), and that Unicode support is not an afterthought but a natural consequence of the same principle. The language kept growing as each piece clicked into place.
 
 **The founding question**, now stated plainly: notation travels further than vocabulary. Mathematics writes `∑` and `∫`; a musical stave fixes pitch and duration in a single mark; a road sign is read correctly at speed by a driver who has never studied the local language. None of these replace words or compete with them — they sit *beside* language, and the same mark carries the same meaning to everyone who has learned the notation. A language built entirely from marks inherits that property.
 
-Removing keywords entirely is what makes it available. A symbol carries no etymology. `?` does not say *if* in English — it says *condition* in the visual grammar of the program. A developer writing `? edad >= 18` and one writing `? age >= 18` are doing exactly the same thing, and neither is translating.
+Removing words from the grammar entirely is what makes it available. A symbol carries no etymology. `?` does not say *if* in English — it says *condition* in the visual grammar of the program. A developer writing `? edad >= 18` and one writing `? age >= 18` are doing exactly the same thing, and neither is translating.
 
 The practical result: any human language can be the *native* language of a Zymbol program. Spanish with full accents (`función`, `índice`), Devanagari (`सक्रिय`, `फलन`), Arabic (`متغير`, `دالة`), Korean (`변수`, `함수`), and yes — Klingon pIqaD for the ones who want to program in the language of the Empire. The digit block is registered (CSUR U+F8F0–U+F8F9) and the interpreter supports it completely. No judgment. It is the logical endpoint of the principle.
 
@@ -121,7 +134,7 @@ Types, modules, and numeral modes share `#` because all three are about *what so
 
 Zymbol's symbolic vocabulary is its own. The symbols have no external standard to conform to — their meaning is defined by the language itself and built up through consistent use. A programmer learns Zymbol by reading Zymbol, not by mapping it onto another language.
 
-This creates an initial learning curve. It also means the language can evolve its symbol system with full internal consistency: there is no inherited keyword vocabulary — English or otherwise — that a new construct has to stay compatible with.
+This creates an initial learning curve. It also means the language can evolve its symbol system with full internal consistency: there is no inherited word vocabulary — English or otherwise — that a new construct has to stay compatible with.
 
 ### The Numeral Modes as Proof of Concept
 
@@ -141,10 +154,15 @@ zymbol run --help
 
 **When to use each mode:**
 - **Tree-walker**: canonical behavior, descriptive error messages, debugging
-- **VM**: production, ~1.1–1.5× faster than Python for most workloads
+- **VM**: production. There is no single speedup factor — 1.4–6× the tree-walker on the
+  `zyquality/bench/` microbenchmarks, 4.1× on a 19×19 go game and 11–13× on Chaturanga's
+  alpha-beta search, where per-frame and per-scope cost dominates. Quote the workload, and
+  re-measure before quoting: these are the interpreter of the day.
 
 Both modes produce **identical output** on the full parity suite
-(`bash tests/scripts/vm_compare.sh`; 507/507 as of v0.0.7).
+(`zyq consensus --engines zytw,zyvm` in `zyquality/`, which `tests/scripts/vm_compare.sh`
+wraps; of 666 corpus files 660 agree and **0 diverge** as of 2026-09-04, the remaining 6 excused
+for every engine by a reason in `corpus.toml`).
 
 **Diagnostic tiers.** The same analyzers back every entry point, with one
 deliberate difference in coverage:
@@ -265,7 +283,7 @@ Zymbol has two ways to emit a newline in output — both produce a literal newli
 
 ### Reserved Symbols
 
-Zymbol is keyword-free — there are no reserved English words. All control-flow, I/O, and type constructs use symbolic operators. The complete operator set is listed in §21.
+Zymbol has no words in its grammar — no reserved English words, and none in any other language. All control-flow, I/O, and type constructs use symbolic operators. The complete operator set is listed in §21.
 
 The following identifiers have conventional meaning but are not reserved: `_err` (caught error in `:!` blocks).
 
@@ -277,18 +295,123 @@ The following identifiers have conventional meaning but are not reserved: `_err`
 
 | Type | Literal / source | `#?` symbol | Notes |
 |------|-----------------|-------------|-------|
-| Int | `42`, `-7` | `###` | 64-bit signed |
-| Float | `3.14`, `1.5e10` | `##.` | Scientific notation supported |
+| Int | `42`, `-7` | `###` | Safe integer: ±(2⁵³ − 1). Leaving the range is a `##Range` error — see [The number model](#the-number-model) |
+| Float | `3.14`, `1.5e10` | `##.` | IEEE-754 double. Scientific notation supported; overflow yields `inf`, which is a value |
 | String | `"text"` | `##"` | Interpolation: `"Hello {name}"` |
 | Char | `'A'` | `##'` | Single Unicode character |
 | Bool | `#1`, `#0` | `##?` | NOT numeric — `#1` ≠ `1` |
 | Array | `[1, 2, 3]` | `##]` | Homogeneous (same type) |
-| Tuple | `(a, b)` | `##)` | Positional |
-| NamedTuple | `(x: 1, y: 2)` | `##)` | Named fields |
+| List | `#[1, "dos"]` | `##[` | An array holding more than one type — the same type as `[…]`, see below |
+| Tuple | `(a, b)` | `##)` | Positional, immutable |
+| Dictionary | `#(x: 1, y: 2)` | `##(` | Keyed, mutable; `#()` is the empty one |
 | Function | named function ref | `##()` | First-class since v0.0.4; display `<funct/N>` |
 | Lambda | `x -> x * 2` | `##->` | Lambda definition symbol; display `<lambd/N>` |
 | Error | _(runtime value)_ | `##<Kind>` | Type IS the kind: `##Index`, `##Div`, `##IO`, … |
-| Unit | _(void return)_ | `##_` | Returned by functions with no `<~`; display is empty |
+| Unit | `##_` | `##_` | The absence of a value: returned by a function with no `<~`, produced by `json::decode("null")`, and what a `NULL` column arrives as. Displays as nothing on its own and as `()` inside a collection |
+
+### The number model
+
+Zymbol has two numeric types and one rule each.
+
+**`Int` is a safe integer: −9007199254740991 … 9007199254740991**, that is
+±(2⁵³ − 1). Leaving that range — by arithmetic, by a literal, or by a cast — is a
+`##Range` error. It is never a wrapped value, never a rounded one, and never a
+silent promotion to `Float`.
+
+```zymbol
+>>(10 ^ 20) ¶                    // ✗ integer overflow: 10 ^ 20
+>>(9007199254740991 + 1) ¶       // ✗ integer overflow: 9007199254740991 + 1
+>>(9223372036854775807) ¶        // ✗ integer literal out of range
+>>(###1.0e300) ¶                 // ✗ integer overflow: ### cannot represent this float
+```
+
+It is an ordinary catchable error, so a program that expects to reach the edge
+can say so:
+
+```zymbol
+!? {
+    x = 10 ^ 20
+} :! ##Range {
+    >> "too large" ¶             // → too large
+}
+```
+
+The bound is the mantissa of a double, not the width of any one implementation.
+That is what makes it *one* rule: every engine — the tree-walker, the register
+VM and the browser engine — holds this range exactly and natively, so an integer
+means the same thing in all three. A wider `Int` would
+have to be approximated somewhere, and an approximation that only shows up past
+2⁵³ is the kind of disagreement nobody finds until it matters.
+
+Negation is total: the range is symmetric, so `-x` is the one integer operation
+that can never overflow.
+
+**`Float` is an IEEE-754 double**, and keeps IEEE-754 semantics — all of them,
+not just the arithmetic.
+
+*Overflow yields `inf`, which is a value, not an error.* The format has an
+infinity, so nothing is lost by reaching it:
+
+```zymbol
+>>(1.0e308 * 10.0) ¶      // → inf
+>>(-1.0e308 * 10.0) ¶     // → -inf
+>>(1.0e-308 / 1.0e308) ¶  // → 0
+>>(-0.0) ¶                // → -0     (the sign of zero is kept)
+```
+
+The asymmetry with `Int` is deliberate. An integer that leaves its range has
+nowhere to go but a wrong answer, so it stops; a float that leaves its range
+lands on a value IEEE-754 defines, so it continues. Division and modulo by zero
+remain errors (`##Div`) for both.
+
+*`==` is exact.* Two floats are equal when they are the same value, with no
+tolerance — a tolerance would make equality non-transitive, and no fixed one is
+right at both 1e-20 and 1e300. Name the tolerance when you want one:
+
+```zymbol
+>>(0.1 + 0.2 == 0.3) ¶            // → #0   (correct: they really differ)
+>>(0.1 + 0.2 - 0.3) ¶             // → 0.00000000000000005551115123125783
+```
+
+Comparing with a tolerance is a thing you write, not a thing `==` guesses:
+
+```zymbol
+<# std/math => m
+a = 0.1 + 0.2
+b = 0.3
+? m::abs(a - b) < 0.000001 {
+    >> "close enough" ¶           // → close enough
+}
+```
+
+Int/Float promotion is unaffected — `1.0 == 1` is true, because the two sides
+are promoted and *then* compared exactly.
+
+*`NaN` compares false in every direction*, including against itself. It is the
+one value where `x == x` is false, and the reason `<` and `>=` are not each
+other's negation:
+
+```zymbol
+<# std/math => m
+n = m::sqrt(-1.0)
+>>(n == n) ¶   // → #0
+>>(n <> n) ¶   // → #1
+>>(n < 1.0) ¶  // → #0
+>>(n >= 1.0) ¶ // → #0   ← not the negation of the line above
+```
+
+*Floats print as digits, never as an exponent.* `1.0e21` prints
+`1000000000000000000000` and `1.5e-10` prints `0.00000000015`. Scientific
+notation is something you ask for, with `#^`:
+
+```zymbol
+>> #^|1234567.0| ¶      // → 1.234567e6
+>> #^.2|1234567.0| ¶    // → 1.23e6
+```
+
+When a quantity may exceed the integer range — a hash, an accumulator over a long
+loop — reduce it as you go (`h = h % 1000000`) or hold it as a `Float` and accept
+the precision that implies.
 
 ### Non-value Types
 
@@ -310,8 +433,10 @@ The `#?` postfix operator returns a 3-tuple: `(type_symbol, count, display)`.
 | String | `(##", N, val)` | character length |
 | Char | `(##', 1, val)` | always 1 |
 | Bool | `(##?, 1, val)` | always 1 |
-| Array | `(##], N, val)` | element count |
-| Tuple / NamedTuple | `(##), N, val)` | field count |
+| Array | `(##], N, val)` | element count — every element the same type |
+| List | `(##[, N, val)` | element count — the elements are **not** all one type |
+| Tuple | `(##), N, val)` | element count |
+| Dictionary | `(##(, N, val)` | key count |
 | Function | `(##(), N, <funct/N>)` | arity |
 | Lambda | `(##->, N, <lambd/N>)` | arity |
 | Error | `(##Kind, N, ##Kind(msg))` | message length |
@@ -335,6 +460,22 @@ t = meta[1]
 ```
 
 Named functions use `##()` — the call-syntax symbol. Lambdas use `##->` — their definition syntax. This distinction is visible in both the type symbol (field 1) and the display string (field 3): `<funct/N>` vs `<lambd/N>`.
+
+> **The operand must exist.** `#?` asks what a value *is*, which is a different
+> question from whether a name was ever created, and it is not an exception to
+> "defined before use":
+>
+> ```text
+> info = nonexistent#?
+> error: undefined variable 'nonexistent'
+>   help: variables must be defined before use
+> ```
+>
+> This retired an older pattern in which an uncreated name answered
+> `("##_", 0, ())`. To let a branch supply a value, give the name one first and
+> let the branch replace it — the default then reads as a line rather than as
+> the absence of one. `##_` keeps its other meanings: the generic error type,
+> and the Unit a rest pattern leaves when it runs out.
 
 Error values use their **kind** as the type symbol — there is no generic `##error` symbol:
 
@@ -360,7 +501,8 @@ t = (e#?)[1]
 >> a b c ¶                          // identifiers directly
 >> add(2, 3) ¶                       // function call in any position
 >> "sum=" add(1, 2) " double=" double(5) ¶   // mixed
->> (arr$#) ¶                        // postfix operators require parentheses in >>
+>> arr$# ¶                          // postfix operators need no parentheses (since v0.0.7)
+>> (arr$#) ¶                        // parentheses are still valid, and group when needed
 ```
 
 Output uses **juxtaposition** (Haskell-style) — values separated by spaces are printed in sequence. `+` is for numeric addition only; using it with strings is a type error:
@@ -383,6 +525,26 @@ ok = a == b
 > **Note**: `identifier(args)` is a function call in `>>`. `"literal"(expr)` is two
 > separate items — the literal and the parenthesized expression — never a call.
 > Literals (strings, numbers, booleans) are not callable.
+
+**What `>>` accepts, and where the line is.** The output operator has a narrower grammar than
+the rest of the language: arithmetic and everything below it, but not comparison and not the
+logical operators.
+
+```zymbol
+>> 2 + 3 * 4 ¶                     // ✅ 14 — full arithmetic precedence
+>> -7 % 3 ¶                        // ✅ -1 — a leading unary is a term, not the end
+>> -2 ^ 2 ¶                        // ✅ 4  — the unary binds tighter than ^
+>> (1 == 1) ¶                      // ✅ #1 — a comparison needs parentheses
+```
+
+`>> 1 == 1 ¶` and `>> #1 && #0 ¶` are **parse errors**. The reason is juxtaposition: since
+`>> "x=" n " end" ¶` is three arguments, the parser has to decide where each one ends, and
+`<` and `>` are the same characters that open `<#` and `<~` and close `>>|`. Parentheses lift
+anything over the line, and always work.
+
+> **Trap**: `+` and `-` **join** two arguments; they do not separate them.
+> `>> "Score: " -95 ¶` is `"Score: " - 95` — arithmetic on a string, which is an error, not
+> two items. Write `>> "Score: " (-95) ¶`.
 
 ### Newline
 
@@ -439,6 +601,41 @@ Both engines (tree-walker and `--vm`) validate identically. A leading sign is al
 
 `><` works in both engines (tree-walker and `--vm`).
 
+### Exit Status — `<~` at the top level
+
+A `<~` written outside any function ends the program, and its value is the exit
+status the shell sees. It is the same return arrow: `<~` hands a value back to
+whoever called, and a program is called by the operating system.
+
+```zymbol
+>< args
+? args$# < 1 {
+    >> "falta el nombre de la cuenta" ¶
+    <~ 2                       // wrong usage
+}
+>> "trabajando" ¶
+// falling off the end is exit 0
+```
+
+```bash
+zymbol run cuenta.zy && echo "ok"     # the `&&` now means something
+```
+
+- **The value must be a whole number.** `zymbol check` refuses anything else —
+  the exit status is a number to the operating system, and the branch that exits
+  is usually the branch that runs least, so a run-time error there would surface
+  on the day something had already gone wrong.
+- **`<~` with no value** at the top level exits 0.
+- **Falling off the end** exits 0, unchanged.
+- Inside a function, `<~` returns to the caller as it always has. Only the top
+  level reaches the operating system.
+
+> Before v0.0.9 this was a divergence nobody had reported, because nobody writes
+> `<~` in a file body: the register VM and the browser engine stopped the
+> program and dropped the value, and the tree-walker ignored it and ran the rest
+> of the file. Every suite in this project decides by comparing output, and a
+> project that only tests by golden never misses an exit code.
+
 ---
 
 ## 3b. TUI Primitives
@@ -464,16 +661,18 @@ Some TUI primitives are tree-walker only; see the per-primitive notes below for 
 
 ### Query Terminal Size — `>>?`
 
-Returns a `[rows, cols]` array with the current terminal dimensions:
+Returns a `(rows, cols)` **positional tuple** with the current terminal dimensions.
+Receive it with a tuple pattern — since v0.0.9 the bracket shape is checked, so
+`[H, W] = >>?` is a runtime error (REFERENCE.md L32):
 
 ```zymbol
-[H, W] = >>?
+(H, W) = >>?
 >> "Terminal: " H "x" W ¶     // e.g. Terminal: 40x120
 ```
 
 With no terminal attached — output redirected to a file, running inside a
 container, running in CI — there is nothing to measure, and `>>?` returns the
-conventional `[24, 80]` instead of failing. A program that lays itself out with
+conventional `(24, 80)` instead of failing. A program that lays itself out with
 `>>?` therefore stays runnable when piped; it just lays itself out for 80
 columns. Both engines behave identically here.
 
@@ -525,13 +724,41 @@ Special keys are mapped to single-character symbols:
 | Arrow Down | `'↓'` (U+2193) |
 | Arrow Left | `'←'` (U+2190) |
 | Arrow Right | `'→'` (U+2192) |
-| Enter | `'\n'` |
-| Escape | `'\x1b'` |
+| Enter | `'\n'` — a line feed, even though the keyboard sends a carriage return |
+| Escape | `0d27` |
+| Tab | `0d9` |
+| Backspace | `0d127` (DEL) — what the terminal sends for that key |
+| Ctrl + *letter* | its control character: Ctrl+A is `0d1`, Ctrl+S is `0d19` |
 | Other | the character as-is |
 
 > The arrows come back as the arrow glyphs themselves, not as letters. Match
 > them directly — `? k == '↑' { }` — and note that this leaves every ASCII
 > letter free for commands, uppercase included.
+
+**Control keys carry no separate modifier**, because they do not need one: what
+the terminal sends for Ctrl+A *is* the byte 1, and `0d1` writes it. So a
+shortcut is an ordinary comparison, and "is this a control key" is arithmetic on
+the code point:
+
+```zymbol
+<<| k
+? k == 0d19 { guardar() }              // Ctrl+S
+? k == 0d17 { salir() }                // Ctrl+Q
+es_control(t) { <~ (##!t < 32) || (##!t == 127) }
+```
+
+> Until v0.0.9 this was not so: Ctrl+A arrived as the letter `a`, so no program
+> could offer a Ctrl shortcut — the shortcut fired when the user typed that
+> letter into a text field — and Tab and Backspace both arrived as `0d0`, one
+> value for two keys, which made a form where Tab moves between fields
+> impossible to write: every jump would have erased a character.
+
+A field that accepts "any printable character" should say so, and skip the rest:
+
+```zymbol
+_? es_control(t) { }                    // not typed into the field
+_ { texto = texto "" t }
+```
 
 ### TUI Block — `>>|`
 
@@ -728,6 +955,29 @@ as before.
 > program — if you ever see `internal: use after auto-destruction`, it is an
 > interpreter bug: please report it.
 
+### A Statement That Only Reads
+
+A statement that is nothing but a name reads the variable and throws the value
+away. Since v0.0.9 the analyser says so, rather than letting it pass as if it
+had done something:
+
+```text
+x = 5
+x                 warning: this statement does nothing: 'x' is read and discarded
+                  = help: remove it, or use it — `>> name ¶` to print it
+
+arr$#             warning: this statement does nothing: `$#` builds a value and
+                  it is discarded
+                  = help: remove it, or use the result — assign it, print it,
+                          or pass it on
+```
+
+The second one follows from the rule of the result: a `$` whose result is used
+**builds**, and one whose result is discarded **modifies** (COLLECTIONS.md).
+`$#` has nothing to modify, so discarding its result leaves the statement with
+no effect at all. An operation that does modify — `arr$+ 5` — is a statement in
+its own right and warns about nothing.
+
 ### String Interpolation
 
 Works in **any context** — assignments, arguments, array literals, etc.:
@@ -752,8 +1002,25 @@ json = "\{\"key\":\"value\"\}"
 >> json ¶                                // → {"key":"value"}
 ```
 
-> **⚠ False warning**: `unused variable 'name'` may appear even when `name` is used
-> inside an interpolated string. This is a static analyzer bug — ignore it.
+**The escape is symmetric**: a brace that is neither escaped nor part of an
+interpolation is an error, on either side.
+
+```text
+"\{\"n\":1}"     error: unmatched '}' in string
+                  help: the escape is symmetric — write \} for a literal
+                        brace, as \{ is for the opening one
+"}"               the same error
+"{{…}}"           error: invalid character in string interpolation
+                  help: interpolation must be {identifier} — use \{ for a
+                        literal brace
+```
+
+Doubling the brace is how Rust and Python spell a literal one; Zymbol does not
+borrow that — `\{` and `\}` are the spelling, and only those.
+
+> A name used **only** inside an interpolated string counts as used: the analyzer reads
+> interpolations, so `name = "World"` followed by `"Hello {name}!"` warns about nothing.
+> (Earlier versions emitted a false `unused variable` here — REFERENCE.md L9.)
 
 ### Hot Definition Operator `°` (U+00B0)
 
@@ -900,6 +1167,56 @@ Chars compare by code point and Bools order `#0 < #1`.
 Equality is *not* part of this rule: `==` never coerces, so `"5" == 5` is `#0`
 in every engine, and so is `"५" == 5`.
 
+### The Unit Value
+
+**`##_` is the Unit literal** (v0.0.9), and it is how you ask whether something
+is absent. Unit was the only type in the language whose value could not be
+written: reachable everywhere — a function without `<~`, `json::decode("null")`,
+a `NULL` column out of `std/db` — and unspellable, so asking meant taking the
+type reflection apart. `##_` is not a new mark: it was already Unit's type
+symbol and already the "any kind" mark in `:! ##_`, and both are the reading `_`
+has throughout the language — the one that is not specified.
+
+```zymbol
+nada() { }
+u = nada()
+>> (u == ##_) ¶            // → #1
+>> (##_ == "") ¶           // → #0
+>> "[" ##_ "]" ¶           // → []
+```
+
+Do not ask it by the count. `#?`'s second field is 0 for **four** values — Unit,
+`""`, `[]` and `#()` — so a predicate written on it answers yes to all four, and
+an empty text column is an everyday thing. Compare instead:
+
+```zymbol
+es_nulo(v) { <~ v == ##_ }
+```
+
+**Collections compare by value; functions compare by identity.** Two arrays,
+tuples or dictionaries are equal when they hold the same things — for a
+dictionary, the same keys with the same values, in whatever order they were
+inserted. A **function** is equal only to *itself*: two names for one function
+agree, and two functions with the same body do not, because they are two
+functions.
+
+```zymbol
+uno(x) { <~ x + 1 }
+dos(x) { <~ x + 1 }     // el mismo cuerpo, otra función
+a = uno
+>> (a == uno) ¶         // → #1
+>> (uno == dos) ¶       // → #0
+
+l = (x -> x)
+m = l                   // el mismo cierre, otro nombre
+>> (l == m) ¶           // → #1
+>> (l == (x -> x)) ¶    // → #0
+```
+
+A lambda is the *evaluation* that made it, so one written inside a loop is a new
+function each time round — each closing over its own values, and each equal to
+itself alone.
+
 ### Logical
 
 ```zymbol
@@ -908,8 +1225,23 @@ in every engine, and so is `"५" == 5`.
 !#1        // #0 (not)
 ```
 
-Logical operators always return a Bool. Under an active numeral mode the result
-is displayed with the active script digit:
+Logical operators always return a Bool, and they **only take** Bools. There is no
+truthiness in Zymbol: `7 && #1` is a runtime error, not `#1`, and so is
+`0 && #1` — a `0` is a number, not a false. The same rule the loop specifier
+follows (`@ <expr>` is a count or a condition, never a truthy value), and the
+same for the unary operators: `!7` and `-"a"` are refused, not coerced.
+
+```zymbol
+>> (7 && 3) ¶      // warning: logical operation on non-boolean type: Int
+                   // Runtime error: logical AND requires boolean operands, got Int
+>> (!7) ¶          // Runtime error: logical NOT requires boolean operand, got Int
+```
+
+`&&` and `||` **short-circuit**: `#0 && f()` does not call `f()`, and the
+right-hand operand is not even type-checked when it is not reached.
+
+Under an active numeral mode the result is displayed with the active script
+digit:
 
 ```zymbol
 #०९#
@@ -1161,7 +1493,7 @@ i = 0
 
 ### Times Loop — repeat exactly N times
 
-When the loop specifier is a positive integer literal, the body executes **exactly N times**. The condition is evaluated once and never re-evaluated:
+When the loop specifier evaluates to an integer, the body executes **exactly N times**. The specifier is evaluated once and never re-evaluated:
 
 ```zymbol
 @ 5 { >> "Zz" }
@@ -1180,7 +1512,55 @@ The counter is implicit — no iterator variable is exposed. Use `@!` to break e
 // prints "tick " exactly 10 times
 ```
 
-> **Note**: The analyzer emits `loop condition should be Bool, got Int` because the grammar shares the `expr` production with While. This warning is expected and harmless — the runtime correctly identifies the form as a TIMES loop.
+**What makes a loop a Times loop is the specifier's *value*, not its shape.** Any
+expression that yields an Int is a repeat count — a variable, a call, a
+collection size:
+
+```zymbol
+reps = 5
+@ reps { … }        // 5 times
+
+@ items$# { … }     // once per element, without binding one
+
+count() { <~ 3 }
+@ count() { … }     // 3 times — the call happens once
+```
+
+An integer count of zero or less runs the body **zero times**. It is a count,
+not a condition, so it never falls through to the While form and a negative
+number cannot spin forever:
+
+```zymbol
+n = -2
+@ n { >> "never" ¶ }    // prints nothing
+```
+
+A `Bool` — including any comparison — is a condition, re-evaluated on every pass
+(see While, below). **Those are the only two possibilities.** A specifier that is
+neither a count nor a condition is refused at run time, in every engine, with the
+same message:
+
+```zymbol
+items = [1, 2, 3]
+@ items { … }      // ❌ loop expects a count or a condition, got array
+
+n = 3.5
+@ n { … }          // ❌ loop expects a count or a condition, got float
+```
+
+Truthiness is deliberately not applied here. It used to be, and the engines did
+not agree on what an array or an empty string meant: `@ []` ran zero times in the
+tree-walker, forever in the VM, and raised in zyml. Refusing the form is the only
+answer that is the same everywhere. To walk a collection use `@ x:items`, and to
+count its elements use `@ items$#`.
+
+All three engines decide this the same way; `zyquality/corpus/loops/13_specifier_forms.zy`
+covers the forms that run and `zyquality/reject/loops/` the ones that must not.
+
+> **Note**: When the analyzer can tell statically that a specifier is neither a
+> count nor a condition, it warns — `loop expects a count or a condition, got [Int]`
+> for an array, say. It warns rather than errors because that inference is
+> approximate; the engines refuse the form at run time regardless.
 
 ### While Loop
 
@@ -1200,6 +1580,40 @@ fruits = ["apple", "pear", "grape"]
     >> "  - " fruit ¶
 }
 ```
+
+### For-each with a Pattern
+
+A destructuring pattern goes where a single name goes, binding each element
+exactly as an assignment would — because it **is** the same pattern language.
+What it removes is a line whose only job was to unpack:
+
+```zymbol
+pares = [("a", 1), ("b", 2)]
+
+@ par:pares {              @ (k, v):pares {
+    (k, v) = par      →        >> k "=" v ¶
+    >> k "=" v ¶           }
+}
+```
+
+Everything the assignment pattern does works here: the rest absorbs, the
+wildcard discards, and an array pattern walks an array of arrays.
+
+```zymbol
+@ (n, *resto):filas { … }      // the rest keeps the container's shape
+@ (_, texto, _):filas { … }    // discard the positions you do not need
+@ [a, b]:matriz { … }          // an array pattern, over an array of arrays
+```
+
+On a **dictionary** the pattern form is what asks for both halves — `@ k:d` still
+yields keys:
+
+```zymbol
+@ (clave, valor):d { >> clave " → " valor ¶ }
+```
+
+> `@ (` is also how a count loop with a parenthesised specifier begins —
+> `@ (n + 1) { }`. The two are told apart by the `:` after the `)`.
 
 ### The Iterator Variable and Outer Variables
 
@@ -1253,6 +1667,28 @@ i = 99
 @ i:5..0:1 { >> i " " }
 >> ¶    // → 5 4 3 2 1 0
 ```
+
+> **There is no empty range.** A range infers its direction from its endpoints,
+> so `2..1` is not "nothing to do" — it is the two-element descending range
+> `2, 1`. That matters when an endpoint is computed:
+>
+> ```zymbol
+> list = [42]
+> @ i:2..list$# { >> list[i] ¶ }    // ❌ index 2 for array of length 1
+> ```
+>
+> The usual intent — *walk the rest of the list* — needs an explicit guard,
+> because with a one-element list the range runs backwards off the front:
+>
+> ```zymbol
+> ? list$# >= 2 {
+>     @ i:2..list$# { >> list[i] ¶ }
+> }
+> ```
+>
+> The analyzer warns whenever a range's endpoints are not both integer
+> literals, since that is exactly when the direction cannot be read off the
+> source.
 
 ### For-each over String (char by char)
 
@@ -1328,6 +1764,46 @@ found = #0
 | `@!` | Break innermost loop |
 | `@>` | Continue innermost loop |
 
+### Where a break or continue is legal
+
+Both rules are checked statically, by `zymbol check`, `zymbol run` and `zymbol build`
+alike, and in every engine. A program that breaks either one does not run at all.
+
+**1. There has to be a loop.** `@!` and `@>` need an enclosing `@` block:
+
+```zymbol
+@!                          // ✗ error: '@!' outside a loop
+```
+
+**2. A label has to resolve to an *enclosing* loop.** Declared elsewhere in the file is not
+enough:
+
+```zymbol
+@:outer i:1..3 { @:nope! }  // ✗ error: no enclosing loop is labelled 'nope'
+                            //   help: labels in scope here: 'outer'
+
+@:first i:1..2 { }
+@:second j:1..2 { @:first! } // ✗ 'first' is a sibling, not an ancestor
+```
+
+**A function or lambda body is a boundary.** A callee does not see the caller's loops, so
+this is an error even though the only call happens inside a loop:
+
+```zymbol
+bad() { @! }                // ✗ error: '@!' outside a loop
+@ i:1..3 { bad() }
+
+ok() { @ j:1..3 { @! } }    // ✓ the loop is the function's own
+@ i:1..3 { ok() }
+```
+
+> Before v0.0.9 neither rule was checked and the engines disagreed: the tree-walker
+> unwound *every* enclosing loop and carried on, the VM refused to compile, and the
+> browser engine ended the program — none of them said why. See REFERENCE.md L29.
+
+`@~` (sleep) is **not** subject to either rule. It pauses execution without touching the
+loop's control flow, so it is legal anywhere, including at top level.
+
 ---
 
 ## 9. Functions
@@ -1350,7 +1826,11 @@ factorial(n) {
 
 ### Output Parameters `<~`
 
-Output params are passed by reference — the function can modify them:
+Output params are passed by reference — the function can modify them. The mark is written
+**both in the signature and at the call site**, and is required in both: `f(x)` would not
+tell the reader that `x` comes back changed (REFERENCE.md L36).
+
+
 
 ```zymbol
 // Output param only (modifies caller's variable)
@@ -1359,7 +1839,7 @@ increment(counter<~) {
 }
 
 x = 0
-increment(x)
+increment(x<~)
 >> x ¶    // → 1
 
 // Output param + return value (simultaneous)
@@ -1369,7 +1849,7 @@ get_and_increment(val<~) {
 }
 
 n = 5
-result = get_and_increment(n)
+result = get_and_increment(n<~)
 >> "result=" result " n=" n ¶    // → result=6 n=6
 
 // Multiple output params
@@ -1381,25 +1861,66 @@ swap(a<~, b<~) {
 
 x = 10
 y = 20
-swap(x, y)
+swap(x<~, y<~)
 >> "x=" x " y=" y ¶    // → x=20 y=10
 ```
 
+#### Choosing between `<~` parameters and a tuple return
+
+Both get several values out of a function. They say different things:
+
+```zymbol
+// tuple return — the function computes new values
+step(seed) { <~ (seed * 7 % 11, seed + 1) }
+(value, next) = step(3)
+>> "value=" value " next=" next ¶     // → value=10 next=4
+
+// output params — the function updates values the caller already holds
+advance(seed<~, count<~) {
+    seed  = seed * 7 % 11
+    count = count + 1
+}
+seed  = 3
+count = 0
+advance(seed<~, count<~)
+>> "seed=" seed " count=" count ¶     // → seed=10 count=1
+```
+
+Use the **tuple return** when the values are results the caller did not have before, and
+the call reads as an expression. Use **`<~` parameters** when the caller already owns the
+variables and the call is an instruction to update them — the reader then sees the updated
+names at the call site instead of a destructuring pattern that has to be matched up
+positionally.
+
+> **`~` is not `<~`.** `p~` is a *working copy*: the body may reassign it freely and the
+> caller's argument is untouched. The single `<` mark is what makes the change travel back.
+> Both marks work in all three engines as of v0.0.9 (REFERENCE.md L35).
+>
+> **A `<~` slot needs a variable, not an expression.** `g(2 + 3)` where `g` declares `g(b<~)`
+> is a semantic error: `<~` writes back into the caller's variable, and an expression gives
+> it nowhere to write. Assign it to a variable first. Every engine refuses it as of v0.0.9
+> (REFERENCE.md L34).
+
 ### Function Scope
 
-Functions called **directly by name** have isolated scope — only their parameters are in scope:
+A function **captures** what its body reads from the file, by value, and a write
+inside it stays inside the call:
 
 ```zymbol
 global = 100
 
 test() {
-    // 'global' is not accessible here when called directly
-    x = 42        // local
-    <~ x
+    <~ global + 1
 }
 
->> test() ¶    // → 42
+>> test() ¶       // → 101
 ```
+
+Captured, not shared: the value is read when the function is **called**, and
+assigning to that name inside the body writes a local copy that dies with the
+call. Module state is the other thing — a module's functions share it and their
+writes persist — and that difference is what makes one of them state and the
+other capture.
 
 > **Exception — constants pierce the isolation.** Top-level `:=` constants are
 > globally scoped by design: they are readable (never writable) inside any
@@ -1485,11 +2006,14 @@ r = nums$> (x -> double(x))         // ✅ wrapper also valid
 ### Anti-patterns
 
 ```zymbol
-// Postfix operators in >> require parentheses
->> arr$# ¶               // ❌ "DollarHash unexpected"
->> (arr$#) ¶             // ✅
-n = arr$#                // ✅ intermediate variable
+// A named function in a HOF slot takes no parentheses: '(' opens a lambda
+r = nums$> (double)      // ❌ "expected '->' in lambda expression"
+r = nums$> double        // ✅ direct reference
+r = nums$> (x -> double(x))   // ✅ explicit lambda
 ```
+
+> Postfix operators in `>>` were an anti-pattern until v0.0.7 and are not one now:
+> `>> arr$# ¶` is correct, and parentheses remain valid for grouping (REFERENCE.md L1).
 
 ### Named Function vs Lambda — When to Use Each
 
@@ -1531,6 +2055,29 @@ describe = x -> {
 >> describe(-3) ¶    // → negative
 >> describe(0) ¶     // → zero
 ```
+
+### Zero-Parameter Lambda — a thunk
+
+A lambda may take no parameters at all. Both bodies work:
+
+```zymbol
+answer = () -> { <~ 42 }
+uno    = () -> 1
+
+>> answer() ¶     // → 42
+>> uno() ¶        // → 1
+
+// Deferred work, stored and called later
+acciones = [() -> 1, () -> 2]
+>> (acciones[1])() ¶    // → 1
+```
+
+`()` is unambiguous here: there is no empty tuple in Zymbol, and a call's
+parentheses always follow a callable, so `() ->` can only begin a lambda.
+
+> New in v0.0.9. It already ran in the browser engine; the tree-walker and the
+> VM rejected it at parse time, which is the kind of disagreement only a
+> cross-engine run surfaces (`tests/scripts/engine_compare.sh`).
 
 ### Closures — Capturing Outer Scope
 
@@ -1635,36 +2182,45 @@ To share mutable state across calls, use a named function with a module-level va
 
 ### Named Functions vs Lambdas
 
-Named functions (`name(params) { }`) called **directly by name** execute in a **fully isolated scope** — they cannot read or write outer variables. Their only inputs are their parameters:
+Named functions and lambdas capture the same way (v0.0.9): **by value, with the
+write isolated**.
 
 ```zymbol
 x = 42
-peek() { <~ x }    // runtime error: undefined variable: 'x'
+peek() { <~ x }
+>> peek() ¶        // → 42
 ```
 
-> ⚠ **Asymmetric capture**: a named function's behavior depends on how it is used, not only on how it is defined.
->
-> | Usage | Scope | Outer variables |
-> |-------|-------|-----------------|
-> | `fn(args)` — direct call | isolated | not accessible |
-> | `f = fn` then `f(args)` — as first-class value | captures at assignment | snapshot, read-only |
+> **This was asymmetric until v0.0.9**, and the asymmetry is worth knowing about
+> because programs were written around it. A direct call was *isolated* and the
+> same function taken as a value *captured*, so one body meant two things
+> depending on how it was reached:
 >
 > ```zymbol
 > base = 10
 > adder(n) { <~ n + base }
 >
-> adder(5)       // runtime error: undefined variable: 'base'
->
-> f = adder      // captures current scope: { base: 10 }
-> >> f(5) ¶      // → 15
+> adder(5)       // was: runtime error: undefined variable: 'base'
+> f = adder
+> >> f(5) ¶      // → 15, then as now
 >
 > base = 99
 > >> f(5) ¶      // → 15  (snapshot — change to base does not affect f)
 > ```
 >
-> This means `adder(5)` and `(f = adder)(5)` are **not equivalent** when the function body references outer names. If you need a function that always has access to outer state regardless of how it is called, use a lambda.
+> So `adder(5)` and `(f = adder)(5)` were **not equivalent** when the body named
+> anything from outside, and nothing in the source said which one you were
+> looking at. That is why it went: one rule now, and it is the lambda's.
 
-Use lambdas when you need to close over outer state; use named functions when you want strict isolation on direct calls.
+**The one difference that remains** is *when* the value is read, and it follows
+from what each form is. A function taken as a value is a snapshot of that
+moment, so a later change to the file does not reach it; a direct call reads the
+file when it is called. Both are by value, and neither lets a write escape.
+
+**Module state is the other thing.** A module's functions *share* its variables
+and their writes persist — that is what module state is for, and it is the only
+shared mutable state the language has. A script's file variables are captured,
+not shared.
 
 ---
 
@@ -1725,7 +2281,7 @@ In 0-based systems, the same loop would require `0..(arr$#-1)` or similar.
 arr = [10, 20, 30, 40, 50]
 len = arr$#
 >> len ¶        // → 5
->> (arr$#) ¶    // → 5  (parentheses required in >>)
+>> arr$# ¶      // → 5  (no parentheses needed in >>)
 ```
 
 ### Append, Insert, Remove, Contains, Slice
@@ -1844,9 +2400,9 @@ sorting named or positional tuple arrays by field:
 
 ```zymbol
 db = [
-    (name: "Carla", age: 28),
-    (name: "Ana",   age: 25),
-    (name: "Bob",   age: 30)
+    #(name: "Carla", age: 28),
+    #(name: "Ana",   age: 25),
+    #(name: "Bob",   age: 30)
 ]
 
 // Sort by age ascending (< means ascending)
@@ -1862,35 +2418,116 @@ by_name_desc = db$^ (a, b -> a.name > b.name)
 > custom comparator. For named or positional tuple arrays, use `$^` with a lambda.
 > `$^` with a lambda on a primitive array is also valid when you need custom ordering.
 
-### Direct Element Update
+### Declaring a mix — `#[…]`
 
-Arrays are mutable. Elements can be replaced or updated in-place using index syntax:
+`[…]` is homogeneous and gets checked; a deliberate mix is **declared** with
+`#[…]` and is not checked. **They are the same type** and every operator behaves
+the same — `[1, 2] == #[1, 2]`:
+
+```zymbol
+mixto = #[#0, 1, '2', "tres", 4.0]
+homog = [1, 2, 3]
+>> mixto#? ¶       // → (##[, 5, [#0, 1, 2, tres, 4])
+>> homog#? ¶       // → (##], 3, [1, 2, 3])
+```
+
+`#?` tells them apart — `##]` when the elements are all one type, `##[` when
+they are not — and **that is not a second type**. It is read from what the array
+*holds when asked*, never from how the literal was written, which is also the
+question a caller actually has. So an array out of `json::decode` answers `##[`
+with no mark anywhere in the program, and taking the mix out of a `#[…]` leaves
+something that answers `##]`, because one element is not a mix:
+
+```zymbol
+sin_mezcla = #[1, "dos"]$-[2]
+>> sin_mezcla " " (sin_mezcla#?)[1] ¶   // → [1] ##]
+```
+
+What `[…]` refuses, and what the refusal now names:
+
+```text
+[1, "dos", 3.0]
+error: array element 2 has type String, but expected Int (same as first
+       element) — write `#[…]` if the mix is deliberate
+```
+
+This is what closes the hole the rule used to leave: `json::decode` hands back a
+heterogeneous array, and until `#[…]` existed there was no way to *write* one —
+the language could produce a value it could not spell.
+
+The analyser warns when a `#[…]` turns out homogeneous, which keeps the escape
+hatch in its place:
+
+```text
+h = #[1, 2, 3]
+warning: this `#[…]` has no mixed types: every element is Int
+help: use `[…]` — `#[…]` is for declaring a mix that is deliberate
+```
+
+### Element Update — the rule of the result
+
+Arrays are mutable, and `$~` is how an element changes. **There is no indexed
+assignment**: `arr[2] = 99` is an error, because `=` means "this NAME now holds
+this value" and `arr[2] = 99` names nothing — it reaches inside a structure and
+changes a part. Two different operations under one sign.
+
+Which of the two `$~` does is decided by **what happens to its result**:
+
+- the result is **used** — assignment, argument, `>>`, condition, chaining —
+  so the operator **builds**, and the original is untouched;
+- the result is **discarded** — the `$` is the whole statement — so it
+  **modifies in place**.
+
+The two cases are disjoint and are told apart by looking at the syntax. And
+discarding the result has no other possible use: if you were going to throw it
+away, you meant to modify.
 
 ```zymbol
 arr = [10, 20, 30, 40, 50]
 
-// Direct assignment (1-based index)
-arr[2] = 99
+// The result is DISCARDED → modifies in place
+arr[2]$~ 99
 >> arr ¶    // → [10, 99, 30, 40, 50]
 
-// Compound indexed assignment (+=, -=, *=, /=, %=, ^=)
-arr[1] += 5
+arr[1]$~ (arr[1] + 5)
 >> arr ¶    // → [15, 99, 30, 40, 50]
 
-arr[3] *= 2
->> arr ¶    // → [15, 99, 60, 40, 50]
-
-// Functional form — returns a new array; original is unchanged
+// The result is USED → builds; the original is unchanged
 arr2 = arr[2]$~ 0
->> arr ¶    // → [15, 99, 60, 40, 50]  (unchanged)
->> arr2 ¶   // → [15, 0, 60, 40, 50]
+>> arr ¶    // → [15, 99, 30, 40, 50]  (unchanged)
+>> arr2 ¶   // → [15, 0, 30, 40, 50]
 
-// Deep functional update — nav path [i>j>…] selects a nested element
+// Deep update — a nav path [i>j>…] selects a nested element, and follows the
+// same rule
 m  = [[1, 2], [3, 4]]
-m2 = m[1>2]$~ 99
->> m ¶      // → [[1, 2], [3, 4]]   (unchanged)
->> m2 ¶     // → [[1, 99], [3, 4]]
+m2 = m[1>2]$~ 99      // result used → builds
+>> m ¶                // → [[1, 2], [3, 4]]   (unchanged)
+>> m2 ¶               // → [[1, 99], [3, 4]]
+m[1>2]$~ 99           // result discarded → modifies
+>> m ¶                // → [[1, 99], [3, 4]]
 ```
+
+And what no longer exists:
+
+```text
+arr[2] = 99
+error: indexed assignment does not exist: 'arr[…] =' is not a form of Zymbol
+help: use 'arr[i]$~ value' to modify in place — '=' gives a value to a NAME,
+      '$~' changes part of a collection
+```
+
+> **`$~` takes a whole expression as its value** — arithmetic, juxtaposition and
+> all — because `arr[i]$~ v` is an assignment: `arr[1]$~ arr[1] + 5` and
+> `d["a"]$~ "hola " nombre` both do what they look like. Parentheses are allowed
+> and never wrong.
+>
+> Until v0.0.9 it took one postfix expression and the rest of the line became a
+> separate statement, so `d["a"]$~ "" v` assigned `""` and dropped `v` in
+> silence. See COLLECTIONS.md § 1.
+
+> The whole editing family follows the rule of the result — `$+`, `$++`, `[i]$~`,
+> `$-`, `$--`, `$-[i]`, `$^+`, `$^-`, `$^`. The consulting half never modifies
+> anything: `$#`, `$?`, `$??`, `$[..]`, `$>`, `$|`, `$<`, `$/`, `$*`, `$~~`.
 
 > The deep form works in both engines (compiled to the `DeepSet` instruction in the
 > VM). Ranges (`..`) are not supported in a `$~` path — only scalar steps.
@@ -1900,7 +2537,7 @@ m2 = m[1>2]$~ 99
 > ```zymbol
 > a = [1, 2, 3]
 > b = a
-> a[1] = 99
+> a[1]$~ 99
 > >> a ¶    // → [99, 2, 3]
 > >> b ¶    // → [1, 2, 3]   ← b is unaffected
 > ```
@@ -1920,11 +2557,17 @@ nums = [10, 20, 30]
 ```zymbol
 matrix = [[1,2,3], [4,5,6], [7,8,9]]
 >> matrix[2] ¶       // → [4, 5, 6]
->> matrix[2][3] ¶    // → 6
+>> matrix[2>3] ¶     // → 6
 ```
 
-> **⚠ Arrays must be homogeneous** — all elements must be the same type.
-> See [Known Limitations](#20-known-limitations-and-workarounds) for workarounds.
+> **`>` is what goes between the steps.** One bracket group addresses one
+> element, however deep it lies; the chained `matrix[2][3]` is refused, for
+> reading as well as for writing. See
+> [§11c Refused: chained `arr[i][j]`](#refused-chained-arrij).
+>
+> **⚠ `[…]` is homogeneous** — every element must be the same type, and the
+> analyser checks it. A deliberate mix is *declared* with `#[…]`, which is the
+> same type and is not checked — see **Declaring a mix — `#[…]`** above.
 
 ---
 
@@ -1937,15 +2580,44 @@ Unpack arrays or tuples into individual variables in a single statement.
 ```zymbol
 arr = [10, 20, 30, 40, 50]
 
-// Basic — bind by position
-[a, b, c] = arr          // a=10  b=20  c=30
+// Basic — the last name absorbs whatever is left over
+[a, b, c] = arr          // a=10  b=20  c=[30, 40, 50]
 
-// Rest collector — *name captures remaining elements
+// Exactly as many names as values — nothing is left to absorb
+[d, e, f] = [1, 2, 3]    // d=1  e=2  f=3
+
+// Fewer values than names — the last one gets ##_ (Unit)
+[g, h, i] = [1, 2]       // g=1  h=2  i=##_
+
+// Rest collector — *name is always a collection, even of one element or none
 [first, *rest] = arr     // first=10  rest=[20, 30, 40, 50]
 
 // Discard with _
 [x, _, z] = [1, 2, 3]   // x=1  z=3
 ```
+
+**The last name of a pattern absorbs the remainder** — `##_` when nothing remains, the bare
+value when exactly one does, and a collection when several do. Destructuring therefore never
+fails on a length mismatch: with two names there is always somewhere to put the rest. The
+absorbed remainder keeps the shape of the container it came from, so an array yields an
+array and a tuple yields a tuple.
+
+The rule has no exceptions, including the one-name case: `[solo] = arr` binds the whole
+array, saying what `x = arr` already said.
+
+Use `*rest` when the binding must be a collection whatever the length — that is the
+difference the mark buys:
+
+```zymbol
+[a, b, c]  = [1, 2, 3]   // c = 3     — a bare value
+[a, b, *c] = [1, 2, 3]   // c = [3]   — a collection of one
+[a, b, *c] = [1, 2]      // c = []    — empty, not ##_
+```
+
+> **Nothing is discarded implicitly.** Every value ends up under some name; dropping one is
+> your own act — call it `_something` (the analyzer already treats a `_` prefix as
+> deliberately unused) or end its life with `\name`. In the last position `_` absorbs the
+> remainder without binding it.
 
 ### Positional Tuple Destructuring
 
@@ -1954,19 +2626,41 @@ point = (100, 200)
 (px, py) = point         // px=100  py=200
 
 triple = (1, 2, 3)
-(h, *tail) = triple      // h=1  tail=[2, 3]
+(h, *tail) = triple      // h=1  tail=(2, 3) — a tuple, like its container
 ```
 
-### Named Tuple Destructuring
+**This is the form that receives a multi-value return.** A function returns several values
+as a tuple, and the tuple is taken apart by the tuple pattern — the receiver mirrors the
+sender:
 
 ```zymbol
-person = (name: "Ana", age: 25, city: "Madrid")
+divmod(a, b) { <~ (a / b, a % b) }
+
+(q, r) = divmod(17, 5)
+>> "q=" q " r=" r ¶      // → q=3 r=2
+```
+
+Note that the tuple is built by the **comma**, not by the parentheses: `<~ (7)` returns the
+Int `7` grouped, not a one-element tuple.
+
+> **The pattern is typed**: `[ … ]` takes an array and `( … )` takes a tuple. Receiving one
+> with the other's pattern is an error — `[q, r] = divmod(…)` above would fail, because
+> `divmod` returns a tuple. Write the shape the function returns. See REFERENCE.md L32.
+
+For a function whose values are better named than positioned, or that updates values the
+caller already holds, see [Output Parameters `<~`](#output-parameters-) in §9 — that is the
+other way to get several values out, and it needs no destructuring at all.
+
+### Dictionary Destructuring
+
+```zymbol
+person = #(name: "Ana", age: 25, city: "Madrid")
 
 // Bind each field to a local variable
-(name: n, age: a) = person    // n="Ana"  a=25
+#(name: n, age: a) = person    // n="Ana"  a=25
 
 // Rename fields freely
-(name: who, city: where) = person   // who="Ana"  where="Madrid"
+#(name: who, city: where) = person   // who="Ana"  where="Madrid"
 ```
 
 ### Semantics on Existing Variables
@@ -2007,7 +2701,7 @@ f()
 > semantic error (`cannot reassign constant`), the same as direct reassignment.
 > Use a different name in the pattern.
 
-All patterns are matched positionally (arrays, positional tuples) or by field name (named tuples).
+All patterns are matched positionally (arrays, positional tuples) or by field name (dictionaries).
 
 ---
 
@@ -2034,7 +2728,7 @@ postfix `[...]`, the `>` character is always a **depth separator**, not a compar
 
 All forms are fully supported by **both** the tree-walker and the register VM (`--vm`).
 
-> **Design note**: using `>` as depth separator inside `[...]` is intentional. Context resolves any ambiguity: `arr[a>b]` (no spaces, plain identifiers) is always navigation; `arr[(a > b)]` is a parenthesized comparison. Alternatives evaluated (`:`, `>>`, `,`) conflicted with other grammar rules or added more visual noise. The current syntax is the most readable form achievable within the keyword-free constraint.
+> **Design note**: using `>` as depth separator inside `[...]` is intentional. Context resolves any ambiguity: `arr[a>b]` (no spaces, plain identifiers) is always navigation; `arr[(a > b)]` is a parenthesized comparison. Alternatives evaluated (`:`, `>>`, `,`) conflicted with other grammar rules or added more visual noise. The current syntax is the most readable form achievable within the wordless constraint.
 
 ---
 
@@ -2178,16 +2872,73 @@ cubo = [
 // → [[1, 2, 3], [4, 5, 6], [10, 11, 12], [13, 14, 15]]
 ```
 
-### Deprecated: Chained `arr[i][j]`
+### Refused: chained `arr[i][j]`
 
-The old C/Python-style chained index `arr[i][j]` still parses, but `arr[i>j]` is the
-canonical form. A semantic warning may be added in a future version.
+The C/Python-style chained index is **not a form of Zymbol**. One bracket group
+addresses one element, however deep it lies, and `>` is what goes between the
+steps.
 
 ```zymbol
 m = [[1,2,3], [4,5,6], [7,8,9]]
->> m[2][3] ¶    // → 6  (still works, deprecated)
->> m[2>3] ¶     // → 6  (canonical form)
+>> m[2>3] ¶     // → 6
+>> m[2][3] ¶    // ✗ chained index does not exist: 'm[…][…]' is not a
+                //   form of Zymbol
+                //   help: nesting is navigated with '>', so this is 'm[i>j]'
 ```
+
+**The rule governs how an element is addressed, not what is done with it.** The
+chain is refused as soon as it is read, whatever follows the group — so these are
+one rule and not five:
+
+```zymbol
+>> m[2][3] ¶         // read
+x = m[2][3]          // read into a name
+m[2][3]$~ 0          // edit
+x = m[2][3]$~ 0      // build
+m[2][3]$+ 5          // any other `$`
+m[2][3] = 0          // (this one keeps the older `indexed assignment` message)
+```
+
+It was deprecated in v0.0.4 and refused in v0.0.9. In between it parsed and ran,
+and this page said a warning "may be added in a future version" — so the rule
+existed in the prose and in no engine, which left the language with two spellings
+of one access and nothing to tell them apart. That is the same argument that had
+already withdrawn the chained *write* (`m[i][j] = v`, `d["x"]["y"]$~ v`); the read
+was the half that had been left.
+
+### Where the line falls
+
+What is refused is **navigating in two hops**: both groups walking down the same
+structure, which is what `>` does in one. A bracket after something that is not
+itself an access is one group, not a chain, and stays legal:
+
+```zymbol
+m = [[1,2,3], [4,5,6], [7,8,9]]
+f() { <~ [7,8,9] }
+
+// indexing a literal
+>> [1,2,3][2] ¶                        // → 2
+
+// indexing what a call returned
+>> f()[2] ¶                            // → 8
+
+// indexing what an extraction built
+>> m[[1>1, 1>3] ; [3>1, 3>3]][1] ¶     // → [1, 3]
+```
+
+The last one is the interesting one. An extraction does not *descend* into `m` —
+it collects values from several paths and **builds a new collection** that was
+nowhere in `m`:
+
+```zymbol
+m = [[1,2,3], [4,5,6], [7,8,9]]
+esquinas = m[[1>1, 1>3] ; [3>1, 3>3]]
+>> esquinas ¶                             // → [[1, 3], [7, 9]]  — a new value
+>> esquinas[1] ¶                          // → [1, 3]            — one access
+```
+
+Indexing that is the same act as indexing `f()`'s result, so it is written the
+same way.
 
 ### Error Cases
 
@@ -2221,64 +2972,71 @@ data = (42, "hello", #1, 3.14)
 >> data[3] ¶    // → #1
 ```
 
-### Named Tuple
+### Dictionary — a Tuple with Named Fields
 
 ```zymbol
-person = (name: "Alice", age: 25, active: #1)
+person = #(name: "Alice", age: 25, active: #1)
 
-// Access by field name (recommended)
+// Access by field name
 >> person.name ¶    // → Alice
 >> person.age ¶     // → 25
 
-// Access by positional index (1-based)
->> person[1] ¶      // → Alice
->> person[2] ¶      // → 25
+// Access by key — the bracket reaches ANY key, including a computed one
+>> person["name"] ¶ // → Alice
+campo = "age"
+>> person[campo] ¶  // → 25
 
-// Nested named tuples
-pos = (x: 10, y: 20)
-p = (pos: pos, label: "origin")
+// Nested dictionaries
+pos = #(x: 10, y: 20)
+p = #(pos: pos, label: "origin")
 >> p.label ¶        // → origin
 >> p.pos.x ¶        // → 10
 ```
 
+> **A tuple with named fields is a dictionary.** It is mutable, its keys can be
+> computed, added and removed, and it can be walked. “Named tuple” stopped being
+> a defensible name the moment the thing could change — a tuple is immutable by
+> definition. See “Dictionaries”.
+>
+> **The position is not an address.** `person[1]` is an error — *a dictionary is
+> addressed by key, not by position* — because adding a key changes what sits at
+> each position. The whole positional family goes with it: `d[-1]`, `d[2]$~ v`,
+> `d$-[2]`, `d$[1:2]`. See COLLECTIONS.md.
+
 ### Immutability
 
-Tuples cannot be modified after creation. Any attempt to assign to an element
-produces a runtime error:
+A **positional** tuple cannot change. Any attempt to modify one in place is an
+error, whatever the operator — immutability is a property of the value, not an
+exception inside each `$`:
 
 ```zymbol
 t = (10, 20, 30)
-t[1] = 99    // ❌ runtime error: cannot modify tuple 't': tuples are immutable
-t[1] += 5    // ❌ same error
+t[1] = 99     // ❌ indexed assignment does not exist
+t[1]$~ 99     // ❌ cannot modify tuple 't': tuples are immutable
+t$+ 40        // ❌ same error
 ```
 
-To derive a new tuple with one element changed, use the functional update operator `$~`.
-The original tuple is never touched:
+To derive a new tuple, use the same operators with their **result** — the rule of
+the result again, and the original is never touched:
 
 ```zymbol
 t = (10, 20, 30)
 t2 = t[2]$~ 999
 >> t ¶     // → (10, 20, 30)   ← original unchanged
 >> t2 ¶    // → (10, 999, 30)  ← new tuple
+
+t3 = t$+ 40
+>> t3 ¶    // → (10, 20, 30, 40)
 ```
 
-Named tuples support `$~` too (v0.0.6), addressed by 1-based position **or by
-field-name string** (useful when the field is chosen at runtime):
-
-```zymbol
-person = (name: "Alice", age: 25)
-older  = person["age"]$~ 26       // by field name
-upper  = person[1]$~ "ALICE"      // by position (1-based; negative allowed)
->> person.age ¶    // → 25   ← original unchanged
->> older.age ¶     // → 26
->> upper.name ¶    // → ALICE
-```
+> A tuple with **named** fields is a different thing — a **dictionary** — and it
+> *is* mutable. See “Dictionaries” below. The colon is what separates them.
 
 Rebuilding explicitly remains valid when several fields change at once:
 
 ```zymbol
-person = (name: "Alice", age: 25)
-other  = (name: person.name, age: 26)
+person = #(name: "Alice", age: 25)
+other  = #(name: person.name, age: 26)
 ```
 
 > **Constants vs immutability**: `:=` makes the *variable binding* constant (the name
@@ -2286,6 +3044,138 @@ other  = (name: person.name, age: 26)
 > Both mechanisms are independent and complementary.
 
 ---
+
+## 12b. Dictionaries
+
+A tuple with **named** fields is a dictionary, and since v0.0.9 it is written
+`#(clave: valor)`. `(1, 2)` is a positional tuple and is immutable; `#(a: 1, b: 2)`
+is a dictionary and is mutable; `#()` is the empty dictionary, which `()` could
+not be, since it would have to be the empty tuple as well.
+
+> **`(a: 1, b: 2)` is now an error** — *a dictionary is written `#(…)`*. The colon
+> alone used to be the only thing separating the two, so one bracket shape carried
+> two types that behave nothing alike: one immutable and addressed by position, the
+> other mutable and addressed by key. The mark says which is meant before the reader
+> reaches the colon.
+
+It is addressed **by key, and only by key**.
+
+### Reading
+
+```zymbol
+u = #(nombre: "Ana", edad: 30)
+
+>> u.nombre ¶          // the dot reaches keys that are identifiers
+>> u["nombre"] ¶       // the bracket reaches ANY key
+
+clave = "edad"
+>> u[clave] ¶          // ← the key may be COMPUTED
+```
+
+The dot is convenient; the bracket is what JSON needs, because a JSON key can be
+any string:
+
+```zymbol
+u["dos palabras"]$~ 7      // the dot cannot spell this key
+>> u["dos palabras"] ¶
+```
+
+### An absent key is an error
+
+Reading a key that is not there raises `##Key` — Python's `KeyError`, not
+JavaScript's `undefined`. It is coherent with `a[0]`, which is also an error
+rather than a silently wrong answer:
+
+```zymbol
+>> u["sueldo"] ¶
+// Runtime error: no key 'sueldo' in dictionary — available: nombre, edad
+```
+
+Which makes `$?` necessary: on a dictionary it asks about the **key**, as `in`
+does in Python and in JS.
+
+```zymbol
+? u$? "sueldo" {
+    >> u["sueldo"] ¶
+}
+```
+
+### Modifying, adding and removing
+
+```zymbol
+u["edad"]$~ 31            // modifies in place (the rule of the result)
+otro = u["edad"]$~ 31     // builds; u is untouched
+
+u["ciudad"]$~ "Lima"      // a key that is NOT there gets ADDED
+u$-["ciudad"]             // removed by its address, which IS the key
+```
+
+> Note the contrast with the array, where `arr[7]$~ v` fails on an absent
+> element. The two are not inconsistent: an array is addressed by POSITION, so
+> writing past the end would leave a hole; a dictionary is addressed by KEY and
+> has none to leave.
+
+### Walking
+
+`@ k:d` yields the **keys**, in insertion order — `for k in d`, as Python spells
+it. With `d[k]` available the key is enough to reach the value:
+
+```zymbol
+d = #(alfa: 10, beta: 20)
+@ clave:d {
+    >> clave " = " d[clave] ¶
+}
+```
+
+And the pattern form asks for both halves at once:
+
+```zymbol
+@ (clave, valor):d {
+    >> clave " → " valor ¶
+}
+```
+
+### Nesting — this is already JSON
+
+```zymbol
+config = #(
+    servidor: #(host: "localhost", puerto: 8080),
+    etiquetas: ["web", "api"]
+)
+
+>> config.servidor.host ¶
+>> config["servidor"]["puerto"] ¶
+
+// A navigation path reaches down and modifies. A step is an ordinary
+// expression, and its VALUE says how to address: an Int is a position, a
+// string is a key.
+k1 = "servidor"
+k2 = "puerto"
+>> config[k1>k2] ¶
+config[k1>k2]$~ 9090
+config["servidor">"puerto"]$~ 9090     // a literal key works the same
+```
+
+### The position is not an address
+
+Everything positional is refused on a dictionary, because adding a key changes
+what sits at each position and a program that depended on it would stop being
+correct with nothing to say so:
+
+```zymbol
+d[2]        d[-1]        d[2]$~ v
+d$-[2]      d$[1:2]      d$[2..3]      d$-[1:2]
+// error: a dictionary is addressed by key, not by position
+```
+
+There is no principled line between “the second key” and “the first two keys”,
+and a positional *write* is strictly worse than a positional read — it corrupts
+data rather than returning the wrong value. This is Python's position: `dict`
+has no indexing and no slicing, and the slice gets **no** key-based replacement:
+“the first two keys” is not a question a dictionary should answer.
+
+A **positional tuple** keeps the whole family — there the index is the only
+address there is, and the size is fixed.
 
 ## 13. Strings
 
@@ -2493,7 +3383,11 @@ evens = nums$| (x -> x % 2 == 0)
 sum = nums$< (0, (acc, x) -> acc + x)
 >> sum ¶    // → 55
 
-// Chaining via intermediate variables (direct chaining is not supported)
+// Direct chaining — each operator applies to the result of the previous one
+chained = nums$| (x -> x > 3)$> (x -> x * x)
+>> chained ¶    // → [16, 25, 36, 49, 64, 81, 100]
+
+// Intermediate variables do the same thing and read better in long pipelines
 step1 = nums$| (x -> x > 3)
 step2 = step1$> (x -> x * x)
 >> step2 ¶    // → [16, 25, 36, 49, 64, 81, 100]
@@ -2764,14 +3658,32 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 
 **Recommended ordering inside the block**: `<#` imports → `#>` export block → constants/variables → function definitions. The parser accepts any ordering, but `<#` aliases used in `#>` re-exports must appear before the `#>` block.
 
+> ⚠ **A module declares what it exports.** Leaving `#>` out is an error, in every engine:
+>
+> ```
+> error: E014: module 'm' does not declare what it exports
+>   = help: add '#> { … }' inside the module block, naming what it exports — an empty
+>           '#> { }' says it exports nothing
+> ```
+>
+> **`#> { }` is how a module says it exports nothing** — it loads, holds its state, and keeps
+> every name private. That is a module with no public surface, not a module with no rule.
+>
+> Until 2026-09-04 the omission was undefined and the three engines filled the silence three
+> ways: the tree-walker exported everything, the register VM and the browser engine exported
+> nothing, and `zymbol check` reported neither. See REFERENCE.md L48.
+>
+> The block goes **inside** `# name { … }`. A `#>` at file top level is refused by all three
+> engines: *an export block belongs inside a module block*.
+
 ### Allowed and Forbidden Inside a Module Body
 
 | Element | Allowed | Notes |
 |---------|---------|-------|
 | `<# path => alias` | ✓ | Import |
 | `#> { ... }` | ✓ | Export block |
-| `NAME := literal` | ✓ | Exported constant (literal RHS only) |
-| `var = literal` | ✓ | Private mutable state (literal RHS only) |
+| `NAME := literal` | ✓ | Exported constant (literal RHS only, collections included) |
+| `var = literal` | ✓ | Private mutable state (literal RHS only, collections included) |
 | `fn(params) { }` | ✓ | Function definition |
 | `>> expr` | ✗ | **E013** — output not allowed in module body |
 | `<< var` | ✗ | **E013** — input not allowed in module body |
@@ -2782,6 +3694,27 @@ A module file contains exactly one closed block: `# name { ... }`. Everything in
 | `<~ expr` | ✗ | **E013** — return not allowed outside function |
 
 **E013** is raised whenever an executable statement appears at the module top-level. Function bodies are unrestricted — the limitation only applies to the module block itself.
+
+**A literal includes a collection literal**, recursively: `[1, 2, 3]`, `(1, 2)`,
+`#(a: 1, b: 2)` and a dictionary of dictionaries all name a value rather than
+computing one, and all initialise module state. What stays out is anything that
+computes — a call, a name, an operator, an interpolated string — at any depth.
+
+```zymbol
+# catalogo {
+    #> { texto }
+    IDIOMAS := ["es", "en"]                    // ✓ exported constant
+    tabla = #(es: "hola", en: "hi")             // ✓ private state
+    // tabla = json::decode(io::read("x"))     // ✗ E013 — a call computes
+    texto(k) { c = k
+        ? (tabla$? c) { <~ tabla[c] }
+        <~ c }
+}
+```
+
+Until v0.0.9 only a scalar was accepted here, which is why four of the project's
+applications wrote their translation tables as `??` chains inside a function: it
+was the only way to put a table in a module.
 
 > Since v0.0.8, importing a module also runs the full **semantic analysis** on
 > it (both engines): reassigning a module constant or violating scope rules
@@ -2855,6 +3788,20 @@ pi = u.PI
 <# ../shared/lib => s    // parent directory
 <# ./sub/folder => c     // subdirectory
 ```
+
+### Imports come first
+
+In an executable file, every `<#` precedes the first statement. Blank lines and comments may
+sit above them; a statement closes the import section.
+
+```zymbol
+<# std/json => js        // ✅ imports first
+>> "ready" ¶
+```
+
+An import written after a statement is `error: imports must come before any statement`, in
+every engine. (Before v0.0.9 the browser engine ran such a file anyway, so a program written
+in the playground could fail to parse outside it — see REFERENCE.md L40.)
 
 ### Export Aliases
 
@@ -2934,6 +3881,7 @@ the i18n pattern with no special handling:
 | `std/net` | `get` `post` `post_json` `head` | v0.0.7 |
 | `std/db` | `connect` `disconnect` `exec` `query` `query_one` `query_value` `tx` `begin` `commit` `rollback` `savepoint` `release` `rollback_to` `exec_script` `table_exists` | v0.0.7 |
 | `std/term` | `width` `pad_left` `pad_right` `center` `truncate` | v0.0.8 |
+| `std/time` | `now` `today` `parts` `of` `format` `add` `diff` | v0.0.9 |
 
 **`std/term` — display width in terminal columns.** `width` counts **columns**, not
 graphemes: CJK ideographs, kana, hangul and most emoji take two columns each, so a
@@ -2954,6 +3902,93 @@ This is a **screen** metric. Operating on a string's *content* — split, slice,
 repeat — stays in the language's symbols (`$/`, `$[..]`, `$~~`, `$*`); `std/term` never
 duplicates them.
 
+**`std/time` — the clock and the civil calendar.** Before v0.0.9 the only way to learn the
+date was to leave the language, `<\ "date +%F" \>`, which is absent on Windows, absent in a
+browser, needs `#09#` forced first — otherwise the shell's answer comes back in whatever
+script the numeral mode selected and stops being ISO 8601 — and answers nothing beyond
+"what day is it": *the last thirty days* cannot be asked of a string.
+
+An **instant** is milliseconds since 1970-01-01T00:00:00Z, always UTC, and that is what
+every function passes around. A **date** is a *reading* of an instant, and there is no
+reading without saying where the reader is standing, so every function takes an optional
+trailing zone — `"UTC"` (the default), `"local"`, or a fixed offset written `"+1000"` /
+`"-0400"`.
+
+```zymbol
+<# std/time => t
+
+fijo = t::of(2026, 8, 23, 14, 5, 9)     // year, month, day [, hour, minute, second]
+>> t::format(fijo, "%F %T") ¶           // → 2026-08-23 14:05:09
+>> t::format(fijo, "%F %T", "-0400") ¶  // → 2026-08-23 10:05:09
+>> t::format(fijo, "%F", "+1000") ¶     // → 2026-08-24
+>> t::parts(fijo).weekday ¶             // → 7
+```
+
+`parts` returns a dictionary — `year month day hour minute second millisecond weekday
+offset` — with `weekday` numbered as ISO 8601 does it, 1 for Monday. `now()` is the current
+instant and `today()` the current date as `YYYY-MM-DD`.
+
+**Below a day it is duration; from a day up it is calendar.** A minute is always 60 000
+milliseconds, and a *day* is not always 86 400 000 — a zone that observes daylight saving
+has one 23-hour day and one 25-hour day every year. "Tomorrow at the same time" and "24
+hours from now" are different questions, and `add`/`diff` answer the first:
+
+```zymbol
+<# std/time => t
+fijo = t::of(2026, 8, 23, 14, 5, 9)
+
+>> t::format(t::add(fijo, 90, "minute"), "%T") ¶            // → 15:35:09
+>> t::format(t::add(fijo, -30, "day"), "%F") ¶              // → 2026-07-24
+>> t::format(t::add(t::of(2026, 1, 31), 1, "month"), "%F") ¶ // → 2026-02-28
+
+>> t::diff(t::of(2026, 8, 23), t::of(2026, 7, 24), "day") ¶  // → 30
+>> t::diff(t::of(2026, 8, 23), t::of(2026, 7, 24), "month") ¶ // → 0
+```
+
+The units are `millisecond second minute hour day week month year`, one spelling each and
+in full. Adding a month lands on the same day of the month or on the last one there is —
+one month after the 31st of January is the 28th of February, because there is no 31st, and
+rolling into March would turn "next month" into the one after. `diff` counts **whole**
+units toward zero, which is why the 23rd of August is 0 months after the 24th of July: the
+day of the month has not come round yet.
+
+**The digits are always ASCII.** `format` and `today` do not follow the numeral mode, and
+that is the point: a date is the one piece of text a program writes for a *machine* to read
+back — a filename, a database column, an ISO 8601 field — and `२०२६-०८-२३` is not ISO 8601.
+Text for a person is built from `parts`, whose numbers print in whatever script is active.
+
+```zymbol
+<# std/time => t
+fijo = t::of(2026, 8, 23)
+p = t::parts(fijo)
+#०९#
+>> t::format(fijo, "%F") ¶          // → 2026-08-23
+>> p.year "-" p.month "-" p.day ¶   // → २०२६-८-२३
+#09#
+```
+
+Patterns are the POSIX `date` codes, and only these: `%Y %m %d %H %M %S %L %j %u %z %F %T`
+and `%%`. `%F` is `%Y-%m-%d`, `%T` is `%H:%M:%S`, `%L` is the milliseconds, `%j` the day of
+the year, `%u` the weekday and `%z` the offset as `±HHMM`. Anything else is refused rather
+than passed through.
+
+Bad **data** — month 13, the 29th of a February that has 28, an unknown zone, `%Q` — is a
+soft `##Time(...)` you test with `$!`, because a date arriving from a form, a file or a
+database column is exactly where that happens. A wrong argument **type** is the program's
+own bug and stops it.
+
+```zymbol
+<# std/time => t
+mal = t::of(2026, 2, 30)
+? mal$! {
+    >> "esa fecha no existe" ¶      // → esa fecha no existe
+}
+```
+
+`"local"` is the only part that asks the machine anything, and it is read **at the
+instant** rather than once, so a date in January and one in July get their own offsets.
+Where the zone cannot be determined it returns a soft error instead of guessing.
+
 **Error convention.** Type/arity mistakes raise a hard `RuntimeError` (the program is
 malformed). Recoverable environmental failures — file not found, network timeout, malformed
 JSON, SQL errors — come back as a **soft `Error` value** (`##IO(...)`, `##Network(...)`,
@@ -2971,7 +4006,7 @@ txt = io::read("no-existe.txt")
 
 `std/net` is synchronous (no async). `get`/`post`/`post_json` accept an optional trailing
 `headers` argument — an array of 2-element `(String, String)` tuples — to reach authenticated
-APIs. JSON object ↔ `NamedTuple` (key order preserved), JSON array ↔ `Array`, null ↔ `Unit`.
+APIs. JSON object ↔ **dictionary** `#(…)` (key order preserved), JSON array ↔ `Array`, null ↔ `Unit`.
 
 > When writing JSON **literals** in source, escape `{` as `\{` (an unescaped `{` starts string
 > interpolation). JSON read from a file or the network needs no escaping.
@@ -2980,15 +4015,16 @@ APIs. JSON object ↔ `NamedTuple` (key order preserved), JSON array ↔ `Array`
 the **keys** of decoded JSON come from the external API and stay in its language
 (`数据.candidates[1].content.parts[1].text`). `decode_map(text, map)` decodes **and** renames
 object keys recursively, at any depth, so the resulting structure reads in the consumer's
-language. The map is a `NamedTuple` whose field names are the source keys and whose String
-values are the new names; keys absent from the map are kept verbatim, and an empty `()` map
-makes `decode_map` behave like `decode`.
+language. The map is a **dictionary** whose keys are the source keys and whose String values
+are the new names; keys absent from the map are kept verbatim, and an empty `#()` map makes
+`decode_map` behave like `decode`. (`()` is not the empty map — it does not parse: there is no
+empty tuple in Zymbol.)
 
 ```zymbol
 <# std/json => json
 
 datos = json::decode_map(respuesta,
-    (candidates: "候选", content: "内容", parts: "片段", text: "文本"))
+    #(candidates: "候选", content: "内容", parts: "片段", text: "文本"))
 >> datos.候选[1].内容.片段[1].文本 ¶   // no English API key leaks into the logic
 ```
 
@@ -3024,8 +4060,39 @@ db::disconnect("c")
 - **Parameter binding**: `exec`/`query`/`query_one`/`query_value` take an optional trailing
   positional-tuple of parameters bound to `?` placeholders — quotes in data are safe by
   construction (no SQL injection by string concatenation).
-- **Rows are `NamedTuple`s** keyed by column name; `query` returns an array of rows,
-  `query_one` a single row (or soft error), `query_value` a single scalar.
+- **Rows are dictionaries** `#(…)` keyed by column name; `query` returns an array of rows,
+  `query_one` a single row, `query_value` a single scalar.
+- **`query_one` that matches nothing is a soft error** — `##DB(query_one matched no
+  rows)` — so `? fila$!` is the check, and it is the same check that catches a broken
+  query. A row that exists but holds a `NULL` in one of its columns is a different
+  question: the row is not an error, and the column comes back as `Unit`.
+
+  ```zymbol
+  <# std/db => db
+  db::connect("c", "Driver={SQLite3};Database=/tmp/demo_nulos.db;")
+  db::exec("c", "DROP TABLE IF EXISTS socios")
+  db::exec("c", "CREATE TABLE socios(cod INTEGER PRIMARY KEY, nota TEXT)")
+  db::exec("c", "INSERT INTO socios(cod, nota) VALUES(1, NULL)")
+
+  ausente = db::query_one("c", "SELECT cod, nota FROM socios WHERE cod = ?", (99,))
+  >> ausente$! ¶                       // → #1
+  >> ausente ¶                         // → ##DB(query_one matched no rows)
+
+  fila = db::query_one("c", "SELECT cod, nota FROM socios WHERE cod = ?", (1,))
+  >> fila$! ¶                          // → #0
+  >> "[" fila.nota "]" ¶               // → []
+  db::disconnect("c")
+  ```
+
+  The row exists, so `fila$!` is `#0`; its `nota` column was `NULL`, so it prints as
+  nothing. Two questions, two answers.
+
+  > Before v0.0.9 no rows returned `Unit` too, so `$!` answered `#0` either way and
+  > the branch the documentation prescribed could never be taken. A program failed
+  > several lines later, on a line that was correct, with a message about tuples.
+- `query_value` still returns `Unit` for no rows, and deliberately: its result is one
+  scalar, and a scalar column may legitimately *be* `NULL`. There the two emptinesses
+  really are the same value.
 - **Transactions**: `tx(name, batch)` runs an array of `(sql, params)` tuples atomically;
   low-level `begin`/`commit`/`rollback` plus nested `savepoint`/`release`/`rollback_to`.
 - **Utilities**: `exec_script` (multi-statement SQL), `table_exists`.
@@ -3168,17 +4235,26 @@ v7 = #|"٣.١٤"|
 
 ### Type Metadata `expr#?`
 
-Returns tuple `(type_symbol, count, value)` where `count` meaning depends on type:
+Returns tuple `(type_symbol, count, value)`. The symbol names the type and the
+`count` means something different for each:
 
-| Type | `count` meaning |
-|------|----------------|
-| Int, Float | number of characters in the string representation |
-| String | character length |
-| Char, Bool | always `1` |
-| Array, Tuple, NamedTuple | number of elements / fields |
-| Function | arity (number of parameters) |
-| Error | length of the error message |
-| Unit | `0` |
+| Type | symbol | `count` meaning |
+|------|--------|----------------|
+| Int, Float | `###`, `##.` | number of characters in the string representation |
+| String | `##"` | character length |
+| Char | `##'` | always `1` |
+| Bool | `##?` | always `1` |
+| Array | `##]` | number of elements |
+| Declared mix `#[…]` | `##[` | number of elements |
+| Positional tuple | `##)` | number of fields |
+| Dictionary | `##(` | number of keys |
+| Function, lambda | `##()`, `##->` | arity (number of parameters) |
+| Error | its class — `##IO`, `##Parse`, `##DB`, … | length of the error message |
+| Unit | `##_` | `0` |
+
+> **The four collections each have their own symbol** (v0.0.9). Before, an array
+> and a dictionary answered alike, so a program could not ask what it was
+> holding without taking the value apart.
 
 ```zymbol
 ti = 42#?
@@ -3201,10 +4277,16 @@ f = double
 lam = (a, b) -> a + b
 >> lam#? ¶            // → (##->, 2, <lambd/2>)
 
-// Extract just the type (intermediate variable required)
+// The four collections
+>> [1,2,3]#? ¶        // → (##], 3, [1, 2, 3])
+>> #[1,"x"]#? ¶       // → (##[, 2, [1, x])
+>> (1,"x")#? ¶        // → (##), 2, (1, x))
+>> #(k: 1, j: 2)#? ¶  // → (##(, 2, #(k: 1, j: 2))
+
+// Extract just the type — the postfix chains, no binding needed
+>> 42#?[1] ¶          // → ###
 meta = 42#?
-t = meta[1]
->> t ¶    // → ###
+>> meta[1] ¶          // → ###
 ```
 
 **Display format**: named functions show as `<funct/N>`, anonymous lambdas as `<lambd/N>`, where `N` is the arity.
@@ -3308,6 +4390,47 @@ sci = #^|xsci|
 >> #^!3|xsci| ¶    // → 1.234e4  (truncate to 3 significant digits)
 ```
 
+#### Separators and the numeral mode
+
+A formatted number's digits follow the active numeral mode, exactly as `>>` does
+— and so do its separators, where the script has separators of its own.
+
+```zymbol
+sep = 1234567.89
+
+#٠٩#
+>> sep ¶           // → ١٢٣٤٥٦٧٫٨٩
+>> #,.2|sep| ¶     // → ١٬٢٣٤٬٥٦٧٫٨٩
+
+#०९#
+>> #,.2|sep| ¶     // → १,२३४,५६७.८९
+#09#
+```
+
+Two rules, to be read together:
+
+- **The language fixes the pair.** `,` groups the thousands and `.` divides the
+  decimals, in every script, and it never inverts. A program that wants
+  `100.000,00` builds it; no mode and no argument makes the engine do it. This
+  is deliberate — the moment the pair becomes settable, every program that reads
+  a number has to ask which way round it was written.
+- **The script chooses how that pair is drawn**, when it has a drawing of its
+  own. The bar is that Unicode name the character a numeric separator *for that
+  script*, and exactly one script clears it: Arabic, through U+066B ARABIC
+  DECIMAL SEPARATOR and U+066C ARABIC THOUSANDS SEPARATOR, for both of its digit
+  blocks. The other 67 scripts write `.` and `,`, which is what they do in
+  practice; a Devanagari-specific decimal point would be an invention.
+
+Reading is script-blind, writing is not. `٤٫٧٥` and `٤.٧٥` are the same number —
+as a literal and through `#|…|` — and only the active mode decides which one is
+written. That is what keeps *what the program writes, the program can read back*
+true for floats.
+
+`#,` is the only operator in the language that emits a thousands separator,
+because it is the only one whose result is text rather than a number. That is
+also why its output is the one thing `#|…|` hands straight back instead of
+parsing.
+
 ### Base Literals and Conversions
 
 ```zymbol
@@ -3350,7 +4473,32 @@ Write the digit `0` and digit `9` of the target script, enclosed in `#…#`:
 ```
 
 The token is **purely a runtime directive** — it emits no output and leaves no
-variable. One mode-switch persists until the next one in the same file.
+variable. One mode-switch persists until the next one.
+
+**The mode is global to the process, not to the file.** Reaching a mode-switch
+anywhere — inside a function, inside an imported module — changes how every
+subsequent `>>` formats numbers, in every module and in the main program:
+
+```zymbol
+// script/setter.zy
+# .script_setter {
+    #> { activate }
+    activate(code) { ? code == "sa" { #०९# }  <~ 0 }
+}
+```
+```zymbol
+// main.zy
+<# ./script/setter => s
+<# ./script/other  => other
+s::activate("sa")
+other::show(42)       // → ४२   (a different file)
+>> "here: " 42 ¶      // → ४२
+```
+
+That is what makes the mode usable as an i18n layer: a language dispatcher can
+pick the digit script along with the language, and no drawing code needs to
+know which one is active. See `USERAPPI18N.md` §"Third mechanism" for the
+pattern and its two traps.
 
 ### Output Under an Active Mode
 
@@ -3389,10 +4537,17 @@ z = "n=" n         // juxtaposition (BinaryOp::Concat)
 w = "n=" $++ n     // $++
 >> w ¶             // → n=४२
 
->>~ (1, 1) > n     // positioned output
-
 >> [1, 2, 3] ¶     // → [१, २, ३]  (elements, not brackets)
 >> (7, 8) ¶        // → (७, ८)
+```
+
+Positioned output converts too. It is shown on its own because `>>~` writes a cursor
+escape ahead of the value, so its output is not comparable line by line:
+
+```zymbol
+#०९#
+n = 42
+>>~ (1, 1) > n     // prints ४२ at row 1, col 1
 ```
 
 The mode reaches *inside* collections: a number does not stop being a number by
@@ -3445,6 +4600,12 @@ s = "{n}"          // ← "१२०"
 
 >> #|s| ¶          // → १२०  (parsed as the Int 120, rendered in the mode)
 >> #.0|s| ¶        // → १२०  (round: same normalization)
+```
+
+Typed input normalises the same way — this one waits for a person, so it is shown on
+its own rather than run as an example:
+
+```zymbol
 <<### edad         // accepts ४२ and 42 alike
 ```
 
@@ -3729,7 +4890,7 @@ output = </ ./subscript.zy />
 
 ---
 
-## 22. Verified Examples
+## 20. Verified Examples
 
 ### FizzBuzz
 
@@ -3769,15 +4930,15 @@ bsort(arr<~) {
         @ j:1..(n-i) {
             ? arr[j] > arr[j+1] {
                 tmp = arr[j]
-                arr[j] = arr[j+1]
-                arr[j+1] = tmp
+                arr[j]$~ arr[j+1]
+                arr[j+1]$~ tmp
             }
         }
     }
 }
 
 data = [64, 34, 25, 12, 22, 11, 90]
-bsort(data)
+bsort(data<~)
 >> data ¶    // → [11, 12, 22, 25, 34, 64, 90]
 ```
 

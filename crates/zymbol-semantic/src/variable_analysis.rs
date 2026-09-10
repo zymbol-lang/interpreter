@@ -236,6 +236,16 @@ pub struct VariableAnalyzer {
     /// Variables in current analysis scope
     /// Key: variable name, Value: variable info
     variables: HashMap<String, VariableInfo>,
+    /// Declarations a later declaration of the SAME NAME displaced.
+    ///
+    /// `variables` is keyed by name, so `@ i:1..3 { … }` twice kept only the
+    /// second `i` and warned once, about the second site — two unused
+    /// iterators, one warning, pointing at one of them. A warning carries a
+    /// position, so one for two sites is one of them reported and the other
+    /// silently dropped (GLB-003). Displaced entries are kept here and warned
+    /// about at the end; usage still marks the CURRENT one, which is right —
+    /// a read after a redeclaration reads the new variable.
+    retired: Vec<VariableInfo>,
     /// Set of variable names currently in scope (for shadowing detection)
     current_scope_vars: Vec<HashSet<String>>,
     /// Collected diagnostics
@@ -251,6 +261,7 @@ impl VariableAnalyzer {
         Self {
             scope_depth: 0,
             variables: HashMap::new(),
+            retired: Vec::new(),
             current_scope_vars: vec![HashSet::new()],
             diagnostics: Vec::new(),
             scope_tree: ScopeTree::new(),
@@ -324,9 +335,13 @@ impl VariableAnalyzer {
             return;
         }
 
-        // Record the variable
+        // Record the variable, keeping whatever it displaces (see `retired`).
         let info = VariableInfo::new(name.clone(), span, is_const, self.scope_depth);
-        self.variables.insert(name.clone(), info);
+        if let Some(previous) = self.variables.insert(name.clone(), info) {
+            if previous.declaration_span != span {
+                self.retired.push(previous);
+            }
+        }
 
         // Add to current scope set
         if let Some(scope_set) = self.current_scope_vars.last_mut() {
@@ -461,6 +476,13 @@ impl VariableAnalyzer {
                         loop_stmt.span,
                         false,
                     );
+                }
+                // `@ (k, v):pares` declares every name its pattern binds, the
+                // same way a single iterator name is declared.
+                if let Some(pattern) = &loop_stmt.iterator_pattern {
+                    for name in pattern.bound_names() {
+                        self.declare_variable(name, loop_stmt.span, false);
+                    }
                 }
 
                 // Analyze loop body statements (don't use analyze_block to avoid double scope entry)
@@ -893,15 +915,26 @@ impl VariableAnalyzer {
             // Format expressions
             Expr::Format(op) => {
                 self.analyze_expr(&op.expr);
+                if let Some(p) = &op.precision {
+                    if let zymbol_ast::Precision::Dynamic(e) = p.precision() {
+                        self.analyze_expr(e);
+                    }
+                }
             }
 
             // Precision expressions
             Expr::Round(op) => {
                 self.analyze_expr(&op.expr);
+                if let zymbol_ast::Precision::Dynamic(e) = &op.precision {
+                    self.analyze_expr(e);
+                }
             }
 
             Expr::Trunc(op) => {
                 self.analyze_expr(&op.expr);
+                if let zymbol_ast::Precision::Dynamic(e) = &op.precision {
+                    self.analyze_expr(e);
+                }
             }
 
             Expr::Literal(lit) => {
@@ -1007,8 +1040,23 @@ impl VariableAnalyzer {
 
     /// Generate diagnostics for all unused variables
     fn generate_diagnostics(&mut self) {
-        let mut vars: Vec<&VariableInfo> = self.variables.values().collect();
-        vars.sort_by_key(|v| (v.declaration_span.start.line, v.declaration_span.start.column));
+        let mut vars: Vec<&VariableInfo> =
+            self.variables.values().chain(self.retired.iter()).collect();
+        // The name breaks the tie, and it has to: `self.variables` is a HashMap,
+        // whose iteration order Rust randomizes per process, and `sort_by_key`
+        // is stable — so any two variables sharing a position kept that random
+        // order and the warnings came out shuffled between runs of the SAME
+        // file. Positions collide whenever one statement declares several
+        // names: `(a, b, c) = t9` gives all three the span of the statement.
+        //
+        // Nothing in the corpus goldens captures a warning order, so this was
+        // invisible there; it surfaced in the formatter's P3 property, which
+        // compares `2>&1` and was intermittently blaming `fmt` for a shuffle it
+        // had not caused.
+        vars.sort_by(|a, b| {
+            (a.declaration_span.start.line, a.declaration_span.start.column, &a.name)
+                .cmp(&(b.declaration_span.start.line, b.declaration_span.start.column, &b.name))
+        });
         for var_info in vars {
             // Skip underscore-prefixed variables (intentionally unused)
             if var_info.name.starts_with('_') {

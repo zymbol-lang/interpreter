@@ -4,7 +4,7 @@
 <# std/json => json
 
 // build the request body from a Zymbol value
-payload = json::encode((user: "ada", score: 42))
+payload = json::encode(#(user: "ada", score: 42))
 >> "Sending: " payload ¶
 
 resp = json::decode(net::post_json("https://httpbin.org/post", payload))

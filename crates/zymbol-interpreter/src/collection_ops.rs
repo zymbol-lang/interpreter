@@ -24,6 +24,30 @@ use zymbol_ast::{
 };
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
+use std::rc::Rc;
+
+/// The refusal of a positional address on a dictionary, in one place.
+///
+/// Decision 11 of `Divergente_ES/forma/README.md` withdrew `d[2]`, and the
+/// reasoning covers the whole family: in a mutable dictionary a position is not
+/// a stable address, because adding a key changes what sits at each one. There
+/// is no principled line between "the second key" and "the first two keys", and
+/// a positional *write* — `d[2]$~ v`, `d$-[2]` — is strictly worse than a
+/// positional read, since it corrupts data rather than returning the wrong one.
+///
+/// This is Python's position: `dict` has no indexing and no slicing. The slice
+/// has no key-based replacement and does not get one — "the first two keys" is
+/// not a question a dictionary should answer.
+///
+/// The POSITIONAL tuple keeps the whole family: there the index is the only
+/// address there is, and the size is fixed.
+pub(crate) fn dict_not_positional(op: &str, first_key: Option<&str>) -> String {
+    let k = first_key.unwrap_or("clave");
+    format!(
+        "a dictionary is addressed by key, not by position: `{}` has no meaning here\nhelp: use the key — d[\"{}\"], d[\"{}\"]$~ value, d$-[\"{}\"] — because adding a key changes what sits at each position",
+        op, k, k, k
+    )
+}
 
 impl<W: Write> Interpreter<W> {
     /// Evaluate collection length operator: collection$#
@@ -52,11 +76,11 @@ impl<W: Write> Interpreter<W> {
 
         match collection {
             Value::Array(mut arr) => {
-                arr.push(element);
+                Rc::make_mut(&mut arr).push(element);
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
-                tup.push(element);
+                Rc::make_mut(&mut tup).push(element);
                 Ok(Value::Tuple(tup))
             }
             Value::NamedTuple(_) => Err(RuntimeError::Generic {
@@ -89,6 +113,35 @@ impl<W: Write> Interpreter<W> {
         let collection = self.eval_expr(&op.collection)?;
         let index_value = self.eval_expr(&op.index)?;
 
+        // In a dictionary the ADDRESS is the key, so `$-[…]` — which already
+        // means "remove by address" for the array (`arr$-[1]`, by position) — is
+        // the same operator with the same sense (decision 9). That leaves
+        // `$- value` free to keep meaning "by value" in both collections.
+        if let (Value::NamedTuple(fields), Value::String(key)) =
+            (&collection, &index_value)
+        {
+            let key = key.clone();
+            let mut out: Vec<(String, Value)> = fields.to_vec();
+            match out.iter().position(|(k, _)| *k == key) {
+                Some(i) => { out.remove(i); }
+                None => {
+                    let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                    return Err(RuntimeError::Generic {
+                        message: crate::variables::missing_key_msg(&key, &available),
+                        span: op.span,
+                    });
+                }
+            }
+            return Ok(Value::named_tuple(out));
+        }
+
+        if let (Value::NamedTuple(fields), Value::Int(_)) = (&collection, &index_value) {
+            return Err(RuntimeError::Generic {
+                message: dict_not_positional("d$-[n]", fields.first().map(|(k, _)| k.as_str())),
+                span: op.span,
+            });
+        }
+
         // Extract index as integer
         let index = match index_value {
             Value::Int(n) => n,
@@ -119,7 +172,7 @@ impl<W: Write> Interpreter<W> {
                         span: op.span,
                     });
                 }
-                arr.remove(i as usize);
+                Rc::make_mut(&mut arr).remove(i as usize);
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
@@ -140,7 +193,7 @@ impl<W: Write> Interpreter<W> {
                         span: op.span,
                     });
                 }
-                tup.remove(i as usize);
+                Rc::make_mut(&mut tup).remove(i as usize);
                 Ok(Value::Tuple(tup))
             }
             Value::NamedTuple(mut fields) => {
@@ -161,7 +214,7 @@ impl<W: Write> Interpreter<W> {
                         span: op.span,
                     });
                 }
-                fields.remove(i as usize);
+                Rc::make_mut(&mut fields).remove(i as usize);
                 Ok(Value::NamedTuple(fields))
             }
             Value::String(s) => {
@@ -212,6 +265,25 @@ impl<W: Write> Interpreter<W> {
                 let found = tup.iter().any(|item| self.values_equal(item, &element));
                 Ok(Value::Bool(found))
             }
+            // On a DICTIONARY the question is about the KEY, which is what `in`
+            // asks in Python and in JS. Decision 10 makes reading an absent key
+            // an error, so this is what lets a dictionary built piece by piece be
+            // consulted at all — without it there is no way to ask before
+            // reading. Asking about a value is a different operation and would
+            // need its own sign.
+            Value::NamedTuple(ref fields) => {
+                let key = match &element {
+                    Value::String(s) => s.clone(),
+                    other => return Err(RuntimeError::Generic {
+                        message: format!(
+                            "a dictionary is asked about a key, so `$?` needs a String, got {:?}",
+                            other
+                        ),
+                        span: op.span,
+                    }),
+                };
+                Ok(Value::Bool(fields.iter().any(|(k, _)| *k == key)))
+            }
             Value::String(ref s) => {
                 // Check if string contains character or substring
                 match element {
@@ -249,7 +321,10 @@ impl<W: Write> Interpreter<W> {
         // Deep update path: arr[i>j>k]$~ val
         if let Expr::DeepIndex(di) = op.target.unwrap_group() {
             // Evaluate all step indices (ranges not supported for update)
-            let mut indices: Vec<i64> = Vec::with_capacity(di.path.steps.len());
+            // A step is an ordinary expression, and its VALUE says how to
+            // address: Int → position, String → dictionary key. Same rule as
+            // `d[clave]`, one level down.
+            let mut indices: Vec<Value> = Vec::with_capacity(di.path.steps.len());
             for step in &di.path.steps {
                 if step.range_end.is_some() {
                     return Err(RuntimeError::Generic {
@@ -258,9 +333,12 @@ impl<W: Write> Interpreter<W> {
                     });
                 }
                 match self.eval_expr(&step.index)? {
-                    Value::Int(n) => indices.push(n),
+                    v @ (Value::Int(_) | Value::String(_)) => indices.push(v),
                     other => return Err(RuntimeError::Generic {
-                        message: format!("deep update index must be integer, got {:?}", other),
+                        message: format!(
+                            "a navigation step is a position (Int) or a dictionary key (String), got {:?}",
+                            other
+                        ),
                         span: op.span,
                     }),
                 }
@@ -270,35 +348,49 @@ impl<W: Write> Interpreter<W> {
             return deep_update_value(root, &indices, new_val, op.span);
         }
 
-        // Single-level update path: arr[i]$~ val or tuple["campo"]$~ val
-        let index_expr = match op.target.unwrap_group() {
-            Expr::Index(idx) => idx,
+        // Single-level update path: arr[i]$~ val, d["k"]$~ val, or d.k$~ val.
+        //
+        // The dot is the same access as the bracket with a literal key — it is
+        // how COLLECTIONS.md spells reading a key that is an identifier — so it
+        // resolves to the very same String index and every rule below applies
+        // unchanged. Evaluation order is receiver, then index, then value, as
+        // it already was.
+        let (collection, index_value) = match op.target.unwrap_group() {
+            Expr::Index(idx) => {
+                let c = self.eval_expr(&idx.array)?;
+                let i = self.eval_expr(&idx.index)?;
+                (c, i)
+            }
+            Expr::MemberAccess(ma) if !ma.is_module_access => {
+                let c = self.eval_expr(&ma.object)?;
+                (c, Value::String(ma.field.clone()))
+            }
             _ => {
                 return Err(RuntimeError::Generic {
-                    message: "update operator ($~) requires an indexed expression like arr[i]$~ val or arr[i>j]$~ val"
+                    message: "update operator ($~) requires a place to write like arr[i]$~ val, arr[i>j]$~ val or d.key$~ val"
                         .to_string(),
                     span: op.span,
                 });
             }
         };
-
-        // Evaluate the collection, index, and new value
-        let collection = self.eval_expr(&index_expr.array)?;
-        let index_value = self.eval_expr(&index_expr.index)?;
         let new_value = self.eval_expr(&op.value)?;
 
         // Resolve 1-based or negative integer index to a 0-based usize.
-        let resolve_int = |index: i64, len: usize, span: zymbol_span::Span| -> Result<usize> {
+        // `container` names the thing that was too short, and the index-0 text
+        // carries the same parenthetical every other site carries: this local
+        // copy said "collection" and dropped the hint, so `a[0]$~ v` and `a[0]`
+        // answered differently in the same engine.
+        let resolve_int = |index: i64, len: usize, span: zymbol_span::Span, container: &str| -> Result<usize> {
             if index == 0 {
                 return Err(RuntimeError::Generic {
-                    message: "index 0 is invalid — Zymbol uses 1-based indexing".to_string(),
+                    message: "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)".to_string(),
                     span,
                 });
             }
             let i = if index < 0 { len as i64 + index } else { index - 1 };
             if i < 0 || i as usize >= len {
                 return Err(RuntimeError::Generic {
-                    message: format!("index out of bounds: index {} for collection of length {}", index, len),
+                    message: format!("{} index out of bounds: index {} for {} of length {}", container, index, container, len),
                     span,
                 });
             }
@@ -315,8 +407,8 @@ impl<W: Write> Interpreter<W> {
                     }),
                 };
                 let len = arr.len();
-                let i = resolve_int(index, len, op.span)?;
-                arr[i] = new_value;
+                let i = resolve_int(index, len, op.span, "array")?;
+                Rc::make_mut(&mut arr)[i] = new_value;
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
@@ -353,32 +445,45 @@ impl<W: Write> Interpreter<W> {
                     i
                 };
                 // Create a new tuple with the value updated (immutability)
-                tup[i] = new_value;
+                Rc::make_mut(&mut tup)[i] = new_value;
                 Ok(Value::Tuple(tup))
             }
             Value::NamedTuple(mut fields) => {
                 match index_value {
-                    Value::Int(n) => {
-                        let len = fields.len();
-                        let i = resolve_int(n, len, op.span)?;
-                        fields[i].1 = new_value;
-                        Ok(Value::NamedTuple(fields))
-                    }
+                    // A positional WRITE is strictly worse than a positional
+                    // read: it corrupts data rather than returning the wrong
+                    // value. `d[2]$~ v` is exactly the failure decision 11
+                    // describes — adding a key changes what sits at each
+                    // position — applied to a mutation.
+                    Value::Int(_) => Err(RuntimeError::Generic {
+                        message: dict_not_positional(
+                            "d[n]$~ value",
+                            fields.first().map(|(k, _)| k.as_str()),
+                        ),
+                        span: op.span,
+                    }),
                     Value::String(name) => {
-                        for (field_name, field_value) in &mut fields {
+                        for (field_name, field_value) in std::rc::Rc::make_mut(&mut fields) {
                             if *field_name == name {
                                 *field_value = new_value;
                                 return Ok(Value::NamedTuple(fields));
                             }
                         }
-                        let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
-                        Err(RuntimeError::Generic {
-                            message: format!(
-                                "named tuple has no field '{}'. Available: {}",
-                                name, available.join(", ")
-                            ),
-                            span: op.span,
-                        })
+                        // A key that is not there gets ADDED — `forma/diccionarios.zy`
+                        // § 3, and it is what `d[k] = v` does in Python.
+                        //
+                        // Note the contrast with the array, where decision 13
+                        // makes `arr[7]$~ v` fail on an absent element. The two
+                        // are not inconsistent: an array is addressed by
+                        // POSITION, so writing past the end would leave a hole,
+                        // and JavaScript's `<3 empty items>` is what that looks
+                        // like. A dictionary is addressed by KEY and has no
+                        // holes to leave.
+                        //
+                        // Without this, a JSON built piece by piece — the normal
+                        // case — could not be built at all.
+                        Rc::make_mut(&mut fields).push((name.clone(), new_value));
+                        Ok(Value::NamedTuple(fields))
                     }
                     _ => Err(RuntimeError::Generic {
                         message: format!(
@@ -391,8 +496,8 @@ impl<W: Write> Interpreter<W> {
             }
             _ => Err(RuntimeError::Generic {
                 message: format!(
-                    "cannot update {:?} - only arrays, tuples, and named tuples support $~",
-                    collection
+                    "$~ writes into a collection, and this is {}\nhelp: use a[1]$~ v on an array or tuple, d[\"key\"]$~ v on a #(…)",
+                    crate::base_type_symbol(&collection)
                 ),
                 span: op.span,
             }),
@@ -499,16 +604,19 @@ impl<W: Write> Interpreter<W> {
         match collection {
             Value::Array(arr) => {
                 let slice = arr[(start as usize)..(end as usize)].to_vec();
-                Ok(Value::Array(slice))
+                Ok(Value::array(slice))
             }
             Value::Tuple(tup) => {
                 let slice = tup[(start as usize)..(end as usize)].to_vec();
-                Ok(Value::Tuple(slice))
+                Ok(Value::tuple(slice))
             }
-            Value::NamedTuple(fields) => {
-                let slice = fields[(start as usize)..(end as usize)].to_vec();
-                Ok(Value::NamedTuple(slice))
-            }
+            // No key-based replacement, and it does not get one: "the first
+            // two keys" is not a question a dictionary should answer, which is
+            // why Python's `dict` has no slicing either.
+            Value::NamedTuple(fields) => Err(RuntimeError::Generic {
+                message: dict_not_positional("d$[a..b]", fields.first().map(|(k, _)| k.as_str())),
+                span: op.span,
+            }),
             Value::String(s) => {
                 // Convert string to chars, slice, then back to string
                 let chars: Vec<char> = s.chars().collect();
@@ -539,7 +647,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(arr) => {
                 let mut result = Vec::new();
 
-                for element in arr {
+                for element in crate::own_elements(arr) {
                     // Call lambda with element
                     let transformed = self.eval_lambda_call(
                         func.clone(),
@@ -549,7 +657,7 @@ impl<W: Write> Interpreter<W> {
                     result.push(transformed);
                 }
 
-                Ok(Value::Array(result))
+                Ok(Value::array(result))
             }
             _ => Err(RuntimeError::Generic {
                 message: format!("map requires array, got {:?}", collection),
@@ -577,7 +685,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(arr) => {
                 let mut result = Vec::new();
 
-                for element in arr {
+                for element in crate::own_elements(arr) {
                     // Call lambda with element
                     let keep = self.eval_lambda_call(
                         func.clone(),
@@ -598,7 +706,7 @@ impl<W: Write> Interpreter<W> {
                     }
                 }
 
-                Ok(Value::Array(result))
+                Ok(Value::array(result))
             }
             _ => Err(RuntimeError::Generic {
                 message: format!("filter requires array, got {:?}", collection),
@@ -638,7 +746,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(arr) => {
                 let mut accumulator = initial;
 
-                for element in arr {
+                for element in crate::own_elements(arr) {
                     // Call lambda with (accumulator, element)
                     accumulator = self.eval_lambda_call(
                         func.clone(),
@@ -686,17 +794,17 @@ impl<W: Write> Interpreter<W> {
                             )?;
                             let a_before_b = matches!(keep, Value::Bool(true));
                             if !a_before_b {
-                                items.swap(j, j + 1);
+                                Rc::make_mut(&mut items).swap(j, j + 1);
                             }
                         }
                     }
                 } else {
                     // Natural order
-                    items.sort_by(|a, b| {
+                    Rc::make_mut(&mut items).sort_by(|a, b| {
                         natural_cmp(a, b).unwrap_or(std::cmp::Ordering::Equal)
                     });
                     if !op.ascending {
-                        items.reverse();
+                        Rc::make_mut(&mut items).reverse();
                     }
                 }
 
@@ -738,7 +846,7 @@ impl<W: Write> Interpreter<W> {
                         span: op.span,
                     });
                 }
-                arr.insert(i, element);
+                Rc::make_mut(&mut arr).insert(i, element);
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
@@ -748,7 +856,7 @@ impl<W: Write> Interpreter<W> {
                         span: op.span,
                     });
                 }
-                tup.insert(i, element);
+                Rc::make_mut(&mut tup).insert(i, element);
                 Ok(Value::Tuple(tup))
             }
             Value::NamedTuple(_) => Err(RuntimeError::Generic {
@@ -794,19 +902,19 @@ impl<W: Write> Interpreter<W> {
         match collection {
             Value::Array(mut arr) => {
                 if let Some(pos) = arr.iter().position(|item| self.values_equal(item, &value)) {
-                    arr.remove(pos);
+                    Rc::make_mut(&mut arr).remove(pos);
                 }
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
                 if let Some(pos) = tup.iter().position(|item| self.values_equal(item, &value)) {
-                    tup.remove(pos);
+                    Rc::make_mut(&mut tup).remove(pos);
                 }
                 Ok(Value::Tuple(tup))
             }
             Value::NamedTuple(mut fields) => {
                 if let Some(pos) = fields.iter().position(|(_, v)| self.values_equal(v, &value)) {
-                    fields.remove(pos);
+                    Rc::make_mut(&mut fields).remove(pos);
                 }
                 Ok(Value::NamedTuple(fields))
             }
@@ -856,22 +964,22 @@ impl<W: Write> Interpreter<W> {
 
         match collection {
             Value::Array(arr) => {
-                let result: Vec<Value> = arr.into_iter()
+                let result: Vec<Value> = crate::own_elements(arr).into_iter()
                     .filter(|item| !self.values_equal(item, &value))
                     .collect();
-                Ok(Value::Array(result))
+                Ok(Value::array(result))
             }
             Value::Tuple(tup) => {
-                let result: Vec<Value> = tup.into_iter()
+                let result: Vec<Value> = crate::own_elements(tup).into_iter()
                     .filter(|item| !self.values_equal(item, &value))
                     .collect();
-                Ok(Value::Tuple(result))
+                Ok(Value::tuple(result))
             }
             Value::NamedTuple(fields) => {
-                let result: Vec<(String, Value)> = fields.into_iter()
+                let result: Vec<(String, Value)> = crate::own_fields(fields).into_iter()
                     .filter(|(_, v)| !self.values_equal(v, &value))
                     .collect();
-                Ok(Value::NamedTuple(result))
+                Ok(Value::named_tuple(result))
             }
             Value::String(s) => {
                 let result = match value {
@@ -971,9 +1079,13 @@ impl<W: Write> Interpreter<W> {
         }
 
         match collection {
-            Value::Array(mut arr) => { arr.drain(start..end); Ok(Value::Array(arr)) }
-            Value::Tuple(mut tup) => { tup.drain(start..end); Ok(Value::Tuple(tup)) }
-            Value::NamedTuple(mut fields) => { fields.drain(start..end); Ok(Value::NamedTuple(fields)) }
+            Value::Array(mut arr) => { Rc::make_mut(&mut arr).drain(start..end); Ok(Value::Array(arr)) }
+            Value::Tuple(mut tup) => { Rc::make_mut(&mut tup).drain(start..end); Ok(Value::Tuple(tup)) }
+            // Removing a RUN of keys by position: same family, same refusal.
+            Value::NamedTuple(fields) => Err(RuntimeError::Generic {
+                message: dict_not_positional("d$-[a..b]", fields.first().map(|(k, _)| k.as_str())),
+                span: op.span,
+            }),
             Value::String(s) => {
                 let mut chars: Vec<char> = s.chars().collect();
                 chars.drain(start..end);
@@ -997,7 +1109,7 @@ impl<W: Write> Interpreter<W> {
                     .filter(|(_, item)| self.values_equal(item, &value))
                     .map(|(i, _)| Value::Int((i + 1) as i64))
                     .collect();
-                Ok(Value::Array(indices))
+                Ok(Value::array(indices))
             }
             Value::Tuple(ref tup) => {
                 let indices: Vec<Value> = tup.iter()
@@ -1005,7 +1117,7 @@ impl<W: Write> Interpreter<W> {
                     .filter(|(_, item)| self.values_equal(item, &value))
                     .map(|(i, _)| Value::Int((i + 1) as i64))
                     .collect();
-                Ok(Value::Array(indices))
+                Ok(Value::array(indices))
             }
             Value::String(ref s) => {
                 let string_chars: Vec<char> = s.chars().collect();
@@ -1013,7 +1125,7 @@ impl<W: Write> Interpreter<W> {
                     Value::String(ref pattern) => {
                         let pattern_chars: Vec<char> = pattern.chars().collect();
                         if pattern_chars.is_empty() {
-                            return Ok(Value::Array(vec![]));
+                            return Ok(Value::array(vec![]));
                         }
                         let mut positions = Vec::new();
                         for i in 0..=(string_chars.len().saturating_sub(pattern_chars.len())) {
@@ -1040,7 +1152,7 @@ impl<W: Write> Interpreter<W> {
                         })
                     }
                 };
-                Ok(Value::Array(positions))
+                Ok(Value::array(positions))
             }
             _ => Err(RuntimeError::Generic {
                 message: format!(
@@ -1070,17 +1182,72 @@ fn natural_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 /// Called by eval_collection_update for `arr[i>j>k]$~ val`.
 fn deep_update_value(
     col: Value,
-    indices: &[i64],
+    indices: &[Value],
     new_val: Value,
     span: zymbol_span::Span,
 ) -> Result<Value> {
     if indices.is_empty() {
         return Ok(new_val);
     }
-    let idx = indices[0];
-    let sub = get_at_idx(&col, idx, span)?;
+    let idx = &indices[0];
+    let sub = get_at_step(&col, idx, span)?;
     let updated_sub = deep_update_value(sub, &indices[1..], new_val, span)?;
-    set_at_idx(col, idx, updated_sub, span)
+    set_at_step(col, idx, updated_sub, span)
+}
+
+/// Read the element a navigation step addresses: a key on a dictionary, a
+/// 1-based position on anything else.
+fn get_at_step(col: &Value, step: &Value, span: zymbol_span::Span) -> Result<Value> {
+    if let (Value::NamedTuple(fields), Value::String(key)) = (col, step) {
+        return match fields.iter().find(|(k, _)| k == key) {
+            Some((_, v)) => Ok(v.clone()),
+            None => {
+                let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                Err(RuntimeError::Generic {
+                    message: crate::variables::missing_key_msg(key, &available),
+                    span,
+                })
+            }
+        };
+    }
+    if let (Value::NamedTuple(fields), Value::Int(_)) = (col, step) {
+        return Err(RuntimeError::Generic {
+            message: dict_not_positional("d[n>…]", fields.first().map(|(k, _)| k.as_str())),
+            span,
+        });
+    }
+    match step {
+        Value::Int(n) => get_at_idx(col, *n, span),
+        other => Err(RuntimeError::Generic {
+            message: format!("a navigation step is a position or a key, got {:?}", other),
+            span,
+        }),
+    }
+}
+
+/// Replace the element a navigation step addresses. Adds the key when it is not
+/// there, exactly as the single-level `d["k"]$~ v` does.
+fn set_at_step(col: Value, step: &Value, new_val: Value, span: zymbol_span::Span) -> Result<Value> {
+    if let (Value::NamedTuple(mut fields), Value::String(key)) = (col.clone(), step) {
+        match Rc::make_mut(&mut fields).iter_mut().find(|(k, _)| k == key) {
+            Some(f) => f.1 = new_val,
+            None => Rc::make_mut(&mut fields).push((key.clone(), new_val)),
+        }
+        return Ok(Value::NamedTuple(fields));
+    }
+    if let (Value::NamedTuple(fields), Value::Int(_)) = (&col, step) {
+        return Err(RuntimeError::Generic {
+            message: dict_not_positional("d[n>…]$~ value", fields.first().map(|(k, _)| k.as_str())),
+            span,
+        });
+    }
+    match step {
+        Value::Int(n) => set_at_idx(col, *n, new_val, span),
+        other => Err(RuntimeError::Generic {
+            message: format!("a navigation step is a position or a key, got {:?}", other),
+            span,
+        }),
+    }
 }
 
 /// Read element at 1-based (or negative) integer index from any indexable Value.
@@ -1104,19 +1271,19 @@ fn set_at_idx(col: Value, index: i64, new_val: Value, span: zymbol_span::Span) -
         Value::Array(mut arr) => {
             let len = arr.len();
             let i = resolve_idx(index, len, span)?;
-            arr[i] = new_val;
+            Rc::make_mut(&mut arr)[i] = new_val;
             Ok(Value::Array(arr))
         }
         Value::Tuple(mut tup) => {
             let len = tup.len();
             let i = resolve_idx(index, len, span)?;
-            tup[i] = new_val;
+            Rc::make_mut(&mut tup)[i] = new_val;
             Ok(Value::Tuple(tup))
         }
         Value::NamedTuple(mut fields) => {
             let len = fields.len();
             let i = resolve_idx(index, len, span)?;
-            fields[i].1 = new_val;
+            Rc::make_mut(&mut fields)[i].1 = new_val;
             Ok(Value::NamedTuple(fields))
         }
         other => Err(RuntimeError::Generic {

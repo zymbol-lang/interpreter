@@ -1,8 +1,0 @@
-# json_es {
-    <# std/json => _json
-
-    #> {
-        _json::decode => decodificar
-        _json::encode => codificar
-    }
-}

@@ -1,9 +1,0 @@
-
-// Ejecutar calculator.zy y capturar el output
->> "Ejecutando calculator.zy..." ¶
-resultado = </ "./calculator.zy" />
-
->> "Output capturado:" ¶
->> resultado ¶
-
->> "Fin de la ejecución." ¶

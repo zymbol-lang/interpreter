@@ -50,6 +50,29 @@ pub enum ZymbolType {
     Any,
 }
 
+/// The name of the CONSULTING `$` operator this expression is, or `None`.
+///
+/// The two halves of the family are in COLLECTIONS.md § 1: the editing half
+/// modifies when its result is discarded (decision 12), and the consulting half
+/// always builds, so discarding it is dead code (decision 19). This is the
+/// consulting half, and the reason it is a list rather than a negation: a new
+/// operator has to be classified deliberately, not fall into a default.
+fn consulting_op_name(expr: &Expr) -> Option<&'static str> {
+    Some(match expr {
+        Expr::CollectionLength(_) => "$#",
+        Expr::CollectionContains(_) => "$?",
+        Expr::CollectionFindAll(_) => "$??",
+        Expr::CollectionSlice(_) => "$[..]",
+        Expr::CollectionMap(_) => "$>",
+        Expr::CollectionFilter(_) => "$|",
+        Expr::CollectionReduce(_) => "$<",
+        Expr::StringSplit(_) => "$/",
+        Expr::StringRepeat(_) => "$*",
+        Expr::StringReplace(_) => "$~~",
+        _ => return None,
+    })
+}
+
 impl ZymbolType {
     /// Get a human-readable name for this type
     pub fn name(&self) -> String {
@@ -103,6 +126,18 @@ impl ZymbolType {
             (a, b) => a == b,
         }
     }
+}
+
+/// What a bracket means on a given receiver.
+///
+/// Two operations share one sign: `arr[3]` reaches a position and `d["k"]`
+/// reaches a key. They are told apart by the receiver, never by the index.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum IndexKind {
+    /// Array, string or positional tuple — the index is an Int.
+    Position,
+    /// Dictionary — the index is a String key.
+    Key,
 }
 
 /// Type constraint for inference
@@ -285,13 +320,121 @@ pub struct TypeChecker {
     /// Import aliases registered in the current program (e.g. `u` from `<# ./utils <= u`)
     /// These are valid identifiers that resolve to modules, not regular variables.
     module_aliases: HashSet<String>,
+    /// Parameter counts of the functions each alias can reach, so that
+    /// `m::f(a, b)` is checked the same way `f(a, b)` already was. Empty
+    /// unless a caller supplies it with [`Self::set_module_arities`] — a
+    /// qualified call is left unchecked rather than guessed at.
+    module_arities: crate::call_arity::AliasArities,
+    /// Which slots of each module function are `<~` outputs, so `m::f(x<~)` is
+    /// checked like `f(x<~)`. Supplied beside the arities; empty means unchecked.
+    module_out_slots: crate::call_arity::AliasOutSlots,
     /// Nesting depth of @ loop bodies currently being analyzed.
     /// Used to suppress "redundant °" warnings inside loops, where every iteration
     /// re-executes the same statement (°x is needed on every iteration, not just the first).
     loop_depth: u32,
+    /// Range bounds an enclosing `?` has already compared against something, so
+    /// the "direction decided at runtime" warning stays quiet on the loops that
+    /// are guarded correctly. Keys come from [`Self::expr_key`].
+    guarded_bounds: Vec<String>,
+    /// During parameter-constraint collection only: names in the function body
+    /// that are bound to a collection literal, and which of the two things the
+    /// bracket then means on them.
+    ///
+    /// The bracket addresses a POSITION in an array, a string or a positional
+    /// tuple, and a KEY in a dictionary, so `f(k) { <~ d[k] }` says nothing
+    /// about `k` until the receiver is known. Reading it out of the type
+    /// environment is not possible here: locals are all `Any` at this point.
+    /// Populated per function and cleared with the constraints.
+    index_receiver_kinds: HashMap<String, IndexKind>,
+    /// Which parameter slots of each function are `<~` outputs. A `<~` slot
+    /// promises the change travels back to the caller, so the argument has to be
+    /// something that can be written to (REFERENCE.md L34).
+    output_slots: HashMap<String, Vec<usize>>,
 }
 
 impl TypeChecker {
+    /// Note which of `func`'s parameter slots are `<~` outputs, so that calls to
+    /// it can be checked (REFERENCE.md L34). Functions with no output parameter
+    /// — nearly all of them — record nothing.
+    fn record_output_slots(&mut self, func: &zymbol_ast::FunctionDecl) {
+        let slots: Vec<usize> = func.parameters.iter().enumerate()
+            .filter(|(_, p)| matches!(p.kind, zymbol_ast::ParameterKind::Output))
+            .map(|(i, _)| i)
+            .collect();
+        if !slots.is_empty() {
+            self.output_slots.insert(func.name.clone(), slots);
+        }
+    }
+
+    /// A `<~` parameter sends its change back to the caller's variable. When the
+    /// argument is not a name there is nothing to send it back to, and the write
+    /// is silently lost — so the call is rejected instead (REFERENCE.md L34).
+    fn check_output_arguments(&mut self, name: &str, arguments: &[Expr]) {
+        let Some(slots) = self.output_slots.get(name).cloned() else { return };
+        for i in slots {
+            let Some(arg) = arguments.get(i) else { continue };
+            if matches!(arg.unwrap_group(), Expr::Identifier(_)) {
+                continue;
+            }
+            self.errors.push(
+                Diagnostic::error(format!(
+                    "argument {} of '{}' is an output parameter '<~' and needs a variable, \
+                     not an expression",
+                    i + 1, name
+                ))
+                .with_span(arg.span())
+                .with_help(
+                    "'<~' writes the change back into the caller's variable; there is \
+                     nowhere to write an expression back to — assign it to a variable first"
+                )
+            );
+        }
+    }
+
+    /// The call site must spell `<~` on exactly the arguments the callee declares
+    /// as outputs (REFERENCE.md L36). The mark is redundant with the signature on
+    /// purpose: it states the same contract where the consequence lands, so a
+    /// reader can see which arguments come back changed without opening the
+    /// function. Being required is what keeps it from drifting out of date.
+    ///
+    /// `slots` is `None` when the callee's signature is not known — a qualified
+    /// call into a module that could not be resolved — and the call is then left
+    /// unchecked rather than guessed at.
+    fn check_out_marks(
+        &mut self,
+        name: &str,
+        slots: Option<&[usize]>,
+        call: &zymbol_ast::FunctionCallExpr,
+    ) {
+        let Some(slots) = slots else { return };
+        for (i, arg) in call.arguments.iter().enumerate() {
+            let declared = slots.contains(&i);
+            let marked = call.out_args.contains(&i);
+            if declared == marked {
+                continue;
+            }
+            let d = if declared {
+                Diagnostic::error(format!(
+                    "argument {} of '{}' is an output parameter and must be marked '<~' \
+                     at the call site",
+                    i + 1, name
+                ))
+                .with_help(
+                    "write the argument as 'name<~' — the mark says the value comes back \
+                     changed, so a reader does not have to open the function to find out"
+                )
+            } else {
+                Diagnostic::error(format!(
+                    "argument {} of '{}' is marked '<~' but the function does not declare \
+                     it as an output parameter",
+                    i + 1, name
+                ))
+                .with_help("drop the '<~', or declare the parameter as an output in the signature")
+            };
+            self.errors.push(d.with_span(arg.span()));
+        }
+    }
+
     /// Create a new type checker
     pub fn new() -> Self {
         Self {
@@ -299,8 +442,79 @@ impl TypeChecker {
             errors: Vec::new(),
             warnings: Vec::new(),
             module_aliases: HashSet::new(),
+            module_arities: crate::call_arity::AliasArities::new(),
+            module_out_slots: crate::call_arity::AliasOutSlots::new(),
             loop_depth: 0,
+            guarded_bounds: Vec::new(),
+            index_receiver_kinds: HashMap::new(),
+            output_slots: HashMap::new(),
         }
+    }
+
+    /// A stable key for the expressions that show up as range bounds, so a
+    /// guard can be matched against the bound it protects. `None` for anything
+    /// more complex than a name, a field, an index or a `$#` over one of those
+    /// — an unrecognized shape simply is not treated as guarded.
+    fn expr_key(expr: &Expr) -> Option<String> {
+        match expr.unwrap_group() {
+            Expr::Identifier(id) => Some(id.name.clone()),
+            Expr::CollectionLength(op) => {
+                Some(format!("{}$#", Self::expr_key(&op.collection)?))
+            }
+            Expr::MemberAccess(m) => {
+                Some(format!("{}.{}", Self::expr_key(&m.object)?, m.field))
+            }
+            Expr::Index(ix) => Some(format!(
+                "{}[{}]",
+                Self::expr_key(&ix.array)?,
+                Self::expr_key(&ix.index)
+                    .or_else(|| match ix.index.unwrap_group() {
+                        Expr::Literal(lit) => Some(format!("{:?}", lit.value)),
+                        _ => None,
+                    })?
+            )),
+            _ => None,
+        }
+    }
+
+    /// The range bounds a condition vouches for: both sides of any comparison
+    /// it contains, including the operands of `&&`/`||` chains.
+    fn guarded_bounds(cond: &Expr) -> Vec<String> {
+        let mut out = Vec::new();
+        fn walk(e: &Expr, out: &mut Vec<String>) {
+            if let Expr::Binary(b) = e.unwrap_group() {
+                match b.op {
+                    BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le
+                    | BinaryOp::Ge | BinaryOp::Eq | BinaryOp::Neq => {
+                        out.extend(TypeChecker::expr_key(&b.left));
+                        out.extend(TypeChecker::expr_key(&b.right));
+                    }
+                    BinaryOp::And | BinaryOp::Or => {
+                        walk(&b.left, out);
+                        walk(&b.right, out);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        walk(cond, &mut out);
+        out
+    }
+
+    /// Supply the parameter counts behind each import alias, enabling the arity
+    /// check on `alias::func(...)` calls.
+    ///
+    /// Build the table with [`module_arities`](crate::module_arities) to read
+    /// modules from disk, or assemble it from editor buffers — the LSP checks
+    /// what is on screen, which may not be what is saved.
+    /// Supply the output-parameter slots behind each import alias, enabling the
+    /// call-site mark check on `m::f(x<~)` (REFERENCE.md L36).
+    pub fn set_module_out_slots(&mut self, slots: crate::call_arity::AliasOutSlots) {
+        self.module_out_slots = slots;
+    }
+
+    pub fn set_module_arities(&mut self, arities: crate::call_arity::AliasArities) {
+        self.module_arities = arities;
     }
 
     /// Check a program and return all diagnostics (errors + warnings)
@@ -320,6 +534,7 @@ impl TypeChecker {
                 let param_types: Vec<ZymbolType> = func.parameters.iter()
                     .map(|_| ZymbolType::Any)
                     .collect();
+                self.record_output_slots(func);
                 self.env.define_function(&func.name, param_types, ZymbolType::Any);
             }
         }
@@ -337,10 +552,131 @@ impl TypeChecker {
             self.check_statement(stmt);
         }
 
+        // GAP-ZYB-006: a `<~` at the top level ends the program, and its value
+        // is the exit status the operating system receives — a number, and
+        // nothing else. Caught here rather than at run time because it is
+        // decidable without running, and because the branch that exits is
+        // typically the branch that runs least.
+        for stmt in &program.statements {
+            self.check_top_level_exit(stmt);
+        }
+
         // Return all diagnostics combined
         let mut all = std::mem::take(&mut self.errors);
         all.extend(std::mem::take(&mut self.warnings));
         all
+    }
+
+    /// Walk the statements a top-level `<~` can be reached from — everything
+    /// except a function body, which returns to its caller and not to the
+    /// operating system — and require its value to be a whole number.
+    fn check_top_level_exit(&mut self, stmt: &Statement) {
+        match stmt {
+            // A function's `<~` returns to whoever called the function.
+            Statement::FunctionDecl(_) => {}
+            Statement::Return(ret) => {
+                let Some(value) = &ret.value else { return };
+                let t = self.infer_expr(value);
+                if !matches!(t, ZymbolType::Int | ZymbolType::Any) {
+                    self.errors.push(
+                        Diagnostic::error(format!(
+                            "a top-level `<~` ends the program, so its value is the exit status and must be a whole number — this one is {}",
+                            t.name()
+                        ))
+                        .with_span(ret.span)
+                        .with_help(
+                            "`<~ 0` for success and `<~ 1` (or another number) for failure; \
+                             to print something before leaving, use `>>` on the line above",
+                        ),
+                    );
+                }
+            }
+            Statement::If(if_stmt) => {
+                for st in &if_stmt.then_block.statements {
+                    self.check_top_level_exit(st);
+                }
+                for branch in &if_stmt.else_if_branches {
+                    for st in &branch.block.statements {
+                        self.check_top_level_exit(st);
+                    }
+                }
+                if let Some(block) = &if_stmt.else_block {
+                    for st in &block.statements {
+                        self.check_top_level_exit(st);
+                    }
+                }
+            }
+            Statement::Loop(loop_stmt) => {
+                for st in &loop_stmt.body.statements {
+                    self.check_top_level_exit(st);
+                }
+            }
+            Statement::Try(try_stmt) => {
+                for st in &try_stmt.try_block.statements {
+                    self.check_top_level_exit(st);
+                }
+                for clause in &try_stmt.catch_clauses {
+                    for st in &clause.block.statements {
+                        self.check_top_level_exit(st);
+                    }
+                }
+                if let Some(fin) = &try_stmt.finally_clause {
+                    for st in &fin.block.statements {
+                        self.check_top_level_exit(st);
+                    }
+                }
+            }
+            Statement::Match(m) => {
+                for case in &m.cases {
+                    if let Some(block) = &case.block {
+                        for st in &block.statements {
+                            self.check_top_level_exit(st);
+                        }
+                    }
+                }
+            }
+            Statement::TuiBlock(tb) => {
+                for st in &tb.body.statements {
+                    self.check_top_level_exit(st);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Does this value fit as an element of this collection? (L46)
+    ///
+    /// One place for the whole edit family, because it had been one place for
+    /// one member of it: decision 15 says `[…]` is homogeneous **and gets
+    /// checked**, and until v0.0.9 the check ran on the literal and on `$+`
+    /// only. `$++`, `$+[i]` and `[i]$~` each turned a `[…]` heterogeneous with
+    /// nobody declaring it, in all three engines, and `#?` then answered `##[`
+    /// — a list nobody wrote.
+    ///
+    /// Says nothing where it knows nothing: a collection that is not a
+    /// statically known array, or an element whose type could not be inferred,
+    /// passes. `#[…]` declares its mix and is `Array(Any)`, which every type is
+    /// compatible with, so the escape hatch keeps working.
+    fn check_element_fits(
+        &mut self,
+        verb: &str,
+        collection_type: &ZymbolType,
+        element_type: &ZymbolType,
+        span: zymbol_span::Span,
+    ) {
+        let ZymbolType::Array(elem_type) = collection_type else { return };
+        if self.types_compatible(element_type, elem_type) {
+            return;
+        }
+        self.errors.push(
+            Diagnostic::error(format!(
+                "cannot {verb} {} to {}: type mismatch",
+                element_type.name(),
+                collection_type.name()
+            ))
+            .with_span(span)
+            .with_help(format!("expected element of type {}", elem_type.name())),
+        );
     }
 
     /// Check a program and return only errors (fatal type errors)
@@ -360,6 +696,7 @@ impl TypeChecker {
                 let param_types: Vec<ZymbolType> = func.parameters.iter()
                     .map(|_| ZymbolType::Any)
                     .collect();
+                self.record_output_slots(func);
                 self.env.define_function(&func.name, param_types, ZymbolType::Any);
             }
         }
@@ -375,6 +712,13 @@ impl TypeChecker {
         // Third pass: check statements with inferred types
         for stmt in &program.statements {
             self.check_statement(stmt);
+        }
+
+        // GAP-ZYB-006 — see `check`. Both entry points run it: `zymbol check`
+        // calls this one, and a finding only the other reports is a finding
+        // the command line never shows.
+        for stmt in &program.statements {
+            self.check_top_level_exit(stmt);
         }
 
         std::mem::take(&mut self.errors)
@@ -558,12 +902,18 @@ impl TypeChecker {
                     );
                 }
 
-                // Check then block
+                // Check then block. A comparison in the condition guards the
+                // range bounds it names for the whole block — `? n >= 2 { @ i:2..n … }`
+                // is the correct way to write that loop and must not be warned about.
+                let guarded = Self::guarded_bounds(&if_stmt.condition);
+                let guard_depth = self.guarded_bounds.len();
+                self.guarded_bounds.extend(guarded);
                 self.env.enter_scope();
                 for stmt in &if_stmt.then_block.statements {
                     self.check_statement(stmt);
                 }
                 self.env.exit_scope();
+                self.guarded_bounds.truncate(guard_depth);
 
                 // Check else-if branches
                 for branch in &if_stmt.else_if_branches {
@@ -604,14 +954,46 @@ impl TypeChecker {
                             condition.as_ref(),
                             Expr::Literal(lit) if matches!(lit.value, zymbol_common::Literal::Int(_))
                         );
+                    // A specifier is a count (Int) or a condition (Bool); every
+                    // engine refuses anything else at run time. Warned rather
+                    // than errored because the inference behind `cond_type` is
+                    // approximate, and a false positive here would reject code
+                    // that runs correctly.
                     if !is_times_loop && !matches!(cond_type, ZymbolType::Bool | ZymbolType::Any | ZymbolType::Unknown) {
                         self.warnings.push(
                             Diagnostic::warning(format!(
-                                "loop condition should be Bool, got {}",
+                                "loop expects a count or a condition, got {}",
                                 cond_type.name()
                             ))
                             .with_span(condition.span())
                         );
+                    }
+                }
+
+                // A range infers its direction from its endpoints, so `i:2..n`
+                // is not an empty range when n is 1 — it counts down, from 2 to
+                // 1, which is how "walk the rest of the list" walks off the
+                // front of a one-element list. Say so when the direction cannot
+                // be read off the source.
+                if let Some(iterable) = &loop_stmt.iterable {
+                    if let Expr::Range(range) = iterable.unwrap_group() {
+                        let is_int_literal = |e: &Expr| matches!(
+                            e.unwrap_group(),
+                            Expr::Literal(lit) if matches!(lit.value, zymbol_common::Literal::Int(_))
+                        );
+                        let guarded = Self::expr_key(&range.end)
+                            .is_some_and(|k| self.guarded_bounds.contains(&k));
+                        if !guarded && !(is_int_literal(&range.start) && is_int_literal(&range.end)) {
+                            self.warnings.push(
+                                Diagnostic::warning(
+                                    "range direction is decided at runtime: if the end \
+                                     turns out to be lower than the start, this loop counts \
+                                     down instead of not running. Guard the empty case."
+                                        .to_string()
+                                )
+                                .with_span(range.span)
+                            );
+                        }
                     }
                 }
 
@@ -652,6 +1034,18 @@ impl TypeChecker {
                         ZymbolType::Int // Range loop
                     };
                     self.env.define_var(iter_var, iter_type);
+                }
+                // `@ (k, v):pares` defines every name its pattern binds. The
+                // element types are not known statically — the pattern may sit
+                // over a tuple of mixed types, which is what a tuple is for — so
+                // each name is `Any`, exactly as `(k, v) = par` leaves them.
+                if let Some(pattern) = &loop_stmt.iterator_pattern {
+                    if let Some(iterable) = &loop_stmt.iterable {
+                        let _ = self.infer_expr(iterable);
+                    }
+                    for name in pattern.bound_names() {
+                        self.env.define_var(&name, ZymbolType::Any);
+                    }
                 }
 
                 self.loop_depth += 1;
@@ -722,6 +1116,50 @@ impl TypeChecker {
             }
 
             Statement::Expr(expr_stmt) => {
+                // A statement that is only a NAME does nothing, and saying so
+                // matters for a reason that is not tidiness (ERROR-ZYB-001).
+                //
+                // It is the mechanism that made BUG-ZYB-002 silent: when the
+                // parse of `d[k]$~ "" v` split in two, the remainder landed in
+                // a statement with no effect and vanished. A warning would have
+                // shown it where it was written instead of three modules later.
+                //
+                // Only a bare identifier: an expression with a call in it may be
+                // there for its effect, and `arr$+ 4` as a statement is the
+                // documented way to modify in place (the rule of the result).
+                if let Expr::Identifier(ident) = expr_stmt.expr.unwrap_group() {
+                    if !ident.hot {
+                        self.warnings.push(
+                            Diagnostic::warning(format!(
+                                "this statement does nothing: '{}' is read and discarded",
+                                ident.name
+                            ))
+                            .with_span(ident.span)
+                            .with_help("remove it, or use it — `>> name ¶` to print it"),
+                        );
+                    }
+                }
+                // Decision 19, the other half of the rule of the result: the
+                // CONSULTING `$` operators always build and never modify, so
+                // discarding one is dead code. COLLECTIONS.md § 1 says so and
+                // nothing enforced it — `s$~~["a":"X"]` on its own line ran and
+                // changed nothing, in all three engines, with no diagnostic.
+                //
+                // The operator itself is pure, so this is sound even when a
+                // call sits inside it: the call's effect still happens, and the
+                // `$#` wrapped around it is still pointless. The warning points
+                // at the operator, not at the call.
+                if let Some(op) = consulting_op_name(expr_stmt.expr.unwrap_group()) {
+                    self.warnings.push(
+                        Diagnostic::warning(format!(
+                            "this statement does nothing: `{op}` builds a value and it is discarded"
+                        ))
+                        .with_span(expr_stmt.expr.span())
+                        .with_help(
+                            "remove it, or use the result — assign it, print it, or pass it on",
+                        ),
+                    );
+                }
                 self.infer_expr(&expr_stmt.expr);
             }
 
@@ -798,8 +1236,15 @@ impl TypeChecker {
             self.env.define_var(&param.name, ZymbolType::Any);
         }
 
+        // Note which locals are bound to a collection literal before reading
+        // the body: a bracket's meaning is decided by its receiver, and the
+        // type environment has every local at `Any` at this point.
+        self.index_receiver_kinds.clear();
+        self.collect_index_receiver_kinds(&func.body);
+
         // Collect constraints from body usage
         self.collect_constraints_from_block(&func.body, &func.parameters.iter().map(|p| p.name.clone()).collect::<Vec<_>>());
+        self.index_receiver_kinds.clear();
 
         // Define local variables (non-parameter assignments) in scope so return type
         // inference can resolve them. Without this, `<~ local_var` produces a false
@@ -942,15 +1387,28 @@ impl TypeChecker {
                 let right_param = self.get_param_name(&binary.right, params);
 
                 match binary.op {
-                    // Juxtaposition constrains parameters to be string-compatible
-                    BinaryOp::Concat => {
-                        if let Some(param) = left_param {
-                            self.env.add_param_constraint(&param, TypeConstraint::CompatibleWith(ZymbolType::String));
-                        }
-                        if let Some(param) = right_param {
-                            self.env.add_param_constraint(&param, TypeConstraint::CompatibleWith(ZymbolType::String));
-                        }
-                    }
+                    // Juxtaposition constrains NOTHING. Every value has a
+                    // string form — the one `>>` prints — so a parameter that
+                    // is juxtaposed can still be an Int, a Float, a Bool, a
+                    // Char, an array, a dictionary or an error.
+                    //
+                    // This used to record `CompatibleWith(String)`, which
+                    // resolved the parameter to String and then rejected every
+                    // other type at the call site:
+                    //
+                    //     g(b) { <~ "[" b "]" }
+                    //     >> g(42) ¶      // error: argument 1 has type Int
+                    //
+                    // while `>> "[" n "]" ¶` with the same 42 printed `[42]`
+                    // one line away. Both Rust engines refused a correct
+                    // program and the browser engine ran it — a divergence
+                    // that rejected, rather than mis-ran, so no golden could
+                    // see it. Any function that builds a message out of a
+                    // number was affected, which is most functions that build
+                    // a message. (The report reached this through
+                    // GAP-ZYB-007, which blamed juxtaposition in call
+                    // arguments; that part was never true.)
+                    BinaryOp::Concat => {}
                     // Arithmetic operations constrain parameters to be numeric
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div |
                     BinaryOp::Mod | BinaryOp::Pow => {
@@ -970,9 +1428,33 @@ impl TypeChecker {
                             self.env.add_param_constraint(&param, TypeConstraint::Boolean);
                         }
                     }
-                    // Comparison with known type constrains parameter
-                    BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Lt | BinaryOp::Le |
-                    BinaryOp::Gt | BinaryOp::Ge => {
+                    // EQUALITY constrains nothing, for the same reason
+                    // juxtaposition does not: `==` never coerces. `"5" == 5` is
+                    // a legal expression that answers `#0`, and GUIDE.md says so
+                    // in as many words, so a parameter compared against a known
+                    // type can still be any type at all.
+                    //
+                    // This used to record `CompatibleWith`, and the result was
+                    // the same shape as ERROR-ZYB-005:
+                    //
+                    //     es_cinco(v) { <~ v == 5 }
+                    //     >> es_cinco("hola") ¶   // error: argument 1 has type String
+                    //
+                    // while `>> ("hola" == 5) ¶` one line away printed `#0`.
+                    // Both Rust engines refused a correct program and the
+                    // browser engine ran it — a divergence that REJECTS rather
+                    // than mis-runs, so neither a golden nor `zyq consensus`
+                    // could see it.
+                    //
+                    // It became unavoidable with `##_`: the predicate everybody
+                    // writes is `es_nulo(v) { <~ v == ##_ }`, and the constraint
+                    // made it callable only with something already Unit —
+                    // useless for the one question it exists to answer.
+                    BinaryOp::Eq | BinaryOp::Neq => {}
+                    // ORDERING keeps the constraint: `<`, `>`, `<=` and `>=` do
+                    // error at run time when a number meets text that is not a
+                    // number, so the analyzer is right to say so first.
+                    BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
                         if let Some(param) = &left_param {
                             let right_type = self.infer_expr_for_constraint(&binary.right, params);
                             if !matches!(right_type, ZymbolType::Any | ZymbolType::Unknown) {
@@ -1029,9 +1511,27 @@ impl TypeChecker {
                 }
             }
             Expr::Index(index) => {
-                // If indexing with a param, it should be Int
+                // The bracket addresses two different things, and which one
+                // decides the index type. A POSITION — in an array, a string or
+                // a positional tuple — is an Int; a KEY in a dictionary is a
+                // String. So the constraint follows the receiver, and when the
+                // receiver's type is not known here, nothing is constrained.
+                //
+                // It used to be `Exact(Int)` unconditionally, which predates the
+                // dictionary having a computed key at all. The effect was that
+                // `f(k) { <~ d[k] }` — the shape of every table lookup — had its
+                // parameter declared an Int and became uncallable with the very
+                // key it was written for, while both engines ran it correctly.
+                // Under-constraining is the safe direction: `infer_expr` checks
+                // the index against the receiver at the use site anyway.
                 if let Some(param) = self.get_param_name(&index.index, params) {
-                    self.env.add_param_constraint(&param, TypeConstraint::Exact(ZymbolType::Int));
+                    if let Some(kind) = self.index_kind_of(&index.array, params) {
+                        let ty = match kind {
+                            IndexKind::Position => ZymbolType::Int,
+                            IndexKind::Key => ZymbolType::String,
+                        };
+                        self.env.add_param_constraint(&param, TypeConstraint::Exact(ty));
+                    }
                 }
                 self.collect_constraints_from_expr(&index.array, params);
                 self.collect_constraints_from_expr(&index.index, params);
@@ -1050,6 +1550,81 @@ impl TypeChecker {
                 self.collect_constraints_from_expr(&op.element, params);
             }
             _ => {}
+        }
+    }
+
+    /// Which of the two bracket operations this receiver takes, when that can
+    /// be told during constraint collection. `None` means it cannot, and
+    /// nothing is constrained — an unknown receiver says nothing about its
+    /// index, and `infer_expr` still checks the pair at the use site.
+    fn index_kind_of(&self, receiver: &Expr, params: &[String]) -> Option<IndexKind> {
+        match receiver.unwrap_group() {
+            Expr::ArrayLiteral(_) | Expr::Tuple(_) => Some(IndexKind::Position),
+            Expr::NamedTuple(_) => Some(IndexKind::Key),
+            Expr::Literal(lit) => match lit.value {
+                Literal::String(_) | Literal::InterpolatedString(_) => Some(IndexKind::Position),
+                _ => None,
+            },
+            // A parameter is unknown by definition — it is what is being
+            // inferred — so it never decides the kind for another parameter.
+            Expr::Identifier(id) if !params.contains(&id.name) => {
+                self.index_receiver_kinds.get(&id.name).copied().or_else(|| {
+                    match self.env.lookup_var(&id.name) {
+                        Some(ZymbolType::Array(_))
+                        | Some(ZymbolType::String)
+                        | Some(ZymbolType::Tuple(_)) => Some(IndexKind::Position),
+                        Some(ZymbolType::NamedTuple(_)) => Some(IndexKind::Key),
+                        _ => None,
+                    }
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Record which body-local names are bound to a collection literal, so a
+    /// bracket on one of them can say what its index means. Recurses into the
+    /// blocks a local can be written in; a name bound twice to different kinds
+    /// is dropped rather than guessed at.
+    fn collect_index_receiver_kinds(&mut self, block: &Block) {
+        for stmt in &block.statements {
+            match stmt {
+                Statement::Assignment(assign) => {
+                    let kind = match assign.value.unwrap_group() {
+                        Expr::ArrayLiteral(_) | Expr::Tuple(_) => Some(IndexKind::Position),
+                        Expr::NamedTuple(_) => Some(IndexKind::Key),
+                        Expr::Literal(lit) => match lit.value {
+                            Literal::String(_) | Literal::InterpolatedString(_) => {
+                                Some(IndexKind::Position)
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    match (kind, self.index_receiver_kinds.get(&assign.name).copied()) {
+                        (Some(k), None) => {
+                            self.index_receiver_kinds.insert(assign.name.clone(), k);
+                        }
+                        (Some(k), Some(prev)) if k != prev => {
+                            self.index_receiver_kinds.remove(&assign.name);
+                        }
+                        _ => {}
+                    }
+                }
+                Statement::If(if_stmt) => {
+                    self.collect_index_receiver_kinds(&if_stmt.then_block);
+                    for branch in &if_stmt.else_if_branches {
+                        self.collect_index_receiver_kinds(&branch.block);
+                    }
+                    if let Some(else_block) = &if_stmt.else_block {
+                        self.collect_index_receiver_kinds(else_block);
+                    }
+                }
+                Statement::Loop(loop_stmt) => {
+                    self.collect_index_receiver_kinds(&loop_stmt.body);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -1072,6 +1647,7 @@ impl TypeChecker {
                 Literal::String(_) | Literal::InterpolatedString(_) => ZymbolType::String,
                 Literal::Char(_) => ZymbolType::Char,
                 Literal::Bool(_) => ZymbolType::Bool,
+                Literal::Unit => ZymbolType::Unit,
             },
             Expr::Identifier(ident) => {
                 self.env.lookup_var(&ident.name)
@@ -1171,6 +1747,7 @@ impl TypeChecker {
                     Literal::String(_) | Literal::InterpolatedString(_) => ZymbolType::String,
                     Literal::Char(_) => ZymbolType::Char,
                     Literal::Bool(_) => ZymbolType::Bool,
+                    Literal::Unit => ZymbolType::Unit,
                 };
 
                 if !self.types_compatible(&pattern_type, scrutinee_type) {
@@ -1358,6 +1935,7 @@ impl TypeChecker {
                 Literal::String(_) | Literal::InterpolatedString(_) => ZymbolType::String,
                 Literal::Char(_) => ZymbolType::Char,
                 Literal::Bool(_) => ZymbolType::Bool,
+                Literal::Unit => ZymbolType::Unit,
             },
 
             Expr::Identifier(ident) => {
@@ -1502,23 +2080,53 @@ impl TypeChecker {
                     ZymbolType::Array(Box::new(ZymbolType::Any))
                 } else {
                     let first_type = self.infer_expr(&arr.elements[0]);
+                    let mut mixed = false;
 
-                    // Validate all elements have compatible types
                     for (i, elem) in arr.elements.iter().skip(1).enumerate() {
                         let elem_type = self.infer_expr(elem);
                         if !self.types_compatible(&elem_type, &first_type) {
-                            self.errors.push(
-                                Diagnostic::error(format!(
-                                    "array element {} has type {}, but expected {} (same as first element)",
-                                    i + 2, elem_type.name(), first_type.name()
-                                ))
-                                .with_span(elem.span())
-                                .with_help("all array elements must have the same type")
-                            );
+                            mixed = true;
+                            // `#[…]` declares the mix, so there is nothing to
+                            // report. `[…]` is homogeneous and gets checked —
+                            // decision 15 of Divergente_ES/forma/README.md.
+                            if !arr.declared_mixed {
+                                self.errors.push(
+                                    Diagnostic::error(format!(
+                                        "array element {} has type {}, but expected {} (same as first element)",
+                                        i + 2, elem_type.name(), first_type.name()
+                                    ))
+                                    .with_span(elem.span())
+                                    .with_help("all array elements must have the same type — write `#[…]` if the mix is deliberate")
+                                );
+                            }
                         }
                     }
 
-                    ZymbolType::Array(Box::new(first_type))
+                    // Decision 18: a `#[…]` that turns out homogeneous is the
+                    // escape hatch being used where it is not needed. This is
+                    // the vaccine against what happened to `Object` in Java and
+                    // `any` in TypeScript — an opt-out of the type discipline
+                    // that exists gets used, and the warning keeps it in its
+                    // place, with the same mechanism that already flags an
+                    // unused variable.
+                    if arr.declared_mixed && !mixed {
+                        self.warnings.push(
+                            Diagnostic::warning(format!(
+                                "this `#[…]` has no mixed types: every element is {}",
+                                first_type.name()
+                            ))
+                            .with_span(arr.span)
+                            .with_help("use `[…]` — `#[…]` is for declaring a mix that is deliberate")
+                        );
+                    }
+
+                    // Same type either way. A declared mix has an open element
+                    // type; a checked array has the type of its first element.
+                    if arr.declared_mixed {
+                        ZymbolType::Array(Box::new(ZymbolType::Any))
+                    } else {
+                        ZymbolType::Array(Box::new(first_type))
+                    }
                 }
             }
 
@@ -1546,7 +2154,14 @@ impl TypeChecker {
                 // and rejecting it would flag every index computed from an
                 // untyped parameter. A value that really is a Float at runtime
                 // is still caught there.
-                if !matches!(
+                // A String index is how a dictionary is addressed — `d["k"]`
+                // and `d[clave]` — so it is only wrong when the receiver is
+                // known to be something else. Decision 7 made the named tuple
+                // the dictionary; before it, this check was what made a computed
+                // key impossible (DM-09).
+                let string_key_ok = matches!(index_type, ZymbolType::String)
+                    && !matches!(array_type, ZymbolType::Array(_) | ZymbolType::String);
+                if !string_key_ok && !matches!(
                     index_type,
                     ZymbolType::Int
                         | ZymbolType::Bool
@@ -1619,6 +2234,13 @@ impl TypeChecker {
 
                 // Try to get function signature
                 if let Expr::Identifier(ident) = call.callable.unwrap_group() {
+                    self.check_output_arguments(&ident.name, &call.arguments);
+                    let slots = self.output_slots.get(&ident.name).cloned();
+                    // A locally declared function always has a known signature:
+                    // no slots recorded means it declares no output parameter.
+                    if self.env.lookup_function(&ident.name).is_some() {
+                        self.check_out_marks(&ident.name, Some(slots.as_deref().unwrap_or(&[])), call);
+                    }
                     if let Some((param_types, ret_type)) = self.env.lookup_function(&ident.name).cloned() {
                         // Validate argument count
                         if arg_types.len() != param_types.len() {
@@ -1667,6 +2289,49 @@ impl TypeChecker {
                         return ZymbolType::Unknown;
                     }
                 }
+
+                // `alias::func(...)` — same check as above, against the arity
+                // table the caller supplied. Without a table, or for a name the
+                // module does not export (reported separately), nothing is said.
+                if let Expr::MemberAccess(access) = call.callable.unwrap_group() {
+                    if access.is_module_access {
+                        if let Expr::Identifier(alias) = access.object.unwrap_group() {
+                            // The call-site output mark, checked against the module's
+                            // signature exactly as a bare call's is. A module whose
+                            // arity is unknown is also unchecked here — the signature
+                            // is not known, so neither is the right answer.
+                            if self.module_arities.get(&alias.name)
+                                .is_some_and(|m| m.contains_key(&access.field))
+                            {
+                                let slots = self.module_out_slots
+                                    .get(&alias.name)
+                                    .and_then(|m| m.get(&access.field))
+                                    .cloned()
+                                    .unwrap_or_default();
+                                let name = format!("{}::{}", alias.name, access.field);
+                                self.check_out_marks(&name, Some(&slots), call);
+                            }
+                            if let Some(expected) = self
+                                .module_arities
+                                .get(&alias.name)
+                                .and_then(|module| module.get(&access.field))
+                                .copied()
+                            {
+                                // A variadic function (-1) takes any number.
+                                if expected >= 0 && arg_types.len() != expected as usize {
+                                    self.errors.push(
+                                        Diagnostic::error(format!(
+                                            "function '{}::{}' expects {} argument(s), but {} were provided",
+                                            alias.name, access.field, expected, arg_types.len()
+                                        ))
+                                        .with_span(call.span)
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
                 ZymbolType::Any
             }
 
@@ -1701,43 +2366,82 @@ impl TypeChecker {
             Expr::Range(_) => ZymbolType::Array(Box::new(ZymbolType::Int)),
 
             // Collection operations
-            Expr::CollectionLength(_) => ZymbolType::Int,
+            //
+            // Every arm below must INFER ITS OPERANDS even when it does not need
+            // their types, because `infer_expr` is what performs the checks:
+            // "is this name defined", "does this call have the right number of
+            // arguments", "is its `<~` marked". Three arms here used to match
+            // `(_)` and return a type without descending, so everything written
+            // inside a `$#`, `$?` or `$??` operand went unchecked —
+            // `noexiste$#` was silent, `g(1,2,3)$#` was silent, and so was a
+            // qualified call missing its output mark.
+            //
+            // Found by validating against Chaturanga, whose alpha-beta test
+            // writes `(नि::वैधचालाः(मातस्थितिः, 2))$#`: the browser engine refused
+            // the file and both Rust engines accepted it, and the browser engine
+            // was the one that was right.
+            Expr::CollectionLength(op) => {
+                self.infer_expr(&op.collection);
+                ZymbolType::Int
+            }
             Expr::CollectionAppend(op) => {
                 let collection_type = self.infer_expr(&op.collection);
                 let element_type = self.infer_expr(&op.element);
-
-                // Validate element type matches array element type
-                if let ZymbolType::Array(elem_type) = &collection_type {
-                    if !self.types_compatible(&element_type, elem_type) {
-                        self.errors.push(
-                            Diagnostic::error(format!(
-                                "cannot append {} to {}: type mismatch",
-                                element_type.name(), collection_type.name()
-                            ))
-                            .with_span(op.element.span())
-                            .with_help(format!("expected element of type {}", elem_type.name()))
-                        );
-                    }
-                }
-
+                self.check_element_fits("append", &collection_type, &element_type, op.element.span());
                 collection_type
             }
-            Expr::CollectionInsert(op) => self.infer_expr(&op.collection),
+            // `$+[i]` puts an element INTO an array, so it is checked like `$+`
+            // (L46). Until v0.0.9 only the literal and `$+` were checked, so
+            // three of the four edit operations could turn a `[…]` heterogeneous
+            // with nobody declaring it — and `#?` then answered `##[`, a list
+            // nobody wrote. `[…]` is homogeneous AND CHECKED, or it is only
+            // homogeneous when you write it.
+            Expr::CollectionInsert(op) => {
+                let collection_type = self.infer_expr(&op.collection);
+                let element_type = self.infer_expr(&op.element);
+                self.check_element_fits("insert", &collection_type, &element_type, op.element.span());
+                collection_type
+            }
             Expr::CollectionRemoveValue(op) => self.infer_expr(&op.collection),
             Expr::CollectionRemoveAll(op) => self.infer_expr(&op.collection),
             Expr::CollectionRemoveAt(op) => self.infer_expr(&op.collection),
             Expr::CollectionRemoveRange(op) => self.infer_expr(&op.collection),
-            Expr::CollectionContains(_) => ZymbolType::Bool,
-            Expr::CollectionFindAll(_) => ZymbolType::Array(Box::new(ZymbolType::Int)),
+            Expr::CollectionContains(op) => {
+                self.infer_expr(&op.collection);
+                self.infer_expr(&op.element);
+                ZymbolType::Bool
+            }
+            Expr::CollectionFindAll(op) => {
+                self.infer_expr(&op.collection);
+                self.infer_expr(&op.value);
+                ZymbolType::Array(Box::new(ZymbolType::Int))
+            }
             Expr::CollectionUpdate(op) => {
                 // target is IndexExpr(collection[index]) — return the collection type,
                 // not the element type (which would cause false type-mismatch warnings
                 // on `arr[i] = val` desugared as `arr = arr[i]$~ val`).
-                if let Expr::Index(idx_expr) = op.target.unwrap_group() {
-                    self.infer_expr(&idx_expr.array)
-                } else {
-                    self.infer_expr(&op.target)
+                let collection_type = match op.target.unwrap_group() {
+                    Expr::Index(idx_expr) => self.infer_expr(&idx_expr.array),
+                    // `d.k$~ v` is the same write as `d["k"]$~ v`, so it yields
+                    // the RECEIVER's type too. Inferring the target would give
+                    // the field's, and the desugared `d = d.k$~ v` then warned
+                    // that a dictionary was being assigned an Int.
+                    Expr::MemberAccess(ma) if !ma.is_module_access => self.infer_expr(&ma.object),
+                    _ => self.infer_expr(&op.target),
+                };
+                // `[i]$~ v` writes an element, so the element has to fit (L46).
+                // A multi-step navigation (`m[i>j]$~ v`) reaches inside a nested
+                // array and the outer type says nothing about what lands there,
+                // so only the single-step form is decided here.
+                // A single-step `arr[i]$~ v` writes an element of `arr`, so the
+                // value has to fit. A multi-step navigation (`m[i>j]$~ v`) is a
+                // different node, and the outer type says nothing about what
+                // lands inside — so it is not decided here.
+                if matches!(op.target.unwrap_group(), Expr::Index(_)) {
+                    let value_type = self.infer_expr(&op.value);
+                    self.check_element_fits("write", &collection_type, &value_type, op.value.span());
                 }
+                collection_type
             }
             Expr::CollectionSlice(op) => self.infer_expr(&op.collection),
             Expr::CollectionMap(op) => {
@@ -1856,11 +2560,15 @@ impl TypeChecker {
             }
 
             Expr::CollectionSortAsc(op) | Expr::CollectionSortDesc(op) | Expr::CollectionSortCustom(op) => {
-                let _collection_type = self.infer_expr(&op.collection);
+                // Sorting reorders; it does not retype. Answering
+                // `Array(Unknown)` made `arr$^+` warn that `[Int]` had been
+                // assigned `[?]` — a false diagnostic on the documented way to
+                // sort in place, and one the browser engine did not emit.
+                let collection_type = self.infer_expr(&op.collection);
                 if let Some(ref cmp) = op.comparator {
                     let _cmp_type = self.infer_expr(cmp);
                 }
-                ZymbolType::Array(Box::new(ZymbolType::Unknown))
+                collection_type
             }
 
             // String operations
@@ -1869,9 +2577,20 @@ impl TypeChecker {
             Expr::StringSplit(_) => ZymbolType::Array(Box::new(ZymbolType::String)),
             Expr::ConcatBuild(op) => {
                 // Type depends on base: String base → String, Array base → Array
-                match self.infer_expr(&op.base) {
-                    ZymbolType::Array(_) => ZymbolType::Array(Box::new(ZymbolType::Any)),
-                    _ => ZymbolType::String,
+                let base_type = self.infer_expr(&op.base);
+                if let ZymbolType::Array(_) = &base_type {
+                    // Every item joins the array, so every item has to fit (L46).
+                    for item in &op.items {
+                        let item_type = self.infer_expr(item);
+                        self.check_element_fits("append", &base_type, &item_type, item.span());
+                    }
+                    // The base's type, not `[Any]`: every item was just checked
+                    // to fit it, so widening here contradicted the check one
+                    // line above and made `a$++ 7 8` warn that `[Int]` had been
+                    // assigned `[Any]`.
+                    base_type
+                } else {
+                    ZymbolType::String
                 }
             }
 
@@ -1882,7 +2601,21 @@ impl TypeChecker {
 
             // Data operations
             Expr::NumericEval(_) => ZymbolType::Float,
-            Expr::TypeMetadata(_) => ZymbolType::Tuple(vec![ZymbolType::String, ZymbolType::Int, ZymbolType::Any]),
+            // `x#?` answers a tuple, and the OPERAND is inferred like any other
+            // expression — which is how an undefined name in it gets reported.
+            //
+            // The operand used to be ignored (`TypeMetadata(_)`), so
+            // `user_choice#?` on a name that does not exist answered
+            // `(##_, 0, ())` and `zymbol check` said "No errors or warnings",
+            // while the LSP — running the analyser directly — flagged it. Three
+            // ways to ask, two answers, and the quiet one was the CLI.
+            //
+            // A variable is defined before use or it is not; asking its type is
+            // not an exception to that.
+            Expr::TypeMetadata(op) => {
+                let _ = self.infer_expr(&op.expr);
+                ZymbolType::Tuple(vec![ZymbolType::String, ZymbolType::Int, ZymbolType::Any])
+            }
             Expr::Format(_) => ZymbolType::String,
             Expr::BaseConversion(_) => ZymbolType::String,
             Expr::Round(_) | Expr::Trunc(_) => ZymbolType::Float,

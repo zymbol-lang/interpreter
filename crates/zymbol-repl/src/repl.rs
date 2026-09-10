@@ -159,8 +159,15 @@ impl Repl {
             // Render current state
             self.render_line(&mut stdout)?;
 
-            // Read event
+            // Read event. Only key-*down*: the Windows console reports the release
+            // too, and acting on both would echo every character the user typed twice.
             if let Event::Key(key_event) = event::read()? {
+                if !matches!(
+                    key_event.kind,
+                    crossterm::event::KeyEventKind::Press | crossterm::event::KeyEventKind::Repeat
+                ) {
+                    continue;
+                }
                 match self.handle_key_event(key_event) {
                     KeyAction::Continue => continue,
                     KeyAction::Submit => {

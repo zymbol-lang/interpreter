@@ -1,4 +1,0 @@
-=== Testing function access to external variable ===
-Calling function that tries to access external_var...
-Runtime error: 'external_var' is undefined — did you mean 'external_var°' (hot definition)?
-Trying to access: 

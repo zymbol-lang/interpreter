@@ -17,6 +17,7 @@ use zymbol_ast::{
     InputPrompt, InputCast,
 };
 use zymbol_lexer::StringPart;
+use zymbol_ast::AssignSugar;
 use zymbol_ast::Pattern;
 use zymbol_ast::BasePrefix;
 use zymbol_ast::CastKind;
@@ -264,6 +265,24 @@ struct CompiledModuleExports {
     constants: Vec<(String, ModuleConst)>,
 }
 
+/// Whether an expression can only ever produce a Bool, judged from its shape
+/// alone. Used to keep `@ n <= 3` on the plain WHILE path instead of paying for
+/// the runtime type test that `@ <expr>` of unknown type needs.
+fn expr_is_always_bool(expr: &Expr) -> bool {
+    match expr.unwrap_group() {
+        Expr::Literal(lit) => matches!(lit.value, Literal::Bool(_)),
+        Expr::Binary(b) => matches!(
+            b.op,
+            BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Lt | BinaryOp::Gt
+                | BinaryOp::Le | BinaryOp::Ge
+        ) || (matches!(b.op, BinaryOp::And | BinaryOp::Or)
+            && expr_is_always_bool(&b.left)
+            && expr_is_always_bool(&b.right)),
+        Expr::Unary(u) => matches!(u.op, UnaryOp::Not),
+        _ => false,
+    }
+}
+
 /// Auto-free (v0.0.8): overwrite each scheduled variable's register with Unit
 /// right after its last use, releasing the heap value it held. Names without
 /// a register (never materialized on this path) are skipped.
@@ -277,11 +296,32 @@ fn emit_auto_free(ctx: &mut FunctionCtx, names: &[String]) {
 
 #[derive(Clone)]
 enum ModuleConst {
+    /// `##_` — the absence of a value, which is a literal like any other.
+    Unit,
     Int(i64),
     Float(f64),
     String(String),
     Bool(bool),
     Char(char),
+    /// `[1, 2, 3]` — recursive, so a nested collection is one constant.
+    Array(Vec<ModuleConst>),
+    /// `(1, 2)` — the positional tuple.
+    Tuple(Vec<ModuleConst>),
+    /// `(a: 1, b: 2)` — the dictionary, in declaration order.
+    Dict(Vec<(String, ModuleConst)>),
+}
+
+impl ModuleConst {
+    /// A collection is not inlined at its use sites the way a scalar is.
+    ///
+    /// A scalar constant costs one `Load*` wherever it is named. A collection
+    /// costs one instruction per element, every time — so a table of sixty keys
+    /// would be rebuilt on every lookup, and a module table is exactly the thing
+    /// that gets looked up in a loop. Collections become globals instead,
+    /// materialized once when the VM starts.
+    fn is_collection(&self) -> bool {
+        matches!(self, ModuleConst::Array(_) | ModuleConst::Tuple(_) | ModuleConst::Dict(_))
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -313,9 +353,41 @@ pub struct Compiler {
     global_var_map: HashMap<String, u16>,
     /// Initial values for global module variables (indexed by u16)
     global_var_inits: Vec<zymbol_bytecode::GlobalInit>,
+    /// A SCRIPT's file-level variables: name → global var index.
+    ///
+    /// Separate from `global_var_map` because the semantics differ. Module state
+    /// is SHARED — a module function writes it and the write persists, which is
+    /// what module state is for. A script's file variables are CAPTURED: a
+    /// function reads them and a write stays inside the call, exactly as a
+    /// lambda behaves (ERROR-ZYB-002). So these emit `LoadGlobal` on a read and
+    /// never `StoreGlobal` from inside a function body.
+    file_var_map: HashMap<String, u16>,
     /// Known module aliases (registered via import). Used to distinguish
     /// "private function" errors from "completely unknown" errors at call sites.
     known_module_aliases: HashSet<String>,
+    /// Finally blocks whose `!?` statement the compiler is currently inside,
+    /// outermost first.
+    ///
+    /// A finally is emitted inline after the try/catch, which is enough for
+    /// code that falls off the end of the block and nothing else: a `<~` inside
+    /// the try body returns from the *function* and jumps straight over those
+    /// instructions, so the finally never ran at all (BUG-ZYB-010). The
+    /// tree-walker and the browser engine both ran it.
+    ///
+    /// So every `<~` reachable from inside a `!?` emits a copy of the pending
+    /// finally blocks first, innermost first — which is what the note on
+    /// `Instruction::TryCatch` means by "the compiler emits the block twice".
+    /// The list is empty for the overwhelming majority of returns, and that is
+    /// the case that costs nothing.
+    pending_finally: Vec<zymbol_ast::Block>,
+    /// True while compiling the body of a `:>` clause.
+    ///
+    /// BUG-ZYB-011: a `:>` is cleanup and does not decide the return value, so
+    /// a `<~` inside one evaluates its expression (for the side effects it may
+    /// have) and then does nothing. Without this the block, emitted inline,
+    /// would return from the function and discard the value the try block was
+    /// carrying — and it would do it differently in each engine.
+    in_finally: bool,
     /// Source of named functions: name → (param_names, body_statements).
     /// Used to recompile named functions as closures when they capture outer variables.
     fn_source: HashMap<String, (Vec<String>, Vec<Statement>)>,
@@ -330,6 +402,15 @@ pub struct Compiler {
     compiled_modules: HashMap<PathBuf, CompiledModuleExports>,
     /// Builtin function IDs: "alias::func" → builtin_id (for std/math, std/random).
     builtin_map: HashMap<String, u16>,
+    /// Declared parameter count per compiled function, so a call with the wrong
+    /// number of arguments fails the way the tree-walker fails it. `Instruction::Call`
+    /// ignores `arg_regs.len()` entirely: it copies every argument into the callee's
+    /// registers, so one argument too many overwrote a local of the callee and the
+    /// program carried on with corrupted state, while the tree-walker raised.
+    func_arity: HashMap<FuncIdx, u16>,
+    /// Declared argument count per builtin id; `-1` for the variadic ones.
+    /// Same purpose as `func_arity`, for `CallBuiltin`.
+    builtin_arity: HashMap<u16, i32>,
 }
 
 impl Compiler {
@@ -351,10 +432,15 @@ impl Compiler {
             module_scope: HashMap::new(),
             global_var_map: HashMap::new(),
             global_var_inits: Vec::new(),
+            file_var_map: HashMap::new(),
             known_module_aliases: HashSet::new(),
+            pending_finally: Vec::new(),
+            in_finally: false,
             fn_source: HashMap::new(),
             compiled_modules: HashMap::new(),
             builtin_map: HashMap::new(),
+            func_arity: HashMap::new(),
+            builtin_arity: HashMap::new(),
             auto_free_excluded: HashSet::new(),
         };
 
@@ -376,6 +462,7 @@ impl Compiler {
             if let Statement::FunctionDecl(decl) = stmt {
                 let idx = compiler.functions.len() as FuncIdx;
                 compiler.function_index.insert(decl.name.clone(), idx);
+                compiler.func_arity.insert(idx, decl.parameters.len() as u16);
                 // Register output param flags
                 let out_flags: Vec<bool> = decl.parameters.iter()
                     .map(|p| p.kind == zymbol_ast::ParameterKind::Output)
@@ -395,10 +482,46 @@ impl Compiler {
 
         // Collect global IMMUTABLE constants (:=) so function bodies can inline them.
         // Mutable assignments (=) are NOT inlined to preserve function scope isolation.
+        // A collection constant becomes a global instead of being inlined — see
+        // `ModuleConst::is_collection`.
         for stmt in &program.statements {
             if let Statement::ConstDecl(c) = stmt {
                 if let Some(mc) = Self::eval_const_expr(&c.value) {
-                    compiler.global_consts.insert(c.name.clone(), mc);
+                    if mc.is_collection() {
+                        if !compiler.global_var_map.contains_key(&c.name) {
+                            let gvar_idx = compiler.global_var_inits.len() as u16;
+                            compiler.global_var_inits.push(Self::global_init_of(&mc));
+                            compiler.global_var_map.insert(c.name.clone(), gvar_idx);
+                        }
+                    } else {
+                        compiler.global_consts.insert(c.name.clone(), mc);
+                    }
+                }
+            }
+        }
+
+        // Register the SCRIPT's file-level variables as globals, so a function
+        // body can read them (ERROR-ZYB-002). Reading is all they are for: the
+        // write-back happens only from `<main>`, so a write inside a function
+        // stays in that call.
+        //
+        // Registered BEFORE the function bodies are compiled, because that is
+        // when the reads are emitted. Only in a script — a module's own state
+        // already goes through `global_var_map`, and it is shared rather than
+        // captured.
+        if program.module_decl.is_none() {
+            for stmt in &program.statements {
+                if let Statement::Assignment(a) = stmt {
+                    if compiler.global_var_map.contains_key(&a.name)
+                        || compiler.file_var_map.contains_key(&a.name)
+                    {
+                        continue;
+                    }
+                    let idx = compiler.global_var_inits.len() as u16;
+                    compiler
+                        .global_var_inits
+                        .push(zymbol_bytecode::GlobalInit::Unit);
+                    compiler.file_var_map.insert(a.name.clone(), idx);
                 }
             }
         }
@@ -460,8 +583,14 @@ impl Compiler {
             let module_key = import.path.components.join("/");
             if let Some(entries) = stdlib_builtin_entries(&module_key) {
                 let alias = import.alias.clone();
+                let declared = zymbol_common::stdlib::module(&module_key);
                 for (func_name, builtin_id) in entries {
                     self.builtin_map.insert(format!("{}::{}", alias, func_name), builtin_id);
+                    // Keyed by builtin id, not by "alias::func", so an i18n layer
+                    // that re-exports the builtin under another name keeps its arity.
+                    if let Some(f) = declared.and_then(|m| m.function(func_name)) {
+                        self.builtin_arity.insert(builtin_id, f.arity);
+                    }
                 }
                 if module_key == "std/math" {
                     self.module_constants.insert(
@@ -527,11 +656,18 @@ impl Compiler {
         let (tokens, _lex_errs) = lexer.tokenize();
         let parser = zymbol_parser::Parser::new(tokens);
         let module_prog = parser.parse().map_err(|errors| {
-            let canon_path = canonical.display().to_string();
+            // The path as written, not `canonical` — same rule as the semantic gate
+            // below, and for the same reason. `canonicalize()` is for identity
+            // (cycle detection), never for text a user reads: on Windows it returns
+            // the extended-length form, so this message named the module
+            // `\\?\D:\...\sistema.zy` while the tree-walker named `D:\...\sistema.zy`.
+            // A path the user cannot type, and a tree-walker/VM mismatch that only
+            // appears off Linux, where canonicalize changes nothing visible.
+            let shown_path = path.display().to_string();
             let detail: Vec<String> = errors.iter().map(|d| {
                 let loc = d.span
-                    .map(|s| format!("{}:{}:{}", canon_path, s.start.line, s.start.column))
-                    .unwrap_or_else(|| canon_path.clone());
+                    .map(|s| format!("{}:{}:{}", shown_path, s.start.line, s.start.column))
+                    .unwrap_or_else(|| shown_path.clone());
                 let mut msg = format!("  {}: {}", loc, d.message);
                 if let Some(help) = &d.help {
                     msg.push_str(&format!("\n    help: {}", help));
@@ -541,7 +677,7 @@ impl Compiler {
             CompileError::ModuleParse(format!(
                 "{} parse error(s) in '{}'\n{}",
                 errors.len(),
-                canon_path,
+                shown_path,
                 detail.join("\n")
             ))
         })?;
@@ -644,6 +780,7 @@ impl Compiler {
         for stmt in &module_prog.statements {
             if let Statement::FunctionDecl(decl) = stmt {
                 if let Some(&idx) = local_scope.get(&decl.name) {
+                    self.func_arity.insert(idx, decl.parameters.len() as u16);
                     let out_flags: Vec<bool> = decl
                         .parameters
                         .iter()
@@ -669,37 +806,48 @@ impl Compiler {
             }
         }
 
-        // Collect module-level immutable constants (:=) for function body inlining
+        // Collect module-level immutable constants (:=) for function body inlining.
+        // A collection constant becomes a global instead — see
+        // `ModuleConst::is_collection`.
         let saved_global_consts = std::mem::take(&mut self.global_consts);
+
+        // A module's own bindings SHADOW whatever the map already holds under
+        // the same name, and the previous binding is put back when the module
+        // is done. Skipping the insert instead would let a module read the
+        // program's `TABLA` under its own name — which became reachable the
+        // moment program-level collection constants started living here too.
+        let mut shadowed_gvars: Vec<(String, Option<u16>)> = Vec::new();
+        let bind_gvar = |compiler: &mut Self,
+                             name: &str,
+                             init: zymbol_bytecode::GlobalInit,
+                             shadowed: &mut Vec<(String, Option<u16>)>| {
+            let gvar_idx = compiler.global_var_inits.len() as u16;
+            compiler.global_var_inits.push(init);
+            let prev = compiler.global_var_map.insert(name.to_string(), gvar_idx);
+            shadowed.push((name.to_string(), prev));
+        };
+
         for stmt in &module_prog.statements {
             if let Statement::ConstDecl(c) = stmt {
                 if let Some(mc) = Self::eval_const_expr(&c.value) {
-                    self.global_consts.insert(c.name.clone(), mc);
+                    if mc.is_collection() {
+                        bind_gvar(self, &c.name, Self::global_init_of(&mc), &mut shadowed_gvars);
+                    } else {
+                        self.global_consts.insert(c.name.clone(), mc);
+                    }
                 }
             }
         }
 
         // Register module-level mutable variables (= not :=) as global vars
         // so function bodies can read/write them across calls via LoadGlobal/StoreGlobal.
-        let mut module_gvar_names: Vec<String> = Vec::new();
         for stmt in &module_prog.statements {
             if let Statement::Assignment(a) = stmt {
-                if !self.global_var_map.contains_key(&a.name) {
-                    let gvar_idx = self.global_var_inits.len() as u16;
-                    let init = if let Some(mc) = Self::eval_const_expr(&a.value) {
-                        match mc {
-                            ModuleConst::Int(n) => zymbol_bytecode::GlobalInit::Int(n),
-                            ModuleConst::Float(f) => zymbol_bytecode::GlobalInit::Float(f),
-                            ModuleConst::Bool(b) => zymbol_bytecode::GlobalInit::Bool(b),
-                            ModuleConst::Char(c) => zymbol_bytecode::GlobalInit::Char(c),
-                            ModuleConst::String(s) => zymbol_bytecode::GlobalInit::Str(s),
-                        }
-                    } else {
-                        zymbol_bytecode::GlobalInit::Unit
-                    };
-                    self.global_var_inits.push(init);
-                    self.global_var_map.insert(a.name.clone(), gvar_idx);
-                    module_gvar_names.push(a.name.clone());
+                if !shadowed_gvars.iter().any(|(n, _)| n == &a.name) {
+                    let init = Self::eval_const_expr(&a.value)
+                        .map(|mc| Self::global_init_of(&mc))
+                        .unwrap_or(zymbol_bytecode::GlobalInit::Unit);
+                    bind_gvar(self, &a.name, init, &mut shadowed_gvars);
                 }
             }
         }
@@ -733,8 +881,11 @@ impl Compiler {
         self.module_scope = saved_module_scope;
         self.auto_free_excluded = saved_auto_free_excluded;
         self.global_consts = saved_global_consts;
-        for name in &module_gvar_names {
-            self.global_var_map.remove(name);
+        for (name, prev) in shadowed_gvars.iter().rev() {
+            match prev {
+                Some(idx) => { self.global_var_map.insert(name.clone(), *idx); }
+                None => { self.global_var_map.remove(name); }
+            }
         }
 
         // Collect own constant/variable exports
@@ -902,9 +1053,11 @@ impl Compiler {
                         ctx.postfix_hot_vars.insert(a.name.clone());
                     }
                 }
-                self.compile_assignment(&a.name, &a.value, ctx)
+                self.compile_assignment(&a.name, &a.value, a.sugar, ctx)
             }
-            Statement::ConstDecl(c) => self.compile_assignment(&c.name, &c.value, ctx),
+            Statement::ConstDecl(c) => {
+                self.compile_assignment(&c.name, &c.value, AssignSugar::None, ctx)
+            }
             Statement::Output(o) => self.compile_output(o, ctx),
             Statement::Newline(_n) => {
                 ctx.emit(Instruction::PrintNewline);
@@ -915,18 +1068,31 @@ impl Compiler {
             Statement::Break(b) => self.compile_break(b, ctx),
             Statement::Continue(c) => self.compile_continue(c, ctx),
             Statement::Return(r) => {
-                // TCO: if `<~ f(args)` where f is the current function → TailCall
-                if let Some(val) = &r.value {
-                    if let Expr::FunctionCall(call) = val.unwrap_group() {
-                        if let Expr::Identifier(id) = call.callable.unwrap_group() {
-                            if id.name == ctx.name {
-                                if let Some(&func_idx) = self.function_index.get(&id.name) {
-                                    let mut arg_regs = Vec::with_capacity(call.arguments.len());
-                                    for arg in &call.arguments {
-                                        arg_regs.push(self.compile_expr(arg, ctx)?);
+                // BUG-ZYB-011: inside a `:>`, `<~` is not a return. The value
+                // is still computed — it may call something with an effect —
+                // and then dropped.
+                if self.in_finally {
+                    if let Some(val) = &r.value {
+                        self.compile_expr(val, ctx)?;
+                    }
+                    return Ok(());
+                }
+                // TCO: if `<~ f(args)` where f is the current function → TailCall.
+                // Suppressed inside a `!?` that has a finally: the call must not
+                // replace this frame while there is still cleanup owed on it.
+                if self.pending_finally.is_empty() {
+                    if let Some(val) = &r.value {
+                        if let Expr::FunctionCall(call) = val.unwrap_group() {
+                            if let Expr::Identifier(id) = call.callable.unwrap_group() {
+                                if id.name == ctx.name {
+                                    if let Some(&func_idx) = self.function_index.get(&id.name) {
+                                        let mut arg_regs = Vec::with_capacity(call.arguments.len());
+                                        for arg in &call.arguments {
+                                            arg_regs.push(self.compile_expr(arg, ctx)?);
+                                        }
+                                        ctx.emit(Instruction::TailCall(func_idx, arg_regs));
+                                        return Ok(());
                                     }
-                                    ctx.emit(Instruction::TailCall(func_idx, arg_regs));
-                                    return Ok(());
                                 }
                             }
                         }
@@ -938,6 +1104,22 @@ impl Compiler {
                     let t = ctx.alloc_temp()?;
                     ctx.emit(Instruction::LoadUnit(t));
                     t
+                };
+                // The returned value is fixed BEFORE the finally runs, so a
+                // finally that assigns to the same name cannot change what
+                // comes back — which is what the other two engines do.
+                //
+                // The copy is the whole point: `compile_expr` on an identifier
+                // hands back the variable's OWN register, not a temporary, so
+                // `<~ v` followed by `v = "otro"` in the finally returned
+                // "otro". Only paid when there is a finally to run.
+                let reg = if self.pending_finally.is_empty() {
+                    reg
+                } else {
+                    let held = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::CopyReg(held, reg));
+                    self.emit_pending_finally(ctx)?;
+                    held
                 };
                 ctx.emit(Instruction::Return(reg));
                 Ok(())
@@ -1095,8 +1277,23 @@ impl Compiler {
         &mut self,
         name: &str,
         value: &Expr,
+        sugar: AssignSugar,
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
+        // A bare `$` edit statement modifies its receiver, and a positional
+        // tuple does not change. `$~` guards itself through `DeepSetInPlace`,
+        // which already holds the root in a register; every other editing
+        // operator gets the check here, once, on the receiver — because
+        // immutability is a property of the value, not of the operator
+        // (forma/tuplas.zy § 6).
+        if sugar == AssignSugar::InPlaceEdit
+            && !matches!(value.unwrap_group(), Expr::CollectionUpdate(_))
+        {
+            if let Ok(r_recv) = ctx.get_reg(name) {
+                let idx = self.intern_string(name);
+                ctx.emit(Instruction::AssertMutable(r_recv, idx));
+            }
+        }
         // Optimise: arr = arr$+ elem → ArrayPush in-place (O(1), no clone)
         if let Expr::CollectionAppend(ca) = value {
             if let Expr::Identifier(ident) = ca.collection.unwrap_group() {
@@ -1117,13 +1314,43 @@ impl Compiler {
             }
         }
 
-        let src = self.compile_expr(value, ctx)?;
+        // `t[i] = val` and `t[i] op= val` were desugared by the parser into a
+        // CollectionUpdate, so by the time they arrive here they look exactly
+        // like the functional `new = t[i]$~ val`. Only `sugar` still records
+        // which one the programmer wrote, and the difference is not cosmetic: a
+        // positional tuple must refuse the in-place form and allow the
+        // functional one. The compiler used to drop the field, both forms
+        // reached `DeepSet`, and the VM modified the tuple in silence (DM-16).
+        let in_place = matches!(
+            sugar,
+            AssignSugar::IndexedAssign
+                | AssignSugar::IndexedCompound(_)
+                | AssignSugar::InPlaceEdit
+        );
+        let src = match value.unwrap_group() {
+            Expr::CollectionUpdate(cu) if in_place => {
+                self.compile_collection_update_as(cu, Some(name), ctx)?
+            }
+            _ => self.compile_expr(value, ctx)?,
+        };
         let src_ty = ctx.get_reg_type(src);
 
         // If this name is a module global var, emit StoreGlobal instead of local register assign
         if let Some(&gvar_idx) = self.global_var_map.get(name) {
             ctx.emit(Instruction::StoreGlobal(gvar_idx, src));
             return Ok(());
+        }
+
+        // A SCRIPT's file variable is written back ONLY from the file body, so
+        // the functions that capture it see the current value. Inside a function
+        // the assignment falls through to a local register and dies with the
+        // call — which is the write isolation a lambda has, and what makes this
+        // capture and not shared state.
+        if ctx.name == "<main>" {
+            if let Some(&gvar_idx) = self.file_var_map.get(name) {
+                ctx.emit(Instruction::StoreGlobal(gvar_idx, src));
+                // and fall through: the file body reads it from its own register
+            }
         }
 
         // If re-assignment, get existing dst register; otherwise allocate new.
@@ -1149,33 +1376,64 @@ impl Compiler {
     ) -> Result<(), CompileError> {
         let r_rhs = self.compile_expr(&d.value, ctx)?;
         match &d.pattern {
+            // The pattern is typed (L32) and its last item absorbs the remainder (L33).
+            // Both rules match `Interpreter::bind_positional` in the tree-walker; the two
+            // are compared verbatim by `zyq consensus`.
             DestructurePattern::Array(items) | DestructurePattern::Positional(items) => {
+                let wants_tuple = matches!(&d.pattern, DestructurePattern::Positional(_));
+                ctx.emit(Instruction::DestructureCheck(r_rhs, wants_tuple));
+
+                let rest_at = items.iter().position(|i| matches!(i, DestructureItem::Rest(_)));
+                // Items after a `*rest` are counted from the end, exactly as the
+                // tree-walker's `trailing` does: their position from the front is not
+                // known until run time.
+                let trailing = rest_at.map_or(0, |p| items.len() - p - 1);
                 let mut idx: i64 = 0;
-                for item in items {
+                for (pos, item) in items.iter().enumerate() {
+                    let absorbs = rest_at.is_none() && pos + 1 == items.len();
+                    let after_rest = rest_at.is_some_and(|p| pos > p);
                     match item {
                         DestructureItem::Bind(name) => {
-                            let r_idx = ctx.alloc_temp()?;
-                            ctx.emit(Instruction::LoadInt(r_idx, idx + 1));
                             let dst = if let Ok(existing) = ctx.get_reg(name) {
                                 existing
                             } else {
                                 ctx.alloc_reg(name)?
                             };
-                            ctx.emit(Instruction::ArrayGet(dst, r_rhs, r_idx));
+                            if absorbs {
+                                ctx.emit(Instruction::DestructureAbsorb(dst, r_rhs, (idx + 1) as u32));
+                            } else {
+                                if after_rest {
+                                    // The trailing names are entitled to their
+                                    // share only if the elements reach that far;
+                                    // otherwise they are Unit and the rest keeps
+                                    // everything (DM-24). Indexing from the end
+                                    // unconditionally was what made
+                                    // `[d0, *dR, d9] = [1,2]` give `d9=2` here
+                                    // and `d9=` in the other two engines.
+                                    let rest_from = rest_at.unwrap() as u32 + 1;
+                                    ctx.emit(Instruction::DestructureTail(
+                                        dst, r_rhs,
+                                        (items.len() - pos) as u32,
+                                        rest_from,
+                                        trailing as u32,
+                                    ));
+                                } else {
+                                    let r_idx = ctx.alloc_temp()?;
+                                    ctx.emit(Instruction::LoadInt(r_idx, idx + 1));
+                                    ctx.emit(Instruction::ArrayGet(dst, r_rhs, r_idx));
+                                }
+                            }
                             idx += 1;
                         }
                         DestructureItem::Rest(name) => {
-                            let r_lo = ctx.alloc_temp()?;
-                            ctx.emit(Instruction::LoadInt(r_lo, idx + 1));
-                            let r_hi = ctx.alloc_temp()?;
-                            // Use array length as hi (slice to end)
-                            ctx.emit(Instruction::ArrayLen(r_hi, r_rhs));
                             let dst = if let Ok(existing) = ctx.get_reg(name) {
                                 existing
                             } else {
                                 ctx.alloc_reg(name)?
                             };
-                            ctx.emit(Instruction::ArraySlice(dst, r_rhs, r_lo));
+                            ctx.emit(Instruction::DestructureRest(
+                                dst, r_rhs, (idx + 1) as u32, trailing as u32,
+                            ));
                             idx += 1;
                         }
                         DestructureItem::Ignore => {
@@ -1185,6 +1443,10 @@ impl Compiler {
                 }
             }
             DestructurePattern::NamedTuple(fields) => {
+                // Once, before the fields: the receiver has to be a dictionary,
+                // and saying so here is what lets the per-field gets keep the
+                // wording of a plain `d.k`.
+                ctx.emit(Instruction::RequireDict(r_rhs));
                 for (field, var_name) in fields {
                     let field_idx = self.intern_string(field);
                     let dst = if let Ok(existing) = ctx.get_reg(var_name) {
@@ -1269,6 +1531,34 @@ impl Compiler {
         lp: &Loop,
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
+        // `@ (k, v):x { … }` desugars to `@ __zy_par:x { (k, v) = __zy_par; … }`,
+        // which reuses the foreach compilation and the destructure compilation
+        // unchanged. The only piece that is genuinely new is `IterPairs`, which
+        // hands a DICTIONARY over as `(clave, valor)` pairs — `@ k:d` still
+        // yields keys (decision 8).
+        if let Some(pattern) = &lp.iterator_pattern {
+            let tmp = "__zy_par".to_string();
+            let mut body = lp.body.clone();
+            let span = lp.span;
+            body.statements.insert(0, zymbol_ast::Statement::DestructureAssign(
+                zymbol_ast::DestructureAssign {
+                    pattern: pattern.clone(),
+                    value: Box::new(Expr::Identifier(zymbol_ast::IdentifierExpr::new(tmp.clone(), span))),
+                    span,
+                },
+            ));
+            let desugared = zymbol_ast::Loop {
+                condition: None,
+                iterator_var: Some(tmp),
+                iterator_pattern: None,
+                iterable: lp.iterable.clone(),
+                body,
+                label: lp.label.clone(),
+                span,
+            };
+            return self.compile_foreach_loop(&desugared, ctx);
+        }
+
         // Four cases: infinite, while, range for-each, array for-each
         if lp.iterator_var.is_some() {
             // Check if iterable is a Range or an array/expression
@@ -1279,18 +1569,19 @@ impl Compiler {
                 self.compile_foreach_loop(lp, ctx)
             }
         } else if lp.condition.is_some() {
-            // Detect TIMES loop: condition is a literal Int → repeat N times
-            // (look through user parens: `@(3)` parses as Group(Literal(3)))
+            // Which of TIMES and WHILE a `@ <expr>` loop is depends on the *value*
+            // the specifier evaluates to, not on its syntactic shape: an Int is a
+            // repeat count, anything else is a condition re-tested every pass. Two
+            // shapes let us decide that statically; everything else must ask at
+            // runtime, which is what compile_adaptive_loop emits.
+            // (Look through user parens: `@(3)` parses as Group(Literal(3)).)
             let cond = lp.condition.as_ref().unwrap().unwrap_group();
-            let is_literal_times = matches!(cond, Expr::Literal(lit) if matches!(lit.value, Literal::Int(_)));
-            // Dynamic times: condition is an identifier (variable holding an Int count)
-            let is_dynamic_times = matches!(cond, Expr::Identifier(_));
-            if is_literal_times {
+            if matches!(cond, Expr::Literal(lit) if matches!(lit.value, Literal::Int(_))) {
                 self.compile_times_loop(lp, ctx)
-            } else if is_dynamic_times {
-                self.compile_dynamic_times_loop(lp, ctx)
-            } else {
+            } else if expr_is_always_bool(cond) {
                 self.compile_while_loop(lp, ctx)
+            } else {
+                self.compile_adaptive_loop(lp, ctx)
             }
         } else {
             self.compile_infinite_loop(lp, ctx)
@@ -1345,24 +1636,51 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_dynamic_times_loop(
+    /// `@ <expr>` where the specifier's type is not known until it runs.
+    ///
+    /// The specifier is evaluated once up front and type-tested. If it is an Int
+    /// the loop runs that many times (a negative count runs zero times) and the
+    /// expression is never re-evaluated; otherwise it is re-evaluated and tested
+    /// for truth on every pass. That is the tree-walker's rule, and the body is
+    /// emitted once for both paths so break and continue keep a single target.
+    fn compile_adaptive_loop(
         &mut self,
         lp: &Loop,
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
-        // Evaluate the count expression once
-        let r_n = self.compile_expr(lp.condition.as_ref().unwrap(), ctx)?;
+        let cond_expr = lp.condition.as_ref().unwrap();
+
+        // Evaluate once, then decide which loop this is.
+        let r_first = self.compile_expr(cond_expr, ctx)?;
+        let r_n = ctx.alloc_temp()?;
+        let r_is_times = ctx.alloc_temp()?;
         let r_i = ctx.alloc_temp()?;
         let r_cmp = ctx.alloc_temp()?;
+        ctx.emit(Instruction::CopyReg(r_n, r_first));
+        ctx.emit(Instruction::IsInt(r_is_times, r_n));
         ctx.emit(Instruction::LoadInt(r_i, 0));
 
         let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
         ctx.loop_stack.push(LoopCtx { break_patches: Vec::new(), continue_patches: Vec::new(), label: lp.label.clone() });
 
+        // TIMES path: i >= n → done. Falls through to the body otherwise.
+        let to_while = ctx.emit_jump_if_not_placeholder(r_is_times);
         ctx.emit(Instruction::CmpGe(r_cmp, r_i, r_n));
-        let exit_jump = ctx.emit(Instruction::JumpIf(r_cmp, 0));
+        let exit_times = ctx.emit(Instruction::JumpIf(r_cmp, 0));
+        let to_body = ctx.emit(Instruction::Jump(0));
 
+        // WHILE path: re-evaluate the specifier and test it for truth. A value
+        // that is neither a count nor a condition raises here rather than being
+        // read through truthiness — this is also what catches it on the first
+        // pass, since a non-Int specifier always arrives down this path.
+        let while_label = ctx.current_label();
+        let r_cond = self.compile_expr(cond_expr, ctx)?;
+        let r_checked = ctx.alloc_temp()?;
+        ctx.emit(Instruction::AsLoopCond(r_checked, r_cond));
+        let exit_while = ctx.emit(Instruction::JumpIfNot(r_checked, 0));
+
+        let body_label = ctx.current_label();
         self.compile_block(&lp.body, ctx)?;
 
         let inc_label = ctx.current_label();
@@ -1370,7 +1688,10 @@ impl Compiler {
         ctx.emit(Instruction::Jump(loop_start));
 
         let loop_end = ctx.current_label();
-        ctx.patch_jump(exit_jump, loop_end);
+        ctx.patch_jump(to_while, while_label);
+        ctx.patch_jump(to_body, body_label);
+        ctx.patch_jump(exit_times, loop_end);
+        ctx.patch_jump(exit_while, loop_end);
 
         let lctx = ctx.loop_stack.pop().unwrap();
         for pos in lctx.break_patches { ctx.patch_jump(pos, loop_end); }
@@ -1633,16 +1954,7 @@ impl Compiler {
                 }
                 // Fall back to global constant inlining (module-level consts in function bodies)
                 if let Some(mc) = self.global_consts.get(&id.name).cloned() {
-                    let dst = ctx.alloc_temp()?;
-                    let instr = match mc {
-                        ModuleConst::Int(n) => Instruction::LoadInt(dst, n),
-                        ModuleConst::Float(f) => { ctx.set_reg_type(dst, StaticType::Float); Instruction::LoadFloat(dst, f) }
-                        ModuleConst::String(s) => { let idx = self.intern_string(&s); ctx.set_reg_type(dst, StaticType::String); Instruction::LoadStr(dst, idx) }
-                        ModuleConst::Bool(b) => { ctx.set_reg_type(dst, StaticType::Bool); Instruction::LoadBool(dst, b) }
-                        ModuleConst::Char(c) => { ctx.set_reg_type(dst, StaticType::Char); Instruction::LoadChar(dst, c) }
-                    };
-                    ctx.emit(instr);
-                    return Ok(dst);
+                    return self.emit_module_const(&mc, ctx);
                 }
                 // Fall back to module global variable (mutable state shared across calls)
                 if let Some(&gvar_idx) = self.global_var_map.get(&id.name) {
@@ -1650,8 +1962,27 @@ impl Compiler {
                     ctx.emit(Instruction::LoadGlobal(dst, gvar_idx));
                     return Ok(dst);
                 }
+                // And then a SCRIPT's file variable, which a function captures:
+                // read here, never written back (ERROR-ZYB-002).
+                if let Some(&gvar_idx) = self.file_var_map.get(&id.name) {
+                    let dst = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::LoadGlobal(dst, gvar_idx));
+                    return Ok(dst);
+                }
                 // Named function used as first-class value: f = myFunc, arr$> myFunc, x |> myFunc
-                if self.function_index.contains_key(&id.name) {
+                //
+                // BUG-ZYB-005: `module_scope` has to be consulted here for the
+                // same reason `compile_call` consults it — inside a module body
+                // a sibling function is in that map and not in
+                // `function_index`, which only ever holds the main program's
+                // names and `alias::exported` ones. Calling `_helper(x)` worked
+                // and *passing* `_helper` did not, so a higher-order function
+                // between modules ran under the tree-walker and the browser
+                // engine and died under the VM — first noticed when a `.zyp`
+                // was packaged, since a package defaults to `--vm`.
+                if self.function_index.contains_key(&id.name)
+                    || self.module_scope.contains_key(&id.name)
+                {
                     // Check if the function body captures variables from the current scope
                     let maybe_source = self.fn_source.get(&id.name).cloned();
                     if let Some((params, stmts)) = maybe_source {
@@ -1674,7 +2005,13 @@ impl Compiler {
                             return Ok(dst);
                         }
                     }
-                    let func_idx = *self.function_index.get(&id.name).unwrap();
+                    // Same precedence as `compile_call`: the qualified table
+                    // first, the enclosing module's own names second.
+                    let func_idx = *self
+                        .function_index
+                        .get(&id.name)
+                        .or_else(|| self.module_scope.get(&id.name))
+                        .unwrap();
                     let dst = ctx.alloc_temp()?;
                     ctx.emit(Instruction::MakeFunc(dst, func_idx));
                     return Ok(dst);
@@ -1730,20 +2067,18 @@ impl Compiler {
                 ctx.emit(Instruction::NumericEval(dst, r));
                 Ok(dst)
             }
+            // The operand compiles like any other expression.
+            //
+            // There used to be a special case mirroring one in the tree-walker:
+            // an identifier with no register and no global constant compiled to
+            // `LoadUnit`, so `nonexistent#?` answered `("##_", 0, Unit)` rather
+            // than erroring. It is unreachable — the semantic analyzer refuses
+            // an undefined name before anything compiles — and what it did reach
+            // was a NAMED FUNCTION, which has neither a register nor a global
+            // constant, so `f#?` reported that a function was Unit while
+            // `g = f` then `g#?` reported `##(), 2` (GAP-ZYB-009 § 6, D-4).
             Expr::TypeMetadata(tm) => {
-                // If the inner expr is an undefined identifier, treat as Unit (##_ type)
-                // This matches tree-walker behavior: nonexistent#? → ("##_", 0, Unit)
-                let r = if let Expr::Identifier(id) = tm.expr.unwrap_group() {
-                    if ctx.get_reg(&id.name).is_err() && !self.global_consts.contains_key(&id.name) {
-                        let tmp = ctx.alloc_temp()?;
-                        ctx.emit(Instruction::LoadUnit(tmp));
-                        tmp
-                    } else {
-                        self.compile_expr(&tm.expr, ctx)?
-                    }
-                } else {
-                    self.compile_expr(&tm.expr, ctx)?
-                };
+                let r = self.compile_expr(&tm.expr, ctx)?;
                 let dst = ctx.alloc_temp()?;
                 ctx.emit(Instruction::TypeOf(dst, r));
                 Ok(dst)
@@ -1766,14 +2101,30 @@ impl Compiler {
                 let src = self.compile_expr(&r.expr, ctx)?;
                 let dst = ctx.alloc_temp()?;
                 ctx.set_reg_type(dst, StaticType::Float);
-                ctx.emit(Instruction::RoundFloat(dst, src, r.precision));
+                match &r.precision {
+                    zymbol_ast::Precision::Literal(n) => {
+                        ctx.emit(Instruction::RoundFloat(dst, src, *n))
+                    }
+                    zymbol_ast::Precision::Dynamic(e) => {
+                        let pr = self.compile_expr(e, ctx)?;
+                        ctx.emit(Instruction::RoundFloatDyn(dst, src, pr))
+                    }
+                };
                 Ok(dst)
             }
             Expr::Trunc(t) => {
                 let src = self.compile_expr(&t.expr, ctx)?;
                 let dst = ctx.alloc_temp()?;
                 ctx.set_reg_type(dst, StaticType::Float);
-                ctx.emit(Instruction::TruncFloat(dst, src, t.precision));
+                match &t.precision {
+                    zymbol_ast::Precision::Literal(n) => {
+                        ctx.emit(Instruction::TruncFloat(dst, src, *n))
+                    }
+                    zymbol_ast::Precision::Dynamic(e) => {
+                        let pr = self.compile_expr(e, ctx)?;
+                        ctx.emit(Instruction::TruncFloatDyn(dst, src, pr))
+                    }
+                };
                 Ok(dst)
             }
             Expr::ErrorCheck(ec) => {
@@ -1817,7 +2168,10 @@ impl Compiler {
             Expr::Execute(exec) => {
                 // Resolve path relative to base_dir (same as WT's eval_execute).
                 // Absolute paths are used as-is; everything else is joined to base_dir.
-                let abs_path = if exec.path.starts_with('/') {
+                // `is_absolute` rather than a leading `/`: on Windows `D:\lib\x.zy`
+                // is absolute and has no leading slash, so testing for one filed it
+                // as relative and joined it onto base_dir, producing nonsense.
+                let abs_path = if std::path::Path::new(&exec.path).is_absolute() {
                     exec.path.clone()
                 } else if let Some(ref base) = self.base_dir {
                     base.join(&exec.path).to_string_lossy().to_string()
@@ -2049,6 +2403,12 @@ impl Compiler {
     ) -> Result<Reg, CompileError> {
         let dst = ctx.alloc_temp()?;
         match &lit.value {
+            // `##_` — the Unit literal. `LoadUnit` already existed: the value
+            // was reachable long before it could be written.
+            Literal::Unit => {
+                ctx.emit(Instruction::LoadUnit(dst));
+                ctx.set_reg_type(dst, StaticType::Unknown);
+            }
             Literal::Int(n) => {
                 ctx.emit(Instruction::LoadInt(dst, *n));
                 ctx.set_reg_type(dst, StaticType::Int);
@@ -2143,15 +2503,38 @@ impl Compiler {
             }
         }
 
-        let r_l = self.compile_expr(&bin.left, ctx)?;
+        // A hot identifier on the left of a JUXTAPOSITION starts at `""`.
+        //
+        // The generic identifier path (`compile_expr`, the `id.hot || id.pre_hot`
+        // branch) has no idea which operator it sits under, so it emitted
+        // `HotNeutral::Int` for everything — and `s = °s "x"` accumulated onto a
+        // `0`, giving `0xxx` where the tree-walker gives `xxx`. The neutral is a
+        // property of the operator, and the operator is only known here.
+        // GLB-002; the assignment path already knew (`hot_neutral_instr`).
+        let r_l = if bin.op == BinaryOp::Concat {
+            match bin.left.unwrap_group() {
+                Expr::Identifier(id)
+                    if (id.hot || id.pre_hot) && ctx.get_reg(&id.name).is_err() =>
+                {
+                    let dst = ctx.alloc_reg(&id.name)?;
+                    ctx.emit(Instruction::HotInit(dst, zymbol_bytecode::HotNeutral::String));
+                    ctx.hot_vars.insert(id.name.clone());
+                    if id.hot {
+                        ctx.postfix_hot_vars.insert(id.name.clone());
+                    }
+                    dst
+                }
+                _ => self.compile_expr(&bin.left, ctx)?,
+            }
+        } else {
+            self.compile_expr(&bin.left, ctx)?
+        };
         let r_r = self.compile_expr(&bin.right, ctx)?;
         let dst = ctx.alloc_temp()?;
 
         let ty_l = ctx.get_reg_type(r_l);
         let ty_r = ctx.get_reg_type(r_r);
         let is_float = ty_l == StaticType::Float || ty_r == StaticType::Float;
-        let is_string = ty_l == StaticType::String || ty_r == StaticType::String
-            || ty_l == StaticType::Char || ty_r == StaticType::Char;
 
         let instr = match bin.op {
             BinaryOp::Concat => {
@@ -2171,11 +2554,14 @@ impl Compiler {
             BinaryOp::Sub => if is_float { ctx.set_reg_type(dst, StaticType::Float); Instruction::SubFloat(dst, r_l, r_r) } else { Instruction::SubInt(dst, r_l, r_r) },
             BinaryOp::Mul => if is_float { ctx.set_reg_type(dst, StaticType::Float); Instruction::MulFloat(dst, r_l, r_r) } else { Instruction::MulInt(dst, r_l, r_r) },
             BinaryOp::Div => {
-                if is_string {
-                    // String split: "a,b" / ',' → Array
-                    ctx.set_reg_type(dst, StaticType::Unknown); // Array type
-                    Instruction::StrSplit(dst, r_l, r_r)
-                } else if is_float {
+                // ZYVM-001: `/` used to compile to StrSplit when either operand
+                // was statically a String or a Char, so `"ab" / "cd"` answered
+                // `[ab]` under the VM while the tree-walker refused it with the
+                // message that names the operator that DOES split — `$/`. The
+                // VM was not skipping a check; it was performing the operation
+                // the refusal tells the reader this is not. `$/` still compiles
+                // to StrSplit, from its own site.
+                if is_float {
                     ctx.set_reg_type(dst, StaticType::Float);
                     Instruction::DivFloat(dst, r_l, r_r)
                 } else {
@@ -2212,6 +2598,10 @@ impl Compiler {
     ) -> Result<Reg, CompileError> {
         let dst = ctx.alloc_temp()?;
         let r_l = self.compile_expr(&bin.left, ctx)?;
+        // The left operand is a Bool or the program is refused — checked HERE,
+        // before the jump, because the jump answers by truthiness and would
+        // otherwise settle `0 && #1` as `#0` (ZYVM-001).
+        ctx.emit(Instruction::RequireBool(r_l, true));
         // Short-circuit: if left is false, skip right
         let skip = ctx.emit_jump_if_not_placeholder(r_l);
         let r_r = self.compile_expr(&bin.right, ctx)?;
@@ -2233,6 +2623,8 @@ impl Compiler {
     ) -> Result<Reg, CompileError> {
         let dst = ctx.alloc_temp()?;
         let r_l = self.compile_expr(&bin.left, ctx)?;
+        // As in `compile_and`: the guard goes before the jump (ZYVM-001).
+        ctx.emit(Instruction::RequireBool(r_l, false));
         // Short-circuit: if left is true, skip right
         let skip = ctx.emit(Instruction::JumpIf(r_l, 0)); // placeholder
         let r_r = self.compile_expr(&bin.right, ctx)?;
@@ -2272,6 +2664,56 @@ impl Compiler {
         Ok(dst)
     }
 
+    /// The expected count when `got` arguments cannot satisfy it, else `None`.
+    ///
+    /// `None` in, `None` out: a call whose target has no recorded arity — a
+    /// closure chunk, a function reached through a path that never registered
+    /// one — is compiled as before rather than rejected on a guess. A negative
+    /// arity marks a variadic builtin, which any count satisfies.
+    fn arity_error(&self, declared: Option<i32>, got: usize) -> Option<i32> {
+        match declared {
+            Some(expected) if expected >= 0 && expected as usize != got => Some(expected),
+            _ => None,
+        }
+    }
+
+    /// Emit the tree-walker's arity error at this call site.
+    ///
+    /// This is a backstop, not the primary check. Semantic analysis rejects an
+    /// argument-count mismatch before either engine starts, so a program run
+    /// through the CLI never reaches these instructions. They matter when the
+    /// compiler and VM are driven directly, without that analysis: without them
+    /// `Instruction::Call` copies every argument into the callee's register
+    /// window and a surplus one overwrites a local, which is silent corruption
+    /// rather than an error.
+    ///
+    /// A `CompileError` would be the wrong shape for a backstop — it would make
+    /// the VM refuse programs the tree-walker accepts whenever the two are
+    /// driven without analysis. Raising at the call site keeps the engines
+    /// interchangeable.
+    ///
+    /// The two wordings are the tree-walker's, which phrases native and Zymbol
+    /// functions differently (`argument(s)` vs `arguments`); parity is measured
+    /// on the exact bytes, so they are reproduced rather than unified.
+    fn raise_arity(
+        &mut self,
+        expected: i32,
+        got: usize,
+        native: bool,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let msg = if native {
+            format!("function expects {} argument(s), got {}", expected, got)
+        } else {
+            format!("function expects {} arguments, got {}", expected, got)
+        };
+        let idx = self.intern_string(&msg);
+        let dst = ctx.alloc_temp()?;
+        ctx.emit(Instruction::RaiseError(idx));
+        ctx.emit(Instruction::LoadUnit(dst));
+        Ok(dst)
+    }
+
     fn compile_call(
         &mut self,
         call: &zymbol_ast::FunctionCallExpr,
@@ -2292,6 +2734,15 @@ impl Compiler {
             let mut arg_regs = Vec::with_capacity(call.arguments.len());
             for arg in &call.arguments {
                 arg_regs.push(self.compile_expr(arg, ctx)?);
+            }
+            // Wrong argument count: raise where the tree-walker raises. Native
+            // functions ignore the extra registers, so `math::sqrt(4.0, 9.0)`
+            // quietly returned 2 under the VM and errored under the tree-walker.
+            if let Some(expected) = self.arity_error(
+                self.builtin_arity.get(&builtin_id).copied(),
+                call.arguments.len(),
+            ) {
+                return self.raise_arity(expected, call.arguments.len(), true, ctx);
             }
             let dst = ctx.alloc_temp()?;
             ctx.emit(Instruction::CallBuiltin(dst, builtin_id, arg_regs));
@@ -2345,6 +2796,14 @@ impl Compiler {
         let dst = ctx.alloc_temp()?;
 
         if let Some(func_idx) = maybe_func_idx {
+            // Wrong argument count: raise before the call rather than copying the
+            // arguments over the callee's registers (see `func_arity`).
+            if let Some(expected) = self.arity_error(
+                self.func_arity.get(&func_idx).map(|n| *n as i32),
+                call.arguments.len(),
+            ) {
+                return self.raise_arity(expected, call.arguments.len(), false, ctx);
+            }
             // Emit SetupOutputWriteback if this function has output params
             if let Some(out_flags) = self.output_param_map.get(&func_idx).cloned() {
                 let mut pairs: Vec<(u16, Reg)> = Vec::new();
@@ -2394,6 +2853,7 @@ impl Compiler {
                 Literal::String(s) | Literal::InterpolatedString(s) => Some(ModuleConst::String(s.replace('\x01', "{").replace('\x02', "}"))),
                 Literal::Bool(b) => Some(ModuleConst::Bool(*b)),
                 Literal::Char(c) => Some(ModuleConst::Char(*c)),
+                Literal::Unit => Some(ModuleConst::Unit),
             },
             Expr::Unary(un) if un.op == UnaryOp::Neg => {
                 if let Expr::Literal(lit) = un.operand.unwrap_group() {
@@ -2406,7 +2866,117 @@ impl Compiler {
                     None
                 }
             }
+            // A collection literal names a value rather than computing one, so
+            // it is a constant by the same reading as `-1` above, and the rule
+            // is recursive. `None` if any element is not — one computed element
+            // makes the whole thing a computation.
+            Expr::Group(g) => Self::eval_const_expr(&g.expr),
+            Expr::ArrayLiteral(arr) => arr
+                .elements
+                .iter()
+                .map(Self::eval_const_expr)
+                .collect::<Option<Vec<_>>>()
+                .map(ModuleConst::Array),
+            Expr::Tuple(t) => t
+                .elements
+                .iter()
+                .map(Self::eval_const_expr)
+                .collect::<Option<Vec<_>>>()
+                .map(ModuleConst::Tuple),
+            Expr::NamedTuple(nt) => nt
+                .fields
+                .iter()
+                .map(|(k, v)| Self::eval_const_expr(v).map(|c| (k.clone(), c)))
+                .collect::<Option<Vec<_>>>()
+                .map(ModuleConst::Dict),
             _ => None,
+        }
+    }
+
+    /// Emit the instructions that rebuild a module constant in a fresh
+    /// register.
+    ///
+    /// The scalar cases are one `Load*` each, which is what the four call sites
+    /// used to write inline. The collections need a sequence — build each
+    /// element, then one instruction to gather them — so a shared emitter is
+    /// the only way the four sites can stay in agreement.
+    fn emit_module_const(
+        &mut self,
+        mc: &ModuleConst,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let dst = ctx.alloc_temp()?;
+        match mc {
+            ModuleConst::Unit => {
+                ctx.emit(Instruction::LoadUnit(dst));
+            }
+            ModuleConst::Int(n) => {
+                ctx.emit(Instruction::LoadInt(dst, *n));
+            }
+            ModuleConst::Float(f) => {
+                ctx.set_reg_type(dst, StaticType::Float);
+                ctx.emit(Instruction::LoadFloat(dst, *f));
+            }
+            ModuleConst::String(s) => {
+                let idx = self.intern_string(s);
+                ctx.set_reg_type(dst, StaticType::String);
+                ctx.emit(Instruction::LoadStr(dst, idx));
+            }
+            ModuleConst::Bool(b) => {
+                ctx.set_reg_type(dst, StaticType::Bool);
+                ctx.emit(Instruction::LoadBool(dst, *b));
+            }
+            ModuleConst::Char(c) => {
+                ctx.set_reg_type(dst, StaticType::Char);
+                ctx.emit(Instruction::LoadChar(dst, *c));
+            }
+            ModuleConst::Array(items) => {
+                ctx.emit(Instruction::NewArray(dst));
+                for item in items {
+                    let r = self.emit_module_const(item, ctx)?;
+                    ctx.emit(Instruction::ArrayPush(dst, r));
+                }
+            }
+            ModuleConst::Tuple(items) => {
+                let mut regs = Vec::with_capacity(items.len());
+                for item in items {
+                    regs.push(self.emit_module_const(item, ctx)?);
+                }
+                ctx.emit(Instruction::MakeTuple(dst, regs));
+            }
+            ModuleConst::Dict(fields) => {
+                let mut names = Vec::with_capacity(fields.len());
+                let mut regs = Vec::with_capacity(fields.len());
+                for (k, v) in fields {
+                    names.push(self.intern_string(k));
+                    regs.push(self.emit_module_const(v, ctx)?);
+                }
+                ctx.emit(Instruction::MakeNamedTuple(dst, names, regs));
+            }
+        }
+        Ok(dst)
+    }
+
+    /// A module constant as a VM startup initializer. Mirrors
+    /// [`Self::emit_module_const`] for the globals table, which is built once
+    /// rather than compiled into a function body.
+    fn global_init_of(mc: &ModuleConst) -> zymbol_bytecode::GlobalInit {
+        use zymbol_bytecode::GlobalInit as G;
+        match mc {
+            ModuleConst::Unit => G::Unit,
+            ModuleConst::Int(n) => G::Int(*n),
+            ModuleConst::Float(f) => G::Float(*f),
+            ModuleConst::Bool(b) => G::Bool(*b),
+            ModuleConst::Char(c) => G::Char(*c),
+            ModuleConst::String(s) => G::Str(s.clone()),
+            ModuleConst::Array(items) => G::Array(items.iter().map(Self::global_init_of).collect()),
+            ModuleConst::Tuple(items) => G::Tuple(items.iter().map(Self::global_init_of).collect()),
+            ModuleConst::Dict(fields) => G::Dict(
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Self::global_init_of(v)))
+                    .collect(),
+            ),
         }
     }
 
@@ -2478,29 +3048,7 @@ impl Compiler {
         if let Expr::Identifier(obj) = ma.object.unwrap_group() {
             let key = format!("{}.{}", obj.name, ma.field);
             if let Some(mc) = self.module_constants.get(&key).cloned() {
-                let dst = ctx.alloc_temp()?;
-                let instr = match mc {
-                    ModuleConst::Int(n) => Instruction::LoadInt(dst, n),
-                    ModuleConst::Float(f) => {
-                        ctx.set_reg_type(dst, StaticType::Float);
-                        Instruction::LoadFloat(dst, f)
-                    }
-                    ModuleConst::String(s) => {
-                        let idx = self.intern_string(&s);
-                        ctx.set_reg_type(dst, StaticType::String);
-                        Instruction::LoadStr(dst, idx)
-                    }
-                    ModuleConst::Bool(b) => {
-                        ctx.set_reg_type(dst, StaticType::Bool);
-                        Instruction::LoadBool(dst, b)
-                    }
-                    ModuleConst::Char(c) => {
-                        ctx.set_reg_type(dst, StaticType::Char);
-                        Instruction::LoadChar(dst, c)
-                    }
-                };
-                ctx.emit(instr);
-                return Ok(dst);
+                return self.emit_module_const(&mc, ctx);
             }
         }
         let r_obj = self.compile_expr(&ma.object, ctx)?;
@@ -2674,42 +3222,7 @@ impl Compiler {
                     skips.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                 }
                 Pattern::Ident(name, _) => {
-                    // Load the variable; if array → containment, else → equality
-                    let r_var = if let Ok(r) = ctx.get_reg(name) {
-                        r
-                    } else if let Some(mc) = self.global_consts.get(name).cloned() {
-                        let r = ctx.alloc_temp()?;
-                        let instr = match mc {
-                            ModuleConst::Int(n)    => Instruction::LoadInt(r, n),
-                            ModuleConst::Float(f)  => { ctx.set_reg_type(r, StaticType::Float); Instruction::LoadFloat(r, f) }
-                            ModuleConst::String(s) => { let idx = self.intern_string(&s); ctx.set_reg_type(r, StaticType::String); Instruction::LoadStr(r, idx) }
-                            ModuleConst::Bool(b)   => { ctx.set_reg_type(r, StaticType::Bool); Instruction::LoadBool(r, b) }
-                            ModuleConst::Char(c)   => { ctx.set_reg_type(r, StaticType::Char); Instruction::LoadChar(r, c) }
-                        };
-                        ctx.emit(instr);
-                        r
-                    } else if let Some(&gvar_idx) = self.global_var_map.get(name) {
-                        let r = ctx.alloc_temp()?;
-                        ctx.emit(Instruction::LoadGlobal(r, gvar_idx));
-                        r
-                    } else {
-                        return Err(CompileError::UndefinedVariable(name.clone()));
-                    };
-                    // Runtime dispatch: array variable → containment check, scalar → equality
-                    let r_is_arr = ctx.alloc_temp()?;
-                    ctx.emit(Instruction::IsArray(r_is_arr, r_var));
-                    let patch_to_eq = ctx.emit_jump_if_not_placeholder(r_is_arr);
-                    // Array branch: ArrayContains(r_cmp, r_var, r_sub)
-                    let r_cmp = ctx.alloc_temp()?;
-                    ctx.emit(Instruction::ArrayContains(r_cmp, r_var, r_sub));
-                    let patch_arr_skip = ctx.emit_jump_placeholder(); // jump over eq branch
-                    // Scalar branch:
-                    let eq_label = ctx.current_label();
-                    ctx.patch_jump(patch_to_eq, eq_label);
-                    ctx.emit(Instruction::CmpEq(r_cmp, r_sub, r_var));
-                    // Merge point:
-                    let merge_label = ctx.current_label();
-                    ctx.patch_jump(patch_arr_skip, merge_label);
+                    let r_cmp = self.compile_ident_pattern_test(name, r_sub, ctx)?;
                     skips.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                 }
                 Pattern::List(patterns, _) => {
@@ -2762,6 +3275,34 @@ impl Compiler {
                                         struct_skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                                     }
                                     _ => {}
+                                }
+                            }
+                            // An identifier is a value to compare, and the whole
+                            // point of DM-26 is that it used to fall through the
+                            // catch-all below and match silently.
+                            Pattern::Ident(name, _) => {
+                                let r_idx = ctx.alloc_temp()?;
+                                ctx.emit(Instruction::LoadInt(r_idx, (i + 1) as i64));
+                                let r_elem = ctx.alloc_temp()?;
+                                ctx.emit(Instruction::ArrayGet(r_elem, r_sub, r_idx));
+                                match self.compile_ident_pattern_test(name, r_elem, ctx) {
+                                    Ok(r_cmp) => {
+                                        struct_skip_patches
+                                            .push(ctx.emit_jump_if_not_placeholder(r_cmp));
+                                    }
+                                    // An undefined name has to fail *when the arm
+                                    // is reached*, not when the file is compiled.
+                                    // The arity check above already jumped out on
+                                    // a length mismatch, so the tree-walker never
+                                    // looks at `a` in `?? [1,2] { [a,b,c] => … }`
+                                    // and answers `_`. Raising here at compile
+                                    // time would refuse a program it runs.
+                                    Err(CompileError::UndefinedVariable(n)) => {
+                                        let idx = self.intern_string(&format!(
+                                            "undefined variable '{}' in match pattern", n));
+                                        ctx.emit(Instruction::RaiseError(idx));
+                                    }
+                                    Err(e) => return Err(e),
                                 }
                             }
                             _ => {}
@@ -2910,11 +3451,89 @@ impl Compiler {
         Ok(dst)
     }
 
+    /// Compile the test an `Ident` pattern performs against `r_sub`, leaving the
+    /// boolean result in the returned register.
+    ///
+    /// An identifier in a pattern is a **value that gets compared**, never a name
+    /// that gets bound — `?? codigo { umbral => … }` compares `codigo` against
+    /// the value of `umbral` (`corpus/match/13_ident_scalar.zy`), and an
+    /// identifier naming nothing is an error, which is what
+    /// `CompileError::UndefinedVariable` below is for.
+    ///
+    /// Extracted so the list pattern can run the same test on each element. It
+    /// could not before: the structural path handled only `Wildcard` and
+    /// `Literal` and let everything else fall through a catch-all that emitted
+    /// nothing, so `?? [9,8,7] { [a, b, c] => … }` **took the branch** with `a`,
+    /// `b` and `c` undefined, while the tree-walker refused it. A pattern that
+    /// matches when it should raise is the worst way to be wrong, and this is
+    /// the engine that is going to be the default (DM-26).
+    fn compile_ident_pattern_test(
+        &mut self,
+        name: &str,
+        r_sub: Reg,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        // Load the variable; if array → containment, else → equality
+        let r_var = if let Ok(r) = ctx.get_reg(name) {
+            r
+        } else if let Some(mc) = self.global_consts.get(name).cloned() {
+            self.emit_module_const(&mc, ctx)?
+        } else if let Some(&gvar_idx) = self.global_var_map.get(name) {
+            let r = ctx.alloc_temp()?;
+            ctx.emit(Instruction::LoadGlobal(r, gvar_idx));
+            r
+        } else {
+            return Err(CompileError::UndefinedVariable(name.to_string()));
+        };
+        // Runtime dispatch: array variable → containment check, scalar → equality
+        let r_is_arr = ctx.alloc_temp()?;
+        ctx.emit(Instruction::IsArray(r_is_arr, r_var));
+        let patch_to_eq = ctx.emit_jump_if_not_placeholder(r_is_arr);
+        // Array branch: ArrayContains(r_cmp, r_var, r_sub)
+        let r_cmp = ctx.alloc_temp()?;
+        ctx.emit(Instruction::ArrayContains(r_cmp, r_var, r_sub));
+        let patch_arr_skip = ctx.emit_jump_placeholder(); // jump over eq branch
+        // Scalar branch:
+        let eq_label = ctx.current_label();
+        ctx.patch_jump(patch_to_eq, eq_label);
+        ctx.emit(Instruction::CmpEq(r_cmp, r_sub, r_var));
+        // Merge point:
+        let merge_label = ctx.current_label();
+        ctx.patch_jump(patch_arr_skip, merge_label);
+        Ok(r_cmp)
+    }
+
     fn compile_collection_update(
         &mut self,
         cu: &zymbol_ast::CollectionUpdateExpr,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
+        // A bare `$~` expression is the functional update: it derives a new
+        // collection and a tuple is a legal target.
+        self.compile_collection_update_as(cu, None, ctx)
+    }
+
+    /// `compile_collection_update`, told whether the source form was the
+    /// in-place `t[i] = val` (`in_place`) or the functional `t[i]$~ val`.
+    /// The only thing it changes is which opcode carries the write, and the
+    /// only thing that distinguishes them is whether a positional tuple at the
+    /// root is refused.
+    fn compile_collection_update_as(
+        &mut self,
+        cu: &zymbol_ast::CollectionUpdateExpr,
+        in_place: Option<&str>,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        // The assigned variable's name, interned once, so the VM can name it in
+        // the refusal exactly as the tree-walker does.
+        let target = match in_place {
+            Some(name) => Some(self.intern_string(name)),
+            None => None,
+        };
+        let deep_set = move |dst, path, val| match target {
+            Some(idx) => Instruction::DeepSetInPlace(dst, path, val, idx),
+            None => Instruction::DeepSet(dst, path, val),
+        };
         match cu.target.unwrap_group() {
             // Single-level: arr[i]$~ val, t[i]$~ val, nt["field"]$~ val.
             // Routed through DeepSet (not ArraySet) because $~ is the functional
@@ -2930,7 +3549,7 @@ impl Compiler {
                 let r_val = self.compile_expr(&cu.value, ctx)?;
                 let dst = ctx.alloc_temp()?;
                 ctx.emit(Instruction::CopyReg(dst, r_arr));
-                ctx.emit(Instruction::DeepSet(dst, r_path, r_val));
+                ctx.emit(deep_set(dst, r_path, r_val));
                 Ok(dst)
             }
             // Deep: arr[i>j>…]$~ val
@@ -2951,7 +3570,25 @@ impl Compiler {
                 let r_val = self.compile_expr(&cu.value, ctx)?;
                 let dst = ctx.alloc_temp()?;
                 ctx.emit(Instruction::CopyReg(dst, r_root));
-                ctx.emit(Instruction::DeepSet(dst, r_path, r_val));
+                ctx.emit(deep_set(dst, r_path, r_val));
+                Ok(dst)
+            }
+            // By name: d.k$~ val — the same access as d["k"]$~ val, so it
+            // builds the same one-step path with the field as its key. The
+            // tree-walker resolves it to `Value::String(field)`; this is that,
+            // interned.
+            Expr::MemberAccess(ma) if !ma.is_module_access => {
+                let r_obj = self.compile_expr(&ma.object, ctx)?;
+                let r_key = ctx.alloc_temp()?;
+                let key_idx = self.intern_string(&ma.field);
+                ctx.emit(Instruction::LoadStr(r_key, key_idx));
+                let r_path = ctx.alloc_temp()?;
+                ctx.emit(Instruction::NewArray(r_path));
+                ctx.emit(Instruction::ArrayPush(r_path, r_key));
+                let r_val = self.compile_expr(&cu.value, ctx)?;
+                let dst = ctx.alloc_temp()?;
+                ctx.emit(Instruction::CopyReg(dst, r_obj));
+                ctx.emit(deep_set(dst, r_path, r_val));
                 Ok(dst)
             }
             _ => Err(CompileError::Unsupported("collection update on non-index expr".into())),
@@ -3263,18 +3900,7 @@ impl Compiler {
                         // `"{DIR}/f.txt"` compiled to the eight characters
                         // `{DIR}` — silently, and only inside functions, and
                         // only under the VM.
-                        let r = ctx.alloc_temp()?;
-                        let instr = match mc {
-                            ModuleConst::Int(n) => Instruction::LoadInt(r, n),
-                            ModuleConst::Float(f) => Instruction::LoadFloat(r, f),
-                            ModuleConst::String(s) => {
-                                let idx = self.intern_string(&s);
-                                Instruction::LoadStr(r, idx)
-                            }
-                            ModuleConst::Bool(b) => Instruction::LoadBool(r, b),
-                            ModuleConst::Char(c) => Instruction::LoadChar(r, c),
-                        };
-                        ctx.emit(instr);
+                        let r = self.emit_module_const(&mc, ctx)?;
                         parts.push(BuildPart::Reg(r));
                     } else if let Some(&gvar_idx) = self.global_var_map.get(&var_name) {
                         // Module-level mutable state, same reasoning.
@@ -3327,7 +3953,7 @@ impl Compiler {
         let iter_var = lp.iterator_var.as_ref().unwrap();
         let iterable = lp.iterable.as_ref().unwrap();
 
-        let r_coll = self.compile_expr(iterable, ctx)?;
+        let mut r_coll = self.compile_expr(iterable, ctx)?;
         let coll_is_string = ctx.get_reg_type(r_coll) == StaticType::String;
 
         let r_len = ctx.alloc_temp()?;
@@ -3342,8 +3968,26 @@ impl Compiler {
             ctx.emit(Instruction::StrLen(r_len, r_coll));
             ctx.emit(Instruction::LoadInt(r_idx, 0));
         } else {
-            // Generic path: StrChars converts String→Array<Char> once, O(1) for arrays.
-            ctx.emit(Instruction::StrChars(r_coll, r_coll));
+            // Generic path: StrChars normalises the collection once — O(1) for an
+            // array, String→Array<Char>, and dictionary→array of KEYS.
+            //
+            // Into a FRESH register, not over `r_coll`. When the iterable is a
+            // bare name, `r_coll` IS that variable's register, so writing the
+            // normalised form back over it replaced the variable for the rest of
+            // the loop. Nobody could see it while the normalisation was a no-op
+            // for arrays and the String path was taken statically — but the
+            // moment a dictionary normalised to its keys, `@ k:d { … d[k] … }`
+            // indexed the key array instead of the dictionary and answered
+            // "expected Int, got String".
+            let r_iter = ctx.alloc_temp()?;
+            // `__zy_par` is the desugared pattern loop: a dictionary has to be
+            // handed over as pairs there, and as bare keys everywhere else.
+            if iter_var == "__zy_par" {
+                ctx.emit(Instruction::IterPairs(r_iter, r_coll));
+            } else {
+                ctx.emit(Instruction::StrChars(r_iter, r_coll));
+            }
+            r_coll = r_iter;
             ctx.emit(Instruction::ArrayLen(r_len, r_coll));
             ctx.emit(Instruction::LoadInt(r_idx, 1));  // 1-based: start at 1
         }
@@ -3412,6 +4056,27 @@ impl Compiler {
     //   finally_label:
     //   [finally body]
     //   end_label:
+    /// Emit a copy of every pending finally block, innermost first.
+    ///
+    /// Called before a `Return` that is lexically inside one or more `!?`
+    /// statements with a `:>` clause. The list is taken out while they compile,
+    /// so a `<~` written inside a finally does not re-emit that same finally
+    /// forever.
+    fn emit_pending_finally(&mut self, ctx: &mut FunctionCtx) -> Result<(), CompileError> {
+        if self.pending_finally.is_empty() {
+            return Ok(());
+        }
+        let pending = std::mem::take(&mut self.pending_finally);
+        let was_in_finally = std::mem::replace(&mut self.in_finally, true);
+        let result = pending
+            .iter()
+            .rev()
+            .try_for_each(|block| self.compile_block(block, ctx));
+        self.in_finally = was_in_finally;
+        self.pending_finally = pending;
+        result
+    }
+
     fn compile_try(
         &mut self,
         ts: &TryStmt,
@@ -3425,6 +4090,13 @@ impl Compiler {
 
         // TryBegin: patch target after body is compiled
         let try_begin_pos = ctx.emit(Instruction::TryBegin(0));
+
+        // From here until the inline copy below, a `<~` owes this finally a
+        // visit on its way out — the try body and every catch clause alike.
+        if has_finally {
+            self.pending_finally
+                .push(ts.finally_clause.as_ref().unwrap().block.clone());
+        }
 
         // Compile try body
         self.compile_block(&ts.try_block, ctx)?;
@@ -3500,9 +4172,15 @@ impl Compiler {
             ctx.patch_try_begin(try_begin_pos, finally_label);
         }
 
-        // Finally block: always executes
+        // Finally block: the copy taken by falling off the end of try/catch.
+        // Popped first, so a `<~` inside the finally itself does not emit it
+        // again.
         if has_finally {
-            self.compile_block(&ts.finally_clause.as_ref().unwrap().block, ctx)?;
+            self.pending_finally.pop();
+            let was_in_finally = std::mem::replace(&mut self.in_finally, true);
+            let r = self.compile_block(&ts.finally_clause.as_ref().unwrap().block, ctx);
+            self.in_finally = was_in_finally;
+            r?;
         }
 
         Ok(())
@@ -3537,15 +4215,32 @@ impl Compiler {
         let r = self.compile_expr(&fe.expr, ctx)?;
         let dst = ctx.alloc_temp()?;
 
-        let (prec_kind, prec_n) = match fe.precision {
-            None => (0u8, 0u32),
-            Some(PrecisionOp::Round(n)) => (1u8, n),
-            Some(PrecisionOp::Truncate(n)) => (2u8, n),
+        // A written count becomes an immediate; a computed one is evaluated
+        // into a register and the `*Dyn` opcode reads it (GAP-ZYB-001).
+        let (prec_kind, prec) = match &fe.precision {
+            None => (0u8, None),
+            Some(PrecisionOp::Round(p)) => (1u8, Some(p)),
+            Some(PrecisionOp::Truncate(p)) => (2u8, Some(p)),
+        };
+        let prec_literal = prec.and_then(|p| p.literal());
+        let prec_reg = match (prec, prec_literal) {
+            (Some(zymbol_ast::Precision::Dynamic(e)), _) => Some(self.compile_expr(e, ctx)?),
+            _ => None,
         };
 
-        match fe.kind {
-            FormatKind::Thousands => ctx.emit(Instruction::FmtThousands(dst, r, prec_kind, prec_n)),
-            FormatKind::Scientific => ctx.emit(Instruction::FmtScientific(dst, r, prec_kind, prec_n)),
+        match (fe.kind, prec_reg) {
+            (FormatKind::Thousands, None) => {
+                ctx.emit(Instruction::FmtThousands(dst, r, prec_kind, prec_literal.unwrap_or(0)))
+            }
+            (FormatKind::Scientific, None) => {
+                ctx.emit(Instruction::FmtScientific(dst, r, prec_kind, prec_literal.unwrap_or(0)))
+            }
+            (FormatKind::Thousands, Some(pr)) => {
+                ctx.emit(Instruction::FmtThousandsDyn(dst, r, prec_kind, pr))
+            }
+            (FormatKind::Scientific, Some(pr)) => {
+                ctx.emit(Instruction::FmtScientificDyn(dst, r, prec_kind, pr))
+            }
         };
         ctx.set_reg_type(dst, StaticType::String);
         Ok(dst)
@@ -3770,10 +4465,25 @@ fn collect_free_in_expr(
         }
         Expr::NumericEval(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
         Expr::TypeMetadata(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
-        Expr::Format(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
+        Expr::Format(op) => {
+            collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free);
+            if let Some(zymbol_ast::Precision::Dynamic(e)) = op.precision.as_ref().map(|p| p.precision()) {
+                collect_free_in_expr(e, locals, outer_ctx, seen, free);
+            }
+        }
         Expr::BaseConversion(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
-        Expr::Round(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
-        Expr::Trunc(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
+        Expr::Round(op) => {
+            collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free);
+            if let zymbol_ast::Precision::Dynamic(e) = &op.precision {
+                collect_free_in_expr(e, locals, outer_ctx, seen, free);
+            }
+        }
+        Expr::Trunc(op) => {
+            collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free);
+            if let zymbol_ast::Precision::Dynamic(e) = &op.precision {
+                collect_free_in_expr(e, locals, outer_ctx, seen, free);
+            }
+        }
         Expr::ErrorCheck(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
         Expr::ErrorPropagate(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
         Expr::Pipe(pipe) => {
@@ -4122,6 +4832,15 @@ pub fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16
             ("list",   B::IO_LIST),
             ("mkdir",  B::IO_MKDIR),
         ]),
+        "std/time" => Some(vec![
+            ("now",    B::TIME_NOW),
+            ("today",  B::TIME_TODAY),
+            ("parts",  B::TIME_PARTS),
+            ("of",     B::TIME_OF),
+            ("format", B::TIME_FORMAT),
+            ("add",    B::TIME_ADD),
+            ("diff",   B::TIME_DIFF),
+        ]),
         "std/net" => Some(vec![
             ("get",       B::NET_GET),
             ("post",      B::NET_POST),
@@ -4188,7 +4907,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::CmpEqImm(d, s, _) | Instruction::CmpNeImm(d, s, _)
             | Instruction::CmpLtImm(d, s, _) | Instruction::CmpLeImm(d, s, _)
             | Instruction::CmpGtImm(d, s, _) | Instruction::CmpGeImm(d, s, _) => { upd(*d); upd(*s); }
-            Instruction::Not(d, s) => { upd(*d); upd(*s); }
+            Instruction::Not(d, s) | Instruction::IsInt(d, s)
+            | Instruction::AsLoopCond(d, s) => { upd(*d); upd(*s); }
             Instruction::And(d, a, b) | Instruction::Or(d, a, b) => { upd(*d); upd(*a); upd(*b); }
             Instruction::Return(r) | Instruction::Print(r)
             | Instruction::JumpIf(r, _) | Instruction::JumpIfNot(r, _) => upd(*r),
@@ -4202,11 +4922,18 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::ArrayPush(a, e) => { upd(*a); upd(*e); }
             Instruction::ArrayGet(d, a, i) | Instruction::ArraySet(d, a, i)
             | Instruction::DeepSet(d, a, i) => { upd(*d); upd(*a); upd(*i); }
+            Instruction::DeepSetInPlace(d, a, i, _) => { upd(*d); upd(*a); upd(*i); }
+            Instruction::AssertMutable(r, _) => { upd(*r); }
+            Instruction::IterPairs(d, s) => { upd(*d); upd(*s); }
+            Instruction::DestructureRest(d, s, _, _) => { upd(*d); upd(*s); }
+            Instruction::DestructureTail(d, s, _, _, _) => { upd(*d); upd(*s); }
             Instruction::ArrayRemove(d, a) | Instruction::ArrayRemoveValue(d, a)
             | Instruction::ArrayRemoveAll(d, a) | Instruction::ArrayRemoveRange(d, a) => { upd(*d); upd(*a); }
             Instruction::ArrayInsert(d, i, v) => { upd(*d); upd(*i); upd(*v); }
             Instruction::ArrayLen(d, a) | Instruction::ArrayContains(d, a, _)
             | Instruction::ArraySlice(d, a, _) => { upd(*d); upd(*a); }
+            Instruction::DestructureCheck(s, _) => upd(*s),
+            Instruction::DestructureAbsorb(d, s, _) => { upd(*d); upd(*s); }
             Instruction::ArrayMap(d, a, f) | Instruction::ArrayFilter(d, a, f) => { upd(*d); upd(*a); upd(*f); }
             Instruction::ArrayReduce(d, a, i, f) => { upd(*d); upd(*a); upd(*i); upd(*f); }
             Instruction::ArraySort(d, a, _, f) => { upd(*d); upd(*a); if *f != u16::MAX { upd(*f); } }
@@ -4225,8 +4952,16 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::MakeTuple(d, elems) => { upd(*d); for &e in elems { upd(e); } }
             Instruction::MakeNamedTuple(d, _, fields) => { upd(*d); for &f in fields { upd(f); } }
             Instruction::NamedTupleGet(d, t, _) => { upd(*d); upd(*t); }
+            Instruction::RequireDict(t) => { upd(*t); }
+            Instruction::RequireBool(t, _) => { upd(*t); }
             Instruction::BashExec(d, _) | Instruction::BuildStr(d, _)
             | Instruction::Execute(d, _) => upd(*d),
+            Instruction::FmtThousandsDyn(d, s, _, p) | Instruction::FmtScientificDyn(d, s, _, p) => {
+                upd(*d); upd(*s); upd(*p);
+            }
+            Instruction::RoundFloatDyn(d, s, p) | Instruction::TruncFloatDyn(d, s, p) => {
+                upd(*d); upd(*s); upd(*p);
+            }
             Instruction::FmtThousands(d, s, _, _) | Instruction::FmtScientific(d, s, _, _)
             | Instruction::NumericEval(d, s) | Instruction::TypeOf(d, s)
             | Instruction::IsError(d, s) | Instruction::IsArray(d, s)

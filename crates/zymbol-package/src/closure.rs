@@ -462,7 +462,10 @@ fn handle_execute(
     queue: &mut VecDeque<(PathBuf, PathBuf)>,
     warnings: &mut Vec<PackageWarning>,
 ) {
-    let target = if raw_path.starts_with('/') {
+    // `is_absolute` rather than a leading `/`, to match the two engines: on Windows
+    // `D:\lib\x.zy` is absolute without a leading slash, and reading it as relative
+    // here would drop from the package a file the engines will still go and execute.
+    let target = if Path::new(raw_path).is_absolute() {
         PathBuf::from(raw_path)
     } else {
         script_base.join(raw_path)

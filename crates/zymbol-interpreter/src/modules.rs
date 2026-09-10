@@ -31,7 +31,7 @@ pub(crate) struct LoadedModule {
     /// All module variables (for function execution context - includes private variables)
     pub(crate) all_variables: HashMap<String, Value>,
     /// Module's import aliases (for function execution context)
-    pub(crate) import_aliases: HashMap<String, PathBuf>,
+    pub(crate) import_aliases: crate::ModuleAliases,
     /// Module's loaded modules (for function execution context)
     #[allow(dead_code)]
     pub(crate) loaded_modules_refs: HashMap<PathBuf, ()>, // Just to track dependencies
@@ -72,7 +72,7 @@ impl<W: Write> Interpreter<W> {
         }
 
         // Register the import alias
-        self.import_aliases
+        std::rc::Rc::make_mut(&mut self.import_aliases)
             .insert(import.alias.clone(), module_path);
 
         Ok(())
@@ -316,7 +316,7 @@ impl<W: Write> Interpreter<W> {
             self.loaded_modules.insert(synthetic.clone(), module);
         }
 
-        self.import_aliases.insert(alias.to_string(), synthetic);
+        std::rc::Rc::make_mut(&mut self.import_aliases).insert(alias.to_string(), synthetic);
         Ok(())
     }
 }

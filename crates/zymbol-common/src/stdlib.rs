@@ -129,6 +129,22 @@ pub const MODULES: &[StdModule] = &[
         feature_gated: false,
     },
     StdModule {
+        path: "std/time",
+        // Everything but `now` takes an optional trailing zone, so everything
+        // but `now` is variadic.
+        functions: &[
+            f("now", 0),
+            f("today", -1),
+            f("parts", -1),
+            f("of", -1),
+            f("format", -1),
+            f("add", -1),
+            f("diff", -1),
+        ],
+        constants: &[],
+        feature_gated: false,
+    },
+    StdModule {
         path: "std/db",
         functions: &[
             f("connect", 2),

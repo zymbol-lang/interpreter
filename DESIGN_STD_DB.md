@@ -344,7 +344,7 @@ impl ErrorValue {
    (mirror the TW logic exactly; share the bind/extract + registry helpers).
 6. **Cargo deps** — `odbc-api = "28"`, `base64 = "0.22"`, `once_cell` in workspace +
    interpreter + vm. CI image needs `unixodbc-dev` + the SQLite ODBC driver.
-7. **Tests** in `tests/stdlib/` (see §9).
+7. **Tests** in `zyquality/corpus/stdlib/` (see §9).
 8. **i18n adapter** `db_es.zy` re-exporting the Spanish names.
 
 Parser · AST · Lexer · CLI: **no changes required** (same as every prior module).
@@ -353,7 +353,7 @@ Parser · AST · Lexer · CLI: **no changes required** (same as every prior modu
 
 ## 9. Testing
 
-`.zy` + `.expected` pairs under `interpreter/tests/stdlib/`. Tests run against
+`.zy` + `.expected` pairs under `zyquality/corpus/stdlib/`. Tests run against
 **SQLite over ODBC**, which is file-based and deterministic, so they can cover the
 happy path (unlike `net`):
 

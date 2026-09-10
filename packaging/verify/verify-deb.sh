@@ -20,6 +20,13 @@
 #   --force-host      Allow running outside a container (see the guard below)
 #   -h, --help
 #
+# Environment:
+#   ZYQ_ROOT   Where the ZyQuality checkout is. `--scope full` runs the corpus
+#              through tests/scripts/vm_compare.sh, which is a wrapper over that
+#              repository; inside a container it is not a sibling of anything, so
+#              mount it and name it:
+#                  -v "$ZYQ:/zyquality" -e ZYQ_ROOT=/zyquality
+#
 # Exit status: 0 when every check passes, 1 otherwise. Checks do not abort on
 # first failure — one run reports every problem the package has.
 #
@@ -39,7 +46,7 @@ EXPECTED_ARCH="amd64"
 SCOPE="full"
 FORCE_HOST=false
 
-usage() { sed -n '2,31p' "${BASH_SOURCE[0]}"; }
+usage() { sed -n '2,35p' "${BASH_SOURCE[0]}"; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -86,7 +93,11 @@ if [[ -z "${EXPECTED_VERSION}" ]]; then
         || { echo "cannot determine expected version — pass --version" >&2; exit 2; }
 fi
 
-# The E2E suite needs the test corpus from the source tree.
+# The E2E suite is driven from the source tree, but the corpus itself no longer
+# lives there: it is in the sibling zyquality repository, and tests/scripts/ is a
+# wrapper over it. Inside a container that repository has to be mounted and
+# named, or the wrapper exits 2 and section 6 fails for a reason that has
+# nothing to do with the package.
 if [[ "${SCOPE}" == "full" && ! -d "${REPO_ROOT}/tests" ]]; then
     echo "--scope full needs the source checkout — pass --repo DIR" >&2
     exit 2
@@ -156,6 +167,18 @@ field() { grep -m1 "^$1:" <<< "${CONTROL}" | cut -d' ' -f2-; }
 [[ -n "$(field Maintainer)"  ]] && ok "Maintainer is set"  || bad "Maintainer is empty"
 [[ -n "$(field Description)" ]] && ok "Description is set" || bad "Description is empty"
 check_contains "Depends declares libc6" "$(field Depends)" "libc6"
+
+# `apt show zymbol-lang` prints this, and every release up to v0.0.8 printed the
+# template's own placeholder: `https://github.com/your-username/zymbol-lang`.
+# Nothing looked at it, in the .deb or in the .rpm and PKGBUILD that carry the
+# same line — a field no check reads is a field that stays wrong.
+HOMEPAGE="$(field Homepage)"
+case "${HOMEPAGE}" in
+    "")             bad "Homepage is empty" ;;
+    *your-username*|*example.com*|*{{*)
+                    bad "Homepage is '${HOMEPAGE}' — the template placeholder was never substituted" ;;
+    *)              ok "Homepage: ${HOMEPAGE}" ;;
+esac
 
 # The filename is what users download; a mismatch with the metadata is a bug.
 EXPECTED_BASENAME_ARCH="x86_64"
@@ -408,14 +431,29 @@ elif [[ "${SCOPE}" == "full" ]]; then
     # appending .zy to stdlib module names — that divergence surfaced here first,
     # so this suite stays unfiltered to keep catching its like.
     SUMMARY="${WORK}/vm_compare.summary"
-    if ZYMBOL_BIN="${ZYMBOL_BIN}" VM_COMPARE_SUMMARY="${SUMMARY}" \
+    # No `set +e` guard around this: the script runs without errexit on purpose,
+    # so that one failed check does not hide the rest of the package's problems.
+    ZYMBOL_BIN="${ZYMBOL_BIN}" VM_COMPARE_SUMMARY="${SUMMARY}" \
         bash "${REPO_ROOT}/tests/scripts/vm_compare.sh" > "${WORK}/vm_compare.log" 2>&1
-    then
-        ok "vm_compare.sh: no tree-walker / VM mismatches"
-    else
-        bad "vm_compare.sh reported mismatches (full log below)"
-        sed -n '/SUMMARY/,$p' "${WORK}/vm_compare.log" | head -60 | sed 's/^/          /'
-    fi
+    SUITE_RC=$?
+
+    # 0 clean, 1 a divergence, 2 could not run — the contract every script in
+    # tests/scripts/ honours. Telling 1 and 2 apart is the difference between
+    # "the engines disagree about the corpus" and "the corpus is not here", and
+    # they send whoever reads this to opposite ends of the project. Both are
+    # failures; only one of them is about the package.
+    case ${SUITE_RC} in
+        0) ok "vm_compare.sh: no tree-walker / VM mismatches" ;;
+        2) bad "vm_compare.sh could not run — the corpus was not reachable"
+           note "the corpus, the goldens and the comparison live in the sibling"
+           note "zyquality repository; this script is a wrapper over it. Inside a"
+           note "container it has to be mounted and pointed at:"
+           note "  -v \"\$ZYQ:/zyquality\" -e ZYQ_ROOT=/zyquality"
+           note "See verify-linux-packages.yml, which does exactly that."
+           sed -n '1,20p' "${WORK}/vm_compare.log" | sed 's/^/          /' ;;
+        *) bad "vm_compare.sh reported mismatches (full log below)"
+           sed -n '/SUMMARY/,$p' "${WORK}/vm_compare.log" | head -60 | sed 's/^/          /' ;;
+    esac
 
     if [[ -f "${SUMMARY}" ]]; then
         # shellcheck disable=SC1090
@@ -439,7 +477,11 @@ elif [[ "${SCOPE}" == "full" ]]; then
         [[ "${skip:-0}" -eq 0 ]] \
             && ok "no tests skipped" \
             || note "${skip} test(s) skipped (timeout or @vm-skip) — not a gate failure"
-    else
+    elif [[ ${SUITE_RC} -ne 2 ]]; then
+        # When the suite could not run at all, the case above has already said
+        # so and said why. Reporting a missing summary on top of that is a
+        # second failure for one cause, and it asks a question — "did it run?" —
+        # that was answered two lines earlier.
         bad "vm_compare.sh wrote no summary — did it run?"
     fi
 fi

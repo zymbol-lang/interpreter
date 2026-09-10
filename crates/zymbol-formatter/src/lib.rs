@@ -150,7 +150,7 @@ pub fn format_with_config(source: &str, config: FormatterConfig) -> Result<Strin
 
     // Format the AST, interleaving comments by source position
     let mut output = OutputBuilder::new(config);
-    let mut visitor = FormatVisitor::new(&mut output, comments);
+    let mut visitor = FormatVisitor::new(&mut output, comments, source);
     visitor.format_program(&program);
 
     let result = output.finish();
@@ -283,8 +283,8 @@ mod tests {
 
     #[test]
     fn test_format_named_tuple() {
-        let result = format("p=(name:\"Alice\",age:25)").unwrap();
-        assert_eq!(result, "p = (name: \"Alice\", age: 25)\n");
+        let result = format("p=#(name:\"Alice\",age:25)").unwrap();
+        assert_eq!(result, "p = #(name: \"Alice\", age: 25)\n");
     }
 
     #[test]
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn test_named_tuple_breaks() {
         let config = FormatterConfig::new().with_max_line_length(30);
-        let result = format_with_config("p = (name: \"Alice Smith\", age: 25, city: \"New York\")", config).unwrap();
+        let result = format_with_config("p = #(name: \"Alice Smith\", age: 25, city: \"New York\")", config).unwrap();
         // Should break due to length
         assert!(result.contains('\n'), "Long named tuple should break: {}", result);
     }
@@ -598,5 +598,82 @@ mod tests {
         let src = ">> a + b ¶\n";
         let second = format(src).unwrap();
         assert_eq!(src, second, "already-formatted arithmetic output must be stable");
+    }
+
+    // ── Literals reprint as WRITTEN (FORMATTER_RULES §2.1, §10) ───────────────
+    //
+    // A literal reaches the AST as a value, and several source forms share one
+    // value. Printing the value picked one spelling and threw the author's
+    // away, which §10 makes a bug rather than a normalization — and none of the
+    // four properties the harness checks (reparse, idempotence, runtime output,
+    // comment count) can see a surface rewrite, which is why it went unnoticed.
+
+    fn unchanged(src: &str) {
+        assert_eq!(format(src).unwrap(), src, "formatter rewrote {src:?}");
+    }
+
+    #[test]
+    fn numeral_script_survives() {
+        // The founding principle: a program written in Devanagari is a
+        // first-class Zymbol program. It stopped being one when formatted.
+        unchanged("a = \u{096A}\u{0968}\n");
+        unchanged("a = \u{0661}\u{0662}\u{0663}\n");
+        unchanged("a = -\u{096A}\u{0968}\n");
+    }
+
+    #[test]
+    fn the_scripts_own_decimal_separator_survives() {
+        unchanged("a = \u{0663}\u{066B}\u{0665}\n");
+        unchanged("a = \u{0663}.\u{0665}\n");
+    }
+
+    #[test]
+    fn base_literals_stay_base_literals() {
+        // `0o17` came out as a quoted U+000F: the value is a Char, and the
+        // formatter wrote a raw control character into the source file.
+        unchanged("a = 0xFF\n");
+        unchanged("a = 0b1010\n");
+        unchanged("a = 0o17\n");
+        unchanged("a = 0d65\n");
+    }
+
+    #[test]
+    fn written_zeros_and_exponents_stay() {
+        unchanged("a = 007\n");
+        unchanged("a = 1.50\n");
+        unchanged("a = 1e10\n");
+        unchanged("a = 1E10\n");
+        unchanged("a = 1.5e-3\n");
+    }
+
+    #[test]
+    fn booleans_keep_their_script() {
+        unchanged("a = #\u{0967}\n");
+        unchanged("a = #\u{0966}\n");
+        unchanged("a = #1\n");
+    }
+
+    #[test]
+    fn literals_in_match_patterns_too() {
+        // The pattern arm prints through the same path as an expression.
+        unchanged("m = ?? 42 {\n    0xFF => \"efe\"\n    _ => \"otro\"\n}\n");
+    }
+
+    #[test]
+    fn a_literal_reprint_is_idempotent() {
+        let once = format("a = 0xFF\nb = \u{096A}\u{0968}\n").unwrap();
+        assert_eq!(format(&once).unwrap(), once);
+    }
+
+    #[test]
+    fn a_rewritten_edit_reprints_as_written() {
+        // `d.x["y"]$~ 5` RUNS as a deep write at `d["x">"y"]` — the only shape
+        // that can be assigned back to `d` without replacing it — but that is
+        // not what the author wrote. `Assignment::written` carries the surface
+        // form; without it the token gate refuses the file (§2.1, §12).
+        unchanged("d = #(a: 1)\nd.x[\"y\"]$~ 5\n");
+        unchanged("d = #(a: 1)\nd[\"x\"].y$~ 5\n");
+        unchanged("d = #(a: 1)\nd.x.y$~ 5\n");
+        unchanged("d = #(a: 1)\nd.lista $+ 3\n");
     }
 }

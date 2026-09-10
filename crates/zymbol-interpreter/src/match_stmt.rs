@@ -20,6 +20,7 @@ fn literal_to_value(lit: &Literal) -> Value {
         Literal::Float(f)  => Value::Float(*f),
         Literal::Char(c)   => Value::Char(*c),
         Literal::Bool(b)   => Value::Bool(*b),
+        Literal::Unit      => Value::Unit,
     }
 }
 
@@ -92,6 +93,7 @@ impl<W: Write> Interpreter<W> {
                     Literal::Float(f) => Value::Float(*f),
                     Literal::Char(c) => Value::Char(*c),
                     Literal::Bool(b) => Value::Bool(*b),
+                    Literal::Unit => Value::Unit,
                 };
 
                 if self.values_equal(&pattern_value, value) {

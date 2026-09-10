@@ -1,5 +1,0 @@
-// Fatal error: ° in output position blocks execution entirely
-
-x° += 5
->> x° ¶
->> "unreachable" ¶

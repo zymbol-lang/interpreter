@@ -48,6 +48,22 @@ Everything else is untouchable. In particular:
   `##"`, `##'`, `#|var|`), interpolated strings `"a {b} c"`, `¶` vs `\\`,
   1-tuples `(1,)`, single vs double bracket extraction (`arr[i>a..b]` vs
   `arr[[path]]`), and export-block comma separators.
+- **Literals reprint as written.** A literal reaches the AST as a *value*, and
+  many source forms share one value: `४२`, `0x2A`, `0b101010` and `42` are all
+  `Int(42)`; `٣٫٥` and `3.5` are one `Float`; `#१` and `#1` are one `Bool`.
+  The formatter emits the literal's own source text, recovered from its span and
+  verified by re-lexing it (`visitor.rs::literal_source_form`) — so a script, a
+  base prefix, an exponent, and written leading or trailing zeros all survive.
+
+  > Until v0.0.9 it printed the *value*, so `४२` came out `42` and a program
+  > written entirely in Devanagari stopped being one the moment it was
+  > formatted. `0o17` came out as a quoted **U+000F**: the value is a `Char`, so
+  > the formatter wrote a raw control character into the source. None of P1–P4
+  > can see this — the output reparses, is idempotent, runs identically and
+  > keeps every comment — and G1 passes legitimately, because `Integer(42)` is
+  > `Integer(42)` whichever script spelled it. Held by unit tests in
+  > `crates/zymbol-formatter/src/lib.rs`, which is where a surface property has
+  > to be checked.
 
 ### 2.2 Never delete content
 
@@ -115,6 +131,23 @@ it (`result $+ element`).
 ### 4.6 Tuple field access `.` — no spaces (`point.x`)
 
 ### 4.7 Lambda arrow `->` — one space each side
+
+Exactly one, whichever the body is:
+
+```zymbol
+e = x -> x + 1          // expression body
+b = (x) -> { <~ x }     // block body
+t = () -> { <~ 42 }     // zero parameters (v0.0.9)
+```
+
+The right-hand space belongs to whoever writes it once. A block supplies its
+own leading space (§5.1), so the arrow does not add one there; an expression
+has none, so the arrow does. Until v0.0.9 the arrow always wrote it and every
+block lambda came out `x ->  { … }` with two — invisible to the property
+harness, which checks reparse, idempotence, semantics and comments, and a
+stray space breaks none of the four. Fixed by
+`crates/zymbol-formatter/src/visitor.rs::format_lambda`, held by three unit
+tests including one for trailing whitespace in brace-next-line mode.
 
 ### 4.8 Pipe `|>` — one space each side
 
@@ -201,44 +234,63 @@ whitespace:
 If `fmt` changes anything not in this table, it is a bug — and the safety
 gate will normally have refused to emit it.
 
----
+**"Normally" is the load-bearing word.** The gate compares *tokens*, so a
+rewrite that preserves the token stream passes it: printing `42` for `४२` is
+one, and it stood for four releases. When output differs from input in a way
+this table does not list, the gate's silence is not evidence.
 
-## 11. Configuration reference
+### 10.1 The table is executable
 
-| Option | Default | CLI flag | Description |
-|--------|---------|----------|-------------|
-| `indent_size` | 4 | `--indent N` | Spaces per indent level |
-| `use_spaces` | true | — | Tabs via `FormatterConfig::with_tabs()` |
-| `max_line_length` | 100 | — | Target line length |
-| `max_inline_array_length` | — | — | Character budget for inline arrays |
-| `inline_single_statement` | true | — | Collapse single-stmt blocks (§5.4) |
-| `brace_same_line` | true | — | Opening brace placement |
+This section is prose, and prose does not fail a build. The machine-readable
+copy is **`ZyFmtCheck/normalizations.toml`**, and `ZyFmtCheck/bin/zyfmtcheck`
+reads that and nothing else:
 
----
+1. **format** every `.zy` of a body in a *temporary copy* — never in place;
+2. **verify** that the code skeleton and the multiset of comments are unchanged,
+   and that every remaining difference is one the file declares;
+3. **run** the application's own suite from the copy and require the same output.
 
-## 12. Syntax coverage policy
+It runs over the **LDV applications** rather than only the corpus, because a
+formatter's damage lives in what short files do not have: deep nesting,
+hand-aligned tables, comments in awkward places, five writing systems, modules
+importing each other. `--body corpus` asks the wider, shallower question.
 
-The formatter's `format_statement` / `format_expr` matches are **exhaustive**:
-adding a `Statement` or `Expr` variant fails compilation until the formatter
-learns to print it. This is deliberate.
+The point is not the check, it is where the list lives. Adding a normalization
+means adding an entry with a reason, in a file a reviewer reads — so a
+formatter cannot grow a new power quietly. §13's non-goals are a promise; this
+is the mechanism.
 
-**Process rule:** a PR that adds parser syntax must, in the same PR:
+It is a **separate project**, not a test in this repository, and that is
+deliberate: a contract that lives inside the thing it constrains is not a
+contract. `zyq suite` gates on it.
 
-1. add the formatter arm (the compiler enforces this),
-2. make sure the parser records any surface form the AST would otherwise
-   lose (see `AssignSugar`, `Newline.backslash`, `FlatExtractExpr.double_bracket`,
-   `ExportBlock.commas`, `Expr::Group` for precedents),
-3. add at least one corpus file exercising the new syntax and keep
-   `tests/scripts/fmt_property.sh` green.
-
-The property harness runs P1 (reparse), P2 (idempotence), P3 (runtime output
-equality) and P4 (comment counts) over every `.zy` file in `tests/` and
-`examples/`; `--baseline` mode gates CI on regressions.
-
----
-
-## 13. Non-goals (explicit)
-
-- **Linting** — use `zymbol check`
-- **Style enforcement beyond layout** — naming conventions, idioms
-- **Auto-import or auto-fix** — the formatter never adds new code
+> **First run, 2026-08-30 — four behaviours, all fixed.**
+>
+> **Interpolated strings were re-spelled.** A newline written inside `"…{x}…"`
+> came back as `\n`, and `\'` came back as `'`. `literal_source_form` had an arm
+> for `String` and none for `InterpolatedString`, so every interpolated literal
+> fell through to the re-writer. Same family as `४२` → `42`, and invisible to
+> P1–P4 and to G1 for the same reason.
+>
+> **The export block was moved.** A module opening with `#> { … }` and imports
+> underneath came back with the two swapped: imports were printed first
+> unconditionally, while the export block was placed in source order relative to
+> the *statements* only.
+>
+> **A dictionary key was re-spelled twice over.** The quoted form used Rust's
+> `{:?}`, which writes a combining mark as `\u{941}` — Rust syntax this language
+> does not have, and which its own lexer then read as an interpolation with an
+> invalid character. And the bare/quoted decision used `is_alphanumeric()`,
+> narrower than the lexer's identifier rule, so `मुद्रा` — a bare key, and a
+> valid identifier everywhere else — was judged to need quoting. Both directions
+> changed a token. The remaining half needed the AST: a key arrives as a bare
+> `String` either way, so `NamedTupleExpr` now records `quoted`, per §12.
+>
+> **An output statement was wrapped.** `>>` and `>>~` end at the line, so
+> breaking a long call across lines inside one does not reformat the statement —
+> it ends it and leaves the rest as a fragment. The visitor carries a `no_wrap`
+> flag now. Line length is a preference; producing a program that does not parse
+> is not a trade-off against it.
+>
+> Refusals across the seven LDV applications: **fourteen → zero**. The corpus's
+> thirteen are files that do not parse, which is the correct refusal.

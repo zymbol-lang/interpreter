@@ -7,9 +7,9 @@ PackageName: Zymbol
 PackageUrl: https://github.com/zymbol-lang/interpreter
 License: AGPL-3.0-or-later
 LicenseUrl: https://github.com/zymbol-lang/interpreter/blob/main/LICENSE
-ShortDescription: A keyword-free symbolic programming language
+ShortDescription: A symbolic programming language with no words in its grammar
 Description: |-
-  Zymbol is a keyword-free symbolic programming language where every construct
+  Zymbol is a symbolic programming language with no words in its grammar where every construct
   (conditionals, loops, functions, I/O, error handling) uses pure symbols
   instead of reserved words. Includes a tree-walker interpreter, a register VM,
   LSP server, REPL, formatter, and VS Code extension.

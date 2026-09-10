@@ -20,8 +20,19 @@
 Thumbs.db
 
 # Test output
-tests/output/
+#
+# `tests/output/` is NOT an output directory — it holds the test cases for the
+# output operator `>>`. Ignoring it by that name hid eight committed-nowhere tests
+# for over two months: they ran on the machine that wrote them and existed on no
+# other clone, so the parity suite counted 544 files there and 536 everywhere else.
+# Nothing writes into that directory; do not add the rule back.
 *.tmp
+
+# Scratch files the std/io and std/db tests create in the working directory.
+# They used to be written to /tmp, which does not exist on Windows; the tests now
+# use relative paths, so the artifacts land wherever the suite was run from.
+zy_io_*
+zy_test_db_*.db
 
 # Standalone executables built by `zymbol build`
 *.exe
@@ -37,3 +48,10 @@ packaging/RELEASE_NOTES_*.md
 
 # Manual test logs (generated per session, not committed)
 tests/manual/logs/manual_*.log
+
+# Coverage profiles. A binary built with `-C instrument-coverage` writes a
+# default_*.profraw into the *current directory* on every run when
+# LLVM_PROFILE_FILE is unset — so one `cargo test` after a coverage build drops
+# dozens of them here. See zyquality/coverage/run.sh.
+*.profraw
+*.profdata

@@ -1,12 +1,21 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **v0.0.8** — a *debt* release, scoped by evidence rather
+> Current status: **v0.0.9 (in development)** — a *decision* release: rules that existed
+> in the prose and in no engine, or in three engines three ways, decided once and enforced
+> in all three. The collections (`COLLECTIONS.md`), the dictionary's own notation `#(…)`,
+> the withdrawn chained index, `std/time`, the safe integer, and the eleven Windows
+> findings. See `IMPL_V009.md` and `WINDOWS_V009.md`.
+> Validation (measured 2026-09-07): **666 corpus files, 660 agreeing, 0 diverging** across
+> all three engines; **1026 unit tests**, 0 failed; `zyq suite` reports **all gates pass**.
+> **0.0.8 is the latest published release**; every figure on this page is measured on the
+> `v0.0.9` branch.
+>
+> Previously: **v0.0.8 (released 2026-08-02)** — a *debt* release, scoped by evidence rather
 > than by a feature wish list: the design-vs-implementation audit in `MEMORY_MODEL.md`
 > (MM-1 … MM-11) plus findings from three validation projects written in Zymbol
 > (zy-GO, zy-Serpiente, zyKlingonGalaxy). Highlights: auto-free (destruction at last use,
 > both engines), `std/term`, `##!` on `Char`, match or-patterns (`p1 || p2`), Zymbol
 > Packages (`.zyp`), and VM module-system parity. See `IMPL_V008.md`.
-> Validation: 544/544 VM-parity, 936 unit tests.
 >
 > Previously: **v0.0.7 (released 2026-07-02)** — native stdlib expansion (`std/json`,
 > `std/io`, `std/net`, `std/db` via ODBC), typed/validated input (`<< ##.(5,2) "p" var`),
@@ -49,8 +58,8 @@
 | Negative indices `arr[-1]` (tree-walker + VM parity) | ✅ |
 | **1-based indexing** — `arr[1]` is first element; index 0 = runtime error | ✅ |
 | Sort `$^+` (ascending) / `$^-` (descending), natural + custom comparator | ✅ |
-| Destructuring assignment: `[a, b, *rest] = arr`, `(name: n) = t` | ✅ |
-| Named tuples with `.field` access | ✅ |
+| Destructuring assignment: `[a, b, *rest] = arr`, `(a, b) = t`, `#(name: n) = d` | ✅ |
+| Dictionaries `#(k: v)` with `.field` and computed-key `d[k]` access | ✅ v0.0.9 |
 | String operators: split, slice, find, insert, remove, replace | ✅ |
 | Error handling: `!?` / `:!` / `:>` with typed catch | ✅ |
 | Module system: `#` / `#>` / `<#` with aliases | ✅ |
@@ -69,7 +78,7 @@
 | Tree-walker interpreter | ✅ | Default mode, best error messages |
 | Scope pool recycling | ✅ | Zero allocation per scope push/pop |
 | Tail-call optimization (TCO) | ✅ | Detects `<~ f(same_args)` restart |
-| Register VM | ✅ | `--vm` flag, 4.4× faster than tree-walker on fib(35) |
+| Register VM | ✅ | `--vm` flag. No single speedup factor — 1.4–6× on the microbenchmarks, 11–13× on an alpha-beta search. Quote the workload |
 | Flat register stack | ✅ | All frames share one `Vec<Value>`, zero alloc per call |
 | `sizeof(Value)` = 16 bytes | ✅ | Via `Rc<T>` heap payloads (was 40 bytes) |
 | String pool pre-interning | ✅ | `LoadStr` = O(1) `Rc::clone` |
@@ -92,12 +101,18 @@
 
 | Suite | Status |
 |-------|--------|
-| Unit + integration (`cargo test`) | ✅ 936 passed, 0 failed |
-| VM parity check (`vm_compare.sh`) | ✅ 544/544 PASS, 0 skipped |
-| Golden files (`expected_compare.sh`) | ⚠️ 523/525 — two stale hand-written `.expected` fixtures, not interpreter regressions (see `IMPL_V008.md` § E.1) |
-| Formatter property suite (`fmt_property.sh`) | ✅ 600 PASS / 43 SKIP / 0 FAIL over 643 files, no regressions vs. baseline (the pattern-escaping bug, § E.2, is fixed) |
-| JS mirror parity (`web/tests/test_runner.mjs`) | ⚠️ 516/521 + 208/210 on the example pool — seven gaps in `web/src/zymbol/zymbol.js` (see `IMPL_V008.md` § E.3) |
+| Unit + integration (`cargo test`) | ✅ 1026 passed, 0 failed, 4 ignored |
+| TW/VM consensus (`zyq consensus --engines zytw,zyvm`) | ✅ 660 of 666 agree, 0 diverge (6 excused for every engine by a reason in `corpus.toml`) |
+| Three-engine consensus (`zyq consensus`) | ✅ 660 agree, 0 diverge — the browser engine included |
+| Golden files (`zyq expect`) | ✅ 635/639 via `run`, **0 stale**, 4 unchecked · 25/25 via `check` |
+| Rejection corpus (`zyq reject`) | ✅ 41 forms, all refused in every engine |
+| Formatter property suite (`zyq suite --only fmt`) | ✅ 710 PASS / 55 SKIP / 0 FAIL over 764 files, P1–P4 all zero, no regressions vs. baseline |
+| JS mirror parity (`zyq consensus --engines zytw,zyjs`) | ✅ 636 of 666 agree, **0 diverge** — the 30 excused for `zyjs` in `corpus.toml`. The seven gaps of `IMPL_V008.md` § E.3 are closed |
+| Benchmark gate | ✅ 16/16 within tolerance, no performance regressions |
 | RosettaStone i18n suite (105 languages) | ✅ PASS |
+
+The whole question at once: `cd ../zyquality && ./zyq suite` — **all gates pass** as of
+2026-09-07.
 
 ---
 
@@ -112,9 +127,9 @@ They are documented in the manual as known limitations.
 |-----|-------------|------------|
 | **Match multi-value arms** | `1, 2 => "low"` (one arm, several values) not parsed — `[NI02]` | Or-patterns: `1 \|\| 2 => "low"` (v0.0.8), which also work for non-literal patterns; or list containment `[1, 2] => "low"` (v0.0.4) |
 | **Match identifier binding** | `pattern as name` — `[NI03]` — **dismissed 2026-06-12** | Extract the value before the match (the idiom) |
-| ~~**`$!!` from lambdas**~~ | **Resolved** — verified 2026-06-12: `$!!` propagates from lambdas identically to named functions (`tests/lambdas/error_propagate_lambda.zy`) | — |
+| ~~**`$!!` from lambdas**~~ | **Resolved** — verified 2026-06-12: `$!!` propagates from lambdas identically to named functions (`zyquality/corpus/lambdas/error_propagate_lambda.zy`) | — |
 | **`do-while ~>`** | Post-condition loop `[NI01]` — **dismissed 2026-06-12** | Infinite loop with `@!` break at end (the idiom) |
-| **Dict / map literal** | `[NI05]` — no `key: value` collection literal | Use named tuples, or arrays of `(k, v)` pairs |
+| ~~**Dict / map literal**~~ | **Resolved in v0.0.9** — the dictionary is `#(clave: valor)`: computed keys, insertion, removal, `@ k:d`, `##Key`, and `#()` for the empty one. No new *type* — it is the old named tuple — but it did get **a notation of its own**, and the bare `(a: 1)` is refused: the empty dictionary is what forced it, since `()` cannot be both that and the empty tuple. See [COLLECTIONS.md](COLLECTIONS.md) § 5 | — |
 
 > **Dismissed 2026-06-12** (validated with the language author): `do-while ~>` and
 > match identifier binding will NOT be implemented. Their workarounds are the
@@ -124,7 +139,7 @@ They are documented in the manual as known limitations.
 > **Resolved since this table was first written** (verified against `crates/` + `tests/`):
 > module constant access `alias.CONST` (see REFERENCE.md L4), named functions as
 > first-class values (`f = myFunc`) and as HOF references (`arr$> myFunc`)
-> (`tests/analysis/p0a_named_fn_firstclass.zy`, GAP-Z009), and `><` CLI-args capture
+> (`zyquality/corpus/analysis/p0a_named_fn_firstclass.zy`, GAP-Z009), and `><` CLI-args capture
 > in VM mode (`LoadCliArgs`). Match guard patterns `_?` were **removed**, not added
 > (EBNF `[D03]`/`[R05]`).
 
@@ -135,7 +150,19 @@ They are documented in the manual as known limitations.
 | `unused variable` for interpolation `"{x}"` | Analyzer does not track string interpolation usage |
 | `unused variable` for BashExec `<\ {x} \>` | Analyzer does not track BashExec variable usage |
 | `arithmetic on non-numeric` for string `/` split | Analyzer cannot distinguish `/` operators by context |
-| `type mismatch` for `arr[i] = val` | Analyzer does not model indexed assignment |
+| ~~`type mismatch` for `arr[i] = val`~~ | **Moot since v0.0.9** — indexed assignment was withdrawn, so there is nothing to model: the form is refused in all three engines |
+
+### Auto-free debt — inherited from v0.0.8, still undecided
+
+Both were recorded in `IMPL_V008.md` § B as "known and accepted, not regressions", with
+the note that they *should be decided explicitly before v0.0.9 rather than inherited
+silently*. v0.0.9 is the branch in flight and neither has been decided, so they are moved
+here — a debt whose deadline passed inside a released plan is a debt nobody is looking at.
+
+| Debt | What it costs | Shape of the fix |
+|------|---------------|------------------|
+| **VM expression temporaries** | `emit_auto_free` clears the *named* variable's register; a temporary holding the same large value lives until its register is reused, so the VM's peak-memory win is measurably smaller than the tree-walker's | Teach the register allocator to release temporaries at their last read — a change to allocation, not to the analysis. Worth a before/after measurement on the same 30 MB benchmark used for the tree-walker |
+| **Flat regions only** | A variable created inside a nested block, loop body or lambda body is attributed to the enclosing statement and freed there — correct, but later than necessary in long loop bodies | Extending regions into blocks needs the analysis to model block lifetimes, which is exactly the complexity the current design avoids. **Standing recommendation: leave it, and write the reason into `last_use.rs`** so the next reader does not rediscover it as a bug |
 
 ---
 
@@ -148,12 +175,59 @@ They are documented in the manual as known limitations.
 - **Match multi-value arms**: extend parser to accept `val1, val2 => expr` arm syntax
 - ~~Match identifier binding~~ — dismissed 2026-06-12 (see gaps table above)
 
+#### Multiple returns and out-parameters — decided 2026-08-15
+
+Five decisions taken together, after an audit found that the two mechanisms for getting
+several values out of a function were both fully implemented, both documented only in part,
+and consequently almost unused: `(a, b) = f()` appears in 2 corpus files against 9 using
+`[a, b] = f()`, and **no `.zy` in the workspace declares a `<~` parameter at all**. The
+documentation tables were corrected on the same date (REFERENCE.md §21, IMPLEMENTATION.md
+feature table, SYMBOLS.md §16); the five items below are behavioral and still open.
+
+| # | Decision | Tracked as | Status |
+|---|----------|------------|--------|
+| 1 | The destructuring pattern is **typed**: `[ … ]` takes an array, `( … )` takes a tuple | REFERENCE.md L32 | ✅ every engine |
+| 2 | The last name **absorbs the remainder** (`##_` when nothing remains); destructuring never fails on length | REFERENCE.md L33 | ✅ every engine |
+| 3 | A non-assignable expression in a `<~` slot is a **semantic error** | REFERENCE.md L34 | ✅ `zytw` `zyvm` `zyjs` — every engine that exists |
+| 4 | ~~`zyml` implements `~`~~, and the corpus starts covering both marks | REFERENCE.md L35 | ✅ (`zyml` retired 2026-08-17) |
+| 5 | `<~` becomes **visible at the call site**: `f(x<~)`, required, qualified calls included | REFERENCE.md L36 | ✅ `zytw` `zyvm` `zyjs` — every engine that exists |
+
+**Decision 2 — absorption, chosen over strict arity.** The first form of this decision was
+the opposite (an unequal length is an error, a tail discarded only via `*rest`). It was
+replaced on the same day: destructuring never fails on length, and the last name of the
+pattern takes whatever is left over, or `##_` when nothing is. The cost is accepted rather
+than unnoticed — the last binding's type is then decided at run time by the length of the
+value, so a function that grows a return value keeps its old call sites compiling while that
+variable turns from scalar to collection. L33 records the trade in full; the Clippy-style
+lint below, not the type checker, is where it gets flagged.
+
+**Decision 2's two sub-questions were closed on the same day.** A single-name pattern
+absorbs like any other (`[solo] = [1,2,3]` now binds the whole array — the rule has no
+special cases), and **no new discard syntax was added**: absorption already puts every value
+under some name, and dropping one is the programmer's own act, spelled `_something` or
+`\name`. `_` keeps exactly the meaning it had.
+
+**Decision 5 — `<~` at the call site.** Settled on 2026-08-15 and implemented the same day:
+the mark is **required** wherever the callee declares an output parameter, and marking an
+argument the callee does not declare is an error too. Optional would have meant absent from
+exactly the call sites nobody revisited; requiring it is what keeps the annotation and the
+signature from drifting apart. The rule is the same for `m::f(x<~)`. See REFERENCE.md L36
+for what it cost — a table beside `module_arities`, and nine corpus files that were
+modifying their caller's variables without saying so.
+
+**Migration is a linter's job, not a rewrite.** `serpiente/` receives tuple returns with
+`[ … ]` 35 times and would read better with out-parameters
+(`tick_comida(comio, serpiente, AN, AL, semilla<~, comida<~, fruta<~)` replaces a
+three-value tuple plus its destructuring). Those call sites are **not** to be migrated by
+hand ahead of the language work: decisions 1 and 2 make the wrong ones fail to compile, and
+the planned Clippy-style lint pass is what proposes the out-parameter form where it applies.
+
 #### ~~Fix static analyzer false positives~~ Resolved
 
 Verified 2026-06-12: variables used only inside string interpolation or BashExec
-no longer warn (regression test: `tests/errors/semantic/no_false_positive_unused.zy`).
+no longer warn (regression test: `zyquality/corpus/errors/semantic/no_false_positive_unused.zy`).
 - Distinguish string split `/` from arithmetic `/` in type checker
-- Model `arr[i] = val` as a mutation rather than a type mismatch
+- ~~Model `arr[i] = val` as a mutation~~ — moot: the form was withdrawn in v0.0.9
 
 #### ~~VM completeness~~ Reached in v0.0.8
 
@@ -162,10 +236,11 @@ worse than no line: it sends projects to the tree-walker by default, which is ex
 zy-GO did before HLZ-008 was found.
 
 - ~~**Module system in VM**~~ — HLZ-008, HLZ-009, HLZ-010, MM-10 and MM-11 closed the known
-  divergences. `tests/scripts/vm_compare.sh` reports **544/544** files byte-identical under
-  both engines, `tests/modules_scope/` included. Exactly one test carries `@vm-skip`
-  (`tests/gaps/gap_key_input_type_check.zy`) and it is skipped by design — it is a
-  `zymbol check` test that never executes.
+  divergences. The TW/VM consensus reports **660 of 666** corpus files byte-identical under
+  both engines (2026-09-07), `zyquality/corpus/modules_scope/` included. **No corpus file
+  carries an in-file skip marker**: `@vm-skip` was retired along with the four other
+  exclusion mechanisms `zyquality/corpus.toml` replaced, and every exclusion now names the
+  engine, the tag and the reason in that one file.
 - ~~**Format expressions in VM**~~ — already done, and that line's syntax predated v0.0.6.
   Verified on the v0.0.8 binary, TW == VM for `#,|x|` → `12,345.678`, `#^|x|` →
   `1.2345678e4`, `#^.3|x|` → `1.235e4`, `#,.2|x|` → `12,345.68`. `compile_format`
@@ -262,13 +337,13 @@ Built-in modules accessible via `<#`:
 | `std/math` | `sqrt exp ln log pow sin cos abs max min floor ceil round` + `PI E` | ✅ v0.0.6 |
 | `std/random` | `entero rango peso_f64` (xoshiro256++) | ✅ v0.0.6 |
 | `std/io` | `read write append exists delete list mkdir` — soft `##IO` errors | ✅ v0.0.7 |
-| `std/json` | `decode encode` — object↔NamedTuple, soft `##Parse` errors | ✅ v0.0.7 |
+| `std/json` | `decode decode_map encode` — JSON object ↔ **dictionary** `#(…)`, soft `##Parse` errors | ✅ v0.0.7 |
 | `std/net` | `get post post_json head` (sync, optional headers arg) — soft `##Network` errors | ✅ v0.0.7 |
 | `std/db` | Vendor-neutral DB access via ODBC (connect/exec/query/tx/savepoints) — soft `##DB` errors | ✅ v0.0.7 |
 | `std/term` | `width pad_left pad_right center truncate` — display width in terminal **columns** (CJK/emoji count as 2), measured over grapheme clusters | ✅ v0.0.8 |
 | `std/env` | Environment variables, OS info | **dropped v0.0.7** — redundant: `<\ "printenv KEY" \>`, `><` (see `IMPL_V007.md`) |
 | `std/string` | Advanced string utilities | planned |
-| `std/time` | Timestamps, duration, formatting | planned |
+| `std/time` | `now today parts of format add diff` — instants in milliseconds, the civil calendar, zones (`UTC`/`local`/`±HHMM`), calendar arithmetic — soft `##Time` errors | ✅ v0.0.9 |
 
 #### Package Manager
 
@@ -300,18 +375,22 @@ What a package manager still needs on top:
 
 ## Performance Targets
 
-Current benchmarks (release build, post-Sprint 5D+):
+Measured 2026-09-07 by the benchmark gate (median of 5 runs), which reports
+**16/16 within tolerance, no regressions**:
 
-| Benchmark | Tree-walker | VM (now) | VM (target) |
-|-----------|:-----------:|:--------:|:-----------:|
-| Stress | ~200ms | **67ms** | <60ms |
-| Match | ~165ms | **50ms** | <50ms |
-| Collections | ~14s | **33ms** | <30ms |
-| Strings | ~43ms | 36ms | <25ms |
-| Recursion | ~1480ms | 308ms | <200ms |
+| Benchmark | Tree-walker | VM | VM (target) |
+|-----------|:-----------:|:--:|:-----------:|
+| Stress | 236ms | **101ms** | <60ms |
+| Match | 182ms | **67ms** | <50ms |
+| Collections | 72ms | **58ms** | <30ms |
+| Strings | 92ms | **73ms** | <25ms |
+| Recursion | 1648ms | **271ms** | <200ms |
+| Index read | 140ms | **96ms** | — |
 
-Recursion and strings are the remaining performance targets.
-Both are addressed by the Cranelift JIT milestone.
+Recursion and strings are the remaining performance targets; both are addressed by the
+Cranelift JIT milestone. These are gate timings on one machine, not the isolated
+microbenchmark numbers in `README.md` § Performance — a gate measures against its own
+recorded baseline, which is what makes a regression visible.
 
 ---
 

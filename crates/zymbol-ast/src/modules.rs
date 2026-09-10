@@ -185,19 +185,12 @@ impl ModulePath {
 
         let mut resolved = if self.is_absolute {
             if self.home_relative {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-                PathBuf::from(home)
+                home_dir()
             } else {
-                PathBuf::from("/")
+                filesystem_root(base_dir)
             }
         } else {
-            let mut base = base_dir.to_path_buf();
-            for _ in 0..self.parent_levels {
-                if !base.pop() {
-                    return None;
-                }
-            }
-            base
+            climb(base_dir, self.parent_levels)?
         };
 
         for component in &self.components {
@@ -205,5 +198,203 @@ impl ModulePath {
         }
         resolved.set_extension("zy");
         Some(resolved)
+    }
+}
+
+/// Walk `levels` directories up from `base_dir`, staying relative if it was.
+///
+/// The obvious `PathBuf::pop` is wrong on a base with nothing left to pop, and
+/// that base is the common one: `zymbol run prog.zy` gives the interpreter a
+/// file name with no directory in it, whose `parent()` is `""`. `pop()` on `""`
+/// returns false, so `<# ../lib/util` failed outright — while the same file run
+/// as `zymbol run sub/prog.zy` from one directory up resolved fine. The path
+/// spelled on the command line decided whether an import worked (BUG-ZYB-004).
+///
+/// `./prog.zy` failed differently and worse: `parent()` is `"."`, `pop()` on it
+/// succeeds and leaves `""`, so the `../` was silently *consumed* and the
+/// module was looked for one directory too low, with a "not found" naming a
+/// path the program had never asked for.
+///
+/// So climbing out of a name that is not a directory name appends `..` rather
+/// than popping. Relative bases stay relative — resolving against the current
+/// directory is what makes them work at all, and it keeps diagnostics (and the
+/// goldens that record them) free of absolute paths that differ per machine.
+fn climb(base_dir: &Path, levels: usize) -> Option<PathBuf> {
+    use std::path::Component;
+    // A leading `.` carries no meaning here and only clutters the result.
+    let mut base = if base_dir == Path::new(".") {
+        PathBuf::new()
+    } else {
+        base_dir.to_path_buf()
+    };
+    for _ in 0..levels {
+        match base.components().next_back() {
+            // Above the root there is nothing.
+            Some(Component::RootDir) | Some(Component::Prefix(_)) => return None,
+            // A real directory name: step out of it.
+            Some(Component::Normal(_)) => {
+                base.pop();
+            }
+            // `""`, `.` or an existing `..`: keep climbing symbolically.
+            _ => base.push(".."),
+        }
+    }
+    Some(base)
+}
+
+/// The user's home directory, for `~/mod` imports.
+///
+/// Windows does not set `HOME`; it uses `USERPROFILE`. Reading only `HOME` there
+/// meant `~/mod` silently fell back to `/root` — a path that cannot exist on
+/// Windows, so the import failed with a "not found" naming a directory the user
+/// never mentioned.
+///
+/// `HOME` still comes first on every platform: a user who sets it (or a POSIX
+/// shell that sets it, as Git Bash does) means it.
+fn home_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        return PathBuf::from(home);
+    }
+    #[cfg(windows)]
+    {
+        if let Some(profile) = std::env::var_os("USERPROFILE").filter(|p| !p.is_empty()) {
+            return PathBuf::from(profile);
+        }
+        // Last resort before giving up on `~`: the pair NT actually stores.
+        if let (Some(drive), Some(path)) = (
+            std::env::var_os("HOMEDRIVE").filter(|d| !d.is_empty()),
+            std::env::var_os("HOMEPATH").filter(|p| !p.is_empty()),
+        ) {
+            let mut home = PathBuf::from(drive);
+            home.push(PathBuf::from(path));
+            return home;
+        }
+    }
+    // Nothing to go on. `~/mod` will not resolve, which is the honest outcome.
+    PathBuf::from("/")
+}
+
+/// The filesystem root that a leading-`/` import is resolved against.
+///
+/// On Unix that is `/`. On Windows a path has no meaning without a drive —
+/// `PathBuf::from("/")` is root-relative to whichever drive happens to be current —
+/// so `/mod` resolves against the root of the drive the importing file is on. That
+/// keeps `<# /lib/x` pointing inside the project's own drive rather than wherever
+/// the process was started from.
+fn filesystem_root(base_dir: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::Component;
+        let mut components = base_dir.components();
+        if let Some(Component::Prefix(prefix)) = components.next() {
+            let mut root = PathBuf::from(prefix.as_os_str());
+            root.push(std::path::MAIN_SEPARATOR_STR);
+            return root;
+        }
+    }
+    let _ = base_dir;
+    PathBuf::from("/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zymbol_span::{FileId, Position, Span};
+
+    fn span() -> Span {
+        Span::new(Position::start(), Position::start(), FileId(0))
+    }
+
+    /// `<# ../lib/util`, the import in every one of these cases.
+    fn parent_import() -> ModulePath {
+        ModulePath::new(
+            vec!["lib".to_string(), "util".to_string()],
+            true,
+            1,
+            span(),
+        )
+    }
+
+    /// BUG-ZYB-004 — the base directory comes from the importing file's
+    /// `parent()`, and how the file was *spelled* on the command line decides
+    /// what that is: `sub/prog.zy` gives `"sub"`, `./prog.zy` gives `"."` and a
+    /// bare `prog.zy` gives `""`. All three name the same file, so all three
+    /// have to climb to the same place.
+    #[test]
+    fn parent_import_resolves_the_same_however_the_file_was_spelled() {
+        let path = parent_import();
+
+        // A real directory name: step out of it. This one always worked.
+        assert_eq!(
+            path.resolve_from(Path::new("sub")),
+            Some(PathBuf::from("lib/util.zy"))
+        );
+
+        // `zymbol run prog.zy` from the program's own directory — the most
+        // ordinary way there is to run something. `PathBuf::pop` on `""`
+        // returns false, so this used to resolve to nothing at all and the
+        // import failed with `module not found: ["lib", "util"]`.
+        assert_eq!(
+            path.resolve_from(Path::new("")),
+            Some(PathBuf::from("../lib/util.zy"))
+        );
+
+        // `zymbol run ./prog.zy` — the failure that was worse, because it did
+        // not look like one. `pop()` on `"."` succeeds and leaves `""`, so the
+        // `../` was silently swallowed and the module was looked for one
+        // directory too low.
+        assert_eq!(
+            path.resolve_from(Path::new(".")),
+            Some(PathBuf::from("../lib/util.zy"))
+        );
+
+        // And the absolute form, which is unaffected either way.
+        assert_eq!(
+            path.resolve_from(Path::new("/home/u/rel/sub")),
+            Some(PathBuf::from("/home/u/rel/lib/util.zy"))
+        );
+    }
+
+    /// Climbing more levels than the base has names keeps going symbolically
+    /// rather than giving up: `../../x` from a bare file name is two levels up
+    /// from the current directory, which is a real place.
+    #[test]
+    fn climbing_past_the_start_of_a_relative_base_keeps_climbing() {
+        let two_up = ModulePath::new(vec!["x".to_string()], true, 2, span());
+
+        assert_eq!(
+            two_up.resolve_from(Path::new("")),
+            Some(PathBuf::from("../../x.zy"))
+        );
+        assert_eq!(
+            two_up.resolve_from(Path::new("sub")),
+            Some(PathBuf::from("../x.zy"))
+        );
+        assert_eq!(
+            two_up.resolve_from(Path::new("a/b")),
+            Some(PathBuf::from("x.zy"))
+        );
+    }
+
+    /// An absolute base still has a top, and `None` is the honest answer there.
+    #[test]
+    fn climbing_above_the_filesystem_root_fails() {
+        let two_up = ModulePath::new(vec!["x".to_string()], true, 2, span());
+        assert_eq!(two_up.resolve_from(Path::new("/a")), None);
+    }
+
+    /// No `../` at all: the base is used as-is, including the empty one.
+    #[test]
+    fn a_sibling_import_needs_no_climbing() {
+        let sibling = ModulePath::new(vec!["util".to_string()], true, 0, span());
+
+        assert_eq!(
+            sibling.resolve_from(Path::new("")),
+            Some(PathBuf::from("util.zy"))
+        );
+        assert_eq!(
+            sibling.resolve_from(Path::new("sub")),
+            Some(PathBuf::from("sub/util.zy"))
+        );
     }
 }

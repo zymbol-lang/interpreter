@@ -8,8 +8,8 @@
 //! - Precision expressions: #.N|expr| (round), #!N|expr| (truncate)
 
 use std::io::Write;
-use zymbol_ast::{BaseConversionExpr, CastKind, Expr, FormatExpr, NumericCastExpr, NumericEvalExpr, RoundExpr, TruncExpr, TypeMetadataExpr};
-use zymbol_lexer::digit_blocks::digit_value;
+use zymbol_ast::{BaseConversionExpr, CastKind, FormatExpr, NumericCastExpr, NumericEvalExpr, RoundExpr, TruncExpr, TypeMetadataExpr};
+use zymbol_common::num;
 
 use crate::{Interpreter, Result, RuntimeError, Value};
 
@@ -28,32 +28,10 @@ fn value_type(v: Value) -> &'static str {
     }
 }
 
-/// Normalize a string containing Unicode numerals to ASCII digits.
-/// Accepts: Unicode decimal digits (any of 69 scripts), '.', '-' (leading only).
-/// Returns None if any non-numeric character is found.
-fn normalize_unicode_digits(s: &str) -> Option<String> {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    // Optional leading minus
-    if chars.peek() == Some(&'-') {
-        result.push('-');
-        chars.next();
-    }
-    let mut has_digit = false;
-    let mut has_dot = false;
-    for ch in chars {
-        if let Some(dv) = digit_value(ch) {
-            result.push(char::from_digit(dv as u32, 10).unwrap());
-            has_digit = true;
-        } else if ch == '.' && !has_dot {
-            result.push('.');
-            has_dot = true;
-        } else {
-            return None; // non-numeric character — not a number
-        }
-    }
-    if has_digit { Some(result) } else { None }
-}
+// The one normalizer, shared with the VM and with the lexer's own literal
+// scanner. It used to be a hand-written copy in each engine; they agreed, which
+// is exactly what makes that shape dangerous — nothing would have said so.
+use zymbol_lexer::digit_blocks::ascii_number as normalize_unicode_digits;
 
 /// The ASCII form of a numeric string written in any of the 69 supported digit
 /// scripts: `"४२"` → `"42"`, `"42"` → `"42"` (borrowed, no allocation).
@@ -76,31 +54,65 @@ pub(crate) fn ascii_digits(s: &str) -> std::borrow::Cow<'_, str> {
 /// Returns the original `String` value if parsing fails (fail-safe).
 /// Also handles Unicode digit scripts (Thai, Arabic, Devanagari, etc.).
 pub(crate) fn parse_numeric_string(s: String) -> Value {
-    let trimmed = s.trim();
-    if let Ok(n) = trimmed.parse::<i64>() {
-        return Value::Int(n);
+    // What the text says is `num::parse`'s call, shared with the VM so the two
+    // engines cannot read the same string differently.
+    fn numeric(t: &str) -> Option<Value> {
+        match num::parse(t) {
+            num::Num::Int(n) => Some(Value::Int(n)),
+            num::Num::Float(f) => Some(Value::Float(f)),
+            num::Num::None => None,
+        }
     }
-    if let Ok(f) = trimmed.parse::<f64>() {
-        return Value::Float(f);
+    let trimmed = s.trim();
+    if let Some(v) = numeric(trimmed) {
+        return v;
     }
     if let Some(normalized) = normalize_unicode_digits(trimmed) {
-        if let Ok(n) = normalized.parse::<i64>() {
-            return Value::Int(n);
-        }
-        if let Ok(f) = normalized.parse::<f64>() {
-            return Value::Float(f);
+        if let Some(v) = numeric(&normalized) {
+            return v;
         }
     }
     Value::String(s)
 }
 
+/// A float already rounded or truncated, as an integer.
+///
+/// `f as i64` in Rust *saturates*: `1e300` becomes `i64::MAX` and `nan` becomes
+/// `0`, so the cast used to answer with a number the program never computed.
+/// Out of range is a `##Range` error like any other integer overflow.
+fn cast_to_int(f: f64, cast: &str, span: zymbol_span::Span) -> Result<Value> {
+    match num::from_f64(f) {
+        Some(n) => Ok(Value::Int(n)),
+        None => Err(RuntimeError::Generic {
+            // The offending float is deliberately not quoted: the engines still
+            // print large floats differently (`1e+300` in the browser, 301
+            // digits here), and an error message is the last place a parity gate
+            // should have to tolerate that. The span already points at it.
+            message: format!("integer overflow: {} cannot represent this float", cast),
+            span,
+        }),
+    }
+}
+
 impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_numeric_eval(&mut self, op: &NumericEvalExpr) -> Result<Value> {
         let value = self.eval_expr(&op.expr)?;
-        if let Value::String(s) = value {
-            Ok(parse_numeric_string(s))
-        } else {
-            Ok(value)
+        match value {
+            Value::String(s) => Ok(parse_numeric_string(s)),
+            // GAP-ZYB-012: a Char reads like the one-character string it is.
+            //
+            // `#|"७"|` gave 7 and `#|'७'|` gave back the glyph — the same
+            // operator, the same character, two answers depending on which of
+            // the two ways it had been written. `#|'7'|` did not convert
+            // either. `parse_numeric_string` already knows all 69 digit
+            // scripts, so this is the same reading applied to the same
+            // character, and a Char that is not a digit comes back untouched,
+            // which is what "safe conversion" means for a string too.
+            Value::Char(c) => Ok(match parse_numeric_string(c.to_string()) {
+                Value::String(_) => Value::Char(c),
+                converted => converted,
+            }),
+            other => Ok(other),
         }
     }
 
@@ -121,7 +133,7 @@ impl<W: Write> Interpreter<W> {
             },
             CastKind::ToIntRound => match value {
                 Value::Int(_) => Ok(value),
-                Value::Float(f) => Ok(Value::Int(f.round() as i64)),
+                Value::Float(f) => cast_to_int(f.round(), "###", op.span),
                 other => Err(RuntimeError::Generic {
                     message: format!("### requires a numeric value, got {}", value_type(other)),
                     span: op.span,
@@ -129,7 +141,7 @@ impl<W: Write> Interpreter<W> {
             },
             CastKind::ToIntTrunc => match value {
                 Value::Int(_) => Ok(value),
-                Value::Float(f) => Ok(Value::Int(f.trunc() as i64)),
+                Value::Float(f) => cast_to_int(f.trunc(), "##!", op.span),
                 // A Char casts to its Unicode code point. This is the only
                 // direct Char→Int route (the alternative was inverting a base
                 // literal and stripping its prefix), and it makes characters
@@ -148,73 +160,83 @@ impl<W: Write> Interpreter<W> {
     /// Type symbols are language-agnostic with ## prefix:
     /// ###, ##., ##", ##', ##?, ##], ##), ##_
     ///
-    /// SAFE ACCESS: If expr is an undefined variable, returns ("##_", 0, Unit)
-    /// instead of throwing an error. This allows checking variable existence.
+    /// The operand is evaluated like any other expression.
+    ///
+    /// There used to be a special case here: an `Expr::Identifier` was looked up
+    /// with `get_variable` and, when that found nothing, `#?` answered
+    /// `("##_", 0, Unit)` instead of erroring — "so variable existence can be
+    /// checked". That case is unreachable: an undefined name is refused by the
+    /// semantic analyzer before anything runs, so nothing ever arrived at it.
+    ///
+    /// What it did reach was a **named function**, which is not a variable — it
+    /// lives in the function table — so the lookup failed and `f#?` reported
+    /// that a function was Unit, while `g = f` then `g#?` reported `##(), 2`.
+    /// The browser engine, which has no such case, was right about both.
+    /// A workaround for a situation that cannot happen, paid for with a false
+    /// answer to one that does (GAP-ZYB-009 § 6, D-4).
     pub(crate) fn eval_type_metadata(&mut self, op: &TypeMetadataExpr) -> Result<Value> {
-        // Special handling for identifiers - check if variable exists
-        let value = if let Expr::Identifier(ident) = op.expr.unwrap_group() {
-            // Try to get variable safely
-            match self.get_variable(&ident.name) {
-                Some(v) => v.clone(),
-                None => {
-                    // Variable undefined - return Unit metadata without error
-                    return Ok(Value::Tuple(vec![
-                        Value::String("##_".to_string()),  // Unit type symbol
-                        Value::Int(0),                      // Count: 0
-                        Value::Unit,                        // Value: Unit
-                    ]));
-                }
-            }
-        } else {
-            // For other expressions, evaluate normally (can still error)
-            self.eval_expr(&op.expr)?
-        };
+        let value = self.eval_expr(&op.expr)?;
 
-        let (type_symbol, count) = match &value {
-            Value::Int(n) => {
-                let count = n.to_string().len() as i64;
-                ("###".to_string(), count)
-            }
-            Value::Float(f) => {
-                let count = f.to_string().len() as i64;
-                ("##.".to_string(), count)
-            }
-            Value::String(s) => {
-                let count = s.len() as i64;
-                ("##\"".to_string(), count)
-            }
-            Value::Char(_) => ("##'".to_string(), 1),
-            Value::Bool(_) => ("##?".to_string(), 1),
-            Value::Array(arr) => {
-                let count = arr.len() as i64;
-                ("##]".to_string(), count)
-            }
-            Value::Tuple(tup) => {
-                let count = tup.len() as i64;
-                ("##)".to_string(), count)
-            }
-            Value::NamedTuple(fields) => {
-                let count = fields.len() as i64;
-                ("##)".to_string(), count)  // Same symbol as positional tuples
-            }
-            Value::Function(func) => {
-                let count = func.params.len() as i64;
-                let sym = if func.is_named_fn { "##()" } else { "##->" };
-                (sym.to_string(), count)
-            }
-            Value::Error(err) => {
-                let count = err.message.len() as i64;
-                (format!("##{}", err.error_type), count)  // Error type symbol
-            }
-            Value::Unit => ("##_".to_string(), 0),
+        // The symbol comes from `type_symbol_of`, which every engine shares
+        // through `zymbol_common::typesym`; only the count is decided here,
+        // because what "how many" means differs per type.
+        let type_symbol = crate::type_symbol_of(&value);
+        let count: i64 = match &value {
+            Value::Int(n) => n.to_string().len() as i64,
+            Value::Float(f) => f.to_string().len() as i64,
+            Value::String(s) => s.len() as i64,
+            Value::Char(_) | Value::Bool(_) => 1,
+            Value::Array(arr) => arr.len() as i64,
+            Value::Tuple(tup) => tup.len() as i64,
+            Value::NamedTuple(fields) => fields.len() as i64,
+            Value::Function(func) => func.params.len() as i64,
+            Value::Error(err) => err.message.len() as i64,
+            Value::Unit => 0,
         };
 
         // Return tuple: (type_symbol, count, value)
-        Ok(Value::Tuple(vec![
+        Ok(Value::tuple(vec![
             Value::String(type_symbol),
             Value::Int(count),
             value,
         ]))
+    }
+
+    /// The decimal count a precision operator was given, evaluated if it was
+    /// written as an expression (GAP-ZYB-001).
+    fn eval_precision(&mut self, p: &zymbol_ast::Precision, span: zymbol_span::Span) -> Result<u32> {
+        match p {
+            zymbol_ast::Precision::Literal(n) => Ok(*n),
+            zymbol_ast::Precision::Dynamic(expr) => match self.eval_expr(expr)? {
+                Value::Int(n) if n >= 0 => Ok(n as u32),
+                Value::Int(n) => Err(RuntimeError::Generic {
+                    message: format!("decimal count must not be negative, got {}", n),
+                    span,
+                }),
+                other => Err(RuntimeError::Generic {
+                    message: format!(
+                        "decimal count must be a whole number, got {}",
+                        other.type_name()
+                    ),
+                    span,
+                }),
+            },
+        }
+    }
+
+    fn eval_precision_op(
+        &mut self,
+        op: &Option<zymbol_ast::PrecisionOp>,
+        span: zymbol_span::Span,
+    ) -> Result<Option<zymbol_ast::ResolvedPrecision>> {
+        use zymbol_ast::{PrecisionOp, ResolvedPrecision};
+        Ok(match op {
+            None => None,
+            Some(PrecisionOp::Round(p)) => Some(ResolvedPrecision::Round(self.eval_precision(p, span)?)),
+            Some(PrecisionOp::Truncate(p)) => {
+                Some(ResolvedPrecision::Truncate(self.eval_precision(p, span)?))
+            }
+        })
     }
 
     /// Evaluate format expression: #,|expr| or #^|expr| with optional precision.
@@ -238,12 +260,26 @@ impl<W: Write> Interpreter<W> {
             }
         };
 
+        let precision = self.eval_precision_op(&op.precision, op.span)?;
         let formatted = match op.kind {
-            FormatKind::Thousands => interp_fmt_thousands(f, op.precision),
-            FormatKind::Scientific => interp_fmt_scientific(f, op.precision),
+            FormatKind::Thousands => interp_fmt_thousands(f, precision),
+            FormatKind::Scientific => interp_fmt_scientific(f, precision),
         };
 
-        Ok(Value::String(formatted))
+        // Digits *and* separators follow the active numeral mode, as `>>` and
+        // the precision operators do. They did not: `#,` and `#^` build their
+        // text with `format!`, which writes ASCII, so under `#०९#` a program
+        // printed `१२३४५६७.८९` with `>>` and `1,234,567.89` one line later with
+        // `#,` — two spellings of one number inside one output. The same in all
+        // three engines, so no consensus run could see it.
+        //
+        // `#,` is the only operator in the language that emits a thousands
+        // separator at all, because it is the only one whose result is text
+        // rather than a number.
+        Ok(Value::String(crate::numeral_mode::map_numeral_number(
+            formatted,
+            self.numeral_mode,
+        )))
     }
 
     /// Evaluate base conversion expression: 0x|expr| or 0b|expr| or 0o|expr| or 0d|expr|
@@ -387,7 +423,8 @@ impl<W: Write> Interpreter<W> {
         };
 
         // Round to N decimal places
-        let multiplier = 10_f64.powi(op.precision as i32);
+        let digits = self.eval_precision(&op.precision, op.span)?;
+        let multiplier = 10_f64.powi(digits as i32);
         let rounded = (float_val * multiplier).round() / multiplier;
 
         Ok(Value::Float(rounded))
@@ -436,7 +473,8 @@ impl<W: Write> Interpreter<W> {
         };
 
         // Truncate to N decimal places
-        let multiplier = 10_f64.powi(op.precision as i32);
+        let digits = self.eval_precision(&op.precision, op.span)?;
+        let multiplier = 10_f64.powi(digits as i32);
         let truncated = (float_val * multiplier).trunc() / multiplier;
 
         Ok(Value::Float(truncated))
@@ -446,8 +484,8 @@ impl<W: Write> Interpreter<W> {
 // ── Format helpers (free functions) ──────────────────────────────────────────
 
 /// Format number with thousands separators and optional precision.
-fn interp_fmt_thousands(num: f64, precision: Option<zymbol_ast::PrecisionOp>) -> String {
-    use zymbol_ast::PrecisionOp;
+fn interp_fmt_thousands(num: f64, precision: Option<zymbol_ast::ResolvedPrecision>) -> String {
+    use zymbol_ast::ResolvedPrecision as PrecisionOp;
 
     // Apply precision first
     let num = match precision {
@@ -504,8 +542,8 @@ fn interp_fmt_thousands(num: f64, precision: Option<zymbol_ast::PrecisionOp>) ->
 }
 
 /// Format number in scientific notation with optional precision.
-fn interp_fmt_scientific(num: f64, precision: Option<zymbol_ast::PrecisionOp>) -> String {
-    use zymbol_ast::PrecisionOp;
+fn interp_fmt_scientific(num: f64, precision: Option<zymbol_ast::ResolvedPrecision>) -> String {
+    use zymbol_ast::ResolvedPrecision as PrecisionOp;
     match precision {
         None => format!("{:e}", num),
         Some(PrecisionOp::Round(n)) => format!("{:.prec$e}", num, prec = n as usize),

@@ -157,8 +157,30 @@ impl DiagnosticPipeline {
                 lsp_diagnostics.push(to_lsp_diagnostic(semantic_error));
             }
 
-            // Type checking
+            // The document's path on disk, when it has one. Needed to resolve
+            // imports — both for the arity table below and for module analysis.
+            // Virtual documents have none and skip those passes.
+            let path = crate::workspace::uri_to_path(&document.uri).or_else(|| {
+                // Plain paths (no file:// scheme) are used by tests
+                // and tooling — accept them when they exist on disk.
+                let p = std::path::PathBuf::from(document.uri.as_ref());
+                p.exists().then_some(p)
+            });
+
+            // Type checking. The arity table makes `alias::func(...)` checked
+            // in the editor exactly as `zymbol check` checks it — without it
+            // the two disagree, and the editor is the one people believe.
             let mut type_checker = zymbol_semantic::TypeChecker::new();
+            if let Some(base_dir) = path.as_deref().and_then(|p| p.parent()) {
+                type_checker.set_module_arities(zymbol_semantic::module_arities(
+                    &program.imports,
+                    base_dir,
+                ));
+                type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+                    &program.imports,
+                    base_dir,
+                ));
+            }
             let type_diagnostics = type_checker.check(program);
 
             // Convert type diagnostics
@@ -166,18 +188,18 @@ impl DiagnosticPipeline {
                 lsp_diagnostics.push(to_lsp_diagnostic(type_diag));
             }
 
+            // Loop context: `@!`/`@>` need an enclosing loop, and `@:L!` needs
+            // one labelled L. Same function `zymbol check` calls, so a mistyped
+            // label is underlined as you write it rather than at run time.
+            for diag in zymbol_semantic::check_loop_context(program) {
+                lsp_diagnostics.push(to_lsp_diagnostic(&diag));
+            }
+
             // Module analysis — same pass as `zymbol check` (E001 name
             // mismatch, E002 module not found, E009 duplicate export, export
             // validation). Resolving imported files needs a real filesystem
             // path, so virtual documents without one skip this pass.
             if program.module_decl.is_some() || !program.imports.is_empty() {
-                let path = crate::workspace::uri_to_path(&document.uri)
-                    .or_else(|| {
-                        // Plain paths (no file:// scheme) are used by tests
-                        // and tooling — accept them when they exist on disk.
-                        let p = std::path::PathBuf::from(document.uri.as_ref());
-                        p.exists().then_some(p)
-                    });
                 if let Some(path) = path {
                     if let Some(base_dir) = path.parent() {
                         let mut module_analyzer =
@@ -343,15 +365,24 @@ mod tests {
 
     /// Build a Document from a real corpus fixture (module analysis needs a
     /// filesystem path to resolve imports).
+    ///
+    /// The corpus lives in ZyQuality, a sibling repository — `ZYQUALITY_DIR`
+    /// overrides where, the same way `engines.toml` overrides every path it
+    /// reaches back through. A missing corpus is a hard failure, not a skip: a
+    /// gate must not read "nothing ran" as "nothing failed".
     fn doc_from_fixture(rel: &str) -> crate::document::Document {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
+        let corpus = std::env::var("ZYQUALITY_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../zyquality")
+            });
+        let path = corpus
             .join(rel)
             .canonicalize()
-            .expect("fixture exists");
+            .unwrap_or_else(|e| panic!("corpus fixture {rel} not found under {}: {e}", corpus.display()));
         let content = std::fs::read_to_string(&path).expect("read fixture");
         crate::document::Document::new(
-            std::sync::Arc::from(format!("file://{}", path.display()).as_str()),
+            crate::workspace::path_to_uri(&path),
             content,
             0,
             FileId(0),
@@ -363,9 +394,9 @@ mod tests {
     #[test]
     fn test_module_errors_in_pipeline() {
         let cases = [
-            ("tests/errors/semantic/E001_mismatch_mod.zy", "E001"),
-            ("tests/errors/semantic/E002_mod_not_found.zy", "E002"),
-            ("tests/errors/semantic/E009_dup_export.zy", "E009"),
+            ("corpus/errors/semantic/E001_mismatch_mod.zy", "E001"),
+            ("corpus/errors/semantic/E002_mod_not_found.zy", "E002"),
+            ("corpus/errors/semantic/E009_dup_export.zy", "E009"),
         ];
         for (fixture, code) in cases {
             let doc = doc_from_fixture(fixture);

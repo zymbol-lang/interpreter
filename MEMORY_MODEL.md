@@ -8,6 +8,13 @@
 > note describing the new behavior. Promoted to `REFERENCE.md` as L18–L24 (all
 > fixed). Regression tests: `tests/bugs/bug_mm*.zy` (TW == VM parity).
 >
+> **MM-12 (v0.0.9)** was found afterwards, by an application rather than by this
+> audit: module state read through a helper that does not name it saw the value
+> from before the current frame's write. It is fixed, and the reason it survived
+> the audit is worth keeping — every case anyone wrote called the reader
+> *directly*, and a direct call was the one shape that worked. See §7 and the
+> findings table.
+>
 > Design sources: `GUIDE.md` §4 (Variables and Constants), §9 (Functions), §10/10b
 > (Lambdas, Capture Semantics), §17 (Modules); `REFERENCE.md` §20 (Known Limitations).
 > Implementation source: `crates/zymbol-interpreter` (tree-walker). Every claim below was
@@ -50,14 +57,30 @@ The tree-walker holds all program state inside the `Interpreter` struct
 | `import_aliases: HashMap<String, PathBuf>` | Alias → module path. Call-scoped (saved/restored per call). |
 | `dead_variables: HashSet<String>` | Names destroyed by `\` (use-after-destruction detection). **Global, not call-scoped** — see MM-3. |
 
-Values have **value semantics**: assignment, argument passing, and capture copy the
-`Value` (with fast paths that mutate in place when the interpreter can prove the target
-is the same variable, e.g. `arr = arr$+ x`). There are no references or aliasing at the
-language level; the only shared-identity structure is `LoadedModule`.
+Values have **value semantics**: assignment, argument passing, and capture give the
+callee a copy. There are no references or aliasing at the language level; the only
+shared-identity structure is `LoadedModule`.
 
-Performance machinery that is *semantically neutral* (verified): scope-map pooling
-(B10/B13), scope elision for blocks that declare no variables (QW7 in `if_stmt.rs:16`,
-QW16 in `loops.rs:36`), self-assign fast paths (B3/B12), and move-on-return (MoveOrClone).
+**How that copy is paid for is not part of the semantics.** Since v0.0.9 the three
+aggregates are `Rc<Vec<…>>` and are **copied when written, not when passed**:
+binding one to a name, handing it to a function or returning it shares the
+allocation, and the first writer calls `Rc::make_mut`, which clones only if
+somebody else is still holding it. Sharing is invisible precisely because every
+write detaches first — the 14-case battery in zy-GO's HLZ-014 checks each door
+(reassign the parameter, `$~` inside the callee, `b = a` then write, an array
+inside an array, `~` and `<~` marks, the dictionary in both spellings) and the
+three engines answer alike. This is the register VM's model, ported; the browser
+engine reaches the same place by sharing the JavaScript array and rebuilding it
+on write.
+
+`String` is deliberately not shared this way in the tree-walker: a string clone
+is one allocation, not one per element, and the VM's `ZyStr` is unsafe code that
+earns its keep in a bytecode loop and not here.
+
+Performance machinery that is *semantically neutral* (verified): copy-on-write for
+the aggregates (HLZ-012/HLZ-014), scope-map pooling (B10/B13), scope elision for
+blocks that declare no variables (QW7 in `if_stmt.rs:16`, QW16 in `loops.rs:36`),
+self-assign fast paths (B3/B12), and move-on-return (MoveOrClone).
 
 ---
 
@@ -165,8 +188,8 @@ three states cross the call boundary when the design says nothing should:
 > **v0.0.8**: both leaks are fixed — `loop_scope_depths` (MM-1) and
 > `dead_variables` (MM-3) are saved and restored per call frame in
 > `SavedCallState`. Both examples above now print the VM result in both engines.
-> Regression tests: `tests/bugs/bug_mm1_hot_def_fn_scope.zy`,
-> `tests/bugs/bug_mm3_destroy_frame_local.zy`.
+> Regression tests: `zyquality/corpus/bugs/bug_mm1_hot_def_fn_scope.zy`,
+> `zyquality/corpus/bugs/bug_mm3_destroy_frame_local.zy`.
 
 ---
 
@@ -222,7 +245,7 @@ an error. The GUIDE does not specify constant *scope*.
 > lambda frames. Block-local constants remain lexically scoped and are still
 > forwarded one frame at a time — now re-marked (`mark_const`) so chains work.
 > A parameter may shadow a forwarded constant (`unmark_const` at binding).
-> Regression test: `tests/bugs/bug_mm9_const_call_depth.zy`.
+> Regression test: `zyquality/corpus/bugs/bug_mm9_const_call_depth.zy`.
 
 ```zymbol
 PI := 3.14
@@ -236,7 +259,9 @@ area(r) { <~ r * r * PI }   // works: PI injected into the isolated frame
 
 **Design** (GUIDE §17): a module has exported constants (`:=`, read via `alias.CONST`),
 private mutable state (`=` variables, persisting across calls, reachable only through
-exported functions), and functions. Initializers must be literals (E013).
+exported functions), and functions. Initializers must be literals (E013) — which
+since v0.0.9 includes the three collection literals, recursively, so a lookup table
+is module state like any scalar (REFERENCE L41).
 
 **Implementation** (`modules.rs`, `LoadedModule` at `modules.rs:21`):
 
@@ -295,6 +320,25 @@ state mutations persist across calls.
     get_value()        { <~ count }
 }
 ```
+
+> **MM-12 (v0.0.9).** Reading module state through a helper that does not *name*
+> it used to see the value from before the current frame's write. Injection only
+> copies the names a body mentions, and a frame's writes only reached the store
+> when that frame returned; a direct call still saw the fresh value, because the
+> injection looks for a live copy in the caller's own scope first. Put one
+> function in between that mentions nothing, and there was no live copy to find:
+>
+> ```zymbol
+> correr()  { v = "nuevo"  _lee()  _medio() }   // "nuevo", then "viejo"
+> _medio()  { _lee() }                          // does not name `v`
+> _lee()    { >> v ¶ }
+> ```
+>
+> A same-module call now publishes the caller's changed keys to the store on the
+> way in (`flush_module_frame`), diffed against the snapshot the caller was
+> given so an untouched copy cannot clobber a nested call's write-back — the
+> MM-2 rule, applied on entry as well as on return. The snapshot travels with
+> the frame it describes, or the two disagree about what "unchanged" means.
 ```zymbol
 <# ./counter => c
 c::bump_via_helper()
@@ -310,7 +354,7 @@ c::bump_via_helper()
 > with the keys just written back. Parameters named like module variables are
 > excluded from write-back. The rule of thumb below is obsolete — helpers may
 > mutate state freely. Regression test:
-> `tests/bugs/bug_mm2_module_state_helper.zy`.
+> `zyquality/corpus/bugs/bug_mm2_module_state_helper.zy`.
 
 **Rule of thumb until fixed** *(obsolete since v0.0.8, kept for history)*: mutate
 module state only in the function that is called directly through `alias::`;
@@ -346,7 +390,7 @@ directly and catches the reassignment. Run `check` on every module file in CI.
 > text. The example above fails at import time. As a runtime backstop, module
 > constant names (`LoadedModule.const_names`) are re-marked `const` when
 > injected into module frames, so reassignment errors even if analysis is
-> bypassed. Regression test: `tests/bugs/bug_mm4_module_const_guard.zy`.
+> bypassed. Regression test: `zyquality/corpus/bugs/bug_mm4_module_const_guard.zy`.
 
 ---
 
@@ -382,6 +426,7 @@ which works transparently since capture reads any visible scope.
 | **MM-9** | 🔴 Bug | Constants × nested calls | In the tree-walker, a global constant vanished at call depth ≥ 2 (injected copies were not re-marked const). | ✅ **Fixed** — root-scope constants live in a global table not swapped by frames; REFERENCE L22 |
 | **MM-10** | 🟠 Bug (VM) | Modules × VM | The VM gave each import alias its own module state copy; the tree-walker shares one state per file path. | ✅ **Fixed** — compiler caches compiled modules by canonical path; aliases and diamond importers share chunks and global slots; REFERENCE L23 |
 | **MM-11** | 🟡 Bug (VM) | Loops × VM | Leftover iterator value after a loop that reuses an outer variable differed: TW leaves the last executed value, VM left the first out-of-range value (body writes could also alter iteration). | ✅ **Fixed** — VM range loops advance a hidden counter published to the named iterator per iteration; REFERENCE L24 |
+| **MM-12** | 🔴 Bug (TW) | Modules × indirection | A write to module state reached the store only when the writing frame returned, so a call routed through a function that does not name the variable read the pre-write value. Direct calls were fine — the injection finds a live copy in the caller's own scope — which is why six minimal cases missed it. | ✅ **Fixed** — the caller's changed module keys are flushed to the store on entry to any same-module call, and the caller's snapshot moves with its frame; corpus `modules_scope/estado_por_intermedia.zy`; ZyBank BUG-ZYB-008 |
 
 ## 10. Verified Behavior Matrix
 
@@ -491,6 +536,13 @@ benchmarks improve from lower allocator pressure).
 Re-measured at the v0.0.8 release (2026-08-01), still with no auto-free-attributable
 failure: 936 unit tests, 544/544 TW/VM parity, 523/525 golden (two stale fixtures —
 `IMPL_V008.md` § E.1), formatter property 600 PASS / 0 FAIL, benchmark gate 14/14.
+
+Re-measured on the `v0.0.9` branch (2026-09-07), same conclusion and now on the corpus
+that moved to `zyquality/`: **1026 unit tests**, 660/666 TW/VM consensus with **0
+diverging**, goldens **0 stale**, formatter property **710 PASS / 0 FAIL**, benchmark
+gate **16/16**, `zyq suite` **all gates pass**. The two auto-free debts of `IMPL_V008.md`
+§ B are still open and still undecided — they are tracked in [ROADMAP.md](ROADMAP.md)
+§ Known Gaps, and neither is a regression.
 
 ---
 

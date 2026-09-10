@@ -148,28 +148,47 @@ impl<W: Write> Interpreter<W> {
     /// parity suite never saw it until it ran inside a container.
     pub(crate) fn eval_terminal_size(&mut self, _span: Span) -> Result<Value> {
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-        Ok(Value::Tuple(vec![Value::Int(rows as i64), Value::Int(cols as i64)]))
+        Ok(Value::tuple(vec![Value::Int(rows as i64), Value::Int(cols as i64)]))
     }
 
     /// Blocking / non-blocking key input: <<| var  or  <<|? var
     pub(crate) fn execute_key_input(&mut self, ki: &KeyInput) -> Result<()> {
-        use crossterm::event::{self, Event, KeyEvent};
+        use crossterm::event::{self, Event};
         let ch = if ki.blocking {
             loop {
                 match event::read().map_err(|e| RuntimeError::Generic {
                     message: e.to_string(), span: ki.span,
                 })? {
-                    Event::Key(KeyEvent { code, .. }) => break map_key_code(code),
+                    Event::Key(key) if is_key_press(&key) => break map_key_code(&key),
                     _ => continue,
                 }
             }
         } else {
-            if event::poll(std::time::Duration::ZERO).unwrap_or(false) {
-                match event::read().unwrap_or(Event::FocusLost) {
-                    Event::Key(KeyEvent { code, .. }) => map_key_code(code),
-                    _ => '\0',
+            // Drain until a keypress or until nothing is pending — do not stop at the
+            // first event that is not one.
+            //
+            // Reading a single event per call was enough while every event was a
+            // keypress. On Windows each keystroke also delivers a release, so a call
+            // that happened to pull the release returned "no key" and left the queue
+            // one event longer than it found it. In a game loop calling this once per
+            // tick, the backlog grows and every turn arrives late — the same two-cell
+            // lag whether the tick is 40 ms or 160 ms, which is what gives it away as
+            // a queue and not a timing problem.
+            //
+            // Draining also covers resize and focus events, which could waste a tick
+            // on any platform.
+            let mut found = '\0';
+            while event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+                match event::read() {
+                    Ok(Event::Key(key)) if is_key_press(&key) => {
+                        found = map_key_code(&key);
+                        break;
+                    }
+                    Ok(_) => continue,
+                    Err(_) => break,
                 }
-            } else { '\0' }
+            }
+            found
         };
         self.set_variable(&ki.variable, Value::Char(ch));
         Ok(())
@@ -289,17 +308,67 @@ impl<W: Write> Interpreter<W> {
     }
 }
 
-fn map_key_code(code: crossterm::event::KeyCode) -> char {
-    use crossterm::event::KeyCode::*;
-    match code {
+/// Is this a key going *down*, as opposed to coming back up?
+///
+/// Windows is the only platform that reports key releases: its console API delivers
+/// a `KEY_EVENT` for the press and another for the release, and crossterm passes
+/// both through. Reading every `Event::Key` therefore counted each keystroke twice —
+/// a menu selection skipped an entry, and the snake moved two cells per arrow, which
+/// made it impossible to line up a one-cell gap. Unix never sends releases, so this
+/// filter changes nothing there.
+///
+/// `Repeat` counts as a press: a held key auto-repeats on Unix too, arriving as a
+/// run of ordinary presses, so accepting it is what keeps the two platforms feeling
+/// the same.
+fn is_key_press(key: &crossterm::event::KeyEvent) -> bool {
+    use crossterm::event::KeyEventKind;
+    matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+}
+
+/// Translate a key event into the single character `<<|` yields.
+///
+/// The tree-walker's copy; `zymbol-vm`'s `vm_map_key_code` must stay identical
+/// or the two engines disagree about the keyboard, which no pipe-based suite
+/// can see — only `zyquality/tui/run.sh`, through a real pty.
+fn map_key_code(key: &crossterm::event::KeyEvent) -> char {
+    use crossterm::event::{KeyCode::*, KeyModifiers};
+
+    // Ctrl+letter is a control character, and that is what the terminal puts on
+    // the wire: Ctrl+A is 0x01, Ctrl+S is 0x13. crossterm hands it over
+    // decoded — `Char('a')` with CONTROL set — and this function used to read
+    // the code and drop the modifiers, so Ctrl+A arrived as the letter `a`
+    // (BUG-ZYB-006). Not "the combination never arrived": it arrived wearing
+    // another key's clothes, which is worse — a Ctrl+X shortcut fired when the
+    // user typed an x into a text field, and no full-screen program could offer
+    // Ctrl+S, Ctrl+Q or Ctrl+C at all.
+    //
+    // Handing back the control character adds nothing to the language: `0d1`
+    // already writes it, and `##!t < 32` already asks the question.
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        if let Char(c) = key.code {
+            let lower = c.to_ascii_lowercase();
+            if lower.is_ascii_lowercase() {
+                return (lower as u8 - b'a' + 1) as char;
+            }
+        }
+    }
+
+    match key.code {
         Char(c) => c,
-        Up      => '↑',
-        Down    => '↓',
-        Left    => '←',
-        Right   => '→',
+        Up      => '\u{2191}',
+        Down    => '\u{2193}',
+        Left    => '\u{2190}',
+        Right   => '\u{2192}',
         Enter   => '\n',
         Esc     => '\x1B',
-        _       => '\0',
+        // Tab and Backspace used to fall through to `'\0'` together, so a
+        // program could not tell them apart — harmless in a numeric field,
+        // which is why ZyBank treated both as "delete", and impossible in a
+        // form where Tab moves between fields: every jump would erase a
+        // character. Both now carry what the terminal sends for them.
+        Tab       => '\t',      // 0d9
+        Backspace => '\x7F',    // 0d127 — DEL, which is what a terminal sends
+        _         => '\0',
     }
 }
 

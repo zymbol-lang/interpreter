@@ -18,14 +18,14 @@ fila2 = matriz[2]
 >> "=== Access Individual Elements ===" ¶
 
 // Chained indexing for matrix elements (1-based)
-elemento11 = matriz[1][1]
->> "Element [1][1]: " elemento11 ¶
+elemento11 = matriz[1>1]
+>> "Element [1>1]: " elemento11 ¶
 
-elemento23 = matriz[2][3]
->> "Element [2][3]: " elemento23 ¶
+elemento23 = matriz[2>3]
+>> "Element [2>3]: " elemento23 ¶
 
-elemento33 = matriz[3][3]
->> "Element [3][3]: " elemento33 ¶
+elemento33 = matriz[3>3]
+>> "Element [3>3]: " elemento33 ¶
 
 ¶
 >> "=== Iterate over Matrix ===" ¶

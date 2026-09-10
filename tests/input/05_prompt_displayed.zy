@@ -1,3 +1,0 @@
-// The prompt string appears in output before the value
-<< "enter: " x
->> x ¶

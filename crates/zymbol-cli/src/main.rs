@@ -358,7 +358,10 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
     if program.module_decl.is_some() {
         let module_name = program.module_decl.as_ref().map(|m| m.name.as_str()).unwrap_or("?");
         eprintln!("warning: '{}' is a module file and cannot be run directly", display_name);
-        eprintln!("  = help: module '{}' is meant to be imported with <# ./{} <= alias", module_name, path.file_stem().and_then(|s| s.to_str()).unwrap_or("module"));
+        // `=>`, not the pre-v0.0.6 `<=`: that spelling is rejected by the parser
+        // (`test_import_le_syntax_rejected`), so the help was handing out an
+        // import line that cannot parse. The browser engine already said `=>`.
+        eprintln!("  = help: module '{}' is meant to be imported with <# ./{} => alias", module_name, path.file_stem().and_then(|s| s.to_str()).unwrap_or("module"));
         return Ok(1);
     }
 
@@ -393,8 +396,62 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         }
     }
 
-    // Run type checking
+    // Module analysis, before anything executes.
+    //
+    // GLB-005: only `zymbol check` used to run this, so `zymbol check` refused a
+    // program that `run`, `--vm` and the browser engine all executed happily. A
+    // convention that one tool out of four enforces is not a convention, it is a
+    // lint somebody can route around by using a different command.
+    // Module analysis over the whole program, before anything executes.
+    //
+    // GLB-005: only `zymbol check` used to do this, so it refused programs that
+    // `run`, `--vm` and the browser engine all executed happily. A convention
+    // one tool out of four enforces is not a convention — it is a lint anybody
+    // can route around by using a different command.
+    //
+    // Done HERE and not in each engine's module loader on purpose: the
+    // tree-walker and the VM have a loader each and the browser engine a third,
+    // and one rule written three times is how GLOBAL-001 happened. This covers
+    // both Rust engines from one place.
+    {
+        let mut bag = DiagnosticBag::new();
+        for err in module_decl_errors(path, &program, &mut source_map) {
+            bag.add(err);
+        }
+        if !bag.is_empty() {
+            bag.emit_all(&source_map);
+            return Ok(1);
+        }
+    }
+
+    // Loop-context analysis, before anything executes: `@!`/`@>` need an
+    // enclosing loop and `@:L!` needs an enclosing loop labelled L. Fatal for
+    // the same reason arity is — the four engines used to give four different
+    // answers to `@:nope!`, and the tree-walker's answer was to unwind every
+    // loop in silence.
+    let loop_errors = zymbol_semantic::check_loop_context(&program);
+    if !loop_errors.is_empty() {
+        let mut bag = DiagnosticBag::new();
+        for err in loop_errors {
+            bag.add(err);
+        }
+        bag.emit_all(&source_map);
+        return Ok(1);
+    }
+
+    // Run type checking. The arity table must be supplied here too, not only in
+    // `check`: an argument-count mismatch is fatal before execution, and it has
+    // to be fatal for `alias::func(...)` exactly as it already was for a bare
+    // `func(...)`. Without it `run` would reject one and execute the other.
     let mut type_checker = TypeChecker::new();
+    type_checker.set_module_arities(zymbol_semantic::module_arities(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
+    type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
     let type_errors = type_checker.check_errors(&program);
 
     // Type errors are fatal - stop execution
@@ -405,6 +462,51 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         }
         bag.emit_all(&source_map);
         return Ok(1);
+    }
+
+    // Def-use analysis, so `run` says what `check` says.
+    //
+    // It used to run only in `check`, and the split was invisible and wrong:
+    // `@ i:1..3 { … }` warned about `i` on `zymbol check` and in the playground
+    // — which mirrors `check` — and said nothing on `zymbol run`. Three ways to
+    // ask the same question, two answers.
+    //
+    // And the warning is worth having. `i += 1` inside the loop is visible for
+    // the rest of that pass and gone on the next, exactly as in Python:
+    //
+    //     @ i:1..3 { >> i " "  i += 1  >> i " " }   →  1 2 2 3 3 4
+    //
+    // Python does not warn; Zymbol does, and a modification that silently does
+    // not persist is worth a word. A word — not an error: the program is
+    // correct and runs.
+    {
+        let cfg = ControlFlowGraph::build_sequential(&program.statements);
+        let mut def_use_analyzer = DefUseAnalyzer::new();
+        let _ = def_use_analyzer.analyze(&program.statements, &cfg);
+        // In source order. `get_ambiguous_variables` walks a HashMap, so the
+        // same file reported `'k'` before `'w'` on one run and after it on the
+        // next. A diagnostic whose ORDER changes between runs makes every
+        // differential comparison flap: the formatter audit reported 13
+        // failures twice in a row with two DIFFERENT files among them.
+        let mut ambiguous = def_use_analyzer.get_ambiguous_variables();
+        ambiguous.sort_by_key(|c| c.ambiguity.as_ref().map(|a| {
+            (a.suggested_span.start.line, a.suggested_span.start.column)
+        }));
+        for chain in &ambiguous {
+            if let Some(ambiguity) = &chain.ambiguity {
+                let reason = match ambiguity.reason {
+                    AmbiguityReason::LoopVariant => "variable is modified inside a loop",
+                    AmbiguityReason::ConditionalUse => "variable is used in some branches but not others",
+                    AmbiguityReason::MultipleExitPaths => "multiple possible last uses",
+                };
+                eprintln!("warning: ambiguous lifetime for '{}'", chain.variable);
+                eprintln!("  --> {}:{}:{}", display_name,
+                    ambiguity.suggested_span.start.line, ambiguity.suggested_span.start.column);
+                eprintln!("  = note: {}", reason);
+                eprintln!("  = help: consider using explicit lifetime annotation");
+                eprintln!();
+            }
+        }
     }
 
     // Show type warnings but continue execution
@@ -436,7 +538,11 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
                 ) {
                     eprintln!("Runtime error: {}", e);
                 } else {
-                    eprintln!("VM compile error: {}", e);
+                    // Never the engine's name: a reader is told what the
+                    // LANGUAGE refuses, not which of its three implementations
+                    // noticed. `VM compile error:` on a program the tree-walker
+                    // refuses too is a fact about our build, not about Zymbol.
+                    eprintln!("error: {}", e);
                 }
                 return Ok(1);
             }
@@ -446,6 +552,10 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         if let Err(e) = vm.run(&compiled) {
             eprintln!("Runtime error: {}", e);
             return Ok(1);
+        }
+        // GAP-ZYB-006: a top-level `<~ n` is the program's exit status.
+        if let Some(code) = vm.exit_code() {
+            return Ok(code as i32);
         }
     } else {
         // Execute with tree-walker interpreter
@@ -465,6 +575,10 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         if let Err(e) = interpreter.execute(&program) {
             eprintln!("Runtime error: {}", e);
             return Ok(1);
+        }
+        // GAP-ZYB-006: a top-level `<~ n` is the program's exit status.
+        if let Some(code) = interpreter.exit_code() {
+            return Ok(code as i32);
         }
     }
 
@@ -540,8 +654,27 @@ fn build_file(path: PathBuf, output: Option<PathBuf>, release: bool) -> Result<(
         }
     }
 
-    // Run type checking
+    // Loop-context analysis, on the same terms as `run` and `check`.
+    let loop_errors = zymbol_semantic::check_loop_context(&program);
+    if !loop_errors.is_empty() {
+        let mut bag = DiagnosticBag::new();
+        for err in loop_errors {
+            bag.add(err);
+        }
+        bag.emit_all(&source_map);
+        std::process::exit(1);
+    }
+
+    // Run type checking, with the same arity table `run` and `check` use.
     let mut type_checker = TypeChecker::new();
+    type_checker.set_module_arities(zymbol_semantic::module_arities(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
+    type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
     let type_errors = type_checker.check_errors(&program);
 
     // Type errors are fatal - stop build
@@ -803,6 +936,75 @@ fn display_path(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
+/// Every module **declaration** violation reachable from `entry`, transitively:
+/// a name that breaks the dot convention (E001), and a module that never says
+/// what it exports (E014).
+///
+/// Mirrors `check_file`'s import walk and deliberately does far less: `check`
+/// runs the whole analysis on every module, which is right for a checker and
+/// wrong before executing — it would report a module's style warnings every
+/// time a program that imports it runs. This asks only the questions that make
+/// a module unusable rather than untidy (GLB-005, L48).
+///
+/// A module that cannot be read or parsed is skipped, not reported: the engine
+/// is about to load it and will say so itself, in its own words.
+fn module_decl_errors(
+    entry: &Path,
+    program: &zymbol_ast::Program,
+    source_map: &mut SourceMap,
+) -> Vec<zymbol_error::Diagnostic> {
+    fn imports_of(program: &zymbol_ast::Program, base: &Path) -> Vec<PathBuf> {
+        program
+            .imports
+            .iter()
+            .filter(|i| !i.path.is_stdlib())
+            .filter_map(|i| i.path.resolve_from(base))
+            .collect()
+    }
+
+    let mut out = Vec::new();
+    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    visited.insert(canonical(entry));
+
+    let entry_base = entry.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut stack: Vec<PathBuf> = imports_of(program, &entry_base);
+
+    // The entry file itself, when it declares a module and is being run
+    // directly — the caller already refuses that case, but a `.zyp` script may
+    // legitimately carry one.
+    let mut analyzer = ModuleAnalyzer::new(&entry_base);
+    if let Err(errs) = analyzer.analyze(program, entry) {
+        out.extend(errs.into_iter().filter(|d| is_module_decl_error(d)));
+    }
+
+    while let Some(module_path) = stack.pop() {
+        if !visited.insert(canonical(&module_path)) {
+            continue;
+        }
+        let Ok(src) = fs::read_to_string(&module_path) else { continue };
+        let file_id = source_map.add_file(display_path(&module_path), src.clone());
+        let (tokens, _) = zymbol_lexer::Lexer::new(&src, file_id).tokenize();
+        let parser = zymbol_parser::Parser::new(tokens);
+        let Ok(module_program) = parser.parse() else { continue };
+
+        let base = module_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        stack.extend(imports_of(&module_program, &base));
+
+        let mut analyzer = ModuleAnalyzer::new(&base);
+        if let Err(errs) = analyzer.analyze(&module_program, &module_path) {
+            out.extend(errs.into_iter().filter(|d| is_module_decl_error(d)));
+        }
+    }
+    out
+}
+
+/// The two findings that make a module unusable rather than untidy, and so are
+/// worth stopping a `run` for: E001, a name that breaks the dot convention, and
+/// E014, a module that never declares what it exports.
+fn is_module_decl_error(d: &zymbol_error::Diagnostic) -> bool {
+    d.message.starts_with("E001:") || d.message.starts_with("E014:")
+}
+
 /// Check the whole program, not just the file named on the command line.
 ///
 /// A module's errors only surfaced at run time before: `zymbol check main.zy`
@@ -965,8 +1167,31 @@ fn check_source(
         }
     }
 
-    // Run type checking
+    // Loop-context analysis. `check` reports it alongside everything else
+    // rather than bailing out, so one pass surfaces every problem in the file.
+    let loop_errors = zymbol_semantic::check_loop_context(&program);
+    if !loop_errors.is_empty() {
+        let mut bag = DiagnosticBag::new();
+        for err in loop_errors {
+            bag.add(err);
+        }
+        bag.emit_all(source_map);
+        has_errors = true;
+    }
+
+    // Run type checking. Feeding it the imports' arities extends the existing
+    // argument-count check to `alias::func(...)`, which used to go unchecked —
+    // a wrong count there only ever failed at runtime, on whichever branch
+    // happened to make the call.
     let mut type_checker = TypeChecker::new();
+    type_checker.set_module_arities(zymbol_semantic::module_arities(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
+    type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
     let type_errors = type_checker.check_errors(&program);
 
     // Type errors are fatal
@@ -1057,7 +1282,11 @@ fn check_source(
     let _chains = def_use_analyzer.analyze(&program.statements, &cfg);
 
     // Report ambiguous lifetime warnings
-    let ambiguous_vars = def_use_analyzer.get_ambiguous_variables();
+    // Source order, for the same reason as in `run` above.
+    let mut ambiguous_vars = def_use_analyzer.get_ambiguous_variables();
+    ambiguous_vars.sort_by_key(|c| c.ambiguity.as_ref().map(|a| {
+        (a.suggested_span.start.line, a.suggested_span.start.column)
+    }));
     let mut lifetime_warning_count = 0;
     for chain in &ambiguous_vars {
         if !report_warnings {

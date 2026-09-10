@@ -30,7 +30,7 @@ x = (1, 2, 3) // Tuple
 x = [1, 2, 3] // List
 >> x ¶
 
-x = (Objet: "Value") // Object:Value
+x = #(Objet: "Value") // Object:Value
 >> x ¶
 
 ƒ(a){ <~ a + 1 } // Function assigned to x

@@ -36,7 +36,63 @@ impl Parser {
             }
             self.advance(); // consume ']'
 
+            // `m[1][2] = 77` — chained brackets. The indexed assignment does not
+            // exist at any depth (decision 6), and nesting is navigated with
+            // `>`: `m[1>2]`. Both halves belong in the message, because a reader
+            // who wrote this needs to know the notation as well as the rule.
+            if matches!(self.peek().kind, TokenKind::LBracket) {
+                let span = ident_token.span.to(&self.peek().span);
+                // Recovery belongs to the loop that catches this — see
+                // `skip_statement` and GLB-007. Skipping here too ran it twice
+                // and the second run took the block's closing brace.
+                return Err(Diagnostic::error(format!(
+                    "indexed assignment does not exist: '{}[…] =' is not a form of Zymbol",
+                    name
+                ))
+                .with_span(span)
+                .with_help(format!(
+                    "nesting is navigated with '>', so this is '{}[i>j]$~ value' — '=' gives a value to a NAME, '$~' changes part of a collection",
+                    name
+                )));
+            }
+
             let assign_tok = self.peek().clone();
+            // Decision 6 of Divergente_ES/forma/README.md: the indexed
+            // assignment is withdrawn, in all three collections.
+            //
+            // `=` means "this NAME now holds this value", and `u["k"] = v` names
+            // nothing: it reaches inside a structure and changes a part. Two
+            // different operations under one sign. Modifying is `$~`, which says
+            // so — and it is the same rule for the array, the dictionary and
+            // (as a refusal) the positional tuple.
+            //
+            // This could not be withdrawn until `u["k"]$~ v` worked as a
+            // statement, which is decision 12 and landed first: prohibiting the
+            // old form while the new one did not parse would have left the
+            // language with no way at all to change an element.
+            if matches!(
+                assign_tok.kind,
+                TokenKind::Assign
+                    | TokenKind::PlusAssign
+                    | TokenKind::MinusAssign
+                    | TokenKind::StarAssign
+                    | TokenKind::SlashAssign
+                    | TokenKind::PercentAssign
+                    | TokenKind::CaretAssign
+            ) {
+                // Recovery belongs to the loop that catches this — see
+                // `skip_statement` and GLB-007. Skipping here too ran it twice
+                // and the second run took the block's closing brace.
+                return Err(Diagnostic::error(format!(
+                    "indexed assignment does not exist: '{}[…] =' is not a form of Zymbol",
+                    name
+                ))
+                .with_span(ident_token.span.to(&assign_tok.span))
+                .with_help(format!(
+                    "use '{}[i]$~ value' to modify in place — '=' gives a value to a NAME, '$~' changes part of a collection",
+                    name
+                )));
+            }
             let compound_op = match assign_tok.kind {
                 TokenKind::Assign => None,
                 TokenKind::PlusAssign => Some(BinaryOp::Add),
@@ -91,7 +147,7 @@ impl Parser {
                 span,
             ));
 
-            return Ok(Statement::Assignment(Assignment { name, value: update_expr, span, hot, pre_hot, sugar: compound_op.map(AssignSugar::IndexedCompound).unwrap_or(AssignSugar::IndexedAssign) }));
+            return Ok(Statement::Assignment(Assignment { name, value: update_expr, span, hot, pre_hot, written: None, sugar: compound_op.map(AssignSugar::IndexedCompound).unwrap_or(AssignSugar::IndexedAssign) }));
         }
 
         let assign_token = self.peek();
@@ -131,7 +187,7 @@ impl Parser {
             } else {
                 AssignSugar::Decrement
             };
-            return Ok(Statement::Assignment(Assignment { name, value: binary_expr, span, hot, pre_hot, sugar }));
+            return Ok(Statement::Assignment(Assignment { name, value: binary_expr, span, hot, pre_hot, sugar, written: None }));
         }
 
         // Check for compound assignment (+=, -=, *=, /=, %=, ^=)
@@ -172,6 +228,7 @@ impl Parser {
                 hot,
                 pre_hot,
                 sugar: AssignSugar::Compound(op),
+                written: None,
             }))
         } else {
             // Regular assignment: name = expr [expr ...]
@@ -180,7 +237,7 @@ impl Parser {
             let first = self.parse_expr()?;
             let value = self.parse_juxtapose_chain(first)?;
             let span = ident_token.span.to(&value.span());
-            Ok(Statement::Assignment(Assignment { name, value, span, hot, pre_hot, sugar: AssignSugar::None }))
+            Ok(Statement::Assignment(Assignment { name, value, span, hot, pre_hot, sugar: AssignSugar::None, written: None }))
         }
     }
 
@@ -303,11 +360,14 @@ impl Parser {
     /// Uses save/restore to look past the paren group and check for `=`.
     pub(crate) fn is_tuple_destructure(&mut self) -> bool {
         let saved = self.current;
-        self.advance(); // consume (
+        self.advance(); // consume `(` or `#(`
         let mut depth = 1i32;
         while depth > 0 && !self.is_at_end() {
             match self.peek().kind {
-                TokenKind::LParen => { depth += 1; self.advance(); }
+                // `#(` opens as surely as `(` does, and a dictionary literal
+                // nested inside the pattern's right-hand side must not close
+                // it early.
+                TokenKind::LParen | TokenKind::HashLParen => { depth += 1; self.advance(); }
                 TokenKind::RParen => { depth -= 1; self.advance(); }
                 _ => { self.advance(); }
             }
@@ -339,7 +399,8 @@ impl Parser {
         Ok(Statement::DestructureAssign(DestructureAssign::new(pattern, value, span)))
     }
 
-    fn parse_array_destructure_pattern(&mut self) -> Result<DestructurePattern, Diagnostic> {
+    pub(crate) fn parse_array_destructure_pattern(&mut self) -> Result<DestructurePattern, Diagnostic> {
+        // (see `reject_second_rest` at the bottom of this file)
         self.advance(); // consume [
         let mut items = Vec::new();
         loop {
@@ -347,6 +408,7 @@ impl Parser {
                 TokenKind::RBracket => { self.advance(); break; }
                 TokenKind::Comma => { self.advance(); }
                 TokenKind::Star => {
+                    let star_span = self.peek().span;
                     self.advance(); // consume *
                     let ident = self.peek().clone();
                     let name = match &ident.kind {
@@ -355,6 +417,9 @@ impl Parser {
                             .with_span(ident.span)),
                     };
                     self.advance();
+                    if let Some(d) = reject_second_rest(&items, star_span) {
+                        return Err(d);
+                    }
                     items.push(DestructureItem::Rest(name));
                 }
                 TokenKind::Underscore => {
@@ -373,8 +438,8 @@ impl Parser {
         Ok(DestructurePattern::Array(items))
     }
 
-    fn parse_tuple_destructure_pattern(&mut self) -> Result<DestructurePattern, Diagnostic> {
-        self.advance(); // consume (
+    pub(crate) fn parse_tuple_destructure_pattern(&mut self) -> Result<DestructurePattern, Diagnostic> {
+        self.advance(); // consume `(` or `#(`
 
         // Determine named vs positional: if first content is `ident :` → named
         let is_named = matches!(
@@ -390,6 +455,7 @@ impl Parser {
                 TokenKind::RParen => { self.advance(); break; }
                 TokenKind::Comma => { self.advance(); }
                 TokenKind::Star if !is_named => {
+                    let star_span = self.peek().span;
                     self.advance();
                     let ident = self.peek().clone();
                     let name = match &ident.kind {
@@ -398,6 +464,9 @@ impl Parser {
                             .with_span(ident.span)),
                     };
                     self.advance();
+                    if let Some(d) = reject_second_rest(&positional_items, star_span) {
+                        return Err(d);
+                    }
                     positional_items.push(DestructureItem::Rest(name));
                 }
                 TokenKind::Ident(n) if is_named => {
@@ -423,6 +492,18 @@ impl Parser {
                     let name = n.clone();
                     self.advance();
                     positional_items.push(DestructureItem::Bind(name));
+                }
+                // `_` discards a position — decision 23. It already worked in
+                // the ARRAY pattern (`[a, _, c]`) and was an error here, which
+                // is an inconsistency between two patterns that say the same
+                // thing (DI-16). There was no mark to design: the job was to
+                // accept in one pattern what the other already accepted.
+                //
+                // All three reference languages have it: `_, x = t` in Python,
+                // `[, x]` in JS, `let (_, r)` in Swift.
+                TokenKind::Underscore if !is_named => {
+                    self.advance();
+                    positional_items.push(DestructureItem::Ignore);
                 }
                 _ => return Err(Diagnostic::error("unexpected token in tuple destructure pattern")
                     .with_span(self.peek().span)),
@@ -496,5 +577,36 @@ mod tests {
             }
             _ => panic!("Expected assignment"),
         }
+    }
+}
+
+/// Refuse a second `*rest` in one destructuring pattern.
+///
+/// Two rests are ambiguous by definition: nothing says where the first ends and
+/// the second begins, and every engine invented a different split rather than
+/// saying so. `[a, *r, *s, z] = [1,2,3,4,5]` gave three answers on the same
+/// input — `r=[2,3,4] s=[5] z=##_` in the tree-walker, `r=[2,3] s=[3] z=5` in the
+/// VM, which returns the 3 **twice**, and `r=[2,3] s=[4,5] z=##_` in the browser
+/// engine. A result that repeats an element cannot be right under any reading of
+/// what a rest is (DM-17, decision 26).
+///
+/// Python refuses the same form: `SyntaxError: multiple starred expressions in
+/// assignment`. Refusing in the parser rather than at run time means `zymbol
+/// check` catches it, which is where a pattern mistake should surface.
+///
+/// The legitimate single rest — `[a0, *aR, a9]`, `(t0, *tR, t9)` — is untouched
+/// and worked identically in all three engines, which is why nobody noticed.
+fn reject_second_rest(
+    items: &[DestructureItem],
+    star_span: zymbol_span::Span,
+) -> Option<Diagnostic> {
+    if items.iter().any(|i| matches!(i, DestructureItem::Rest(_))) {
+        Some(
+            Diagnostic::error("only one '*rest' is allowed in a destructure pattern")
+                .with_span(star_span)
+                .with_help("two rests cannot be told apart: nothing says where the first ends"),
+        )
+    } else {
+        None
     }
 }

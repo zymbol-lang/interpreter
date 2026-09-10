@@ -6,7 +6,9 @@
 //! - Pipe expressions (function composition with placeholder syntax)
 
 use zymbol_ast::{BinaryExpr, Expr, PipeExpr, UnaryExpr};
+use zymbol_common::num;
 use zymbol_common::BinaryOp;
+use crate::arithmetic_ops::int_result;
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
 
@@ -52,6 +54,47 @@ impl<W: Write> Interpreter<W> {
     /// Evaluate a binary expression (arithmetic and comparison operators)
     pub(crate) fn eval_binary(&mut self, binary: &BinaryExpr) -> Result<Value> {
         use zymbol_common::Literal;
+
+        // Short-circuit && and ||, before anything evaluates both sides.
+        //
+        // This has to come first. Every path below — the fast paths and the
+        // slow one — evaluates `binary.right` before dispatching on the
+        // operator, which made `#0 && f()` call `f()` and `arr$# > 0 &&
+        // arr[1] > 5` index an empty array. The answer was still right, so the
+        // corpus could not see it: only a right-hand side with an observable
+        // effect tells the two apart. The VM and the browser engine have always
+        // short-circuited; this is the tree-walker catching up (DM-19).
+        //
+        // Guarding the *left* operand's type before deciding is deliberate:
+        // `1 && x` must stay the same error it has always been, not become an
+        // error about `x`.
+        if matches!(binary.op, BinaryOp::And | BinaryOp::Or) {
+            let is_and = binary.op == BinaryOp::And;
+            let name = if is_and { "AND" } else { "OR" };
+            let left = self.eval_expr(&binary.left)?;
+            let left_bool = match &left {
+                Value::Bool(b) => *b,
+                _ => return Err(RuntimeError::Generic {
+                    message: format!("logical {name} requires boolean operands, got {}", left.type_ident()),
+                    span: binary.span,
+                }),
+            };
+            // `#0 && _` is #0 and `#1 || _` is #1 whatever the right side says,
+            // so the right side is not evaluated at all — not even to type-check
+            // it. That is the whole point: the left operand guards the right.
+            if left_bool != is_and {
+                return Ok(Value::Bool(left_bool));
+            }
+            let right = self.eval_expr(&binary.right)?;
+            let right_bool = match &right {
+                Value::Bool(b) => *b,
+                _ => return Err(RuntimeError::Generic {
+                    message: format!("logical {name} requires boolean operands, got {}", right.type_ident()),
+                    span: binary.span,
+                }),
+            };
+            return Ok(Value::Bool(right_bool));
+        }
         // QW15a: Identifier OP IntLiteral — most common in loops/conditions
         // Saves 2× eval_expr dispatch (~80ns) per binary expression
         if let Expr::Identifier(lhs) = binary.left.unwrap_group() {
@@ -66,9 +109,16 @@ impl<W: Write> Interpreter<W> {
                             BinaryOp::Ge  => return Ok(Value::Bool(l >= r)),
                             BinaryOp::Eq  => return Ok(Value::Bool(l == r)),
                             BinaryOp::Neq => return Ok(Value::Bool(l != r)),
-                            BinaryOp::Add => return Ok(Value::Int(l.wrapping_add(r))),
-                            BinaryOp::Sub => return Ok(Value::Int(l.wrapping_sub(r))),
-                            BinaryOp::Mul => return Ok(Value::Int(l.wrapping_mul(r))),
+                            // The i53 range is checked here, not only on the
+                            // slow path. These arms used to wrap, so
+                            // `>>(9007199254740991 + 1)` raised ##Range on a
+                            // literal — constant-folded — and answered
+                            // 9007199254740992 the moment the same value came
+                            // from a variable, which is the shape every real
+                            // program has (DM-01).
+                            BinaryOp::Add => return int_result(num::add(l, r), l, "+", r, &binary.span),
+                            BinaryOp::Sub => return int_result(num::sub(l, r), l, "-", r, &binary.span),
+                            BinaryOp::Mul => return int_result(num::mul(l, r), l, "*", r, &binary.span),
                             BinaryOp::Mod if r != 0 => return Ok(Value::Int(l % r)),
                             BinaryOp::Div if r != 0 => return Ok(Value::Int(l / r)),
                             _ => {}
@@ -88,9 +138,11 @@ impl<W: Write> Interpreter<W> {
                         BinaryOp::Ge  => return Ok(Value::Bool(l >= r)),
                         BinaryOp::Eq  => return Ok(Value::Bool(l == r)),
                         BinaryOp::Neq => return Ok(Value::Bool(l != r)),
-                        BinaryOp::Add => return Ok(Value::Int(l.wrapping_add(r))),
-                        BinaryOp::Sub => return Ok(Value::Int(l.wrapping_sub(r))),
-                        BinaryOp::Mul => return Ok(Value::Int(l.wrapping_mul(r))),
+                        // Same range check as the arm above: identifier OP
+                        // identifier is the other half of DM-01.
+                        BinaryOp::Add => return int_result(num::add(l, r), l, "+", r, &binary.span),
+                        BinaryOp::Sub => return int_result(num::sub(l, r), l, "-", r, &binary.span),
+                        BinaryOp::Mul => return int_result(num::mul(l, r), l, "*", r, &binary.span),
                         BinaryOp::Mod if r != 0 => return Ok(Value::Int(l % r)),
                         BinaryOp::Div if r != 0 => return Ok(Value::Int(l / r)),
                         _ => {}
@@ -99,14 +151,30 @@ impl<W: Write> Interpreter<W> {
             }
         }
         // Hot/pre_hot RHS: c = c°/°c + a — eval right first to infer neutral type, then init left
-        if binary.op == BinaryOp::Add {
+        //
+        // `Concat` is here for the same reason `Add` is: `s = °s "x"` is the
+        // string accumulator GUIDE.md documents, and without this branch the
+        // `°s` was evaluated as a variable that does not exist yet — so the
+        // tree-walker refused the program while the VM answered `0xxx` and the
+        // browser engine answered `0`. Three engines, three answers, on a form
+        // the guide gives as an example (GLB-002).
+        //
+        // The neutral follows the OPERATOR, not the operand: juxtaposition
+        // joins text, so its neutral is the empty string whatever is on the
+        // right. `+` keeps inferring from the right-hand value, because there
+        // it is the operand that decides between Int and Float.
+        if matches!(binary.op, BinaryOp::Add | BinaryOp::Concat) {
             if let Expr::Identifier(ident) = binary.left.unwrap_group() {
                 if (ident.hot || ident.pre_hot) && self.get_variable(&ident.name).is_none() {
                     let right_val = self.eval_expr(&binary.right)?;
-                    let neutral = match &right_val {
-                        Value::String(_) => Value::String(String::new()),
-                        Value::Float(_)  => Value::Float(0.0),
-                        _                => Value::Int(0),
+                    let neutral = if binary.op == BinaryOp::Concat {
+                        Value::String(String::new())
+                    } else {
+                        match &right_val {
+                            Value::String(_) => Value::String(String::new()),
+                            Value::Float(_)  => Value::Float(0.0),
+                            _                => Value::Int(0),
+                        }
                     };
                     if ident.pre_hot {
                         self.set_above_nearest_loop(&ident.name, neutral);
@@ -114,7 +182,11 @@ impl<W: Write> Interpreter<W> {
                         self.set_variable(&ident.name, neutral);
                     }
                     let left_val = self.eval_expr(&binary.left)?;
-                    return self.eval_add(&left_val, &right_val, &binary.span);
+                    return if binary.op == BinaryOp::Concat {
+                        self.eval_concat(&left_val, &right_val, &binary.span)
+                    } else {
+                        self.eval_add(&left_val, &right_val, &binary.span)
+                    };
                 }
             }
         }
@@ -129,10 +201,10 @@ impl<W: Write> Interpreter<W> {
 
             // Arithmetic operators
             BinaryOp::Add => self.eval_add(&left, &right, &binary.span),
-            BinaryOp::Sub => self.eval_arithmetic(&left, &right, |a, b| a - b, |a, b| a - b, &binary.span),
-            BinaryOp::Mul => self.eval_arithmetic(&left, &right, |a, b| a * b, |a, b| a * b, &binary.span),
+            BinaryOp::Sub => self.eval_arithmetic(&left, &right, num::sub, |a, b| a - b, "-", &binary.span),
+            BinaryOp::Mul => self.eval_arithmetic(&left, &right, num::mul, |a, b| a * b, "*", &binary.span),
             BinaryOp::Div => self.eval_div(&left, &right, &binary.span),
-            BinaryOp::Mod => self.eval_arithmetic(&left, &right, |a, b| a % b, |a, b| a % b, &binary.span),
+            BinaryOp::Mod => self.eval_mod(&left, &right, &binary.span),
             BinaryOp::Pow => self.eval_pow(&left, &right, &binary.span),
 
             // Comparison operators
@@ -148,14 +220,14 @@ impl<W: Write> Interpreter<W> {
                 let left_bool = match &left {
                     Value::Bool(b) => *b,
                     _ => return Err(RuntimeError::Generic {
-                        message: format!("logical AND requires boolean operands, got {:?}", left),
+                        message: format!("logical AND requires boolean operands, got {}", left.type_ident()),
                         span: binary.span,
                     }),
                 };
                 let right_bool = match &right {
                     Value::Bool(b) => *b,
                     _ => return Err(RuntimeError::Generic {
-                        message: format!("logical AND requires boolean operands, got {:?}", right),
+                        message: format!("logical AND requires boolean operands, got {}", right.type_ident()),
                         span: binary.span,
                     }),
                 };
@@ -165,14 +237,14 @@ impl<W: Write> Interpreter<W> {
                 let left_bool = match &left {
                     Value::Bool(b) => *b,
                     _ => return Err(RuntimeError::Generic {
-                        message: format!("logical OR requires boolean operands, got {:?}", left),
+                        message: format!("logical OR requires boolean operands, got {}", left.type_ident()),
                         span: binary.span,
                     }),
                 };
                 let right_bool = match &right {
                     Value::Bool(b) => *b,
                     _ => return Err(RuntimeError::Generic {
-                        message: format!("logical OR requires boolean operands, got {:?}", right),
+                        message: format!("logical OR requires boolean operands, got {}", right.type_ident()),
                         span: binary.span,
                     }),
                 };
@@ -195,7 +267,7 @@ impl<W: Write> Interpreter<W> {
                 match operand {
                     Value::Bool(b) => Ok(Value::Bool(!b)),
                     _ => Err(RuntimeError::Generic {
-                        message: format!("logical NOT requires boolean operand, got {:?}", operand),
+                        message: format!("logical NOT requires boolean operand, got {}", operand.type_ident()),
                         span: unary.span,
                     }),
                 }
@@ -205,7 +277,7 @@ impl<W: Write> Interpreter<W> {
                     Value::Int(n) => Ok(Value::Int(-n)),
                     Value::Float(f) => Ok(Value::Float(-f)),
                     _ => Err(RuntimeError::Generic {
-                        message: format!("negation requires numeric operand, got {:?}", operand),
+                        message: format!("negation requires numeric operand, got {}", operand.type_ident()),
                         span: unary.span,
                     }),
                 }

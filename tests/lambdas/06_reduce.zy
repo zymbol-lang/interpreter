@@ -1,4 +1,0 @@
-// Test reduce operation
-numbers = [1, 2, 3, 4, 5]
-sum = numbers$< (0, (acc, x) -> acc + x)
->> sum ¶
