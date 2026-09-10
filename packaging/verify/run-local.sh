@@ -14,6 +14,11 @@
 #   --engine ENG   podman | docker   (default: whichever is installed)
 #   -h, --help
 #
+# Environment:
+#   ZYQ_ROOT       Where the ZyQuality checkout is (default: ../zyquality). It
+#                  holds the corpus that `--scope full` runs, and it has to be
+#                  built once: make -C ../zyquality
+#
 # Requires podman or docker:
 #   sudo apt install podman        # rootless, no daemon
 #
@@ -56,7 +61,7 @@ while [[ $# -gt 0 ]]; do
         --no-build)   DO_BUILD=false;  shift ;;
         --scope)      SCOPE="$2";      shift 2 ;;
         --engine)     ENGINE="$2";     shift 2 ;;
-        -h|--help)    sed -n '2,33p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)    sed -n '2,38p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -112,9 +117,70 @@ fi
 
 [[ -f "${DEB}" ]] || { echo "Not found: ${DEB} (drop --no-build?)" >&2; exit 1; }
 
+# `--scope full` runs the corpus against the installed binary, and the corpus is
+# in the sibling zyquality checkout, not here. Inside the container that sibling
+# does not exist, so it is mounted and named — the same thing CI does. Without
+# it the wrapper exits 2 and the gate goes red for a missing repository rather
+# than for anything wrong with the package.
+ZYQ_MOUNT=()
+ZYQ_DIR="${ZYQ_ROOT:-${REPO_ROOT}/../zyquality}"
+if [[ "${SCOPE}" == "full" ]]; then
+    if [[ -x "${ZYQ_DIR}/zyq" && -f "${ZYQ_DIR}/engines.toml" ]]; then
+        ZYQ_DIR="$(cd "${ZYQ_DIR}" && pwd -P)"
+        ZYQ_MOUNT=(-v "${ZYQ_DIR}:/zyquality" -e ZYQ_ROOT=/zyquality)
+        echo "==> ZyQuality at ${ZYQ_DIR} → mounted at /zyquality"
+
+        # `zyq` is compiled too, so the rule that decides where the interpreter
+        # is built applies to the harness as well: a binary runs on its build
+        # machine's glibc or newer, never older. A zyq built on Debian 13 does
+        # not start in debian:12, and the gate then reports that the corpus
+        # could not run — true, and about this machine rather than about the
+        # package. CI never sees this (ubuntu-22.04 is older than the image);
+        # a modern workstation always would.
+        if ! "${ENGINE}" run --rm -v "${ZYQ_DIR}:/zyquality:ro" \
+                "${VERIFY_IMAGE}" /zyquality/zyq --root /zyquality suites \
+                >/dev/null 2>&1
+        then
+            IMAGE_ZYQ="${REPO_ROOT}/target/container/zyq"
+            echo "==> zyq cannot start in ${VERIFY_IMAGE} — built against a newer glibc"
+            if [[ ! -x "${IMAGE_ZYQ}" ]] \
+               || [[ "${ZYQ_DIR}/src/main.ml" -nt "${IMAGE_ZYQ}" ]]
+            then
+                echo "    Compiling one from the same sources inside the image."
+                mkdir -p "${REPO_ROOT}/target/container"
+                # In a copy: `make` would otherwise drop this image's .cmx files
+                # into the checkout's src/, where the host's own OCaml — a
+                # different version — would refuse to link against them.
+                "${ENGINE}" run --rm \
+                    -v "${ZYQ_DIR}:/zyquality:ro" \
+                    -v "${REPO_ROOT}/target/container:/out" \
+                    "${VERIFY_IMAGE}" bash -c '
+                        set -e
+                        apt-get update -qq
+                        apt-get install -y -qq --no-install-recommends ocaml-nox make \
+                            > /dev/null
+                        cp -r /zyquality /build
+                        make -C /build clean > /dev/null 2>&1 || true
+                        make -C /build > /dev/null
+                        install -m755 /build/zyq /out/zyq'
+            else
+                echo "    Reusing ${IMAGE_ZYQ}"
+            fi
+            # Over the mount, not into the checkout: the host keeps the zyq it
+            # uses for `zyq suite`, and the container gets one that starts.
+            ZYQ_MOUNT+=(-v "${IMAGE_ZYQ}:/zyquality/zyq:ro")
+        fi
+    else
+        echo "==> No built ZyQuality at ${ZYQ_DIR} — section 6 will report that it" >&2
+        echo "    could not run. Build it with: make -C '${ZYQ_DIR}'" >&2
+        echo "    Or run with --scope smoke, which does not need the corpus." >&2
+    fi
+fi
+
 echo "==> Verifying ${DEB} in ${VERIFY_IMAGE} via ${ENGINE}"
 exec "${ENGINE}" run --rm \
     -v "${REPO_ROOT}:/workspace" \
+    "${ZYQ_MOUNT[@]}" \
     --workdir /workspace \
     "${VERIFY_IMAGE}" \
     bash packaging/verify/verify-deb.sh --deb "${DEB}" --scope "${SCOPE}"

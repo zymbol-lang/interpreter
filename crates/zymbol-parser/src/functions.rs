@@ -130,6 +130,28 @@ impl Parser {
                 // Proper expression statement - evaluated for side effects, result discarded
                 Ok(Statement::Expr(ExprStatement::new(expr, span)))
             }
+            // `f()[1]$~ 5` — an edit whose receiver is a call. Decision 20:
+            // modifying requires a destination with a NAME, because the array
+            // the call returned is discarded on the next line and the edit is
+            // unobservable by construction.
+            //
+            // Named separately from the generic case: "expected function call"
+            // is a fact about the parser, and says nothing about why the line
+            // cannot mean anything.
+            Expr::CollectionUpdate(_)
+            | Expr::CollectionAppend(_)
+            | Expr::CollectionInsert(_)
+            | Expr::CollectionRemoveAt(_)
+            | Expr::CollectionRemoveValue(_)
+            | Expr::CollectionRemoveAll(_)
+            | Expr::CollectionRemoveRange(_)
+            | Expr::CollectionSortAsc(_)
+            | Expr::CollectionSortDesc(_)
+            | Expr::CollectionSortCustom(_) => Err(Diagnostic::error(
+                "modifying requires a destination with a name",
+            )
+            .with_span(span)
+            .with_help("this edits whatever the call returned, and nothing holds it — assign the result first, or edit a named collection")),
             _ => Err(Diagnostic::error("expected function call")
                 .with_span(span)
                 .with_help("only function calls can be used as statements")),

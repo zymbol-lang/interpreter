@@ -1,3 +1,0 @@
-<# ../semantic/E010_reexport_private => m
-
->> m::secret_fn() ¶

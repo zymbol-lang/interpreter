@@ -29,17 +29,21 @@ fn json_to_value(v: serde_json::Value) -> Value {
         serde_json::Value::Null => Value::Unit,
         serde_json::Value::Bool(b) => Value::Bool(b),
         serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Int(i)
-            } else {
-                Value::Float(n.as_f64().unwrap_or(f64::NAN))
+            // JSON numbers are unbounded on paper and 64-bit in serde_json, so
+            // one past the Zymbol range becomes a Float here rather than an Int
+            // no other engine could hold. Unlike `##` on a string, this is not a
+            // loss the reader can avoid: JSON has a single number type, and a
+            // float is what the browser's own parser would have produced.
+            match n.as_i64().filter(|i| zymbol_common::num::in_int_range(*i)) {
+                Some(i) => Value::Int(i),
+                None => Value::Float(n.as_f64().unwrap_or(f64::NAN)),
             }
         }
         serde_json::Value::String(s) => Value::String(s),
         serde_json::Value::Array(arr) => {
-            Value::Array(arr.into_iter().map(json_to_value).collect())
+            Value::array(arr.into_iter().map(json_to_value).collect())
         }
-        serde_json::Value::Object(map) => Value::NamedTuple(
+        serde_json::Value::Object(map) => Value::named_tuple(
             map.into_iter().map(|(k, v)| (k, json_to_value(v))).collect(),
         ),
     }
@@ -56,13 +60,13 @@ fn value_to_json(v: Value) -> serde_json::Value {
         Value::String(s) => serde_json::Value::String(s),
         Value::Char(c) => serde_json::Value::String(c.to_string()),
         Value::Array(arr) => {
-            serde_json::Value::Array(arr.into_iter().map(value_to_json).collect())
+            serde_json::Value::Array(crate::own_elements(arr).into_iter().map(value_to_json).collect())
         }
         Value::Tuple(fields) => {
-            serde_json::Value::Array(fields.into_iter().map(value_to_json).collect())
+            serde_json::Value::Array(crate::own_elements(fields).into_iter().map(value_to_json).collect())
         }
         Value::NamedTuple(pairs) => serde_json::Value::Object(
-            pairs.into_iter().map(|(k, v)| (k, value_to_json(v))).collect(),
+            crate::own_fields(pairs).into_iter().map(|(k, v)| (k, value_to_json(v))).collect(),
         ),
         Value::Function(_) | Value::Error(_) => serde_json::Value::Null,
     }
@@ -90,7 +94,7 @@ fn build_rename_map(map: Value, span: Span) -> Result<HashMap<String, String>> {
         Value::Unit => Ok(HashMap::new()),
         Value::NamedTuple(pairs) => {
             let mut table = HashMap::with_capacity(pairs.len());
-            for (src, dst) in pairs {
+            for (src, dst) in crate::own_fields(pairs) {
                 match dst {
                     Value::String(name) => {
                         table.insert(src, name);
@@ -119,8 +123,8 @@ fn build_rename_map(map: Value, span: Span) -> Result<HashMap<String, String>> {
 /// Arrays and tuples are traversed; scalars are returned unchanged.
 fn rekey(value: Value, table: &HashMap<String, String>) -> Value {
     match value {
-        Value::NamedTuple(pairs) => Value::NamedTuple(
-            pairs
+        Value::NamedTuple(pairs) => Value::named_tuple(
+            crate::own_fields(pairs)
                 .into_iter()
                 .map(|(k, v)| {
                     let new_key = table.get(&k).cloned().unwrap_or(k);
@@ -128,8 +132,8 @@ fn rekey(value: Value, table: &HashMap<String, String>) -> Value {
                 })
                 .collect(),
         ),
-        Value::Array(items) => Value::Array(items.into_iter().map(|v| rekey(v, table)).collect()),
-        Value::Tuple(items) => Value::Tuple(items.into_iter().map(|v| rekey(v, table)).collect()),
+        Value::Array(items) => Value::array(crate::own_elements(items).into_iter().map(|v| rekey(v, table)).collect()),
+        Value::Tuple(items) => Value::tuple(crate::own_elements(items).into_iter().map(|v| rekey(v, table)).collect()),
         other => other,
     }
 }

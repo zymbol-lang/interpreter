@@ -1,6 +1,5 @@
 mod common;
 use common::ReplTestHarness;
-use crossterm::tty::IsTty;
 
 // ── pIqaD digits U+F8F0–U+F8F9 ────────────────────────────────────────────
 
@@ -314,14 +313,51 @@ fn test_key_input_nonblocking_returns_null_in_headless() {
     assert!(k_val.is_some(), "<<|? should define the variable k");
 }
 
-// ── TUI key input <<| (requires TTY) ─────────────────────────────────────
+// ── TUI key input <<| (requires a terminal) ──────────────────────────────
+
+/// Can crossterm reach a terminal from this process?
+///
+/// The question the TUI tests below need answered is "will `<<|` block waiting for
+/// a key, or fail because there is nothing to read from" — and that is decided by
+/// whether crossterm can open the terminal, not by whether *stdout* is a tty.
+///
+/// Those are the same question on Unix and different ones on Windows, where
+/// crossterm talks to `CONIN$`/`CONOUT$` rather than to the standard handles. Under
+/// `cargo test` stdout is captured, so `is_tty()` said "headless" while the process
+/// still had a console attached — and `<<|` sat waiting for a keypress that was
+/// never coming, hanging the whole suite until the process was killed by hand.
+///
+/// `terminal::size()` asks the same layer `<<|` reads from, so it answers for both
+/// platforms.
+fn terminal_is_reachable() -> bool {
+    crossterm::terminal::size().is_ok()
+}
+
+/// Can this process actually enter raw mode?
+///
+/// A narrower question than [`terminal_is_reachable`], and the two do come apart.
+/// On a Linux box with no controlling terminal — `cargo test` under a CI runner, or
+/// any non-interactive session — `terminal::size()` still answers, while
+/// `enable_raw_mode()` fails with `ENXIO` because there is no `/dev/tty` to open.
+/// A test that asked the first question and then asserted the second failed on
+/// Linux while being right about Windows.
+///
+/// Asking by doing is the only answer that cannot drift: raw mode is enabled and
+/// immediately undone, which is exactly what the statement under test would do.
+fn raw_mode_is_available() -> bool {
+    if crossterm::terminal::enable_raw_mode().is_ok() {
+        let _ = crossterm::terminal::disable_raw_mode();
+        return true;
+    }
+    false
+}
 
 #[test]
 fn test_key_input_headless_graceful() {
     // <<| reads one keypress. In headless mode crossterm cannot access the
     // terminal device and must produce a runtime error.
-    // On a real TTY the statement blocks for input — we skip that path here.
-    if std::io::stdout().is_tty() {
+    // On a real terminal the statement blocks for input — we skip that path here.
+    if terminal_is_reachable() {
         return; // would block waiting for a keypress; skip
     }
     let mut h = ReplTestHarness::new();
@@ -345,7 +381,7 @@ fn test_tui_block_headless_graceful() {
     let mut h = ReplTestHarness::new();
     let result = h.run_line(">>| { >> \"in tui\"¶ }");
 
-    if std::io::stdout().is_tty() {
+    if raw_mode_is_available() {
         // Real terminal: block should execute cleanly.
         assert!(result.error.is_none(), "TUI block should work on a real TTY: {:?}", result.error);
     } else {

@@ -126,6 +126,8 @@ pub struct ErrorValue {
     pub message: String,
 }
 
+use zymbol_common::typesym;
+
 impl ErrorValue {
     pub fn new(error_type: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
@@ -165,13 +167,89 @@ impl ErrorValue {
         Self::new("Div", message)
     }
 
+    /// Create a Range error — an integer that left `zymbol_common::num`'s range.
+    /// Raised by arithmetic, by the `###` cast, and by any reader that turns
+    /// outside data into an integer.
+    pub fn range(message: impl Into<String>) -> Self {
+        Self::new("Range", message)
+    }
+
     /// Create a Parse error
     pub fn parse(message: impl Into<String>) -> Self {
         Self::new("Parse", message)
     }
+
+    /// Create a Key error — a dictionary key that is not there.
+    ///
+    /// Decision 10 of `Divergente_ES/forma/README.md`: reading an absent key is
+    /// an error, not `##_`. It is Python's `KeyError`, not JavaScript's
+    /// `undefined`, and it is coherent with `a[0]`, which is also an error
+    /// rather than a silently wrong answer.
+    pub fn key(message: impl Into<String>) -> Self {
+        Self::new("Key", message)
+    }
+}
+
+/// The type symbol a value carries, before any refinement.
+///
+/// "Base" because an array is always [`typesym::ARRAY`] here, whatever its
+/// elements hold: this is what error messages name, and a failed destructuring
+/// is about the shape rather than about the mix. `#?` refines it —
+/// [`type_symbol_of`] — and is the only thing that does.
+pub(crate) fn base_type_symbol(value: &Value) -> String {
+    match value {
+        Value::Int(_) => typesym::INT.to_string(),
+        Value::Float(_) => typesym::FLOAT.to_string(),
+        Value::String(_) => typesym::STRING.to_string(),
+        Value::Char(_) => typesym::CHAR.to_string(),
+        Value::Bool(_) => typesym::BOOL.to_string(),
+        Value::Array(_) => typesym::ARRAY.to_string(),
+        Value::Tuple(_) => typesym::TUPLE.to_string(),
+        Value::NamedTuple(_) => typesym::DICT.to_string(),
+        Value::Function(f) => if f.is_named_fn { typesym::FUNCTION.to_string() } else { typesym::LAMBDA.to_string() },
+        Value::Error(err) => format!("##{}", err.error_type),
+        Value::Unit => typesym::UNIT.to_string(),
+    }
+}
+
+/// What `#?` answers: [`base_type_symbol`], except that an array whose elements
+/// are not all one type is a list, [`typesym::LIST`].
+///
+/// The mix is read from the value **now**, not from how the literal was written:
+/// `#[…]` declares a mix to the analyzer and leaves no trace on the value, so
+/// `json::decode`'s heterogeneous array answers `##[` without any mark, and
+/// `#[1, "dos"]$-[2]` answers `##]` because a single Int is not a mix.
+pub(crate) fn type_symbol_of(value: &Value) -> String {
+    match value {
+        Value::Array(items) => {
+            typesym::array_symbol(items.iter().map(|v| base_type_symbol(v))
+                .collect::<Vec<_>>().iter().map(String::as_str)).to_string()
+        }
+        other => base_type_symbol(other),
+    }
 }
 
 /// Runtime value
+///
+/// The three aggregates sit behind an `Rc` and are **copied when written**, not
+/// when passed (zy-GO's HLZ-014). Binding one to a name, handing it to a
+/// function or returning it shares the allocation; the first writer calls
+/// `Rc::make_mut`, which clones only if somebody else is still holding it.
+///
+/// The semantics do not change and must not: a plain parameter is a COPY — the
+/// body may reassign it and may edit it with `$~`, and neither reaches the
+/// caller. Sharing is invisible precisely because every write detaches first.
+///
+/// This is the register VM's value model, ported (`zymbol-vm/src/lib.rs`): the
+/// two engines are compared file by file on every `zyq consensus`, and the one
+/// that copied on every call was the tree-walker alone. The browser engine
+/// reaches the same place by a third route — it shares the JavaScript array and
+/// rebuilds it on write (`deepUpdateValue`).
+///
+/// `String` is deliberately NOT behind an `Rc` here. The VM has `ZyStr` for it
+/// (7 bytes inline, `Rc<String>` above that), which is unsafe code earning its
+/// keep in a bytecode loop; a string clone is one allocation, not one per
+/// element, so the tree-walker pays a bounded price and keeps the simple type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     String(String),
@@ -179,13 +257,64 @@ pub enum Value {
     Float(f64),
     Char(char),
     Bool(bool),
-    Array(Vec<Value>),
-    Tuple(Vec<Value>),
-    NamedTuple(Vec<(String, Value)>),  // (field_name, value) pairs
+    Array(Rc<Vec<Value>>),
+    Tuple(Rc<Vec<Value>>),
+    NamedTuple(Rc<Vec<(String, Value)>>),  // (field_name, value) pairs
     Function(FunctionValue),
     /// Error value for try-catch error handling
     Error(ErrorValue),
     Unit,
+}
+
+/// The module aliases visible at one point in the program (alias -> file path).
+///
+/// Behind an `Rc` because every function value carries the set that was visible
+/// where it was written, and every call frame swaps one in: without sharing,
+/// creating a lambda inside a loop would deep-copy the map on each iteration.
+pub type ModuleAliases = std::rc::Rc<std::collections::HashMap<String, std::path::PathBuf>>;
+
+/// What makes two function values **the same function** (BUG-ZYB-012).
+///
+/// `a = uno` and `b = uno` name one function and must compare equal; two
+/// functions with identical bodies must not. Neither answer falls out of the
+/// data by itself: a named function is turned into a value afresh on every
+/// lookup — new captures, cloned body — so pointer equality on the value fails,
+/// and structural equality would call two identical definitions the same
+/// function, which is exactly what identity is for.
+///
+/// So identity is carried explicitly, and it is the thing that was *written*:
+/// the definition for a named function, the evaluation for a lambda.
+#[derive(Debug, Clone)]
+pub(crate) enum FnIdentity {
+    /// A named function: the `FunctionDef` it came from. Looking the name up
+    /// twice yields the same `Rc`, so two values built from it are one function.
+    Named(std::rc::Rc<FunctionDef>),
+    /// A lambda: the evaluation that created it. Cloning the value keeps the
+    /// number, so two names for one lambda agree; evaluating the expression a
+    /// second time makes a different closure, which it is.
+    Lambda(u64),
+    /// A native `std/` function reached as a value — not constructible today.
+    Native,
+}
+
+impl PartialEq for FnIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (FnIdentity::Named(a), FnIdentity::Named(b)) => std::rc::Rc::ptr_eq(a, b),
+            (FnIdentity::Lambda(a), FnIdentity::Lambda(b)) => a == b,
+            // A named function and a lambda are never the same function, and
+            // two natives have nothing to compare.
+            _ => false,
+        }
+    }
+}
+
+/// The next lambda identity. One counter for the process: a lambda evaluated in
+/// a loop is a new closure each time round, and each one is itself.
+pub(crate) fn next_lambda_identity() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Function value for lambdas and closures
@@ -197,18 +326,70 @@ pub struct FunctionValue {
     /// True when this value was created from a named FunctionDecl used as a first-class value.
     /// Named functions may complete their block without <~ and return Unit (unlike block lambdas).
     pub is_named_fn: bool,
-    /// Module aliases captured at definition time for named functions.
-    /// Empty for anonymous lambdas — they inherit aliases from the fast path in eval_lambda_call.
-    pub module_aliases: std::collections::HashMap<String, std::path::PathBuf>,
+    /// What makes this the same function as another — see [`FnIdentity`].
+    ///
+    /// Crate-private because it names `FunctionDef`, which is: the identity is
+    /// something the engine decides and nothing outside constructs.
+    pub(crate) identity: FnIdentity,
+    /// The module aliases visible where this function was written.
+    ///
+    /// Restored for the duration of the call, so `alias::fn` inside the body
+    /// means what it meant at the definition site. Anonymous lambdas used to
+    /// leave this empty and inherit the *caller's* aliases instead, which is
+    /// the same thing only while the lambda is called from where it was
+    /// defined — crossing into another module lost them (BUG-ZYB-001).
+    pub module_aliases: ModuleAliases,
 }
 
 impl PartialEq for FunctionValue {
+    /// Two function values are equal when they are the same function.
+    ///
+    /// This compared `params` until v0.0.9, which made every one-argument
+    /// function equal to every other — and no caller ever saw it, because
+    /// `values_equal_static` had no arm for `Function` and answered `#0` to all
+    /// of them, including a function against itself (BUG-ZYB-012).
     fn eq(&self, other: &Self) -> bool {
-        self.params == other.params
+        self.identity == other.identity
     }
 }
 
+/// Take the elements out of a shared aggregate: free when this was the last
+/// holder, a copy when it was not.
+///
+/// The read-side twin of `Rc::make_mut`. Code that consumes a collection —
+/// `$>` mapping over it, `json::encode` walking it — wants owned values, and
+/// this hands them over without a copy whenever the value was a temporary.
+#[inline]
+pub(crate) fn own_elements(rc: Rc<Vec<Value>>) -> Vec<Value> {
+    Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone())
+}
+
+/// `own_elements` for a dictionary's `(key, value)` pairs.
+#[inline]
+pub(crate) fn own_fields(rc: Rc<Vec<(String, Value)>>) -> Vec<(String, Value)> {
+    Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone())
+}
+
 impl Value {
+    /// Build an array. The `Rc` is an implementation detail of how a value is
+    /// SHARED, so nothing outside this module should have to spell it.
+    #[inline]
+    pub fn array(elements: Vec<Value>) -> Value {
+        Value::Array(Rc::new(elements))
+    }
+
+    /// Build a positional tuple.
+    #[inline]
+    pub fn tuple(elements: Vec<Value>) -> Value {
+        Value::Tuple(Rc::new(elements))
+    }
+
+    /// Build a dictionary (named tuple), from its `(key, value)` pairs in order.
+    #[inline]
+    pub fn named_tuple(fields: Vec<(String, Value)>) -> Value {
+        Value::NamedTuple(Rc::new(fields))
+    }
+
     /// Convert value to displayable string, in ASCII numerals.
     ///
     /// Callers with access to the active numeral mode should use
@@ -258,12 +439,15 @@ impl Value {
                 format!("({})", contents)
             }
             Value::NamedTuple(fields) => {
+                // `#(…)`, the way the literal is written. A dictionary printed as
+                // `(a: 1)` could not be typed back in: that spelling is refused
+                // since v0.0.9, and `()` would be the empty tuple as well.
                 let contents = fields
                     .iter()
                     .map(|(name, value)| format!("{}: {}", name, nested(value, block_base)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("({})", contents)
+                format!("#({})", contents)
             }
             Value::Function(f) => {
                 if f.is_named_fn {
@@ -314,9 +498,51 @@ impl Value {
                     .map(|(name, v)| format!("{}: {}", name, v.to_repr_string_in(block_base)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("({})", contents)
+                format!("#({})", contents)
             }
             _ => self.to_display_string_in(block_base),
+        }
+    }
+
+    /// Readable type name for diagnostics, as opposed to [`Self::type_name`],
+    /// which yields the language's `##` type symbol. Mirrored zyml's `type_name`
+    /// and the VM's `type_word`, so a message naming a type reads the same
+    /// whichever engine produced it.
+    pub fn type_word(&self) -> &'static str {
+        match self {
+            Value::Int(_)        => "integer",
+            Value::Float(_)      => "float",
+            Value::Bool(_)       => "bool",
+            Value::String(_)     => "string",
+            Value::Char(_)       => "char",
+            Value::Array(_)      => "array",
+            Value::Tuple(_) | Value::NamedTuple(_) => "tuple",
+            Value::Function(f)   => if f.is_named_fn { "function" } else { "lambda" },
+            Value::Error(_)      => "error",
+            Value::Unit          => "unit",
+        }
+    }
+
+    /// The type as a diagnostic spells it — `Int`, `String`, `Char` — as
+    /// opposed to [`Self::type_word`] (prose: `integer`) and [`Self::type_name`]
+    /// (the language's `##` symbol).
+    ///
+    /// It is the VM's `type_name`, and it exists here so that a message naming
+    /// a type is one text across the engines rather than two that happen to
+    /// agree (GLOBAL-001).
+    pub fn type_ident(&self) -> &'static str {
+        match self {
+            Value::Int(_)        => "Int",
+            Value::Float(_)      => "Float",
+            Value::String(_)     => "String",
+            Value::Char(_)       => "Char",
+            Value::Bool(_)       => "Bool",
+            Value::Array(_)      => "Array",
+            Value::Tuple(_)      => "Tuple",
+            Value::NamedTuple(_) => "Dict",
+            Value::Function(_)   => "Function",
+            Value::Error(_)      => "Error",
+            Value::Unit          => "Unit",
         }
     }
 
@@ -372,11 +598,29 @@ pub struct Interpreter<W: Write> {
     /// Modules currently being loaded (for circular import detection)
     loading_modules: HashSet<PathBuf>,
     /// Import aliases (alias -> file_path)
-    import_aliases: HashMap<String, PathBuf>,
+    import_aliases: ModuleAliases,
+    /// The module variables injected into the CURRENT frame, as they were at
+    /// injection time.
+    ///
+    /// Two things read it. The write-back when the frame returns diffs against
+    /// it, so a frame that never touched a key cannot clobber what a nested
+    /// call wrote (MM-2). And a call to another function of the same module
+    /// flushes the difference to the store on the way in, so the callee sees
+    /// what this frame has written rather than what the store last heard
+    /// (MM-12 — see `flush_module_frame`).
+    frame_module_vars: HashMap<String, Value>,
     /// Current file path (for resolving relative imports)
     current_file: Option<PathBuf>,
     /// Base directory for module resolution
     base_dir: PathBuf,
+    /// The code a top-level `<~ n` asked the program to end with (GAP-ZYB-006).
+    ///
+    /// `<~` hands a value back to whoever called; a program is called by the
+    /// operating system, so a value handed back at the top level is its exit
+    /// status. That derivation is why this needed no new symbol — and the
+    /// register VM and the browser engine already stopped the program here,
+    /// while this engine walked past it and ran the rest of the file.
+    exit_code: Option<i64>,
     /// CLI arguments passed to the script
     cli_args: Option<Vec<Value>>,
     /// Auto-free (v0.0.8): top-level statement index → variables to destroy
@@ -402,6 +646,17 @@ pub struct Interpreter<W: Write> {
     const_vec_pool: Vec<Vec<HashSet<String>>>,
     /// QW9: Recycled Vec pool for argument evaluation (avoids per-call heap alloc)
     arg_vec_pool: Vec<Vec<Value>>,
+    /// Which of a module's bindings each module function body actually names,
+    /// keyed by the address of its `Rc<FunctionDef>`.
+    ///
+    /// A module function frame is given a copy of the module's state on entry
+    /// and diffs it on the way out. The tree-walker's collections are not
+    /// reference-counted, so both halves are deep copies, and the cost was
+    /// proportional to the whole of the module's state rather than to the part
+    /// the function touches — a module holding a sixty-key table paid for it on
+    /// every call, including calls to functions that never name the table.
+    /// Computed once per function body and reused (REFERENCE.md L44).
+    module_var_mentions: HashMap<usize, std::rc::Rc<std::collections::HashSet<String>>>,
     /// MoveOrClone guard: depth of active try/catch blocks.
     /// When > 0, Return must clone (finally block may reference the variable after <~).
     /// When == 0, Return can move (take_variable) — O(1) for String/Array.
@@ -452,6 +707,36 @@ pub struct Interpreter<W: Write> {
     /// MM-9: call-frame depth — 0 while executing top-level statements.
     /// Distinguishes the root scope from a function frame's bottom scope.
     call_depth: usize,
+    /// The file body's variables, reachable at any call depth.
+    ///
+    /// A named function CAPTURES what its body reads from the scope it was
+    /// written in, exactly as a lambda does (ERROR-ZYB-002). That scope is the
+    /// file body — and `take_call_state` swaps the whole scope stack away on
+    /// every call, so by the time a function two frames down is entered there is
+    /// nothing left to read it from.
+    ///
+    /// Mirroring on write costs O(1) per top-level assignment, which is the
+    /// cheap side of the trade: the alternative was cloning the scope stack on
+    /// every call, and a program that calls in a loop would pay it every
+    /// iteration.
+    ///
+    /// Only writes that land in the file body itself are mirrored — a block's
+    /// locals are not the file's, and a named function is written at file level
+    /// so it cannot see them anyway.
+    file_vars: HashMap<String, Value>,
+    /// The free names of each named function's body, computed once per
+    /// definition instead of once per call.
+    ///
+    /// Capturing (above) needs to know what a body reads from outside itself,
+    /// and that answer walks the whole body AST. It depends on the DEFINITION
+    /// alone, so a recursive function was re-deriving its own answer on every
+    /// invocation: `bench_recursion` lost 32% the day named functions started
+    /// capturing. The JavaScript engine already cached it on the function
+    /// object; this is the same cache, keyed by definition address.
+    ///
+    /// The `Rc` is kept in the map so that address cannot be reused by a later
+    /// allocation while an entry for it is still live.
+    free_names_cache: HashMap<usize, (Rc<FunctionDef>, Rc<Vec<String>>)>,
     /// Auto-free (v0.0.8): names destroyed by the last-use schedule in the
     /// CURRENT frame. Separate from `dead_variables` so an analyzer bug
     /// surfaces as a distinctive internal error, never as a user-facing `\`
@@ -571,8 +856,12 @@ impl<W: Write> Interpreter<W> {
         if !self.auto_dead_variables.is_empty() {
             self.auto_dead_variables.remove(name);
         }
+        let at_file_level = self.call_depth == 0 && self.scope_stack.len() == 1;
         if let Some(scope) = self.scope_stack.last_mut() {
-            scope.insert(name.to_string(), value);
+            scope.insert(name.to_string(), value.clone());
+        }
+        if at_file_level {
+            self.file_vars.insert(name.to_string(), value);
         }
     }
 
@@ -604,14 +893,22 @@ impl<W: Write> Interpreter<W> {
         if !self.auto_dead_variables.is_empty() {
             self.auto_dead_variables.remove(name);
         }
-        for scope in self.scope_stack.iter_mut().rev() {
+        let at_depth_zero = self.call_depth == 0;
+        for (i, scope) in self.scope_stack.iter_mut().enumerate().rev() {
             if let Some(existing) = scope.get_mut(name) {
-                *existing = value;
+                *existing = value.clone();
+                if at_depth_zero && i == 0 {
+                    self.file_vars.insert(name.to_string(), value);
+                }
                 return;
             }
         }
+        let at_file_level = at_depth_zero && self.scope_stack.len() == 1;
         if let Some(scope) = self.scope_stack.last_mut() {
-            scope.insert(name.to_string(), value);
+            scope.insert(name.to_string(), value.clone());
+        }
+        if at_file_level {
+            self.file_vars.insert(name.to_string(), value);
         }
     }
 
@@ -728,6 +1025,7 @@ impl<W: Write> Interpreter<W> {
             mutable_vars_stack: std::mem::take(&mut self.mutable_vars_stack),
             const_vars_stack: std::mem::take(&mut self.const_vars_stack),
             import_aliases: std::mem::take(&mut self.import_aliases),
+            frame_module_vars: std::mem::take(&mut self.frame_module_vars),
             has_any_const: self.has_any_const,
             // MM-1: loop anchors index into the caller's scope_stack — they must
             // not leak into the callee frame or x°/°x would write out of bounds.
@@ -763,6 +1061,7 @@ impl<W: Write> Interpreter<W> {
         let mut fn_mut = std::mem::replace(&mut self.mutable_vars_stack, saved.mutable_vars_stack);
         let mut fn_const = std::mem::replace(&mut self.const_vars_stack, saved.const_vars_stack);
         self.import_aliases = saved.import_aliases;
+        self.frame_module_vars = saved.frame_module_vars;
         self.has_any_const = saved.has_any_const;
         self.loop_scope_depths = saved.loop_scope_depths;      // MM-1
         self.dead_variables = saved.dead_variables;            // MM-3
@@ -798,7 +1097,8 @@ pub(crate) struct SavedCallState {
     pub(crate) scope_stack: Vec<HashMap<String, Value>>,
     mutable_vars_stack: Vec<HashSet<String>>,
     pub(crate) const_vars_stack: Vec<HashSet<String>>,
-    pub(crate) import_aliases: HashMap<String, std::path::PathBuf>,
+    pub(crate) import_aliases: ModuleAliases,
+    pub(crate) frame_module_vars: HashMap<String, Value>,
     has_any_const: bool,
     loop_scope_depths: Vec<usize>,
     dead_variables: HashSet<String>,
@@ -819,6 +1119,8 @@ impl Interpreter<std::io::Stdout> {
         Self {
             output: std::io::stdout(),
             scope_stack: vec![HashMap::new()],  // Start with one global scope
+            file_vars: HashMap::new(),
+            free_names_cache: HashMap::new(),
             loop_scope_depths: Vec::new(),
             functions: HashMap::new(),
             control_flow: ControlFlow::None,
@@ -826,9 +1128,11 @@ impl Interpreter<std::io::Stdout> {
             const_vars_stack: vec![HashSet::new()],
             loaded_modules: HashMap::new(),
             loading_modules: HashSet::new(),
-            import_aliases: HashMap::new(),
+            import_aliases: ModuleAliases::default(),
+            frame_module_vars: HashMap::new(),
             current_file: None,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            exit_code: None,
             cli_args: None,
             destruction_schedule: HashMap::new(),
             dead_variables: HashSet::new(),
@@ -841,6 +1145,7 @@ impl Interpreter<std::io::Stdout> {
             mut_vec_pool: Vec::new(),
             const_vec_pool: Vec::new(),
             arg_vec_pool: Vec::new(),
+            module_var_mentions: HashMap::new(),
             try_depth: 0,
             tui_depth: 0,
             current_function: None,
@@ -870,6 +1175,8 @@ impl<W: Write> Interpreter<W> {
         Self {
             output,
             scope_stack: vec![HashMap::new()],  // Start with one global scope
+            file_vars: HashMap::new(),
+            free_names_cache: HashMap::new(),
             loop_scope_depths: Vec::new(),
             functions: HashMap::new(),
             control_flow: ControlFlow::None,
@@ -877,9 +1184,11 @@ impl<W: Write> Interpreter<W> {
             const_vars_stack: vec![HashSet::new()],
             loaded_modules: HashMap::new(),
             loading_modules: HashSet::new(),
-            import_aliases: HashMap::new(),
+            import_aliases: ModuleAliases::default(),
+            frame_module_vars: HashMap::new(),
             current_file: None,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            exit_code: None,
             cli_args: None,
             destruction_schedule: HashMap::new(),
             dead_variables: HashSet::new(),
@@ -892,6 +1201,7 @@ impl<W: Write> Interpreter<W> {
             mut_vec_pool: Vec::new(),
             const_vec_pool: Vec::new(),
             arg_vec_pool: Vec::new(),
+            module_var_mentions: HashMap::new(),
             try_depth: 0,
             tui_depth: 0,
             current_function: None,
@@ -927,6 +1237,12 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Set the base directory for module resolution
+    /// The exit status a top-level `<~ n` asked for, if the program asked
+    /// (GAP-ZYB-006).
+    pub fn exit_code(&self) -> Option<i64> {
+        self.exit_code
+    }
+
     pub fn set_base_dir<P: AsRef<Path>>(&mut self, path: P) {
         self.base_dir = path.as_ref().to_path_buf();
     }
@@ -1013,7 +1329,8 @@ impl<W: Write> Interpreter<W> {
         self.const_vars_stack.push(HashSet::new());
         self.functions.clear();
         self.dead_variables.clear();
-        self.import_aliases.clear();
+        self.import_aliases = ModuleAliases::default();
+        self.frame_module_vars.clear();
         self.loading_modules.clear();
         self.loop_scope_depths.clear();
         self.has_any_const = false;
@@ -1110,14 +1427,14 @@ impl<W: Write> Interpreter<W> {
                 }
                 Value::Tuple(elements) => {
                     let types: Vec<String> = elements.iter().map(|v| self.value_type_name(v)).collect();
-                    format!("##)({})", types.join(", "))
+                    format!("{}({})", typesym::TUPLE, types.join(", "))
                 }
                 Value::NamedTuple(fields) => {
                     let types: Vec<String> = fields
                         .iter()
                         .map(|(name, val)| format!("{}: {}", name, self.value_type_name(val)))
                         .collect();
-                    format!("##)({})", types.join(", "))
+                    format!("{}({})", typesym::DICT, types.join(", "))
                 }
                 Value::Function(f) => if f.is_named_fn { "##()".to_string() } else { "##->".to_string() },
                 Value::Error(err) => format!("##{}", err.error_type),
@@ -1129,19 +1446,7 @@ impl<W: Write> Interpreter<W> {
 
     /// Helper to get type name for a value (symbolic notation)
     fn value_type_name(&self, value: &Value) -> String {
-        match value {
-            Value::Int(_) => "###".to_string(),
-            Value::Float(_) => "##.".to_string(),
-            Value::String(_) => "##\"".to_string(),
-            Value::Char(_) => "##'".to_string(),
-            Value::Bool(_) => "##?".to_string(),
-            Value::Array(_) => "##]".to_string(),
-            Value::Tuple(_) => "##)".to_string(),
-            Value::NamedTuple(_) => "##)".to_string(),
-            Value::Function(f) => if f.is_named_fn { "##()".to_string() } else { "##->".to_string() },
-            Value::Error(err) => format!("##{}", err.error_type),
-            Value::Unit => "##_".to_string(),
-        }
+        base_type_symbol(value).to_string()
     }
 
     /// Format a value for display using the current active numeral mode.
@@ -1156,6 +1461,41 @@ impl<W: Write> Interpreter<W> {
     /// strings/chars are quoted, Unit shows as `()`.  Used by the REPL.
     pub fn format_value_repr(&self, value: &Value) -> String {
         value.to_repr_string_in(self.numeral_mode)
+    }
+
+    /// Bind a function declaration to its name.
+    ///
+    /// Called twice for a top-level declaration — once by the hoisting pass in
+    /// `execute` and once when the statement itself runs — which is harmless: it
+    /// builds the same `FunctionDef` and overwrites the same entry.
+    pub(crate) fn register_function(&mut self, func_decl: &zymbol_ast::FunctionDecl) {
+        // Auto-free (v0.0.8): schedule body locals and by-value params
+        // for destruction after their last use. Output/Mutable params
+        // participate in caller write-back — never freed early.
+        let mut excluded: HashSet<String> = (*self.auto_free_excluded).clone();
+        let mut param_candidates: Vec<String> = Vec::new();
+        for p in &func_decl.parameters {
+            match p.kind {
+                zymbol_ast::ParameterKind::Normal => {
+                    param_candidates.push(p.name.clone());
+                }
+                _ => {
+                    excluded.insert(p.name.clone());
+                }
+            }
+        }
+        let auto_free = zymbol_semantic::region_schedule(
+            &func_decl.body.statements,
+            &param_candidates,
+            &excluded,
+        );
+        let func_def = FunctionDef::Zymbol {
+            parameters: func_decl.parameters.clone(),
+            body: func_decl.body.clone(),
+            origin_module_path: self.current_file.clone(),
+            auto_free,
+        };
+        self.functions.insert(func_decl.name.clone(), Rc::new(func_def));
     }
 
     /// Execute a program
@@ -1173,9 +1513,55 @@ impl<W: Write> Interpreter<W> {
         self.destruction_schedule =
             zymbol_semantic::region_schedule(&program.statements, &[], &self.auto_free_excluded);
 
+        // Hoisting: a function declared anywhere at the top level is callable
+        // from anywhere at the top level, including above its own declaration.
+        //
+        // This used to be decided by architecture rather than by anybody: the VM
+        // compiles the file before running it and so registers every name first
+        // (zymbol-compiler `compile`, "First pass: register function names"),
+        // while this engine and the browser one bound each name as its statement
+        // executed. `>> f(2) ¶` above `f(x) { <~ x * 10 }` printed 20 under
+        // `--vm` and was `undefined function: 'f'` by default — the same program,
+        // two answers (DM-03).
+        //
+        // The static analyzer had already picked a side: `zymbol check` passes
+        // that program, because zymbol-semantic collects declarations before
+        // checking calls. So the analyzer promised something only one of the
+        // three engines delivered.
+        //
+        // Top level only, which is what the VM does. A function declared inside a
+        // block still appears when the block runs; hoisting it out would move the
+        // three engines apart again, in the other direction.
+        //
+        // Must run after `auto_free_excluded` is set: `register_function` reads
+        // it to compute the body's destruction schedule.
+        for statement in &program.statements {
+            if let Statement::FunctionDecl(func_decl) = statement {
+                self.register_function(func_decl);
+            }
+        }
+
         // Execute statements with auto-destruction after each one's last uses
         for (i, statement) in program.statements.iter().enumerate() {
             self.execute_statement(statement)?;
+
+            // GAP-ZYB-006: a `<~` that reaches the top level ends the program,
+            // and its value is the exit status. The other two engines already
+            // stopped here; this one used to walk past and keep going, so the
+            // same file printed different things under `--vm`.
+            if let ControlFlow::Return(value) = &self.control_flow {
+                self.exit_code = Some(match value {
+                    Some(Value::Int(n)) => *n,
+                    // No value: ended deliberately, with nothing to report.
+                    None => 0,
+                    // Rejected by the analyzer before running; if one arrives
+                    // anyway, saying "something went wrong" beats inventing a
+                    // number out of a value that is not one.
+                    Some(_) => 1,
+                });
+                self.clear_control_flow();
+                break;
+            }
 
             // Pending control flow (shouldn't reach top level): teardown owns cleanup
             if self.is_control_flow_pending() {
@@ -1233,33 +1619,7 @@ impl<W: Write> Interpreter<W> {
             Statement::Break(break_stmt) => self.execute_break(break_stmt),
             Statement::Continue(continue_stmt) => self.execute_continue(continue_stmt),
             Statement::FunctionDecl(func_decl) => {
-                // Auto-free (v0.0.8): schedule body locals and by-value params
-                // for destruction after their last use. Output/Mutable params
-                // participate in caller write-back — never freed early.
-                let mut excluded: HashSet<String> = (*self.auto_free_excluded).clone();
-                let mut param_candidates: Vec<String> = Vec::new();
-                for p in &func_decl.parameters {
-                    match p.kind {
-                        zymbol_ast::ParameterKind::Normal => {
-                            param_candidates.push(p.name.clone());
-                        }
-                        _ => {
-                            excluded.insert(p.name.clone());
-                        }
-                    }
-                }
-                let auto_free = zymbol_semantic::region_schedule(
-                    &func_decl.body.statements,
-                    &param_candidates,
-                    &excluded,
-                );
-                let func_def = FunctionDef::Zymbol {
-                    parameters: func_decl.parameters.clone(),
-                    body: func_decl.body.clone(),
-                    origin_module_path: self.current_file.clone(),
-                    auto_free,
-                };
-                self.functions.insert(func_decl.name.clone(), Rc::new(func_def));
+                self.register_function(func_decl);
                 Ok(())
             }
             Statement::Return(return_stmt) => {
@@ -1322,7 +1682,7 @@ impl<W: Write> Interpreter<W> {
                 // For now, we'll need to pass CLI args through the interpreter context
                 // This will be implemented when we add CLI args support to the interpreter
                 let args_array = self.cli_args.clone().unwrap_or_default();
-                self.set_variable(&cli_args.variable_name, Value::Array(args_array));
+                self.set_variable(&cli_args.variable_name, Value::array(args_array));
                 Ok(())
             }
             Statement::LifetimeEnd(lifetime_end) => {
@@ -1369,66 +1729,131 @@ impl<W: Write> Interpreter<W> {
     /// Execute a destructure assignment statement: [a, *rest, _] = expr / (a, b) = expr / (field: var) = expr
     pub(crate) fn eval_destructure_assign(&mut self, d: &DestructureAssign) -> Result<()> {
         let rhs = self.eval_expr(&d.value)?;
-        match &d.pattern {
-            DestructurePattern::Array(items) | DestructurePattern::Positional(items) => {
+        self.bind_destructure_pattern(&d.pattern, rhs, d.span)
+    }
+
+    /// Bind a destructuring pattern to a value that is already evaluated.
+    ///
+    /// Split out of `eval_destructure_assign` so a loop head can use the very
+    /// same pattern: `@ (k, v):pares { … }` binds each element exactly as
+    /// `(k, v) = par` would, which is the whole point — the pattern language is
+    /// one language, and the loop stops needing a first line that only unpacks.
+    pub(crate) fn bind_destructure_pattern(
+        &mut self,
+        pattern: &DestructurePattern,
+        rhs: Value,
+        span: zymbol_span::Span,
+    ) -> Result<()> {
+        match pattern {
+            // The pattern is typed: `[ … ]` takes an array, `( … )` takes a tuple.
+            // A mismatch is an error rather than a silent reinterpretation (REFERENCE.md L32).
+            DestructurePattern::Array(items) => {
                 let elements: Vec<Value> = match &rhs {
-                    Value::Array(arr) => arr.clone(),
-                    Value::Tuple(tup) => tup.clone(),
+                    Value::Array(arr) => (**arr).clone(),
                     _ => return Err(RuntimeError::Generic {
                         message: format!(
-                            "destructure assignment requires an array or tuple, got {}",
+                            "array pattern '[ … ]' requires an array, got {}",
                             self.value_type_name(&rhs)
                         ),
-                        span: d.span,
+                        span,
                     }),
                 };
-                let mut idx = 0usize;
-                for item in items {
-                    match item {
-                        DestructureItem::Bind(name) => {
-                            let val = elements.get(idx).cloned().unwrap_or(Value::Unit);
-                            self.set_variable(name, val);
-                            idx += 1;
-                        }
-                        DestructureItem::Rest(name) => {
-                            // Collect remaining elements (excluding any trailing Bind/Ignore items)
-                            let trailing = items.iter().rev().take_while(|i| !matches!(i, DestructureItem::Rest(_))).count();
-                            let end = if trailing > 0 && elements.len() > idx + trailing {
-                                elements.len() - trailing
-                            } else {
-                                elements.len()
-                            };
-                            let rest: Vec<Value> = elements.get(idx..end).unwrap_or(&[]).to_vec();
-                            self.set_variable(name, Value::Array(rest));
-                            idx = end;
-                        }
-                        DestructureItem::Ignore => {
-                            idx += 1;
-                        }
-                    }
-                }
+                self.bind_positional(items, elements, false);
+            }
+            DestructurePattern::Positional(items) => {
+                let elements: Vec<Value> = match &rhs {
+                    Value::Tuple(tup) => (**tup).clone(),
+                    _ => return Err(RuntimeError::Generic {
+                        message: format!(
+                            "tuple pattern '( … )' requires a tuple, got {}",
+                            self.value_type_name(&rhs)
+                        ),
+                        span,
+                    }),
+                };
+                self.bind_positional(items, elements, true);
             }
             DestructurePattern::NamedTuple(fields) => {
                 let pairs: &Vec<(String, Value)> = match &rhs {
                     Value::NamedTuple(p) => p,
                     _ => return Err(RuntimeError::Generic {
                         message: format!(
-                            "named tuple destructure requires a named tuple, got {}",
-                            self.value_type_name(&rhs)
+                            "the pattern #(…) requires a dictionary, got {}\nhelp: #(key: name) = d unpacks a dictionary; use (a, b) for a tuple, [a, b] for an array",
+                            crate::base_type_symbol(&rhs)
                         ),
-                        span: d.span,
+                        span,
                     }),
                 };
                 for (field, var_name) in fields {
-                    let val = pairs.iter()
-                        .find(|(k, _)| k == field)
-                        .map(|(_, v)| v.clone())
-                        .unwrap_or(Value::Unit);
+                    // A key the dictionary does not hold is `##Key`, never a silent
+                    // Unit: binding nothing made `#(zzz: n) = d` succeed with `n`
+                    // empty and exit 0, which is the very answer decision 10 exists
+                    // to refuse. The register VM already raised here.
+                    let Some(val) = pairs.iter().find(|(k, _)| k == field).map(|(_, v)| v.clone())
+                    else {
+                        let available: Vec<String> =
+                            pairs.iter().map(|(k, _)| k.clone()).collect();
+                        return Err(RuntimeError::Generic {
+                            message: crate::variables::missing_key_msg(field, &available),
+                            span,
+                        });
+                    };
                     self.set_variable(var_name, val);
                 }
             }
         }
         Ok(())
+    }
+
+    /// Bind an array or positional-tuple pattern against the values it received.
+    ///
+    /// The **last item of the pattern absorbs whatever remains** (REFERENCE.md L33), so a
+    /// length mismatch is never an error: it binds `Unit` when nothing is left, the bare
+    /// value when exactly one is, and a collection when several are. `is_tuple` selects the
+    /// shape that collection takes — the remainder keeps the shape of the container it came
+    /// from.
+    ///
+    /// An explicit `*rest` opts out of absorption: it already governs how the values are
+    /// shared out, and its binding is always a collection, even of one element or none.
+    fn bind_positional(&mut self, items: &[DestructureItem], elements: Vec<Value>, is_tuple: bool) {
+        let wrap = |vals: Vec<Value>| if is_tuple { Value::tuple(vals) } else { Value::array(vals) };
+        let has_rest = items.iter().any(|i| matches!(i, DestructureItem::Rest(_)));
+        let mut idx = 0usize;
+
+        for (pos, item) in items.iter().enumerate() {
+            let absorbs = !has_rest && pos + 1 == items.len();
+            match item {
+                DestructureItem::Bind(name) => {
+                    let val = if absorbs {
+                        match elements.len().saturating_sub(idx) {
+                            0 => Value::Unit,
+                            1 => elements[idx].clone(),
+                            _ => wrap(elements[idx..].to_vec()),
+                        }
+                    } else {
+                        elements.get(idx).cloned().unwrap_or(Value::Unit)
+                    };
+                    self.set_variable(name, val);
+                    idx = if absorbs { elements.len() } else { idx + 1 };
+                }
+                DestructureItem::Rest(name) => {
+                    // Collect remaining elements (excluding any trailing Bind/Ignore items)
+                    let trailing = items.iter().rev().take_while(|i| !matches!(i, DestructureItem::Rest(_))).count();
+                    let end = if trailing > 0 && elements.len() > idx + trailing {
+                        elements.len() - trailing
+                    } else {
+                        elements.len()
+                    };
+                    let rest: Vec<Value> = elements.get(idx..end).unwrap_or(&[]).to_vec();
+                    self.set_variable(name, wrap(rest));
+                    idx = end;
+                }
+                DestructureItem::Ignore => {
+                    // In the last position `_` absorbs the remainder without binding it.
+                    idx = if absorbs { elements.len() } else { idx + 1 };
+                }
+            }
+        }
     }
 
     /// Evaluate an expression
@@ -1513,20 +1938,23 @@ impl<W: Write> Interpreter<W> {
         // Check if we got an error (either RuntimeError or returned Error value)
         let error_value = match &try_result {
             Err(e) => Some(self.runtime_error_to_value(e)),
-            Ok(()) => {
-                // Check if control flow returned an error value
-                if let ControlFlow::Return(Some(ref val)) = self.control_flow {
-                    if val.is_error() {
-                        let err = val.clone();
-                        self.clear_control_flow();
-                        Some(err)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
+            // A pending `Return` is VALUE flow and never exception flow, even
+            // when the value it carries is an error.
+            //
+            // This used to look inside the return, and treat an error found
+            // there as something `:!` should catch. That made `$!!` — an early
+            // return, by definition — behave as a throw whenever it happened to
+            // sit inside a `!?`, so a function propagating a failure upwards
+            // was intercepted by its own catch clause instead of returning.
+            // The register VM and the browser engine both returned the value;
+            // only the tree-walker caught it, and `GUIDE.md` § "Value flow"
+            // states the rule the other two follow: "`$!!` … does not throw an
+            // exception, so it cannot be caught with `!?`/`:!`".
+            //
+            // A `<~` of an ordinary value already left through here untouched,
+            // so this is the same path, now taken by every return alike. The
+            // finally clause below still runs: that is what a finally is.
+            Ok(()) => None,
         };
 
         // If we have an error, try to find a matching catch clause
@@ -1543,8 +1971,33 @@ impl<W: Write> Interpreter<W> {
         }
 
         // Execute finally block if present (always runs)
+        //
+        // "Always" includes the case where the try block returned. A pending
+        // `ControlFlow::Return` has to be set aside first, or the finally runs
+        // against a frame that is already unwinding: `execute_block` stops at
+        // the first statement it sees while control flow is pending, so
+        // `:> { >> "cleaning" ¶ }` printed `cleaning` and swallowed the newline
+        // — half a statement, which is worse than none. The return is put back
+        // afterwards unless the finally raised its own control flow, which
+        // legitimately wins.
         if let Some(ref finally) = try_stmt.finally_clause {
-            self.execute_block(&finally.block)?;
+            let pending = std::mem::replace(&mut self.control_flow, ControlFlow::None);
+            let pending_flag = std::mem::replace(&mut self.has_control_flow, false);
+            let finally_result = self.execute_block(&finally.block);
+            // BUG-ZYB-011: a `:>` is cleanup, and cleanup does not decide what
+            // the function returns. A `<~` written inside it is discarded, and
+            // the return the try block was carrying continues — which is what
+            // the browser engine has always done, and what makes this clause
+            // safe to read: whatever it contains, the value coming back is the
+            // one the reader saw at the `<~` above it.
+            //
+            // Java and Python do the opposite and let the finally win; both
+            // warn against relying on it in their own style guides. Zymbol
+            // takes the warning instead of the feature, and the analyzer says
+            // so at the `<~` rather than letting it look like it did something.
+            self.control_flow = pending;
+            self.has_control_flow = pending_flag;
+            finally_result?;
         }
 
         // If error wasn't caught, propagate it
@@ -1564,11 +2017,20 @@ impl<W: Write> Interpreter<W> {
             RuntimeError::Generic { message, .. } => {
                 // Try to classify the error based on message content
                 let lower_msg = message.to_lowercase();
-                if lower_msg.contains("index") || lower_msg.contains("out of bounds") {
+                // Checked before the rest: an integer that left its range is a
+                // ##Range whatever else the message happens to mention.
+                if lower_msg.contains("overflow") || lower_msg.contains("out of range") {
+                    Value::Error(ErrorValue::range(message.clone()))
+                // Before the index branch: a missing key is a ##Key even though
+                // the reader reached it through the index syntax `d["k"]`.
+                } else if lower_msg.contains("no key") {
+                    Value::Error(ErrorValue::key(message.clone()))
+                } else if lower_msg.contains("index") || lower_msg.contains("out of bounds") {
                     Value::Error(ErrorValue::index(message.clone()))
                 } else if lower_msg.contains("type") {
                     Value::Error(ErrorValue::type_error(message.clone()))
-                } else if lower_msg.contains("division") || lower_msg.contains("divide by zero") {
+                } else if lower_msg.contains("division") || lower_msg.contains("divide by zero")
+                    || lower_msg.contains("modulo") {
                     Value::Error(ErrorValue::div(message.clone()))
                 } else if lower_msg.contains("parse") {
                     Value::Error(ErrorValue::parse(message.clone()))

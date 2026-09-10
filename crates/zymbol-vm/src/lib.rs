@@ -24,7 +24,7 @@ use std::rc::Rc;
 
 use thiserror::Error;
 use zymbol_bytecode::{BuildPart, Chunk, CompiledProgram, FuncIdx, InputKind, Instruction, Reg};
-use zymbol_lexer::digit_blocks::digit_value;
+use zymbol_common::num;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Numeral-mode helpers (mirrors zymbol-interpreter::numeral_mode)
@@ -32,25 +32,35 @@ use zymbol_lexer::digit_blocks::digit_value;
 
 const ASCII_BASE: u32 = 0x0030;
 
+/// Rewrites one **formatted number** into the script identified by `block_base`
+/// (mirrors zymbol-interpreter::numeral_mode::map_numeral_number): digits, the
+/// decimal separator and the thousands separator all follow the script.
+///
+/// The argument must be a single number and nothing else — the separators are
+/// ordinary punctuation, so running this over composite text would rewrite
+/// marks that were never separators. Composite text never reaches here: a list,
+/// an interpolation and a concatenation each map their numbers one at a time.
+///
 /// Takes `s` by value so the ASCII fast-path hands the buffer straight back
-/// instead of re-allocating it (mirrors zymbol-interpreter::numeral_mode).
-fn map_ascii_digits(s: String, block_base: u32) -> String {
+/// instead of re-allocating it.
+fn map_numeral_number(s: String, block_base: u32) -> String {
     if block_base == ASCII_BASE {
         return s;
     }
+    let decimal = zymbol_lexer::digit_blocks::decimal_separator(block_base);
+    let thousands = zymbol_lexer::digit_blocks::thousands_separator(block_base);
     s.chars()
-        .map(|ch| {
-            if ch.is_ascii_digit() {
-                char::from_u32(block_base + (ch as u32 - ASCII_BASE)).unwrap_or(ch)
-            } else {
-                ch
-            }
+        .map(|ch| match ch {
+            '0'..='9' => char::from_u32(block_base + (ch as u32 - ASCII_BASE)).unwrap_or(ch),
+            '.' => decimal,
+            ',' => thousands,
+            _ => ch,
         })
         .collect()
 }
 
-fn numeral_int(value: i64, base: u32) -> String { map_ascii_digits(value.to_string(), base) }
-fn numeral_float(value: f64, base: u32) -> String { map_ascii_digits(value.to_string(), base) }
+fn numeral_int(value: i64, base: u32) -> String { map_numeral_number(value.to_string(), base) }
+fn numeral_float(value: f64, base: u32) -> String { map_numeral_number(value.to_string(), base) }
 fn numeral_bool(value: bool, base: u32) -> String { format!("#{}", numeral_int(if value { 1 } else { 0 }, base)) }
 
 /// Append `n` to `s` in the active script. In ASCII mode — the default, and the
@@ -107,6 +117,28 @@ pub enum Value {
     Error(ZyStr),
 }
 
+/// Materialize a module-level initializer into a runtime value.
+///
+/// Split out of `Vm::run` because the collection variants are recursive: a
+/// dictionary of dictionaries is one initializer and has to be built depth
+/// first. It runs once per global at startup, never inside the dispatch loop.
+fn global_init_value(init: &zymbol_bytecode::GlobalInit) -> Value {
+    use zymbol_bytecode::GlobalInit as G;
+    match init {
+        G::Int(n) => Value::Int(*n),
+        G::Float(f) => Value::Float(*f),
+        G::Bool(b) => Value::Bool(*b),
+        G::Char(c) => Value::Char(*c),
+        G::Str(s) => Value::String(ZyStr::new(s.clone())),
+        G::Unit => Value::Unit,
+        G::Array(items) => Value::Array(Rc::new(items.iter().map(global_init_value).collect())),
+        G::Tuple(items) => Value::Tuple(Rc::new(items.iter().map(global_init_value).collect())),
+        G::Dict(fields) => Value::NamedTuple(Rc::new(
+            fields.iter().map(|(k, v)| (k.clone(), global_init_value(v))).collect(),
+        )),
+    }
+}
+
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -134,7 +166,8 @@ impl fmt::Display for Value {
                 write!(f, ")")
             }
             Value::NamedTuple(fields) => {
-                write!(f, "(")?;
+                // `#(…)` — see the note on the tree-walker's `to_display_string_in`.
+                write!(f, "#(")?;
                 for (i, (name, val)) in fields.as_ref().iter().enumerate() {
                     if i > 0 { write!(f, ", ")?; }
                     write!(f, "{}: {}", name, val)?;
@@ -150,6 +183,25 @@ impl fmt::Display for Value {
 }
 
 impl Value {
+    /// Readable type name for diagnostics. Mirrors `zymbol-interpreter`'s
+    /// `type_word` and (until it was retired) zyml's `type_name`, so a message naming a type reads the
+    /// same whichever engine produced it.
+    fn type_word(&self) -> &'static str {
+        match self {
+            Value::Int(_)        => "integer",
+            Value::Float(_)      => "float",
+            Value::Bool(_)       => "bool",
+            Value::String(_)     => "string",
+            Value::Char(_)       => "char",
+            Value::Array(_)      => "array",
+            Value::Tuple(_) | Value::NamedTuple(_) => "tuple",
+            Value::Function(..)  => "function",
+            Value::Closure(..)   => "lambda",
+            Value::Error(_)      => "error",
+            Value::Unit          => "unit",
+        }
+    }
+
     #[inline(always)]
     fn is_truthy(&self) -> bool {
         match self {
@@ -163,6 +215,14 @@ impl Value {
     fn to_string_repr(&self) -> String {
         match self {
             Value::String(s) => s.to_string(),
+            // A standalone Unit is nothing, and only INSIDE a collection is it
+            // `()` — `[1, , 3]` reads like a typo. `Display` renders the nested
+            // form, so this arm is what tells the two apart.
+            //
+            // Without it, `"" u` built `"()"` in this engine and `""` in the
+            // other two: a program composing a message with a NULL column
+            // printed something different depending on which one ran it.
+            Value::Unit => String::new(),
             other => other.to_string(),
         }
     }
@@ -174,27 +234,38 @@ impl Value {
     /// Mirrors `Value::to_display_string_in` in the tree-walker; the two must
     /// agree character for character.
     fn to_display_in(&self, block_base: u32) -> String {
+        // Standalone Unit is nothing; nested Unit is `()`. Mirrors
+        // `to_display_string_in` in the tree-walker, which spells the rule the
+        // same way and for the same reason.
+        fn nested(v: &Value, block_base: u32) -> String {
+            match v {
+                Value::Unit => "()".to_string(),
+                other => other.to_display_in(block_base),
+            }
+        }
         match self {
+            Value::Unit     => String::new(),
             Value::Int(n)   => numeral_int(*n, block_base),
             Value::Float(f) => numeral_float(*f, block_base),
             Value::Bool(b)  => numeral_bool(*b, block_base),
             Value::String(s) => s.to_string(),
             Value::Array(arr) => {
                 let contents: Vec<String> =
-                    arr.iter().map(|v| v.to_display_in(block_base)).collect();
+                    arr.iter().map(|v| nested(v, block_base)).collect();
                 format!("[{}]", contents.join(", "))
             }
             Value::Tuple(items) => {
                 let contents: Vec<String> =
-                    items.iter().map(|v| v.to_display_in(block_base)).collect();
+                    items.iter().map(|v| nested(v, block_base)).collect();
                 format!("({})", contents.join(", "))
             }
             Value::NamedTuple(fields) => {
+                // `#(…)` — see the note on the tree-walker's `to_display_string_in`.
                 let contents: Vec<String> = fields
                     .iter()
-                    .map(|(name, v)| format!("{}: {}", name, v.to_display_in(block_base)))
+                    .map(|(name, v)| format!("{}: {}", name, nested(v, block_base)))
                     .collect();
-                format!("({})", contents.join(", "))
+                format!("#({})", contents.join(", "))
             }
             other => other.to_string(),
         }
@@ -209,7 +280,7 @@ impl Value {
             Value::Bool(_)          => "Bool",
             Value::Array(_)         => "Array",
             Value::Tuple(_)         => "Tuple",
-            Value::NamedTuple(_)    => "Tuple",
+            Value::NamedTuple(_)    => "Dict",
             Value::Function(_, _)   => "Function",
             Value::Closure(_, _, _) => "Function",
             Value::Unit             => "Unit",
@@ -235,6 +306,110 @@ impl Value {
         }
     }
 
+    /// The type name spelled as the tree-walker's `value_type_name` spells it.
+    ///
+    /// Destructuring errors are compared verbatim across engines by `zyq consensus`, so the
+    /// two must agree to the character — which is why the spellings come from
+    /// `zymbol_common::typesym` rather than from a table written out here. This is the
+    /// BASE symbol: an array is `##]` whatever it holds, because a failed destructuring is
+    /// about the shape and not about the mix. `#?` refines it; see `refined_type_symbol`.
+    ///
+    /// `zymbol_type_name` above uses a different spelling for the same types (`##[]`
+    /// against `##]`, `##()` against `##)`) and cannot be reused here.
+    fn tw_type_name(&self) -> &'static str {
+        use zymbol_common::typesym as ts;
+        match self {
+            Value::Int(_)           => ts::INT,
+            Value::Float(_)         => ts::FLOAT,
+            Value::String(_)        => ts::STRING,
+            Value::Char(_)          => ts::CHAR,
+            Value::Bool(_)          => ts::BOOL,
+            Value::Array(_)         => ts::ARRAY,
+            Value::Tuple(_)         => ts::TUPLE,
+            Value::NamedTuple(_)    => ts::DICT,
+            Value::Function(_, _)   => ts::FUNCTION,
+            Value::Closure(_, _, _) => ts::LAMBDA,
+            Value::Unit             => ts::UNIT,
+            Value::Error(_)         => "##!",
+        }
+    }
+
+    /// `tw_type_name`, except that an ERROR names its own kind — `##Index`, not the
+    /// generic `##!` — exactly as the tree-walker's `base_type_symbol` does.
+    ///
+    /// The kind is the prefix before `(` of the error's own text, which is where
+    /// `Instruction::TypeOf` already read it from to answer `#?`. Written once because
+    /// it had been written once and MISSED once: `#?` said `##Index` while a diagnostic
+    /// naming the same value said `##!`.
+    fn tw_type_name_owned(&self) -> String {
+        match self {
+            Value::Error(s) => {
+                let t = s.as_ref();
+                t.find('(').map(|i| &t[..i]).unwrap_or(t).to_string()
+            }
+            other => other.tw_type_name().to_string(),
+        }
+    }
+
+    /// The message inside an error's `##Kind(…)` text, which is what `#?` counts.
+    ///
+    /// The tree-walker keeps kind and message in separate fields and answers
+    /// `err.message.len()` (`data_ops.rs`); this engine keeps one string, so the message
+    /// is what sits between the first `(` and the final `)`. Answering 0 made the same
+    /// value report a length of 57 under one engine and 0 under the other.
+    fn error_message_len(&self) -> i64 {
+        match self {
+            Value::Error(s) => {
+                let t = s.as_ref();
+                match (t.find('('), t.strip_suffix(')')) {
+                    (Some(i), Some(no_paren)) => no_paren[i + 1..].len() as i64,
+                    _ => t.len() as i64,
+                }
+            }
+            _ => 0,
+        }
+    }
+
+    /// What `#?` answers: `tw_type_name`, except that an array whose elements are not all
+    /// one type is a list, `##[`.
+    ///
+    /// The mix is read from the value NOW, not from how the literal was written: `#[…]`
+    /// declares a mix to the analyzer and leaves no trace on the value, so a heterogeneous
+    /// array out of `json::decode` answers `##[` with no mark anywhere, and
+    /// `#[1, "dos"]$-[2]` answers `##]` because a single Int is not a mix.
+    fn refined_type_symbol(&self) -> &'static str {
+        match self {
+            Value::Array(items) => {
+                let bases: Vec<&'static str> = items.iter().map(Value::tw_type_name).collect();
+                zymbol_common::typesym::array_symbol(bases.into_iter())
+            }
+            other => other.tw_type_name(),
+        }
+    }
+
+    /// The `(symbol, count)` pair `#?` builds its tuple from. Written once because it had
+    /// been written twice — the two dispatch paths below each carried their own copy, and
+    /// a table kept in two places is a table that eventually disagrees with itself.
+    fn type_metadata(&self) -> (&'static str, i64) {
+        let count = match self {
+            Value::Int(n) => n.to_string().len() as i64,
+            Value::Float(fl) => fl.to_string().len() as i64,
+            Value::String(s) => s.as_ref().chars().count() as i64,
+            Value::Char(_) | Value::Bool(_) => 1,
+            Value::Array(a) => a.as_ref().len() as i64,
+            Value::Tuple(t) => t.as_ref().len() as i64,
+            Value::NamedTuple(f) => f.as_ref().len() as i64,
+            Value::Function(_, arity) => *arity as i64,
+            Value::Closure(_, arity, _) => *arity as i64,
+            _ => 0,
+        };
+        let symbol = match self {
+            Value::Unit | Value::Error(_) => zymbol_common::typesym::UNIT,
+            other => other.refined_type_symbol(),
+        };
+        (symbol, count)
+    }
+
     /// Equality for pattern matching and $? operator
     fn equals(&self, other: &Value) -> bool {
         match (self, other) {
@@ -248,8 +423,49 @@ impl Value {
             (Value::Char(a), Value::Char(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Unit, Value::Unit) => true,
+            // Two functions are equal when they are THE SAME function
+            // (BUG-ZYB-012). A named one is its index in the function table,
+            // which is stable however many names point at it; a closure is its
+            // index AND the upvalues it captured, because the same lambda
+            // evaluated twice — next time round a loop — is two closures.
+            //
+            // Same shape as the missing `Array` arm above: no arm meant
+            // `_ => false`, so a function never equalled itself, while the
+            // browser engine said `#1` to any two functions at all. Neither had
+            // been decided; identity is what was.
+            (Value::Function(ia, aa), Value::Function(ib, ab)) => ia == ib && aa == ab,
+            (Value::Closure(ia, aa, ua), Value::Closure(ib, ab, ub)) => {
+                ia == ib && aa == ab && Rc::ptr_eq(ua, ub)
+            }
             (Value::Tuple(a), Value::Tuple(b)) => {
                 a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.equals(y))
+            }
+            // Arrays compare element by element, exactly as tuples do. The
+            // missing arm fell through to `_ => false`, so `[1,2,3] == [1,2,3]`
+            // answered #0 in the VM and #1 in the other two engines (DM-02): a
+            // silent wrong answer, and a `?` on it took the opposite branch.
+            //
+            // Recursing through `equals` is what gives nested arrays and the
+            // Int/Float promotion for free — element equality has to be the same
+            // relation as scalar equality, or `[1] == [1.0]` disagrees with
+            // `1 == 1.0`, which is #1 and documented.
+            (Value::Array(a), Value::Array(b)) => {
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.equals(y))
+            }
+            // Two dictionaries are equal when they hold the same keys with the
+            // same values — decided 2026-08-19 (DM-22). Both Rust engines said
+            // `#0`, which was indefensible: every other collection compares by
+            // value, and a dictionary that never equals another cannot be
+            // tested, deduplicated or asserted on.
+            //
+            // Key ORDER is not part of it. Insertion order is preserved for
+            // walking, as in Python's dict, but two dictionaries built in a
+            // different order still hold the same thing.
+            (Value::NamedTuple(a), Value::NamedTuple(b)) => {
+                a.len() == b.len()
+                    && a.iter().all(|(ka, va)| {
+                        b.iter().any(|(kb, vb)| ka == kb && va.equals(vb))
+                    })
             }
             _ => false,
         }
@@ -299,14 +515,30 @@ struct FrameInfo {
 
 #[derive(Debug, Error)]
 pub enum VmError {
-    #[error("type error: expected {expected}, got {got}")]
+    // Phrased as the LANGUAGE, not as the check that noticed. "type error:
+    // expected Int, got String" names an internal predicate; a reader is told
+    // what the program did wrong.
+    #[error("this needs {expected} and got {got}")]
     TypeError { expected: &'static str, got: String },
     #[error("{op} requires a numeric value, got {got}")]
     CastError { op: &'static str, got: String },
     #[error("division by zero")]
     DivisionByZero,
-    #[error("array index out of bounds: index {index} for array of length {length}")]
-    IndexOutOfBounds { index: i64, length: usize },
+    #[error("modulo by zero")]
+    ModuloByZero,
+    /// An integer result outside `zymbol_common::num`'s range. Spelled exactly
+    /// as the tree-walker spells it — `zyq consensus` compares the text.
+    #[error("integer overflow: {a} {op} {b}")]
+    IntOverflow { a: i64, op: &'static str, b: i64 },
+    /// `###`/`##!` on a float with no integer form in range.
+    #[error("integer overflow: {op} cannot represent this float")]
+    CastOverflow { op: &'static str },
+    /// `container` is spelled as the tree-walker spells it — the read path there
+    /// names the thing that was too short, and one message that always said
+    /// "array" told a program indexing past the end of a STRING that its array
+    /// was short. `zyq consensus` compares the text.
+    #[error("{container} index out of bounds: index {index} for {container} of length {length}")]
+    IndexOutOfBounds { index: i64, length: usize, container: &'static str },
     #[error("index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)")]
     IndexZero,
     #[error("undefined function index {0}")]
@@ -323,6 +555,25 @@ pub enum VmError {
 // Free helpers (not methods — avoids borrow conflicts in the dispatch loop)
 // ──────────────────────────────────────────────────────────────────────────────
 
+/// Run `cmd` through the system shell, for `<\ \>` and `</ />`.
+///
+/// Shared by both instructions and resolved by the same code the tree-walker uses
+/// (`zymbol_common::shell`), so the two engines cannot disagree about which shell
+/// a script runs in. A spawn failure names the program, which the previous
+/// `failed to execute bash command: program not found` did not — it named a shell
+/// the code was not even running.
+fn run_in_shell(cmd: &str) -> Result<std::process::Output, VmError> {
+    let mut shell =
+        zymbol_common::shell::shell_command(cmd).map_err(|e| VmError::Generic(e.to_string()))?;
+    shell.output().map_err(|e| {
+        VmError::Generic(format!(
+            "failed to run `{}`: {}",
+            shell.get_program().to_string_lossy(),
+            e
+        ))
+    })
+}
+
 fn fmt_comma_int(n: i64) -> String {
     let neg = n < 0;
     let digits = format!("{}", n.unsigned_abs());
@@ -337,6 +588,56 @@ fn fmt_comma_int(n: i64) -> String {
 }
 
 /// Format with thousands separators: prec_kind 0=none, 1=round, 2=truncate
+/// The decimal count held in a register, for the `*Dyn` format opcodes.
+fn vm_precision_from(v: &Value) -> Result<u32, VmError> {
+    match v {
+        Value::Int(n) if *n >= 0 => Ok(*n as u32),
+        Value::Int(n) => Err(VmError::TypeError {
+            expected: "a decimal count that is not negative",
+            got: n.to_string(),
+        }),
+        other => Err(VmError::TypeError {
+            expected: "a whole number as the decimal count",
+            got: other.type_name().to_string(),
+        }),
+    }
+}
+
+/// The number a format opcode operates on. Mirrors the immediate path, which
+/// also accepts a string that parses — the tree-walker rejects a non-number and
+/// returning 0.0 silently made the two engines disagree.
+fn vm_number_from(v: &Value) -> Result<f64, VmError> {
+    match v {
+        Value::Int(n) => Ok(*n as f64),
+        Value::Float(f) => Ok(*f),
+        other => ascii_digits(other.to_string().trim())
+            .parse::<f64>()
+            .map_err(|_| VmError::TypeError {
+                expected: "number",
+                got: other.type_name().to_string(),
+            }),
+    }
+}
+
+/// A Char read as the one-character string it is, for `#|c|` (GAP-ZYB-012).
+///
+/// Mirrors the String arm above, including the 69 digit scripts, and returns
+/// the character unchanged when it is not a number — which is what "safe
+/// conversion" means for a string too.
+fn vm_char_as_number(c: char) -> Value {
+    let s = c.to_string();
+    match num::parse(&s) {
+        num::Num::Int(i) => Value::Int(i),
+        num::Num::Float(f) => Value::Float(f),
+        num::Num::None => match normalize_unicode_digits(&s).map(|n| num::parse(&n)) {
+            Some(num::Num::Int(i)) => Value::Int(i),
+            Some(num::Num::Float(f)) => Value::Float(f),
+            _ => Value::Char(c),
+        },
+    }
+}
+
+/// Map the ASCII digits of a formatted number into the active numeral script.
 fn vm_fmt_thousands(num: f64, prec_kind: u8, prec_n: u32) -> String {
     let num = match prec_kind {
         1 => { let m = 10f64.powi(prec_n as i32); (num * m).round() / m }
@@ -420,9 +721,13 @@ fn num_eq_imm(v: &Value, imm: i64) -> Option<bool> {
 fn cmp_order(va: &Value, vb: &Value) -> Option<i32> {
     use std::cmp::Ordering;
     fn ord(o: Ordering) -> i32 { match o { Ordering::Less => -1, Ordering::Equal => 0, Ordering::Greater => 1 } }
-    fn as_int(s: &str) -> Option<i64> { ascii_digits(s.trim()).parse::<i64>().ok() }
+    fn as_int(s: &str) -> Option<i64> {
+        match num::parse(&ascii_digits(s.trim())) { num::Num::Int(n) => Some(n), _ => None }
+    }
     fn as_f64(s: &str) -> Option<f64> { ascii_digits(s.trim()).parse::<f64>().ok() }
-    fn f_ord(x: f64, y: f64) -> i32 { ord(x.partial_cmp(&y).unwrap_or(Ordering::Equal)) }
+    // NaN has no ordering against anything, itself included. Folding that into
+    // `Equal` made `nan <= 1.0` and `nan >= 1.0` both true.
+    fn f_ord(x: f64, y: f64) -> i32 { x.partial_cmp(&y).map_or(INCOMPARABLE, ord) }
 
     match (va, vb) {
         (Value::Int(x), Value::Int(y))     => Some(ord(x.cmp(y))),
@@ -450,17 +755,26 @@ fn cmp_order(va: &Value, vb: &Value) -> Option<i32> {
         },
         (Value::String(s), Value::Float(f)) => as_f64(s.as_str()).map(|n| f_ord(n, *f)),
         (Value::Float(f), Value::String(s)) => as_f64(s.as_str()).map(|n| f_ord(*f, n)),
-        (Value::Tuple(x), Value::Tuple(y)) => {
-            if x.len() != y.len() { return Some(1); }
-            for (a, b) in x.iter().zip(y.iter()) {
-                match cmp_order(a, b) {
-                    Some(0) => continue,
-                    other => return other,
-                }
-            }
-            Some(0)
-        }
+        // ZYVM-001: a tuple used to compare element by element here, so
+        // `(1, 2) < (3, 4)` answered `#1` under the VM and was refused by the
+        // tree-walker. The tuple is positional and heterogeneous — `(1, "a") <
+        // (2, #0)` has no defensible answer — so the language has no ordering
+        // for it, and the two engines now say so with one message. Equality is
+        // untouched: `==` does not go through here, and two tuples still
+        // compare equal element by element.
         _ => None,
+    }
+}
+
+/// `rb2!` for the call-frame interpreter loop, which has no `raise!` macro and
+/// propagates with `?`.
+fn bools_or_err(va: &Value, vb: &Value, op: &str) -> Result<(bool, bool), VmError> {
+    match (va, vb) {
+        (Value::Bool(x), Value::Bool(y)) => Ok((*x, *y)),
+        _ => Err(VmError::Generic(logical_type_error(
+            op,
+            if matches!(va, Value::Bool(_)) { vb } else { va },
+        ))),
     }
 }
 
@@ -487,17 +801,77 @@ fn cmp_order_error(va: &Value, vb: &Value, op: &str) -> String {
     }
 }
 
+/// The tree-walker's refusal for an arithmetic operation whose operands are not
+/// numbers — **spelled per operator** (ZYVM-002).
+///
+/// It used to be one string, `+ is arithmetic only …`, reached from every
+/// arithmetic instruction through one shared macro. So `7 - "a"` was refused
+/// with guidance about an operator the program had not written, and `'a' + 'b'`
+/// — where that guidance is exactly right — got the generic "this needs a
+/// number" instead, because it took a different path. The message was tied to
+/// the code route, not to the operator; now it is tied to the operator.
+fn arith_type_error(op: &str, a: &Value, b: &Value) -> String {
+    match op {
+        "+" => "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\"".to_string(),
+        "/" => "/ requires numeric operands — use $/ to split strings".to_string(),
+        "^" => format!("power operator requires numeric operands: {}, {}", a.type_name(), b.type_name()),
+        _   => format!("arithmetic requires numeric operands: {}, {}", a.type_name(), b.type_name()),
+    }
+}
+
+/// The tree-walker's refusal for `&&` / `||` on an operand that is not a Bool.
+///
+/// ZYVM-001: the VM read both operands through `is_truthy()`, so `7 && 3`
+/// answered `#1` where the tree-walker refused — and the semantic analyser,
+/// which both engines share, had already emitted the warning in both. The
+/// language settled this for the loop specifier in v0.0.9 — there is no
+/// truthiness; a thing is what it is or it is refused — and the logical
+/// operators follow the same rule.
+fn logical_type_error(op: &str, v: &Value) -> String {
+    format!("logical {} requires boolean operands, got {}", op, v.type_name())
+}
+
+/// Returned by `cmp_direct` and `cmp_order` for values with no ordering at all
+/// — two different types, or anything involving NaN.
+///
+/// It is deliberately not a value the sign tests would accept: an ordering
+/// comparison against it must be *false in all four directions*, which is what
+/// IEEE-754 says about NaN. That is why the operators below ask `ord_lt(r)`
+/// rather than `r < 0` — `INCOMPARABLE > 0` is true, and reading the sign is
+/// exactly the bug this constant exists to prevent.
+const INCOMPARABLE: i32 = 2;
+
+#[inline] fn ord_lt(r: i32) -> bool { r == -1 }
+#[inline] fn ord_le(r: i32) -> bool { r == -1 || r == 0 }
+#[inline] fn ord_gt(r: i32) -> bool { r == 1 }
+#[inline] fn ord_ge(r: i32) -> bool { r == 1 || r == 0 }
+
 fn cmp_direct(va: &Value, vb: &Value) -> i32 {
     use std::cmp::Ordering;
     fn ord(o: Ordering) -> i32 { match o { Ordering::Less => -1, Ordering::Equal => 0, Ordering::Greater => 1 } }
     match (va, vb) {
         (Value::Int(x), Value::Int(y))     => ord(x.cmp(y)),
-        (Value::Float(x), Value::Float(y)) => ord(x.partial_cmp(y).unwrap_or(Ordering::Equal)),
-        (Value::Int(x), Value::Float(y))   => ord((*x as f64).partial_cmp(y).unwrap_or(Ordering::Equal)),
-        (Value::Float(x), Value::Int(y))   => ord(x.partial_cmp(&(*y as f64)).unwrap_or(Ordering::Equal)),
+        // `unwrap_or(Equal)` here made NaN equal to every float, including
+        // itself: `partial_cmp` returns None precisely when one side is NaN, and
+        // callers read 0 as "equal". INCOMPARABLE is a non-zero code, so `==` is
+        // false and `!=` is true — which is what IEEE-754 says about NaN, and
+        // what the other three engines already did.
+        (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).map_or(INCOMPARABLE, ord),
+        (Value::Int(x), Value::Float(y))   => (*x as f64).partial_cmp(y).map_or(INCOMPARABLE, ord),
+        (Value::Float(x), Value::Int(y))   => x.partial_cmp(&(*y as f64)).map_or(INCOMPARABLE, ord),
         (Value::String(x), Value::String(y)) => ord(x.as_str().cmp(y.as_str())),
         (Value::Char(x), Value::Char(y))   => ord(x.cmp(y)),
         (Value::Bool(x), Value::Bool(y))   => ord(x.cmp(y)),
+        // Unit is equal to Unit. There is one Unit value, so this is both the
+        // type test and the value test, and `##_ == ##_` had better be `#1` now
+        // that `##_` can be written (GAP-ZYB-009).
+        //
+        // Missing here, this VM said a Unit was not equal to ITSELF while the
+        // other two engines said it was — the fourth arm to go missing from a
+        // comparison in this file, after `Array` (DM-02), `NamedTuple` (DM-22)
+        // and `Function` (BUG-ZYB-012). `Value::equals` had it; this does not
+        // share code with it, and that is the whole defect.
+        (Value::Unit, Value::Unit)         => 0,
         (Value::Tuple(x), Value::Tuple(y)) => {
             if x.len() != y.len() { return 1; }
             for (a, b) in x.iter().zip(y.iter()) {
@@ -505,6 +879,48 @@ fn cmp_direct(va: &Value, vb: &Value) -> i32 {
                 if r != 0 { return r; }
             }
             0
+        }
+        // Same arm for arrays, and for the same reason as in `Value::equals`
+        // above: without it `[1,2,3] == [1,2,3]` was #0 in the VM alone (DM-02).
+        //
+        // This function returns an ordering code and `==` reads 0 as equal, so a
+        // non-zero result also makes `<>` true — which is all `==`/`<>` need. It
+        // is not an order on arrays: no engine defines one, and the first
+        // differing element's code is returned only so equality is decided.
+        (Value::Array(x), Value::Array(y)) => {
+            if x.len() != y.len() { return 1; }
+            for (a, b) in x.iter().zip(y.iter()) {
+                let r = cmp_direct(a, b);
+                if r != 0 { return r; }
+            }
+            0
+        }
+        // Two dictionaries are equal when they hold the same keys with the same
+        // values (DM-22, decided 2026-08-19). Key ORDER is not part of it: two
+        // dictionaries built in a different order still hold the same thing, so
+        // this looks each key up rather than zipping.
+        (Value::NamedTuple(x), Value::NamedTuple(y)) => {
+            if x.len() != y.len() { return 1; }
+            for (ka, va) in x.iter() {
+                match y.iter().find(|(kb, _)| kb == ka) {
+                    Some((_, vb)) if cmp_direct(va, vb) == 0 => {}
+                    _ => return 1,
+                }
+            }
+            0
+        }
+        // Two functions are equal when they are THE SAME function (BUG-ZYB-012)
+        // — see `Value::equals`, which this has to agree with, because the two
+        // dispatch loops of this VM reach equality through different doors:
+        // one calls `equals` and the other calls this.
+        //
+        // There is no ORDER on functions and none is implied: `1` only means
+        // "not equal", which is what `==` and `<>` read.
+        (Value::Function(ia, aa), Value::Function(ib, ab)) => {
+            if ia == ib && aa == ab { 0 } else { 1 }
+        }
+        (Value::Closure(ia, aa, ua), Value::Closure(ib, ab, ub)) => {
+            if ia == ib && aa == ab && Rc::ptr_eq(ua, ub) { 0 } else { 1 }
         }
         _ => 1,
     }
@@ -532,16 +948,14 @@ fn vm_validate_input(s: &str, kind: &InputKind) -> Result<Value, String> {
     match kind {
         InputKind::Raw => Ok(Value::String(ZyStr::new(s.to_string()))),
         InputKind::Numeric => {
-            if let Ok(i) = s.parse::<i64>() {
-                Ok(Value::Int(i))
-            } else if let Ok(f) = s.parse::<f64>() {
-                Ok(Value::Float(f))
-            } else if let Some(norm) = normalize_unicode_digits(s) {
-                if let Ok(i) = norm.parse::<i64>() { Ok(Value::Int(i)) }
-                else if let Ok(f) = norm.parse::<f64>() { Ok(Value::Float(f)) }
-                else { Ok(Value::String(ZyStr::new(s.to_string()))) }
-            } else {
-                Ok(Value::String(ZyStr::new(s.to_string())))
+            match num::parse(s) {
+                num::Num::Int(i) => Ok(Value::Int(i)),
+                num::Num::Float(f) => Ok(Value::Float(f)),
+                num::Num::None => match normalize_unicode_digits(s).map(|n| num::parse(&n)) {
+                    Some(num::Num::Int(i)) => Ok(Value::Int(i)),
+                    Some(num::Num::Float(f)) => Ok(Value::Float(f)),
+                    _ => Ok(Value::String(ZyStr::new(s.to_string()))),
+                },
             }
         }
         InputKind::Float => ascii_digits(s).parse::<f64>()
@@ -617,28 +1031,9 @@ fn ascii_digits(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-fn normalize_unicode_digits(s: &str) -> Option<String> {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    if chars.peek() == Some(&'-') {
-        result.push('-');
-        chars.next();
-    }
-    let mut has_digit = false;
-    let mut has_dot = false;
-    for ch in chars {
-        if let Some(dv) = digit_value(ch) {
-            result.push(char::from_digit(dv as u32, 10).unwrap());
-            has_digit = true;
-        } else if ch == '.' && !has_dot {
-            result.push('.');
-            has_dot = true;
-        } else {
-            return None;
-        }
-    }
-    if has_digit { Some(result) } else { None }
-}
+// The one normalizer, shared with the tree-walker and with the lexer's own
+// literal scanner — see `zymbol_lexer::digit_blocks::ascii_number`.
+use zymbol_lexer::digit_blocks::ascii_number as normalize_unicode_digits;
 
 #[inline(always)]
 fn get_chunk(program: &CompiledProgram, chunk_idx: usize) -> &Chunk {
@@ -686,6 +1081,8 @@ pub struct VM<W: Write> {
     global_vars: Vec<Value>,
     /// CLI arguments passed after the script path (argv[1..], skipping --vm flags)
     cli_args: Vec<String>,
+    /// The code a top-level `<~ n` asked the program to end with (GAP-ZYB-006).
+    exit_code: Option<i64>,
     output: W,
 }
 
@@ -700,6 +1097,7 @@ impl<W: Write> VM<W> {
             numeral_mode: 0x0030, // ASCII_BASE default
             global_vars: Vec::new(),
             cli_args: Vec::new(),
+            exit_code: None,
             output,
         }
     }
@@ -707,6 +1105,12 @@ impl<W: Write> VM<W> {
     /// Set CLI arguments before running (argv after the script path, minus VM flags).
     pub fn set_cli_args(&mut self, args: Vec<String>) {
         self.cli_args = args;
+    }
+
+    /// The exit status a top-level `<~ n` asked for, if the program asked
+    /// (GAP-ZYB-006).
+    pub fn exit_code(&self) -> Option<i64> {
+        self.exit_code
     }
 
     /// Stringify a value under the active numeral mode.
@@ -739,14 +1143,7 @@ impl<W: Write> VM<W> {
         self.string_rcs = program.string_pool.iter().map(|s| ZyStr::from_str_ref(s)).collect();
 
         // Initialize global variables from program inits
-        self.global_vars = program.global_var_inits.iter().map(|init| match init {
-            zymbol_bytecode::GlobalInit::Int(n) => Value::Int(*n),
-            zymbol_bytecode::GlobalInit::Float(f) => Value::Float(*f),
-            zymbol_bytecode::GlobalInit::Bool(b) => Value::Bool(*b),
-            zymbol_bytecode::GlobalInit::Char(c) => Value::Char(*c),
-            zymbol_bytecode::GlobalInit::Str(s) => Value::String(ZyStr::new(s.clone())),
-            zymbol_bytecode::GlobalInit::Unit => Value::Unit,
-        }).collect();
+        self.global_vars = program.global_var_inits.iter().map(global_init_value).collect();
 
         // Push initial frame for main chunk
         let num_regs = program.main.num_registers as usize;
@@ -777,16 +1174,25 @@ impl<W: Write> VM<W> {
         macro_rules! wreg {
             ($r:expr, $v:expr) => { unsafe { *self.value_stack.get_unchecked_mut(base + $r as usize) = $v } }
         }
-        // ri!: read register as Int, raise TypeError on mismatch
+        // ri!: read register as Int for a POSITION — an index, a count, a
+        // repetition. Not for an arithmetic operand: those go through `ri2!`,
+        // which knows which operator asked and can therefore say so.
+        //
+        // This macro used to carry the `+ is arithmetic only …` guidance for a
+        // String, because it was the only Int reader and `+` was the commonest
+        // way to reach it. That made the message a property of the code route
+        // rather than of the operator (ZYVM-002): `7 - "a"` quoted the guidance
+        // for `+`, and `arr["x"]` would have quoted it too.
         macro_rules! ri {
             ($r:expr) => {
                 match unsafe { self.value_stack.get_unchecked(base + $r as usize) } {
                     Value::Int(n) => *n,
-                    other => raise!(VmError::TypeError { expected: "Int", got: other.type_name().to_string() }),
+                    other => raise!(VmError::TypeError { expected: "a number", got: other.type_name().to_string() }),
                 }
             }
         }
-        // rf!: read register as Float (Int coerced), raise TypeError on mismatch
+        // rf!: read register as Float (Int coerced), raise TypeError on mismatch.
+        // As with `ri!`, arithmetic operands use `rf2!` instead.
         macro_rules! rf {
             ($r:expr) => {
                 match unsafe { self.value_stack.get_unchecked(base + $r as usize) } {
@@ -795,6 +1201,44 @@ impl<W: Write> VM<W> {
                     other => raise!(VmError::TypeError { expected: "Float", got: other.type_name().to_string() }),
                 }
             }
+        }
+        // ri2!/rf2!: read BOTH arithmetic operands, and on failure raise the
+        // tree-walker's message for the operator that asked (ZYVM-002).
+        //
+        // The message is built in a first step that ends the borrow of
+        // `value_stack`, because `raise!` needs `self` mutably — the reason
+        // these are not one expression.
+        macro_rules! ri2 {
+            ($a:expr, $b:expr, $op:expr) => {{
+                let read = match (rreg!($a), rreg!($b)) {
+                    (Value::Int(x), Value::Int(y)) => Ok((*x, *y)),
+                    (va, vb) => Err(arith_type_error($op, va, vb)),
+                };
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+            }}
+        }
+        macro_rules! rf2 {
+            ($a:expr, $b:expr, $op:expr) => {{
+                let read = match (rreg!($a), rreg!($b)) {
+                    (Value::Float(x), Value::Float(y)) => Ok((*x, *y)),
+                    (Value::Float(x), Value::Int(y))   => Ok((*x, *y as f64)),
+                    (Value::Int(x), Value::Float(y))   => Ok((*x as f64, *y)),
+                    (Value::Int(x), Value::Int(y))     => Ok((*x as f64, *y as f64)),
+                    (va, vb) => Err(arith_type_error($op, va, vb)),
+                };
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+            }}
+        }
+        // The immediate forms: the other operand is the literal the compiler
+        // folded in, so the message names it exactly as the general form would.
+        macro_rules! ri_imm {
+            ($r:expr, $imm:expr, $op:expr) => {{
+                let read = match rreg!($r) {
+                    Value::Int(x) => Ok(*x),
+                    va => Err(arith_type_error($op, va, &Value::Int($imm as i64))),
+                };
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+            }}
         }
 
         macro_rules! raise {
@@ -821,9 +1265,15 @@ impl<W: Write> VM<W> {
                     frame.catch_ip = u32::MAX;
                     let kind = match &_err {
                         VmError::TypeError { .. } | VmError::CastError { .. } => "Type",
-                        VmError::DivisionByZero => "Div",
+                        VmError::DivisionByZero | VmError::ModuloByZero => "Div",
+                        VmError::IntOverflow { .. } | VmError::CastOverflow { .. } => "Range",
                         VmError::IndexOutOfBounds { .. } | VmError::IndexZero => "Index",
                         VmError::Io(_) => "IO",
+                        // A dictionary key that is not there is a ##Key, even
+                        // though the reader arrived through the index syntax
+                        // `d["k"]` (decision 10). The tree-walker classifies the
+                        // same way, from the same wording.
+                        VmError::Generic(m) if m.starts_with("no key '") => "Key",
                         _ => "_",
                     };
                     frame.try_depth = 0;
@@ -837,8 +1287,44 @@ impl<W: Write> VM<W> {
             }};
         }
 
+        // An integer result, or the overflow the tree-walker would have raised.
+        // Every integer instruction goes through this: the VM used to use the
+        // `wrapping_*` family throughout, so `10 ^ 20` answered with the low 64
+        // bits of the true product and no program could tell.
+        macro_rules! iop {
+            ($v:expr, $a:expr, $op:expr, $b:expr) => {
+                match $v {
+                    Some(n) => n,
+                    None => raise!(VmError::IntOverflow { a: $a, op: $op, b: $b }),
+                }
+            };
+        }
+
         // Ordering comparison, raising the tree-walker's error when the two
         // values are not comparable (a number against non-numeric text).
+        // rb2!: both logical operands as Bool, or the tree-walker's refusal.
+        // The left operand is reported first, as there — `7 && "a"` names the 7.
+        macro_rules! rb2 {
+            ($a:expr, $b:expr, $op:expr) => {{
+                let read = match (rreg!($a), rreg!($b)) {
+                    (Value::Bool(x), Value::Bool(y)) => Ok((*x, *y)),
+                    (va, vb) => Err(logical_type_error($op, if matches!(va, Value::Bool(_)) { vb } else { va })),
+                };
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+            }}
+        }
+        // rn!: the operand of unary `-`. Its refusal used to come out of `ri!`
+        // as the guidance for `+` (ZYVM-002): `-"a"` was refused with advice
+        // about concatenation.
+        macro_rules! rn {
+            ($r:expr) => {{
+                let read = match rreg!($r) {
+                    Value::Int(n)   => Ok(*n),
+                    va => Err(format!("negation requires numeric operand, got {}", va.type_name())),
+                };
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+            }}
+        }
         macro_rules! ord_or_raise {
             ($a:expr, $b:expr, $op:expr) => {
                 match cmp_order(rreg!($a), rreg!($b)) {
@@ -848,6 +1334,23 @@ impl<W: Write> VM<W> {
                     )),
                 }
             };
+        }
+        // The same rule against a folded literal. The Int case is answered
+        // without building a Value, so the loop counter pays nothing for it.
+        macro_rules! ord_imm_or_raise {
+            ($r:expr, $imm:expr, $op:expr) => {{
+                match rreg!($r) {
+                    Value::Int(n) => { let n = *n; let i = $imm as i64; if n < i { -1 } else if n > i { 1 } else { 0 } }
+                    _ => {
+                        let rhs = Value::Int($imm as i64);
+                        let read = match cmp_order(rreg!($r), &rhs) {
+                            Some(r) => Ok(r),
+                            None => Err(cmp_order_error(rreg!($r), &rhs, $op)),
+                        };
+                        match read { Ok(r) => r, Err(msg) => raise!(VmError::Generic(msg)) }
+                    }
+                }
+            }};
         }
 
         // TUI cleanup guards — dropped on any return path (Ok, Err, or panic).
@@ -930,27 +1433,27 @@ impl<W: Write> VM<W> {
                 &Instruction::AddInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
-                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa + fb));
-                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(va.wrapping_add(vb))); }
+                        let (fa, fb) = rf2!(a, b, "+"); wreg!(dst, Value::Float(fa + fb));
+                    } else { let (va, vb) = ri2!(a, b, "+"); wreg!(dst, Value::Int(iop!(num::add(va, vb), va, "+", vb))); }
                 }
                 &Instruction::SubInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
-                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa - fb));
-                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(va.wrapping_sub(vb))); }
+                        let (fa, fb) = rf2!(a, b, "-"); wreg!(dst, Value::Float(fa - fb));
+                    } else { let (va, vb) = ri2!(a, b, "-"); wreg!(dst, Value::Int(iop!(num::sub(va, vb), va, "-", vb))); }
                 }
                 &Instruction::MulInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
-                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa * fb));
-                    } else { let (va, vb) = (ri!(a), ri!(b)); wreg!(dst, Value::Int(va.wrapping_mul(vb))); }
+                        let (fa, fb) = rf2!(a, b, "*"); wreg!(dst, Value::Float(fa * fb));
+                    } else { let (va, vb) = ri2!(a, b, "*"); wreg!(dst, Value::Int(iop!(num::mul(va, vb), va, "*", vb))); }
                 }
                 &Instruction::DivInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
-                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa / fb));
+                        let (fa, fb) = rf2!(a, b, "/"); wreg!(dst, Value::Float(fa / fb));
                     } else {
-                        let (va, vb) = (ri!(a), ri!(b));
+                        let (va, vb) = ri2!(a, b, "/");
                         if vb == 0 { raise!(VmError::DivisionByZero); }
                         wreg!(dst, Value::Int(va / vb));
                     }
@@ -958,43 +1461,56 @@ impl<W: Write> VM<W> {
                 &Instruction::ModInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
-                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa % fb));
+                        let (fa, fb) = rf2!(a, b, "%");
+                        // As in the integer branch below and in `DivFloat`: a
+                        // zero divisor is an error whichever type it was written
+                        // as, not a NaN.
+                        if fb == 0.0 { raise!(VmError::ModuloByZero); }
+                        wreg!(dst, Value::Float(fa % fb));
                     } else {
-                        let (va, vb) = (ri!(a), ri!(b));
-                        if vb == 0 { raise!(VmError::DivisionByZero); }
+                        let (va, vb) = ri2!(a, b, "%");
+                        if vb == 0 { raise!(VmError::ModuloByZero); }
                         wreg!(dst, Value::Int(va % vb));
                     }
                 }
                 &Instruction::PowInt(dst, a, b) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + a as usize) }, Value::Float(_))
                     || matches!(unsafe { self.value_stack.get_unchecked(base + b as usize) }, Value::Float(_)) {
-                        let (fa, fb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(fa.powf(fb)));
+                        let (fa, fb) = rf2!(a, b, "^"); wreg!(dst, Value::Float(fa.powf(fb)));
                     } else {
-                        let (va, vb) = (ri!(a), ri!(b));
-                        wreg!(dst, Value::Int(if vb < 0 { 0 } else { va.wrapping_pow(vb as u32) }));
+                        let (va, vb) = ri2!(a, b, "^");
+                        // A negative exponent is a float operation, as in the
+                        // tree-walker. This used to answer Int(0), so `2 ^ -2`
+                        // was 0 here and 0.25 there.
+                        if vb < 0 {
+                            wreg!(dst, Value::Float((va as f64).powf(vb as f64)));
+                        } else {
+                            let e = u32::try_from(vb).unwrap_or(u32::MAX);
+                            wreg!(dst, Value::Int(iop!(num::pow(va, e), va, "^", vb)));
+                        }
                     }
                 }
                 &Instruction::NegInt(dst, src) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
                         let v = rf!(src); wreg!(dst, Value::Float(-v));
-                    } else { let v = ri!(src); wreg!(dst, Value::Int(-v)); }
+                    } else { let v = rn!(src); wreg!(dst, Value::Int(-v)); }
                 }
 
                 // ── Integer immediate variants ──────────────────────────────
                 &Instruction::AddIntImm(dst, src, imm) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
                         let v = rf!(src); wreg!(dst, Value::Float(v + imm as f64));
-                    } else { let v = ri!(src); wreg!(dst, Value::Int(v.wrapping_add(imm as i64))); }
+                    } else { let v = ri_imm!(src, imm, "+"); wreg!(dst, Value::Int(iop!(num::add(v, imm as i64), v, "+", imm as i64))); }
                 }
                 &Instruction::SubIntImm(dst, src, imm) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
                         let v = rf!(src); wreg!(dst, Value::Float(v - imm as f64));
-                    } else { let v = ri!(src); wreg!(dst, Value::Int(v.wrapping_sub(imm as i64))); }
+                    } else { let v = ri_imm!(src, imm, "-"); wreg!(dst, Value::Int(iop!(num::sub(v, imm as i64), v, "-", imm as i64))); }
                 }
                 &Instruction::MulIntImm(dst, src, imm) => {
                     if matches!(unsafe { self.value_stack.get_unchecked(base + src as usize) }, Value::Float(_)) {
                         let v = rf!(src); wreg!(dst, Value::Float(v * imm as f64));
-                    } else { let v = ri!(src); wreg!(dst, Value::Int(v.wrapping_mul(imm as i64))); }
+                    } else { let v = ri_imm!(src, imm, "*"); wreg!(dst, Value::Int(iop!(num::mul(v, imm as i64), v, "*", imm as i64))); }
                 }
                 &Instruction::CmpEqImm(dst, src, imm) => {
                     match num_eq_imm(rreg!(src), imm as i64) {
@@ -1008,18 +1524,38 @@ impl<W: Write> VM<W> {
                         None => wreg!(dst, Value::Bool(true)),
                     }
                 }
-                &Instruction::CmpLtImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v  < imm as i64)); }
-                &Instruction::CmpLeImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v <= imm as i64)); }
-                &Instruction::CmpGtImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v  > imm as i64)); }
-                &Instruction::CmpGeImm(dst, src, imm) => { let v = ri!(src); wreg!(dst, Value::Bool(v >= imm as i64)); }
+                // The immediate comparisons keep the Int fast path — this is
+                // the loop counter's instruction — and hand everything else to
+                // the same ordering rule the general form uses. They used to
+                // read the register through `ri!`, so `'a' < 7` was refused
+                // here as "this needs a number and got Char" and there as
+                // "cannot compare values with operator 'Lt': Char and Int":
+                // one comparison, two refusals, decided by whether the
+                // right-hand side happened to be a literal small enough to fold.
+                &Instruction::CmpLtImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Lt"); wreg!(dst, Value::Bool(ord_lt(r))); }
+                &Instruction::CmpLeImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Le"); wreg!(dst, Value::Bool(ord_le(r))); }
+                &Instruction::CmpGtImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Gt"); wreg!(dst, Value::Bool(ord_gt(r))); }
+                &Instruction::CmpGeImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Ge"); wreg!(dst, Value::Bool(ord_ge(r))); }
 
                 // ── Float arithmetic ────────────────────────────────────────
-                &Instruction::AddFloat(dst, a, b) => { let (va, vb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(va + vb)); }
-                &Instruction::SubFloat(dst, a, b) => { let (va, vb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(va - vb)); }
-                &Instruction::MulFloat(dst, a, b) => { let (va, vb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(va * vb)); }
-                &Instruction::DivFloat(dst, a, b) => { let (va, vb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(va / vb)); }
-                &Instruction::PowFloat(dst, a, b) => { let (va, vb) = (rf!(a), rf!(b)); wreg!(dst, Value::Float(va.powf(vb))); }
-                &Instruction::NegFloat(dst, src)  => { let v = rf!(src); wreg!(dst, Value::Float(-v)); }
+                &Instruction::AddFloat(dst, a, b) => { let (va, vb) = rf2!(a, b, "+"); wreg!(dst, Value::Float(va + vb)); }
+                &Instruction::SubFloat(dst, a, b) => { let (va, vb) = rf2!(a, b, "-"); wreg!(dst, Value::Float(va - vb)); }
+                &Instruction::MulFloat(dst, a, b) => { let (va, vb) = rf2!(a, b, "*"); wreg!(dst, Value::Float(va * vb)); }
+                &Instruction::DivFloat(dst, a, b) => {
+                    let (va, vb) = (rf!(a), rf!(b));
+                    if vb == 0.0 { raise!(VmError::DivisionByZero); }
+                    wreg!(dst, Value::Float(va / vb));
+                }
+                &Instruction::PowFloat(dst, a, b) => { let (va, vb) = rf2!(a, b, "^"); wreg!(dst, Value::Float(va.powf(vb))); }
+                &Instruction::NegFloat(dst, src)  => {
+                    let read = match rreg!(src) {
+                        Value::Float(n) => Ok(*n),
+                        Value::Int(n)   => Ok(*n as f64),
+                        va => Err(format!("negation requires numeric operand, got {}", va.type_name())),
+                    };
+                    let v = match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) };
+                    wreg!(dst, Value::Float(-v));
+                }
 
                 // ── Type conversion ─────────────────────────────────────────
                 &Instruction::IntToFloat(dst, src) => {
@@ -1032,7 +1568,10 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::FloatToIntRound(dst, src) => {
                     let v = match rreg!(src) {
-                        Value::Float(f) => f.round() as i64,
+                        Value::Float(f) => match num::from_f64(f.round()) {
+                            Some(n) => n,
+                            None => raise!(VmError::CastOverflow { op: "###" }),
+                        },
                         Value::Int(n)   => *n,
                         other => raise!(VmError::CastError { op: "###", got: other.type_name().to_string() }),
                     };
@@ -1040,7 +1579,10 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::FloatToIntTrunc(dst, src) => {
                     let v = match rreg!(src) {
-                        Value::Float(f) => f.trunc() as i64,
+                        Value::Float(f) => match num::from_f64(f.trunc()) {
+                            Some(n) => n,
+                            None => raise!(VmError::CastOverflow { op: "##!" }),
+                        },
                         Value::Int(n)   => *n,
                         // Char → its Unicode code point (matches the tree-walker).
                         Value::Char(c)  => *c as u32 as i64,
@@ -1176,15 +1718,33 @@ impl<W: Write> VM<W> {
                 // ── Comparison ──────────────────────────────────────────────
                 &Instruction::CmpEq(dst, a, b) => { let r = cmp_direct(rreg!(a), rreg!(b)); wreg!(dst, Value::Bool(r == 0)); }
                 &Instruction::CmpNe(dst, a, b) => { let r = cmp_direct(rreg!(a), rreg!(b)); wreg!(dst, Value::Bool(r != 0)); }
-                &Instruction::CmpLt(dst, a, b) => { let r = ord_or_raise!(a, b, "Lt"); wreg!(dst, Value::Bool(r  < 0)); }
-                &Instruction::CmpLe(dst, a, b) => { let r = ord_or_raise!(a, b, "Le"); wreg!(dst, Value::Bool(r <= 0)); }
-                &Instruction::CmpGt(dst, a, b) => { let r = ord_or_raise!(a, b, "Gt"); wreg!(dst, Value::Bool(r  > 0)); }
-                &Instruction::CmpGe(dst, a, b) => { let r = ord_or_raise!(a, b, "Ge"); wreg!(dst, Value::Bool(r >= 0)); }
+                &Instruction::CmpLt(dst, a, b) => { let r = ord_or_raise!(a, b, "Lt"); wreg!(dst, Value::Bool(ord_lt(r))); }
+                &Instruction::CmpLe(dst, a, b) => { let r = ord_or_raise!(a, b, "Le"); wreg!(dst, Value::Bool(ord_le(r))); }
+                &Instruction::CmpGt(dst, a, b) => { let r = ord_or_raise!(a, b, "Gt"); wreg!(dst, Value::Bool(ord_gt(r))); }
+                &Instruction::CmpGe(dst, a, b) => { let r = ord_or_raise!(a, b, "Ge"); wreg!(dst, Value::Bool(ord_ge(r))); }
 
                 // ── Logical ─────────────────────────────────────────────────
-                &Instruction::And(dst, a, b) => { let (va, vb) = (rreg!(a).is_truthy(), rreg!(b).is_truthy()); wreg!(dst, Value::Bool(va && vb)); }
-                &Instruction::Or (dst, a, b) => { let (va, vb) = (rreg!(a).is_truthy(), rreg!(b).is_truthy()); wreg!(dst, Value::Bool(va || vb)); }
+                // ZYVM-001: these read both operands through `is_truthy()`, so
+                // `7 && 3` answered `#1` here and was refused by the tree-walker
+                // — while the semantic analyser the two engines SHARE had
+                // already warned in both. There is no truthiness in Zymbol
+                // (the loop specifier settled it in v0.0.9), so a non-Bool
+                // operand is refused, with the tree-walker's words.
+                &Instruction::And(dst, a, b) => { let (va, vb) = rb2!(a, b, "AND"); wreg!(dst, Value::Bool(va && vb)); }
+                &Instruction::Or (dst, a, b) => { let (va, vb) = rb2!(a, b, "OR");  wreg!(dst, Value::Bool(va || vb)); }
                 &Instruction::Not(dst, src)  => { let v = rreg!(src).is_truthy(); wreg!(dst, Value::Bool(!v)); }
+                &Instruction::IsInt(dst, src) => { let v = matches!(rreg!(src), Value::Int(_)); wreg!(dst, Value::Bool(v)); }
+                &Instruction::AsLoopCond(dst, src) => {
+                    match rreg!(src) {
+                        &Value::Bool(b) => wreg!(dst, Value::Bool(b)),
+                        other => {
+                            let got = other.type_word();
+                            raise!(VmError::Generic(format!(
+                                "loop expects a count or a condition, got {got}"
+                            )))
+                        }
+                    }
+                }
 
                 // ── Control flow ────────────────────────────────────────────
                 &Instruction::Jump(label)          => { ip = label as usize; }
@@ -1296,6 +1856,18 @@ impl<W: Write> VM<W> {
                     );
 
                     if self.frame_stack.is_empty() {
+                        // GAP-ZYB-006: a `<~` that reaches the top level ends
+                        // the program, and its value is the exit status. The
+                        // stop was already here — only the value was being
+                        // dropped on the floor.
+                        self.exit_code = Some(match &result {
+                            Value::Int(n) => *n,
+                            Value::Unit => 0,
+                            // The analyzer rejects a non-integer before this
+                            // runs; if one arrives anyway, "something went
+                            // wrong" beats inventing a number.
+                            _ => 1,
+                        });
                         return Ok(());
                     }
 
@@ -1365,6 +1937,37 @@ impl<W: Write> VM<W> {
                     }
                 }
                 &Instruction::ArrayGet(dst, arr_reg, idx_reg) => {
+                    // A dictionary is addressed by KEY, and the key may be
+                    // computed (decision 7, DM-09). Checked before the index is
+                    // read as an Int, which is what used to make `d[clave]` a
+                    // type error here.
+                    if let (Value::NamedTuple(fields), Value::String(key)) =
+                        (&self.value_stack[base + arr_reg as usize], self.reg_get(idx_reg))
+                    {
+                        let key = key.as_str().to_string();
+                        match fields.iter().find(|(k, _)| *k == key) {
+                            Some((_, v)) => { let v = v.clone(); self.reg_set(dst, v); }
+                            None => {
+                                let available: Vec<String> =
+                                    fields.iter().map(|(k, _)| k.clone()).collect();
+                                raise!(VmError::Generic(missing_key_msg(&key, &available)));
+                            }
+                        }
+                        continue;
+                    }
+                    // Decision 11: a dictionary is addressed by KEY, never by
+                    // position. In a mutable dictionary a positional index is
+                    // fragile — adding a key changes what sits at each position.
+                    if let (Value::NamedTuple(fields), Value::Int(_)) =
+                        (&self.value_stack[base + arr_reg as usize], self.reg_get(idx_reg))
+                    {
+                        let first = fields.first().map(|(k, _)| k.clone())
+                            .unwrap_or_else(|| "clave".to_string());
+                        raise!(VmError::Generic(format!(
+                            "a dictionary is addressed by key, not by position\nhelp: use d[\"{}\"] — adding a key changes what sits at each position",
+                            first
+                        )));
+                    }
                     let idx = match self.as_int(idx_reg) {
                         Ok(n) => n,
                         Err(e) => raise!(e),
@@ -1374,7 +1977,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
                             }
                             arr[i as usize].clone()
                         }
@@ -1382,7 +1985,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { items.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= items.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: items.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: items.len() , container: "tuple" });
                             }
                             items[i as usize].clone()
                         }
@@ -1390,7 +1993,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= fields.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() , container: "named tuple" });
                             }
                             fields[i as usize].1.clone()
                         }
@@ -1400,7 +2003,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { char_count as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= char_count {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: char_count });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: char_count , container: "string" });
                             }
                             let ch = s.chars().nth(i as usize).unwrap();
                             Value::Char(ch)
@@ -1421,6 +2024,50 @@ impl<W: Write> VM<W> {
                         Err(e) => raise!(e),
                     }
                 }
+                &Instruction::IterPairs(dst, src) => {
+                    let val = match &self.value_stack[base + src as usize] {
+                        Value::NamedTuple(nt) => Value::Array(Rc::new(
+                            nt.iter()
+                                .map(|(k, v)| Value::Tuple(Rc::new(vec![
+                                    Value::String(ZyStr::new(k.clone())), v.clone(),
+                                ])))
+                                .collect::<Vec<_>>(),
+                        )),
+                        Value::String(s) => Value::Array(Rc::new(
+                            s.chars().map(Value::Char).collect::<Vec<_>>(),
+                        )),
+                        Value::Array(arr) => Value::Array(arr.clone()),
+                        Value::Tuple(t) => Value::Tuple(t.clone()),
+                        other => raise!(VmError::TypeError {
+                            expected: "String, Array or dictionary",
+                            got: other.type_name().to_string(),
+                        }),
+                    };
+                    self.reg_set(dst, val);
+                }
+                &Instruction::AssertMutable(reg, name_idx) => {
+                    if let Value::Tuple(_) = self.reg_get(reg) {
+                        let name = self.string_rcs[name_idx as usize].as_str();
+                        raise!(VmError::Generic(tuple_immutable_msg(name)));
+                    }
+                }
+                &Instruction::DeepSetInPlace(dst, path_reg, val_reg, name_idx) => {
+                    let val = self.reg_get(val_reg).clone();
+                    let path = match self.reg_get(path_reg) {
+                        Value::Array(p) => p.clone(),
+                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    let root = mem::replace(&mut self.value_stack[base + dst as usize], Value::Unit);
+                    if let Value::Tuple(_) = &root {
+                        self.value_stack[base + dst as usize] = root;
+                        let name = self.string_rcs[name_idx as usize].as_str();
+                        raise!(VmError::Generic(tuple_immutable_msg(name)));
+                    }
+                    match vm_deep_set(root, &path, val) {
+                        Ok(updated) => self.value_stack[base + dst as usize] = updated,
+                        Err(e) => raise!(e),
+                    }
+                }
                 &Instruction::ArraySet(arr_reg, idx_reg, val_reg) => {
                     let val = self.reg_get(val_reg).clone();
                     let idx_val = self.reg_get(idx_reg).clone();
@@ -1434,18 +2081,27 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
                             }
                             arr[i as usize] = val;
                         }
                         Value::NamedTuple(rc_fields) => {
                             let fields = Rc::make_mut(rc_fields);
                             match idx_val {
+                                // A positional WRITE corrupts data rather than
+                                // returning the wrong value: strictly worse than
+                                // the positional read decision 11 withdrew.
+                                Value::Int(_) => {
+                                    let first = fields.first().map(|(k, _)| k.clone());
+                                    raise!(VmError::Generic(dict_not_positional(
+                                        "d[n]$~ value", first.as_deref())));
+                                }
+                                #[allow(unreachable_patterns)]
                                 Value::Int(idx) => {
                                     let i = if idx == 0 { raise!(VmError::IndexZero);
                                     } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
                                     if i < 0 || i as usize >= fields.len() {
-                                        raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
+                                        raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() , container: "named tuple" });
                                     }
                                     fields[i as usize].1 = val;
                                 }
@@ -1453,7 +2109,8 @@ impl<W: Write> VM<W> {
                                     if let Some(f) = fields.iter_mut().find(|(k, _)| k == name.as_str()) {
                                         f.1 = val;
                                     } else {
-                                        raise!(VmError::Generic(format!("named tuple has no field '{}'", name.as_str())));
+                                        // A key that is not there gets added.
+                                        fields.push((name.as_str().to_string(), val));
                                     }
                                 }
                                 other => raise!(VmError::TypeError { expected: "Int or String", got: other.type_name().to_string() }),
@@ -1473,6 +2130,27 @@ impl<W: Write> VM<W> {
                     self.reg_set(dst, Value::Int(n));
                 }
                 &Instruction::ArrayRemove(arr_reg, idx_reg) => {
+                    // In a dictionary the ADDRESS is the key, so `$-[…]` — which
+                    // already means "remove by address" for the array — is the
+                    // same operator with the same sense (decision 9). Checked
+                    // before the index is read as an Int.
+                    if let (Value::NamedTuple(fields), Value::String(key)) =
+                        (&self.value_stack[base + arr_reg as usize], self.reg_get(idx_reg))
+                    {
+                        let key = key.as_str().to_string();
+                        let mut out = fields.as_ref().clone();
+                        match out.iter().position(|(k, _)| *k == key) {
+                            Some(i) => { out.remove(i); }
+                            None => {
+                                let available: Vec<String> =
+                                    fields.iter().map(|(k, _)| k.clone()).collect();
+                                raise!(VmError::Generic(missing_key_msg(&key, &available)));
+                            }
+                        }
+                        self.value_stack[base + arr_reg as usize] =
+                            Value::NamedTuple(Rc::new(out));
+                        continue;
+                    }
                     let idx = self.as_int(idx_reg)?;
                     let result = match std::mem::replace(&mut self.value_stack[base + arr_reg as usize], Value::Unit) {
                         Value::Array(mut rc_arr) => {
@@ -1480,7 +2158,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
                             }
                             arr.remove(i as usize);
                             Value::Array(rc_arr)
@@ -1490,27 +2168,21 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { tup.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= tup.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() , container: "tuple" });
                             }
                             tup.remove(i as usize);
                             Value::Tuple(Rc::new(tup))
                         }
                         Value::NamedTuple(rc_fields) => {
-                            let mut fields = rc_fields.as_ref().clone();
-                            let i = if idx == 0 { raise!(VmError::IndexZero);
-                            } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
-                            if i < 0 || i as usize >= fields.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
-                            }
-                            fields.remove(i as usize);
-                            Value::NamedTuple(Rc::new(fields))
+                            let first = rc_fields.first().map(|(k, _)| k.clone());
+                            raise!(VmError::Generic(dict_not_positional("d$-[n]", first.as_deref())));
                         }
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { chars.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= chars.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() , container: "string" });
                             }
                             chars.remove(i as usize);
                             Value::String(ZyStr::new(chars.iter().collect()))
@@ -1594,7 +2266,7 @@ impl<W: Write> VM<W> {
                         Value::Array(rc_arr) => {
                             let mut arr = rc_arr.as_ref().clone();
                             if idx <= 0 || (idx - 1) as usize > arr.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
                             }
                             arr.insert((idx - 1) as usize, val);
                             self.value_stack[base + arr_reg as usize] = Value::Array(Rc::new(arr));
@@ -1602,7 +2274,7 @@ impl<W: Write> VM<W> {
                         Value::Tuple(rc_tup) => {
                             let mut tup = rc_tup.as_ref().clone();
                             if idx <= 0 || (idx - 1) as usize > tup.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() , container: "tuple" });
                             }
                             tup.insert((idx - 1) as usize, val);
                             self.value_stack[base + arr_reg as usize] = Value::Tuple(Rc::new(tup));
@@ -1610,7 +2282,7 @@ impl<W: Write> VM<W> {
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
                             if idx <= 0 || (idx - 1) as usize > chars.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() });
+                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() , container: "string" });
                             }
                             let i = (idx - 1) as usize;
                             match val {
@@ -1650,11 +2322,10 @@ impl<W: Write> VM<W> {
                             self.value_stack[base + arr_reg as usize] = Value::Tuple(Rc::new(tup));
                         }
                         Value::NamedTuple(rc_nt) => {
-                            let mut fields = rc_nt.as_ref().clone();
-                            if lo <= hi && hi <= fields.len() {
-                                fields.drain(lo..hi);
-                            }
-                            self.value_stack[base + arr_reg as usize] = Value::NamedTuple(Rc::new(fields));
+                            let fields = rc_nt.as_ref().clone();
+                            let _ = (lo, hi);
+                            let first = fields.first().map(|(k, _)| k.clone());
+                            raise!(VmError::Generic(dict_not_positional("d$-[a..b]", first.as_deref())));
                         }
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
@@ -1896,7 +2567,18 @@ impl<W: Write> VM<W> {
                         }
                         Value::Array(arr)       => Value::Array(arr.clone()),
                         Value::Tuple(t)         => Value::Tuple(t.clone()),
-                        Value::NamedTuple(nt)   => Value::NamedTuple(nt.clone()),
+                        // A dictionary yields its KEYS, in insertion order —
+                        // `for k in d` as Python spells it (decision 8). It used
+                        // to pass the dictionary through unchanged, so the
+                        // indexed read below handed back the VALUES, while the
+                        // tree-walker refused to walk one at all: three engines,
+                        // two answers, and neither was the decided one.
+                        //
+                        // With `d[k]` available the key is enough to reach the
+                        // value, so no destructuring pattern has to enter `@`.
+                        Value::NamedTuple(nt) => Value::Array(Rc::new(
+                            nt.iter().map(|(k, _)| Value::String(ZyStr::new(k.clone()))).collect::<Vec<_>>(),
+                        )),
                         other => raise!(VmError::TypeError {
                             expected: "String or Array",
                             got: other.type_name().to_string(),
@@ -2202,8 +2884,15 @@ impl<W: Write> VM<W> {
                     let args: Vec<Value> = arg_regs.iter()
                         .map(|&r| unsafe { self.value_stack.get_unchecked(base + r as usize).clone() })
                         .collect();
-                    let result = crate::stdlib_builtins::call(builtin_id, args)
-                        .map_err(VmError::Generic)?;
+                    // `raise!`, not `?`. The `?` propagated straight out of the
+                    // interpreter loop without looking for an armed `:!`, so no
+                    // hard error from any `std/` function was catchable in this
+                    // engine — `!? { m::ln(0.0) } :! ##_ { }` caught it in the
+                    // tree-walker and aborted the program here.
+                    let result = match crate::stdlib_builtins::call(builtin_id, args) {
+                        Ok(v) => v,
+                        Err(e) => raise!(VmError::Generic(e)),
+                    };
                     wreg!(dst, result);
                 }
 
@@ -2217,6 +2906,22 @@ impl<W: Write> VM<W> {
                             Value::String(sub) => s.as_ref().contains(sub.as_str()),
                             _ => false,
                         },
+                        // On a DICTIONARY the question is about the KEY, which
+                        // is what `in` asks in Python and in JS. Decision 10
+                        // makes reading an absent key an error, so this is what
+                        // lets a dictionary built piece by piece be consulted at
+                        // all. A POSITIONAL tuple keeps the value question:
+                        // there are no keys to ask about.
+                        Value::NamedTuple(fields) => match &elem {
+                            Value::String(key) => {
+                                fields.iter().any(|(k, _)| k.as_str() == key.as_str())
+                            }
+                            other => raise!(VmError::TypeError {
+                                expected: "String",
+                                got: other.type_name().to_string(),
+                            }),
+                        },
+                        Value::Tuple(t) => t.as_ref().iter().any(|v| v.equals(&elem)),
                         other => raise!(VmError::TypeError { expected: "Array or String", got: other.type_name().to_string() }),
                     };
                     self.reg_set(dst, Value::Bool(result));
@@ -2251,9 +2956,12 @@ impl<W: Write> VM<W> {
                             let len = fields.len() as i64;
                             let lo_norm = (if lo == 0 { 0i64 } else if lo < 0 { len + lo } else { lo - 1 }).max(0).min(len) as usize;
                             let hi_norm = (if hi < 0 { len + hi + 1 } else { hi }).max(0).min(len) as usize;
-                            let lo_norm = lo_norm.min(fields.len());
-                            let hi_norm = hi_norm.min(fields.len()).max(lo_norm);
-                            Value::NamedTuple(Rc::new(fields[lo_norm..hi_norm].to_vec()))
+                            let _ = (lo_norm, hi_norm);
+                            // No key-based replacement, and it does not get one:
+                            // "the first two keys" is not a question a dictionary
+                            // should answer — Python's `dict` has no slicing.
+                            let first = fields.first().map(|(k, _)| k.clone());
+                            raise!(VmError::Generic(dict_not_positional("d$[a..b]", first.as_deref())));
                         }
                         // Strings slice too. The tree-walker has always allowed
                         // `s$[3..]`; the VM only reached this instruction when
@@ -2344,6 +3052,87 @@ impl<W: Write> VM<W> {
                     self.reg_set(dst, Value::Array(Rc::new(items)));
                 }
 
+                // ── Destructuring ────────────────────────────────────────────
+                &Instruction::DestructureCheck(src, wants_tuple) => {
+                    let v = self.reg_get(src);
+                    let ok = if wants_tuple {
+                        matches!(v, Value::Tuple(_))
+                    } else {
+                        matches!(v, Value::Array(_))
+                    };
+                    if !ok {
+                        let got = v.tw_type_name_owned();
+                        raise!(VmError::Generic(if wants_tuple {
+                            format!("tuple pattern '( … )' requires a tuple, got {got}")
+                        } else {
+                            format!("array pattern '[ … ]' requires an array, got {got}")
+                        }));
+                    }
+                }
+                &Instruction::DestructureRest(dst, src, from, trailing) => {
+                    let (len, is_tuple) = match self.reg_get(src) {
+                        Value::Array(a) => (a.len(), false),
+                        Value::Tuple(t) => (t.len(), true),
+                        _ => (0, false),
+                    };
+                    let lo = (from as usize - 1).min(len);
+                    // The trailing names get their share only if the elements
+                    // reach that far — the tree-walker's rule, exactly.
+                    let end = if trailing > 0 && len > lo + trailing as usize {
+                        len - trailing as usize
+                    } else {
+                        len
+                    };
+                    let slice: Vec<Value> = match self.reg_get(src) {
+                        Value::Array(a) => a.as_ref().get(lo..end).unwrap_or(&[]).to_vec(),
+                        Value::Tuple(t) => t.as_ref().get(lo..end).unwrap_or(&[]).to_vec(),
+                        _ => Vec::new(),
+                    };
+                    let v = if is_tuple { Value::Tuple(Rc::new(slice)) } else { Value::Array(Rc::new(slice)) };
+                    self.reg_set(dst, v);
+                }
+                &Instruction::DestructureTail(dst, src, k, from, trailing) => {
+                    let len = match self.reg_get(src) {
+                        Value::Array(a) => a.len(),
+                        Value::Tuple(t) => t.len(),
+                        _ => 0,
+                    };
+                    let lo = (from as usize - 1).min(len);
+                    let v = if trailing > 0 && len > lo + trailing as usize {
+                        let i = len - k as usize;
+                        match self.reg_get(src) {
+                            Value::Array(a) => a.as_ref().get(i).cloned().unwrap_or(Value::Unit),
+                            Value::Tuple(t) => t.as_ref().get(i).cloned().unwrap_or(Value::Unit),
+                            _ => Value::Unit,
+                        }
+                    } else {
+                        Value::Unit
+                    };
+                    self.reg_set(dst, v);
+                }
+                &Instruction::DestructureAbsorb(dst, src, from) => {
+                    let value = match self.reg_get(src) {
+                        Value::Array(arr) => {
+                            let rest = &arr.as_ref()[(from as usize - 1).min(arr.len())..];
+                            match rest.len() {
+                                0 => Value::Unit,
+                                1 => rest[0].clone(),
+                                _ => Value::Array(Rc::new(rest.to_vec())),
+                            }
+                        }
+                        Value::Tuple(tup) => {
+                            let rest = &tup.as_ref()[(from as usize - 1).min(tup.len())..];
+                            match rest.len() {
+                                0 => Value::Unit,
+                                1 => rest[0].clone(),
+                                _ => Value::Tuple(Rc::new(rest.to_vec())),
+                            }
+                        }
+                        _ => Value::Unit,
+                    };
+                    self.reg_set(dst, value);
+                }
+
                 // ── Tuples ───────────────────────────────────────────────────
                 Instruction::MakeTuple(dst, regs) => {
                     let dst = *dst;
@@ -2362,6 +3151,23 @@ impl<W: Write> VM<W> {
                     }
                     self.reg_set(dst, Value::NamedTuple(Rc::new(fields)));
                 }
+                &Instruction::RequireBool(src, is_and) => {
+                    let v = self.reg_get(src);
+                    if !matches!(v, Value::Bool(_)) {
+                        let msg = logical_type_error(if is_and { "AND" } else { "OR" }, v);
+                        raise!(VmError::Generic(msg));
+                    }
+                }
+                &Instruction::RequireDict(src) => {
+                    let v = self.reg_get(src);
+                    if !matches!(v, Value::NamedTuple(_)) {
+                        let got = v.tw_type_name_owned();
+                        raise!(VmError::Generic(format!(
+                            "the pattern #(…) requires a dictionary, got {}\nhelp: #(key: name) = d unpacks a dictionary; use (a, b) for a tuple, [a, b] for an array",
+                            got
+                        )));
+                    }
+                }
                 &Instruction::NamedTupleGet(dst, tuple_reg, field_idx) => {
                     let field_name = &program.string_pool[field_idx as usize];
                     let result = match self.reg_get(tuple_reg) {
@@ -2371,29 +3177,40 @@ impl<W: Write> VM<W> {
                                 Some(v) => v,
                                 None => {
                                     let available: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
-                                    raise!(VmError::Generic(format!(
-                                        "Named tuple has no field '{}'. Available fields: {}",
-                                        field_name, available.join(", ")
-                                    )));
+                                    raise!(VmError::Generic(missing_key_msg(&field_name, &available)));
                                 }
                             }
                         }
-                        // positional index on array (tuple[0])
+                        // A numeric field name is unreachable from source — the
+                        // parser refuses `a.1` in every engine — so an array
+                        // reaching here is the dot on the wrong collection, and
+                        // it gets the same message the tree-walker gives.
                         Value::Array(arr) => {
                             if let Ok(i) = field_name.parse::<usize>() {
                                 arr.get(i).cloned().unwrap_or(Value::Unit)
                             } else {
-                                raise!(VmError::TypeError { expected: "Int index", got: field_name.clone() });
+                                let field_name = field_name.clone();
+                                raise!(VmError::Generic(format!(
+                                    "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
+                                    zymbol_common::typesym::ARRAY, field_name
+                                )));
                             }
                         }
                         Value::Tuple(_) => {
                             let field_name = field_name.clone();
                             raise!(VmError::Generic(format!(
-                                "Cannot access field '{}' on positional tuple. Use positional indexing like tuple[1]",
+                                "a positional tuple is addressed by position, not by name: '{}'\nhelp: use t[1] — names live in a dictionary, #(key: value)",
                                 field_name
                             )));
                         }
-                        other => raise!(VmError::TypeError { expected: "Tuple", got: other.type_name().to_string() }),
+                        other => {
+                            let got = other.tw_type_name_owned();
+                            let field_name = field_name.clone();
+                            raise!(VmError::Generic(format!(
+                                "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
+                                got, field_name
+                            )));
+                        }
                     };
                     self.reg_set(dst, result);
                 }
@@ -2404,14 +3221,14 @@ impl<W: Write> VM<W> {
                         Value::String(s) => {
                             let s_rc = s.clone();
                             let trimmed = s_rc.as_ref().trim();
-                            if let Ok(i) = trimmed.parse::<i64>() {
+                            if let num::Num::Int(i) = num::parse(trimmed) {
                                 Value::Int(i)
-                            } else if let Ok(f) = trimmed.parse::<f64>() {
+                            } else if let num::Num::Float(f) = num::parse(trimmed) {
                                 Value::Float(f)
                             } else if let Some(normalized) = normalize_unicode_digits(trimmed) {
-                                if let Ok(i) = normalized.parse::<i64>() {
+                                if let num::Num::Int(i) = num::parse(&normalized) {
                                     Value::Int(i)
-                                } else if let Ok(f) = normalized.parse::<f64>() {
+                                } else if let num::Num::Float(f) = num::parse(&normalized) {
                                     Value::Float(f)
                                 } else {
                                     Value::String(s_rc)
@@ -2422,6 +3239,10 @@ impl<W: Write> VM<W> {
                         }
                         Value::Int(n) => Value::Int(*n),
                         Value::Float(f) => Value::Float(*f),
+                        // GAP-ZYB-012: a Char reads like the one-character
+                        // string it is — `#|'७'|` is 7, as `#|"७"|` already
+                        // was. A Char that is not a digit comes back untouched.
+                        Value::Char(c) => vm_char_as_number(*c),
                         other => other.clone(),
                     };
                     self.reg_set(dst, result);
@@ -2432,28 +3253,14 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::TypeOf(dst, src) => {
                     let val = self.reg_get(src).clone();
-                    let tuple_val = if let Value::Error(s) = &val {
-                        let s_ref = s.as_ref();
-                        let kind = s_ref.find('(').map(|i| &s_ref[..i]).unwrap_or(s_ref);
+                    let tuple_val = if matches!(&val, Value::Error(_)) {
                         Value::Tuple(Rc::new(vec![
-                            Value::String(ZyStr::new(kind.to_string())),
-                            Value::Int(0),
+                            Value::String(ZyStr::new(val.tw_type_name_owned())),
+                            Value::Int(val.error_message_len()),
                             val.clone(),
                         ]))
                     } else {
-                        let (type_sym, len) = match &val {
-                            Value::Int(n) => ("###", n.to_string().len() as i64),
-                            Value::Float(fl) => ("##.", fl.to_string().len() as i64),
-                            Value::String(s) => ("##\"", s.as_ref().chars().count() as i64),
-                            Value::Char(_) => ("##'", 1),
-                            Value::Bool(_) => ("##?", 1),
-                            Value::Array(a) => ("##]", a.as_ref().len() as i64),
-                            Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
-                            Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
-                            Value::Function(_, arity) => ("##()", *arity as i64),
-                            Value::Closure(_, arity, _) => ("##->", *arity as i64),
-                            _ => ("##_", 0),
-                        };
+                        let (type_sym, len) = val.type_metadata();
                         Value::Tuple(Rc::new(vec![
                             Value::String(ZyStr::new(type_sym.to_string())),
                             Value::Int(len),
@@ -2554,11 +3361,7 @@ impl<W: Write> VM<W> {
                             BuildPart::Reg(r) => cmd.push_str(&self.reg_get(*r).to_string_repr()),
                         }
                     }
-                    let out = std::process::Command::new("sh")
-                        .arg("-c")
-                        .arg(&cmd)
-                        .output()
-                        .map_err(VmError::Io)?;
+                    let out = run_in_shell(&cmd)?;
                     // Capture both stdout and stderr (mirrors tree-walker behavior)
                     let mut result = String::from_utf8_lossy(&out.stdout).into_owned();
                     if !out.stderr.is_empty() {
@@ -2584,11 +3387,7 @@ impl<W: Write> VM<W> {
                             BuildPart::Reg(r) => cmd.push_str(&self.reg_get(*r).to_string_repr()),
                         }
                     }
-                    let out = std::process::Command::new("sh")
-                        .arg("-c")
-                        .arg(&cmd)
-                        .output()
-                        .map_err(VmError::Io)?;
+                    let out = run_in_shell(&cmd)?;
                     if !out.status.success() {
                         let mut msg = String::from_utf8_lossy(&out.stderr).into_owned();
                         if msg.is_empty() {
@@ -2602,6 +3401,57 @@ impl<W: Write> VM<W> {
                 }
 
                 // ── Format ops ────────────────────────────────────────────────
+                // GAP-ZYB-001: the same four operations with the decimal count
+                // in a register. The count is read, checked, and the immediate
+                // path below does the rest.
+                &Instruction::FmtThousandsDyn(dst, src, prec_kind, prec_reg) => {
+                    let n = match vm_precision_from(self.reg_get(prec_reg)) {
+                        Ok(n) => n,
+                        Err(e) => raise!(e),
+                    };
+                    let f = match vm_number_from(self.reg_get(src)) {
+                        Ok(f) => f,
+                        Err(e) => raise!(e),
+                    };
+                    let s = map_numeral_number(vm_fmt_thousands(f, prec_kind, n), self.numeral_mode);
+                    self.reg_set(dst, Value::String(ZyStr::new(s)));
+                }
+                &Instruction::FmtScientificDyn(dst, src, prec_kind, prec_reg) => {
+                    let n = match vm_precision_from(self.reg_get(prec_reg)) {
+                        Ok(n) => n,
+                        Err(e) => raise!(e),
+                    };
+                    let f = match vm_number_from(self.reg_get(src)) {
+                        Ok(f) => f,
+                        Err(e) => raise!(e),
+                    };
+                    let s = map_numeral_number(vm_fmt_scientific(f, prec_kind, n), self.numeral_mode);
+                    self.reg_set(dst, Value::String(ZyStr::new(s)));
+                }
+                &Instruction::RoundFloatDyn(dst, src, prec_reg) => {
+                    let n = match vm_precision_from(self.reg_get(prec_reg)) {
+                        Ok(n) => n,
+                        Err(e) => raise!(e),
+                    };
+                    let f = match vm_number_from(self.reg_get(src)) {
+                        Ok(f) => f,
+                        Err(e) => raise!(e),
+                    };
+                    let m = 10f64.powi(n as i32);
+                    self.reg_set(dst, Value::Float((f * m).round() / m));
+                }
+                &Instruction::TruncFloatDyn(dst, src, prec_reg) => {
+                    let n = match vm_precision_from(self.reg_get(prec_reg)) {
+                        Ok(n) => n,
+                        Err(e) => raise!(e),
+                    };
+                    let f = match vm_number_from(self.reg_get(src)) {
+                        Ok(f) => f,
+                        Err(e) => raise!(e),
+                    };
+                    let m = 10f64.powi(n as i32);
+                    self.reg_set(dst, Value::Float((f * m).trunc() / m));
+                }
                 &Instruction::FmtThousands(dst, src, prec_kind, prec_n) => {
                     let f = match self.reg_get(src) {
                         Value::Int(n) => *n as f64,
@@ -2615,7 +3465,7 @@ impl<W: Write> VM<W> {
                             }),
                         },
                     };
-                    let s = vm_fmt_thousands(f, prec_kind, prec_n);
+                    let s = map_numeral_number(vm_fmt_thousands(f, prec_kind, prec_n), self.numeral_mode);
                     self.reg_set(dst, Value::String(ZyStr::new(s)));
                 }
                 &Instruction::FmtScientific(dst, src, prec_kind, prec_n) => {
@@ -2629,7 +3479,7 @@ impl<W: Write> VM<W> {
                             }),
                         },
                     };
-                    let s = vm_fmt_scientific(f, prec_kind, prec_n);
+                    let s = map_numeral_number(vm_fmt_scientific(f, prec_kind, prec_n), self.numeral_mode);
                     self.reg_set(dst, Value::String(ZyStr::new(s)));
                 }
 
@@ -2733,22 +3583,34 @@ impl<W: Write> VM<W> {
                 }
 
                 &Instruction::ReadKey(dst, blocking) => {
-                    use crossterm::event::{self, Event, KeyEvent};
+                    use crossterm::event::{self, Event};
                     let ch = if blocking {
                         loop {
                             match event::read() {
-                                Ok(Event::Key(KeyEvent { code, .. })) => break vm_map_key_code(code),
+                                Ok(Event::Key(key)) if vm_is_key_press(&key) => {
+                                    break vm_map_key_code(&key)
+                                }
                                 Ok(_) => continue,
                                 Err(e) => return Err(VmError::Generic(e.to_string())),
                             }
                         }
-                    } else if event::poll(std::time::Duration::ZERO).unwrap_or(false) {
-                        match event::read().unwrap_or(Event::FocusLost) {
-                            Event::Key(KeyEvent { code, .. }) => vm_map_key_code(code),
-                            _ => '\0',
-                        }
                     } else {
-                        '\0'
+                        // Drain to the first keypress rather than giving up on the
+                        // first event that is not one — see the tree-walker's
+                        // execute_key_input for why a single read per call makes a
+                        // game loop fall a fixed number of ticks behind on Windows.
+                        let mut found = '\0';
+                        while event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+                            match event::read() {
+                                Ok(Event::Key(key)) if vm_is_key_press(&key) => {
+                                    found = vm_map_key_code(&key);
+                                    break;
+                                }
+                                Ok(_) => continue,
+                                Err(_) => break,
+                            }
+                        }
+                        found
                     };
                     wreg!(dst, Value::Char(ch));
                 }
@@ -2953,6 +3815,16 @@ impl<W: Write> VM<W> {
             ip += 1;
             macro_rules! r { ($r:expr) => { &self.value_stack[base + $r as usize] } }
             macro_rules! w { ($r:expr, $v:expr) => { self.value_stack[base + $r as usize] = $v } }
+            // As in the main loop, but this one returns rather than raising:
+            // errors here propagate to the caller, which owns the catch.
+            macro_rules! iop {
+                ($v:expr, $a:expr, $op:expr, $b:expr) => {
+                    match $v {
+                        Some(n) => n,
+                        None => return Err(VmError::IntOverflow { a: $a, op: $op, b: $b }),
+                    }
+                };
+            }
             match instr {
                 &Instruction::Return(src) => {
                     let result = mem::replace(&mut self.value_stack[base + src as usize], Value::Unit);
@@ -2978,7 +3850,7 @@ impl<W: Write> VM<W> {
                         let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
                         w!(dst, Value::Float(fa + fb));
                     } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        let res = va.wrapping_add(*vb); w!(dst, Value::Int(res));
+                        let res = iop!(num::add(*va, *vb), *va, "+", *vb); w!(dst, Value::Int(res));
                     }
                 }
                 &Instruction::SubInt(dst, a, b) => {
@@ -2988,7 +3860,7 @@ impl<W: Write> VM<W> {
                         let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
                         w!(dst, Value::Float(fa - fb));
                     } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        let res = va.wrapping_sub(*vb); w!(dst, Value::Int(res));
+                        let res = iop!(num::sub(*va, *vb), *va, "-", *vb); w!(dst, Value::Int(res));
                     }
                 }
                 &Instruction::MulInt(dst, a, b) => {
@@ -2998,7 +3870,7 @@ impl<W: Write> VM<W> {
                         let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
                         w!(dst, Value::Float(fa * fb));
                     } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        let res = va.wrapping_mul(*vb); w!(dst, Value::Int(res));
+                        let res = iop!(num::mul(*va, *vb), *va, "*", *vb); w!(dst, Value::Int(res));
                     }
                 }
                 &Instruction::ModInt(dst, a, b) => {
@@ -3006,22 +3878,24 @@ impl<W: Write> VM<W> {
                     if is_fl {
                         let fa = match r!(a) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
                         let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        if fb != 0.0 { w!(dst, Value::Float(fa % fb)); }
+                        if fb == 0.0 { return Err(VmError::ModuloByZero); }
+                        w!(dst, Value::Float(fa % fb));
                     } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        if *vb != 0 { w!(dst, Value::Int(va % vb)); }
+                        if *vb == 0 { return Err(VmError::ModuloByZero); }
+                        w!(dst, Value::Int(va % vb));
                     }
                 }
                 &Instruction::AddIntImm(dst, src, imm) => {
                     if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v + imm as f64)); }
-                    else if let Value::Int(v) = r!(src) { w!(dst, Value::Int(v.wrapping_add(imm as i64))); }
+                    else if let Value::Int(v) = r!(src) { let (a, b) = (*v, imm as i64); w!(dst, Value::Int(iop!(num::add(a, b), a, "+", b))); }
                 }
                 &Instruction::SubIntImm(dst, src, imm) => {
                     if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v - imm as f64)); }
-                    else if let Value::Int(v) = r!(src) { w!(dst, Value::Int(v.wrapping_sub(imm as i64))); }
+                    else if let Value::Int(v) = r!(src) { let (a, b) = (*v, imm as i64); w!(dst, Value::Int(iop!(num::sub(a, b), a, "-", b))); }
                 }
                 &Instruction::MulIntImm(dst, src, imm) => {
                     if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v * imm as f64)); }
-                    else if let Value::Int(v) = r!(src) { w!(dst, Value::Int(v.wrapping_mul(imm as i64))); }
+                    else if let Value::Int(v) = r!(src) { let (a, b) = (*v, imm as i64); w!(dst, Value::Int(iop!(num::mul(a, b), a, "*", b))); }
                 }
                 &Instruction::CmpEqImm(dst, src, imm) => {
                     let res = num_eq_imm(r!(src), imm as i64).unwrap_or(false);
@@ -3050,11 +3924,25 @@ impl<W: Write> VM<W> {
                     let res = !r!(a).equals(r!(b)); w!(dst, Value::Bool(res));
                 }
                 &Instruction::CmpGt(dst, a, b) => {
-                    let res = ord_slow(r!(a), r!(b), "Gt")? > 0;
+                    let res = ord_gt(ord_slow(r!(a), r!(b), "Gt")?);
                     w!(dst, Value::Bool(res));
                 }
                 &Instruction::Not(dst, src) => {
                     let v = r!(src).is_truthy(); w!(dst, Value::Bool(!v));
+                }
+                &Instruction::IsInt(dst, src) => {
+                    let v = matches!(r!(src), Value::Int(_)); w!(dst, Value::Bool(v));
+                }
+                &Instruction::AsLoopCond(dst, src) => {
+                    match r!(src) {
+                        &Value::Bool(b) => w!(dst, Value::Bool(b)),
+                        other => {
+                            let got = other.type_word();
+                            return Err(VmError::Generic(format!(
+                                "loop expects a count or a condition, got {got}"
+                            )));
+                        }
+                    }
                 }
                 &Instruction::Jump(label) => { ip = label as usize; }
                 &Instruction::JumpIf(cond, label) if r!(cond).is_truthy() => { ip = label as usize; }
@@ -3177,52 +4065,128 @@ impl<W: Write> VM<W> {
                     self.value_stack[base + *dst as usize] = result;
                 }
                 &Instruction::CmpLt(dst, a, b) => {
-                    let res = ord_slow(r!(a), r!(b), "Lt")? < 0;
+                    let res = ord_lt(ord_slow(r!(a), r!(b), "Lt")?);
                     w!(dst, Value::Bool(res));
                 }
                 &Instruction::CmpLe(dst, a, b) => {
-                    let res = ord_slow(r!(a), r!(b), "Le")? <= 0;
+                    let res = ord_le(ord_slow(r!(a), r!(b), "Le")?);
                     w!(dst, Value::Bool(res));
                 }
                 &Instruction::CmpGe(dst, a, b) => {
-                    let res = ord_slow(r!(a), r!(b), "Ge")? >= 0;
+                    let res = ord_ge(ord_slow(r!(a), r!(b), "Ge")?);
                     w!(dst, Value::Bool(res));
                 }
+                &Instruction::RequireBool(src, is_and) => {
+                    let v = &self.value_stack[base + src as usize];
+                    if !matches!(v, Value::Bool(_)) {
+                        return Err(VmError::Generic(
+                            logical_type_error(if is_and { "AND" } else { "OR" }, v),
+                        ));
+                    }
+                }
+                &Instruction::RequireDict(src) => {
+                    let v = &self.value_stack[base + src as usize];
+                    if !matches!(v, Value::NamedTuple(_)) {
+                        let got = v.tw_type_name_owned();
+                        return Err(VmError::Generic(format!(
+                            "the pattern #(…) requires a dictionary, got {}\nhelp: #(key: name) = d unpacks a dictionary; use (a, b) for a tuple, [a, b] for an array",
+                            got
+                        )));
+                    }
+                }
                 &Instruction::NamedTupleGet(dst, tuple_reg, field_idx) => {
+                    // The dictionary rules, same as the main dispatch loop above.
+                    // This loop runs a CALLED function's body, which is where a
+                    // lambda handed to `$>`/`$|`/`$<` lives — and it answered a
+                    // missing key with Unit and carried on, so
+                    // `ds$> (d -> d.zzz)` returned `[(), ()]` and exited 0 where
+                    // both other engines raised `##Key`. That is the silent
+                    // undefined decision 10 exists to refuse.
                     let field_name = &program.string_pool[field_idx as usize];
                     let result = match &self.value_stack[base + tuple_reg as usize] {
                         Value::NamedTuple(fields) => {
                             let field_name = field_name.clone();
-                            fields.iter()
-                                .find(|(n, _)| *n == field_name)
-                                .map(|(_, v)| v.clone())
-                                .unwrap_or(Value::Unit)
+                            match fields.iter().find(|(n, _)| *n == field_name).map(|(_, v)| v.clone()) {
+                                Some(v) => v,
+                                None => {
+                                    let available: Vec<String> =
+                                        fields.iter().map(|(n, _)| n.clone()).collect();
+                                    return Err(VmError::Generic(missing_key_msg(&field_name, &available)));
+                                }
+                            }
                         }
-                        _ => Value::Unit,
+                        Value::Tuple(_) => {
+                            let field_name = field_name.clone();
+                            return Err(VmError::Generic(format!(
+                                "a positional tuple is addressed by position, not by name: '{}'\nhelp: use t[1] — names live in a dictionary, #(key: value)",
+                                field_name
+                            )));
+                        }
+                        other => {
+                            let got = other.tw_type_name_owned();
+                            let field_name = field_name.clone();
+                            return Err(VmError::Generic(format!(
+                                "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
+                                got, field_name
+                            )));
+                        }
                     };
                     self.value_stack[base + dst as usize] = result;
                 }
 
                 // ── Array/Tuple indexing ──────────────────────────────────────
                 &Instruction::ArrayGet(dst, arr_reg, idx_reg) => {
+                    // The dictionary rules, same as the main dispatch loop above.
+                    // This second loop is the one a LOOP BODY runs through, which
+                    // is exactly where `@ k:d { >> d[k] ¶ }` lives — patching
+                    // only the first one left the commonest use of a computed key
+                    // failing with "expected Int, got String".
+                    if let Value::NamedTuple(fields) = r!(arr_reg) {
+                        match r!(idx_reg) {
+                            Value::String(key) => {
+                                let key = key.as_str().to_string();
+                                let fields = fields.clone();
+                                match fields.iter().find(|(k, _)| *k == key) {
+                                    Some((_, v)) => { let v = v.clone(); w!(dst, v); }
+                                    None => {
+                                        let available: Vec<String> =
+                                            fields.iter().map(|(k, _)| k.clone()).collect();
+                                        return Err(VmError::Generic(
+                                            missing_key_msg(&key, &available)));
+                                    }
+                                }
+                                continue;  // `ip` was advanced before the match
+                            }
+                            // Decision 11: addressed by key, never by position.
+                            Value::Int(_) => {
+                                let first = fields.first().map(|(k, _)| k.clone())
+                                    .unwrap_or_else(|| "clave".to_string());
+                                return Err(VmError::Generic(format!(
+                                    "a dictionary is addressed by key, not by position\nhelp: use d[\"{}\"] — adding a key changes what sits at each position",
+                                    first
+                                )));
+                            }
+                            _ => {}
+                        }
+                    }
                     let idx = match r!(idx_reg) { Value::Int(n) => *n, _ => 0 };
                     let val = match r!(arr_reg).clone() {
                         Value::Array(arr) => {
                             let i = if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i >= 0 && (i as usize) < arr.len() { arr[i as usize].clone() } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: arr.len() });
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
                             }
                         }
                         Value::Tuple(items) => {
                             let i = if idx < 0 { items.len() as i64 + idx } else { idx - 1 };
                             if i >= 0 && (i as usize) < items.len() { items[i as usize].clone() } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: items.len() });
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: items.len() , container: "tuple" });
                             }
                         }
                         Value::NamedTuple(fields) => {
                             let i = if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
                             if i >= 0 && (i as usize) < fields.len() { fields[i as usize].1.clone() } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: fields.len() });
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: fields.len() , container: "named tuple" });
                             }
                         }
                         Value::String(s) => {
@@ -3231,7 +4195,7 @@ impl<W: Write> VM<W> {
                             if i >= 0 && (i as usize) < char_count {
                                 Value::Char(s.chars().nth(i as usize).unwrap())
                             } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: char_count });
+                                return Err(VmError::IndexOutOfBounds { index: idx, length: char_count , container: "string" });
                             }
                         }
                         other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
@@ -3269,6 +4233,14 @@ impl<W: Write> VM<W> {
                     let elem = r!(elem_reg).clone();
                     let found = match r!(arr_reg) {
                         Value::Array(arr) => arr.iter().any(|v| v.equals(&elem)),
+                        // On a dictionary the question is about the KEY.
+                        Value::NamedTuple(fields) => match &elem {
+                            Value::String(key) => {
+                                fields.iter().any(|(k, _)| k.as_str() == key.as_str())
+                            }
+                            _ => false,
+                        },
+                        Value::Tuple(t) => t.iter().any(|v| v.equals(&elem)),
                         _ => false,
                     };
                     w!(dst, Value::Bool(found));
@@ -3283,7 +4255,13 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::PowInt(dst, a, b) => {
                     if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        w!(dst, Value::Int(va.wrapping_pow(*vb as u32)));
+                        let (va, vb) = (*va, *vb);
+                        if vb < 0 {
+                            w!(dst, Value::Float((va as f64).powf(vb as f64)));
+                        } else {
+                            let e = u32::try_from(vb).unwrap_or(u32::MAX);
+                            w!(dst, Value::Int(iop!(num::pow(va, e), va, "^", vb)));
+                        }
                     }
                 }
                 &Instruction::NegInt(dst, src) => {
@@ -3325,6 +4303,7 @@ impl<W: Write> VM<W> {
                         (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
                         _ => return Ok(Value::Unit),
                     };
+                    if vb == 0.0 { return Err(VmError::DivisionByZero); }
                     w!(dst, Value::Float(va / vb));
                 }
                 &Instruction::PowFloat(dst, a, b) => {
@@ -3352,14 +4331,20 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::FloatToIntRound(dst, src) => {
                     match r!(src) {
-                        Value::Float(f) => { let v = f.round() as i64; w!(dst, Value::Int(v)); }
+                        Value::Float(f) => match num::from_f64(f.round()) {
+                            Some(v) => w!(dst, Value::Int(v)),
+                            None => return Err(VmError::CastOverflow { op: "###" }),
+                        },
                         Value::Int(n)   => { let v = *n; w!(dst, Value::Int(v)); }
                         _ => {}
                     }
                 }
                 &Instruction::FloatToIntTrunc(dst, src) => {
                     match r!(src) {
-                        Value::Float(f) => { let v = f.trunc() as i64; w!(dst, Value::Int(v)); }
+                        Value::Float(f) => match num::from_f64(f.trunc()) {
+                            Some(v) => w!(dst, Value::Int(v)),
+                            None => return Err(VmError::CastOverflow { op: "##!" }),
+                        },
                         Value::Int(n)   => { let v = *n; w!(dst, Value::Int(v)); }
                         Value::Char(c)  => { let v = *c as u32 as i64; w!(dst, Value::Int(v)); }
                         _ => {}
@@ -3367,13 +4352,55 @@ impl<W: Write> VM<W> {
                 }
 
                 // ── Logical ──────────────────────────────────────────────────
+                // ZYVM-001, in the call-frame loop as in the main one: a
+                // logical operand is a Bool or it is refused.
                 &Instruction::And(dst, a, b) => {
-                    let res = r!(a).is_truthy() && r!(b).is_truthy();
-                    w!(dst, Value::Bool(res));
+                    let (x, y) = bools_or_err(r!(a), r!(b), "AND")?;
+                    w!(dst, Value::Bool(x && y));
                 }
                 &Instruction::Or(dst, a, b) => {
-                    let res = r!(a).is_truthy() || r!(b).is_truthy();
-                    w!(dst, Value::Bool(res));
+                    let (x, y) = bools_or_err(r!(a), r!(b), "OR")?;
+                    w!(dst, Value::Bool(x || y));
+                }
+
+                // ── Destructuring ────────────────────────────────────────────
+                &Instruction::DestructureCheck(src, wants_tuple) => {
+                    let v = &self.value_stack[base + src as usize];
+                    let ok = if wants_tuple {
+                        matches!(v, Value::Tuple(_))
+                    } else {
+                        matches!(v, Value::Array(_))
+                    };
+                    if !ok {
+                        let got = v.tw_type_name_owned();
+                        return Err(VmError::Generic(if wants_tuple {
+                            format!("tuple pattern '( … )' requires a tuple, got {got}")
+                        } else {
+                            format!("array pattern '[ … ]' requires an array, got {got}")
+                        }));
+                    }
+                }
+                &Instruction::DestructureAbsorb(dst, src, from) => {
+                    let value = match &self.value_stack[base + src as usize] {
+                        Value::Array(arr) => {
+                            let rest = &arr.as_ref()[(from as usize - 1).min(arr.len())..];
+                            match rest.len() {
+                                0 => Value::Unit,
+                                1 => rest[0].clone(),
+                                _ => Value::Array(Rc::new(rest.to_vec())),
+                            }
+                        }
+                        Value::Tuple(tup) => {
+                            let rest = &tup.as_ref()[(from as usize - 1).min(tup.len())..];
+                            match rest.len() {
+                                0 => Value::Unit,
+                                1 => rest[0].clone(),
+                                _ => Value::Tuple(Rc::new(rest.to_vec())),
+                            }
+                        }
+                        _ => Value::Unit,
+                    };
+                    w!(dst, value);
                 }
 
                 // ── Tuples ───────────────────────────────────────────────────
@@ -3651,16 +4678,22 @@ impl<W: Write> VM<W> {
                         Value::String(s) => {
                             let s_rc = s.clone();
                             let trimmed = s_rc.as_ref().trim();
-                            if let Ok(i) = trimmed.parse::<i64>() { Value::Int(i) }
-                            else if let Ok(f) = trimmed.parse::<f64>() { Value::Float(f) }
-                            else if let Some(norm) = normalize_unicode_digits(trimmed) {
-                                if let Ok(i) = norm.parse::<i64>() { Value::Int(i) }
-                                else if let Ok(f) = norm.parse::<f64>() { Value::Float(f) }
-                                else { Value::String(s_rc) }
-                            } else { Value::String(s_rc) }
+                            match num::parse(trimmed) {
+                                num::Num::Int(i) => Value::Int(i),
+                                num::Num::Float(f) => Value::Float(f),
+                                num::Num::None => match normalize_unicode_digits(trimmed).map(|n| num::parse(&n)) {
+                                    Some(num::Num::Int(i)) => Value::Int(i),
+                                    Some(num::Num::Float(f)) => Value::Float(f),
+                                    _ => Value::String(s_rc),
+                                },
+                            }
                         }
                         Value::Int(n) => Value::Int(*n),
                         Value::Float(f) => Value::Float(*f),
+                        // GAP-ZYB-012: a Char reads like the one-character
+                        // string it is — `#|'७'|` is 7, as `#|"७"|` already
+                        // was. A Char that is not a digit comes back untouched.
+                        Value::Char(c) => vm_char_as_number(*c),
                         other => other.clone(),
                     };
                     w!(dst, result);
@@ -3671,29 +4704,25 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::TypeOf(dst, src) => {
                     let val = r!(src).clone();
-                    let result = if let Value::Error(s) = &val {
-                        let s_ref = s.as_ref();
-                        let kind = s_ref.find('(').map(|i| &s_ref[..i]).unwrap_or(s_ref);
+                    // `(symbol, count, value)`, in that order. This loop runs a CALLED
+                    // function's body — where a lambda handed to `$>`/`$|`/`$<` lives —
+                    // and it built `(value, symbol, count)`, so `x#?` answered a
+                    // scrambled tuple to every program that asked inside one. Same
+                    // shape as the main dispatch loop above, and the error case reads
+                    // its kind and length from the shared helpers rather than a copy.
+                    let result = if matches!(&val, Value::Error(_)) {
                         Value::Tuple(Rc::new(vec![
-                            Value::String(ZyStr::new(kind.to_string())),
-                            Value::Int(0),
+                            Value::String(ZyStr::new(val.tw_type_name_owned())),
+                            Value::Int(val.error_message_len()),
                             val.clone(),
                         ]))
                     } else {
-                        let (type_sym, len) = match &val {
-                            Value::Int(n) => ("###", n.to_string().len() as i64),
-                            Value::Float(fl) => ("##.", fl.to_string().len() as i64),
-                            Value::String(s) => ("##\"", s.as_ref().chars().count() as i64),
-                            Value::Char(_) => ("##'", 1),
-                            Value::Bool(_) => ("##?", 1),
-                            Value::Array(a) => ("##]", a.as_ref().len() as i64),
-                            Value::Tuple(t) => ("##)", t.as_ref().len() as i64),
-                            Value::NamedTuple(f) => ("##)", f.as_ref().len() as i64),
-                            Value::Function(_, arity) => ("##()", *arity as i64),
-                            Value::Closure(_, arity, _) => ("##->", *arity as i64),
-                            _ => ("##_", 0),
-                        };
-                        Value::Tuple(Rc::new(vec![val.clone(), Value::String(ZyStr::new(type_sym.to_string())), Value::Int(len)]))
+                        let (type_sym, len) = val.type_metadata();
+                        Value::Tuple(Rc::new(vec![
+                            Value::String(ZyStr::new(type_sym.to_string())),
+                            Value::Int(len),
+                            val.clone(),
+                        ]))
                     };
                     w!(dst, result);
                 }
@@ -3745,6 +4774,26 @@ impl<W: Write> VM<W> {
                     let updated = vm_deep_set(root, &path, val)?;
                     self.value_stack[base + dst as usize] = updated;
                 }
+                &Instruction::AssertMutable(reg, name_idx) => {
+                    if let Value::Tuple(_) = r!(reg) {
+                        let name = self.string_rcs[name_idx as usize].as_str();
+                        return Err(VmError::Generic(tuple_immutable_msg(name)));
+                    }
+                }
+                &Instruction::DeepSetInPlace(dst, path_reg, val_reg, name_idx) => {
+                    let val = r!(val_reg).clone();
+                    let path = match r!(path_reg) {
+                        Value::Array(p) => p.clone(),
+                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    };
+                    let root = mem::replace(&mut self.value_stack[base + dst as usize], Value::Unit);
+                    if let Value::Tuple(_) = &root {
+                        let name = self.string_rcs[name_idx as usize].as_str();
+                        return Err(VmError::Generic(tuple_immutable_msg(name)));
+                    }
+                    let updated = vm_deep_set(root, &path, val)?;
+                    self.value_stack[base + dst as usize] = updated;
+                }
 
                 _ => {
                     // For unsupported instructions in HOF mini-VM, skip
@@ -3760,17 +4809,57 @@ impl<W: Write> VM<W> {
 /// `deep_update_value` over VM values. Steps are Int (1-based, negative counts
 /// from the end) for arrays, tuples, and named tuples; a String step addresses
 /// a named-tuple field by name. An empty remaining path replaces the value.
+/// The tree-walker's refusal of `t[i] = val`, word for word.
+///
+/// Spelled once and quoted from here because `zyq consensus` compares text: two
+/// engines that refuse the same program with different wording are still a
+/// divergence. The tree-walker's copy is in
+/// `zymbol-interpreter/src/variables.rs`.
+fn tuple_immutable_msg(name: &str) -> String {
+    format!(
+        "cannot modify tuple '{}': tuples are immutable\nhelp: use 'new = {}[i]$~ value' for a functional update",
+        name, name
+    )
+}
+
+/// The refusal of an absent dictionary key, spelled as the tree-walker spells
+/// it (`zymbol-interpreter::variables::missing_key_msg`) — `zyq consensus`
+/// compares text, and this engine used to say the least of the three: no list of
+/// available keys at all.
+/// The refusal of a positional address on a dictionary, spelled as the
+/// tree-walker spells it (`collection_ops::dict_not_positional`).
+///
+/// Decision 11 withdrew `d[2]`, and the reasoning covers the whole family: in a
+/// mutable dictionary a position is not a stable address. A positional WRITE is
+/// strictly worse than a positional read, since it corrupts data rather than
+/// returning the wrong value.
+fn dict_not_positional(op: &str, first_key: Option<&str>) -> String {
+    let k = first_key.unwrap_or("clave");
+    format!(
+        "a dictionary is addressed by key, not by position: `{}` has no meaning here\nhelp: use the key — d[\"{}\"], d[\"{}\"]$~ value, d$-[\"{}\"] — because adding a key changes what sits at each position",
+        op, k, k, k
+    )
+}
+
+fn missing_key_msg(key: &str, available: &[String]) -> String {
+    if available.is_empty() {
+        format!("no key '{}' in dictionary — it is empty", key)
+    } else {
+        format!("no key '{}' in dictionary — available: {}", key, available.join(", "))
+    }
+}
+
 fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmError> {
     let Some((step, rest)) = path.split_first() else {
         return Ok(new_val);
     };
-    fn resolve(idx: i64, len: usize) -> Result<usize, VmError> {
+    fn resolve(idx: i64, len: usize, container: &'static str) -> Result<usize, VmError> {
         if idx == 0 {
             return Err(VmError::IndexZero);
         }
         let i = if idx < 0 { len as i64 + idx } else { idx - 1 };
         if i < 0 || i as usize >= len {
-            return Err(VmError::IndexOutOfBounds { index: idx, length: len });
+            return Err(VmError::IndexOutOfBounds { index: idx, length: len, container });
         }
         Ok(i as usize)
     }
@@ -3783,14 +4872,14 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
     match col {
         Value::Array(mut rc) => {
             let arr = Rc::make_mut(&mut rc);
-            let i = resolve(int_step(step)?, arr.len())?;
+            let i = resolve(int_step(step)?, arr.len(), "array")?;
             let sub = mem::replace(&mut arr[i], Value::Unit);
             arr[i] = vm_deep_set(sub, rest, new_val)?;
             Ok(Value::Array(rc))
         }
         Value::Tuple(mut rc) => {
             let tup = Rc::make_mut(&mut rc);
-            let i = resolve(int_step(step)?, tup.len())?;
+            let i = resolve(int_step(step)?, tup.len(), "tuple")?;
             let sub = mem::replace(&mut tup[i], Value::Unit);
             tup[i] = vm_deep_set(sub, rest, new_val)?;
             Ok(Value::Tuple(rc))
@@ -3800,37 +4889,90 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
             let i = match step {
                 Value::String(name) => match fields.iter().position(|(k, _)| k == name.as_str()) {
                     Some(i) => i,
+                    // A key that is not there gets ADDED, as it does in Python.
+                    // The array refuses the same move (decision 13) and the two
+                    // are not inconsistent: an array is addressed by POSITION,
+                    // so writing past the end leaves a hole; a dictionary is
+                    // addressed by KEY and has no holes to leave.
                     None => {
-                        return Err(VmError::Generic(format!(
-                            "named tuple has no field '{}'",
-                            name.as_str()
-                        )))
+                        fields.push((name.as_str().to_string(), Value::Unit));
+                        fields.len() - 1
                     }
                 },
-                other => resolve(int_step(other)?, fields.len())?,
+                // A positional WRITE corrupts data rather than returning the
+                // wrong value: strictly worse than the positional read that
+                // decision 11 withdrew.
+                _ => {
+                    let first = fields.first().map(|(k, _)| k.clone());
+                    return Err(VmError::Generic(dict_not_positional(
+                        "d[n]$~ value", first.as_deref())));
+                }
             };
             let sub = mem::replace(&mut fields[i].1, Value::Unit);
             fields[i].1 = vm_deep_set(sub, rest, new_val)?;
             Ok(Value::NamedTuple(rc))
         }
-        other => Err(VmError::TypeError {
-            expected: "Array, Tuple, or NamedTuple",
-            got: other.type_name().to_string(),
-        }),
+        other => Err(VmError::Generic(format!(
+            "$~ writes into a collection, and this is {}\nhelp: use a[1]$~ v on an array or tuple, d[\"key\"]$~ v on a #(…)",
+            other.tw_type_name_owned()
+        ))),
     }
 }
 
-fn vm_map_key_code(code: crossterm::event::KeyCode) -> char {
-    use crossterm::event::KeyCode::*;
-    match code {
+/// Is this a key going *down*, as opposed to coming back up?
+///
+/// Mirrors the tree-walker's `is_key_press` — Windows reports key releases as well
+/// as presses, so `<<|` counted every keystroke twice there. See the comment on the
+/// tree-walker copy for the full story; the two must agree or the engines diverge on
+/// exactly the platform where the behaviour is hard to notice.
+fn vm_is_key_press(key: &crossterm::event::KeyEvent) -> bool {
+    use crossterm::event::KeyEventKind;
+    matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+}
+
+/// Translate a key event into the single character `<<|` yields.
+///
+/// Mirrors the tree-walker's `map_key_code`; the two must agree or the engines
+/// diverge on the keyboard, which only the pty harness can catch.
+fn vm_map_key_code(key: &crossterm::event::KeyEvent) -> char {
+    use crossterm::event::{KeyCode::*, KeyModifiers};
+
+    // Ctrl+letter is a control character, and that is what the terminal puts on
+    // the wire: Ctrl+A is 0x01, Ctrl+S is 0x13. crossterm hands it over
+    // decoded — `Char('a')` with CONTROL set — and this function used to read
+    // the code and drop the modifiers, so Ctrl+A arrived as the letter `a`
+    // (BUG-ZYB-006). Not "the combination never arrived": it arrived wearing
+    // another key's clothes, which is worse — a Ctrl+X shortcut fired when the
+    // user typed an x into a text field, and no full-screen program could offer
+    // Ctrl+S, Ctrl+Q or Ctrl+C at all.
+    //
+    // Handing back the control character adds nothing to the language: `0d1`
+    // already writes it, and `##!t < 32` already asks the question.
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        if let Char(c) = key.code {
+            let lower = c.to_ascii_lowercase();
+            if lower.is_ascii_lowercase() {
+                return (lower as u8 - b'a' + 1) as char;
+            }
+        }
+    }
+
+    match key.code {
         Char(c) => c,
-        Up      => '↑',
-        Down    => '↓',
-        Left    => '←',
-        Right   => '→',
+        Up      => '\u{2191}',
+        Down    => '\u{2193}',
+        Left    => '\u{2190}',
+        Right   => '\u{2192}',
         Enter   => '\n',
         Esc     => '\x1B',
-        _       => '\0',
+        // Tab and Backspace used to fall through to `'\0'` together, so a
+        // program could not tell them apart — harmless in a numeric field,
+        // which is why ZyBank treated both as "delete", and impossible in a
+        // form where Tab moves between fields: every jump would erase a
+        // character. Both now carry what the terminal sends for them.
+        Tab       => '\t',      // 0d9
+        Backspace => '\x7F',    // 0d127 — DEL, which is what a terminal sends
+        _         => '\0',
     }
 }
 

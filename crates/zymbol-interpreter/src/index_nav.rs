@@ -16,7 +16,25 @@ impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_deep_index(&mut self, di: &DeepIndexExpr) -> Result<Value> {
         let mut current = self.eval_expr(&di.array)?;
         for step in &di.path.steps {
-            let idx = self.eval_nav_atom(&step.index, step)?;
+            // A step is an ordinary expression, and its VALUE says how to
+            // address: Int → position, String → dictionary key. Same rule as
+            // `d[clave]`, one level down, which is why `config[k1>k2]` works
+            // with `k1 = "servidor"`.
+            let step_val = self.eval_expr(&step.index)?;
+            if let Value::String(key) = &step_val {
+                current = descend_key(current, key, di.span)?;
+                continue;
+            }
+            let idx = match step_val {
+                Value::Int(n) => n,
+                other => return Err(RuntimeError::Generic {
+                    message: format!(
+                        "a navigation step is a position (Int) or a dictionary key (String), got {:?}",
+                        other
+                    ),
+                    span: step.index.span(),
+                }),
+            };
             current = descend(current, idx, step.index.span(), di.span)?;
         }
         Ok(current)
@@ -34,7 +52,7 @@ impl<W: Write> Interpreter<W> {
             result.extend(values);
         }
 
-        Ok(Value::Array(result))
+        Ok(Value::array(result))
     }
 
     // ── Structured extraction ─────────────────────────────────────────────────
@@ -46,10 +64,10 @@ impl<W: Write> Interpreter<W> {
 
         for group in &se.groups {
             let sub = self.eval_extract_group(base.clone(), group, se.span)?;
-            groups_out.push(Value::Array(sub));
+            groups_out.push(Value::array(sub));
         }
 
-        Ok(Value::Array(groups_out))
+        Ok(Value::array(groups_out))
     }
 
     fn eval_extract_group(
@@ -133,8 +151,31 @@ impl<W: Write> Interpreter<W> {
             }
             Ok(collected)
         } else {
-            // Plain step — descend
-            let idx = self.eval_nav_atom(&step.index, step)?;
+            // Plain step — descend. A step is an ORDINARY EXPRESSION, and its
+            // value says how to address: an Int is a position, a String is a
+            // dictionary key. That is what makes `config[k1>k2]` work with
+            // `k1 = "servidor"` — the same rule as `d[clave]`, one level down.
+            //
+            // It has to be the value and not the spelling: a bare identifier
+            // inside `[…]` is a VARIABLE, which is exactly what makes a computed
+            // key possible. If `config[servidor>…]` meant the key named
+            // `servidor`, then `d[clave]` would mean the key named `clave` and
+            // computed keys could not exist.
+            let step_val = self.eval_expr(&step.index)?;
+            if let Value::String(key) = &step_val {
+                let next = descend_key(current, key, span)?;
+                return self.walk_steps(next, rest, span);
+            }
+            let idx = match step_val {
+                Value::Int(n) => n,
+                other => return Err(RuntimeError::Generic {
+                    message: format!(
+                        "a navigation step is a position (Int) or a dictionary key (String), got {:?}",
+                        other
+                    ),
+                    span: step.index.span(),
+                }),
+            };
             let next = descend(current, idx, step.index.span(), span)?;
             self.walk_steps(next, rest, span)
         }
@@ -160,6 +201,29 @@ impl<W: Write> Interpreter<W> {
     }
 }
 
+/// Descend into a dictionary by KEY — the String half of a navigation step.
+fn descend_key(collection: Value, key: &str, op_span: zymbol_span::Span) -> Result<Value> {
+    match collection {
+        Value::NamedTuple(fields) => match fields.iter().find(|(k, _)| k == key) {
+            Some((_, v)) => Ok(v.clone()),
+            None => {
+                let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                Err(RuntimeError::Generic {
+                    message: crate::variables::missing_key_msg(key, &available),
+                    span: op_span,
+                })
+            }
+        },
+        other => Err(RuntimeError::Generic {
+            message: format!(
+                "a String navigation step addresses a dictionary key, and this is {}",
+                other.type_name()
+            ),
+            span: op_span,
+        }),
+    }
+}
+
 // ── Shared descent helper (not a method — no `self` needed) ─────────────────
 
 /// Descend into `collection` by 1-based `index`, returning the element.
@@ -181,23 +245,23 @@ fn descend(
     match collection {
         Value::Array(arr) => {
             let len = arr.len();
-            let i = resolve_index(index, len, op_span)?;
+            let i = resolve_index(index, len, op_span, "array")?;
             Ok(arr[i].clone())
         }
         Value::Tuple(elems) => {
             let len = elems.len();
-            let i = resolve_index(index, len, op_span)?;
+            let i = resolve_index(index, len, op_span, "tuple")?;
             Ok(elems[i].clone())
         }
         Value::NamedTuple(fields) => {
             let len = fields.len();
-            let i = resolve_index(index, len, op_span)?;
+            let i = resolve_index(index, len, op_span, "named tuple")?;
             Ok(fields[i].1.clone())
         }
         Value::String(s) => {
             let chars: Vec<char> = s.chars().collect();
             let len = chars.len();
-            let i = resolve_index(index, len, op_span)?;
+            let i = resolve_index(index, len, op_span, "string")?;
             Ok(Value::String(chars[i].to_string()))
         }
         other => Err(RuntimeError::Generic {
@@ -211,7 +275,18 @@ fn descend(
 }
 
 /// Convert a 1-based (or negative) index to a 0-based usize, checking bounds.
-fn resolve_index(index: i64, len: usize, span: zymbol_span::Span) -> Result<usize> {
+///
+/// `container` names the thing that was too short, because the read path
+/// (`expr_eval`) names it — "array index out of bounds … for array of length 2"
+/// — and this write path said "collection" for all four. Same program, two
+/// texts, decided by whether the index was being read or written; `zyq
+/// consensus` never saw it because no corpus file writes past the end.
+fn resolve_index(
+    index: i64,
+    len: usize,
+    span: zymbol_span::Span,
+    container: &str,
+) -> Result<usize> {
     let i = if index < 0 {
         len as i64 + index
     } else {
@@ -220,8 +295,8 @@ fn resolve_index(index: i64, len: usize, span: zymbol_span::Span) -> Result<usiz
     if i < 0 || i as usize >= len {
         return Err(RuntimeError::Generic {
             message: format!(
-                "index out of bounds: index {} for collection of length {}",
-                index, len
+                "{} index out of bounds: index {} for {} of length {}",
+                container, index, container, len
             ),
             span,
         });

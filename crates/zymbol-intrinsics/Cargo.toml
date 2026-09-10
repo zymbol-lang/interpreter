@@ -6,5 +6,9 @@ license.workspace = true
 description = "Pure-Rust string and collection intrinsics for Zymbol-Lang VM — no boxing, no VM types"
 
 [dependencies]
-# Intentionally empty: intrinsics operate on &str / primitive types only.
-# The VM adapter layer owns the boxing/unboxing.
+# Almost empty: intrinsics operate on &str / primitive types only, and the VM
+# adapter layer owns the boxing/unboxing. The one exception is reading the
+# machine's own time zone for `std/time`, which no std API offers — `local-offset`
+# is the whole reason this dependency exists, and the civil calendar itself is
+# hand-written so the two Rust engines and the JavaScript one give one answer.
+time = { version = "0.3", default-features = false, features = ["std", "local-offset"] }

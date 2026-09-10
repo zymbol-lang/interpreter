@@ -407,7 +407,7 @@ build_arch_package() {
     cat > "${pkg_dir}/.PKGINFO" <<EOF
 pkgname = zymbol-lang
 pkgver = ${VERSION}-1
-pkgdesc = Zymbol symbolic programming language — keyword-free, symbol-driven
+pkgdesc = Zymbol symbolic programming language — no words, symbol-driven
 url = https://zymbol-lang.org
 builddate = $(date -u +%s)
 packager = Zymbol-Lang Contributors

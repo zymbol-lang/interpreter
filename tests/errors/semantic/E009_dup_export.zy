@@ -1,5 +1,0 @@
-# E009_dup_export {
-    #> { add, add }
-
-    add(a, b) { <~ a + b }
-}

@@ -5,12 +5,12 @@
 <h1 align="center">Zymbol-Lang — Interpreter</h1>
 
 <p align="center">
-  A minimalist symbolic programming language with no keywords.<br/>
+  A minimalist symbolic programming language with no words in its grammar.<br/>
   Pure symbols for every construct. Full Unicode. Built in Rust.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.0.8-informational?style=flat-square"/>
+  <img src="https://img.shields.io/badge/version-v0.0.9-informational?style=flat-square"/>
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square"/>
   <img src="https://img.shields.io/badge/status-active-brightgreen?style=flat-square"/>
@@ -21,7 +21,7 @@
 ## What is Zymbol-Lang?
 
 Zymbol started as an **esoteric programming language** — a single tight question taken seriously:
-*what happens if you remove every keyword?* No `if`, no `while`, no `function`, no `return`.
+*what happens if you remove every word?* No `if`, no `while`, no `function`, no `return`.
 The original experiment is on [esolangs.org](https://esolangs.org). Then the idea grew.
 
 The reason the constraint matters is an old and uncontroversial one: notation travels.
@@ -60,17 +60,55 @@ program in the language of the Empire (CSUR U+F8F0–U+F8F9, fully supported, re
 The esolang became a general-purpose language. What stayed minimal is the growth mechanism:
 no new construct ever borrows a word from any natural language.
 
+### An agglutinative notation
+
+The marks are not a flat table to be memorised. An operator is a **sequence of marks, each
+contributing one meaning**, with the boundaries between them visible in the written form —
+the way an agglutinative language builds a word by stacking morphemes. `<<|?` is not a
+trigraph that happens to mean "poll the keyboard"; it is three morphemes:
+
+```text
+<<      |       ?              $       ^       -              @       :outer  !
+IN      UNIT    IRR            COLL    ORDER   REV            TEMP    LBL     FRC
+"one unit from the input       "impose an order on the        "act forcefully on the
+ stream, non-committally"       collection, reversed"          time-context named outer"
+→ poll for a keypress          → sort descending              → break the labelled loop
+```
+
+Segmentable operators fill one slot template — `[BINDER] DOMAIN [OPERATION] [MODALITY]
+[ARGUMENT]`, where the domain head (`$` collection, `@` time, `#` meta, `>>` out, `<<` in,
+`?` irrealis, `!` force/error) says *which world* the operation lives in, and a modal `?` or
+`!` is always the rightmost mark. So a combination that has never been written already has a
+meaning, worked out in advance by the marks it is made of; implementing it is a matter of
+building what the notation already said. That is why the language grows by recombination:
+across v0.0.5–v0.0.9 it coined exactly **one** new base mark (`°`, the hot-definition
+diacritic) and derived everything else from marks already in the inventory.
+
+Stating it this way makes it falsifiable, which is the point: for any operator you either can
+segment and gloss it, or you cannot. [SYMBOLS.md](./SYMBOLS.md) does that count for the whole
+inventory — transparent forms (the majority), semi-transparent (6, where the whole means more
+than the parts), and **opaque** (10, which must simply be learned: `¶`, `><`, `#1`/`#0`, the
+base prefixes, `###`, `°`). It also names the six declared homographs, the exact
+natural-language residue that "no words in the grammar" does not cover (error kinds, `std/` names, `0x`),
+and the eight rules a proposed operator has to pass before it can exist. A reader who has
+never seen Zymbol will guess `>>` and `->` correctly and will guess `$^-` never — the second
+kind is a memorisation cost, so the design keeps counting it instead of assuming it is small.
+
 ---
 
 ## Features
 
-- **No keywords** — pure symbolic syntax (`?` if, `@` loop, `>>` output, `->` lambda)
+- **No words** — pure symbolic syntax (`?` if, `@` loop, `>>` output, `->` lambda). Not
+  "no keywords": *keyword* is a tokenizer's term for a reserved token, and by that
+  reading the language server files `?` and `@` under `KEYWORD` because LSP has no
+  other slot. The checkable claim is that **no construct of the grammar is a word**
+  ([`SYMBOLS.md`](SYMBOLS.md) §1.2)
 - **Dual execution** — tree-walker interpreter and register-based VM (`--vm`)
 - **Full Unicode** — identifiers, strings, and numerals support any Unicode script
 - **First-class functions** — named functions as values, HOF arguments, and closures
 - **Pattern matching** — `??` with literals, ranges, comparisons, ident, list and or-patterns (`'p' || 'P'`)
 - **Multi-dimensional indexing** — `arr[i>j]`, flat/structured extraction, ranges on nav steps
-- **Destructuring** — `[a, *rest] = arr`, `(name: n, age: a) = tuple`
+- **Destructuring** — `[a, *rest] = arr`, `(a, b) = tuple`, `#(name: n, age: a) = dict`
 - **Module system** — file-based imports with aliases, re-exports, and i18n translation layers
 - **Error handling** — `!?` try / `:!` catch (typed or generic) / `:>` finally
 - **Higher-order functions** — `$>` map, `$|` filter, `$<` reduce, `$^` sort with comparator
@@ -184,7 +222,7 @@ PI := 3.14159       // Const (immutable — reassignment is a runtime error)
 >> "Hello" ¶                    // with newline
 >> "Score: " score ¶            // string + variable (juxtaposition)
 >> "a=" a " b=" b ¶             // multiple values
->> (arr$#) ¶                    // postfix ops need parentheses in >>
+>> arr$# ¶                      // postfix ops need no parentheses in >> (since v0.0.7)
 >> "Sum: " (x + y) ¶            // parenthesized expression
 ```
 
@@ -308,22 +346,22 @@ has  = nums$? 3         // #1
 sub  = nums$[2..4]      // [2,3,4]
 srt  = nums$^+          // sort ascending
 
-// Array element update
-nums[1] = 99
-nums[2] += 10
+// Array element update — `$~`, never `=`
+nums[1]$~ 99
+nums[2]$~ (nums[2] + 10)
 
 // Destructuring
 [first, *rest] = nums    // first=99, rest=[...remaining]
 
-// Named tuples
-person = (name: "Alice", age: 25)
+// Dictionaries — keyed, insertion-ordered, mutable; `#(` marks the notation
+person = #(name: "Alice", age: 25)
 >> person.name ¶         // Alice
->> person.age ¶          // 25
+>> person["age"] ¶       // 25 — the bracket takes a computed key too
 
-// Array of named tuples
+// Array of dictionaries
 people = [
-    (name: "Alice", age: 25),
-    (name: "Bob",   age: 30)
+    #(name: "Alice", age: 25),
+    #(name: "Bob",   age: 30)
 ]
 sorted = people$^ (a, b -> a.age < b.age)
 ```
@@ -500,73 +538,191 @@ performance benchmarks.
 
 ## Performance
 
-Benchmarks (release build):
+Microbenchmarks (`zyquality/bench/`, release build, re-measured for v0.0.9,
+best of 3, process startup subtracted):
 
-| Benchmark | Tree-walker | VM |
-|-----------|:-----------:|:--:|
-| Stress loop | ~200ms | **67ms** |
-| Match | ~165ms | **50ms** |
-| Collections | ~14s | **33ms** |
-| Recursion | ~1480ms | 308ms |
+| Benchmark | Tree-walker | VM | VM speedup |
+|-----------|:-----------:|:--:|:----------:|
+| Strings | 76ms | **51ms** | 1.4× |
+| Collections | 71ms | **37ms** | 1.9× |
+| Stress loop | 236ms | **78ms** | 3.0× |
+| Match | 171ms | **54ms** | 3.1× |
+| Recursion (`fib`) | 1566ms | **253ms** | 6.1× |
 
-The VM is 4.4× faster than the tree-walker on `fib(35)`.
+Those figures are arithmetic-bound and shallow. On real programs the gap is much
+wider, because the tree-walker's cost is per call frame and per scope:
 
-Those figures are arithmetic-bound. On a real program dominated by array allocation and
-copying the gap is wider: a full 19 × 19 game of [囲碁](https://github.com/zymbol-lang/zy-GO)
-runs in **49.8s under the VM against 6m40s under the tree-walker** — 8–14× depending on
-board size. Quote the benchmark that matches your workload, not a single number.
+| Real workload | Tree-walker | VM | VM speedup |
+|---------------|:-----------:|:--:|:----------:|
+| zy-GO, 19x19 game from a fixed seed | 15.5s | **3.78s** | 4.1x |
+| Chaturanga, `perft(3)`, 4448 nodes | 1.94s | **0.171s** | 11x |
+| Chaturanga, full alpha-beta suite | 12.78s | **0.989s** | 13x |
+
+(The go engine is [囲碁](https://github.com/zymbol-lang/zy-GO); the chess-ancestor
+engine is चतुरङ्गम्.)
+
+**Quote the workload, not a single number** — and take the measurement, do not
+copy it. Those three rows read 8–14×, 42× and 46× until 2026-09-02, and the VM
+did not change: the tree-walker stopped cloning a whole collection to read one
+element of it, and then stopped cloning it to hand it to a function (zy-GO's
+HLZ-012 and HLZ-014). It came out 2.3× faster on the go game and 3.4× on the
+search. A ratio between two engines measures both.
+
+"~4×" circulated for a long time as if it were the language's speedup; it is the
+low end of the microbenchmarks and a fraction of what a search-shaped program
+sees.
 
 ---
 
 ## Testing
 
+**QA for this project lives in [ZyQuality](https://github.com/zymbol-lang/zyquality).**
+The `.zy` corpus and its golden files are no longer in `tests/`: they were there
+*and* in zyquality, and the two copies had drifted 28 files apart. The scripts
+below keep their names, flags and exit codes and delegate to `zyq`. They exit
+**2** if it is absent — a gate must not read "nothing ran" as "nothing failed".
+
 ```bash
-# Unit tests (all 19 crates)
+git clone https://github.com/zymbol-lang/zyquality.git ../zyquality
+make -C ../zyquality
+```
+
+```bash
+# Unit tests (all 19 crates) — unaffected, these live inside the crates
 cargo test
 
-# Tree-walker vs VM parity check
+# Tree-walker vs VM parity          → zyq consensus --engines zytw,zyvm
 bash tests/scripts/vm_compare.sh
 
-# Golden expected-output tests
+# All three engines                 → zyq consensus
+bash tests/scripts/engine_compare.sh
+bash tests/scripts/engine_compare.sh loops/labels
+
+# Golden expected-output tests      → zyq expect
 bash tests/scripts/expected_compare.sh
 
-# Formatter property tests (reparse, idempotence, semantics, comments)
+# Semantic diagnostics E001–E013    → zyq expect --via check
+bash tests/scripts/semantic_compare.sh
+
+# Formatter properties — stays here: only this engine has a formatter.
+# Reads the shared corpus plus this repository's examples/.
 bash tests/scripts/fmt_property.sh --baseline tests/scripts/fmt_property_baseline.txt
 ```
 
-Current status (v0.0.8): **936 tests passing** via `cargo test` (0 failed).  
-VM parity: **544/544 PASS**, 0 skipped. (`tests/gaps/gap_key_input_type_check.zy` carries
-`@vm-skip` by design — it is a `zymbol check` test that never executes — and is not
-counted.)  
-Formatter property suite: **600 PASS / 0 FAIL** over 643 files, no regressions against
-the baseline.  
-Golden files: **523/525 PASS** via `expected_compare.sh`. The two failures are stale
-`.expected` fixtures, not interpreter regressions: both were hand-written with `warning:`
-and blank lines that the script's `strip_warnings` filter removes from actual output, so
-they compare unequal against output that is otherwise byte-identical.
+Or ask the whole question at once, from the zyquality checkout:
+
+```bash
+./zyq suite     # selftest + audit + reject + goldens + consensus, one verdict
+```
+
+Current status (v0.0.9 branch — 0.0.8 is the latest published release).
+**Re-measured 2026-09-07**, every figure below on the same tree, with `./zyq suite`
+reporting **all gates pass**. Re-derive a count in a fresh clone before quoting it in
+release notes — that is the rule that came out of the 544/536 correction:
+
+- **1026 `#[test]` functions** across the 19 crates via `cargo test` — 0 failed, 4 ignored.
+- Corpus: **666 `.zy`**, 664 with a golden, 6 excused for every engine by a written reason
+  in `corpus.toml`. `zyq audit` reports no hygiene problems.
+- Tree-walker vs VM: **660 agree, 0 diverge**.
+- All three engines: **660 agree, 0 diverge**. Against the browser engine alone,
+  **636 agree, 0 diverge** — the 30 in the difference are excused for `zyjs` in
+  `corpus.toml` (`std/db` is ODBC, `<\ cmd \>` entropy, TUI needs a real TTY).
+- Goldens: **635 of 639 match via `run`, 0 stale**, 4 unchecked; **25 of 25 via `check`**.
+- `zyq reject`: **41 forms refused in every engine**, 0 accepted anywhere.
+- Formatter properties: **710 PASS / 0 FAIL** over 764 files, 55 skipped — P1–P4 all zero.
+- Benchmarks: **16/16 within tolerance** of the recorded baseline, no regressions.
+- LSP against `zymbol check`: 666 files, 16 disagreements, **0 outside the baseline**.
+
+`ZYMBOL_BIN=/usr/bin/zymbol` still points the suite at an installed package
+rather than the build tree. `VM_COMPARE_EXCLUDE` is gone — exclusions are
+declared in `../zyquality/corpus.toml` and selected by tag:
+
+```bash
+bash tests/scripts/vm_compare.sh --without STD_DB
+```
+
+> **The parity number counts only versioned files.** During v0.0.8 this README said
+> 544/544 while the release notes said 536/536, and both were "measured": the larger
+> figure came from a working tree holding test files that `.gitignore` kept out of the
+> repository, so a clean clone — and the `.deb` gate built from one — saw a different
+> suite. The corpus now lives in `../zyquality/corpus/`, so re-derive it there, in a
+> fresh clone, before quoting it in release notes — and disable git's path quoting when
+> you do:
+>
+> ```bash
+> cd ../zyquality
+> comm -3 <(find corpus -name '*.zy' | sort) \
+>         <(git -c core.quotePath=false ls-files 'corpus/**/*.zy' 'corpus/*.zy' | sort)
+> ```
+>
+> Without `core.quotePath=false`, git escapes the non-ASCII names in `corpus/i18n/`
+> (`中文_应用.zy`, `한국_앱.zy`, `עִברִית.zy`, …) as octal, and the comparison reports eight
+> phantom differences on both sides while the counts match — a mismatch in the check, not
+> in the repository.
+>
+> Moving the corpus removed the *other* half of this problem: there is now one copy, so
+> "which corpus was measured" has one answer.
 
 ---
 
-## Real-World Validation Projects
+## Language-Driven Validation
 
-Each release milestone is stress-tested by building a non-trivial program entirely in Zymbol.
-Bugs discovered during construction feed back directly into the language.
+Each release is validated by building a non-trivial application entirely in Zymbol, in a domain
+the language has not been asked to serve before. The application is the test and **the language
+is the unit under test**: it is written *as if the language already supported it*, and every
+place it cannot say what it means — or says it and returns a silently wrong answer — is a
+finding against the interpreter, not a defect in the program. Closing one means changing the
+language: an operator derived under the [SYMBOLS.md](./SYMBOLS.md) rules, a semantic fix, a
+TW/VM divergence, or a `std/` module.
 
-The projects below also serve as cross-language proof: each is written in a different
-natural language — English, Mandarin Chinese, Spanish, Klingon pIqaD, and Japanese —
-demonstrating that Zymbol's keyword-free design is genuinely language-neutral: no flags,
-no special modes, no translation layer at the syntax level.
+This is validation, not verification, and the difference is the whole point. `cargo test`, the
+parity runs and the golden files verify — they take a program that exists and check that the
+implementation handles it correctly. None of them can report that the language cannot express a
+Go board, because a missing capability produces no failing test; only writing the board does.
+The cost is inverted from ordinary TDD: the test is expensive to build and the *discovery*
+cannot be rerun, so a project earns its keep as a discovery mechanism first. Every finding is
+distilled into a minimal `.zy` case, a golden and a unit test, and it is that cheap layer that
+names what broke when something does.
+
+The application is not retired afterwards. Seven of the eight are registered in
+`zyquality/project/apps.toml` and run as a gate (`gate = true`, ~40 goldens through both
+engines); `ZyFmtCheck` runs over the LDV applications **by default**, because a formatter's
+damage shows up in hand-aligned tables, five writing systems and modules importing each other,
+and not in a corpus of short files — which is how it found five formatter defects the token
+gate could not see. Carrying an application across a breaking language change is itself a
+validation act, and two findings so far were born inside a migration rather than inside a
+cycle. `LDV.md` § 1 and decalogue point 12 state both halves.
+
+Each project keeps a **gap log**: every friction, bug, missing capability and idea, with an ID,
+a reproduction and a status. The log closes against the release — 囲碁's eleven findings were
+all fixed in v0.0.8, each with its own regression test. चतुरङ्गम्'s five were all resolved on
+2026-08-13, against the same v0.0.9 — fixed, documented or warned, each with the decision
+recorded at the foot of its entry. ZyBank's thirty-three closed against that same release, which
+is what an LDV log looks like once the cycle completes: closing one is a language change or a
+reasoned rejection, and neither is the application author's call. The method, its decalogue, and
+the index of the eight logs are in **[LDV.md](./LDV.md)**.
+
+The projects carry a second load at the same time. They are written across six natural
+languages — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese, Sanskrit — which is what
+turns "a wordless grammar means language-neutral" from a claim into a result: no flags, no special
+modes, no translation layer at the syntax level. Sanskrit adds the case the earlier six could
+not make: Devanagari is the first script where a single identifier needs combining marks to be
+spelled at all, so `मन्त्री` and `अश्वः` are not "Unicode support" in the sense CJK was — they
+are a grapheme cluster question that reaches the lexer, the analyzer and the display layer at
+once.
 
 ### Summary
 
-| Project | Version | Code language | Features validated |
-|---------|---------|---------------|--------------------|
+| Project | Version | Code language | What it put under test |
+|---------|---------|---------------|------------------------|
 | [ZethyCLI](https://github.com/zymbol-lang/zy-ZethyCLI) | **v0.0.3** | English | Modules, `<\cmd\>` shell exec, HTTP via Ollama, multi-turn state, string building |
-| [ZyAudit](https://github.com/zymbol-lang/zy-ZyAudit) | **v0.0.4** | 中文 (Mandarin) | CJK identifiers as first-class citizens, named tuples, HOF pipeline, `$~~` replace |
+| [ZyAudit](https://github.com/zymbol-lang/zy-ZyAudit) | **v0.0.4** | 中文 (Mandarin) | CJK identifiers as first-class citizens, dictionaries, HOF pipeline, `$~~` replace |
 | [Serpiente](https://github.com/zymbol-lang/zy-Serpiente) | **v0.0.5** | Español | TUI primitives, register VM, hot-definition `°`, tuple equality, labeled loops |
 | [Hov veS](https://github.com/zymbol-lang/zyKlingonGalaxy) | **v0.0.5** | pIqaD (Klingon) | Multi-module orchestration, Galaxian formation AI, delta rendering, dual projectiles, 3-language i18n |
 | [Zofía](https://github.com/zymbol-lang/zy-Zofia) | **v0.0.6** | Español | Scientific computing, transformer AI from scratch, `^` float exponents, global `:=` scope fix, `#.N\|x\|` formatting |
 | [囲碁 (Igo)](https://github.com/zymbol-lang/zy-GO) | **v0.0.8** | 日本語 (Japanese) | Recursive flood fill at depth, state threading across modules, double-width glyph grid, application-level i18n in 5 languages, `std/term` |
+| [चतुरङ्गम् (Chaturanga)](https://github.com/zymbol-lang/zyChaturanga) | **v0.0.9** | संस्कृतम् (Sanskrit) | Devanagari identifiers with conjuncts and visarga, alpha-beta search over make/unmake, mixed-script module names, numeral script as an i18n axis |
+| [ZyBank](https://github.com/zymbol-lang/ZyBank) | **v0.0.9** | Español | `std/db` in an application, money as integers with a per-currency exponent, dictionaries, configuration precedence, functions across module boundaries, keyboard input and typed fields in raw mode |
 
 ---
 
@@ -586,9 +742,9 @@ history = []
 @:chat {
     << prompt
     ? prompt == "quit" { @:chat! }
-    history = history$+ (role: "user", content: prompt)
+    history = history$+ #(role: "user", content: prompt)
     response = ai::complete(MODEL, history)
-    history  = history$+ (role: "assistant", content: response)
+    history  = history$+ #(role: "assistant", content: response)
     >> response ¶
 }
 ```
@@ -599,7 +755,7 @@ history = []
 
 Static code auditing tool. Written entirely in Mandarin identifiers — validates that
 CJK characters work as first-class symbols in every language construct: functions,
-named tuples, HOF arguments, and string operators.
+dictionaries, HOF arguments, and string operators.
 
 ```zymbol
 // ZyAudit — 代码审计工具
@@ -609,7 +765,7 @@ named tuples, HOF arguments, and string operators.
     内容  = <\ "cat {源码路径}" \>
     符号  = 词法::分析(内容)
     问题  = 符号$| (项 -> 项.类型 == "警告")
-    <~ (路径: 源码路径, 问题数: 问题$#, 列表: 问题)
+    <~ #(路径: 源码路径, 问题数: 问题$#, 列表: 问题)
 }
 
 @ 文件:目标列表 {
@@ -827,7 +983,7 @@ Building it drove a substantial part of v0.0.8. Findings that became interpreter
 _探索(局面, 路, 点, 色, 訪問<~, 結果<~) {
     ? 訪問[点] == 1 { <~ 0 }
     ? 局面[点] <> 色 { <~ 0 }
-    訪問[点] = 1
+    訪問[点]$~ 1                 // the edit form: result discarded → modifies in place
     結果 = 結果 $+ 点
     @ 隣点 : 隣(路, 点) { _探索(局面, 路, 隣点, 色, 訪問, 結果) }
     <~ 0
@@ -842,6 +998,245 @@ measures and for two documented misreadings of small samples.
 
 ---
 
+### चतुरङ्गम् (Chaturanga) — v0.0.9 · संस्कृतम् (Sanskrit)
+
+Chaturanga — the sixth-century Indian ancestor of chess — for the terminal, with the
+historical rules, an alpha-beta opponent, and an interface in five languages. Written
+entirely in Sanskrit: the game's own name is the compound **चतुर्-अङ्ग**, *four limbs*, and
+the pieces are those four divisions of an army (पत्तिः foot, अश्वः horse, रथः chariot,
+गजः elephant), so the vocabulary in the source is the vocabulary the game was first
+described with.
+
+It pushes on a different axis from 囲碁. Where the go engine proved that a **large** state
+could be threaded through modules, this one proves that state can be **searched**: go offers
+three hundred moves a position and search is hopeless, chaturanga offers about twenty and
+alpha-beta is the right instrument. The board is never copied — every move is played and
+taken back on one array — so `कृति`/`प्रत्यावर्तनम्` being exact inverses across thousands
+of nodes is a language-level property the suite asserts directly.
+
+Three capabilities were under test for the first time:
+
+- **Devanagari identifiers.** Not "Unicode support" in the sense CJK already proved: `मन्त्री`
+  and `अश्वः` need combining marks — virama, matras, visarga — to be spelled at all. They
+  work unchanged in the lexer, the VM, `zymbol check` and the LSP, and a module name mixing
+  two scripts (`# .भाषा_فارسی`, a Persian locale inside a Devanagari tree) checks clean.
+- **Grapheme cluster ≠ display column, in a script where both vary.** `रा` is two graphemes
+  and two columns, `र` is one of each, `कृ` is two graphemes and *one* column. `std/term`
+  answers all three correctly, which is what lets one padding function hold a board where
+  emoji, chess symbols and Devanagari letters share a grid.
+- **The numeral mode as an i18n axis.** `#d0d9#` turns out to be process-global, not
+  per-file, so a locale dispatcher can switch the digit script along with the language. The
+  same line of drawing code yields `e४`, `e۴` and `e4`, and nothing below it knows which.
+  This is a third i18n mechanism beyond the two in [I18N.md](./I18N.md), now written up in
+  [USERAPPI18N.md](./USERAPPI18N.md) §14.
+
+Its log held five entries, **all closed against v0.0.9**:
+
+- **`@ <expr>` picked the loop form differently in each engine.** Logged as the `Bool` case,
+  it turned out to be three: the VM decided from the *syntactic shape* of the specifier
+  while the tree-walker, zyml and the JavaScript engine decided from the *value*, so
+  `@ <Bool>` aborted under the VM and `@ f()` / `@ arr$#` looped forever there. A fourth,
+  where the tree-walker was the odd one out: a negative `Int` count spun forever instead of
+  running zero times. Fixed by fixing the rule — **an `Int` is a count, anything else is a
+  condition** — with the VM asking at runtime (`IsInt` + `compile_adaptive_loop`, one body
+  emitted for both paths) and the tree-walker dropping its `n > 0` guard.
+  A second pass closed the other half: the *condition* path still read the specifier
+  through truthiness, which no two engines agreed on — `@ []` ran zero times in the
+  tree-walker, forever in the VM and raised in zyml. **A specifier is a count or a
+  condition; anything else is refused at run time**, with one message across every
+  engine. `zyquality/corpus/loops/13_specifier_forms.zy` holds them to the forms that
+  run and `zyquality/reject/loops/` to the ones that must not; there was no corpus file
+  writing any of these forms before.
+- **A range infers its direction, so `@ i:2..n` counts *down* when `n < 2`** instead of not
+  iterating. The semantics were left alone — making the descending range empty would
+  silence loops that currently run, and a bug that stops warning is worse than one that
+  crashes. `zymbol check` now warns when a range's endpoints are not both integer literals,
+  and stays quiet when an enclosing `?` already guards the bound.
+- **GUIDE.md said the numeral mode persists "in the same file".** It is global to the
+  process — which is the useful behaviour, and the one the game depends on. The guide says
+  so now, and the technique is written up as a third i18n mechanism in
+  [USERAPPI18N.md](./USERAPPI18N.md) §14, traps included.
+- **The VM is 14–17× the tree-walker on this workload**, not the ~4× that had been quoted
+  for years. A search is recursion with output parameters and array indexing in the
+  innermost loop, which is where the tree-walker pays per frame. Every performance figure
+  in this repository was re-measured; see [Performance](#performance). It read 42–46× when
+  first measured: the tree-walker cloned a collection to read one element of it (zy-GO's
+  HLZ-012), and closing that made the slower engine 2.7× faster on this same workload.
+
+```zymbol
+// मूल/मतिः.zy — negamax with alpha-beta, scored from the mover's side.
+// The board goes down as an output parameter and comes back untouched:
+// every move is played and taken back, never copied.
+गवेषणम्(स्थितिः<~, वर्णः, गभीरता, अल्फा, बीटा, सारणी, पदानि<~) {
+    पदानि = पदानि + १
+    ? गभीरता <= ० { <~ आ::मूल्याङ्कनम्(स्थितिः, वर्णः, सारणी) }
+
+    चालाः = नि::वैधचालाः(स्थितिः, वर्णः)
+    // मातः and गतिरोधः are both losses — this game keeps the old
+    // shatranj rule, and it touches the search in exactly this line
+    ? (चालाः$#) == ० { <~ ० - १०००० - गभीरता }
+
+    रिपुवर्णः = अ::रिपुः(वर्णः)
+    श्रेष्ठम् = ० - ९९९९९
+    @ चालः : क्रमणम्(स्थितिः, चालाः) {
+        अङ्गम् = स्थितिः[अ::आदिपदम्(चालः)]
+        गृहीतम् = ०
+        नि::कृति(स्थितिः, चालः, गृहीतम्)
+        मूल्यम् = ० - गवेषणम्(स्थितिः, रिपुवर्णः, गभीरता - १,
+                              ० - बीटा, ० - अल्फा, सारणी, पदानि)
+        नि::प्रत्यावर्तनम्(स्थितिः, चालः, अङ्गम्, गृहीतम्)
+
+        ? मूल्यम् > श्रेष्ठम् { श्रेष्ठम् = मूल्यम् }
+        ? मूल्यम् > अल्फा { अल्फा = मूल्यम् }
+        ? अल्फा >= बीटा { <~ श्रेष्ठम् }
+    }
+    <~ श्रेष्ठम्
+}
+```
+
+```zymbol
+// भाषा/प्रेषकः.zy — choosing a language chooses a digit script.
+// One directive, and every number the program will print follows it.
+निर्धारणम्(संकेतः) {
+    वर्तमानाभाषा = संकेतः
+    ?? संकेतः {
+        "fa" => { #۰۹# }      // Extended Arabic-Indic, U+06F0 — not U+0660
+        "en" => { #09# }
+        "es" => { #09# }
+        _    => { #०९# }      // Devanagari, U+0966
+    }
+    <~ ०
+}
+```
+
+Six suites produce **byte-identical output under the tree-walker and the register VM**,
+which is the property that makes the node counts meaningful: the search is deterministic, so
+both engines must visit the same 16 / 272 / 1 646 nodes at levels 1 / 2 / 3 — a divergence
+there would not show in the chosen move, because the choice is random among the survivors.
+
+---
+
+### ZyBank — v0.0.9 · Español
+
+A personal ledger for the terminal: income and expenses over SQLite, accounts in several
+currencies, transfers, and an interface in four languages. It is the first project chosen for
+**domain distance rather than a new script** — the seven before it were a CLI over an HTTP
+service, two TUI games, scientific computing, a code auditor and two board games, and not one
+of them had persistence, money arithmetic, or a dictionary.
+
+The requirement that shaped everything came from the domain and not from the language: **an
+amount is one integer in the minor unit of its currency, and the number of decimals is
+configuration, not a constant.** The Chilean peso has no minor unit in circulation, the dollar
+and the euro have two, the Kuwaiti dinar has three. The same stored `1050` is `$1.050`,
+`$10.50` or `1.050 د.ك`, and nothing about the integer changes.
+
+```zymbol
+// A currency is a dictionary; `exponente` is what says what the integer MEANS
+CLP: #(código: "CLP", exponente: 0, símbolo: "$",   posición: "antes",   miles: ".", decimal: ",", espacio: #0, nombre: "Peso chileno"),
+KWD: #(código: "KWD", exponente: 3, símbolo: "د.ك", posición: "después", miles: ",", decimal: ".", espacio: #1, nombre: "Dinar kuwaití")
+
+// The padding zero is obtained by converting 0 HERE, not written as a literal:
+// under `#०९#` zero is «०», and a fixed "0" would mix two scripts inside one
+// amount — `$१२,३४५.0७` instead of `$१२,३४५.०७`
+cero = "" 0
+frac = rellenar(frac_txt, exp, cero)
+```
+
+Four capabilities were under test for the first time:
+
+- **`std/db` in an application.** Five corpus files touched it and no program did. Transfers
+  are the reason: two entries that live or die together, so `tx` rather than two `exec`s —
+  half a transfer is not a state the database may hold. Across currencies the destination
+  amount is required rather than derived, because inventing a rate would be falsifying an
+  entry.
+- **The dictionary**, which arrived in v0.0.9 and that no application had used. The locale
+  catalogues, the currency table, the preferences and the CLI verbs are all dictionaries read
+  by **computed** key — the operation that separates a dictionary from a record.
+- **Data that outlives the language it was entered in.** What is stored are keys
+  (`gasto.alimentación`), never translated names, so a ledger created in Japanese reads in
+  Spanish. The configuration file may itself be written in the user's language —
+  `{"言語": "hi", "通貨": "KWD"}` configures it — through `json::decode_map`, and the CLI verbs
+  are accepted in all four languages at once (`zybank 口座` = `zybank cuentas`).
+- **A fourth i18n axis.** [USERAPPI18N.md](./USERAPPI18N.md) documents three mechanisms;
+  money needs one more, because the *format* of a number is independent of the language of the
+  text, of the digit script and of the currency. Hindi with Kuwaiti dinars gives `-२५.९९० د.ك`,
+  and that is correct: the language someone reads does not say which currency their money is in.
+
+Its log holds **thirty-three** findings — 12 BUG, 13 GAP, 6 ERROR, 2 IDEA — and it is the first
+written against the canonical form of [LDV.md](./LDV.md) § 5.2 entire, `HALLAZGOS.md` included.
+All thirty-three are closed against v0.0.9: 22 fixed, 5 withdrawn, and the rest resolved with the
+decision recorded at the foot of the entry. **Three were engine divergences**, in a language whose
+gate reports zero over 666 corpus files.
+Two of them are symmetric:
+
+| what is passed to another module | zytw | zyvm | zyjs |
+|---|---|---|---|
+| a lambda that uses a module alias | **error** | 6 | 6 |
+| a function defined **in a module** | 6 | **error** | 6 |
+| a function defined at file scope | 6 | 6 | 6 |
+
+Each Rust engine breaks a different one, and the only form that works everywhere is the one
+unavailable inside a module — which is where an application's code lives. So **there is
+currently no way to write a higher-order function across modules that runs on both Rust
+engines.** Neither is reachable without composing three features, and the VM half surfaced
+only when the package was first run, since a `.zyp` defaults to `--vm`. The third divergence
+came later, from the TUI, and is described below.
+
+The rest of the log is mostly about things that fail *quietly*: `d[k]$~ "" v` assigns `""` and
+drops `v` with no diagnostic while `s$+ "" v` concatenates; composing a message with a soft
+`##DB` error aborts the process that was handling it; a `NULL` column answers `#0` to `$!`, so
+the natural check never fires; and `zymbol check` accepts a file-scope variable read from
+inside a function, which is exactly the write that fails at run time in the branch a suite
+reaches last.
+
+A fifth capability arrived with the full-screen program, which is where the ledger is actually
+operated — accounts opened, movements recorded, corrected and deleted, balances credited and
+debited. **Nobody had written an input field in Zymbol before**, and building one cost four more
+findings: `<<|` delivers Ctrl+letter *as* the letter and collapses Tab with Backspace
+(BUG-ZYB-006); arrow keys cannot be used without losing ESC (GAP-ZYB-011); and a write to
+module state inside `>>|` is not seen
+by another function of the same module — the tree-walker keeps the old value, the VM does not,
+and both readings coexist (BUG-ZYB-008, the first finding here that resisted reduction: six
+minimal cases are recorded as *not* reproducing it).
+
+The field validates per keystroke rather than on confirm, which is the domain showing through
+again: it does not accept a letter, and the decimal point is accepted because the *currency* has
+decimals — in CLP the point key does nothing, in KWD three digits follow it.
+
+And it produced the finding that best states why an application reaches what a corpus cannot —
+and then, on review, the one that best states how an application gets a finding *wrong*. What
+the field exposed is real: a Hindi InScript layout sends U+0966 and a Bengali keyboard U+09E6,
+so **a program that prints «$१२,३४५.०७» to someone and then refuses the «१» they type back has
+localised its output and left its input in ASCII.** No test case was going to find that, because
+a test case has no keyboard.
+
+What was written up alongside it was not. Two findings claimed the language cannot go from a
+character to a number or back (GAP-ZYB-010, GAP-ZYB-012), and both rested on one incomplete
+experiment: `###c` was tried — the *rounding* cast, which refuses a Char for good reason — and
+`#|c|`, which converts to text. `##!` was not, and `##!` is the operator that answers: `##!'७'`
+is 2413, documented in REFERENCE.md and shipped in v0.0.8 alongside `std/term`, which the same
+application was already using. Characters can also be written by code point in four bases —
+`0d27`, `0x1b`, `0o33`, `0b11011` are all ESC, and they are *character* literals (`0d65 == 'A'`
+is `#1`, `0d65 == 65` is `#0`).
+
+The cost of not knowing that was thirteen hand-copied glyph tables and two shell processes per
+keystroke, to work around something the language already did. The correction is in ZyBank's
+HALLAZGOS.md rather than deleted from it, because the method error generalises: an application
+finds what a corpus cannot, **and mistakes absence for a gap in a way a corpus cannot**, by
+testing the wrong operator and generalising from it. A finding against the language is worth no
+more than the probe behind it, and the probe has to exhaust the operators that could answer.
+
+What survives as a gap is much smaller: there is no built-in digit predicate, so an application
+still declares each script's zero — thirteen integers, nine of them the progression `2406 + 128k`
+because an Indic block is 128 code points wide, and a digit's value is `##!t` minus that zero.
+
+Six suites, five judged against goldens and one that drives the TUI through a real pty. That
+one judges the **balances** rather than the bytes and reports BUG-ZYB-008 instead of gating on
+it — the same division `zyquality` makes between goldens and consensus. The browser engine does
+not take part: `std/db` does not exist there, and it has neither a terminal nor a filesystem.
+
+---
+
 ## Project Layout
 
 ```
@@ -850,7 +1245,7 @@ interpreter/
 ├── zymbol-lang.ebnf     # Formal grammar (EBNF, v3.1.0)
 ├── install-zymbol.sh    # Install script
 ├── crates/              # Rust source crates
-├── tests/               # End-to-end test suite (544 vm-compare files; 525 golden .expected pairs)
+├── tests/               # Wrappers over `zyq` and the formatter corpus — the .zy corpus lives in ../zyquality/
 ├── docs/                # Extended documentation
 ├── LICENSE
 ├── LICENSE-AGPL-3.0     # AGPL-3.0 (interpreter source)
@@ -861,14 +1256,17 @@ interpreter/
 
 ## Documentation
 
+- [LLM.md](./LLM.md) — The whole language on one page, written for a model to read in one pass: the rules that break code silently, then every construct in compressed form
 - [GUIDE.md](./GUIDE.md) — Full language guide with verified examples (all constructs)
 - [REFERENCE.md](./REFERENCE.md) — Known limitations, error taxonomy, complete symbol table
+- [COLLECTIONS.md](./COLLECTIONS.md) — The three collections as one piece: the rule of the result, why `=` never writes into a collection, the array and its declared mix, the tuple, the dictionary, and the reasoning behind each rule
 - [IMPLEMENTATION.md](./IMPLEMENTATION.md) — EBNF grammar, coverage table, TW/VM internals
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — Interpreter architecture and performance benchmarks
 - [I18N.md](./I18N.md) — Internationalization: multilingual code via re-export layers, and runtime text via dispatcher modules
 - [USERAPPI18N.md](./USERAPPI18N.md) — Building a multilingual application: measured layout, runtime language switching, per-language entry points, and the completeness gate
 - [MEMORY_MODEL.md](./MEMORY_MODEL.md) — Memory and scoping model: design vs implementation audit (findings MM-1 … MM-11)
-- [SYMBOLS.md](./SYMBOLS.md) — Symbol families, occupied combinations, and the rules a new operator must satisfy
+- [SYMBOLS.md](./SYMBOLS.md) — Semiotic and morphological reference: the grapheme inventory, how marks agglutinate into operators, the declared homographs and opaque signs, and the rules a new operator must satisfy
+- [LDV.md](./LDV.md) — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the eight gap logs
 - [ROADMAP.md](./ROADMAP.md) — What's done, known gaps, and planned work
 - [CHANGELOG.md](./CHANGELOG.md) — Version history
 

@@ -229,7 +229,7 @@ mod tests {
     fn a_field_named_like_an_alias_is_not_a_module_access() {
         assert!(diagnose(concat!(
             "<# std/json => json\n\n",
-            "resp = (json: (user: \"ada\", score: 42))\n",
+            "resp = #(json: #(user: \"ada\", score: 42))\n",
             ">> resp.json.user ¶\n",
             ">> resp.json.score ¶\n"
         ))

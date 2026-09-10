@@ -251,6 +251,24 @@ fn scan_match(mx: &zymbol_ast::MatchExpr, m: &mut Mentions) {
     }
 }
 
+/// Walk the expression a precision operator carries, if it has one.
+///
+/// GAP-ZYB-001: the decimal count can be computed, and a name used there is a
+/// use like any other. Missing it lets the last-use analyzer free the variable
+/// before the operator reads it, which surfaced as
+/// "use of 'n' after auto-destruction".
+fn scan_precision(p: &zymbol_ast::Precision, f: &mut dyn FnMut(&Expr)) {
+    if let zymbol_ast::Precision::Dynamic(e) = p {
+        f(e);
+    }
+}
+
+fn scan_precision_op(op: &Option<zymbol_ast::PrecisionOp>, f: &mut dyn FnMut(&Expr)) {
+    if let Some(op) = op {
+        scan_precision(op.precision(), f);
+    }
+}
+
 fn scan_expr(expr: &Expr, m: &mut Mentions) {
     match expr {
         Expr::Literal(lit) => scan_literal(&lit.value, m),
@@ -378,7 +396,10 @@ fn scan_expr(expr: &Expr, m: &mut Mentions) {
         }
         Expr::NumericEval(op) => scan_expr(&op.expr, m),
         Expr::TypeMetadata(op) => scan_expr(&op.expr, m),
-        Expr::Format(op) => scan_expr(&op.expr, m),
+        Expr::Format(op) => {
+            scan_expr(&op.expr, m);
+            scan_precision_op(&op.precision, &mut |e| scan_expr(e, m));
+        }
         Expr::BaseConversion(op) => scan_expr(&op.expr, m),
         Expr::Lambda(lambda) => {
             // Capture-by-value happens where the lambda literal appears: every
@@ -423,8 +444,14 @@ fn scan_expr(expr: &Expr, m: &mut Mentions) {
                 scan_expr(arg, m);
             }
         }
-        Expr::Round(op) => scan_expr(&op.expr, m),
-        Expr::Trunc(op) => scan_expr(&op.expr, m),
+        Expr::Round(op) => {
+            scan_expr(&op.expr, m);
+            scan_precision(&op.precision, &mut |e| scan_expr(e, m));
+        }
+        Expr::Trunc(op) => {
+            scan_expr(&op.expr, m);
+            scan_precision(&op.precision, &mut |e| scan_expr(e, m));
+        }
         Expr::NumericCast(op) => scan_expr(&op.expr, m),
         Expr::ErrorCheck(op) => scan_expr(&op.expr, m),
         Expr::ErrorPropagate(op) => scan_expr(&op.expr, m),
@@ -553,6 +580,32 @@ pub fn region_schedule(
 /// - for module programs (`# name { }`), every module-level binding: module
 ///   variables participate in the state write-back protocol and module
 ///   constants are re-marked at injection.
+/// Every name mentioned anywhere in a block, nested blocks and lambda bodies
+/// included, plus the names inside `{…}` string interpolations.
+///
+/// This is the same walk `auto_free_exclusions` uses, exposed because the
+/// tree-walker needs the opposite question: not "which names may I free" but
+/// "which of the module's bindings does this body actually touch". A module
+/// function frame is given a copy of the module's state on entry, and the
+/// tree-walker's values are not reference-counted, so a module holding a
+/// sixty-key table paid a deep copy of it on every call — including calls to
+/// functions that never name the table (REFERENCE.md L44).
+///
+/// The answer is deliberately an **over-approximation**: a name that appears
+/// anywhere counts, whether or not the mention is reached. Injecting too much
+/// is what the code did before and is always safe; injecting too little would
+/// be an undefined-variable error, so the walk being exhaustive over `Expr`
+/// (no `_` arm) is what makes this usable.
+pub fn mentioned_names(block: &zymbol_ast::Block) -> HashSet<String> {
+    let mut m = Mentions::default();
+    for stmt in &block.statements {
+        scan_stmt(stmt, &mut m);
+    }
+    let mut out: HashSet<String> = m.last.into_keys().collect();
+    out.extend(m.poisoned);
+    out
+}
+
 pub fn auto_free_exclusions(program: &Program) -> HashSet<String> {
     let mut excluded = HashSet::new();
 
@@ -779,7 +832,7 @@ impl<'a> ExtraOccurrences<'a> {
 }
 
 /// Visit every direct sub-expression of `e` (one level).
-fn walk_sub_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+pub(crate) fn walk_sub_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
     // Reuse the exhaustive mention walker structure by scanning into a probe
     // is not possible (it flattens identifiers) — instead enumerate one level
     // via a Mentions-independent traversal built on scan_expr's shape.
@@ -925,7 +978,10 @@ fn walk_sub_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
         }
         Expr::NumericEval(op) => f(&op.expr),
         Expr::TypeMetadata(op) => f(&op.expr),
-        Expr::Format(op) => f(&op.expr),
+        Expr::Format(op) => {
+            f(&op.expr);
+            scan_precision_op(&op.precision, f);
+        }
         Expr::BaseConversion(op) => f(&op.expr),
         Expr::Lambda(lambda) => match &lambda.body {
             zymbol_ast::LambdaBody::Expr(x) => f(x),
@@ -968,8 +1024,14 @@ fn walk_sub_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
                 f(a);
             }
         }
-        Expr::Round(op) => f(&op.expr),
-        Expr::Trunc(op) => f(&op.expr),
+        Expr::Round(op) => {
+            f(&op.expr);
+            scan_precision(&op.precision, f);
+        }
+        Expr::Trunc(op) => {
+            f(&op.expr);
+            scan_precision(&op.precision, f);
+        }
         Expr::NumericCast(op) => f(&op.expr),
         Expr::ErrorCheck(op) => f(&op.expr),
         Expr::ErrorPropagate(op) => f(&op.expr),
@@ -1011,7 +1073,7 @@ fn walk_sub_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
 
 /// Visit every top-level expression of a statement (recursing through nested
 /// blocks but NOT into function declaration bodies).
-fn walk_stmt_exprs(stmt: &Statement, f: &mut dyn FnMut(&Expr)) {
+pub(crate) fn walk_stmt_exprs(stmt: &Statement, f: &mut dyn FnMut(&Expr)) {
     match stmt {
         Statement::Output(o) => {
             for e in &o.exprs {

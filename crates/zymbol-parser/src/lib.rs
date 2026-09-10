@@ -4,13 +4,16 @@
 //! Phase 1: Parses assignments and identifiers
 
 use zymbol_ast::{
+    Assignment, AssignSugar,
     BasePrefix, Block, CastKind, CollectionLengthExpr, Expr, ExprStatement, FormatKind,
     FunctionCallExpr, IdentifierExpr, IndexExpr, LiteralExpr,
     NumericCastExpr, Program, RangeExpr, Statement, TypeMetadataExpr,
 };
+use zymbol_ast::{CollectionUpdateExpr, DeepIndexExpr, NavPath, NavStep};
 use zymbol_common::Literal;
 use zymbol_error::Diagnostic;
 use zymbol_lexer::{StringPart, Token, TokenKind};
+use zymbol_span::Span;
 
 mod literals;
 mod io;
@@ -94,7 +97,8 @@ impl Parser {
                     }
                     Err(diag) => {
                         self.diagnostics.push(diag);
-                        self.advance();
+                        // Past the whole statement — see `skip_statement`.
+                        self.skip_statement();
                     }
                 }
             }
@@ -107,8 +111,243 @@ impl Parser {
         }
     }
 
+    /// Consume the rest of the current statement, so a refusal does not become a
+    /// cascade.
+    ///
+    /// The recovery in `parse_block` advances by ONE token after a failed
+    /// statement, which is enough to make progress and not enough to get past
+    /// the statement that failed. So `a[2] = 99` reported the real refusal —
+    /// "indexed assignment does not exist" — and then `unexpected token:
+    /// Integer(99)`, a second error about the leftovers of the first, with a
+    /// `help:` listing every statement keyword. A reader cannot act on that, and
+    /// it buries the message that matters.
+    ///
+    /// Called by a refusal that has already decided the whole statement is
+    /// wrong: there is nothing further to learn from parsing its tail.
+    pub(crate) fn skip_statement(&mut self) {
+        // Always advance at least once: the caller is recovering from a failed
+        // statement, and a skip that can consume nothing turns recovery into a
+        // loop. `}` and `;` end a statement, so stopping ON them is right —
+        // stopping on them without having moved is not.
+        if self.is_at_end() { return; }
+        let mut line = self.peek().span.start.line;
+        self.advance();
+        // A statement that has a BODY is not over at its head, and the body's
+        // braces have to be counted or the skip stops inside it (GLB-007).
+        // `? m[1][1] == 1 { >> "si" ¶ }` fails in the CONDITION, so no
+        // `parse_block` is running to own the `{ … }`; the old skip walked to
+        // the `}`, stopped there, and the next round read a lone brace as a
+        // statement — `unexpected token: RBrace`, a second error about the
+        // first one's leftovers. Which is this function's whole purpose.
+        //
+        // `depth` is what tells the two braces apart: one this statement opened
+        // (skip it, body and all) from one that closes the block we are inside
+        // (leave it — it belongs to `parse_block`, which stops on it).
+        let mut depth = 0usize;
+        while !self.is_at_end() {
+            match self.peek().kind {
+                TokenKind::LBrace => depth += 1,
+                TokenKind::RBrace => {
+                    if depth == 0 { break; }
+                    depth -= 1;
+                    // Consume the brace that closed the body, and carry the
+                    // line rule on from ITS line. Falling through to the check
+                    // below would compare the brace's line with the statement's
+                    // and break here, leaving behind the very brace this arm
+                    // exists to swallow — which is what the multi-line `?` did.
+                    // Resuming from here also keeps whatever continues the
+                    // statement (`?? { … }` on the same line) inside the skip.
+                    line = self.peek().span.start.line;
+                    self.advance();
+                    continue;
+                }
+                TokenKind::Semicolon if depth == 0 => break,
+                _ => {}
+            }
+            // The line rule holds outside a body and not inside one: a block
+            // spans lines by definition, and stopping at its first newline
+            // would leave the same lone brace behind, further down.
+            if depth == 0 && self.peek().span.start.line != line {
+                break;
+            }
+            self.advance();
+        }
+    }
+
+    /// Consume a `#>` and the braced list that follows it, matching braces.
+    ///
+    /// Used by the refusal above: the block is one construct and refusing it is
+    /// one diagnostic, so its body must not be read as statements.
+    fn skip_export_block(&mut self) {
+        if self.is_at_end() { return; }
+        self.advance(); // the `#>`
+        if !matches!(self.peek().kind, TokenKind::LBrace) { return; }
+        let mut depth = 0usize;
+        while !self.is_at_end() {
+            match self.peek().kind {
+                TokenKind::LBrace => depth += 1,
+                TokenKind::RBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.advance();
+                        return;
+                    }
+                }
+                _ => {}
+            }
+            self.advance();
+        }
+    }
+
+    /// True when `name[…]` at statement position is an indexed *assignment*
+    /// (`arr[i] = v`, `arr[i] += v`) rather than an edit statement
+    /// (`arr[i]$~ v`) or anything else that merely starts with a bracket.
+    ///
+    /// Saves and restores the position, like the other `is_*` probes.
+    fn is_indexed_assignment(&mut self) -> bool {
+        let saved = self.current;
+        self.advance(); // name
+        // Every consecutive bracket group, not just the first: `m[1][2] = 77`
+        // has to reach the same refusal as `m[2] = 77`, or it falls through to
+        // an expression statement and the reader gets "unexpected token: Assign"
+        // — a fact about the parser, not about the language.
+        while matches!(self.peek().kind, TokenKind::LBracket) {
+            self.advance(); // [
+            let mut depth = 1;
+            while depth > 0 && !self.is_at_end() {
+                match self.peek().kind {
+                    TokenKind::LBracket => depth += 1,
+                    TokenKind::RBracket => depth -= 1,
+                    _ => {}
+                }
+                self.advance();
+            }
+        }
+        let answer = matches!(
+            self.peek().kind,
+            TokenKind::Assign
+                | TokenKind::PlusAssign
+                | TokenKind::MinusAssign
+                | TokenKind::StarAssign
+                | TokenKind::SlashAssign
+                | TokenKind::PercentAssign
+                | TokenKind::CaretAssign
+        );
+        self.current = saved;
+        answer
+    }
+
+    /// Refuse `arr[i][j]` — chained brackets, at any depth and in any position.
+    ///
+    /// Nesting is navigated with `>`: `arr[i>j]`. The *write* form was withdrawn
+    /// first (`m[i][j] = v` in `parse_variable`, `d["x"]["y"]$~ v` in
+    /// `reject/collections/11`), on the argument that reaching inside a
+    /// structure and naming a variable are two operations and must not share a
+    /// notation. The read was left parsing and documented as deprecated, which
+    /// gave the language two ways to spell the same access with nothing in any
+    /// engine to tell them apart — a deprecation that lived only in prose.
+    ///
+    /// Called with the base expression *before* the next `[` is consumed, so the
+    /// refusal is this diagnostic and not a cascade of leftovers — and before
+    /// the group is read, so it lands whatever follows it. A chained access is
+    /// refused for READING and for every action alike: `arr[1][1]`,
+    /// `arr[1][1]$~ 0`, `x = arr[1][1]$~ 0` and `arr[1][1]$+ 5` are one rule,
+    /// not four. Letting `$~` through so the edit could reach its own refusal
+    /// left exactly two ways past it — the two forms above that have somewhere
+    /// to put the result, so they never reached that refusal at all and ran.
+    ///
+    /// `Index` and `DeepIndex` only: those are the two element accesses, and
+    /// `arr[[i>j]]` / `arr[p ; q]` build a new collection rather than reach into
+    /// one.
+    pub(crate) fn reject_chained_index(&mut self, base: &Expr) -> Result<(), Diagnostic> {
+        if !matches!(base, Expr::Index(_) | Expr::DeepIndex(_)) {
+            return Ok(());
+        }
+        let span = base.span().to(&self.bracket_group_end_span());
+        let name = Self::index_root_name(base);
+        // GLB-007: the refusal does NOT skip the statement, though every other
+        // one here used to. Both recovery loops — `parse_block`'s and the
+        // top-level one — already call `skip_statement` in their `Err` arm, so
+        // skipping here made it run twice, and the second run's unconditional
+        // `advance()` ate the `}` closing the block. `@ i:1..2 { >> m[i][1] ¶ }`
+        // then reported `expected '}' to close block` about a brace that was
+        // there: the cascade `skip_statement` exists to prevent, one token
+        // further along.
+        Err(Diagnostic::error(format!(
+            "chained index does not exist: '{}[…][…]' is not a form of Zymbol",
+            name
+        ))
+        .with_span(span)
+        .with_help(format!(
+            "nesting is navigated with '>', so this is '{}[i>j]' — one bracket group addresses one element, however deep it lies",
+            name
+        )))
+    }
+
+    /// Span of the `]` closing the bracket group that starts at `peek()`.
+    ///
+    /// Looks ahead without consuming: the caller is building a diagnostic and
+    /// still owns the token stream. Falls back to the `[` itself at end of
+    /// input, so an unterminated group cannot panic here — it is the lexer's
+    /// and the caller's error to report, not this helper's.
+    fn bracket_group_end_span(&self) -> Span {
+        let mut depth = 0usize;
+        let mut i = 0usize;
+        while let Some(tok) = self.peek_ahead(i) {
+            match tok.kind {
+                TokenKind::LBracket => depth += 1,
+                TokenKind::RBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return tok.span;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        self.peek().span
+    }
+
+    /// The name the chained access hangs off, for the message and its `help`.
+    ///
+    /// Walks down the accesses to the identifier at the root. Anything else at
+    /// the root — a literal, a call — has no name to quote, and the rule is
+    /// about the notation rather than the receiver, so it is written as the
+    /// notation itself.
+    fn index_root_name(expr: &Expr) -> String {
+        match expr {
+            Expr::Identifier(id) => id.name.clone(),
+            Expr::Index(ix) => Self::index_root_name(&ix.array),
+            Expr::DeepIndex(dx) => Self::index_root_name(&dx.array),
+            _ => "…".to_string(),
+        }
+    }
+
     /// Parse a single statement
     fn parse_statement(&mut self) -> Result<Statement, Diagnostic> {
+        // Same shape as the `ModuleImport` arm below, and the same reason. An
+        // export block is only ever read inside `# name { … }`, so one that
+        // arrives here is at file level; the generic arm said `unexpected token:
+        // ExportBlock` with `help: expected statement`, which names the token
+        // and not the rule — while the browser engine ran the file
+        // (`reject/modules/export_block_at_file_level_m.zy`). It is the other
+        // half of L48: a module that omitted `#>` was told its *function* was
+        // not exported, so a reader added the block where they could, and this
+        // is where.
+        //
+        // Handled before the match rather than inside it because the whole block
+        // has to be consumed: leaving its body behind reported a second error
+        // about the closing `}`, which is the cascade `skip_statement` exists to
+        // prevent, and `skip_statement` stops at the end of the LINE.
+        if matches!(self.peek().kind, TokenKind::ExportBlock) {
+            let span = self.peek().span;
+            self.skip_export_block();
+            return Err(Diagnostic::error("an export block belongs inside a module block")
+                .with_span(span)
+                .with_help("move this `#>` inside `# name { … }` — a module declares what it exports, and only a module can"));
+        }
+
         let token = self.peek();
 
         match &token.kind {
@@ -203,15 +442,69 @@ impl Parser {
                             | TokenKind::CaretAssign
                             | TokenKind::PlusPlus
                             | TokenKind::MinusMinus
-                            | TokenKind::LBracket
                             | TokenKind::DollarExclaimExclaim
                         ))
-                        .unwrap_or(false);
+                        .unwrap_or(false)
+                        // `name[` used to route here unconditionally, which made
+                        // the parser demand `=` after the bracket and turned
+                        // `arr[2]$~ 99` into "expected '=' after index
+                        // expression". Look past the bracket instead: only an
+                        // actual indexed *assignment* belongs in
+                        // `parse_assignment`; `arr[2]$~ 99` is an edit statement
+                        // and is parsed as the expression it is (decision 12).
+                        || (matches!(self.peek_ahead(1).map(|t| t.kind.clone()),
+                                     Some(TokenKind::LBracket))
+                            && self.is_indexed_assignment());
                     if is_assignment_op {
                         self.parse_assignment()
                     } else {
                         let expr = self.parse_expr()?;
                         let span = expr.span();
+                        // Decision 12, the rule of the result: a `$` edit whose
+                        // result is the whole statement modifies in place. It
+                        // desugars to `name = <the same expression>`, which is
+                        // observably the same thing because collections assign
+                        // by value and there is no aliasing (DI-04) — and the
+                        // sugar marker keeps the source form for the formatter
+                        // and for the tuple guard.
+                        //
+                        // Before this, a bare `arr$+ 3` parsed, ran, and did
+                        // nothing at all, with no warning (DI-01).
+                        let mk = |name: String, value: Expr, written: Option<Box<Expr>>| {
+                            Ok(Statement::Assignment(Assignment {
+                                name,
+                                value,
+                                span,
+                                hot: false,
+                                pre_hot: false,
+                                sugar: AssignSugar::InPlaceEdit,
+                                written,
+                            }))
+                        };
+                        match classify_edit(&expr) {
+                            EditAnchor::Whole(name) => return mk(name, expr, None),
+                            EditAnchor::Path(name, steps) => {
+                                // The rewrite is what runs; the original is what
+                                // the formatter reprints (FORMATTER_RULES §2.1).
+                                let written = Box::new(expr.clone());
+                                let value = rewrite_edit_at_path(expr, &name, steps, span);
+                                return mk(name, value, Some(written));
+                            }
+                            // Decision 20, finally enforced: an edit with
+                            // nowhere to write is refused. The comment on the
+                            // old `in_place_edit_target` had promised this
+                            // since it was written and nothing did it — the
+                            // statement fell through to `Statement::Expr`, ran,
+                            // and threw the result away in silence.
+                            EditAnchor::Unanchored(help) => {
+                                return Err(Diagnostic::error(
+                                    "this edit has nothing to write into",
+                                )
+                                .with_span(span)
+                                .with_help(help));
+                            }
+                            EditAnchor::NotAnEdit => {}
+                        }
                         Ok(Statement::Expr(ExprStatement::new(expr, span)))
                     }
                 }
@@ -277,6 +570,21 @@ impl Parser {
                         .with_help("use '[a, b] = expr' for array destructuring"))
                 }
             }
+            // `#(name: n) = …` — destructuring a dictionary. The pattern is
+            // written the way the literal is: if `#(` says "this is a
+            // dictionary" when building one, it says the same when taking one
+            // apart, and a reader should not have to remember that the two
+            // sides of `=` spell it differently (GAP-ZYB-003/004).
+            TokenKind::HashLParen => {
+                if self.is_tuple_destructure() {
+                    self.parse_destructure_assign()
+                } else {
+                    let span = self.peek().span;
+                    Err(Diagnostic::error("unexpected '#(' at statement level")
+                        .with_span(span)
+                        .with_help("use '#(name: n) = expr' to destructure a dictionary"))
+                }
+            }
             TokenKind::LParen => {
                 // Could be tuple destructure: (a, b) = expr or (name: n) = expr
                 if self.is_tuple_destructure() {
@@ -296,6 +604,16 @@ impl Parser {
             }
             TokenKind::Eof => Err(Diagnostic::error("unexpected end of file")
                 .with_span(token.span)),
+            // Reached only when an import appears *after* a statement: the loop
+            // in `parse` consumes the leading run of them, and everything left
+            // arrives here. The generic arm below said `unexpected token:
+            // ModuleImport` with `help: expected statement`, which names the
+            // token and not the rule — and the rule was written nowhere else
+            // either, while the browser engine ran the program happily (DM-12).
+            TokenKind::ModuleImport => Err(Diagnostic::error(
+                "imports must come before any statement")
+                .with_span(token.span)
+                .with_help("move this `<#` above the first statement in the file")),
             TokenKind::Error(msg) => Err(Diagnostic::error(msg.clone())
                 .with_span(token.span)),
             _ => Err(Diagnostic::error(format!("unexpected token: {:?}", token.kind))
@@ -319,6 +637,24 @@ impl Parser {
         while !matches!(self.peek().kind, TokenKind::RBrace) && !self.is_at_end() {
             match self.parse_statement() {
                 Ok(stmt) => {
+                    // A function is free in a script or part of a module —
+                    // never of a block (DM-23, decided 2026-08-19).
+                    //
+                    // Both engines already refused it, but only at the CALL, and
+                    // with `undefined function: 'f'` about a function that is
+                    // plainly there — a message that describes the symptom and
+                    // hides the rule. The browser engine ran it, so a program
+                    // written in the playground failed outside it.
+                    if let Statement::FunctionDecl(f) = &stmt {
+                        self.diagnostics.push(
+                            Diagnostic::error(format!(
+                                "a function cannot be declared inside a block: '{}' is free in a script or part of a module, not of a '?', '@' or function body",
+                                f.name
+                            ))
+                            .with_span(f.span)
+                            .with_help("move the declaration to the top level of the script or into a module"),
+                        );
+                    }
                     statements.push(stmt);
                     // Consume optional semicolon after statement
                     if matches!(self.peek().kind, TokenKind::Semicolon) {
@@ -327,8 +663,16 @@ impl Parser {
                 }
                 Err(diag) => {
                     self.diagnostics.push(diag);
-                    // Try to recover
-                    self.advance();
+                    // Recover past the whole statement, not one token.
+                    //
+                    // Advancing by one meant the tail of a failed statement was
+                    // parsed as if it were code, and each fragment produced its
+                    // own error: one bad line in `corpus`-shaped source reported
+                    // 22 of them, each with a `help:` listing every statement
+                    // keyword. The real message was the first; the other 21 were
+                    // the parser talking about its own leftovers, and they bury
+                    // the one a reader can act on.
+                    self.skip_statement();
                 }
             }
         }
@@ -401,6 +745,7 @@ impl Parser {
             match self.peek().kind {
                 TokenKind::LBracket => {
                     if self.peek().span.start.line != expr.span().end.line { break; }
+                    self.reject_chained_index(&expr)?;
                     if self.is_nav_index() {
                         expr = self.parse_nav_index(expr)?;
                     } else {
@@ -436,9 +781,15 @@ impl Parser {
                     if self.peek().span.start.line != expr.span().end.line { break; }
                     self.advance();
                     let mut arguments = Vec::new();
+                    let mut out_args: Vec<usize> = Vec::new();
                     if !matches!(self.peek().kind, TokenKind::RParen) {
                         loop {
                             arguments.push(self.parse_expr()?);
+                            // `x<~` — the call-site output mark (REFERENCE.md L36)
+                            if matches!(self.peek().kind, TokenKind::Return) {
+                                self.advance();
+                                out_args.push(arguments.len() - 1);
+                            }
                             if matches!(self.peek().kind, TokenKind::Comma) {
                                 self.advance();
                             } else {
@@ -453,8 +804,8 @@ impl Parser {
                     }
                     self.advance();
                     let span = expr.span().to(&rparen.span);
-                    expr = Expr::FunctionCall(FunctionCallExpr::new(
-                        Box::new(expr), arguments, span,
+                    expr = Expr::FunctionCall(FunctionCallExpr::new_with_out_args(
+                        Box::new(expr), arguments, out_args, span,
                     ));
                 }
                 _ => break,
@@ -477,6 +828,7 @@ impl Parser {
                     if self.peek().span.start.line != expr.span().end.line {
                         break;
                     }
+                    self.reject_chained_index(&expr)?;
                     if self.is_nav_index() {
                         expr = self.parse_nav_index(expr)?;
                     } else {
@@ -532,10 +884,16 @@ impl Parser {
 
                     // Parse arguments
                     let mut arguments = Vec::new();
+                    let mut out_args: Vec<usize> = Vec::new();
 
                     if !matches!(self.peek().kind, TokenKind::RParen) {
                         loop {
                             arguments.push(self.parse_expr_juxt()?);
+                            // `x<~` — the call-site output mark (REFERENCE.md L36)
+                            if matches!(self.peek().kind, TokenKind::Return) {
+                                self.advance();
+                                out_args.push(arguments.len() - 1);
+                            }
 
                             if matches!(self.peek().kind, TokenKind::Comma) {
                                 self.advance(); // consume ,
@@ -556,9 +914,10 @@ impl Parser {
                     self.advance(); // consume )
 
                     let span = expr.span().to(&rparen_token.span);
-                    expr = Expr::FunctionCall(FunctionCallExpr::new(
+                    expr = Expr::FunctionCall(FunctionCallExpr::new_with_out_args(
                         Box::new(expr),
                         arguments,
+                        out_args,
                         span,
                     ));
                 }
@@ -713,6 +1072,7 @@ impl Parser {
                     if self.peek().span.start.line != expr.span().end.line {
                         break;
                     }
+                    self.reject_chained_index(&expr)?;
                     if self.is_nav_index() {
                         expr = self.parse_nav_index(expr)?;
                     } else {
@@ -927,9 +1287,15 @@ impl Parser {
 
                     // Parse arguments
                     let mut arguments = Vec::new();
+                    let mut out_args: Vec<usize> = Vec::new();
                     if !matches!(self.peek().kind, TokenKind::RParen) {
                         loop {
                             arguments.push(self.parse_expr_juxt()?);
+                            // `x<~` — the call-site output mark (REFERENCE.md L36)
+                            if matches!(self.peek().kind, TokenKind::Return) {
+                                self.advance();
+                                out_args.push(arguments.len() - 1);
+                            }
 
                             if matches!(self.peek().kind, TokenKind::Comma) {
                                 self.advance(); // consume ,
@@ -959,9 +1325,10 @@ impl Parser {
                         span_start.to(&self.tokens[self.current - 2].span), // Up to func_name
                     ));
 
-                    Ok(Expr::FunctionCall(FunctionCallExpr::new(
+                    Ok(Expr::FunctionCall(FunctionCallExpr::new_with_out_args(
                         Box::new(member_access),
                         arguments,
+                        out_args,
                         span,
                     )))
                 }
@@ -975,10 +1342,16 @@ impl Parser {
 
                     // Parse arguments
                     let mut arguments = Vec::new();
+                    let mut out_args: Vec<usize> = Vec::new();
 
                     if !matches!(self.peek().kind, TokenKind::RParen) {
                         loop {
                             arguments.push(self.parse_expr_juxt()?);
+                            // `x<~` — the call-site output mark (REFERENCE.md L36)
+                            if matches!(self.peek().kind, TokenKind::Return) {
+                                self.advance();
+                                out_args.push(arguments.len() - 1);
+                            }
 
                             if matches!(self.peek().kind, TokenKind::Comma) {
                                 self.advance(); // consume ,
@@ -1003,9 +1376,10 @@ impl Parser {
                     // Create identifier as callable
                     let callable = Expr::Identifier(IdentifierExpr::new(name, span_start));
 
-                    Ok(Expr::FunctionCall(FunctionCallExpr::new(
+                    Ok(Expr::FunctionCall(FunctionCallExpr::new_with_out_args(
                         Box::new(callable),
                         arguments,
+                        out_args,
                         span,
                     )))
                 } else {
@@ -1040,6 +1414,40 @@ impl Parser {
             TokenKind::LBracket => {
                 // Parse array literal: [expr1, expr2, ...]
                 self.parse_array_literal()
+            }
+            // `#(…)` — dictionary literal (GAP-ZYB-003/004). The mark says
+            // which of the two things the parentheses open, so `#()` is the
+            // empty dictionary and no lookahead decides anything.
+            TokenKind::HashLParen => self.parse_dict_literal(),
+            // `##_` — the Unit literal (GAP-ZYB-009).
+            //
+            // Unit was the only type in the language whose value could not be
+            // written: a function without `<~` returns it, `json::decode("null")`
+            // produces it and a `NULL` column arrives as it, and there was no
+            // way to name what had arrived. Asking took destructuring the type
+            // reflection, and the obvious way to do that was wrong — the count
+            // is 0 for an empty string, an empty array and an empty dictionary
+            // as well.
+            //
+            // No new mark: `##_` is already the Unit type symbol and already the
+            // "any kind" mark in `:! ##_`, and both are the reading `_` has
+            // everywhere — the one that is not specified.
+            TokenKind::HashHashUnderscore => {
+                let span = self.peek().span;
+                self.advance();
+                Ok(Expr::Literal(zymbol_ast::LiteralExpr {
+                    value: zymbol_common::Literal::Unit,
+                    span,
+                }))
+            }
+            // `#[…]` — declared-mixed array (decision 15). A bare `#` at
+            // expression position is otherwise the module mark, and `#` followed
+            // by `[` is unambiguous.
+            TokenKind::Hash
+                if matches!(self.peek_ahead(1).map(|t| t.kind.clone()),
+                            Some(TokenKind::LBracket)) =>
+            {
+                self.parse_mixed_array_literal()
             }
             TokenKind::DoubleQuestion => {
                 // Parse match expression: ?? expr { cases }
@@ -1188,8 +1596,15 @@ impl Parser {
         matches!(self.peek().kind, TokenKind::Eof)
     }
 
-    /// Check if current position is at start of a lambda with multiple params
-    /// Pattern: ( identifier [, identifier]* ) ->
+    /// Check if current position is at start of a parenthesized lambda.
+    /// Pattern: `( [identifier [, identifier]*] ) ->`
+    ///
+    /// The parameter list may be empty: `() -> body` is a thunk. Nothing else
+    /// in the language spells `()`, so there is no ambiguity to resolve — the
+    /// empty tuple is not a value, and a call's parentheses always follow a
+    /// callable. `parse_lambda` already built an empty `params` for this shape;
+    /// until v0.0.9 this predicate refused to hand it the input, which is why
+    /// `() -> { }` parsed in `zymbol.js` and in zyml (retired) but not here.
     fn is_lambda_start(&mut self) -> bool {
         // Must start with (
         if !matches!(self.peek().kind, TokenKind::LParen) {
@@ -1204,7 +1619,15 @@ impl Parser {
         // Check if we have identifier(s) followed by ->
         let mut is_lambda = false;
 
-        // Must have at least one identifier
+        // Zero-parameter lambda: `() ->`
+        if matches!(self.peek().kind, TokenKind::RParen) {
+            self.advance(); // consume )
+            is_lambda = matches!(self.peek().kind, TokenKind::Arrow);
+            self.current = checkpoint;
+            return is_lambda;
+        }
+
+        // One or more parameters
         if matches!(self.peek().kind, TokenKind::Ident(_)) {
             loop {
                 if !matches!(self.peek().kind, TokenKind::Ident(_)) {
@@ -1295,3 +1718,182 @@ mod tests {
         assert!(matches!(stmts[1], Statement::Output(_)));
     }
 }
+
+/// The variable an editing `$` writes to, when the whole expression is one such
+/// edit and its receiver is a plain name.
+///
+/// This is what decides whether a statement modifies in place (decision 12).
+/// Only the **editing** half of the family qualifies — `$+`, `$++`, `$~`, `$-`,
+/// `$--`, `$-[…]`, `$+[…]`, `$^`, `$^+`, `$^-`. The consulting half (`$#`, `$?`,
+/// `$[..]`, `$>`, `$|`, `$<`, …) never modifies anything, so discarding its
+/// result is dead code and belongs to decision 19, not here.
+///
+/// Returning `None` for a receiver that is not a name is decision 20: `f()[1]$~ 5`
+/// would modify a temporary nobody holds, so it is refused (see
+/// `refuse_unanchored_edit`) rather than silently doing nothing.
+///
+/// The receiver must be a name plus **exactly one** access — `d[k]`, `d.k`, or
+/// the deep form `d[i>j]`. It used to recurse, and that was the whole of a
+/// silent data-destruction bug: `d["x"]["y"]$~ 9` found the base name `d` and
+/// desugared to `d = d["x"]["y"]$~ 9`. The expression returns the RECEIVER it
+/// updated — the inner dictionary — so `d` was replaced by its own child and
+/// every other key vanished. Exit 0, no diagnostic, and all three engines
+/// agreed, so no consensus run could see it.
+///
+/// Assigning the result back is only sound when the receiver IS the name, which
+/// is what "exactly one access" means. Deeper writes have one form, `d[i>j]$~`,
+/// and that is the decision recorded for `m[i][j] = v`: it breaks navigation
+/// and intent.
+/// What a statement-level `$` edit writes into.
+///
+/// Decision 12, the rule of the result: an edit whose result is the whole
+/// statement modifies in place. That is done by desugaring to
+/// `name = <the same expression>`, which is only sound when the thing the
+/// expression RETURNS is what `name` should hold.
+///
+/// It returns the receiver it edited. So when the receiver is the name itself
+/// (`arr$+ 3`) the desugaring is exact, and when the receiver is somewhere
+/// *inside* the name (`d.x$+ 3`, `d.x["y"]$~ 5`) it is not: assigning the inner
+/// collection to the outer name replaces the whole thing. That was a silent
+/// data-destruction bug — `d["x"]["y"]$~ 9` left `d` holding `(y: 9)` with
+/// every other key gone, exit 0, no diagnostic, all three engines agreeing.
+///
+/// So a receiver with a path is rewritten into a deep write at that path, which
+/// is machinery all three engines already have.
+enum EditAnchor {
+    /// Not an editing `$` at all — the consulting half never modifies anything,
+    /// so discarding its result is dead code (decision 19), not this.
+    NotAnEdit,
+    /// The receiver IS the name: `arr$+ 3`, `arr[i]$~ v`, `d.k$~ v`.
+    Whole(String),
+    /// The receiver is inside the name, at this path: `d.x$+ 3`, `d.x["y"]$~ 5`.
+    Path(String, Vec<Box<Expr>>),
+    /// An edit with nowhere to write, and why.
+    Unanchored(&'static str),
+}
+
+const CHAINED_BRACKETS: &str = "a bracket after a bracket is what the navigator is for: write `d[\"x\">\"y\"]$~ value`";
+const RANGE_IN_PATH: &str = "a write reaches one place, so its path has no ranges";
+const NO_NAME: &str = "this edits what the expression produced, and nothing holds it — assign the result to a name first";
+
+/// The receiver of an editing `$`, or `None` when the expression is not one.
+fn edit_receiver(expr: &Expr) -> Option<&Expr> {
+    Some(match expr.unwrap_group() {
+        Expr::CollectionAppend(x) => &x.collection,
+        Expr::CollectionInsert(x) => &x.collection,
+        Expr::CollectionRemoveValue(x) => &x.collection,
+        Expr::CollectionRemoveAll(x) => &x.collection,
+        Expr::CollectionRemoveAt(x) => &x.collection,
+        Expr::CollectionRemoveRange(x) => &x.collection,
+        Expr::CollectionSortAsc(x)
+        | Expr::CollectionSortDesc(x)
+        | Expr::CollectionSortCustom(x) => &x.collection,
+        Expr::CollectionUpdate(x) => &x.target,
+        Expr::ConcatBuild(x) => &x.base,
+        _ => return None,
+    })
+}
+
+/// Walks a receiver chain to its root, collecting one step per access.
+///
+/// A bracket directly after a bracket is refused: `d["x"]["y"]` is the deep
+/// navigator spelled twice, and `d["x">"y"]` is the form. The dot composes
+/// freely — it is a different syntax, not a second spelling of the same one —
+/// so `d.x["y"]`, `d["x"].y` and `d.x.y` all name a place.
+fn flatten_receiver(e: &Expr) -> Result<(String, Vec<Box<Expr>>), &'static str> {
+    fn go(e: &Expr, out: &mut Vec<Box<Expr>>) -> Result<String, &'static str> {
+        match e.unwrap_group() {
+            Expr::Identifier(i) => Ok(i.name.clone()),
+            Expr::Index(ix) => {
+                if matches!(ix.array.unwrap_group(), Expr::Index(_) | Expr::DeepIndex(_)) {
+                    return Err(CHAINED_BRACKETS);
+                }
+                let root = go(&ix.array, out)?;
+                out.push(ix.index.clone());
+                Ok(root)
+            }
+            Expr::DeepIndex(di) => {
+                if matches!(di.array.unwrap_group(), Expr::Index(_) | Expr::DeepIndex(_)) {
+                    return Err(CHAINED_BRACKETS);
+                }
+                let root = go(&di.array, out)?;
+                for step in &di.path.steps {
+                    if step.range_end.is_some() {
+                        return Err(RANGE_IN_PATH);
+                    }
+                    out.push(step.index.clone());
+                }
+                Ok(root)
+            }
+            // `d.k` is the same access as `d["k"]`, so it becomes the same step.
+            Expr::MemberAccess(ma) if !ma.is_module_access => {
+                let root = go(&ma.object, out)?;
+                out.push(Box::new(Expr::Literal(LiteralExpr::new(
+                    Literal::String(ma.field.clone()),
+                    ma.span,
+                ))));
+                Ok(root)
+            }
+            _ => Err(NO_NAME),
+        }
+    }
+    let mut steps = Vec::new();
+    let root = go(e, &mut steps)?;
+    Ok((root, steps))
+}
+
+fn classify_edit(expr: &Expr) -> EditAnchor {
+    let Some(receiver) = edit_receiver(expr) else {
+        return EditAnchor::NotAnEdit;
+    };
+    let (root, steps) = match flatten_receiver(receiver) {
+        Ok(v) => v,
+        Err(why) => return EditAnchor::Unanchored(why),
+    };
+    // `$~` carries the final access inside its own target, so one step means the
+    // receiver is the name. Every other edit takes the collection whole, so any
+    // step at all puts the receiver inside the name.
+    let carries_its_index = matches!(expr.unwrap_group(), Expr::CollectionUpdate(_));
+    let exact = if carries_its_index { steps.len() <= 1 } else { steps.is_empty() };
+    if exact {
+        EditAnchor::Whole(root)
+    } else {
+        EditAnchor::Path(root, steps)
+    }
+}
+
+/// Rewrites an edit whose receiver lives inside `root` into a deep write there.
+///
+/// `d.x["y"]$~ 5` becomes `d = d[<x>><y>]$~ 5` — the update moves onto the whole
+/// path. Any other edit keeps its own shape and is placed back at its path:
+/// `d.x$+ 3` becomes `d = d[<x>]$~ (d.x$+ 3)`, so the append still happens on
+/// `d.x` and what lands in `d` is `d` with that key replaced.
+fn rewrite_edit_at_path(
+    expr: Expr,
+    root: &str,
+    steps: Vec<Box<Expr>>,
+    span: zymbol_span::Span,
+) -> Expr {
+    let root_expr = Expr::Identifier(IdentifierExpr::new(root.to_string(), span));
+    let path = NavPath {
+        steps: steps
+            .into_iter()
+            .map(|index| NavStep { index, range_end: None })
+            .collect(),
+    };
+    let place = Expr::DeepIndex(DeepIndexExpr {
+        array: Box::new(root_expr),
+        path,
+        span,
+    });
+    let value = match expr {
+        Expr::CollectionUpdate(cu) => *cu.value,
+        other => other,
+    };
+    Expr::CollectionUpdate(CollectionUpdateExpr::new(
+        Box::new(place),
+        Box::new(value),
+        span,
+    ))
+}
+

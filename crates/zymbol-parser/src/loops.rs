@@ -58,6 +58,30 @@ impl Parser {
             _ => None,
         };
 
+        // `@ (k, v):pares { … }` — a destructuring pattern where a single name
+        // would go. It binds each element the way `(k, v) = par` binds one, so
+        // the loop stops needing a first line whose only job is to unpack.
+        //
+        // `@ (` is already taken: `@ (n + 1) { }` is a valid count loop. The
+        // disambiguator is the `:` after the `)`, which is the same kind of scan
+        // `is_tuple_destructure` already does at statement level.
+        if matches!(self.peek().kind, TokenKind::LParen | TokenKind::LBracket)
+            && self.is_loop_pattern()
+        {
+            let pattern = if matches!(self.peek().kind, TokenKind::LBracket) {
+                self.parse_array_destructure_pattern()?
+            } else {
+                self.parse_tuple_destructure_pattern()?
+            };
+            self.advance(); // consume :
+            let iterable = Box::new(self.parse_expr()?);
+            let body = self.parse_block()?;
+            let span = start_span.to(&body.span);
+            return Ok(Statement::Loop(Loop::for_each_pattern(
+                pattern, iterable, body, label, span,
+            )));
+        }
+
         // Check for for-each syntax: var:iterable
         // We need to look ahead to distinguish from while loop
         let is_for_each = matches!(self.peek().kind, TokenKind::Ident(_))
@@ -112,5 +136,30 @@ impl Parser {
 
             Ok(Statement::Loop(Loop::new(condition, body, label, span)))
         }
+    }
+}
+
+impl Parser {
+    /// True when a loop head opens with a destructuring pattern rather than a
+    /// condition: `@ (k, v):pares` and `@ [a, b]:filas`, but not `@ (n + 1) { }`.
+    ///
+    /// Saves and restores the position, like the other `is_*` probes; the answer
+    /// is simply whether a `:` follows the balanced bracket.
+    fn is_loop_pattern(&mut self) -> bool {
+        let saved = self.current;
+        let (open, close) = match self.peek().kind {
+            TokenKind::LBracket => (TokenKind::LBracket, TokenKind::RBracket),
+            _ => (TokenKind::LParen, TokenKind::RParen),
+        };
+        self.advance();
+        let mut depth = 1i32;
+        while depth > 0 && !self.is_at_end() {
+            let k = self.peek().kind.clone();
+            if k == open { depth += 1; } else if k == close { depth -= 1; }
+            self.advance();
+        }
+        let answer = matches!(self.peek().kind, TokenKind::Colon);
+        self.current = saved;
+        answer
     }
 }

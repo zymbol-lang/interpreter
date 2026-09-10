@@ -1,4 +1,0 @@
-outer try
-inner try
-inner error caught
-outer finally

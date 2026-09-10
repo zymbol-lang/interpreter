@@ -253,6 +253,34 @@ impl Parser {
                     // Allow chaining: >> "a" >> "b" on same line
                     break;
                 }
+                // A comparison or a logical operator in argument position.
+                //
+                // `>>` has a narrower grammar than the rest of the language
+                // (REFERENCE.md L39) and this is by far the commonest way to
+                // meet that edge, so the refusal says what to do about it. The
+                // refusal itself is unchanged — the primary parser would raise
+                // `expected expression, found Eq` from here anyway; what is new
+                // is the `= help:` line, which the browser engine had folded
+                // into its message and the two Rust engines did not have at all.
+                TokenKind::Eq | TokenKind::Neq | TokenKind::Lt | TokenKind::Gt
+                | TokenKind::Le | TokenKind::Ge | TokenKind::And | TokenKind::Or => {
+                    let token = self.peek().clone();
+                    let spelled = match token.kind {
+                        TokenKind::Eq  => "==", TokenKind::Neq => "<>",
+                        TokenKind::Lt  => "<",  TokenKind::Gt  => ">",
+                        TokenKind::Le  => "<=", TokenKind::Ge  => ">=",
+                        TokenKind::And => "&&", _ => "||",
+                    };
+                    return Err(Diagnostic::error(format!(
+                        "expected expression, found {:?}",
+                        token.kind
+                    ))
+                    .with_help(format!(
+                        "'>>' takes arithmetic; parenthesise a comparison  →  >> (a {} b) ¶",
+                        spelled
+                    ))
+                    .with_span(token.span));
+                }
                 // Statement-starting tokens - stop parsing output expressions
                 TokenKind::Question        // if statement
                 | TokenKind::DoubleQuestion // match statement

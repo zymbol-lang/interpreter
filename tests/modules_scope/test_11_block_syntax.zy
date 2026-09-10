@@ -1,5 +1,0 @@
-<# ./block_syntax_basic => m
-
-result = m::add(3, 7)
->> result ¶
->> m.PI ¶

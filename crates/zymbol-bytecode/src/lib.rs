@@ -106,6 +106,13 @@ pub enum Instruction {
     And(Reg, Reg, Reg),
     Or(Reg, Reg, Reg),
     Not(Reg, Reg),
+    /// `dst = src is an Int` — the runtime type test that lets `@ <expr>`
+    /// pick between the TIMES and the WHILE form the way the tree-walker does.
+    IsInt(Reg, Reg),
+    /// `dst = src`, but only if `src` is a Bool. A loop specifier is a count
+    /// (Int) or a condition (Bool); anything else raises rather than being
+    /// coerced through truthiness, which no two engines agreed on.
+    AsLoopCond(Reg, Reg),
 
     // ── Control flow ─────────────────────────────────────────────────────
     Jump(Label),
@@ -164,6 +171,34 @@ pub enum Instruction {
     /// ascending: true=$^+, false=$^-; func_reg=u8::MAX means natural order
     ArraySort(Reg, Reg, bool, Reg),
 
+    // ── Destructuring ────────────────────────────────────────────────────
+    /// Check a destructuring pattern's shape against the value it received:
+    /// `true` demands a tuple `( … )`, `false` an array `[ … ]`. Errors on a
+    /// mismatch instead of reinterpreting the value (REFERENCE.md L32).
+    DestructureCheck(Reg, bool),
+    /// dst = the remainder of src from 1-based index `idx`: Unit when nothing is
+    /// left, the bare element when exactly one is, and a collection when several
+    /// are — keeping src's own shape (REFERENCE.md L33).
+    DestructureAbsorb(Reg, Reg, u32),
+
+    /// `(dst, src, from, trailing)` — bind a `*rest` that has `trailing` named
+    /// items after it, mirroring the tree-walker's `bind_positional`.
+    ///
+    /// The trailing names are entitled to their share **only if the elements
+    /// reach that far**. When they do not, the rest takes everything that is
+    /// left and the trailing names get `Unit`: destructuring goes left to right
+    /// and stops where the values stop (DM-24, decided 2026-08-19).
+    ///
+    /// The VM used to subtract `trailing` unconditionally and index the trailing
+    /// names from the END, so `[d0, *dR, d9] = [1, 2]` gave `dR=[] d9=2` while
+    /// the other two engines gave `dR=[2] d9=`.
+    DestructureRest(Reg, Reg, u32, u32),
+
+    /// `(dst, src, k, from, trailing)` — bind the item `k` places from the end
+    /// of a pattern that has a `*rest`, under the same rule: the value only if
+    /// the elements reach that far, `Unit` otherwise.
+    DestructureTail(Reg, Reg, u32, u32, u32),
+
     // ── Tuples ───────────────────────────────────────────────────────────
     /// Build a positional tuple: dst = (regs[0], regs[1], ...)
     MakeTuple(Reg, Vec<Reg>),
@@ -173,6 +208,20 @@ pub enum Instruction {
     MakeNamedTuple(Reg, Vec<StrIdx>, Vec<Reg>),
     /// dst = named_tuple.field_name (or positional index)
     NamedTupleGet(Reg, Reg, StrIdx),
+    /// Refuse anything that is not a dictionary, with the message a FAILED
+    /// PATTERN needs. A `#(k: n) = d` destructure compiles to one
+    /// `NamedTupleGet` per field, which cannot tell itself apart from a plain
+    /// `d.k`, so the two raised the same text where the tree-walker raises two.
+    RequireDict(Reg),
+    /// Refuse a logical operand that is not a Bool — the guard `&&` / `||` need
+    /// BEFORE their short-circuit jump. `true` is `&&`, `false` is `||`, and
+    /// the flag is only there to spell the operator in the message.
+    ///
+    /// ZYVM-001: the short-circuit reads the left operand through truthiness,
+    /// so `0 && #1` answered `#0` and never reached `And` to be refused. The
+    /// jump cannot do the checking itself — `? 7 { … }` compiles to the same
+    /// JumpIfNot and is a warning, not an error.
+    RequireBool(Reg, bool),
 
     // ── Pattern match ─────────────────────────────────────────────────────
     MatchInt(Reg, i64, Label),
@@ -217,6 +266,16 @@ pub enum Instruction {
     // ── Precision ops ────────────────────────────────────────────────────
     /// Round dst = #.precision|src|  (standard rounding)
     RoundFloat(Reg, Reg, u32),
+    /// The same four operations with the decimal count taken from a register
+    /// instead of an immediate: `#,.n|x|`, `#.n|x|`, … (GAP-ZYB-001).
+    ///
+    /// Separate opcodes rather than making the count a register everywhere: a
+    /// written count is the overwhelmingly common case and stays one operand
+    /// wide, with no register spent and no load before it.
+    FmtThousandsDyn(Reg, Reg, u8, Reg),
+    FmtScientificDyn(Reg, Reg, u8, Reg),
+    RoundFloatDyn(Reg, Reg, Reg),
+    TruncFloatDyn(Reg, Reg, Reg),
     /// Truncate dst = #!precision|src|  (floor toward zero)
     TruncFloat(Reg, Reg, u32),
 
@@ -280,6 +339,44 @@ pub enum Instruction {
     /// level — mirrors the tree-walker's `$~` semantics (arr[i]$~, t[i]$~,
     /// nt["field"]$~, and deep arr[i>j>…]$~).
     DeepSet(Reg, Reg, Reg), // (dst_root, idx_path, val)
+    /// `DeepSet` for the *in-place* surface form `t[i] = val`, which is not the
+    /// same statement as the functional `new = t[i]$~ val` even though the
+    /// parser desugars both into a `CollectionUpdate`.
+    ///
+    /// The difference only matters for a positional tuple: a tuple is immutable
+    /// (GUIDE.md § 12), so `t[i] = val` has to be refused while `new = t[i]$~
+    /// val` has to work — it derives a second tuple and leaves the first alone.
+    /// The tree-walker tells them apart by `AssignSugar::IndexedAssign`; the
+    /// compiler used to drop that field, so both forms reached `DeepSet` and the
+    /// VM silently modified the tuple (`DM-16`).
+    ///
+    /// Refuses `Value::Tuple` at the root of the path, in the tree-walker's exact
+    /// words. Everything else behaves as `DeepSet`.
+    /// `(dst_root, idx_path, val, target_name)` — `target_name` is the pool
+    /// index of the assigned variable's name, carried for one reason: the
+    /// refusal has to be spelled in the tree-walker's exact words, and a
+    /// register has no name.
+    DeepSetInPlace(Reg, Reg, Reg, StrIdx),
+
+    /// `(dst, src)` — normalise an iterable for a `@ (a, b):x` loop.
+    ///
+    /// Same as `StrChars` except on a DICTIONARY, where it yields
+    /// `(clave, valor)` pairs instead of bare keys. `@ k:d` keeps yielding keys
+    /// (decision 8); the pattern form is what asks for both, and the pair is the
+    /// language's own answer to "several values that travel together".
+    IterPairs(Reg, Reg),
+
+    /// `(receiver, name)` — refuse an in-place edit on a positional tuple.
+    ///
+    /// Emitted once, at the top of a bare `$` edit statement, for every editing
+    /// operator that is not `$~` (which guards itself through `DeepSetInPlace`
+    /// because it already holds the root in a register). Immutability is a
+    /// property of the value and not of the operator, so `$+`, `$-`, `$^`… all
+    /// share this one check rather than each carrying its own exception.
+    ///
+    /// `name` is the pool index of the receiver's name, so the refusal is
+    /// spelled in the tree-walker's exact words.
+    AssertMutable(Reg, StrIdx),
 
     // ── Halt ─────────────────────────────────────────────────────────────
     Halt,
@@ -351,6 +448,16 @@ pub enum GlobalInit {
     Char(char),
     Str(String),
     Unit,
+    /// `[1, 2, 3]` as module state. The three collection variants are
+    /// recursive, so a dictionary of dictionaries — which is the shape of a
+    /// decoded JSON object — is one initializer, materialized once when the VM
+    /// starts and never re-evaluated.
+    Array(Vec<GlobalInit>),
+    /// `(1, 2)` — the positional tuple.
+    Tuple(Vec<GlobalInit>),
+    /// `(a: 1, b: 2)` — the dictionary, in declaration order, which is the
+    /// order it iterates in.
+    Dict(Vec<(String, GlobalInit)>),
 }
 
 /// Builtin function IDs — shared between compiler (emit site) and VM (dispatch).
@@ -421,6 +528,14 @@ pub mod builtins {
     pub const TERM_PAD_RIGHT: u16 = 602;
     pub const TERM_CENTER:    u16 = 603;
     pub const TERM_TRUNCATE:  u16 = 604;
+    // std/time functions (the clock and the civil calendar)
+    pub const TIME_NOW:    u16 = 700;
+    pub const TIME_TODAY:  u16 = 701;
+    pub const TIME_PARTS:  u16 = 702;
+    pub const TIME_OF:     u16 = 703;
+    pub const TIME_FORMAT: u16 = 704;
+    pub const TIME_ADD:    u16 = 705;
+    pub const TIME_DIFF:   u16 = 706;
 }
 
 #[derive(Debug, Serialize, Deserialize)]

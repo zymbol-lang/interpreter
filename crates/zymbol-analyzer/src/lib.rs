@@ -158,6 +158,16 @@ impl Analyzer {
                 let mut var_analyzer = zymbol_semantic::VariableAnalyzer::new();
                 let _ = var_analyzer.analyze(program);
                 let mut type_checker = zymbol_semantic::TypeChecker::new();
+                if let Some(base_dir) = path.parent() {
+                    type_checker.set_module_arities(zymbol_semantic::module_arities(
+                        &program.imports,
+                        base_dir,
+                    ));
+                    type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+                        &program.imports,
+                        base_dir,
+                    ));
+                }
                 var_analyzer
                     .semantic_errors()
                     .iter()
@@ -850,14 +860,13 @@ impl Analyzer {
                                 self.module_index.resolve_symbol(&path, alias, symbol_name)
                             {
                                 // Found in another module
-                                let target_uri = if exports.uri.starts_with("file://") {
-                                    exports.uri.to_string()
-                                } else {
-                                    format!("file://{}", exports.file_path.display())
-                                };
-
                                 return Some(Location {
-                                    uri: lsp_types::Url::parse(&target_uri).ok()?,
+                                    uri: workspace::uri_str_to_url(&exports.uri)
+                                        .or_else(|| {
+                                            workspace::uri_str_to_url(&workspace::path_to_uri(
+                                                &exports.file_path,
+                                            ))
+                                        })?,
                                     range: diagnostics::span_to_range(&export.span),
                                 });
                             }
@@ -1124,7 +1133,10 @@ impl Analyzer {
         // Add import alias completions
         items.extend(self.get_import_alias_completions(uri));
 
-        // Add Zymbol operators/keywords as snippets
+        // Add Zymbol operators as snippets. Those filed below as
+        // CompletionItemKind::KEYWORD are marks, not words — KEYWORD is the LSP
+        // completion kind for a reserved construct, and the protocol has no other.
+        // See semantic_tokens.rs and SYMBOLS.md §1.2.
         items.extend(builtin_completions());
 
         items
@@ -1286,12 +1298,7 @@ impl Analyzer {
                 }
 
                 if !edits.is_empty() {
-                    let url = if doc_uri.starts_with("file://") {
-                        lsp_types::Url::parse(&doc_uri).ok()?
-                    } else {
-                        lsp_types::Url::parse(&format!("file://{}", doc_uri)).ok()?
-                    };
-                    changes.insert(url, edits);
+                    changes.insert(workspace::uri_str_to_url(&doc_uri)?, edits);
                 }
             }
         }
@@ -1321,12 +1328,9 @@ impl Analyzer {
             None => return actions,
         };
 
-        let url = match lsp_types::Url::parse(uri) {
-            Ok(u) => u,
-            Err(_) => match lsp_types::Url::parse(&format!("file://{}", uri)) {
-                Ok(u) => u,
-                Err(_) => return actions,
-            },
+        let url = match workspace::uri_str_to_url(uri) {
+            Some(u) => u,
+            None => return actions,
         };
 
         // Check each diagnostic for applicable code actions
@@ -1847,9 +1851,9 @@ mod tests {
             "re-exported name missing from the index: {exports:?}"
         );
 
-        let uri = format!("file://{}", caller.display());
+        let uri = workspace::path_to_uri(&caller);
         analyzer.open_document(
-            Arc::from(uri.as_str()),
+            Arc::clone(&uri),
             std::fs::read_to_string(&caller).unwrap(),
             1,
         );
@@ -1879,9 +1883,9 @@ mod tests {
         analyzer.initialize_workspace(vec![dir.path().to_path_buf()]);
         analyzer.scan_workspace();
 
-        let uri = format!("file://{}", caller.display());
+        let uri = workspace::path_to_uri(&caller);
         analyzer.open_document(
-            Arc::from(uri.as_str()),
+            Arc::clone(&uri),
             std::fs::read_to_string(&caller).unwrap(),
             1,
         );

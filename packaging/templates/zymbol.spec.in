@@ -8,7 +8,7 @@ Version:        {{VERSION}}
 Release:        1%{?dist}
 Summary:        Zymbol symbolic programming language
 License:        AGPL-3.0-only
-URL:            https://github.com/your-username/zymbol-lang
+URL:            https://zymbol-lang.org
 
 # Pre-built binary package — no compilation at install time.
 # Source0 is a tarball containing only the compiled binary.
@@ -17,7 +17,7 @@ Source0:        zymbol-{{VERSION}}-{{RPM_ARCH}}.tar.gz
 Requires:       glibc >= {{GLIBC_MIN}}
 
 %description
-Zymbol is a keyword-free symbolic programming language where every
+Zymbol is a symbolic programming language with no words in its grammar, where every
 construct (conditionals, loops, functions, I/O, error handling) is
 expressed using pure symbols such as ?, @, ->, >> and others.
 

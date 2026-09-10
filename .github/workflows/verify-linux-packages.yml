@@ -90,15 +90,44 @@ jobs:
           test -f "$DEB" || { echo "::error::$DEB not found"; ls -la packaging/dist || true; exit 1; }
           ls -lh "$DEB"
 
+      # `--scope full` runs the corpus against the INSTALLED binary, and the
+      # corpus is not in this repository: it lives in zyquality, which grades all
+      # three engines on the same files, and tests/scripts/vm_compare.sh is a
+      # wrapper over it. A checkout of this repository alone therefore has no
+      # corpus to run, the wrapper exits 2 — "could not run" — and the gate goes
+      # red for a reason that has nothing to do with the package. That is not a
+      # hypothetical: it is what would happen to the v0.0.9 release.
+      #
+      # `zyq` is OCaml and is not committed (zyquality/.gitignore), so it is
+      # built here. ocaml-nox is installed on the RUNNER, never in the
+      # verification image — debian:12 stays pristine, which is what makes
+      # "dpkg -i needs nothing else" a real claim.
+      - name: Build ZyQuality — the corpus, the goldens and the comparison
+        if: ${{ (inputs.scope || 'full') != 'smoke' }}
+        run: |
+          git clone --depth 1 https://github.com/zymbol-lang/zyquality.git \
+            "${{ runner.temp }}/zyquality"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ocaml-nox
+          make -C "${{ runner.temp }}/zyquality"
+          test -x "${{ runner.temp }}/zyquality/zyq"
+
       # debian:12 with nothing added: if the package needs something the base
-      # image lacks, that is the bug we are looking for.
+      # image lacks, that is the bug we are looking for. ZyQuality is mounted
+      # rather than installed — a read-only corpus and a binary built outside is
+      # not the image growing a dependency.
       - name: Verify in a pristine Debian container
         # `shell: bash` sets pipefail — without it the `| tee` below would mask a
         # failing container and the gate would pass on a broken package.
         shell: bash
         run: |
+          ZYQ_MOUNT=()
+          if [[ -x "${{ runner.temp }}/zyquality/zyq" ]]; then
+            ZYQ_MOUNT=(-v "${{ runner.temp }}/zyquality:/zyquality" -e ZYQ_ROOT=/zyquality)
+          fi
           docker run --rm \
             -v "$PWD:/workspace" \
+            "${ZYQ_MOUNT[@]}" \
             --workdir /workspace \
             debian:12 \
             bash packaging/verify/verify-deb.sh \

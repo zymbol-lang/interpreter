@@ -175,13 +175,24 @@ impl Parser {
         Ok((module_decl, imports, statements))
     }
 
-    /// Returns true if `expr` is a pure literal value (int, float, string, bool, char),
-    /// optionally carrying a sign. Module-level constants and variables must be
-    /// initialized with literals only.
+    /// Returns true if `expr` is a pure literal value — a scalar, optionally
+    /// carrying a sign, or a collection literal built only out of those.
+    /// Module-level constants and variables must be initialized with literals
+    /// only.
     ///
     /// A signed number parses as unary minus applied to a literal, which is an
     /// expression node — but `-1` is a constant, not a computation, and rejecting
     /// it left no way to write a negative constant in a module at all.
+    ///
+    /// The three collections are literals by the same reading: `[1, 2, 3]`,
+    /// `(1, 2)` and `(a: 1, b: 2)` name a value, they do not compute one. The
+    /// rule is recursive, so a dictionary of dictionaries — which is what a
+    /// decoded JSON object is — is a literal too. Rejecting them was what kept a
+    /// lookup table out of the only place a table belongs: `i18n` catalogues in
+    /// four applications were written as `??` chains for want of this.
+    ///
+    /// What stays out is anything that computes: a call, a name, an operator,
+    /// an interpolated string. Those are E013 as before, at any nesting depth.
     fn is_literal_expr(expr: &Expr) -> bool {
         match expr.unwrap_group() {
             Expr::Literal(_) => true,
@@ -189,6 +200,9 @@ impl Parser {
                 matches!(u.op, UnaryOp::Neg | UnaryOp::Pos)
                     && matches!(u.operand.unwrap_group(), Expr::Literal(_))
             }
+            Expr::ArrayLiteral(arr) => arr.elements.iter().all(Self::is_literal_expr),
+            Expr::Tuple(tuple) => tuple.elements.iter().all(Self::is_literal_expr),
+            Expr::NamedTuple(nt) => nt.fields.iter().all(|(_, v)| Self::is_literal_expr(v)),
             _ => false,
         }
     }

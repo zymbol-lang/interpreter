@@ -11,14 +11,20 @@
 //! - Definition-use chain analysis
 
 
+mod call_arity;
 mod modules;
 mod stdlib_access;
 mod variable_analysis;
 mod cfg;
 mod def_use;
 mod last_use;
+mod loop_context;
 mod type_check;
 
+pub use call_arity::{
+    arities_of_module_file, module_arities, module_out_slots, resolved_import_path, AliasArities,
+    AliasOutSlots, ModuleArities, ModuleOutSlots,
+};
 pub use modules::{SemanticError, ExportedItem, ExportTable, ModuleAnalyzer};
 pub use stdlib_access::check_stdlib_access;
 pub use variable_analysis::{VariableAnalyzer, VariableInfo, VariableDiagnostic, Severity};
@@ -28,4 +34,5 @@ pub use def_use::{
     AmbiguousLifetime, AmbiguityReason,
 };
 pub use type_check::{TypeChecker, TypeEnv, ZymbolType};
-pub use last_use::{auto_free_exclusions, region_schedule};
+pub use last_use::{auto_free_exclusions, mentioned_names, region_schedule};
+pub use loop_context::check_loop_context;

@@ -18,7 +18,7 @@ use zymbol_common::UnaryOp;
 /// Semantic validation errors
 #[derive(Debug, Error)]
 pub enum SemanticError {
-    #[error("E001: Module name '{module_name}' does not match file name '{file_name}'")]
+    #[error("E001: module '{module_name}' should be named '{file_name}' for its path")]
     ModuleNameMismatch {
         module_name: String,
         file_name: String,
@@ -76,6 +76,9 @@ pub enum SemanticError {
 
     #[error("E013: executable statement '{stmt_kind}' is not allowed in a module body")]
     ExecutableStatementInModule { stmt_kind: String, span: Span },
+
+    #[error("E014: module '{module}' does not declare what it exports")]
+    MissingExportBlock { module: String, span: Span },
 }
 
 impl SemanticError {
@@ -84,7 +87,11 @@ impl SemanticError {
         match self {
             SemanticError::ModuleNameMismatch { span, .. } => Diagnostic::error(self.to_string())
                 .with_span(*span)
-                .with_help("The module name must match the filename (without .zy extension)"),
+                .with_help(
+                    "a bare name matches the file stem (`# util` in util.zy); a \
+                     leading dot names the whole path, joined with `_` \
+                     (`# .lib_util` in lib/util.zy). See DOT_CONVENTION.md",
+                ),
 
             SemanticError::ModuleNotFound { span, .. } => Diagnostic::error(self.to_string())
                 .with_span(*span)
@@ -128,6 +135,18 @@ impl SemanticError {
             SemanticError::DuplicateExport { span, .. } => Diagnostic::error(self.to_string())
                 .with_span(*span)
                 .with_help("Each item can only be exported once"),
+
+            // L48. The grammar marks the export block optional and never said
+            // what omitting it meant, so the three engines answered three ways:
+            // the tree-walker exported everything, the VM and the browser engine
+            // exported nothing, and `check` said nothing at all. The rule is now
+            // that a module declares its public surface — refused here, once, so
+            // all three inherit it.
+            SemanticError::MissingExportBlock { span, .. } => Diagnostic::error(self.to_string())
+                .with_span(*span)
+                .with_help(
+                    "add '#> { … }' inside the module block, naming what it exports — an empty '#> { }' says it exports nothing",
+                ),
 
             SemanticError::ReExportPrivateItem { span, .. } => {
                 Diagnostic::error(self.to_string())
@@ -355,11 +374,15 @@ impl ModuleAnalyzer {
         })
     }
 
-    /// A module-level initializer must be a literal, optionally signed.
+    /// A module-level initializer must be a literal, optionally signed, or a
+    /// collection literal built only out of those.
     ///
     /// `-1` parses as unary minus applied to a literal — an expression node,
-    /// but a constant all the same. This mirrors `Parser::is_literal_expr`;
-    /// the two checks are deliberate defence in depth and must agree.
+    /// but a constant all the same. A collection literal is the same case one
+    /// level up: `[1, 2, 3]` and `(a: 1)` name a value rather than computing
+    /// one, and the rule is recursive so a nested dictionary — a decoded JSON
+    /// object — qualifies too. This mirrors `Parser::is_literal_expr`; the two
+    /// checks are deliberate defence in depth and must agree.
     fn is_literal_init(expr: &Expr) -> bool {
         match expr.unwrap_group() {
             Expr::Literal(_) => true,
@@ -367,6 +390,9 @@ impl ModuleAnalyzer {
                 matches!(u.op, UnaryOp::Neg | UnaryOp::Pos)
                     && matches!(u.operand.unwrap_group(), Expr::Literal(_))
             }
+            Expr::ArrayLiteral(arr) => arr.elements.iter().all(Self::is_literal_init),
+            Expr::Tuple(tuple) => tuple.elements.iter().all(Self::is_literal_init),
+            Expr::NamedTuple(nt) => nt.fields.iter().all(|(_, v)| Self::is_literal_init(v)),
             _ => false,
         }
     }
@@ -391,13 +417,25 @@ impl ModuleAnalyzer {
         // its file, so it must be compared against `<parent>_<stem>` —
         // comparing it against the stem alone rejected every subdirectory
         // module the convention exists to support.
+        // The parent directory comes from the file's REAL location, not from the
+        // path as it happened to be spelled at the call site.
+        //
+        // It used to read `file_path.parent()` directly, so the same file asked
+        // for two different names: `zymbol check modules_scope/m.zy` from the
+        // corpus wanted `modules_scope_m`, and `zymbol check m.zy` from inside
+        // `modules_scope/` wanted `_m` — and nothing can satisfy both. Every
+        // application suite that runs from its own directory hit it, and it read
+        // as a violation when it was the checker moving the target (GLB-005).
         let expected = match module_decl.name.strip_prefix('.') {
             Some(_) => {
-                let parent = file_path
+                let absolute = std::fs::canonicalize(file_path)
+                    .unwrap_or_else(|_| file_path.to_path_buf());
+                let parent = absolute
                     .parent()
                     .and_then(|p| p.file_name())
                     .and_then(|s| s.to_str())
-                    .unwrap_or("");
+                    .unwrap_or("")
+                    .to_string();
                 format!("{parent}_{file_stem}")
             }
             None => file_stem.to_string(),
@@ -406,6 +444,12 @@ impl ModuleAnalyzer {
         let declared = module_decl.name.strip_prefix('.').unwrap_or(&module_decl.name);
 
         if declared != expected {
+            // The name in `file_name` is the module name the convention asks
+            // for, and it used to be reported as "does not match file name
+            // 'lib_util'" — which reads as though a file by that name were
+            // missing. There is no such file: `lib_util` is what a module in
+            // `lib/util.zy` is called when it uses the dotted form. The
+            // message now says what to write instead.
             return Err(SemanticError::ModuleNameMismatch {
                 module_name: module_decl.name.clone(),
                 file_name: expected,
@@ -554,7 +598,20 @@ impl ModuleAnalyzer {
             import_map.insert(import.alias.clone(), resolved);
         }
 
-        if let Some(ref export_block) = module_decl.export_block {
+        // L48: a module says what it exports. Omitting `#>` used to mean three
+        // different things — everything, nothing, or no opinion — because the
+        // grammar marks the block optional and nothing said what the omission
+        // meant. Refusing it here is what makes the three engines agree: they
+        // all run this analysis before executing anything.
+        let Some(ref export_block) = module_decl.export_block else {
+            errors.push(SemanticError::MissingExportBlock {
+                module: module_decl.name.clone(),
+                span: module_decl.span,
+            });
+            return Err(errors);
+        };
+
+        {
             let mut exported_names = HashSet::new();
 
             for export_item in &export_block.items {

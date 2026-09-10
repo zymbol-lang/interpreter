@@ -13,6 +13,9 @@ zymbol-ast.workspace = true
 zymbol-lexer.workspace = true
 zymbol-parser.workspace = true
 zymbol-semantic = { path = "../zymbol-semantic" }
+# std/time: the civil calendar and the zone lookup, shared with the register VM
+# so the two engines cannot disagree about what a month is.
+zymbol-intrinsics.workspace = true
 unicode-width.workspace = true
 unicode-segmentation.workspace = true
 thiserror.workspace = true

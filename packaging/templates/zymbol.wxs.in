@@ -16,7 +16,7 @@
       Compressed="yes"
       InstallScope="perMachine"
       Description="Zymbol symbolic programming language"
-      Comments="Keyword-free symbolic programming language" />
+      Comments="Symbolic programming language with no words in its grammar" />
 
     <MajorUpgrade
       DowngradeErrorMessage="A newer version of Zymbol-Lang is already installed." />
