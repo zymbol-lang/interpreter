@@ -119,6 +119,24 @@ jobs:
       # body run over. An application whose checkout is absent is reported absent
       # and not counted, so a failure to clone one would quietly shrink the gate:
       # `set -e` makes it fail here instead.
+      #
+      # ZyAudit is deliberately NOT cloned, and its absence is the mechanism
+      # apps.toml documents for exactly this. Four of its eight goldens record
+      # the machine that wrote them rather than the program:
+      #
+      #   test_召模      `已安装: #1` — that Ollama is installed and answering
+      #                  on localhost:11434. `模_已装()` checks the binary and
+      #                  `模_检查()` the service.
+      #   test_构提      the other three shell out, and the golden holds the
+      #   test_解析      system's error text: "No existe el fichero o el
+      #   test_计量      directorio". A runner answers in English, so the
+      #                  goldens encode a Spanish locale.
+      #
+      # Neither is something a runner should fake — installing a language model
+      # on CI to turn one golden green answers the wrong question. They stay
+      # covered by the local run before a merge, which is where the service and
+      # the locale actually are. Cloning it again is one line, once the four
+      # goldens stop recording their machine.
       - name: The applications written in Zymbol
         run: |
           set -euo pipefail
@@ -128,7 +146,6 @@ jobs:
           git clone --depth 1 https://github.com/zymbol-lang/zy-Serpiente.git    serpiente
           git clone --depth 1 https://github.com/zymbol-lang/zyKlingonGalaxy.git klingon_galaxy
           git clone --depth 1 https://github.com/zymbol-lang/zy-Zofia.git        Zofia
-          git clone --depth 1 https://github.com/zymbol-lang/zy-ZyAudit.git      ZyAudit
           git clone --depth 1 https://github.com/zymbol-lang/ZyBank.git          ZyBank
 
       - uses: dtolnay/rust-toolchain@stable
