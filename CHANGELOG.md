@@ -7,15 +7,17 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
-## [0.0.9] — unreleased
-
-In development on the `v0.0.9` branch. `Cargo.toml` already reads `0.0.9`, so this
-section exists to keep the manifest and the changelog from disagreeing about what
-version the tree is; entries move under a date when the release is cut.
+## [0.0.9] — 2026-09-09
 
 The Windows work that began as `v0.0.8_HotFix01` belongs here. Eleven findings is not
 a patch on top of a release, so there is **no 0.0.8.1**: the branch became `v0.0.9` and
 those corrections ship inside it. See [WINDOWS_V009.md](WINDOWS_V009.md).
+
+This is also the first release with a gate that runs somewhere other than the author's
+machine. `.github/workflows/gate.yml` assembles the twelve checkouts ZyQuality, ZyDDT
+and ZyFmtCheck resolve against and runs them on every push, and `verify-linux-packages.yml`
+can reach the corpus again — it could not, once the corpus moved out of this repository,
+which would have published this release with no Linux package at all.
 
 ### Added
 
@@ -2624,6 +2626,7 @@ Initial release — Zymbol-Lang interpreter v5I.
 
 ---
 
+[0.0.9]: https://github.com/zymbol-lang/interpreter/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/zymbol-lang/interpreter/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/zymbol-lang/interpreter/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/zymbol-lang/interpreter/compare/v0.0.5...v0.0.6
