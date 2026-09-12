@@ -1184,7 +1184,29 @@ impl TypeChecker {
             }
 
             Statement::DestructureAssign(d) => {
-                self.infer_expr(&d.value);
+                let value_ty = self.infer_expr(&d.value);
+                // The pattern is typed (REFERENCE.md L32): `[ … ]` takes an
+                // array, `( … )` a tuple, `#( … )` a dictionary. When the shape
+                // of the value is known here, the mismatch is known here too —
+                // and the alternative was finding it at the first frame of a
+                // game, with no file and no line, which is how klingon_galaxy
+                // came to unpack a tuple with `[ … ]` in 38 places.
+                //
+                // A warning rather than an error, deliberately: the mismatch is
+                // catchable with `!?`, and `errors/runtime/destructure_pattern_type.zy`
+                // catches it on purpose. Refusing the program would take that
+                // away, and this check knows the shape of a value in only some
+                // of the places one comes from — a rule that fires sometimes is
+                // not one a program can be refused on.
+                if let Some((want, got)) = destructure_shape_mismatch(&d.pattern, &value_ty) {
+                    self.warnings.push(
+                        Diagnostic::warning(format!(
+                            "{} pattern requires {}, got {}", want.0, want.1, got))
+                            .with_span(d.span)
+                            .with_help(format!(
+                                "unpack {} with {} — the pattern is typed, and this one fails at run time", got, shape_pattern_for(got)))
+                    );
+                }
                 // Define each bound variable as Any (pattern may bind any type)
                 let names: Vec<String> = match &d.pattern {
                     DestructurePattern::Array(items) | DestructurePattern::Positional(items) => {
@@ -2388,7 +2410,14 @@ impl TypeChecker {
                 let collection_type = self.infer_expr(&op.collection);
                 let element_type = self.infer_expr(&op.element);
                 self.check_element_fits("append", &collection_type, &element_type, op.element.span());
-                collection_type
+                // Appending to an array that does not yet know what it holds
+                // teaches it: `a = []` then `a = a $+ (1, 2)` is an array of
+                // tuples, and `a[1]` is a tuple. That is how every one of these
+                // programs builds a collection — the literal-of-tuples form the
+                // inference already understood is the rare one — so without
+                // this the shape of an element is never known and the check
+                // above finds nothing outside a test.
+                refine_element(collection_type, element_type)
             }
             // `$+[i]` puts an element INTO an array, so it is checked like `$+`
             // (L46). Until v0.0.9 only the literal and `$+` were checked, so
@@ -2783,6 +2812,65 @@ impl Default for TypeChecker {
 mod tests {
     use super::*;
 
+    // ── The destructuring pattern's shape (REFERENCE.md L32) ────────────────
+
+    /// Warnings raised by the type checker for one source.
+    fn warnings_for(src: &str) -> Vec<String> {
+        use zymbol_lexer::Lexer;
+        use zymbol_parser::Parser;
+        use zymbol_span::FileId;
+        let (tokens, diags) = Lexer::new(src, FileId(0)).tokenize();
+        assert!(diags.is_empty(), "lex errors: {diags:?}");
+        let program = Parser::new(tokens).parse().expect("test source must parse");
+        let mut checker = TypeChecker::new();
+        checker.check(&program).iter().map(|d| d.message.clone()).collect()
+    }
+
+    fn shape_warnings(src: &str) -> Vec<String> {
+        warnings_for(src).into_iter().filter(|m| m.contains("pattern requires")).collect()
+    }
+
+    #[test]
+    fn array_pattern_on_a_tuple_literal_warns() {
+        let w = shape_warnings("[x, y] = (1, 2)\n>> x ¶\n>> y ¶\n");
+        assert_eq!(w, vec!["array '[ … ]' pattern requires an array, got ##)"]);
+    }
+
+    #[test]
+    fn tuple_pattern_on_an_array_literal_warns() {
+        let w = shape_warnings("(x, y) = [1, 2]\n>> x ¶\n>> y ¶\n");
+        assert_eq!(w, vec!["tuple '( … )' pattern requires a tuple, got ##]"]);
+    }
+
+    /// The shape travels with the variable: this is the form the applications
+    /// were written in, one statement apart rather than in the same one.
+    #[test]
+    fn array_pattern_on_a_variable_holding_a_tuple_warns() {
+        let w = shape_warnings("t = (1, 2)\n[x, y] = t\n>> x ¶\n>> y ¶\n");
+        assert_eq!(w.len(), 1, "expected one warning, got {w:?}");
+    }
+
+    /// And through a function's return, which is where the 24 sites fixed in
+    /// klingon_galaxy on 2026-09-09 came from.
+    #[test]
+    fn array_pattern_on_a_tuple_returning_call_warns() {
+        let w = shape_warnings("f() { <~ (1, 2) }\n[x, y] = f()\n>> x ¶\n>> y ¶\n");
+        assert_eq!(w.len(), 1, "expected one warning, got {w:?}");
+    }
+
+    #[test]
+    fn matching_shapes_are_silent() {
+        assert!(shape_warnings("[x, y] = [1, 2]\n>> x ¶\n>> y ¶\n").is_empty());
+        assert!(shape_warnings("(x, y) = (1, 2)\n>> x ¶\n>> y ¶\n").is_empty());
+    }
+
+    /// A shape this pass cannot decide says nothing. Warning on `Unknown` would
+    /// refuse working programs, and there are more of those than of mistakes.
+    #[test]
+    fn an_undecidable_shape_is_silent() {
+        assert!(shape_warnings("g(t) {\n    [x, y] = t\n    <~ x + y\n}\n>> g((1,2)) ¶\n").is_empty());
+    }
+
     #[test]
     fn test_type_names() {
         assert_eq!(ZymbolType::Int.name(), "Int");
@@ -2848,5 +2936,75 @@ mod tests {
         let (params, ret) = sig.unwrap();
         assert_eq!(params.len(), 2);
         assert_eq!(*ret, ZymbolType::Int);
+    }
+}
+
+/// The pattern's own spelling, what it accepts, and the type symbol of what it
+/// got — or `None` when the shapes agree or the value's shape is not known.
+///
+/// Only a value whose shape is CERTAIN is reported. `Unknown`, `Any`, and every
+/// scalar are silent: a scalar reaching a destructuring is a different mistake
+/// and has its own message at run time, and guessing at `Unknown` would refuse
+/// working programs.
+fn destructure_shape_mismatch(
+    pattern: &DestructurePattern,
+    ty: &ZymbolType,
+) -> Option<((&'static str, &'static str), &'static str)> {
+    use zymbol_common::typesym;
+    let got = match ty {
+        ZymbolType::Array(_) => typesym::ARRAY,
+        ZymbolType::Tuple(_) => typesym::TUPLE,
+        ZymbolType::NamedTuple(_) => typesym::DICT,
+        _ => return None,
+    };
+    let ok = match pattern {
+        DestructurePattern::Array(_) => got == typesym::ARRAY,
+        DestructurePattern::Positional(_) => got == typesym::TUPLE,
+        DestructurePattern::NamedTuple(_) => got == typesym::DICT,
+    };
+    if ok {
+        return None;
+    }
+    let want = match pattern {
+        DestructurePattern::Array(_) => ("array '[ … ]'", "an array"),
+        DestructurePattern::Positional(_) => ("tuple '( … )'", "a tuple"),
+        DestructurePattern::NamedTuple(_) => ("dictionary '#( … )'", "a dictionary"),
+    };
+    Some((want, got))
+}
+
+/// The pattern that does unpack a value of this type.
+fn shape_pattern_for(got: &str) -> &'static str {
+    use zymbol_common::typesym;
+    match got {
+        s if s == typesym::ARRAY => "[ … ]",
+        s if s == typesym::TUPLE => "( … )",
+        _ => "#( … )",
+    }
+}
+
+/// An array whose element type is not yet known learns it from what is put in.
+///
+/// Only from unknown to known, and never the reverse: an array that already
+/// holds a type keeps it, so a second append of a different type is left to
+/// `check_element_fits` — which is the check that owns heterogeneity (L11), and
+/// it must not be quietly re-typed out from under it.
+///
+/// `Array(Any)` — what an empty `[]` literal infers as — is deliberately NOT
+/// refined, even though `a = []` before the loop that fills it is the common
+/// shape. Refining it makes the very next line, `a = a $+ (1, 2)`, report
+/// *type mismatch: 'a' was [Any] but assigned [(Int, Int)]*: the reassignment
+/// check reads a specialization as a change of type. Teaching that check to
+/// accept `Array(Any) → Array(T)` is the way in, and it belongs to that check
+/// rather than to this one.
+fn refine_element(collection: ZymbolType, element: ZymbolType) -> ZymbolType {
+    match &collection {
+        ZymbolType::Array(inner)
+            if matches!(**inner, ZymbolType::Unknown)
+                && !matches!(element, ZymbolType::Unknown | ZymbolType::Any) =>
+        {
+            ZymbolType::Array(Box::new(element))
+        }
+        _ => collection,
     }
 }

@@ -21,7 +21,7 @@ use zymbol_ast::AssignSugar;
 use zymbol_ast::Pattern;
 use zymbol_ast::BasePrefix;
 use zymbol_ast::CastKind;
-use zymbol_bytecode::{BuildPart, Chunk, CompiledProgram, FuncIdx, InputKind, Instruction, Label, Reg, StrIdx};
+use zymbol_bytecode::{BuildPart, Chunk, CompiledProgram, FuncIdx, InputKind, Instruction, Label, Reg, SrcPos, StrIdx};
 use zymbol_common::{BinaryOp, Literal, UnaryOp};
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -99,6 +99,12 @@ struct FunctionCtx {
     hot_vars: HashSet<String>,
     /// Postfix-hot variables (x° only): scoped to their loop, reset to Unit when loop ends
     postfix_hot_vars: HashSet<String>,
+    /// Source position of every emitted instruction, one entry per instruction.
+    src: Vec<SrcPos>,
+    /// The statement currently being compiled. `emit` stamps it onto whatever
+    /// it emits, so an instruction can be traced back to the line that asked
+    /// for it without threading a span through every compile_* function.
+    cur_src: SrcPos,
 }
 
 impl FunctionCtx {
@@ -110,6 +116,8 @@ impl FunctionCtx {
             reg_types: Vec::new(),
             next_reg: 0,
             instructions: Vec::new(),
+            src: Vec::new(),
+            cur_src: SrcPos::default(),
             loop_stack: Vec::new(),
             name: name.into(),
         }
@@ -163,6 +171,7 @@ impl FunctionCtx {
     fn emit(&mut self, instr: Instruction) -> usize {
         let pos = self.instructions.len();
         self.instructions.push(instr);
+        self.src.push(self.cur_src);
         pos
     }
 
@@ -239,12 +248,14 @@ impl FunctionCtx {
     fn into_chunk(mut self, num_params: u16) -> Chunk {
         let old_num_registers = self.next_reg;
         self.emit(Instruction::Halt);
-        let (instructions, num_registers) = eliminate_dead_code(self.instructions, old_num_registers);
+        let (instructions, src, num_registers) =
+            eliminate_dead_code(self.instructions, self.src, old_num_registers);
         Chunk {
             name: self.name,
             instructions,
             num_registers,
             num_params,
+            src,
         }
     }
 }
@@ -345,6 +356,13 @@ pub struct Compiler {
     base_dir: Option<PathBuf>,
     /// Files currently being compiled (for circular import detection)
     loading_stack: HashSet<PathBuf>,
+    /// Every file compiled into this program, indexed by `SrcPos::file`.
+    /// Index 0 is the script; a module joins the list when it is first compiled.
+    files: Vec<String>,
+    /// Which of `files` the statements now being compiled belong to. Saved and
+    /// restored around each module, so a module's bodies are stamped with the
+    /// module even though the compiler is one object for the whole program.
+    cur_file: u16,
     /// Local function scope active during module compilation (plain name → FuncIdx).
     /// Allows module functions to call private sibling functions.
     module_scope: HashMap<String, FuncIdx>,
@@ -419,6 +437,19 @@ impl Compiler {
     }
 
     pub fn compile_with_dir(program: &zymbol_ast::Program, base_dir: Option<&Path>) -> Result<CompiledProgram, CompileError> {
+        Self::compile_named(program, base_dir, None)
+    }
+
+    /// Compile, recording `main_name` as the file the top-level statements came
+    /// from. A runtime error reports the file it happened in, and the script's
+    /// own name is the one thing the AST does not carry — so whoever read the
+    /// file hands it over. Without it the script's frames report a line and no
+    /// file, which is what `None` means downstream.
+    pub fn compile_named(
+        program: &zymbol_ast::Program,
+        base_dir: Option<&Path>,
+        main_name: Option<&str>,
+    ) -> Result<CompiledProgram, CompileError> {
         let mut compiler = Compiler {
             string_pool: Vec::new(),
             functions: Vec::new(),
@@ -429,6 +460,8 @@ impl Compiler {
             in_function_body: false,
             base_dir: base_dir.map(|p| p.to_path_buf()),
             loading_stack: HashSet::new(),
+            files: vec![main_name.unwrap_or("").to_string()],
+            cur_file: 0,
             module_scope: HashMap::new(),
             global_var_map: HashMap::new(),
             global_var_inits: Vec::new(),
@@ -567,6 +600,7 @@ impl Compiler {
         compiled.functions = compiler.functions;
         compiled.string_pool = compiler.string_pool;
         compiled.global_var_inits = compiler.global_var_inits;
+        compiled.files = compiler.files;
         Ok(compiled)
     }
 
@@ -716,10 +750,27 @@ impl Compiler {
 
         let module_base_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
+        // From here to the end of this module, instructions belong to the
+        // module's file. Saved and restored rather than set once: a module that
+        // imports another must go back to being itself when that one is done.
+        let saved_file = self.cur_file;
+        let module_file_idx = {
+            let name = zymbol_span::display_path(&path);
+            match self.files.iter().position(|f| *f == name) {
+                Some(i) => i as u16,
+                None => {
+                    self.files.push(name);
+                    (self.files.len() - 1) as u16
+                }
+            }
+        };
+        self.cur_file = module_file_idx;
+
         // Recursively process sub-imports of the module (for nested imports like i18n modules)
         for sub_import in &module_prog.imports {
             self.compile_import(sub_import, &module_base_dir)?;
         }
+        self.cur_file = module_file_idx;
 
         let alias = import.alias.clone();
 
@@ -927,8 +978,10 @@ impl Compiler {
         self.register_module_alias(&alias, &exports);
         self.compiled_modules.insert(canonical.clone(), exports);
 
-        // Done with this module — remove from loading stack
+        // Done with this module — remove from loading stack, and go back to
+        // being whichever file asked for it.
         self.loading_stack.remove(&canonical);
+        self.cur_file = saved_file;
 
         Ok(())
     }
@@ -1040,6 +1093,12 @@ impl Compiler {
         stmt: &Statement,
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
+        // Everything emitted from here on belongs to this statement, until the
+        // next one says otherwise. Nested statements overwrite it and do not
+        // restore it, which is right: the instructions that follow an inner
+        // block really do belong to whatever ran last.
+        let sp = stmt.span();
+        ctx.cur_src = SrcPos { file: self.cur_file, line: sp.start.line, column: sp.start.column };
         match stmt {
             Statement::Assignment(a) => {
                 // Hot/pre_hot assignment (x° or °x): pre-initialize to neutral element if variable is new
@@ -4698,9 +4757,13 @@ fn collect_free_in_stmts(
 // Forward reachability analysis: mark every instruction reachable from IP 0,
 // remap jump targets, recalculate num_registers from surviving instructions.
 
-fn eliminate_dead_code(instructions: Vec<Instruction>, old_num_regs: u16) -> (Vec<Instruction>, u16) {
+fn eliminate_dead_code(
+    instructions: Vec<Instruction>,
+    src: Vec<SrcPos>,
+    old_num_regs: u16,
+) -> (Vec<Instruction>, Vec<SrcPos>, u16) {
     let n = instructions.len();
-    if n == 0 { return (instructions, old_num_regs); }
+    if n == 0 { return (instructions, src, old_num_regs); }
 
     // --- Pass 1: mark reachable instructions via BFS/DFS ---
     let mut reachable = vec![false; n];
@@ -4741,7 +4804,7 @@ fn eliminate_dead_code(instructions: Vec<Instruction>, old_num_regs: u16) -> (Ve
 
     // Quick exit: if everything is reachable, skip transformation
     if reachable.iter().all(|&r| r) {
-        return (instructions, old_num_regs);
+        return (instructions, src, old_num_regs);
     }
 
     // --- Pass 2: build old-IP → new-IP mapping ---
@@ -4774,11 +4837,20 @@ fn eliminate_dead_code(instructions: Vec<Instruction>, old_num_regs: u16) -> (Ve
         })
         .collect();
 
+    // The positions travel with the instructions they belong to — an entry
+    // dropped here would shift every later line by one.
+    let new_src: Vec<SrcPos> = src
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| reachable[*i])
+        .map(|(_, p)| p)
+        .collect();
+
     // --- Pass 4: recalculate num_registers from surviving instructions ---
     let max_reg = max_reg_used(&new_instructions);
     let num_registers = max_reg.map(|r| r + 1).unwrap_or(0).max(old_num_regs.min(1));
 
-    (new_instructions, num_registers)
+    (new_instructions, new_src, num_registers)
 }
 
 /// Return the (function_name, builtin_id) pairs for a known stdlib module path,

@@ -426,6 +426,25 @@ pub struct Chunk {
     pub instructions: Vec<Instruction>,
     pub num_registers: u16,
     pub num_params: u16,
+    /// Where each instruction came from, one entry per instruction.
+    ///
+    /// A runtime error otherwise names a message and nothing else, and a
+    /// program of five modules gives no way to guess which file it came from.
+    /// The compiler stamps the statement being compiled onto every instruction
+    /// it emits, so the VM can answer the question from the instruction pointer
+    /// it already has.
+    #[serde(default)]
+    pub src: Vec<SrcPos>,
+}
+
+/// The source position an instruction was compiled from. `file` indexes
+/// `CompiledProgram::files`; a chunk compiled before this existed has an empty
+/// `src`, which reads as "unknown" rather than as line 0.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct SrcPos {
+    pub file: u16,
+    pub line: u32,
+    pub column: u32,
 }
 
 impl Chunk {
@@ -435,6 +454,7 @@ impl Chunk {
             instructions: Vec::new(),
             num_registers: 0,
             num_params: 0,
+            src: Vec::new(),
         }
     }
 }
@@ -545,6 +565,12 @@ pub struct CompiledProgram {
     pub string_pool: Vec<String>,
     /// Initial values for module global variables (indexed by LoadGlobal/StoreGlobal idx)
     pub global_var_inits: Vec<GlobalInit>,
+    /// The files this program was compiled from, indexed by `SrcPos::file`.
+    /// Index 0 is the script itself; a module is added when it is first
+    /// compiled, so the name a runtime error reports is the file the failing
+    /// line is actually in.
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 impl CompiledProgram {
@@ -554,6 +580,7 @@ impl CompiledProgram {
             functions: Vec::new(),
             string_pool: Vec::new(),
             global_var_inits: Vec::new(),
+            files: Vec::new(),
         }
     }
 }

@@ -475,6 +475,11 @@ impl<W: Write> Interpreter<W> {
         //   carry only origin_module_path.
         // Main-script functions have origin_module_path = Some(main.zy), which is
         // NOT in loaded_modules, so they resolve to None (script path below).
+        // The file this body's line numbers belong to. `origin_module_path` is
+        // set for every Zymbol function — a module's, and the main script's too
+        // — which is exactly the question an error needs answered.
+        let body_file: Option<std::path::PathBuf> = origin_module_path.clone();
+
         let module_ctx_path: Option<std::path::PathBuf> = if let Some((_, module_path)) = &module_info {
             Some(origin_module_path.as_ref().unwrap_or(module_path).clone())
         } else {
@@ -655,7 +660,16 @@ impl<W: Write> Interpreter<W> {
                 if let Some(caller_functions) = saved_functions {
                     self.functions = caller_functions;
                 }
-                return Err(e);
+                // The innermost frame that knows the file names it. A module
+                // function's body lines are lines of the module, not of the
+                // script that called it, and `locate` leaves an already-located
+                // error alone — so the file reported is the one the error was
+                // raised in, however deep the call chain.
+                let where_from = body_file.as_deref().or(self.current_file.as_deref());
+                return Err(match where_from {
+                    Some(f) => e.locate(f, self.cur_stmt_line),
+                    None => e,
+                });
             }
 
             if self.tco_pending {

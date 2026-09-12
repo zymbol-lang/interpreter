@@ -369,6 +369,61 @@ mod tests {
         String::from_utf8(output).expect("Invalid UTF-8")
     }
 
+    // ── A runtime error says where it happened ──────────────────────────────
+
+    /// Run a program that is expected to fail, and report where the error says
+    /// it happened. `set_current_file` is what the CLI does; without it there
+    /// is nothing to name and the error stays unlocated, which is also correct.
+    fn location_of(source: &str) -> Option<(String, u32)> {
+        let mut output = Vec::new();
+        let (tokens, diags) = Lexer::new(source, FileId(0)).tokenize();
+        assert!(diags.is_empty(), "Lexer errors: {diags:?}");
+        let program = Parser::new(tokens).parse().expect("Parse error");
+        let mut interpreter = Interpreter::with_output(&mut output);
+        interpreter.set_current_file(std::path::Path::new("prog.zy"));
+        let err = interpreter.execute(&program).expect_err("this program must fail");
+        err.location().map(|(f, l)| (f.to_string(), l))
+    }
+
+    #[test]
+    fn a_runtime_error_names_its_file_and_line() {
+        assert_eq!(
+            location_of("a = 1\nb = 0\nc = a / b\n>> c ¶\n"),
+            Some(("prog.zy".to_string(), 3))
+        );
+    }
+
+    /// The line is the STATEMENT's, not the span the error happens to carry —
+    /// several are built with a default span, and reporting those meant line 1
+    /// for a failure four lines down. The register VM and the browser engine
+    /// both answer the statement, and the three are compared on the text.
+    #[test]
+    fn the_line_is_the_statement_that_failed() {
+        assert_eq!(location_of("// a comment\n\n\n>> (7 > ##_) ¶\n"), Some(("prog.zy".to_string(), 4)));
+    }
+
+    /// Inside a function, the line is the failing statement in the body.
+    #[test]
+    fn a_failure_inside_a_function_names_the_body_line() {
+        assert_eq!(
+            location_of("f(x) {\n    y = 0\n    <~ x / y\n}\n>> f(1) ¶\n"),
+            Some(("prog.zy".to_string(), 3))
+        );
+    }
+
+    /// Attaching a location must not change what the message says: `!?`
+    /// classifies an error by its text, and `zyq consensus` compares it.
+    #[test]
+    fn locating_leaves_the_message_alone() {
+        let mut output = Vec::new();
+        let (tokens, _) = Lexer::new("x = 1 / 0\n", FileId(0)).tokenize();
+        let program = Parser::new(tokens).parse().expect("Parse error");
+        let mut interpreter = Interpreter::with_output(&mut output);
+        interpreter.set_current_file(std::path::Path::new("prog.zy"));
+        let err = interpreter.execute(&program).expect_err("this program must fail");
+        assert_eq!(err.to_string(), "division by zero");
+    }
+
     #[test]
     fn test_assignment() {
         let output = run("x = \"hello\"\n>> x ¶");

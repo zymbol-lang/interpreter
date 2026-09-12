@@ -522,6 +522,30 @@ tuple"* — with `[H, W]`. All four now say `(H, W)`. Regression tests:
 `corpus/errors/runtime/destructure_pattern_type.zy` (both directions, caught with `!?` so the
 message can be compared across engines).
 
+**And a warning before it runs, where the shape is known** (2026-09-10). Refusing the program
+was rejected: the failure is catchable with `!?` — the corpus file above catches it on
+purpose — and a rule that can decide only some of the cases is not one a program can be
+refused on. `zymbol check` says
+
+```text
+warning: array '[ … ]' pattern requires an array, got ##)
+  --> file.zy:12
+  = help: unpack ##) with ( … ) — the pattern is typed, and this one fails at run time
+```
+
+for a value whose shape is **certain**: a literal in place, a variable whose last assignment
+was one, an element of an array literal, and the return of a function declared in the same
+file. The browser engine decides the first two — it has no type system — and says nothing
+about the other two; neither engine refuses the program, so all three still run every program
+identically. What no engine decides statically is a **parameter** and an element of a
+collection built with `$+`, which is where the 38 sites found in `klingon_galaxy` on
+2026-09-10 lived: closing those needs inference across function and module boundaries.
+
+Until then, the check that does find them reads the source rather than the types: cross what
+each function returns and what each collection is grown with against how each is unpacked.
+That is how both rounds of the klingon_galaxy fix were found — 24 by the return path on
+2026-09-09, 38 by the element and parameter paths the day after.
+
 ### ~~L33 — The last name of a pattern does not absorb the remainder~~ Fixed in v0.0.9
 
 Today a pattern truncates in one direction and under-fills in the other, and neither is
@@ -1365,6 +1389,25 @@ Runtime errors carry a **kind** (e.g., `##Index`, `##Div`, `##Type`, `##Range`, 
     >> _err ¶   // ##Index(array index out of bounds: index 99 for array of length 3)
 }
 ```
+
+**An uncaught one says where it happened** (2026-09-10), on a second line, in every engine:
+
+```text
+Runtime error: array index out of bounds: index 99 for array of length 3
+  --> juego/tablero.zy:41
+```
+
+The file is the one the failing statement is **written in** — a module reports itself, not the
+script that called it — spelled relative to the working directory when it lies under it. The
+line is the statement that failed, which is why there is no column: a statement's span starts
+at its indentation, and the browser engine's tokens carry no column at all, so `file:line:col`
+would have been a three-engine divergence by construction.
+
+It is the second line of the message and never part of it, so `!?` catches exactly the text it
+always did. `zyq`'s golden filter drops every `  -->` line, the same as for a warning, so no
+golden records a path — the engines are compared on it by ZyDDT instead, which is what found
+the tree-walker reporting line 1 for a failure on line 4: it was using the span the error
+carried, and several are built with a default one.
 
 ---
 

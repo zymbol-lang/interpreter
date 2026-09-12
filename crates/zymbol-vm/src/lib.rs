@@ -549,6 +549,24 @@ pub enum VmError {
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Generic(String),
+
+    /// A runtime error that knows where it happened. Built once, at the edge of
+    /// `run`, from the instruction pointer the VM was on — so the hot loop pays
+    /// two stores per instruction and nothing more. `Display` is the message
+    /// alone, so `!?` catches the same text it always did.
+    #[error("{message}")]
+    Located { message: String, file: String, line: u32, column: u32 },
+}
+
+impl VmError {
+    /// Where the error happened, if it knows. Line only — see
+    /// `RuntimeError::location` for why there is no column.
+    pub fn location(&self) -> Option<(&str, u32)> {
+        match self {
+            VmError::Located { file, line, .. } => Some((file, *line)),
+            _ => None,
+        }
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1083,6 +1101,13 @@ pub struct VM<W: Write> {
     cli_args: Vec<String>,
     /// The code a top-level `<~ n` asked the program to end with (GAP-ZYB-006).
     exit_code: Option<i64>,
+    /// The instruction the dispatch loop is on, and which chunk it belongs to
+    /// (`u32::MAX` = the main chunk). Written once per instruction so that an
+    /// error leaving the loop can be told where it came from — the loop's own
+    /// `ip` is a local, and by the time `?` has carried the error out of `run`
+    /// there is nothing left to ask.
+    cur_ip: u32,
+    cur_chunk: u32,
     output: W,
 }
 
@@ -1098,6 +1123,8 @@ impl<W: Write> VM<W> {
             global_vars: Vec::new(),
             cli_args: Vec::new(),
             exit_code: None,
+            cur_ip: 0,
+            cur_chunk: u32::MAX,
             output,
         }
     }
@@ -1127,6 +1154,48 @@ impl<W: Write> VM<W> {
     }
 
     pub fn run(&mut self, program: &CompiledProgram) -> Result<(), VmError> {
+        match self.run_inner(program) {
+            Ok(()) => Ok(()),
+            // The one place a VM error learns where it came from: `cur_ip` and
+            // `cur_chunk` still hold the instruction that raised, and the chunk
+            // knows which line of which file it was compiled from.
+            Err(e) => Err(self.locate(e, program)),
+        }
+    }
+
+    /// Attach the failing instruction's source position, when the program was
+    /// compiled with one. A chunk with no `src` (an older bundle, or one built
+    /// before positions existed) reports nothing rather than line 0.
+    fn locate(&self, err: VmError, program: &CompiledProgram) -> VmError {
+        // Already located — an inner frame that knew better wins.
+        if matches!(err, VmError::Located { .. }) {
+            return err;
+        }
+        let chunk = if self.cur_chunk == u32::MAX {
+            &program.main
+        } else {
+            match program.functions.get(self.cur_chunk as usize) {
+                Some(c) => c,
+                None => return err,
+            }
+        };
+        let Some(pos) = chunk.src.get(self.cur_ip as usize) else { return err };
+        if pos.line == 0 {
+            return err;
+        }
+        let Some(file) = program.files.get(pos.file as usize) else { return err };
+        if file.is_empty() {
+            return err;
+        }
+        VmError::Located {
+            message: err.to_string(),
+            file: file.clone(),
+            line: pos.line,
+            column: pos.column,
+        }
+    }
+
+    fn run_inner(&mut self, program: &CompiledProgram) -> Result<(), VmError> {
         // Reset flat stack for this execution
         self.value_stack.clear();
         self.frame_stack.clear();
@@ -1398,6 +1467,11 @@ impl<W: Write> VM<W> {
 
             // Reference (no clone!) — safe because chunk borrows from program, not self
             let instr = &chunk.instructions[ip];
+            // Where we are, for whoever has to report an error. Two stores of a
+            // register-resident u32; the alternative was threading a position
+            // through every `?` in the match below.
+            self.cur_ip = ip as u32;
+            self.cur_chunk = chunk_idx as u32;
             // Advance IP before executing (branches will override this)
             ip += 1;
 
@@ -3812,6 +3886,8 @@ impl<W: Write> VM<W> {
             let chunk = &program.functions[chunk_idx];
             if ip >= chunk.instructions.len() { break; }
             let instr = &chunk.instructions[ip];
+            self.cur_ip = ip as u32;
+            self.cur_chunk = chunk_idx as u32;
             ip += 1;
             macro_rules! r { ($r:expr) => { &self.value_stack[base + $r as usize] } }
             macro_rules! w { ($r:expr, $v:expr) => { self.value_stack[base + $r as usize] = $v } }

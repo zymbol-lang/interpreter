@@ -286,3 +286,16 @@ mod tests {
         assert_eq!(starts[2], 12);    // "line3"
     }
 }
+
+/// A path as a reader would type it: relative to the working directory when it
+/// lies under it, absolute otherwise.
+///
+/// Every engine names files this way, so a module and the script that imported
+/// it are spelled alike in a diagnostic — and a golden recorded on one machine
+/// still matches on another, which an absolute path would not.
+pub fn display_path(path: &std::path::Path) -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| path.display().to_string())
+}

@@ -527,7 +527,7 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
 
     if use_vm {
         // Sprint 4: Register VM path
-        let compiled = match Compiler::compile_with_dir(&program, path.parent()) {
+        let compiled = match Compiler::compile_named(&program, path.parent(), Some(&display_name)) {
             Ok(c) => c,
             Err(e) => {
                 // These errors match the tree-walker "Runtime error:" format
@@ -551,6 +551,9 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         vm.set_cli_args(args.clone());
         if let Err(e) = vm.run(&compiled) {
             eprintln!("Runtime error: {}", e);
+            if let Some((file, line)) = e.location() {
+                eprintln!("  --> {}:{}", file, line);
+            }
             return Ok(1);
         }
         // GAP-ZYB-006: a top-level `<~ n` is the program's exit status.
@@ -574,6 +577,12 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
 
         if let Err(e) = interpreter.execute(&program) {
             eprintln!("Runtime error: {}", e);
+            // Where it happened, spelled as the warnings above spell it. An
+            // error with no location says nothing extra rather than guessing at
+            // the entry file: a program of five modules gives no way to guess.
+            if let Some((file, line)) = e.location() {
+                eprintln!("  --> {}:{}", file, line);
+            }
             return Ok(1);
         }
         // GAP-ZYB-006: a top-level `<~ n` is the program's exit status.
