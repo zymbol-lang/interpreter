@@ -67,7 +67,62 @@ pub enum RuntimeError {
 
     #[error("failed to parse module: {0}")]
     ParseError(String),
+
+    /// A runtime error that knows where it happened.
+    ///
+    /// Every `Generic` already carries a `Span`, but a span alone names a line
+    /// in *some* file — and a program of five modules gives no way to guess
+    /// which. So the file is attached where it is known: the frame that was
+    /// executing when the error propagated out of a function body, and the
+    /// interpreter's own `current_file` at the top level. The `Display` is the
+    /// message and nothing else, so `!?` catches text that has not changed.
+    #[error("{message}")]
+    Located { message: String, file: String, line: u32, column: u32 },
 }
+
+impl RuntimeError {
+    /// Attach a file and line to an error that does not yet know where it
+    /// happened.
+    ///
+    /// The line is the **statement being executed**, not the span the error
+    /// carries. The two are usually the same and sometimes are not: a builtin
+    /// that raises with a span of its own, or one of the several errors built
+    /// with a default span, reported line 1 for a failure on line 4. The
+    /// register VM stamps the statement onto every instruction and the browser
+    /// engine onto every node, so the statement is also the answer the other
+    /// two give — and `zyq consensus` compares the text.
+    ///
+    /// Only an unlocated error is rewritten: the innermost frame that knows the
+    /// file wins, so an error raised in a module keeps the module's name as it
+    /// travels out through its callers.
+    pub fn locate(self, file: &std::path::Path, line: u32) -> Self {
+        match self {
+            RuntimeError::Generic { message, .. } if line > 0 => {
+                RuntimeError::Located {
+                    message,
+                    file: zymbol_span::display_path(file),
+                    line,
+                    column: 0,
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// Where the error happened, if it knows.
+    ///
+    /// Line only, no column: the span of a failing statement starts at its
+    /// indentation, so the column said nothing a reader could use — and the
+    /// browser engine's tokens carry no column at all, so a three-engine
+    /// `file:line:col` would have been a divergence by construction.
+    pub fn location(&self) -> Option<(&str, u32)> {
+        match self {
+            RuntimeError::Located { file, line, .. } => Some((file, *line)),
+            _ => None,
+        }
+    }
+}
+
 
 pub type Result<T> = std::result::Result<T, RuntimeError>;
 
@@ -611,6 +666,8 @@ pub struct Interpreter<W: Write> {
     frame_module_vars: HashMap<String, Value>,
     /// Current file path (for resolving relative imports)
     current_file: Option<PathBuf>,
+    /// Line of the statement now executing — see `execute_statement`.
+    cur_stmt_line: u32,
     /// Base directory for module resolution
     base_dir: PathBuf,
     /// The code a top-level `<~ n` asked the program to end with (GAP-ZYB-006).
@@ -1131,6 +1188,7 @@ impl Interpreter<std::io::Stdout> {
             import_aliases: ModuleAliases::default(),
             frame_module_vars: HashMap::new(),
             current_file: None,
+            cur_stmt_line: 0,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             exit_code: None,
             cli_args: None,
@@ -1187,6 +1245,7 @@ impl<W: Write> Interpreter<W> {
             import_aliases: ModuleAliases::default(),
             frame_module_vars: HashMap::new(),
             current_file: None,
+            cur_stmt_line: 0,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             exit_code: None,
             cli_args: None,
@@ -1543,7 +1602,16 @@ impl<W: Write> Interpreter<W> {
 
         // Execute statements with auto-destruction after each one's last uses
         for (i, statement) in program.statements.iter().enumerate() {
-            self.execute_statement(statement)?;
+            // Top level of this file: an error raised here has no enclosing
+            // function frame to name the file, so name it here. A module's body
+            // runs through its own `execute`, whose `current_file` is the
+            // module — so a module that fails while loading reports itself.
+            if let Err(e) = self.execute_statement(statement) {
+                return Err(match self.current_file.as_deref() {
+                    Some(f) => e.locate(f, self.cur_stmt_line),
+                    None => e,
+                });
+            }
 
             // GAP-ZYB-006: a `<~` that reaches the top level ends the program,
             // and its value is the exit status. The other two engines already
@@ -1608,6 +1676,11 @@ impl<W: Write> Interpreter<W> {
 
     /// Execute a single statement
     fn execute_statement(&mut self, statement: &Statement) -> Result<()> {
+        // The line an error raised from here is reported at. Written and never
+        // restored, so the innermost statement that ran is the one named —
+        // which is what the other two engines answer, and what a reader wants.
+        let line = statement.span().start.line;
+        if line > 0 { self.cur_stmt_line = line; }
         match statement {
             Statement::Output(output) => self.execute_output(output),
             Statement::Assignment(assign) => self.execute_assignment(assign),
@@ -2014,7 +2087,10 @@ impl<W: Write> Interpreter<W> {
             RuntimeError::Io(io_err) => {
                 Value::Error(ErrorValue::io(io_err.to_string()))
             }
-            RuntimeError::Generic { message, .. } => {
+            // A located error is a `Generic` that learned where it happened —
+            // `!?` classifies it by exactly the same text, so attaching a file
+            // never moves an error from one `##` family to another.
+            RuntimeError::Generic { message, .. } | RuntimeError::Located { message, .. } => {
                 // Try to classify the error based on message content
                 let lower_msg = message.to_lowercase();
                 // Checked before the rest: an integer that left its range is a

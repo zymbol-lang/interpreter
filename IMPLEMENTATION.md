@@ -1395,12 +1395,16 @@ interpolated_part =
   ;
 
 (*
-  Char literal: delimited by single quotes, exactly one grapheme cluster.
+  Char literal: delimited by single quotes, exactly one Unicode code point.
+  Not one grapheme cluster: the lexer consumes a single scalar value and then
+  demands the closing quote, so 'e\u{301}', a Devanagari consonant with its
+  virama, an emoji with a skin-tone modifier and a ZWJ sequence are all
+  rejected with `expected closing ' for char literal`.
   Escape sequences: \n  \t  \r  \'  \\  \0
   There is no \u{hex} escape for chars either.
 *)
 char_literal = "'" , ( char_char | char_escape ) , "'" ;
-char_char    = (* any Unicode grapheme cluster except  '  and  \ *) ;
+char_char    = (* any Unicode code point except  '  and  \ *) ;
 char_escape  = "\\n" | "\\t" | "\\r" | "\\'" | "\\\\" | "\\0" ;
 
 (*
