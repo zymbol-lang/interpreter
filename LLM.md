@@ -2,7 +2,8 @@
 
 Dense, executable-verified brief. Everything below was run through `zymbol 0.0.9` in
 both engines. Canonical sources: `GUIDE.md` (tutorial), `REFERENCE.md` (limits + full
-symbol table), `SYMBOLS.md` (why each mark has its shape).
+symbol table), `SYMBOLS.md` (why each mark has its shape), `AGENTIC.md` (what
+holds, and what does not, when the code is generated rather than written).
 
 **Zymbol has no keywords in any human language.** Every construct is a mark: `?` if,
 `@` loop, `<~` return, `>>` output, `#1` true. Identifiers may be in any script
@@ -308,7 +309,57 @@ before returning.
 
 ---
 
-## 12. Reference program
+## 12. Safeguards for generated code
+
+Properties you can rely on when writing Zymbol you will not run yourself — each
+verified in all three engines. Full treatment, with the probes and the ten known
+gaps: `AGENTIC.md`.
+
+- **Importing executes nothing.** A module body admits only imports, `#>`,
+  literal-initialised bindings and function definitions; anything that computes
+  is **E013**, before a statement runs. Omitting `#>` is **E014** — nothing is
+  exported by accident.
+- **The reachable program is static.** No dynamic import (a `<#` path is a
+  literal and must precede every statement), `</ p />` takes the path literally,
+  and there is **no `eval`**. Read the entry file, follow `<#`, and you have read
+  everything that can run.
+- **The effect surface is a closed lexical list**: `std/io` `std/net` `std/db`
+  `std/time` `std/random`, `<\ \>`, `</ />`, `<<`, `><`. Nothing else reaches
+  outside the process.
+- **Mutation is declared twice.** `<~` at the signature *and* at every call site,
+  each an error without the other — so a call says what it changes without
+  opening the function. `~` is a working copy; unmarked is by value.
+- **Writes do not escape a call.** No references, no aliasing (`Rc` + copy-on-write
+  is invisible). One read-side door: a named function *does* read the file's
+  top-level names, by value, at call time — a name from a block, from another
+  frame, from the importer or declared after it is refused statically.
+- **A module owns its environment.** Its mutable bindings cannot be exported
+  (`E005`); only constants and functions leave, so module state is reachable
+  only through that module's own functions. Identity is the file path: every
+  alias and importer shares that one environment.
+- **Lifetime is explicit or invisible**: `_x` is strictly block-local (error from
+  inner *and* outer), `\ x` destroys and a later use aborts, `:=` cannot be
+  reassigned, auto-free is required to be unobservable.
+- **Loud where models go wrong**: no coercion in `==`, no silent overflow, arity
+  checked statically, an unmatched `??` aborts, an unread variable warns,
+  `m[i][j]` is refused by name.
+
+Not guaranteed — do not assume these:
+
+- **No capability enforcement and no shell quoting.** `<\ "{cmd}" \>`
+  interpolates a runtime string straight into `sh -c`.
+- **No termination bound.** Infinite recursion and `@ { }` run until something
+  outside kills them.
+- **`check` does not catch everything it looks like it should**: use after `\`
+  and a non-exhaustive `??` are runtime-only.
+- **`?` with a non-Bool condition is not specified and the three engines
+  disagree** (`? [1,2] {}` runs the block in `zyvm`/`zyjs`, skips it in `zytw`;
+  warning only, exit 0). Write an explicit comparison — the no-truthiness rule of
+  §6 is enforced for loop specifiers, not for `?`.
+
+---
+
+## 13. Reference program
 
 ```zymbol
 <# std/math => M

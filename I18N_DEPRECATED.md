@@ -13,7 +13,7 @@
 > parse error: expected identifier in export item
 > ```
 >
-> Superseded by [`I18N.md`](I18N.md), which covers the same three-layer pattern with the
+> Superseded by `zymbol-design/I18N.md`, which covers the same three-layer pattern with the
 > current syntax — every example there is executed in both engines before publication —
 > and additionally documents runtime string localization, which this document never
 > covered.

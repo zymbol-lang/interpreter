@@ -129,7 +129,7 @@ They are documented in the manual as known limitations.
 | **Match identifier binding** | `pattern as name` — `[NI03]` — **dismissed 2026-06-12** | Extract the value before the match (the idiom) |
 | ~~**`$!!` from lambdas**~~ | **Resolved** — verified 2026-06-12: `$!!` propagates from lambdas identically to named functions (`zyquality/corpus/lambdas/error_propagate_lambda.zy`) | — |
 | **`do-while ~>`** | Post-condition loop `[NI01]` — **dismissed 2026-06-12** | Infinite loop with `@!` break at end (the idiom) |
-| ~~**Dict / map literal**~~ | **Resolved in v0.0.9** — the dictionary is `#(clave: valor)`: computed keys, insertion, removal, `@ k:d`, `##Key`, and `#()` for the empty one. No new *type* — it is the old named tuple — but it did get **a notation of its own**, and the bare `(a: 1)` is refused: the empty dictionary is what forced it, since `()` cannot be both that and the empty tuple. See [COLLECTIONS.md](COLLECTIONS.md) § 5 | — |
+| ~~**Dict / map literal**~~ | **Resolved in v0.0.9** — the dictionary is `#(clave: valor)`: computed keys, insertion, removal, `@ k:d`, `##Key`, and `#()` for the empty one. No new *type* — it is the old named tuple — but it did get **a notation of its own**, and the bare `(a: 1)` is refused: the empty dictionary is what forced it, since `()` cannot be both that and the empty tuple. See `zymbol-design/COLLECTIONS.md` § 5 | — |
 
 > **Dismissed 2026-06-12** (validated with the language author): `do-while ~>` and
 > match identifier binding will NOT be implemented. Their workarounds are the

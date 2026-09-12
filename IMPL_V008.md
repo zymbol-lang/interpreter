@@ -37,7 +37,7 @@
 Unlike v0.0.7 (a stdlib expansion designed up front), v0.0.8 is a **debt release**: its
 scope was set by two sources of evidence, not by a feature wish list —
 
-1. the design-vs-implementation audit in [MEMORY_MODEL.md](MEMORY_MODEL.md) (findings
+1. the design-vs-implementation audit in `zymbol-design/MEMORY_MODEL.md` (findings
    MM-1 … MM-9, plus MM-10/MM-11 found while verifying the fixes), and
 2. three **validation projects** written in Zymbol, each of which surfaced divergences
    that no unit test had.
@@ -63,7 +63,7 @@ write a real application in Zymbol
 | Project | What it is | Findings it produced |
 |---------|------------|----------------------|
 | [zy-GO](https://github.com/zymbol-lang/zy-GO) | Go/囲碁 engine, 13 modules across four subdirectories, TUI | HLZ-001 … HLZ-011 |
-| zy-Serpiente | Snake, TUI, i18n rework against [USERAPPI18N.md](USERAPPI18N.md) | HLZ-SRP-001 |
+| zy-Serpiente | Snake, TUI, i18n rework against `zymbol-design/USERAPPI18N.md` | HLZ-SRP-001 |
 | zyKlingonGalaxy | Space game written in pIqaD (Private Use Area identifiers) | HLZ-KL-001 |
 
 Two properties of this cycle matter more than the individual fixes:
@@ -577,7 +577,7 @@ should be decided explicitly before v0.0.9 rather than inherited silently.
 | Gap | v0.0.8 snapshot | Answered by |
 |-----|-----------------|-------------|
 | **Match multi-value arms** `[NI02]` | `1, 2 => "low"` — one arm, several values — is not parsed. Idiom: `[1, 2] => "low"` (list containment) | **Or-patterns `p1 \|\| p2` (v0.0.8)** — `1 \|\| 2 => "low"`, and unlike list containment they work for non-literal patterns. Shipped in this very release; § C was written before feature #10 landed and never revised |
-| **Dict / map literal** `[NI05]` | No `key: value` collection literal. Idiom: named tuples, or arrays of `(k, v)` pairs | **The dictionary `#(a: 1)` (v0.0.9)** — with `#()` for the empty one, which the named tuple could not spell, and `##(` as its type. `[COLLECTIONS.md](COLLECTIONS.md)` is the point of record |
+| **Dict / map literal** `[NI05]` | No `key: value` collection literal. Idiom: named tuples, or arrays of `(k, v)` pairs | **The dictionary `#(a: 1)` (v0.0.9)** — with `#()` for the empty one, which the named tuple could not spell, and `##(` as its type. ``zymbol-design/COLLECTIONS.md`` is the point of record |
 
 Already **dismissed** (2026-06-12, with the language author) and not to be reopened
 without new evidence: `do-while ~>` `[NI01]` and match identifier binding `[NI03]`.
