@@ -85,7 +85,7 @@ across v0.0.5–v0.0.9 it coined exactly **one** new base mark (`°`, the hot-de
 diacritic) and derived everything else from marks already in the inventory.
 
 Stating it this way makes it falsifiable, which is the point: for any operator you either can
-segment and gloss it, or you cannot. [SYMBOLS.md](./SYMBOLS.md) does that count for the whole
+segment and gloss it, or you cannot. `zymbol-design/SYMBOLS.md` does that count for the whole
 inventory — transparent forms (the majority), semi-transparent (6, where the whole means more
 than the parts), and **opaque** (10, which must simply be learned: `¶`, `><`, `#1`/`#0`, the
 base prefixes, `###`, `°`). It also names the six declared homographs, the exact
@@ -102,7 +102,7 @@ kind is a memorisation cost, so the design keeps counting it instead of assuming
   "no keywords": *keyword* is a tokenizer's term for a reserved token, and by that
   reading the language server files `?` and `@` under `KEYWORD` because LSP has no
   other slot. The checkable claim is that **no construct of the grammar is a word**
-  ([`SYMBOLS.md`](SYMBOLS.md) §1.2)
+  (`zymbol-design/SYMBOLS.md` §1.2)
 - **Dual execution** — tree-walker interpreter and register-based VM (`--vm`)
 - **Full Unicode** — identifiers, strings, and numerals support any Unicode script
 - **First-class functions** — named functions as values, HOF arguments, and closures
@@ -512,7 +512,7 @@ Korean, Hebrew, or Mandarin without any changes to the original:
 >> μαθ.ΠΙ ¶                   // → 3.14159
 ```
 
-See [I18N.md](./I18N.md) for the full three-layer pattern.
+See `zymbol-design/I18N.md` for the full three-layer pattern.
 
 ---
 
@@ -672,7 +672,7 @@ the language has not been asked to serve before. The application is the test and
 is the unit under test**: it is written *as if the language already supported it*, and every
 place it cannot say what it means — or says it and returns a silently wrong answer — is a
 finding against the interpreter, not a defect in the program. Closing one means changing the
-language: an operator derived under the [SYMBOLS.md](./SYMBOLS.md) rules, a semantic fix, a
+language: an operator derived under the `zymbol-design/SYMBOLS.md` rules, a semantic fix, a
 TW/VM divergence, or a `std/` module.
 
 This is validation, not verification, and the difference is the whole point. `cargo test`, the
@@ -700,7 +700,7 @@ all fixed in v0.0.8, each with its own regression test. चतुरङ्गम
 recorded at the foot of its entry. ZyBank's thirty-three closed against that same release, which
 is what an LDV log looks like once the cycle completes: closing one is a language change or a
 reasoned rejection, and neither is the application author's call. The method, its decalogue, and
-the index of the eight logs are in **[LDV.md](./LDV.md)**.
+the index of the eight logs are in **`zymbol-design/LDV.md`**.
 
 The projects carry a second load at the same time. They are written across six natural
 languages — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese, Sanskrit — which is what
@@ -840,7 +840,7 @@ lookup tables, no per-string branching at every callsite.
 <# ./bach => bach    // projectiles
 <# ./HUD  => HUD     // display
 
-[AN, AL] = >>?                              // query real terminal size
+(AN, AL) = >>?                              // query real terminal size
 // seed from three independent BashExec entropy sources
 mIS = (nS1 + nS2 * 1009 + nS3 * 6271) % 2147483647
 
@@ -851,12 +851,12 @@ mIS = (nS1 + nS2 * 1009 + nS3 * 6271) % 2147483647
 
     @:bucle {
         retardo = HUD::menu_HeH(AN, AL, idioma)
-        [ghom, mIS] = flota::chen_ghom(AN, AL, 1, mIS)
+        (ghom, mIS) = flota::chen_ghom(AN, AL, 1, mIS)
         @:oleada {
             <<|? tecla
-            [ghom, jaHDu, mIS, hubo_drift] =
+            (ghom, jaHDu, mIS, hubo_drift) =
                 flota::Suy_mIw(ghom, jaHDu, AN, AL, HoS, mIS)
-            [jagh_bachDu, mIS] =
+            (jagh_bachDu, mIS) =
                 bach::jagh_tagh(jagh_bachDu, ghom, jaHDu, mIS, HoS)
             HUD::chou_bID(...)              // delta render — only changed cells
             @~ retardo
@@ -949,7 +949,7 @@ two terminal columns — the structural fix for the alignment class of bug found
 The UI ships in **five languages** (日本語 / 한국어 / 中文 / English / Español) with four
 entry points that preselect one. This is application-level i18n — locale as module state,
 measured layout, and a completeness gate — and it is the reference implementation behind
-[USERAPPI18N.md](./USERAPPI18N.md).
+`zymbol-design/USERAPPI18N.md`.
 
 Building it drove a substantial part of v0.0.8. Findings that became interpreter changes:
 
@@ -1027,8 +1027,8 @@ Three capabilities were under test for the first time:
 - **The numeral mode as an i18n axis.** `#d0d9#` turns out to be process-global, not
   per-file, so a locale dispatcher can switch the digit script along with the language. The
   same line of drawing code yields `e४`, `e۴` and `e4`, and nothing below it knows which.
-  This is a third i18n mechanism beyond the two in [I18N.md](./I18N.md), now written up in
-  [USERAPPI18N.md](./USERAPPI18N.md) §14.
+  This is a third i18n mechanism beyond the two in `zymbol-design/I18N.md`, now written up in
+  `zymbol-design/USERAPPI18N.md` §14.
 
 Its log held five entries, **all closed against v0.0.9**:
 
@@ -1055,7 +1055,7 @@ Its log held five entries, **all closed against v0.0.9**:
 - **GUIDE.md said the numeral mode persists "in the same file".** It is global to the
   process — which is the useful behaviour, and the one the game depends on. The guide says
   so now, and the technique is written up as a third i18n mechanism in
-  [USERAPPI18N.md](./USERAPPI18N.md) §14, traps included.
+  `zymbol-design/USERAPPI18N.md` §14, traps included.
 - **The VM is 14–17× the tree-walker on this workload**, not the ~4× that had been quoted
   for years. A search is recursion with output parameters and array indexing in the
   innermost loop, which is where the tree-walker pays per frame. Every performance figure
@@ -1157,13 +1157,13 @@ Four capabilities were under test for the first time:
   Spanish. The configuration file may itself be written in the user's language —
   `{"言語": "hi", "通貨": "KWD"}` configures it — through `json::decode_map`, and the CLI verbs
   are accepted in all four languages at once (`zybank 口座` = `zybank cuentas`).
-- **A fourth i18n axis.** [USERAPPI18N.md](./USERAPPI18N.md) documents three mechanisms;
+- **A fourth i18n axis.** `zymbol-design/USERAPPI18N.md` documents three mechanisms;
   money needs one more, because the *format* of a number is independent of the language of the
   text, of the digit script and of the currency. Hindi with Kuwaiti dinars gives `-२५.९९० د.ك`,
   and that is correct: the language someone reads does not say which currency their money is in.
 
 Its log holds **thirty-three** findings — 12 BUG, 13 GAP, 6 ERROR, 2 IDEA — and it is the first
-written against the canonical form of [LDV.md](./LDV.md) § 5.2 entire, `HALLAZGOS.md` included.
+written against the canonical form of `zymbol-design/LDV.md` § 5.2 entire, `HALLAZGOS.md` included.
 All thirty-three are closed against v0.0.9: 22 fixed, 5 withdrawn, and the rest resolved with the
 decision recorded at the foot of the entry. **Three were engine divergences**, in a language whose
 gate reports zero over 666 corpus files.
@@ -1259,14 +1259,14 @@ interpreter/
 - [LLM.md](./LLM.md) — The whole language on one page, written for a model to read in one pass: the rules that break code silently, then every construct in compressed form
 - [GUIDE.md](./GUIDE.md) — Full language guide with verified examples (all constructs)
 - [REFERENCE.md](./REFERENCE.md) — Known limitations, error taxonomy, complete symbol table
-- [COLLECTIONS.md](./COLLECTIONS.md) — The three collections as one piece: the rule of the result, why `=` never writes into a collection, the array and its declared mix, the tuple, the dictionary, and the reasoning behind each rule
+- `zymbol-design/COLLECTIONS.md` — The three collections as one piece: the rule of the result, why `=` never writes into a collection, the array and its declared mix, the tuple, the dictionary, and the reasoning behind each rule
 - [IMPLEMENTATION.md](./IMPLEMENTATION.md) — EBNF grammar, coverage table, TW/VM internals
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — Interpreter architecture and performance benchmarks
-- [I18N.md](./I18N.md) — Internationalization: multilingual code via re-export layers, and runtime text via dispatcher modules
-- [USERAPPI18N.md](./USERAPPI18N.md) — Building a multilingual application: measured layout, runtime language switching, per-language entry points, and the completeness gate
-- [MEMORY_MODEL.md](./MEMORY_MODEL.md) — Memory and scoping model: design vs implementation audit (findings MM-1 … MM-11)
-- [SYMBOLS.md](./SYMBOLS.md) — Semiotic and morphological reference: the grapheme inventory, how marks agglutinate into operators, the declared homographs and opaque signs, and the rules a new operator must satisfy
-- [LDV.md](./LDV.md) — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the eight gap logs
+- `zymbol-design/I18N.md` — Internationalization: multilingual code via re-export layers, and runtime text via dispatcher modules
+- `zymbol-design/USERAPPI18N.md` — Building a multilingual application: measured layout, runtime language switching, per-language entry points, and the completeness gate
+- `zymbol-design/MEMORY_MODEL.md` — Memory and scoping model: design vs implementation audit (findings MM-1 … MM-11)
+- `zymbol-design/SYMBOLS.md` — Semiotic and morphological reference: the grapheme inventory, how marks agglutinate into operators, the declared homographs and opaque signs, and the rules a new operator must satisfy
+- `zymbol-design/LDV.md` — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the eight gap logs
 - [ROADMAP.md](./ROADMAP.md) — What's done, known gaps, and planned work
 - [CHANGELOG.md](./CHANGELOG.md) — Version history
 

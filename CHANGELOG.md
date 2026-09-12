@@ -741,7 +741,7 @@ the moment a user tried to run it. Full record in [WINDOWS_V009.md](WINDOWS_V009
 ### Changed — the collections
 
 The three collections were redesigned as one piece rather than three, and the
-whole of it is set down in [COLLECTIONS.md](COLLECTIONS.md), which is the point
+whole of it is set down in `zymbol-design/COLLECTIONS.md`, which is the point
 of record. What follows is the summary; the reasoning, the measurements and the
 rejected alternatives are there.
 
@@ -919,7 +919,7 @@ check applies to one and not the other — rather than write something untrue.
 
 ### Documentation
 
-[COLLECTIONS.md](COLLECTIONS.md) is new: one document for the three collections,
+`zymbol-design/COLLECTIONS.md` is new: one document for the three collections,
 the rules that govern them, and why each was decided the way it was.
 
 The grammar and the spec had drifted from the implementation. `zymbol-lang.ebnf` was
@@ -933,7 +933,7 @@ GUIDE, ARCHITECTURE and CLAUDE.md were re-measured rather than carried forward.
 ## [0.0.8] — 2026-08-02
 
 Memory-model debt release: every divergence found by the design-vs-implementation
-audit in [MEMORY_MODEL.md](MEMORY_MODEL.md) is resolved — findings MM-1 … MM-9 plus
+audit in `zymbol-design/MEMORY_MODEL.md` is resolved — findings MM-1 … MM-9 plus
 the two VM parity bugs (MM-10, MM-11) discovered while verifying the fixes. Three
 validation projects written in Zymbol (zy-GO, zy-Serpiente, zyKlingonGalaxy) contributed
 the rest: HLZ-001 … HLZ-011, HLZ-SRP-001 and HLZ-KL-001 are findings from writing real
@@ -1189,7 +1189,7 @@ on disk.
 **Findings from the zy-Serpiente and zyKlingonGalaxy i18n rework (HLZ-SRP-001, HLZ-KL-001)**
 
 Rewriting the internationalization of the two older TUI games against
-[USERAPPI18N.md](USERAPPI18N.md) surfaced two divergences. Both were found by
+`zymbol-design/USERAPPI18N.md` surfaced two divergences. Both were found by
 writing ordinary application code, and both were silent in one engine and
 correct in the other or correct nowhere.
 
@@ -1618,7 +1618,7 @@ well as the tree-walker.
 introduced `=>` ([0.0.6], `feat(syntax)!`) updated the other reference documents
 but touched only one line of this one. It is preserved as
 [I18N_DEPRECATED.md](I18N_DEPRECATED.md) with a banner naming the cause; the new
-[I18N.md](I18N.md) covers both internationalization mechanisms — re-export layers
+`zymbol-design/I18N.md` covers both internationalization mechanisms — re-export layers
 for code (now including how to wrap `std/*` modules) and dispatcher modules for
 runtime text, which the old document never documented at all. Every code block in
 it is extracted to a clean tree and executed in both engines before publication.
