@@ -943,12 +943,21 @@ impl TypeChecker {
     /// both paths, or capture in both) the second was taken. `GUIDE.md` § 10b,
     /// which documented the isolation as deliberate, was retired with it.
     ///
-    /// **A warning and not an error, for now.** How much existing code reaches
-    /// out of a function was not known when this was written, and a rule whose
-    /// cost nobody has measured is not one to refuse a program on. The warning
-    /// is how the number gets measured; the decision to raise it is the
-    /// author's. Same shape as `HLZ-CHA-002`, warned before it was settled.
-    fn warn_if_reached_out_of_scope(&mut self, name: &str, span: zymbol_span::Span) {
+    /// **An error for a named function, a warning for a lambda**, decided
+    /// 2026-09-13 with the measurement in hand. Across 1251 files the named
+    /// function accounted for FOUR hits, all four in corpus files that test this
+    /// very rule and none in the nine applications — so the isolation MEM-2 asks
+    /// for costs nothing to restore. The lambda accounted for 68, including an
+    /// example named `closure.zy` and two lessons of the course: capture there
+    /// is idiomatic and taught, and taking it away is a separate decision.
+    ///
+    /// The asymmetry has a reason, and it is not the count. A lambda is written
+    /// AT the point where it is created, so a reader sees it beside what it
+    /// captures; a named function is defined far from where it is called.
+    /// `ERROR-ZYB-002`'s incoherence was between one named function reached two
+    /// ways — directly and as a value — which is a different question from
+    /// whether a lambda may capture.
+    fn check_reach_out_of_scope(&mut self, name: &str, span: zymbol_span::Span) {
         let Some(&boundary) = self.strong_boundary.last() else {
             return;                     // file level: nothing to cross
         };
@@ -965,15 +974,24 @@ impl TypeChecker {
             // level for MEM-2 to be about.
             return;
         }
-        let is_lambda = *self.strong_is_lambda.last().unwrap_or(&false);
-        let kind = if is_lambda { "lambda" } else { "function" };
-        self.warnings.push(
-            Diagnostic::warning(format!(
-                "'{}' is read from outside this {}", name, kind))
-                .with_span(span)
-                .with_help(format!(
-                    "a {} is a self-contained space (MEM-2): pass '{}' as a parameter \
-                     instead of reading it from the file", kind, name)));
+        if *self.strong_is_lambda.last().unwrap_or(&false) {
+            self.warnings.push(
+                Diagnostic::warning(format!(
+                    "'{}' is read from outside this lambda", name))
+                    .with_span(span)
+                    .with_help(format!(
+                        "a lambda is a self-contained space: pass '{}' as a parameter \
+                         rather than capturing it. Still a warning while the rule for \
+                         lambdas is decided — for a named function it is an error", name)));
+        } else {
+            self.errors.push(
+                Diagnostic::error(format!(
+                    "'{}' is read from outside this function", name))
+                    .with_span(span)
+                    .with_help(format!(
+                        "a function is a self-contained space: a value crosses into it \
+                         as a parameter, never by being in view — pass '{}' as one", name)));
+        }
     }
 
     fn check_statement(&mut self, stmt: &Statement) {
@@ -2163,7 +2181,7 @@ impl TypeChecker {
             Expr::Identifier(ident) => {
                 if let Some(ty) = self.env.lookup_var(&ident.name) {
                     let ty = ty.clone();
-                    self.warn_if_reached_out_of_scope(&ident.name, ident.span);
+                    self.check_reach_out_of_scope(&ident.name, ident.span);
                     ty
                 } else if self.env.lookup_function(&ident.name).is_some() {
                     // It's a function reference, return Function type
