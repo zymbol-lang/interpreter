@@ -2594,10 +2594,18 @@ impl TypeChecker {
                 // identifier lookups inside the body don't produce false
                 // "undefined variable" errors.
                 self.env.enter_scope();
-                // MEM-6 decided a lambda is a strong environment, like a named
-                // function, so MEM-2 applies to it the same way.
-                self.strong_boundary.push(self.env.current_scope());
-                self.strong_is_lambda.push(true);
+                // MEM-6, 2026-09-13: a lambda is a LIGHT environment, so it
+                // opens no boundary of its own. What that buys is that the
+                // isolation is INHERITED rather than excepted:
+                //
+                //   · written at file level, it reads the file — it IS the
+                //     file's scope, exactly as a `?` block is;
+                //   · written inside a function, it reads that function, and the
+                //     function cannot read the file, so neither can the lambda.
+                //
+                // Nothing is global to it at any depth, and MEM-2 needs no
+                // exception to say so. Its parameters stay explicit and are the
+                // only thing it declares — the same contract a `@` iterator has.
                 for param in &lambda.params {
                     self.env.define_var(param, ZymbolType::Any);
                 }
@@ -2627,8 +2635,6 @@ impl TypeChecker {
                     }
                 };
 
-                self.strong_boundary.pop();
-                self.strong_is_lambda.pop();
                 self.env.exit_scope();
 
                 ZymbolType::Function(param_types, Box::new(return_type))
