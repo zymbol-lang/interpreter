@@ -62,6 +62,10 @@ pub enum CompileError {
     /// Module had parse errors; the message includes count + per-diagnostic lines.
     #[error("failed to parse module: {0}")]
     ModuleParse(String),
+    /// A known alias, an unknown constant. Carries the tree-walker's wording so
+    /// the two engines answer the same thing (GLB-009).
+    #[error("Module '{0}' has no constant '{1}'. Available constants: {2}")]
+    ModuleHasNoConstant(String, String, String),
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -941,10 +945,20 @@ impl Compiler {
 
         // Collect own constant/variable exports
         for (internal_name, public_name) in &own_const_exports {
+            // MEM-4 (GLB-009): only a CONSTANT may be exported. A module's
+            // variables are its state, read and written by its own functions,
+            // and the fence that keeps that from being a global variable is
+            // that the state cannot leave. Accepting `Statement::Assignment`
+            // here let `#> { n }` with `n = 0` export the variable's initial
+            // value as if it were a constant — `E.n` printed 0 under the VM
+            // while `zymbol check` said E005 and the tree-walker refused it.
+            //
+            // The static analyser is the one that names the defect where it is,
+            // in the module's own export block; this is the run-time half
+            // agreeing with it.
             let val_expr = module_prog.statements.iter().find_map(|s| {
                 match s {
                     Statement::ConstDecl(c) if &c.name == internal_name => Some(&c.value),
-                    Statement::Assignment(a) if &a.name == internal_name => Some(&a.value),
                     _ => None,
                 }
             });
@@ -3108,6 +3122,24 @@ impl Compiler {
             let key = format!("{}.{}", obj.name, ma.field);
             if let Some(mc) = self.module_constants.get(&key).cloned() {
                 return self.emit_module_const(&mc, ctx);
+            }
+            // A known alias with an unknown field is not an unknown variable.
+            // Falling through compiled `E` as an expression and reported
+            // `undefined variable 'E'`, which sends the reader to look for a
+            // definition that is right there. The tree-walker's wording, since
+            // it names the module and lists what it does have.
+            if self.known_module_aliases.contains(&obj.name) {
+                let mut available: Vec<&str> = self.module_constants.keys()
+                    .filter_map(|k| k.strip_prefix(&format!("{}.", obj.name)))
+                    .collect();
+                available.sort_unstable();
+                let shown = if available.is_empty() {
+                    "none".to_string()
+                } else {
+                    available.join(", ")
+                };
+                return Err(CompileError::ModuleHasNoConstant(
+                    obj.name.clone(), ma.field.clone(), shown));
             }
         }
         let r_obj = self.compile_expr(&ma.object, ctx)?;
