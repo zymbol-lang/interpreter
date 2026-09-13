@@ -292,6 +292,24 @@ impl TypeEnv {
         None
     }
 
+    /// The INDEX of the innermost open scope, in the same numbering
+    /// [`Self::var_depth`] answers in — the two are compared directly, so they
+    /// have to count the same way. Returning the length instead put a
+    /// function's own parameters one below its own boundary, which reported
+    /// every parameter as reached out of scope.
+    pub fn current_scope(&self) -> usize {
+        self.scopes.len().saturating_sub(1)
+    }
+
+    /// Which scope a name resolves in, innermost first. `None` for a constant:
+    /// a constant is global by MEM-1 and reaching one is never a crossing.
+    pub fn var_depth(&self, name: &str) -> Option<usize> {
+        if self.constants.contains_key(name) {
+            return None;
+        }
+        self.scopes.iter().rposition(|scope| scope.contains_key(name))
+    }
+
     /// Look up a function's signature
     pub fn lookup_function(&self, name: &str) -> Option<&(Vec<ZymbolType>, ZymbolType)> {
         self.functions.get(name)
@@ -326,6 +344,23 @@ pub struct TypeChecker {
     /// unless a caller supplies it with [`Self::set_module_arities`] — a
     /// qualified call is left unchecked rather than guessed at.
     module_arities: crate::call_arity::AliasArities,
+    /// MEM-2. One entry per strong environment currently open — a named
+    /// function or a lambda — holding the scope depth at which it began. A name
+    /// that resolves BELOW the innermost of these was reached out of the
+    /// environment that is reading it, which is the crossing the premise
+    /// forbids. Empty at file level, where there is nothing to cross.
+    strong_boundary: Vec<usize>,
+    /// Whether the innermost strong environment is a lambda, for the wording:
+    /// the two halves were decided together (MEM-6) and are measured apart,
+    /// because their blast radius is not the same.
+    strong_is_lambda: Vec<bool>,
+    /// Whether the file being checked is a module. In a module the top level is
+    /// not "the file's variables" but the module's own STATE, which MEM-4 says
+    /// its functions are the ones that read and write it. Without this the
+    /// detector reported MEM-4 as a violation of MEM-2 — which is what the
+    /// first measurement was: almost every hit in the applications was a module
+    /// function reading its own module's state.
+    is_module: bool,
     /// Which slots of each module function are `<~` outputs, so `m::f(x<~)` is
     /// checked like `f(x<~)`. Supplied beside the arities; empty means unchecked.
     module_out_slots: crate::call_arity::AliasOutSlots,
@@ -444,6 +479,9 @@ impl TypeChecker {
             warnings: Vec::new(),
             module_aliases: HashSet::new(),
             module_arities: crate::call_arity::AliasArities::new(),
+            strong_boundary: Vec::new(),
+            strong_is_lambda: Vec::new(),
+            is_module: false,
             module_out_slots: crate::call_arity::AliasOutSlots::new(),
             loop_depth: 0,
             guarded_bounds: Vec::new(),
@@ -529,6 +567,7 @@ impl TypeChecker {
             self.module_aliases.insert(import.alias.clone());
         }
 
+        self.is_module = program.module_decl.is_some();
         self.check_name_collisions(program);
 
         // First pass: collect function declarations with placeholder types
@@ -693,6 +732,7 @@ impl TypeChecker {
             self.module_aliases.insert(import.alias.clone());
         }
 
+        self.is_module = program.module_decl.is_some();
         self.check_name_collisions(program);
 
         // First pass: collect function declarations with placeholder types
@@ -888,6 +928,52 @@ impl TypeChecker {
                          in it (the other is at line {}) — they do not collide today only \
                          because they are looked up in different tables", first.start.line)));
         }
+    }
+
+
+    /// MEM-2 — a variable is visible only inside its own scope.
+    ///
+    /// `zymbol-design/PREMISES.md` § 2: a variable of the main scope is visible
+    /// only in the main scope, and a function body is a different scope. Values
+    /// cross that boundary as parameters (MEM-5), never by being in view.
+    ///
+    /// The rule held until 2026-08-24, when `fbccc8e` retired it to resolve
+    /// ZyBank's `ERROR-ZYB-002` — the same body behaved differently depending on
+    /// how it was reached, and of the two ways to make that coherent (isolate
+    /// both paths, or capture in both) the second was taken. `GUIDE.md` § 10b,
+    /// which documented the isolation as deliberate, was retired with it.
+    ///
+    /// **A warning and not an error, for now.** How much existing code reaches
+    /// out of a function was not known when this was written, and a rule whose
+    /// cost nobody has measured is not one to refuse a program on. The warning
+    /// is how the number gets measured; the decision to raise it is the
+    /// author's. Same shape as `HLZ-CHA-002`, warned before it was settled.
+    fn warn_if_reached_out_of_scope(&mut self, name: &str, span: zymbol_span::Span) {
+        let Some(&boundary) = self.strong_boundary.last() else {
+            return;                     // file level: nothing to cross
+        };
+        // `None` is a constant, which MEM-1 makes global on purpose.
+        let Some(depth) = self.env.var_depth(name) else {
+            return;
+        };
+        if depth >= boundary {
+            return;                     // its own parameter, or its own local
+        }
+        if self.is_module && depth == 0 {
+            // MEM-4, not a crossing: a module's functions are exactly who may
+            // read and write its state, and a module body has no other top
+            // level for MEM-2 to be about.
+            return;
+        }
+        let is_lambda = *self.strong_is_lambda.last().unwrap_or(&false);
+        let kind = if is_lambda { "lambda" } else { "function" };
+        self.warnings.push(
+            Diagnostic::warning(format!(
+                "'{}' is read from outside this {}", name, kind))
+                .with_span(span)
+                .with_help(format!(
+                    "a {} is a self-contained space (MEM-2): pass '{}' as a parameter \
+                     instead of reading it from the file", kind, name)));
     }
 
     fn check_statement(&mut self, stmt: &Statement) {
@@ -1166,6 +1252,10 @@ impl TypeChecker {
 
             Statement::FunctionDecl(func) => {
                 self.env.enter_scope();
+                // MEM-2: a named function is a strong environment. Everything
+                // the file holds is now outside it.
+                self.strong_boundary.push(self.env.current_scope());
+                self.strong_is_lambda.push(false);
 
                 // Get inferred parameter types from function signature
                 let param_types = if let Some((params, _)) = self.env.lookup_function(&func.name).cloned() {
@@ -1185,6 +1275,8 @@ impl TypeChecker {
                     self.check_statement(stmt);
                 }
 
+                self.strong_boundary.pop();
+                self.strong_is_lambda.pop();
                 self.env.exit_scope();
             }
 
@@ -2070,7 +2162,9 @@ impl TypeChecker {
 
             Expr::Identifier(ident) => {
                 if let Some(ty) = self.env.lookup_var(&ident.name) {
-                    ty.clone()
+                    let ty = ty.clone();
+                    self.warn_if_reached_out_of_scope(&ident.name, ident.span);
+                    ty
                 } else if self.env.lookup_function(&ident.name).is_some() {
                     // It's a function reference, return Function type
                     ZymbolType::Any
@@ -2476,6 +2570,10 @@ impl TypeChecker {
                 // identifier lookups inside the body don't produce false
                 // "undefined variable" errors.
                 self.env.enter_scope();
+                // MEM-6 decided a lambda is a strong environment, like a named
+                // function, so MEM-2 applies to it the same way.
+                self.strong_boundary.push(self.env.current_scope());
+                self.strong_is_lambda.push(true);
                 for param in &lambda.params {
                     self.env.define_var(param, ZymbolType::Any);
                 }
@@ -2505,6 +2603,8 @@ impl TypeChecker {
                     }
                 };
 
+                self.strong_boundary.pop();
+                self.strong_is_lambda.pop();
                 self.env.exit_scope();
 
                 ZymbolType::Function(param_types, Box::new(return_type))
