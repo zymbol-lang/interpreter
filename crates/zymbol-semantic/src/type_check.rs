@@ -2484,6 +2484,23 @@ impl TypeChecker {
                 let return_type = match &lambda.body {
                     zymbol_ast::LambdaBody::Expr(expr) => self.infer_expr(expr),
                     zymbol_ast::LambdaBody::Block(block) => {
+                        // ZYTW-001. `infer_return_type_from_block` collects
+                        // return types and nothing else; the checks live in
+                        // `check_statement`, so a block body has to be walked
+                        // for them too. Without this, NOTHING semantic inside a
+                        // `-> { … }` was checked: an undefined name, a call with
+                        // the wrong arity and a missing `<~` mark were all
+                        // silent, while the same code one bracket to the left
+                        // was refused. Only the parser's own refusals got
+                        // through, which is why `m[i][j]` still failed and made
+                        // the hole look smaller than it was.
+                        //
+                        // Same shape as the `$` operand arms below, and found
+                        // the same way: a place `infer_expr`/`check_statement`
+                        // does not visit is a place where every check is off.
+                        for stmt in &block.statements {
+                            self.check_statement(stmt);
+                        }
                         self.infer_return_type_from_block(block)
                     }
                 };
