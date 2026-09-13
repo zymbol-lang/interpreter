@@ -975,9 +975,15 @@ impl TypeChecker {
             return;
         }
         if *self.strong_is_lambda.last().unwrap_or(&false) {
+            // WHERE it was reached from matters for the decision still open on
+            // MEM-6: capturing the file is not the same move as capturing the
+            // parameter of the function the lambda is written inside, and only
+            // the second is what makes a factory (`f(n) { <~ x -> x * n }`)
+            // expressible at all.
+            let origin = if depth == 0 { "the file" } else { "the enclosing function" };
             self.warnings.push(
                 Diagnostic::warning(format!(
-                    "'{}' is read from outside this lambda", name))
+                    "'{}' is read from {}, outside this lambda", name, origin))
                     .with_span(span)
                     .with_help(format!(
                         "a lambda is a self-contained space: pass '{}' as a parameter \
