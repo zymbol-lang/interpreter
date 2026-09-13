@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use zymbol_ast::{CastKind, DestructureItem, DestructurePattern, Expr, Statement, Program, FunctionDecl, Block};
 use zymbol_common::{BinaryOp, Literal, UnaryOp};
 use zymbol_error::Diagnostic;
+use zymbol_span::Span;
 
 /// Represents a Zymbol type
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -528,6 +529,8 @@ impl TypeChecker {
             self.module_aliases.insert(import.alias.clone());
         }
 
+        self.check_name_collisions(program);
+
         // First pass: collect function declarations with placeholder types
         for stmt in &program.statements {
             if let Statement::FunctionDecl(func) = stmt {
@@ -690,6 +693,8 @@ impl TypeChecker {
             self.module_aliases.insert(import.alias.clone());
         }
 
+        self.check_name_collisions(program);
+
         // First pass: collect function declarations with placeholder types
         for stmt in &program.statements {
             if let Statement::FunctionDecl(func) = stmt {
@@ -782,6 +787,109 @@ impl TypeChecker {
     }
 
     /// Check a statement
+
+    /// MEM-7 — one name, one thing, inside one strong environment.
+    ///
+    /// `zymbol-design/PREMISES.md` § 2. A strong environment is a module, a
+    /// named function or a lambda; a light one is any block. Within one strong
+    /// environment a name designates one thing. BETWEEN strong environments the
+    /// same name is free — two modules may each hold an `x`, and a parameter may
+    /// carry a file-level name — and that half is what makes the rule
+    /// sustainable: four imported modules that could not reuse a name would not
+    /// be.
+    ///
+    /// Four forms, all of which parsed and ran in silence before v0.0.10. The
+    /// first is why this is an error and not a warning: `f(a, a)` called as
+    /// `f(1, 2)` answered **2** in the tree-walker, **1** in the VM and 2 in the
+    /// browser engine — a program whose value was decided by the engine that ran
+    /// it. No corpus file wrote it, so nothing ever asked.
+    fn check_name_collisions(&mut self, program: &Program) {
+
+        let mut functions: HashMap<&str, Span> = HashMap::new();
+        let mut file_vars: HashMap<&str, Span> = HashMap::new();
+
+        for stmt in &program.statements {
+            match stmt {
+                Statement::FunctionDecl(func) => {
+                    // One function, defined twice. The last one used to win, in
+                    // silence: a redefinition is indistinguishable from an edit
+                    // that forgot to delete what it replaced.
+                    if let Some(first) = functions.get(func.name.as_str()) {
+                        self.errors.push(
+                            Diagnostic::error(format!(
+                                "'{}' is defined twice in this file", func.name))
+                                .with_span(func.span)
+                                .with_help(format!(
+                                    "inside one strong environment a name designates one thing \
+                                     (first defined at line {}) — rename one, or delete the \
+                                     definition this one replaces", first.start.line)));
+                    } else {
+                        functions.insert(func.name.as_str(), func.span);
+                    }
+
+                    let mut seen: HashMap<&str, Span> = HashMap::new();
+                    for param in &func.parameters {
+                        // A parameter carrying its own function's name shadows the
+                        // function inside its own body: the body cannot call
+                        // itself, and nothing says why.
+                        if param.name == func.name {
+                            self.errors.push(
+                                Diagnostic::error(format!(
+                                    "parameter '{}' has the same name as the function it \
+                                     belongs to", param.name))
+                                    .with_span(param.span)
+                                    .with_help(
+                                        "a function and its parameters share one strong \
+                                         environment, so inside the body the name would \
+                                         designate two things"));
+                        }
+                        if let Some(first) = seen.get(param.name.as_str()) {
+                            self.errors.push(
+                                Diagnostic::error(format!(
+                                    "'{}' is declared twice in the parameters of '{}'",
+                                    param.name, func.name))
+                                    .with_span(param.span)
+                                    .with_help(format!(
+                                        "which argument the name refers to is undefined \
+                                         (first declared at line {}) — the three engines \
+                                         answered differently, so the program's value \
+                                         depended on which one ran it", first.start.line)));
+                        } else {
+                            seen.insert(param.name.as_str(), param.span);
+                        }
+                    }
+                }
+                Statement::Assignment(a) => {
+                    file_vars.entry(a.name.as_str()).or_insert(a.span);
+                }
+                _ => {}
+            }
+        }
+
+        // A variable and a function under one name, in one file. They lived in
+        // separate tables and never met, so `dato` and `dato()` both worked —
+        // and a reader cannot tell which one a bare `dato` was meant to be.
+        let mut both: Vec<(&str, Span, Span)> = functions.iter()
+            .filter_map(|(n, fs)| file_vars.get(n).map(|vs| (*n, *fs, *vs)))
+            .collect();
+        both.sort_by_key(|(_, fs, _)| fs.start.line);
+        for (name, fn_span, var_span) in both {
+            let (first, second) = if var_span.start.line <= fn_span.start.line {
+                (var_span, fn_span)
+            } else {
+                (fn_span, var_span)
+            };
+            self.errors.push(
+                Diagnostic::error(format!(
+                    "'{}' is both a variable and a function in this file", name))
+                    .with_span(second)
+                    .with_help(format!(
+                        "a file is one strong environment and a name designates one thing \
+                         in it (the other is at line {}) — they do not collide today only \
+                         because they are looked up in different tables", first.start.line)));
+        }
+    }
+
     fn check_statement(&mut self, stmt: &Statement) {
         match stmt {
             Statement::Assignment(assign) => {
