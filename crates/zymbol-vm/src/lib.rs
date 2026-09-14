@@ -1097,6 +1097,11 @@ pub struct VM<W: Write> {
     numeral_mode: u32,
     /// Module-level global variables (mutable, shared across all calls)
     global_vars: Vec<Value>,
+    /// Globals ended by `\`, and the name each one had, so a later read can say
+    /// what happened instead of «'x' is undefined» (GLB-008). A map and not a
+    /// set because the message needs the name and `LoadGlobal` only carries an
+    /// index. Assigning the name again revives it, which `StoreGlobal` does.
+    destroyed_globals: std::collections::HashMap<u16, String>,
     /// CLI arguments passed after the script path (argv[1..], skipping --vm flags)
     cli_args: Vec<String>,
     /// The code a top-level `<~ n` asked the program to end with (GAP-ZYB-006).
@@ -1121,6 +1126,7 @@ impl<W: Write> VM<W> {
             string_rcs: Vec::new(),
             numeral_mode: 0x0030, // ASCII_BASE default
             global_vars: Vec::new(),
+            destroyed_globals: std::collections::HashMap::new(),
             cli_args: Vec::new(),
             exit_code: None,
             cur_ip: 0,
@@ -3619,6 +3625,11 @@ impl<W: Write> VM<W> {
                 }
 
                 &Instruction::LoadGlobal(dst, gvar_idx) => {
+                    if let Some(name) = self.destroyed_globals.get(&gvar_idx) {
+                        raise!(VmError::Generic(format!(
+                            "use after destruction: variable '{}' was destroyed \
+                             after its last use", name)));
+                    }
                     let val = self.global_vars
                         .get(gvar_idx as usize)
                         .cloned()
@@ -3627,9 +3638,20 @@ impl<W: Write> VM<W> {
                 }
 
                 &Instruction::StoreGlobal(gvar_idx, src) => {
+                    // Assigning revives a destroyed name: `\` ends a life, it
+                    // does not burn the name.
+                    self.destroyed_globals.remove(&gvar_idx);
                     let val = rreg!(src).clone();
                     if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
                         *slot = val;
+                    }
+                }
+
+                &Instruction::DestroyGlobal(gvar_idx, name_idx) => {
+                    let name = self.string_rcs[name_idx as usize].to_string();
+                    self.destroyed_globals.insert(gvar_idx, name);
+                    if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
+                        *slot = Value::Unit;
                     }
                 }
 
@@ -4826,6 +4848,11 @@ impl<W: Write> VM<W> {
                 }
 
                 &Instruction::LoadGlobal(dst, gvar_idx) => {
+                    if let Some(name) = self.destroyed_globals.get(&gvar_idx) {
+                        return Err(VmError::Generic(format!(
+                            "use after destruction: variable '{}' was destroyed \
+                             after its last use", name)));
+                    }
                     let val = self.global_vars
                         .get(gvar_idx as usize)
                         .cloned()
@@ -4834,9 +4861,18 @@ impl<W: Write> VM<W> {
                 }
 
                 &Instruction::StoreGlobal(gvar_idx, src) => {
+                    self.destroyed_globals.remove(&gvar_idx);
                     let val = r!(src).clone();
                     if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
                         *slot = val;
+                    }
+                }
+
+                &Instruction::DestroyGlobal(gvar_idx, name_idx) => {
+                    let name = self.string_rcs[name_idx as usize].to_string();
+                    self.destroyed_globals.insert(gvar_idx, name);
+                    if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
+                        *slot = Value::Unit;
                     }
                 }
 
