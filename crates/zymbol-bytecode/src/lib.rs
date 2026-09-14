@@ -241,13 +241,33 @@ pub enum Instruction {
     BaseConvert(Reg, Reg, u8),
 
     // ── Try/catch ────────────────────────────────────────────────────────
-    /// Begin a try block; catch_label is where to jump on error
-    TryBegin(Label),
-    /// End try block normally (jump over catch)
-    TryEnd(Label),
-    /// Catch handler: load error value into reg
-    TryCatch(Reg),
-    /// Finally always runs; no special opcode needed — compiler emits the block twice
+    //
+    // A frame keeps ONE armed handler, and each `!?` saves the one it replaces
+    // in a register of its own, so nesting costs a register and no allocation.
+    // An error that reaches a handler becomes PENDING, tagged with that
+    // register, until a clause handles it or the `!?` ends and raises it again.
+    // Until GLB-010 there was one handler and no pending error, so a `!?` could
+    // not nest, a filter could not let an error through, and a `:>` could not
+    // finish with the error still alive.
+    //
+    // `:>` has no opcode: the compiler emits the block where the normal path
+    // falls into it, and a copy at every `@!`, `@>` and `<~` that leaves the
+    // `!?` early.
+    /// Arm the handler at `Label`; save the one it replaces in `Reg`.
+    TryBegin(Label, Reg),
+    /// The protected region ended normally: re-arm the handler saved in `Reg`.
+    TryEnd(Reg),
+    /// The first instruction at a handler. Re-arms the handler saved in the
+    /// first `Reg`, makes the error in flight pending under that register's tag,
+    /// and writes its value (`_err`) into the second `Reg`.
+    TryLand(Reg, Reg),
+    /// Load the kind of the pending error ("IO", "Index", "Type", "Div", "_") into dst
+    LoadErrorKind(Reg),
+    /// A clause matched: the error pending under the tag `Reg` is handled.
+    TryHandled(Reg),
+    /// The `!?` ends: if an error is still pending under the tag `Reg`, raise
+    /// it again, from the instruction that first raised it.
+    TryRethrow(Reg),
 
     // ── Shell execution ───────────────────────────────────────────────────
     /// Execute a shell command; parts work like BuildStr (literals and registers)
@@ -282,8 +302,6 @@ pub enum Instruction {
     // ── Error check ──────────────────────────────────────────────────────
     /// dst = src$!  → Bool: #1 if src is an error value, #0 otherwise
     IsError(Reg, Reg),
-    /// Load the error kind string ("IO", "Index", "Type", "Div", "_") into dst
-    LoadErrorKind(Reg),
 
     /// Raise a runtime error with message from string pool (for deferred errors)
     RaiseError(StrIdx),
