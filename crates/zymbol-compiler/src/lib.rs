@@ -1268,9 +1268,20 @@ impl Compiler {
             }
             Statement::Try(ts) => self.compile_try(ts, ctx),
             Statement::LifetimeEnd(lifetime_end) => {
-                if let Ok(r) = ctx.get_reg(&lifetime_end.variable_name) {
+                let name = &lifetime_end.variable_name;
+                if let Ok(r) = ctx.get_reg(name) {
                     ctx.emit(Instruction::LoadUnit(r));
-                    ctx.register_map.remove(&lifetime_end.variable_name);
+                    ctx.register_map.remove(name);
+                }
+                // GLB-008: a file variable also lives in `global_vars`, so
+                // dropping the register binding left the value reachable and
+                // `\ x` did nothing at all — `>> x` after it printed the value
+                // again. The global has to be ended at RUN time, because
+                // whether the `\` executes is not decidable here: inside a
+                // branch that never runs it destroys nothing.
+                if let Some(&gidx) = self.file_var_map.get(name) {
+                    let nidx = self.intern_string(name) as u16;
+                    ctx.emit(Instruction::DestroyGlobal(gidx, nidx));
                 }
                 Ok(())
             }
@@ -5075,6 +5086,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::TryCatch(r) => upd(*r),
             Instruction::LoadGlobal(d, _) => upd(*d),
             Instruction::StoreGlobal(_, s) => upd(*s),
+            // Two globals and no register: nothing to count.
+            Instruction::DestroyGlobal(_, _) => {}
             Instruction::Sleep(r) | Instruction::QueryTerminalSize(r)
             | Instruction::ReadKey(r, _) => upd(*r),
             Instruction::ReadLine(d, prompt_r, _) => {

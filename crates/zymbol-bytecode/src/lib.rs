@@ -298,6 +298,12 @@ pub enum Instruction {
     LoadGlobal(Reg, u16),
     /// Store to a module-level global variable: global_vars[idx] = src
     StoreGlobal(u16, Reg),
+    /// `\ name` on a global: end its life, and remember the name so a later
+    /// read can say what happened (GLB-008). Removing the compiler's register
+    /// binding was not enough — a file variable also lives in `global_vars`, so
+    /// the next read found it there and `\` did nothing at all.
+    /// Operands: global index, interned name.
+    DestroyGlobal(u16, u16),
 
     // ── TUI primitives ───────────────────────────────────────────────────
     /// @~ N — sleep N milliseconds (ms value in reg)
