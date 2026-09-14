@@ -350,10 +350,6 @@ pub struct TypeChecker {
     /// environment that is reading it, which is the crossing the premise
     /// forbids. Empty at file level, where there is nothing to cross.
     strong_boundary: Vec<usize>,
-    /// Whether the innermost strong environment is a lambda, for the wording:
-    /// the two halves were decided together (MEM-6) and are measured apart,
-    /// because their blast radius is not the same.
-    strong_is_lambda: Vec<bool>,
     /// Whether the file being checked is a module. In a module the top level is
     /// not "the file's variables" but the module's own STATE, which MEM-4 says
     /// its functions are the ones that read and write it. Without this the
@@ -480,7 +476,6 @@ impl TypeChecker {
             module_aliases: HashSet::new(),
             module_arities: crate::call_arity::AliasArities::new(),
             strong_boundary: Vec::new(),
-            strong_is_lambda: Vec::new(),
             is_module: false,
             module_out_slots: crate::call_arity::AliasOutSlots::new(),
             loop_depth: 0,
@@ -974,30 +969,13 @@ impl TypeChecker {
             // level for MEM-2 to be about.
             return;
         }
-        if *self.strong_is_lambda.last().unwrap_or(&false) {
-            // WHERE it was reached from matters for the decision still open on
-            // MEM-6: capturing the file is not the same move as capturing the
-            // parameter of the function the lambda is written inside, and only
-            // the second is what makes a factory (`f(n) { <~ x -> x * n }`)
-            // expressible at all.
-            let origin = if depth == 0 { "the file" } else { "the enclosing function" };
-            self.warnings.push(
-                Diagnostic::warning(format!(
-                    "'{}' is read from {}, outside this lambda", name, origin))
-                    .with_span(span)
-                    .with_help(format!(
-                        "a lambda is a self-contained space: pass '{}' as a parameter \
-                         rather than capturing it. Still a warning while the rule for \
-                         lambdas is decided — for a named function it is an error", name)));
-        } else {
-            self.errors.push(
-                Diagnostic::error(format!(
-                    "'{}' is read from outside this function", name))
-                    .with_span(span)
-                    .with_help(format!(
-                        "a function is a self-contained space: a value crosses into it \
-                         as a parameter, never by being in view — pass '{}' as one", name)));
-        }
+        self.errors.push(
+            Diagnostic::error(format!(
+                "'{}' is read from outside this function", name))
+                .with_span(span)
+                .with_help(format!(
+                    "a function is a self-contained space: a value crosses into it \
+                     as a parameter, never by being in view — pass '{}' as one", name)));
     }
 
     fn check_statement(&mut self, stmt: &Statement) {
@@ -1279,7 +1257,6 @@ impl TypeChecker {
                 // MEM-2: a named function is a strong environment. Everything
                 // the file holds is now outside it.
                 self.strong_boundary.push(self.env.current_scope());
-                self.strong_is_lambda.push(false);
 
                 // Get inferred parameter types from function signature
                 let param_types = if let Some((params, _)) = self.env.lookup_function(&func.name).cloned() {
@@ -1300,7 +1277,6 @@ impl TypeChecker {
                 }
 
                 self.strong_boundary.pop();
-                self.strong_is_lambda.pop();
                 self.env.exit_scope();
             }
 
