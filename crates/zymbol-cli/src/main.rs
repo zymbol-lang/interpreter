@@ -149,7 +149,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Run { file, vm, tw, script, keep_temp, args } => {
-            run_file(file, args, vm, tw, script, keep_temp)
+            on_program_stack(move || run_file(file, args, vm, tw, script, keep_temp))
         }
         Commands::Build { file, output, release } => build_file(file, output, release),
         Commands::Package { path, output, scripts, name, version, dry_run } => {
@@ -160,6 +160,27 @@ fn main() -> Result<()> {
         Commands::Repl => start_repl(),
         Commands::Lsp { .. } => start_lsp(),
     }
+}
+
+/// The stack a program runs on: 64 MiB, against the 8 MiB of the main thread.
+///
+/// Both engines recurse in Rust where a Zymbol program recurses through
+/// something that is not a plain call — every frame of the tree-walker, and in
+/// the register VM every function a higher-order operator calls, which runs the
+/// dispatch loop again (ZYVM-004). On the main thread's 8 MiB that was 1 099
+/// levels of plain recursion in the tree-walker and 593 through `$>` in the VM,
+/// and the next one aborted the process with no Zymbol error at all. The size is
+/// reserved, not committed: a program that does not recurse does not pay it.
+const PROGRAM_STACK: usize = 64 * 1024 * 1024;
+
+fn on_program_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .name("zymbol-program".into())
+        .stack_size(PROGRAM_STACK)
+        .spawn(f)
+        .expect("could not start the thread a program runs on")
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }
 
 fn start_repl() -> Result<()> {

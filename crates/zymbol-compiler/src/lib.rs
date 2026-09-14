@@ -80,6 +80,49 @@ struct LoopCtx {
     continue_patches: Vec<usize>,
     /// Optional label for this loop (from `@ @label { }` syntax)
     label: Option<String>,
+    /// How many `!?` were open when the loop began. An `@!` or `@>` aimed at
+    /// this loop leaves every `!?` above that depth, and owes each one its exit.
+    try_depth: usize,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Try context (GLB-010)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Which part of a `!?` the code being compiled sits in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TryRegion {
+    /// The `!?` body: its handler is armed.
+    Body,
+    /// A `:!` clause that matched: the error is handled, and while there is a
+    /// `:>` a guard handler is armed so a failing clause still reaches it.
+    Catch,
+    /// The `:>`: an error may be pending, and it leaves when the `:>` does.
+    Finally,
+}
+
+/// One `!?` the compiler is inside, innermost last.
+///
+/// This replaced `pending_finally`, a list of blocks that lived on the
+/// `Compiler` and not on the function being compiled — so a lambda written
+/// inside a `!?` with `:>` emitted that `:>` before its own `<~`, and a lambda
+/// written inside a `:>` could not return at all. A lambda is a function, and
+/// gets a context of its own.
+///
+/// A `:>` is emitted inline where the normal path falls into it, which is enough
+/// for code that falls off the end of the `!?` and nothing else: a `<~`, an `@!`
+/// or an `@>` jumps over those instructions (BUG-ZYB-010). So every jump that
+/// leaves a `!?` early emits, innermost first, what leaving it owes — see
+/// `emit_try_exits`.
+#[derive(Clone)]
+struct TryCtx {
+    region: TryRegion,
+    /// The register this `!?` saves the outer handler in; also the tag of the
+    /// error it may be carrying.
+    save: Reg,
+    /// The guard armed around a clause when there is a `:>`, and its tag.
+    guard: Option<Reg>,
+    finally: Option<std::rc::Rc<zymbol_ast::Block>>,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -97,6 +140,8 @@ struct FunctionCtx {
     instructions: Vec<Instruction>,
     /// Stack of loop contexts (innermost last)
     loop_stack: Vec<LoopCtx>,
+    /// The `!?` statements being compiled, innermost last.
+    try_stack: Vec<TryCtx>,
     /// Name of this function (for error messages)
     name: String,
     /// Hot variables (both x° and °x): persist across block scopes, never zeroed by zero_new_vars
@@ -123,6 +168,7 @@ impl FunctionCtx {
             src: Vec::new(),
             cur_src: SrcPos::default(),
             loop_stack: Vec::new(),
+            try_stack: Vec::new(),
             name: name.into(),
         }
     }
@@ -242,9 +288,20 @@ impl FunctionCtx {
         }
     }
 
+    /// Inside a `:>` — at any depth, including a `!?` written inside one.
+    ///
+    /// BUG-ZYB-011: a `:>` is cleanup and does not decide the return value, so
+    /// a `<~` inside one evaluates its expression (for the side effects it may
+    /// have) and then does nothing. Without this the block, emitted inline,
+    /// would return from the function and discard the value the try block was
+    /// carrying — and it would do it differently in each engine.
+    fn in_finally(&self) -> bool {
+        self.try_stack.iter().any(|t| t.region == TryRegion::Finally)
+    }
+
     fn patch_try_begin(&mut self, pos: usize, target: Label) {
         match &mut self.instructions[pos] {
-            Instruction::TryBegin(lbl) => *lbl = target,
+            Instruction::TryBegin(lbl, _) => *lbl = target,
             _ => panic!("patch_try_begin called on non-TryBegin instruction at {}", pos),
         }
     }
@@ -387,29 +444,6 @@ pub struct Compiler {
     /// Known module aliases (registered via import). Used to distinguish
     /// "private function" errors from "completely unknown" errors at call sites.
     known_module_aliases: HashSet<String>,
-    /// Finally blocks whose `!?` statement the compiler is currently inside,
-    /// outermost first.
-    ///
-    /// A finally is emitted inline after the try/catch, which is enough for
-    /// code that falls off the end of the block and nothing else: a `<~` inside
-    /// the try body returns from the *function* and jumps straight over those
-    /// instructions, so the finally never ran at all (BUG-ZYB-010). The
-    /// tree-walker and the browser engine both ran it.
-    ///
-    /// So every `<~` reachable from inside a `!?` emits a copy of the pending
-    /// finally blocks first, innermost first — which is what the note on
-    /// `Instruction::TryCatch` means by "the compiler emits the block twice".
-    /// The list is empty for the overwhelming majority of returns, and that is
-    /// the case that costs nothing.
-    pending_finally: Vec<zymbol_ast::Block>,
-    /// True while compiling the body of a `:>` clause.
-    ///
-    /// BUG-ZYB-011: a `:>` is cleanup and does not decide the return value, so
-    /// a `<~` inside one evaluates its expression (for the side effects it may
-    /// have) and then does nothing. Without this the block, emitted inline,
-    /// would return from the function and discard the value the try block was
-    /// carrying — and it would do it differently in each engine.
-    in_finally: bool,
     /// Source of named functions: name → (param_names, body_statements).
     /// Used to recompile named functions as closures when they capture outer variables.
     fn_source: HashMap<String, (Vec<String>, Vec<Statement>)>,
@@ -471,8 +505,6 @@ impl Compiler {
             global_var_inits: Vec::new(),
             file_var_map: HashMap::new(),
             known_module_aliases: HashSet::new(),
-            pending_finally: Vec::new(),
-            in_finally: false,
             fn_source: HashMap::new(),
             compiled_modules: HashMap::new(),
             builtin_map: HashMap::new(),
@@ -1144,16 +1176,17 @@ impl Compiler {
                 // BUG-ZYB-011: inside a `:>`, `<~` is not a return. The value
                 // is still computed — it may call something with an effect —
                 // and then dropped.
-                if self.in_finally {
+                if ctx.in_finally() {
                     if let Some(val) = &r.value {
                         self.compile_expr(val, ctx)?;
                     }
                     return Ok(());
                 }
                 // TCO: if `<~ f(args)` where f is the current function → TailCall.
-                // Suppressed inside a `!?` that has a finally: the call must not
-                // replace this frame while there is still cleanup owed on it.
-                if self.pending_finally.is_empty() {
+                // Suppressed inside any `!?`: the call must not replace a frame
+                // whose handler is armed — the callee's errors belong to it —
+                // or that still owes a `:>`.
+                if ctx.try_stack.is_empty() {
                     if let Some(val) = &r.value {
                         if let Expr::FunctionCall(call) = val.unwrap_group() {
                             if let Expr::Identifier(id) = call.callable.unwrap_group() {
@@ -1186,12 +1219,12 @@ impl Compiler {
                 // hands back the variable's OWN register, not a temporary, so
                 // `<~ v` followed by `v = "otro"` in the finally returned
                 // "otro". Only paid when there is a finally to run.
-                let reg = if self.pending_finally.is_empty() {
+                let reg = if ctx.try_stack.is_empty() {
                     reg
                 } else {
                     let held = ctx.alloc_temp()?;
                     ctx.emit(Instruction::CopyReg(held, reg));
-                    self.emit_pending_finally(ctx)?;
+                    self.emit_try_exits(ctx, 0)?;
                     held
                 };
                 ctx.emit(Instruction::Return(reg));
@@ -1699,7 +1732,7 @@ impl Compiler {
 
         let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
-        ctx.loop_stack.push(LoopCtx { break_patches: Vec::new(), continue_patches: Vec::new(), label: lp.label.clone() });
+        ctx.loop_stack.push(LoopCtx { break_patches: Vec::new(), continue_patches: Vec::new(), label: lp.label.clone(), try_depth: ctx.try_stack.len() });
 
         ctx.emit(Instruction::CmpGt(r_cmp, r_i, r_end));
         let exit_jump = ctx.emit(Instruction::JumpIf(r_cmp, 0));
@@ -1746,7 +1779,7 @@ impl Compiler {
 
         let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
-        ctx.loop_stack.push(LoopCtx { break_patches: Vec::new(), continue_patches: Vec::new(), label: lp.label.clone() });
+        ctx.loop_stack.push(LoopCtx { break_patches: Vec::new(), continue_patches: Vec::new(), label: lp.label.clone(), try_depth: ctx.try_stack.len() });
 
         // TIMES path: i >= n → done. Falls through to the body otherwise.
         let to_while = ctx.emit_jump_if_not_placeholder(r_is_times);
@@ -1795,6 +1828,7 @@ impl Compiler {
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
             label: lp.label.clone(),
+            try_depth: ctx.try_stack.len(),
         });
 
         self.compile_block(&lp.body, ctx)?;
@@ -1825,6 +1859,7 @@ impl Compiler {
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
             label: lp.label.clone(),
+            try_depth: ctx.try_stack.len(),
         });
 
         let cond_reg = self.compile_expr(cond_expr, ctx)?;
@@ -1906,6 +1941,7 @@ impl Compiler {
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
             label: lp.label.clone(),
+            try_depth: ctx.try_stack.len(),
         });
 
         // Exit check:
@@ -1972,18 +2008,12 @@ impl Compiler {
         if ctx.loop_stack.is_empty() {
             return Err(CompileError::BreakOutsideLoop);
         }
+        let target = Self::loop_target(ctx, b.label.as_deref(), "break")?;
+        // Every `!?` between here and the loop is left by this jump.
+        self.emit_try_exits(ctx, ctx.loop_stack[target].try_depth)?;
         let jump_pos = ctx.emit_jump_placeholder();
-        // Find the innermost loop matching the label (or innermost if no label).
-        let target = if let Some(lbl) = &b.label {
-            ctx.loop_stack.iter_mut().rev()
-                .find(|lctx| lctx.label.as_deref() == Some(lbl.as_str()))
-        } else {
-            ctx.loop_stack.last_mut()
-        };
-        match target {
-            Some(lctx) => { lctx.break_patches.push(jump_pos); Ok(()) }
-            None => Err(CompileError::Unsupported(format!("break label '{}' not found", b.label.as_deref().unwrap_or("?")))),
-        }
+        ctx.loop_stack[target].break_patches.push(jump_pos);
+        Ok(())
     }
 
     fn compile_continue(
@@ -1994,19 +2024,23 @@ impl Compiler {
         if ctx.loop_stack.is_empty() {
             return Err(CompileError::ContinueOutsideLoop);
         }
+        let target = Self::loop_target(ctx, c.label.as_deref(), "continue")?;
+        self.emit_try_exits(ctx, ctx.loop_stack[target].try_depth)?;
         // Emit a placeholder; each loop type resolves the correct target
         // (range/foreach → increment label, infinite/while → loop_start).
         let jump_pos = ctx.emit_jump_placeholder();
-        // Find the innermost loop matching the label (or innermost if no label).
-        let target = if let Some(lbl) = &c.label {
-            ctx.loop_stack.iter_mut().rev()
-                .find(|lctx| lctx.label.as_deref() == Some(lbl.as_str()))
-        } else {
-            ctx.loop_stack.last_mut()
-        };
-        match target {
-            Some(lctx) => { lctx.continue_patches.push(jump_pos); Ok(()) }
-            None => Err(CompileError::Unsupported(format!("continue label '{}' not found", c.label.as_deref().unwrap_or("?")))),
+        ctx.loop_stack[target].continue_patches.push(jump_pos);
+        Ok(())
+    }
+
+    /// The loop a jump is aimed at: the innermost one with the label, or the
+    /// innermost one when there is no label.
+    fn loop_target(ctx: &FunctionCtx, label: Option<&str>, what: &str) -> Result<usize, CompileError> {
+        match label {
+            Some(lbl) => ctx.loop_stack.iter()
+                .rposition(|lctx| lctx.label.as_deref() == Some(lbl))
+                .ok_or_else(|| CompileError::Unsupported(format!("{} label '{}' not found", what, lbl))),
+            None => Ok(ctx.loop_stack.len() - 1),
         }
     }
 
@@ -2220,9 +2254,18 @@ impl Compiler {
             Expr::ErrorPropagate(ep) => {
                 // expr$!! — if value is an error, return it early from the current function
                 let r_val = self.compile_expr(&ep.expr, ctx)?;
+                // Inside a `:>` a return is not a return (BUG-ZYB-011), and
+                // `$!!` is one.
+                if ctx.in_finally() {
+                    return Ok(r_val);
+                }
                 let r_is_err = ctx.alloc_temp()?;
                 ctx.emit(Instruction::IsError(r_is_err, r_val));
                 let skip = ctx.emit_jump_if_not_placeholder(r_is_err);
+                // The same way out as a `<~`: it crosses the same `!?`.
+                if !ctx.try_stack.is_empty() {
+                    self.emit_try_exits(ctx, 0)?;
+                }
                 ctx.emit(Instruction::Return(r_val));
                 let after = ctx.current_label();
                 ctx.patch_jump(skip, after);
@@ -4103,6 +4146,7 @@ impl Compiler {
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
             label: lp.label.clone(),
+            try_depth: ctx.try_stack.len(),
         });
 
         if coll_is_string {
@@ -4140,42 +4184,83 @@ impl Compiler {
 
     // ── 4C: Try / Catch / Finally ─────────────────────────────────────────────
     //
-    // Bytecode layout (try + catch):
-    //   TryBegin(catch_label)
-    //   [try body]
-    //   TryEnd(0)          ; clear catch state, fall through
-    //   Jump(end_label)    ; skip catch on success
-    //   catch_label:
-    //   TryCatch(r_err)    ; bind _err = error value
-    //   [catch body]
-    //   end_label:
-    //   [finally body if any]
+    // Bytecode layout (GLB-010):
     //
-    // Bytecode layout (try + finally only):
-    //   TryBegin(finally_label)
-    //   [try body]
-    //   TryEnd(0)          ; clear catch state, fall through to finally
-    //   finally_label:
-    //   [finally body]
-    //   end_label:
-    /// Emit a copy of every pending finally block, innermost first.
+    //     TryBegin(H, save)       ; arm H, save the outer handler in `save`
+    //     [body]
+    //     TryEnd(save)            ; re-arm the outer handler
+    //     Jump F
+    //   H:
+    //     TryLand(save, _err)     ; re-arm the outer handler; the error is PENDING
+    //     LoadErrorKind(k)        ; typed clauses only
+    //     … compare, JumpIfNot next …
+    //     TryHandled(save)        ; this clause matched: nothing is pending now
+    //     TryBegin(G, guard)      ; only with a `:>` — a clause that fails owes it
+    //     [clause]
+    //     TryEnd(guard)
+    //     Jump F
+    //   next: … the other clauses …
+    //     Jump F                  ; nothing matched: the error stays pending
+    //   G:
+    //     TryLand(guard, _err2)   ; a clause failed: ITS error is pending
+    //   F:
+    //     [finally]
+    //     TryRethrow(save)        ; whatever is still pending leaves now
+    //     TryRethrow(guard)
+    //
+    // The version before had one handler per frame and nothing pending, which is
+    // why an inner `!?` stayed armed after it ended, why a filter that did not
+    // match and a `:>` without a catch both swallowed the error, and why a
+    // `:!` or `:>` that failed never reached the `!?` outside.
+
+    /// Emit what leaving every `!?` above `down_to` owes, innermost first.
     ///
-    /// Called before a `Return` that is lexically inside one or more `!?`
-    /// statements with a `:>` clause. The list is taken out while they compile,
-    /// so a `<~` written inside a finally does not re-emit that same finally
-    /// forever.
-    fn emit_pending_finally(&mut self, ctx: &mut FunctionCtx) -> Result<(), CompileError> {
-        if self.pending_finally.is_empty() {
+    /// Called before a `<~` (`down_to` 0: the frame goes, so all of them) and
+    /// before an `@!`/`@>` (down to the loop it is aimed at). For each `!?`:
+    ///
+    ///   · left from its body: disarm it, then run its `:>`;
+    ///   · left from a clause: disarm the guard, then run its `:>`;
+    ///   · left from its `:>`: raise what that `:>` was carrying — an `@!` in a
+    ///     cleanup does not swallow the error (tree-walker and browser engine
+    ///     agree; Python's `break` in `finally` does, which is why this is
+    ///     written down).
+    ///
+    /// Each `:>` copy is compiled as if it were in its own region, so a `<~`
+    /// in it is discarded and an error in it goes to the `!?` outside.
+    fn emit_try_exits(&mut self, ctx: &mut FunctionCtx, down_to: usize) -> Result<(), CompileError> {
+        let n = ctx.try_stack.len();
+        if n <= down_to {
             return Ok(());
         }
-        let pending = std::mem::take(&mut self.pending_finally);
-        let was_in_finally = std::mem::replace(&mut self.in_finally, true);
-        let result = pending
-            .iter()
-            .rev()
-            .try_for_each(|block| self.compile_block(block, ctx));
-        self.in_finally = was_in_finally;
-        self.pending_finally = pending;
+        let saved = std::mem::take(&mut ctx.try_stack);
+        let mut result = Ok(());
+        for k in (down_to..n).rev() {
+            let t = saved[k].clone();
+            match t.region {
+                TryRegion::Body => { ctx.emit(Instruction::TryEnd(t.save)); }
+                TryRegion::Catch => {
+                    if let Some(g) = t.guard {
+                        ctx.emit(Instruction::TryEnd(g));
+                    }
+                }
+                TryRegion::Finally => {
+                    ctx.emit(Instruction::TryRethrow(t.save));
+                    if let Some(g) = t.guard {
+                        ctx.emit(Instruction::TryRethrow(g));
+                    }
+                    continue;
+                }
+            }
+            if let Some(fin) = &t.finally {
+                ctx.try_stack = saved[..k].to_vec();
+                ctx.try_stack.push(TryCtx { region: TryRegion::Finally, ..t.clone() });
+                result = self.compile_block(fin, ctx);
+                if result.is_err() {
+                    break;
+                }
+            }
+        }
+        ctx.try_stack = saved;
         result
     }
 
@@ -4184,107 +4269,106 @@ impl Compiler {
         ts: &TryStmt,
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
-        let has_catch = !ts.catch_clauses.is_empty();
         let has_finally = ts.finally_clause.is_some();
+        let finally = ts.finally_clause.as_ref().map(|f| std::rc::Rc::new(f.block.clone()));
 
-        // Allocate _err register (used by catch body via _err variable)
+        let save = ctx.alloc_temp()?;
         let r_err = ctx.alloc_temp()?;
-
-        // TryBegin: patch target after body is compiled
-        let try_begin_pos = ctx.emit(Instruction::TryBegin(0));
-
-        // From here until the inline copy below, a `<~` owes this finally a
-        // visit on its way out — the try body and every catch clause alike.
-        if has_finally {
-            self.pending_finally
-                .push(ts.finally_clause.as_ref().unwrap().block.clone());
-        }
-
-        // Compile try body
-        self.compile_block(&ts.try_block, ctx)?;
-
-        // TryEnd: clear catch state, then fall through
-        ctx.emit(Instruction::TryEnd(0));
-
-        if has_catch {
-            // On success: jump past catch block to finally/end
-            let jump_past_catch = ctx.emit_jump_placeholder();
-
-            // catch_label: where error jumps to
-            let catch_label = ctx.current_label();
-            ctx.patch_try_begin(try_begin_pos, catch_label);
-
-            // Bind error to _err
-            ctx.emit(Instruction::TryCatch(r_err));
-            // Map "_err" to r_err so catch body can reference it
-            ctx.register_map.insert("_err".to_string(), r_err);
-
-            // Check if we have typed catch clauses (any with Some(error_type))
-            let has_typed = ts.catch_clauses.iter().any(|c| c.error_type.is_some());
-
-            if !has_typed {
-                // Simple case: single generic catch (original behavior)
-                self.compile_block(&ts.catch_clauses[0].block, ctx)?;
-            } else {
-                // Typed dispatch: LoadErrorKind → compare → jump to matching clause
-                let r_kind = ctx.alloc_temp()?;
-                let r_cmp_str = ctx.alloc_temp()?;
-                let r_eq = ctx.alloc_temp()?;
-                ctx.emit(Instruction::LoadErrorKind(r_kind));
-
-                let mut end_patches: Vec<usize> = Vec::new();
-
-                for clause in &ts.catch_clauses {
-                    match &clause.error_type {
-                        Some(et) if et.name != "_" => {
-                            // Typed clause: compare error_kind with this type
-                            let kind_idx = self.intern_string(&et.name);
-                            ctx.emit(Instruction::LoadStr(r_cmp_str, kind_idx));
-                            ctx.emit(Instruction::CmpEq(r_eq, r_kind, r_cmp_str));
-                            let skip = ctx.emit_jump_if_not_placeholder(r_eq);
-                            self.compile_block(&clause.block, ctx)?;
-                            let j = ctx.emit_jump_placeholder();
-                            end_patches.push(j);
-                            let next_label = ctx.current_label();
-                            ctx.patch_jump(skip, next_label);
-                        }
-                        _ => {
-                            // Generic clause (no error_type or name == "_"): catch-all fallthrough
-                            self.compile_block(&clause.block, ctx)?;
-                            let j = ctx.emit_jump_placeholder();
-                            end_patches.push(j);
-                            break; // Generic must be last
-                        }
-                    }
-                }
-
-                let catch_end = ctx.current_label();
-                for pos in end_patches {
-                    ctx.patch_jump(pos, catch_end);
-                }
-            }
-
-            let end_label = ctx.current_label();
-            ctx.patch_jump(jump_past_catch, end_label);
-
-            // Patch TryBegin target is already done above (catch_label)
+        // One guard for the whole statement: only one clause ever runs.
+        let guard = if has_finally && !ts.catch_clauses.is_empty() {
+            Some(ctx.alloc_temp()?)
         } else {
-            // No catch: TryBegin target = finally_label (fall through)
-            let finally_label = ctx.current_label();
-            ctx.patch_try_begin(try_begin_pos, finally_label);
+            None
+        };
+
+        // ── body ──
+        let try_begin_pos = ctx.emit(Instruction::TryBegin(0, save));
+        ctx.try_stack.push(TryCtx { region: TryRegion::Body, save, guard, finally: finally.clone() });
+        let body = self.compile_block(&ts.try_block, ctx);
+        ctx.try_stack.pop();
+        body?;
+        ctx.emit(Instruction::TryEnd(save));
+        let mut to_finally = vec![ctx.emit_jump_placeholder()];
+
+        // ── handler ──
+        let handler = ctx.current_label();
+        ctx.patch_try_begin(try_begin_pos, handler);
+        ctx.emit(Instruction::TryLand(save, r_err));
+        // Map "_err" to r_err so a clause can read it
+        ctx.register_map.insert("_err".to_string(), r_err);
+
+        let mut guard_begins: Vec<usize> = Vec::new();
+        let typed = ts.catch_clauses.iter()
+            .any(|c| matches!(&c.error_type, Some(et) if et.name != "_"));
+        let r_kind = if typed {
+            let r = ctx.alloc_temp()?;
+            ctx.emit(Instruction::LoadErrorKind(r));
+            Some(r)
+        } else {
+            None
+        };
+        for clause in &ts.catch_clauses {
+            let skip = match (&clause.error_type, r_kind) {
+                (Some(et), Some(r_kind)) if et.name != "_" => {
+                    let r_cmp_str = ctx.alloc_temp()?;
+                    let r_eq = ctx.alloc_temp()?;
+                    let kind_idx = self.intern_string(&et.name);
+                    ctx.emit(Instruction::LoadStr(r_cmp_str, kind_idx));
+                    ctx.emit(Instruction::CmpEq(r_eq, r_kind, r_cmp_str));
+                    Some(ctx.emit_jump_if_not_placeholder(r_eq))
+                }
+                _ => None,
+            };
+            ctx.emit(Instruction::TryHandled(save));
+            if let Some(g) = guard {
+                guard_begins.push(ctx.emit(Instruction::TryBegin(0, g)));
+            }
+            ctx.try_stack.push(TryCtx { region: TryRegion::Catch, save, guard, finally: finally.clone() });
+            let block = self.compile_block(&clause.block, ctx);
+            ctx.try_stack.pop();
+            block?;
+            if let Some(g) = guard {
+                ctx.emit(Instruction::TryEnd(g));
+            }
+            to_finally.push(ctx.emit_jump_placeholder());
+            match skip {
+                Some(skip) => {
+                    let next = ctx.current_label();
+                    ctx.patch_jump(skip, next);
+                }
+                // A clause with no type catches everything: the ones after it
+                // can never run.
+                None => break,
+            }
+        }
+        // Nothing matched (or there was no clause): the error stays pending.
+        to_finally.push(ctx.emit_jump_placeholder());
+
+        // ── guard: a clause that failed ──
+        if let Some(g) = guard {
+            let guard_label = ctx.current_label();
+            for pos in guard_begins {
+                ctx.patch_try_begin(pos, guard_label);
+            }
+            let r_err2 = ctx.alloc_temp()?;
+            ctx.emit(Instruction::TryLand(g, r_err2));
         }
 
-        // Finally block: the copy taken by falling off the end of try/catch.
-        // Popped first, so a `<~` inside the finally itself does not emit it
-        // again.
-        if has_finally {
-            self.pending_finally.pop();
-            let was_in_finally = std::mem::replace(&mut self.in_finally, true);
-            let r = self.compile_block(&ts.finally_clause.as_ref().unwrap().block, ctx);
-            self.in_finally = was_in_finally;
-            r?;
+        // ── finally, then whatever is still pending ──
+        let finally_label = ctx.current_label();
+        for pos in to_finally {
+            ctx.patch_jump(pos, finally_label);
         }
-
+        if let Some(fin) = &finally {
+            ctx.try_stack.push(TryCtx { region: TryRegion::Finally, save, guard, finally: finally.clone() });
+            let block = self.compile_block(fin, ctx);
+            ctx.try_stack.pop();
+            block?;
+        }
+        ctx.emit(Instruction::TryRethrow(save));
+        if let Some(g) = guard {
+            ctx.emit(Instruction::TryRethrow(g));
+        }
         Ok(())
     }
 
@@ -4834,7 +4918,7 @@ fn eliminate_dead_code(
                 worklist.push(ip + 1);
             }
             // Try/Finally control flow
-            Instruction::TryBegin(target) | Instruction::TryEnd(target) => {
+            Instruction::TryBegin(target, _) => {
                 worklist.push(*target as usize);
                 worklist.push(ip + 1);
             }
@@ -4874,8 +4958,7 @@ fn eliminate_dead_code(
             Instruction::MatchInt(r, v, t)     => Instruction::MatchInt(r, v, remap(t)),
             Instruction::MatchRange(r, lo, hi, t) => Instruction::MatchRange(r, lo, hi, remap(t)),
             Instruction::MatchStr(r, s, t)     => Instruction::MatchStr(r, s, remap(t)),
-            Instruction::TryBegin(t)           => Instruction::TryBegin(remap(t)),
-            Instruction::TryEnd(t)             => Instruction::TryEnd(remap(t)),
+            Instruction::TryBegin(t, r)        => Instruction::TryBegin(remap(t), r),
             other => other,
         })
         .collect();
@@ -5083,7 +5166,9 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             | Instruction::BaseConvert(d, s, _) => { upd(*d); upd(*s); }
             Instruction::RoundFloat(d, s, _) | Instruction::TruncFloat(d, s, _) => { upd(*d); upd(*s); }
             Instruction::LoadErrorKind(d) => upd(*d),
-            Instruction::TryCatch(r) => upd(*r),
+            Instruction::TryBegin(_, r) | Instruction::TryEnd(r)
+            | Instruction::TryHandled(r) | Instruction::TryRethrow(r) => upd(*r),
+            Instruction::TryLand(s, e) => { upd(*s); upd(*e); }
             Instruction::LoadGlobal(d, _) => upd(*d),
             Instruction::StoreGlobal(_, s) => upd(*s),
             // Two globals and no register: nothing to count.
@@ -5099,8 +5184,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
                 for &r in items { upd(r); }
             }
             // No-register instructions
-            Instruction::SetupOutputWriteback(_) | Instruction::TryBegin(_)
-            | Instruction::TryEnd(_) | Instruction::RaiseError(_)
+            Instruction::SetupOutputWriteback(_) | Instruction::RaiseError(_)
             | Instruction::Jump(_) | Instruction::Halt | Instruction::PrintNewline
             | Instruction::SetNumeralMode(_)
             | Instruction::ClearScreen | Instruction::EnterTui | Instruction::ExitTui => {}

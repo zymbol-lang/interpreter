@@ -8,7 +8,9 @@
 //! - The `std/` export table (`stdlib`), shared by the engines and the tooling
 //! - The type symbols `#?` answers with (`typesym`), likewise shared
 //! - Locating the POSIX shell that `<\ \>` runs through (`shell`)
+//! - Which `##` family an error belongs to, read from its message (`errkind`)
 
+pub mod errkind;
 pub mod num;
 pub mod shell;
 pub mod stdlib;

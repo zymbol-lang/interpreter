@@ -478,11 +478,26 @@ impl Value {
 // Sprint 5E: slim FrameInfo — heap-allocate rare fields to reduce sizeof
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// Error state for a frame with an active try/catch — heap-allocated on demand.
+/// An error that reached a handler and has not been dealt with yet (GLB-010).
+///
+/// It stays pending through the clauses of its `!?` until one handles it, and
+/// through the `:>` after them; whatever is still pending when the `!?` ends is
+/// raised again. The original error is kept, not its printed form, so it leaves
+/// with its own kind and — through `origin_*` — from the line that raised it.
+struct Pending {
+    /// The register of the `!?` that caught it (`TryLand`), which is also how
+    /// `TryHandled` and `TryRethrow` recognise it as theirs.
+    tag: Reg,
+    err: VmError,
+    kind: &'static str,
+    origin_ip: u32,
+    origin_chunk: u32,
+}
+
+/// Error state of a frame — allocated the first time an error lands in it.
+#[derive(Default)]
 struct FrameError {
-    error_val: Option<Value>,
-    /// Error kind string: "IO", "Index", "Type", "Div", "_"
-    error_kind: String,
+    pending: Vec<Pending>,
 }
 
 /// Frame metadata — registers live in value_stack[base..next_base]
@@ -496,11 +511,11 @@ struct FrameInfo {
     chunk_idx: u32,
     /// Register in the caller frame where the return value should be written
     return_reg: u16,
-    /// Try/catch: instruction index to jump to on error (u32::MAX = no active catch)
+    /// The armed handler: where an error raised in this frame goes
+    /// (u32::MAX = none). The one it replaced lives in a register of the `!?`
+    /// that armed it (`TryBegin`), so nesting costs no allocation.
     catch_ip: u32,
-    /// Nesting depth of try blocks in this frame
-    try_depth: u8,
-    /// Error state — allocated only when a try block is active (None for normal calls)
+    /// Pending errors — allocated only when an error lands in this frame
     error: Option<Box<FrameError>>,
     /// Output param writeback — None for most functions (saves 24 bytes)
     // Box is intentional: keeps `Option` at 8 bytes (vs 24 for a bare Vec) in the
@@ -784,24 +799,6 @@ fn cmp_order(va: &Value, vb: &Value) -> Option<i32> {
     }
 }
 
-/// `rb2!` for the call-frame interpreter loop, which has no `raise!` macro and
-/// propagates with `?`.
-fn bools_or_err(va: &Value, vb: &Value, op: &str) -> Result<(bool, bool), VmError> {
-    match (va, vb) {
-        (Value::Bool(x), Value::Bool(y)) => Ok((*x, *y)),
-        _ => Err(VmError::Generic(logical_type_error(
-            op,
-            if matches!(va, Value::Bool(_)) { vb } else { va },
-        ))),
-    }
-}
-
-/// `cmp_order` for the call-frame interpreter loop, which has no `raise!` macro
-/// and propagates with `?`.
-fn ord_slow(va: &Value, vb: &Value, op: &str) -> Result<i32, VmError> {
-    cmp_order(va, vb).ok_or_else(|| VmError::Generic(cmp_order_error(va, vb, op)))
-}
-
 /// The tree-walker's message for an ordering comparison it refuses to make, so
 /// both engines fail with the same text.
 fn cmp_order_error(va: &Value, vb: &Value, op: &str) -> String {
@@ -1054,6 +1051,26 @@ fn ascii_digits(s: &str) -> std::borrow::Cow<'_, str> {
 use zymbol_lexer::digit_blocks::ascii_number as normalize_unicode_digits;
 
 #[inline(always)]
+/// The `##` family of a VM error.
+///
+/// A variant that says what went wrong decides it; everything else is read from
+/// the message by the rule the tree-walker uses (`zymbol_common::errkind`), so a
+/// native's `incompatible argument type(s)` is a ##Type in both engines — it was
+/// a ##_ here, and `:! ##Type` could not meet it (GLB-010).
+fn vm_error_kind(e: &VmError) -> &'static str {
+    match e {
+        VmError::TypeError { .. } | VmError::CastError { .. } => "Type",
+        VmError::DivisionByZero | VmError::ModuloByZero => "Div",
+        VmError::IntOverflow { .. } | VmError::CastOverflow { .. } => "Range",
+        VmError::IndexOutOfBounds { .. } | VmError::IndexZero => "Index",
+        VmError::Io(_) => "IO",
+        VmError::Generic(m) | VmError::Located { message: m, .. } => {
+            zymbol_common::errkind::error_kind_of_message(m)
+        }
+        _ => "_",
+    }
+}
+
 fn get_chunk(program: &CompiledProgram, chunk_idx: usize) -> &Chunk {
     // chunk_idx == usize::MAX OR u32::MAX as usize both indicate the main chunk
     if chunk_idx >= program.functions.len() {
@@ -1113,6 +1130,12 @@ pub struct VM<W: Write> {
     /// there is nothing left to ask.
     cur_ip: u32,
     cur_chunk: u32,
+    /// The error `raise!` is carrying to a handler, between the jump and the
+    /// `TryLand` that receives it.
+    in_flight: Option<Pending>,
+    /// Terminal guards: dropping one restores the terminal, so they live as long
+    /// as the TUI they opened — across every nested run of the loop.
+    tui_stack: Vec<TuiGuard>,
     output: W,
 }
 
@@ -1131,6 +1154,8 @@ impl<W: Write> VM<W> {
             exit_code: None,
             cur_ip: 0,
             cur_chunk: u32::MAX,
+            in_flight: None,
+            tui_stack: Vec::new(),
             output,
         }
     }
@@ -1229,17 +1254,36 @@ impl<W: Write> VM<W> {
             chunk_idx: u32::MAX,
             return_reg: 0,
             catch_ip: u32::MAX,
-            try_depth: 0,
             error: None,
             writeback: None,
         };
         self.frame_stack.push(main_frame);
 
+        let result = self.exec(program, 0).map(|_| ());
+        // The terminal is given back on every way out, error included.
+        self.tui_stack.clear();
+        self.in_flight = None;
+        result
+    }
+
+    /// The dispatch loop: run from the frame on top of the stack until the frame
+    /// at index `floor` returns, and hand back what it returned.
+    ///
+    /// `run` enters it once, at the main frame. A higher-order operator enters it
+    /// again for each call it makes, after pushing the callee's frame — so the
+    /// function `$>` calls runs on the same loop as everything else. It used to
+    /// run on a second, smaller loop that knew 96 of the instructions and skipped
+    /// the rest in silence: `["a,b"]$> (s -> s$/ ',')` answered `[()]` (ZYVM-004).
+    ///
+    /// An error with no handler at or above `floor` unwinds to `floor` and
+    /// returns, and the operator raises it in the loop outside — where the
+    /// `!?` around the `$>` can meet it.
+    fn exec(&mut self, program: &CompiledProgram, floor: usize) -> Result<Value, VmError> {
         // Local variables — avoid frame_stack.last() overhead on every instruction
-        let mut ip: usize = 0;
-        let mut chunk_idx: usize = usize::MAX;
-        // base: offset in value_stack where current frame's registers start
-        let mut base: usize = 0;
+        let (mut ip, mut chunk_idx, mut base): (usize, usize, usize) = {
+            let top = self.frame_stack.last().unwrap();
+            (top.ip as usize, top.chunk_idx as usize, top.base as usize)
+        };
 
         // ── Hot-path register access macros ──────────────────────────────────
         // SAFETY: base + reg < value_stack.len() by compiler construction.
@@ -1316,49 +1360,65 @@ impl<W: Write> VM<W> {
             }}
         }
 
-        macro_rules! raise {
-            ($e:expr) => {{
-                let _err = $e;
-                // L16 fix: an error raised inside a called function must reach a
-                // catch armed in ANY ancestor frame, not just the top one. Walk
-                // the frame stack for the nearest active catch, pop the frames
-                // above it (releasing their registers), and resume at the catch.
-                let target = self.frame_stack.iter().rposition(|f| f.catch_ip != u32::MAX);
+        // raise_kind!: carry an error to the nearest armed handler at or above
+        // `floor`, with its kind already decided. A rethrow uses this directly,
+        // so the error leaves with the kind it arrived with.
+        //
+        // L16 fix: an error raised inside a called function must reach a catch
+        // armed in ANY ancestor frame, not just the top one. Walk the frame stack
+        // for the nearest active catch, pop the frames above it (releasing their
+        // registers), and resume at the catch — whose `TryLand` receives the
+        // error from `in_flight`.
+        //
+        // Never write one inside a `for`/`while`/`loop` of an instruction: the
+        // `continue` below would continue THAT loop, and a label cannot reach
+        // into a macro. Break out with the error and raise after the loop.
+        macro_rules! raise_kind {
+            ($e:expr, $kind:expr) => {{
+                let _err: VmError = $e;
+                let _kind: &'static str = $kind;
+                let target = self.frame_stack.iter()
+                    .rposition(|f| f.catch_ip != u32::MAX)
+                    .filter(|&t| t >= floor);
                 if let Some(target) = target {
                     while self.frame_stack.len() - 1 > target {
                         let callee_base = self.frame_stack.last().unwrap().base as usize;
                         self.frame_stack.pop();
                         self.value_stack.truncate(callee_base);
                     }
-                    {
-                        let frame = self.frame_stack.last().unwrap();
+                    let catch = {
+                        let frame = self.frame_stack.last_mut().unwrap();
                         base = frame.base as usize;
                         chunk_idx = frame.chunk_idx as usize;
-                    }
-                    let frame = self.frame_stack.last_mut().unwrap();
-                    let catch = frame.catch_ip;
-                    frame.catch_ip = u32::MAX;
-                    let kind = match &_err {
-                        VmError::TypeError { .. } | VmError::CastError { .. } => "Type",
-                        VmError::DivisionByZero | VmError::ModuloByZero => "Div",
-                        VmError::IntOverflow { .. } | VmError::CastOverflow { .. } => "Range",
-                        VmError::IndexOutOfBounds { .. } | VmError::IndexZero => "Index",
-                        VmError::Io(_) => "IO",
-                        // A dictionary key that is not there is a ##Key, even
-                        // though the reader arrived through the index syntax
-                        // `d["k"]` (decision 10). The tree-walker classifies the
-                        // same way, from the same wording.
-                        VmError::Generic(m) if m.starts_with("no key '") => "Key",
-                        _ => "_",
+                        // Disarmed until `TryLand` re-arms the one outside it: an
+                        // error raised before then must not come back here.
+                        std::mem::replace(&mut frame.catch_ip, u32::MAX)
                     };
-                    frame.try_depth = 0;
-                    let err_data = frame.error.get_or_insert_with(|| Box::new(FrameError { error_val: None, error_kind: String::new() }));
-                    err_data.error_kind = kind.to_string();
-                    err_data.error_val = Some(Value::Error(ZyStr::new(format!("##{}({})", kind, _err))));
+                    self.in_flight = Some(Pending {
+                        tag: 0,
+                        err: _err,
+                        kind: _kind,
+                        origin_ip: self.cur_ip,
+                        origin_chunk: self.cur_chunk,
+                    });
                     ip = catch as usize;
                     continue;
                 }
+                // Nothing here meets it. A nested run gives back the frames it
+                // pushed, so the operator that started it sees the stack it had.
+                if floor > 0 && self.frame_stack.len() > floor {
+                    let floor_base = self.frame_stack[floor].base as usize;
+                    self.frame_stack.truncate(floor);
+                    self.value_stack.truncate(floor_base);
+                }
                 return Err(_err);
+            }};
+        }
+        macro_rules! raise {
+            ($e:expr) => {{
+                let _err: VmError = $e;
+                let _kind = vm_error_kind(&_err);
+                raise_kind!(_err, _kind)
             }};
         }
 
@@ -1428,9 +1488,6 @@ impl<W: Write> VM<W> {
             }};
         }
 
-        // TUI cleanup guards — dropped on any return path (Ok, Err, or panic).
-        // Popped explicitly by ExitTui on the normal path.
-        let mut tui_stack: Vec<TuiGuard> = Vec::new();
 
         loop {
             // chunk borrows only from `program` — no conflict with `self.value_stack`
@@ -1438,7 +1495,13 @@ impl<W: Write> VM<W> {
             if ip >= chunk.instructions.len() {
                 // Fell off end of chunk — implicit return Unit
                 if self.frame_stack.len() == 1 {
-                    return Ok(());
+                    return Ok(Value::Unit);
+                }
+                // The frame a higher-order operator pushed ran off its end.
+                if self.frame_stack.len() - 1 == floor {
+                    self.frame_stack.pop();
+                    self.value_stack.truncate(base);
+                    return Ok(Value::Unit);
                 }
                 let (return_reg, wb) = {
                     let frame = self.frame_stack.last().unwrap();
@@ -1862,7 +1925,6 @@ impl<W: Write> VM<W> {
                         chunk_idx: func_idx,
                         return_reg: dst,
                         catch_ip: u32::MAX,
-                        try_depth: 0,
                         error: None,
                         writeback: if wb.is_empty() { None } else { Some(Box::new(wb)) },
                     });
@@ -1906,9 +1968,12 @@ impl<W: Write> VM<W> {
                         self.value_stack[base + i] = v;
                     }
 
-                    // Update frame metadata (same base, new chunk)
+                    // Update frame metadata (same base, new chunk). The compiler
+                    // never emits a tail call inside a `!?`, so there is no
+                    // handler here to keep.
                     let frame = self.frame_stack.last_mut().unwrap();
                     frame.chunk_idx = func_idx;
+                    frame.catch_ip = u32::MAX;
 
                     ip = 0;
                     chunk_idx = func_idx as usize;
@@ -1948,7 +2013,13 @@ impl<W: Write> VM<W> {
                             // wrong" beats inventing a number.
                             _ => 1,
                         });
-                        return Ok(());
+                        return Ok(Value::Unit);
+                    }
+
+                    // The frame a higher-order operator pushed has returned.
+                    if self.frame_stack.len() == floor {
+                        self.value_stack.truncate(base);
+                        return Ok(result);
                     }
 
                     // Truncate value_stack: remove callee's registers
@@ -2231,7 +2302,7 @@ impl<W: Write> VM<W> {
                             Value::NamedTuple(Rc::new(out));
                         continue;
                     }
-                    let idx = self.as_int(idx_reg)?;
+                    let idx = match self.as_int(idx_reg) { Ok(v) => v, Err(e) => raise!(e) };
                     let result = match std::mem::replace(&mut self.value_stack[base + arr_reg as usize], Value::Unit) {
                         Value::Array(mut rc_arr) => {
                             let arr = Rc::make_mut(&mut rc_arr);
@@ -2340,7 +2411,7 @@ impl<W: Write> VM<W> {
                 }
 
                 &Instruction::ArrayInsert(arr_reg, idx_reg, val_reg) => {
-                    let idx = self.as_int(idx_reg)?;
+                    let idx = match self.as_int(idx_reg) { Ok(v) => v, Err(e) => raise!(e) };
                     let val = self.reg_get(val_reg).clone();
                     match self.value_stack[base + arr_reg as usize].clone() {
                         Value::Array(rc_arr) => {
@@ -2380,8 +2451,8 @@ impl<W: Write> VM<W> {
 
                 &Instruction::ArrayRemoveRange(arr_reg, lo_reg) => {
                     // hi_reg = lo_reg + 1 by compiler convention
-                    let lo_raw = self.as_int(lo_reg)?;
-                    let hi_raw = self.as_int(lo_reg + 1)?;
+                    let lo_raw = match self.as_int(lo_reg) { Ok(v) => v, Err(e) => raise!(e) };
+                    let hi_raw = match self.as_int(lo_reg + 1) { Ok(v) => v, Err(e) => raise!(e) };
                     // lo: 0=default start (1-based 1 = internal 0), positive=1-based (subtract 1), negative=not supported
                     let lo = (if lo_raw == 0 { 0i64 } else { lo_raw - 1 }).max(0) as usize;
                     // hi: positive=1-based inclusive (stays same as 0-based exclusive)
@@ -2420,11 +2491,11 @@ impl<W: Write> VM<W> {
 
                 // ── Pattern match ────────────────────────────────────────────
                 &Instruction::MatchInt(reg, val, label) => {
-                    let v = self.as_int(reg)?;
+                    let v = match self.as_int(reg) { Ok(v) => v, Err(e) => raise!(e) };
                     if v == val { ip = label as usize; }
                 }
                 &Instruction::MatchRange(reg, lo, hi, label) => {
-                    let v = self.as_int(reg)?;
+                    let v = match self.as_int(reg) { Ok(v) => v, Err(e) => raise!(e) };
                     if v >= lo && v <= hi { ip = label as usize; }
                 }
                 &Instruction::MatchStr(reg, idx, label) => {
@@ -2507,24 +2578,23 @@ impl<W: Write> VM<W> {
                             (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
                         }
                     };
-                    let mut results = Vec::new();
-                    match &sep_owned {
-                        Value::Char(c) => {
-                            let c = *c;
-                            for part in s_owned.split(c) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                results.push(self.call_callable(callable.clone(), vec![v], program, ip, chunk_idx)?);
-                            }
-                        }
-                        Value::String(sep_s) => {
-                            let sep_str = sep_s.to_string();
-                            for part in s_owned.split(sep_str.as_str()) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                results.push(self.call_callable(callable.clone(), vec![v], program, ip, chunk_idx)?);
-                            }
-                        }
+                    let parts: Vec<String> = match &sep_owned {
+                        Value::Char(c) => s_owned.split(*c).map(str::to_string).collect(),
+                        Value::String(sep_s) => s_owned.split(sep_s.as_str()).map(str::to_string).collect(),
                         _ => unreachable!(),
-                    }
+                    };
+                    let mut results = Vec::with_capacity(parts.len());
+                    let outcome: Result<(), VmError> = 'calls: {
+                        for part in parts {
+                            let v = Value::String(ZyStr::new(part));
+                            match self.call_callable(callable.clone(), vec![v], program) {
+                                Ok(r) => results.push(r),
+                                Err(e) => break 'calls Err(e),
+                            }
+                        }
+                        Ok(())
+                    };
+                    if let Err(e) = outcome { raise!(e); }
                     self.reg_set(dst, Value::Array(Rc::new(results)));
                 }
                 &Instruction::StrSplitFilter(dst, str_reg, sep_reg, func_reg) => {
@@ -2539,26 +2609,23 @@ impl<W: Write> VM<W> {
                             (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
                         }
                     };
-                    let mut results = Vec::new();
-                    match &sep_owned {
-                        Value::Char(c) => {
-                            let c = *c;
-                            for part in s_owned.split(c) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, ip, chunk_idx)?;
-                                if keep.is_truthy() { results.push(v); }
-                            }
-                        }
-                        Value::String(sep_s) => {
-                            let sep_str = sep_s.to_string();
-                            for part in s_owned.split(sep_str.as_str()) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, ip, chunk_idx)?;
-                                if keep.is_truthy() { results.push(v); }
-                            }
-                        }
+                    let parts: Vec<String> = match &sep_owned {
+                        Value::Char(c) => s_owned.split(*c).map(str::to_string).collect(),
+                        Value::String(sep_s) => s_owned.split(sep_s.as_str()).map(str::to_string).collect(),
                         _ => unreachable!(),
-                    }
+                    };
+                    let mut results = Vec::new();
+                    let outcome: Result<(), VmError> = 'calls: {
+                        for part in parts {
+                            let v = Value::String(ZyStr::new(part));
+                            match self.call_callable(callable.clone(), vec![v.clone()], program) {
+                                Ok(keep) => if keep.is_truthy() { results.push(v); },
+                                Err(e) => break 'calls Err(e),
+                            }
+                        }
+                        Ok(())
+                    };
+                    if let Err(e) = outcome { raise!(e); }
                     self.reg_set(dst, Value::Array(Rc::new(results)));
                 }
                 &Instruction::StrSplitReduce(dst, str_reg, sep_reg, init_reg, func_reg) => {
@@ -2574,23 +2641,22 @@ impl<W: Write> VM<W> {
                             (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
                         }
                     };
-                    match &sep_owned {
-                        Value::Char(c) => {
-                            let c = *c;
-                            for part in s_owned.split(c) {
-                                let elem = Value::String(ZyStr::from_str_ref(part));
-                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, ip, chunk_idx)?;
-                            }
-                        }
-                        Value::String(sep_s) => {
-                            let sep_str = sep_s.to_string();
-                            for part in s_owned.split(sep_str.as_str()) {
-                                let elem = Value::String(ZyStr::from_str_ref(part));
-                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, ip, chunk_idx)?;
-                            }
-                        }
+                    let parts: Vec<String> = match &sep_owned {
+                        Value::Char(c) => s_owned.split(*c).map(str::to_string).collect(),
+                        Value::String(sep_s) => s_owned.split(sep_s.as_str()).map(str::to_string).collect(),
                         _ => unreachable!(),
-                    }
+                    };
+                    let outcome: Result<(), VmError> = 'calls: {
+                        for part in parts {
+                            let elem = Value::String(ZyStr::new(part));
+                            match self.call_callable(callable.clone(), vec![mem::replace(&mut acc, Value::Unit), elem], program) {
+                                Ok(r) => acc = r,
+                                Err(e) => break 'calls Err(e),
+                            }
+                        }
+                        Ok(())
+                    };
+                    if let Err(e) = outcome { raise!(e); }
                     self.reg_set(dst, acc);
                 }
                 &Instruction::StrContains(dst, str_reg, elem_reg) => {
@@ -2607,8 +2673,8 @@ impl<W: Write> VM<W> {
                     wreg!(dst, Value::Bool(result));
                 }
                 &Instruction::StrSlice(dst, str_reg, lo_reg) => {
-                    let lo_val = self.as_int(lo_reg)?;
-                    let hi_val = self.as_int(lo_reg + 1)?;
+                    let lo_val = match self.as_int(lo_reg) { Ok(v) => v, Err(e) => raise!(e) };
+                    let hi_val = match self.as_int(lo_reg + 1) { Ok(v) => v, Err(e) => raise!(e) };
                     let result = match &self.value_stack[base + str_reg as usize] {
                         Value::String(s) => {
                             if s.is_ascii() {
@@ -2947,7 +3013,6 @@ impl<W: Write> VM<W> {
                         chunk_idx: func_idx,
                         return_reg: dst,
                         catch_ip: u32::MAX,
-                        try_depth: 0,
                         error: None,
                         writeback: if wb.is_empty() { None } else { Some(Box::new(wb)) },
                     });
@@ -3008,8 +3073,8 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::ArraySlice(dst, arr_reg, lo_reg) => {
                     // hi_reg = lo_reg + 1 by compiler convention
-                    let lo = self.as_int(lo_reg)?;
-                    let hi = self.as_int(lo_reg + 1)?;
+                    let lo = match self.as_int(lo_reg) { Ok(v) => v, Err(e) => raise!(e) };
+                    let hi = match self.as_int(lo_reg + 1) { Ok(v) => v, Err(e) => raise!(e) };
                     let result = match self.reg_get(arr_reg) {
                         Value::Array(arr) => {
                             let arr = arr.as_ref();
@@ -3067,10 +3132,16 @@ impl<W: Write> VM<W> {
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
                     };
                     let mut results = Vec::with_capacity(arr.len());
-                    for elem in arr {
-                        let result = self.call_callable(callable.clone(), vec![elem], program, ip, chunk_idx)?;
-                        results.push(result);
-                    }
+                    let outcome: Result<(), VmError> = 'calls: {
+                        for elem in arr {
+                            match self.call_callable(callable.clone(), vec![elem], program) {
+                                Ok(r) => results.push(r),
+                                Err(e) => break 'calls Err(e),
+                            }
+                        }
+                        Ok(())
+                    };
+                    if let Err(e) = outcome { raise!(e); }
                     self.reg_set(dst, Value::Array(Rc::new(results)));
                 }
                 &Instruction::ArrayFilter(dst, arr_reg, func_reg) => {
@@ -3080,12 +3151,16 @@ impl<W: Write> VM<W> {
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
                     };
                     let mut results = Vec::new();
-                    for elem in arr {
-                        let keep = self.call_callable(callable.clone(), vec![elem.clone()], program, ip, chunk_idx)?;
-                        if keep.is_truthy() {
-                            results.push(elem);
+                    let outcome: Result<(), VmError> = 'calls: {
+                        for elem in arr {
+                            match self.call_callable(callable.clone(), vec![elem.clone()], program) {
+                                Ok(keep) => if keep.is_truthy() { results.push(elem); },
+                                Err(e) => break 'calls Err(e),
+                            }
                         }
-                    }
+                        Ok(())
+                    };
+                    if let Err(e) = outcome { raise!(e); }
                     self.reg_set(dst, Value::Array(Rc::new(results)));
                 }
                 &Instruction::ArrayReduce(dst, arr_reg, init_reg, func_reg) => {
@@ -3095,9 +3170,16 @@ impl<W: Write> VM<W> {
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
                     };
                     let mut acc = self.reg_get(init_reg).clone();
-                    for elem in arr {
-                        acc = self.call_callable(callable.clone(), vec![acc, elem], program, ip, chunk_idx)?;
-                    }
+                    let outcome: Result<(), VmError> = 'calls: {
+                        for elem in arr {
+                            match self.call_callable(callable.clone(), vec![mem::replace(&mut acc, Value::Unit), elem], program) {
+                                Ok(r) => acc = r,
+                                Err(e) => break 'calls Err(e),
+                            }
+                        }
+                        Ok(())
+                    };
+                    if let Err(e) = outcome { raise!(e); }
                     self.reg_set(dst, acc);
                 }
                 &Instruction::ArraySort(dst, arr_reg, ascending, func_reg) => {
@@ -3116,18 +3198,25 @@ impl<W: Write> VM<W> {
                         // Custom comparator: bubble sort to avoid unsafe borrow
                         let callable = self.reg_get(func_reg).clone();
                         let n = items.len();
-                        for i in 0..n {
-                            for j in 0..n.saturating_sub(i + 1) {
-                                let keep = self.call_callable(
-                                    callable.clone(),
-                                    vec![items[j].clone(), items[j + 1].clone()],
-                                    program, ip, chunk_idx,
-                                )?;
-                                if !keep.is_truthy() {
-                                    items.swap(j, j + 1);
+                        let outcome: Result<(), VmError> = 'calls: {
+                            for i in 0..n {
+                                for j in 0..n.saturating_sub(i + 1) {
+                                    let keep = match self.call_callable(
+                                        callable.clone(),
+                                        vec![items[j].clone(), items[j + 1].clone()],
+                                        program,
+                                    ) {
+                                        Ok(keep) => keep,
+                                        Err(e) => break 'calls Err(e),
+                                    };
+                                    if !keep.is_truthy() {
+                                        items.swap(j, j + 1);
+                                    }
                                 }
                             }
-                        }
+                            Ok(())
+                        };
+                        if let Err(e) = outcome { raise!(e); }
                     }
                     self.reg_set(dst, Value::Array(Rc::new(items)));
                 }
@@ -3412,23 +3501,66 @@ impl<W: Write> VM<W> {
                     self.reg_set(dst, result);
                 }
 
-                // ── Try/catch ─────────────────────────────────────────────────
-                &Instruction::TryBegin(catch_label) => {
-                    let frame = self.frame_stack.last_mut().unwrap();
-                    frame.catch_ip = catch_label;
-                    frame.try_depth += 1;
+                // ── Try/catch (GLB-010) ───────────────────────────────────────
+                // The handler this `!?` replaces is saved in its own register,
+                // packed as `pending_len << 32 | catch_ip`: re-armed on the way
+                // out, and the pending errors truncated back to what they were,
+                // which discards any that belonged to a `!?` inside this one.
+                &Instruction::TryBegin(catch_label, save) => {
+                    let packed = {
+                        let frame = self.frame_stack.last_mut().unwrap();
+                        let pending = frame.error.as_ref().map_or(0, |e| e.pending.len());
+                        let outer = std::mem::replace(&mut frame.catch_ip, catch_label);
+                        ((pending as i64) << 32) | outer as i64
+                    };
+                    wreg!(save, Value::Int(packed));
                 }
-                Instruction::TryEnd(_) => {
-                    let frame = self.frame_stack.last_mut().unwrap();
-                    if frame.try_depth > 0 { frame.try_depth -= 1; }
-                    if frame.try_depth == 0 { frame.catch_ip = u32::MAX; }
+                &Instruction::TryEnd(save) => {
+                    let outer = match rreg!(save) { Value::Int(n) => (*n & 0xFFFF_FFFF) as u32, _ => u32::MAX };
+                    self.frame_stack.last_mut().unwrap().catch_ip = outer;
                 }
-                &Instruction::TryCatch(err_reg) => {
-                    let err = self.frame_stack.last_mut().unwrap()
-                        .error.as_mut()
-                        .and_then(|e| e.error_val.take())
-                        .unwrap_or_else(|| Value::String(ZyStr::new("unknown error".to_string())));
-                    unsafe { *self.value_stack.get_unchecked_mut(base + err_reg as usize) = err; }
+                &Instruction::TryLand(save, err_reg) => {
+                    let (outer, keep) = match rreg!(save) {
+                        Value::Int(n) => ((*n & 0xFFFF_FFFF) as u32, (*n >> 32) as usize),
+                        _ => (u32::MAX, 0),
+                    };
+                    let mut pending = self.in_flight.take().unwrap_or_else(|| Pending {
+                        tag: 0,
+                        err: VmError::Generic("unknown error".to_string()),
+                        kind: "_",
+                        origin_ip: self.cur_ip,
+                        origin_chunk: self.cur_chunk,
+                    });
+                    pending.tag = save;
+                    let value = Value::Error(ZyStr::new(format!("##{}({})", pending.kind, pending.err)));
+                    {
+                        let frame = self.frame_stack.last_mut().unwrap();
+                        frame.catch_ip = outer;
+                        let errors = frame.error.get_or_insert_with(Default::default);
+                        errors.pending.truncate(keep);
+                        errors.pending.push(pending);
+                    }
+                    wreg!(err_reg, value);
+                }
+                &Instruction::TryHandled(tag) => {
+                    if let Some(errors) = self.frame_stack.last_mut().unwrap().error.as_mut() {
+                        if errors.pending.last().is_some_and(|p| p.tag == tag) {
+                            errors.pending.pop();
+                        }
+                    }
+                }
+                &Instruction::TryRethrow(tag) => {
+                    let pending = match self.frame_stack.last_mut().unwrap().error.as_mut() {
+                        Some(errors) if errors.pending.last().is_some_and(|p| p.tag == tag) => errors.pending.pop(),
+                        _ => None,
+                    };
+                    if let Some(p) = pending {
+                        // From where it was first raised: an uncaught rethrow is
+                        // located at that instruction, not at the end of the `!?`.
+                        self.cur_ip = p.origin_ip;
+                        self.cur_chunk = p.origin_chunk;
+                        raise_kind!(p.err, p.kind);
+                    }
                 }
 
                 // ── Shell execution ───────────────────────────────────────────
@@ -3441,7 +3573,7 @@ impl<W: Write> VM<W> {
                             BuildPart::Reg(r) => cmd.push_str(&self.reg_get(*r).to_string_repr()),
                         }
                     }
-                    let out = run_in_shell(&cmd)?;
+                    let out = match run_in_shell(&cmd) { Ok(o) => o, Err(e) => raise!(e.into()) };
                     // Capture both stdout and stderr (mirrors tree-walker behavior)
                     let mut result = String::from_utf8_lossy(&out.stdout).into_owned();
                     if !out.stderr.is_empty() {
@@ -3467,14 +3599,14 @@ impl<W: Write> VM<W> {
                             BuildPart::Reg(r) => cmd.push_str(&self.reg_get(*r).to_string_repr()),
                         }
                     }
-                    let out = run_in_shell(&cmd)?;
+                    let out = match run_in_shell(&cmd) { Ok(o) => o, Err(e) => raise!(e.into()) };
                     if !out.status.success() {
                         let mut msg = String::from_utf8_lossy(&out.stderr).into_owned();
                         if msg.is_empty() {
                             msg = String::from_utf8_lossy(&out.stdout).into_owned();
                         }
                         let msg = msg.trim_end().to_string();
-                        return Err(VmError::Generic(msg));
+                        raise!(VmError::Generic(msg));
                     }
                     let result = String::from_utf8_lossy(&out.stdout).into_owned();
                     self.reg_set(dst, Value::String(ZyStr::new(result)));
@@ -3607,7 +3739,8 @@ impl<W: Write> VM<W> {
                 &Instruction::LoadErrorKind(dst) => {
                     let kind = self.frame_stack.last()
                         .and_then(|f| f.error.as_ref())
-                        .map(|e| e.error_kind.clone())
+                        .and_then(|e| e.pending.last())
+                        .map(|p| p.kind.to_string())
                         .unwrap_or_default();
                     unsafe { *self.value_stack.get_unchecked_mut(base + dst as usize) = Value::String(ZyStr::new(kind)); }
                 }
@@ -3713,11 +3846,15 @@ impl<W: Write> VM<W> {
 
                 Instruction::ReadLine(dst, prompt_reg, kind) => {
                     use std::io::{BufRead, Write};
-                    let in_tui = !tui_stack.is_empty();
+                    let in_tui = !self.tui_stack.is_empty();
                     // Read / validate / re-prompt loop (mirrors the tree-walker). An empty
                     // raw line means EOF (a typed blank line is "\n"); EOF aborts so a failed
                     // constraint cannot spin forever on a closed pipe.
-                    let value = loop {
+                    // The loop breaks with a Result and the error is raised after
+                        // it: a `raise!` in here would `continue` THIS loop, which
+                        // read end-of-input again with the handler already spent,
+                        // so `!? { << n } :! { }` never caught it.
+                    let value: Result<Value, VmError> = loop {
                         if let Some(pr) = prompt_reg {
                             print!("{}", self.numeral_repr(rreg!(*pr)));
                             std::io::stdout().flush().ok();
@@ -3731,22 +3868,23 @@ impl<W: Write> VM<W> {
                         if in_tui {
                             crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide).ok();
                             if let Err(e) = crossterm::terminal::enable_raw_mode() {
-                                raise!(VmError::Generic(format!("input: failed to restore raw mode: {}", e)));
+                                break Err(VmError::Generic(format!("input: failed to restore raw mode: {}", e)));
                             }
                         }
                         if line.is_empty() {
-                            raise!(VmError::Generic(format!(
+                            break Err(VmError::Generic(format!(
                                 "end of input while waiting for {}", vm_describe_input_kind(kind)
                             )));
                         }
                         match vm_validate_input(line.trim(), kind) {
-                            Ok(v) => break v,
+                            Ok(v) => break Ok(v),
                             Err(hint) => {
                                 println!("  ({})", hint);
                                 std::io::stdout().flush().ok();
                             }
                         }
                     };
+                    let value = match value { Ok(v) => v, Err(e) => raise!(e) };
                     wreg!(*dst, value);
                 }
 
@@ -3796,14 +3934,14 @@ impl<W: Write> VM<W> {
                         let _ = crossterm::terminal::disable_raw_mode();
                         raise!(VmError::Generic(format!("failed to enter alternate screen: {}", e)));
                     }
-                    tui_stack.push(TuiGuard);
+                    self.tui_stack.push(TuiGuard);
                 }
 
                 Instruction::ExitTui => {
                     // Pop the guard — its Drop performs cleanup.
                     // If ExitTui is skipped (@:label! / error), the guard is dropped
-                    // when tui_stack goes out of scope at the end of run().
-                    tui_stack.pop();
+                    // when `run` clears the stack on its way out.
+                    self.tui_stack.pop();
                 }
 
                 &Instruction::HotInit(dst, neutral) => {
@@ -3825,7 +3963,7 @@ impl<W: Write> VM<W> {
                     wreg!(dst, Value::Array(Rc::new(arr)));
                 }
 
-                Instruction::Halt => return Ok(()),
+                Instruction::Halt => return Ok(Value::Unit),
             }
         }
     }
@@ -3855,1065 +3993,74 @@ impl<W: Write> VM<W> {
         }
     }
 
-    /// Dispatch a call to either a Function or a Closure value.
-    /// Used by HOF opcodes (ArrayMap, ArrayFilter, ArrayReduce).
+    /// Call a Function or Closure value from inside an instruction — the calls
+    /// `$>`, `$|`, `$<`, `$^` and their string-splitting forms make.
+    ///
+    /// Pushes the callee's frame exactly as `CallDynamic` does and runs the same
+    /// dispatch loop down to it (`exec`). It used to hand the call to a second
+    /// interpreter loop that knew 96 of the instructions and skipped the other
+    /// 49, so a split, a slice, a format, a `??` over a range, a `$!` or a `!?`
+    /// inside the callee all answered `##_` without an error (ZYVM-004). There
+    /// is one loop now; an instruction added to it is added everywhere.
     fn call_callable(
         &mut self,
         callable: Value,
         args: Vec<Value>,
         program: &CompiledProgram,
-        caller_ip: usize,
-        caller_chunk: usize,
     ) -> Result<Value, VmError> {
-        match callable {
-            Value::Function(idx, _) => self.call_function(idx, args, &[], program, caller_ip, caller_chunk),
-            Value::Closure(idx, _, upvalues) => self.call_function(idx, args, upvalues.as_ref(), program, caller_ip, caller_chunk),
-            other => Err(VmError::TypeError { expected: "Function", got: other.type_name().to_string() }),
-        }
-    }
-
-    fn call_function(
-        &mut self,
-        func_idx: FuncIdx,
-        args: Vec<Value>,
-        upvalues: &[Value],
-        program: &CompiledProgram,
-        _caller_ip: usize,
-        _caller_chunk: usize,
-    ) -> Result<Value, VmError> {
-        if func_idx as usize >= program.functions.len() {
+        let (func_idx, upvalues) = match callable {
+            Value::Function(idx, _) => (idx, None),
+            Value::Closure(idx, _, upvalues) => (idx, Some(upvalues)),
+            other => return Err(VmError::TypeError { expected: "Function", got: other.type_name().to_string() }),
+        };
+        let Some(chunk) = program.functions.get(func_idx as usize) else {
             return Err(VmError::UndefinedFunction(func_idx));
-        }
-        let chunk = &program.functions[func_idx as usize];
+        };
         let num_params = chunk.num_params as usize;
         let num_regs = chunk.num_registers as usize;
 
-        // Extend the flat stack for this function's registers
-        let base = self.value_stack.len();
-        self.value_stack.resize(base + num_regs, Value::Unit);
-
-        // Write args
+        let floor = self.frame_stack.len();
+        let new_base = self.value_stack.len();
+        self.value_stack.resize(new_base + num_regs, Value::Unit);
         for (i, v) in args.into_iter().enumerate() {
-            if i < num_regs { self.value_stack[base + i] = v; }
+            if i < num_regs { self.value_stack[new_base + i] = v; }
         }
-        // Load upvalues into [num_params..num_params+k)
-        for (i, uv) in upvalues.iter().enumerate() {
-            let slot = num_params + i;
-            if slot < num_regs { self.value_stack[base + slot] = uv.clone(); }
-        }
-
-        let mut ip = 0usize;
-        let chunk_idx = func_idx as usize;
-        loop {
-            let chunk = &program.functions[chunk_idx];
-            if ip >= chunk.instructions.len() { break; }
-            let instr = &chunk.instructions[ip];
-            self.cur_ip = ip as u32;
-            self.cur_chunk = chunk_idx as u32;
-            ip += 1;
-            macro_rules! r { ($r:expr) => { &self.value_stack[base + $r as usize] } }
-            macro_rules! w { ($r:expr, $v:expr) => { self.value_stack[base + $r as usize] = $v } }
-            // As in the main loop, but this one returns rather than raising:
-            // errors here propagate to the caller, which owns the catch.
-            macro_rules! iop {
-                ($v:expr, $a:expr, $op:expr, $b:expr) => {
-                    match $v {
-                        Some(n) => n,
-                        None => return Err(VmError::IntOverflow { a: $a, op: $op, b: $b }),
-                    }
-                };
+        if let Some(upvalues) = upvalues {
+            for (i, uv) in upvalues.iter().enumerate() {
+                let slot = num_params + i;
+                if slot < num_regs { self.value_stack[new_base + slot] = uv.clone(); }
             }
-            match instr {
-                &Instruction::Return(src) => {
-                    let result = mem::replace(&mut self.value_stack[base + src as usize], Value::Unit);
-                    self.value_stack.truncate(base);
-                    return Ok(result);
-                }
-                &Instruction::Halt => break,
-                &Instruction::LoadInt(dst, n) => w!(dst, Value::Int(n)),
-                &Instruction::LoadFloat(dst, n) => w!(dst, Value::Float(n)),
-                &Instruction::LoadBool(dst, b) => w!(dst, Value::Bool(b)),
-                &Instruction::LoadStr(dst, idx) => w!(dst, Value::String(self.string_rcs[idx as usize].clone())),
-                &Instruction::LoadChar(dst, c) => w!(dst, Value::Char(c)),
-                &Instruction::LoadUnit(dst) => w!(dst, Value::Unit),
-                &Instruction::CopyReg(dst, src) => { let v = r!(src).clone(); w!(dst, v); }
-                &Instruction::MoveReg(dst, src) => {
-                    let v = mem::replace(&mut self.value_stack[base + src as usize], Value::Unit);
-                    w!(dst, v);
-                }
-                &Instruction::AddInt(dst, a, b) => {
-                    let is_fl = matches!(r!(a), Value::Float(_)) || matches!(r!(b), Value::Float(_));
-                    if is_fl {
-                        let fa = match r!(a) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        w!(dst, Value::Float(fa + fb));
-                    } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        let res = iop!(num::add(*va, *vb), *va, "+", *vb); w!(dst, Value::Int(res));
-                    }
-                }
-                &Instruction::SubInt(dst, a, b) => {
-                    let is_fl = matches!(r!(a), Value::Float(_)) || matches!(r!(b), Value::Float(_));
-                    if is_fl {
-                        let fa = match r!(a) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        w!(dst, Value::Float(fa - fb));
-                    } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        let res = iop!(num::sub(*va, *vb), *va, "-", *vb); w!(dst, Value::Int(res));
-                    }
-                }
-                &Instruction::MulInt(dst, a, b) => {
-                    let is_fl = matches!(r!(a), Value::Float(_)) || matches!(r!(b), Value::Float(_));
-                    if is_fl {
-                        let fa = match r!(a) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        w!(dst, Value::Float(fa * fb));
-                    } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        let res = iop!(num::mul(*va, *vb), *va, "*", *vb); w!(dst, Value::Int(res));
-                    }
-                }
-                &Instruction::ModInt(dst, a, b) => {
-                    let is_fl = matches!(r!(a), Value::Float(_)) || matches!(r!(b), Value::Float(_));
-                    if is_fl {
-                        let fa = match r!(a) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        if fb == 0.0 { return Err(VmError::ModuloByZero); }
-                        w!(dst, Value::Float(fa % fb));
-                    } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        if *vb == 0 { return Err(VmError::ModuloByZero); }
-                        w!(dst, Value::Int(va % vb));
-                    }
-                }
-                &Instruction::AddIntImm(dst, src, imm) => {
-                    if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v + imm as f64)); }
-                    else if let Value::Int(v) = r!(src) { let (a, b) = (*v, imm as i64); w!(dst, Value::Int(iop!(num::add(a, b), a, "+", b))); }
-                }
-                &Instruction::SubIntImm(dst, src, imm) => {
-                    if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v - imm as f64)); }
-                    else if let Value::Int(v) = r!(src) { let (a, b) = (*v, imm as i64); w!(dst, Value::Int(iop!(num::sub(a, b), a, "-", b))); }
-                }
-                &Instruction::MulIntImm(dst, src, imm) => {
-                    if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v * imm as f64)); }
-                    else if let Value::Int(v) = r!(src) { let (a, b) = (*v, imm as i64); w!(dst, Value::Int(iop!(num::mul(a, b), a, "*", b))); }
-                }
-                &Instruction::CmpEqImm(dst, src, imm) => {
-                    let res = num_eq_imm(r!(src), imm as i64).unwrap_or(false);
-                    w!(dst, Value::Bool(res));
-                }
-                &Instruction::CmpNeImm(dst, src, imm) => {
-                    let res = !num_eq_imm(r!(src), imm as i64).unwrap_or(false);
-                    w!(dst, Value::Bool(res));
-                }
-                &Instruction::CmpLtImm(dst, src, imm) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Bool(*v < imm as i64)); }
-                }
-                &Instruction::CmpLeImm(dst, src, imm) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Bool(*v <= imm as i64)); }
-                }
-                &Instruction::CmpGtImm(dst, src, imm) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Bool(*v > imm as i64)); }
-                }
-                &Instruction::CmpGeImm(dst, src, imm) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Bool(*v >= imm as i64)); }
-                }
-                &Instruction::CmpEq(dst, a, b) => {
-                    let res = r!(a).equals(r!(b)); w!(dst, Value::Bool(res));
-                }
-                &Instruction::CmpNe(dst, a, b) => {
-                    let res = !r!(a).equals(r!(b)); w!(dst, Value::Bool(res));
-                }
-                &Instruction::CmpGt(dst, a, b) => {
-                    let res = ord_gt(ord_slow(r!(a), r!(b), "Gt")?);
-                    w!(dst, Value::Bool(res));
-                }
-                &Instruction::Not(dst, src) => {
-                    let v = r!(src).is_truthy(); w!(dst, Value::Bool(!v));
-                }
-                &Instruction::IsInt(dst, src) => {
-                    let v = matches!(r!(src), Value::Int(_)); w!(dst, Value::Bool(v));
-                }
-                &Instruction::AsLoopCond(dst, src) => {
-                    match r!(src) {
-                        &Value::Bool(b) => w!(dst, Value::Bool(b)),
-                        other => {
-                            let got = other.type_word();
-                            return Err(VmError::Generic(format!(
-                                "loop expects a count or a condition, got {got}"
-                            )));
-                        }
-                    }
-                }
-                &Instruction::Jump(label) => { ip = label as usize; }
-                &Instruction::JumpIf(cond, label) if r!(cond).is_truthy() => { ip = label as usize; }
-                &Instruction::JumpIfNot(cond, label) if !r!(cond).is_truthy() => { ip = label as usize; }
-                &Instruction::ConcatStr(dst, a, b) => {
-                    let result = if dst == a && a != b {
-                        let left = std::mem::replace(
-                            &mut self.value_stack[base + a as usize],
-                            Value::Unit,
-                        );
-                        match (left, &self.value_stack[base + b as usize]) {
-                            (Value::String(l), Value::String(r)) => {
-                                let r_str = r.as_str().to_string();
-                                let mut s = l.try_into_string();
-                                s.push_str(&r_str);
-                                s
-                            }
-                            (l, r) => {
-                                let ls = self.numeral_repr(&l);
-                                let rs = self.numeral_repr(r);
-                                let mut s = String::with_capacity(ls.len() + rs.len());
-                                s.push_str(&ls);
-                                s.push_str(&rs);
-                                s
-                            }
-                        }
-                    } else {
-                        match (r!(a), r!(b)) {
-                            (Value::String(l), Value::String(r)) => {
-                                let mut s = String::with_capacity(l.len() + r.len());
-                                s.push_str(l.as_ref());
-                                s.push_str(r.as_ref());
-                                s
-                            }
-                            (l, r) => {
-                                let ls = self.numeral_repr(l);
-                                let rs = self.numeral_repr(r);
-                                let mut s = String::with_capacity(ls.len() + rs.len());
-                                s.push_str(&ls);
-                                s.push_str(&rs);
-                                s
-                            }
-                        }
-                    };
-                    w!(dst, Value::String(ZyStr::new(result)));
-                }
-                Instruction::ConcatBuild(dst, base_reg, item_regs) => {
-                    let (dst, base_reg) = (*dst, *base_reg);
-                    let base_val = r!(base_reg).clone();
-                    let result = match base_val {
-                        Value::Array(arr) => {
-                            let mut new_arr = arr.as_ref().clone();
-                            for &ir in item_regs {
-                                new_arr.push(r!(ir).clone());
-                            }
-                            Value::Array(Rc::new(new_arr))
-                        }
-                        other => {
-                            let mut s = self.numeral_repr(&other);
-                            for &ir in item_regs {
-                                let part = self.numeral_repr(r!(ir));
-                                s.push_str(&part);
-                            }
-                            Value::String(ZyStr::new(s))
-                        }
-                    };
-                    w!(dst, result);
-                }
-                &Instruction::MakeFunc(dst, func_idx) => {
-                    let arity = program.functions.get(func_idx as usize)
-                        .map(|c| c.num_params as u8).unwrap_or(0);
-                    w!(dst, Value::Function(func_idx, arity));
-                }
-                &Instruction::MakeLambda(dst, func_idx) => {
-                    let arity = program.functions.get(func_idx as usize)
-                        .map(|c| c.num_params as u8).unwrap_or(0);
-                    w!(dst, Value::Closure(func_idx, arity, Rc::new(vec![])));
-                }
-                Instruction::MakeClosure(dst, func_idx, captured_regs) => {
-                    let (dst, func_idx) = (*dst, *func_idx);
-                    let arity = program.functions.get(func_idx as usize)
-                        .map(|c| c.num_params as u8).unwrap_or(0);
-                    let upvalues: Vec<Value> = captured_regs.iter()
-                        .map(|&cr| self.value_stack[base + cr as usize].clone())
-                        .collect();
-                    self.value_stack[base + dst as usize] = Value::Closure(func_idx, arity, Rc::new(upvalues));
-                }
-                Instruction::Call(dst, func_idx, arg_regs) => {
-                    let (dst, func_idx) = (*dst, *func_idx);
-                    let args: Vec<Value> = arg_regs.iter()
-                        .map(|&r| self.value_stack[base + r as usize].clone())
-                        .collect();
-                    let result = self.call_function(func_idx, args, &[], program, 0, chunk_idx)?;
-                    self.value_stack[base + dst as usize] = result;
-                }
-                Instruction::TailCall(func_idx, arg_regs) => {
-                    let func_idx = *func_idx;
-                    let args: Vec<Value> = arg_regs.iter()
-                        .map(|&r| self.value_stack[base + r as usize].clone())
-                        .collect();
-                    let result = self.call_function(func_idx, args, &[], program, 0, chunk_idx)?;
-                    self.value_stack.truncate(base);
-                    return Ok(result);
-                }
-                Instruction::CallDynamic(dst, callee_reg, arg_regs) => {
-                    let (dst, callee_reg) = (*dst, *callee_reg);
-                    let callable = self.value_stack[base + callee_reg as usize].clone();
-                    let args: Vec<Value> = arg_regs.iter()
-                        .map(|&r| self.value_stack[base + r as usize].clone())
-                        .collect();
-                    let result = self.call_callable(callable, args, program, 0, chunk_idx)?;
-                    self.value_stack[base + dst as usize] = result;
-                }
-                Instruction::CallBuiltin(dst, builtin_id, arg_regs) => {
-                    let args: Vec<Value> = arg_regs.iter()
-                        .map(|&r| self.value_stack[base + r as usize].clone())
-                        .collect();
-                    let result = crate::stdlib_builtins::call(*builtin_id, args)
-                        .map_err(VmError::Generic)?;
-                    self.value_stack[base + *dst as usize] = result;
-                }
-                &Instruction::CmpLt(dst, a, b) => {
-                    let res = ord_lt(ord_slow(r!(a), r!(b), "Lt")?);
-                    w!(dst, Value::Bool(res));
-                }
-                &Instruction::CmpLe(dst, a, b) => {
-                    let res = ord_le(ord_slow(r!(a), r!(b), "Le")?);
-                    w!(dst, Value::Bool(res));
-                }
-                &Instruction::CmpGe(dst, a, b) => {
-                    let res = ord_ge(ord_slow(r!(a), r!(b), "Ge")?);
-                    w!(dst, Value::Bool(res));
-                }
-                &Instruction::RequireBool(src, is_and) => {
-                    let v = &self.value_stack[base + src as usize];
-                    if !matches!(v, Value::Bool(_)) {
-                        return Err(VmError::Generic(
-                            logical_type_error(if is_and { "AND" } else { "OR" }, v),
-                        ));
-                    }
-                }
-                &Instruction::RequireDict(src) => {
-                    let v = &self.value_stack[base + src as usize];
-                    if !matches!(v, Value::NamedTuple(_)) {
-                        let got = v.tw_type_name_owned();
-                        return Err(VmError::Generic(format!(
-                            "the pattern #(…) requires a dictionary, got {}\nhelp: #(key: name) = d unpacks a dictionary; use (a, b) for a tuple, [a, b] for an array",
-                            got
-                        )));
-                    }
-                }
-                &Instruction::NamedTupleGet(dst, tuple_reg, field_idx) => {
-                    // The dictionary rules, same as the main dispatch loop above.
-                    // This loop runs a CALLED function's body, which is where a
-                    // lambda handed to `$>`/`$|`/`$<` lives — and it answered a
-                    // missing key with Unit and carried on, so
-                    // `ds$> (d -> d.zzz)` returned `[(), ()]` and exited 0 where
-                    // both other engines raised `##Key`. That is the silent
-                    // undefined decision 10 exists to refuse.
-                    let field_name = &program.string_pool[field_idx as usize];
-                    let result = match &self.value_stack[base + tuple_reg as usize] {
-                        Value::NamedTuple(fields) => {
-                            let field_name = field_name.clone();
-                            match fields.iter().find(|(n, _)| *n == field_name).map(|(_, v)| v.clone()) {
-                                Some(v) => v,
-                                None => {
-                                    let available: Vec<String> =
-                                        fields.iter().map(|(n, _)| n.clone()).collect();
-                                    return Err(VmError::Generic(missing_key_msg(&field_name, &available)));
-                                }
-                            }
-                        }
-                        Value::Tuple(_) => {
-                            let field_name = field_name.clone();
-                            return Err(VmError::Generic(format!(
-                                "a positional tuple is addressed by position, not by name: '{}'\nhelp: use t[1] — names live in a dictionary, #(key: value)",
-                                field_name
-                            )));
-                        }
-                        other => {
-                            let got = other.tw_type_name_owned();
-                            let field_name = field_name.clone();
-                            return Err(VmError::Generic(format!(
-                                "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
-                                got, field_name
-                            )));
-                        }
-                    };
-                    self.value_stack[base + dst as usize] = result;
-                }
+        }
+        self.frame_stack.push(FrameInfo {
+            base: new_base as u32,
+            ip: 0,
+            chunk_idx: func_idx,
+            return_reg: 0,
+            catch_ip: u32::MAX,
+            error: None,
+            writeback: None,
+        });
 
-                // ── Array/Tuple indexing ──────────────────────────────────────
-                &Instruction::ArrayGet(dst, arr_reg, idx_reg) => {
-                    // The dictionary rules, same as the main dispatch loop above.
-                    // This second loop is the one a LOOP BODY runs through, which
-                    // is exactly where `@ k:d { >> d[k] ¶ }` lives — patching
-                    // only the first one left the commonest use of a computed key
-                    // failing with "expected Int, got String".
-                    if let Value::NamedTuple(fields) = r!(arr_reg) {
-                        match r!(idx_reg) {
-                            Value::String(key) => {
-                                let key = key.as_str().to_string();
-                                let fields = fields.clone();
-                                match fields.iter().find(|(k, _)| *k == key) {
-                                    Some((_, v)) => { let v = v.clone(); w!(dst, v); }
-                                    None => {
-                                        let available: Vec<String> =
-                                            fields.iter().map(|(k, _)| k.clone()).collect();
-                                        return Err(VmError::Generic(
-                                            missing_key_msg(&key, &available)));
-                                    }
-                                }
-                                continue;  // `ip` was advanced before the match
-                            }
-                            // Decision 11: addressed by key, never by position.
-                            Value::Int(_) => {
-                                let first = fields.first().map(|(k, _)| k.clone())
-                                    .unwrap_or_else(|| "clave".to_string());
-                                return Err(VmError::Generic(format!(
-                                    "a dictionary is addressed by key, not by position\nhelp: use d[\"{}\"] — adding a key changes what sits at each position",
-                                    first
-                                )));
-                            }
-                            _ => {}
-                        }
-                    }
-                    let idx = match r!(idx_reg) { Value::Int(n) => *n, _ => 0 };
-                    let val = match r!(arr_reg).clone() {
-                        Value::Array(arr) => {
-                            let i = if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
-                            if i >= 0 && (i as usize) < arr.len() { arr[i as usize].clone() } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
-                            }
-                        }
-                        Value::Tuple(items) => {
-                            let i = if idx < 0 { items.len() as i64 + idx } else { idx - 1 };
-                            if i >= 0 && (i as usize) < items.len() { items[i as usize].clone() } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: items.len() , container: "tuple" });
-                            }
-                        }
-                        Value::NamedTuple(fields) => {
-                            let i = if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
-                            if i >= 0 && (i as usize) < fields.len() { fields[i as usize].1.clone() } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: fields.len() , container: "named tuple" });
-                            }
-                        }
-                        Value::String(s) => {
-                            let char_count = s.chars().count();
-                            let i = if idx < 0 { char_count as i64 + idx } else { idx - 1 };
-                            if i >= 0 && (i as usize) < char_count {
-                                Value::Char(s.chars().nth(i as usize).unwrap())
-                            } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: char_count , container: "string" });
-                            }
-                        }
-                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
-                    };
-                    w!(dst, val);
-                }
-                &Instruction::ArrayLen(dst, src) => {
-                    let n = match r!(src) {
-                        Value::Array(arr) => arr.len() as i64,
-                        Value::String(s)  => if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 },
-                        _ => 0,
-                    };
-                    w!(dst, Value::Int(n));
-                }
-                &Instruction::NewArray(dst) => { w!(dst, Value::Array(Rc::new(Vec::new()))); }
-                &Instruction::ArrayPush(arr_reg, val_reg) => {
-                    let val = r!(val_reg).clone();
-                    match &mut self.value_stack[base + arr_reg as usize] {
-                        Value::Array(rc) => Rc::make_mut(rc).push(val),
-                        Value::Tuple(rc) => Rc::make_mut(rc).push(val),
-                        Value::String(s) => {
-                            use std::fmt::Write as _;
-                            let mut buf = s.clone().try_into_string();
-                            match val {
-                                Value::String(r) => buf.push_str(r.as_str()),
-                                Value::Char(c) => buf.push(c),
-                                other => { let _ = write!(buf, "{}", other); }
-                            }
-                            *s = ZyStr::new(buf);
-                        }
-                        _ => {}
-                    }
-                }
-                &Instruction::ArrayContains(dst, arr_reg, elem_reg) => {
-                    let elem = r!(elem_reg).clone();
-                    let found = match r!(arr_reg) {
-                        Value::Array(arr) => arr.iter().any(|v| v.equals(&elem)),
-                        // On a dictionary the question is about the KEY.
-                        Value::NamedTuple(fields) => match &elem {
-                            Value::String(key) => {
-                                fields.iter().any(|(k, _)| k.as_str() == key.as_str())
-                            }
-                            _ => false,
-                        },
-                        Value::Tuple(t) => t.iter().any(|v| v.equals(&elem)),
-                        _ => false,
-                    };
-                    w!(dst, Value::Bool(found));
-                }
-
-                // ── Integer arithmetic (missing from secondary loop) ──────────
-                &Instruction::DivInt(dst, a, b) => {
-                    if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        if *vb == 0 { return Err(VmError::DivisionByZero); }
-                        w!(dst, Value::Int(va / vb));
-                    }
-                }
-                &Instruction::PowInt(dst, a, b) => {
-                    if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        let (va, vb) = (*va, *vb);
-                        if vb < 0 {
-                            w!(dst, Value::Float((va as f64).powf(vb as f64)));
-                        } else {
-                            let e = u32::try_from(vb).unwrap_or(u32::MAX);
-                            w!(dst, Value::Int(iop!(num::pow(va, e), va, "^", vb)));
-                        }
-                    }
-                }
-                &Instruction::NegInt(dst, src) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Int(-v)); }
-                }
-
-                // ── Float arithmetic ─────────────────────────────────────────
-                &Instruction::AddFloat(dst, a, b) => {
-                    let (va, vb) = match (r!(a), r!(b)) {
-                        (Value::Float(x), Value::Float(y)) => (*x, *y),
-                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
-                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
-                        _ => return Ok(Value::Unit),
-                    };
-                    w!(dst, Value::Float(va + vb));
-                }
-                &Instruction::SubFloat(dst, a, b) => {
-                    let (va, vb) = match (r!(a), r!(b)) {
-                        (Value::Float(x), Value::Float(y)) => (*x, *y),
-                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
-                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
-                        _ => return Ok(Value::Unit),
-                    };
-                    w!(dst, Value::Float(va - vb));
-                }
-                &Instruction::MulFloat(dst, a, b) => {
-                    let (va, vb) = match (r!(a), r!(b)) {
-                        (Value::Float(x), Value::Float(y)) => (*x, *y),
-                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
-                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
-                        _ => return Ok(Value::Unit),
-                    };
-                    w!(dst, Value::Float(va * vb));
-                }
-                &Instruction::DivFloat(dst, a, b) => {
-                    let (va, vb) = match (r!(a), r!(b)) {
-                        (Value::Float(x), Value::Float(y)) => (*x, *y),
-                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
-                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
-                        _ => return Ok(Value::Unit),
-                    };
-                    if vb == 0.0 { return Err(VmError::DivisionByZero); }
-                    w!(dst, Value::Float(va / vb));
-                }
-                &Instruction::PowFloat(dst, a, b) => {
-                    let (va, vb) = match (r!(a), r!(b)) {
-                        (Value::Float(x), Value::Float(y)) => (*x, *y),
-                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
-                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
-                        _ => return Ok(Value::Unit),
-                    };
-                    w!(dst, Value::Float(va.powf(vb)));
-                }
-                &Instruction::NegFloat(dst, src) => {
-                    match r!(src) {
-                        Value::Float(f) => { let v = -f; w!(dst, Value::Float(v)); }
-                        Value::Int(n)   => { let v = *n as f64; w!(dst, Value::Float(-v)); }
-                        _ => {}
-                    }
-                }
-                &Instruction::IntToFloat(dst, src) => {
-                    match r!(src) {
-                        Value::Int(n)   => { let v = *n as f64; w!(dst, Value::Float(v)); }
-                        Value::Float(f) => { let v = *f; w!(dst, Value::Float(v)); }
-                        _ => {}
-                    }
-                }
-                &Instruction::FloatToIntRound(dst, src) => {
-                    match r!(src) {
-                        Value::Float(f) => match num::from_f64(f.round()) {
-                            Some(v) => w!(dst, Value::Int(v)),
-                            None => return Err(VmError::CastOverflow { op: "###" }),
-                        },
-                        Value::Int(n)   => { let v = *n; w!(dst, Value::Int(v)); }
-                        _ => {}
-                    }
-                }
-                &Instruction::FloatToIntTrunc(dst, src) => {
-                    match r!(src) {
-                        Value::Float(f) => match num::from_f64(f.trunc()) {
-                            Some(v) => w!(dst, Value::Int(v)),
-                            None => return Err(VmError::CastOverflow { op: "##!" }),
-                        },
-                        Value::Int(n)   => { let v = *n; w!(dst, Value::Int(v)); }
-                        Value::Char(c)  => { let v = *c as u32 as i64; w!(dst, Value::Int(v)); }
-                        _ => {}
-                    }
-                }
-
-                // ── Logical ──────────────────────────────────────────────────
-                // ZYVM-001, in the call-frame loop as in the main one: a
-                // logical operand is a Bool or it is refused.
-                &Instruction::And(dst, a, b) => {
-                    let (x, y) = bools_or_err(r!(a), r!(b), "AND")?;
-                    w!(dst, Value::Bool(x && y));
-                }
-                &Instruction::Or(dst, a, b) => {
-                    let (x, y) = bools_or_err(r!(a), r!(b), "OR")?;
-                    w!(dst, Value::Bool(x || y));
-                }
-
-                // ── Destructuring ────────────────────────────────────────────
-                &Instruction::DestructureCheck(src, wants_tuple) => {
-                    let v = &self.value_stack[base + src as usize];
-                    let ok = if wants_tuple {
-                        matches!(v, Value::Tuple(_))
-                    } else {
-                        matches!(v, Value::Array(_))
-                    };
-                    if !ok {
-                        let got = v.tw_type_name_owned();
-                        return Err(VmError::Generic(if wants_tuple {
-                            format!("tuple pattern '( … )' requires a tuple, got {got}")
-                        } else {
-                            format!("array pattern '[ … ]' requires an array, got {got}")
-                        }));
-                    }
-                }
-                &Instruction::DestructureAbsorb(dst, src, from) => {
-                    let value = match &self.value_stack[base + src as usize] {
-                        Value::Array(arr) => {
-                            let rest = &arr.as_ref()[(from as usize - 1).min(arr.len())..];
-                            match rest.len() {
-                                0 => Value::Unit,
-                                1 => rest[0].clone(),
-                                _ => Value::Array(Rc::new(rest.to_vec())),
-                            }
-                        }
-                        Value::Tuple(tup) => {
-                            let rest = &tup.as_ref()[(from as usize - 1).min(tup.len())..];
-                            match rest.len() {
-                                0 => Value::Unit,
-                                1 => rest[0].clone(),
-                                _ => Value::Tuple(Rc::new(rest.to_vec())),
-                            }
-                        }
-                        _ => Value::Unit,
-                    };
-                    w!(dst, value);
-                }
-
-                // ── Tuples ───────────────────────────────────────────────────
-                Instruction::MakeTuple(dst, regs) => {
-                    let dst = *dst;
-                    let items: Vec<Value> = regs.iter().map(|&r| self.value_stack[base + r as usize].clone()).collect();
-                    w!(dst, Value::Tuple(Rc::new(items)));
-                }
-                Instruction::MakeNamedTuple(dst, field_names, field_regs) => {
-                    let dst = *dst;
-                    let fields: Vec<(String, Value)> = field_names.iter().zip(field_regs.iter())
-                        .map(|(&ni, &ri)| (program.string_pool[ni as usize].clone(), self.value_stack[base + ri as usize].clone()))
-                        .collect();
-                    w!(dst, Value::NamedTuple(Rc::new(fields)));
-                }
-
-                // ── String ops ───────────────────────────────────────────────
-                &Instruction::StrLen(dst, src) => {
-                    let n = match r!(src) {
-                        Value::String(s) => if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 },
-                        Value::Array(a)  => a.len() as i64,
-                        _ => 0,
-                    };
-                    w!(dst, Value::Int(n));
-                }
-                &Instruction::StrRepeat(dst, str_reg, n_reg) => {
-                    let result = {
-                        let s = match r!(str_reg) {
-                            Value::String(s) => s.as_str().to_owned(),
-                            Value::Char(c)   => c.to_string(),
-                            other => return Err(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
-                        };
-                        let n = match r!(n_reg) {
-                            Value::Int(n) if *n >= 0 => *n as usize,
-                            other => return Err(VmError::TypeError { expected: "non-negative Int", got: other.type_name().to_string() }),
-                        };
-                        s.repeat(n)
-                    };
-                    w!(dst, Value::String(ZyStr::new(result)));
-                }
-                &Instruction::StrCharAt(dst, str_reg, idx_reg) => {
-                    let ch = match (r!(str_reg), r!(idx_reg)) {
-                        (Value::String(s), Value::Int(i)) => {
-                            let i = *i as usize;
-                            if s.is_ascii() {
-                                s.as_bytes().get(i).map(|&b| b as char).unwrap_or('\0')
-                            } else {
-                                s.chars().nth(i).unwrap_or('\0')
-                            }
-                        }
-                        _ => return Err(VmError::TypeError {
-                            expected: "String",
-                            got: "non-String".to_string(),
-                        }),
-                    };
-                    w!(dst, Value::Char(ch));
-                }
-                &Instruction::StrContains(dst, str_reg, elem_reg) => {
-                    let found = match (r!(str_reg), r!(elem_reg)) {
-                        (Value::String(s), Value::String(p)) => s.contains(p.as_ref()),
-                        (Value::String(s), Value::Char(c))   => s.contains(*c),
-                        _ => false,
-                    };
-                    w!(dst, Value::Bool(found));
-                }
-                Instruction::BuildStr(dst, parts) => {
-                    let dst = *dst;
-                    let cap: usize = parts.iter().map(|p| match p {
-                        zymbol_bytecode::BuildPart::Lit(idx) => program.string_pool[*idx as usize].len(),
-                        zymbol_bytecode::BuildPart::Reg(_) => 4,
-                    }).sum();
-                    let mut result = String::with_capacity(cap);
-                    for part in parts {
-                        match part {
-                            zymbol_bytecode::BuildPart::Lit(idx) => result.push_str(&program.string_pool[*idx as usize]),
-                            zymbol_bytecode::BuildPart::Reg(reg) => {
-                                let part = self.numeral_repr(&self.value_stack[base + *reg as usize]);
-                                result.push_str(&part);
-                            }
-                        }
-                    }
-                    w!(dst, Value::String(ZyStr::new(result)));
-                }
-
-                // ── Output ───────────────────────────────────────────────────
-                &Instruction::Print(src) => {
-                    let mode = self.numeral_mode;
-                    match r!(src) {
-                        Value::String(s)  => { let _ = write!(self.output, "{}", s); }
-                        Value::Int(n)     => { let _ = write!(self.output, "{}", numeral_int(*n, mode)); }
-                        Value::Float(f)   => { let _ = write!(self.output, "{}", numeral_float(*f, mode)); }
-                        Value::Bool(b)    => { let _ = write!(self.output, "{}", numeral_bool(*b, mode)); }
-                        Value::Char(c)    => { let _ = write!(self.output, "{}", c); }
-                        Value::Unit       => {}
-                        other             => { let _ = write!(self.output, "{}", other.to_display_in(mode)); }
-                    }
-                }
-                &Instruction::PrintNewline => { let _ = writeln!(self.output); }
-
-                // ── HOF (nested) ──────────────────────────────────────────────
-                &Instruction::ArrayMap(dst, arr_reg, func_reg) => {
-                    let callable = self.value_stack[base + func_reg as usize].clone();
-                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
-                        Value::Array(a) => a.as_ref().clone(),
-                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
-                    };
-                    let mut results = Vec::with_capacity(arr.len());
-                    for elem in arr {
-                        let result = self.call_callable(callable.clone(), vec![elem], program, 0, chunk_idx)?;
-                        results.push(result);
-                    }
-                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
-                }
-                &Instruction::ArrayFilter(dst, arr_reg, func_reg) => {
-                    let callable = self.value_stack[base + func_reg as usize].clone();
-                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
-                        Value::Array(a) => a.as_ref().clone(),
-                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
-                    };
-                    let mut results = Vec::new();
-                    for elem in arr {
-                        let keep = self.call_callable(callable.clone(), vec![elem.clone()], program, 0, chunk_idx)?;
-                        if keep.is_truthy() { results.push(elem); }
-                    }
-                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
-                }
-                &Instruction::ArrayReduce(dst, arr_reg, init_reg, func_reg) => {
-                    let callable = self.value_stack[base + func_reg as usize].clone();
-                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
-                        Value::Array(a) => a.as_ref().clone(),
-                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
-                    };
-                    let mut acc = self.value_stack[base + init_reg as usize].clone();
-                    for elem in arr {
-                        acc = self.call_callable(callable.clone(), vec![acc, elem], program, 0, chunk_idx)?;
-                    }
-                    self.value_stack[base + dst as usize] = acc;
-                }
-                &Instruction::StrSplitCount(dst, str_reg, sep_reg) => {
-                    let count = {
-                        let s_v   = &self.value_stack[base + str_reg  as usize];
-                        let sep_v = &self.value_stack[base + sep_reg as usize];
-                        match (s_v, sep_v) {
-                            (Value::String(s), Value::Char(c))   => intrinsics::split::count(s.as_str(), *c),
-                            (Value::String(s), Value::String(sep)) => intrinsics::split::count_str(s.as_str(), sep.as_str()),
-                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
-                        }
-                    };
-                    self.value_stack[base + dst as usize] = Value::Int(count);
-                }
-                &Instruction::StrSplitMap(dst, str_reg, sep_reg, func_reg) => {
-                    let callable = self.value_stack[base + func_reg as usize].clone();
-                    let (s_owned, sep_owned) = {
-                        let s_v   = &self.value_stack[base + str_reg as usize];
-                        let sep_v = &self.value_stack[base + sep_reg as usize];
-                        match (s_v, sep_v) {
-                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
-                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
-                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
-                        }
-                    };
-                    let mut results = Vec::new();
-                    match &sep_owned {
-                        Value::Char(c) => {
-                            let c = *c;
-                            for part in s_owned.split(c) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                results.push(self.call_callable(callable.clone(), vec![v], program, 0, chunk_idx)?);
-                            }
-                        }
-                        Value::String(sep_s) => {
-                            let sep_str = sep_s.to_string();
-                            for part in s_owned.split(sep_str.as_str()) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                results.push(self.call_callable(callable.clone(), vec![v], program, 0, chunk_idx)?);
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
-                }
-                &Instruction::StrSplitFilter(dst, str_reg, sep_reg, func_reg) => {
-                    let callable = self.value_stack[base + func_reg as usize].clone();
-                    let (s_owned, sep_owned) = {
-                        let s_v   = &self.value_stack[base + str_reg as usize];
-                        let sep_v = &self.value_stack[base + sep_reg as usize];
-                        match (s_v, sep_v) {
-                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
-                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
-                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
-                        }
-                    };
-                    let mut results = Vec::new();
-                    match &sep_owned {
-                        Value::Char(c) => {
-                            let c = *c;
-                            for part in s_owned.split(c) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, 0, chunk_idx)?;
-                                if keep.is_truthy() { results.push(v); }
-                            }
-                        }
-                        Value::String(sep_s) => {
-                            let sep_str = sep_s.to_string();
-                            for part in s_owned.split(sep_str.as_str()) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, 0, chunk_idx)?;
-                                if keep.is_truthy() { results.push(v); }
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
-                }
-                &Instruction::StrSplitReduce(dst, str_reg, sep_reg, init_reg, func_reg) => {
-                    let callable = self.value_stack[base + func_reg as usize].clone();
-                    let mut acc = self.value_stack[base + init_reg as usize].clone();
-                    let (s_owned, sep_owned) = {
-                        let s_v   = &self.value_stack[base + str_reg as usize];
-                        let sep_v = &self.value_stack[base + sep_reg as usize];
-                        match (s_v, sep_v) {
-                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
-                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
-                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
-                        }
-                    };
-                    match &sep_owned {
-                        Value::Char(c) => {
-                            let c = *c;
-                            for part in s_owned.split(c) {
-                                let elem = Value::String(ZyStr::from_str_ref(part));
-                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, 0, chunk_idx)?;
-                            }
-                        }
-                        Value::String(sep_s) => {
-                            let sep_str = sep_s.to_string();
-                            for part in s_owned.split(sep_str.as_str()) {
-                                let elem = Value::String(ZyStr::from_str_ref(part));
-                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, 0, chunk_idx)?;
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-                    self.value_stack[base + dst as usize] = acc;
-                }
-                &Instruction::ArraySort(dst, arr_reg, ascending, func_reg) => {
-                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
-                        Value::Array(a) => a.as_ref().clone(),
-                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
-                    };
-                    let mut items = arr;
-                    if func_reg == u16::MAX {
-                        items.sort_by(vm_natural_cmp);
-                        if !ascending { items.reverse(); }
-                    } else {
-                        let callable = self.value_stack[base + func_reg as usize].clone();
-                        let n = items.len();
-                        for i in 0..n {
-                            for j in 0..n.saturating_sub(i + 1) {
-                                let keep = self.call_callable(callable.clone(), vec![items[j].clone(), items[j+1].clone()], program, 0, chunk_idx)?;
-                                if !keep.is_truthy() { items.swap(j, j+1); }
-                            }
-                        }
-                    }
-                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(items));
-                }
-
-                // ── Data ops ────────────────────────────────────────────────
-                &Instruction::NumericEval(dst, src) => {
-                    let result = match r!(src) {
-                        Value::String(s) => {
-                            let s_rc = s.clone();
-                            let trimmed = s_rc.as_ref().trim();
-                            match num::parse(trimmed) {
-                                num::Num::Int(i) => Value::Int(i),
-                                num::Num::Float(f) => Value::Float(f),
-                                num::Num::None => match normalize_unicode_digits(trimmed).map(|n| num::parse(&n)) {
-                                    Some(num::Num::Int(i)) => Value::Int(i),
-                                    Some(num::Num::Float(f)) => Value::Float(f),
-                                    _ => Value::String(s_rc),
-                                },
-                            }
-                        }
-                        Value::Int(n) => Value::Int(*n),
-                        Value::Float(f) => Value::Float(*f),
-                        // GAP-ZYB-012: a Char reads like the one-character
-                        // string it is — `#|'७'|` is 7, as `#|"७"|` already
-                        // was. A Char that is not a digit comes back untouched.
-                        Value::Char(c) => vm_char_as_number(*c),
-                        other => other.clone(),
-                    };
-                    w!(dst, result);
-                }
-                &Instruction::IsArray(dst, src) => {
-                    let is_arr = matches!(r!(src), Value::Array(_));
-                    w!(dst, Value::Bool(is_arr));
-                }
-                &Instruction::TypeOf(dst, src) => {
-                    let val = r!(src).clone();
-                    // `(symbol, count, value)`, in that order. This loop runs a CALLED
-                    // function's body — where a lambda handed to `$>`/`$|`/`$<` lives —
-                    // and it built `(value, symbol, count)`, so `x#?` answered a
-                    // scrambled tuple to every program that asked inside one. Same
-                    // shape as the main dispatch loop above, and the error case reads
-                    // its kind and length from the shared helpers rather than a copy.
-                    let result = if matches!(&val, Value::Error(_)) {
-                        Value::Tuple(Rc::new(vec![
-                            Value::String(ZyStr::new(val.tw_type_name_owned())),
-                            Value::Int(val.error_message_len()),
-                            val.clone(),
-                        ]))
-                    } else {
-                        let (type_sym, len) = val.type_metadata();
-                        Value::Tuple(Rc::new(vec![
-                            Value::String(ZyStr::new(type_sym.to_string())),
-                            Value::Int(len),
-                            val.clone(),
-                        ]))
-                    };
-                    w!(dst, result);
-                }
-
-                // ── Precision ops ────────────────────────────────────────────
-                &Instruction::RoundFloat(dst, src, prec) => {
-                    match r!(src) {
-                        Value::Float(f) => {
-                            let factor = 10f64.powi(prec as i32);
-                            w!(dst, Value::Float((f * factor).round() / factor));
-                        }
-                        Value::Int(n) => { w!(dst, Value::Int(*n)); }
-                        _ => {}
-                    }
-                }
-                &Instruction::TruncFloat(dst, src, prec) => {
-                    match r!(src) {
-                        Value::Float(f) => {
-                            let factor = 10f64.powi(prec as i32);
-                            w!(dst, Value::Float((f * factor).trunc() / factor));
-                        }
-                        Value::Int(n) => { w!(dst, Value::Int(*n)); }
-                        _ => {}
-                    }
-                }
-
-                &Instruction::LoadGlobal(dst, gvar_idx) => {
-                    if let Some(name) = self.destroyed_globals.get(&gvar_idx) {
-                        return Err(VmError::Generic(format!(
-                            "use after destruction: variable '{}' was destroyed \
-                             after its last use", name)));
-                    }
-                    let val = self.global_vars
-                        .get(gvar_idx as usize)
-                        .cloned()
-                        .unwrap_or(Value::Unit);
-                    w!(dst, val);
-                }
-
-                &Instruction::StoreGlobal(gvar_idx, src) => {
-                    self.destroyed_globals.remove(&gvar_idx);
-                    let val = r!(src).clone();
-                    if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
-                        *slot = val;
-                    }
-                }
-
-                &Instruction::DestroyGlobal(gvar_idx, name_idx) => {
-                    let name = self.string_rcs[name_idx as usize].to_string();
-                    self.destroyed_globals.insert(gvar_idx, name);
-                    if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
-                        *slot = Value::Unit;
-                    }
-                }
-
-                &Instruction::DeepSet(dst, path_reg, val_reg) => {
-                    let val = r!(val_reg).clone();
-                    let path = match r!(path_reg) {
-                        Value::Array(p) => p.clone(),
-                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
-                    };
-                    let root = mem::replace(&mut self.value_stack[base + dst as usize], Value::Unit);
-                    let updated = vm_deep_set(root, &path, val)?;
-                    self.value_stack[base + dst as usize] = updated;
-                }
-                &Instruction::AssertMutable(reg, name_idx) => {
-                    if let Value::Tuple(_) = r!(reg) {
-                        let name = self.string_rcs[name_idx as usize].as_str();
-                        return Err(VmError::Generic(tuple_immutable_msg(name)));
-                    }
-                }
-                &Instruction::DeepSetInPlace(dst, path_reg, val_reg, name_idx) => {
-                    let val = r!(val_reg).clone();
-                    let path = match r!(path_reg) {
-                        Value::Array(p) => p.clone(),
-                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
-                    };
-                    let root = mem::replace(&mut self.value_stack[base + dst as usize], Value::Unit);
-                    if let Value::Tuple(_) = &root {
-                        let name = self.string_rcs[name_idx as usize].as_str();
-                        return Err(VmError::Generic(tuple_immutable_msg(name)));
-                    }
-                    let updated = vm_deep_set(root, &path, val)?;
-                    self.value_stack[base + dst as usize] = updated;
-                }
-
-                _ => {
-                    // For unsupported instructions in HOF mini-VM, skip
+        // The instruction that called: an error the operator raises after this
+        // call has to be reported where the operator is, not inside the callee.
+        let (caller_ip, caller_chunk) = (self.cur_ip, self.cur_chunk);
+        let result = self.exec(program, floor);
+        match &result {
+            Ok(_) => {
+                self.cur_ip = caller_ip;
+                self.cur_chunk = caller_chunk;
+            }
+            // `exec` gives back its frames when it raises; one that left
+            // through `?` may not have, and the operator must see its own stack.
+            Err(_) => {
+                if self.frame_stack.len() > floor {
+                    let floor_base = self.frame_stack[floor].base as usize;
+                    self.frame_stack.truncate(floor);
+                    self.value_stack.truncate(floor_base);
                 }
             }
         }
-        self.value_stack.truncate(base);
-        Ok(Value::Unit)
+        result
     }
 }
 

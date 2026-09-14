@@ -2003,43 +2003,59 @@ impl<W: Write> Interpreter<W> {
 
     /// Execute a try-catch-finally statement
     fn execute_try(&mut self, try_stmt: &TryStmt) -> Result<()> {
+        // ZYTW-003: where the environment stood when this `!?` began. An error
+        // leaves through `?` from however many blocks and loops deep it was
+        // raised, and none of them pops the scope it pushed — so every caught
+        // error left scopes behind, and a loop that caught one per turn made
+        // every name lookup walk all of them: 4x the errors cost 19.5x the time.
+        // This is the one place an error stops travelling, so it is the one
+        // place the stack is put back.
+        let scope_depth = self.scope_stack.len();
+        let loop_depth = self.loop_scope_depths.len();
+
         // Guard: Return inside try/catch must clone (finally may reference the variable).
         self.try_depth += 1;
         let try_result = self.execute_block(&try_stmt.try_block);
         self.try_depth -= 1;
 
-        // Check if we got an error (either RuntimeError or returned Error value)
-        let error_value = match &try_result {
-            Err(e) => Some(self.runtime_error_to_value(e)),
-            // A pending `Return` is VALUE flow and never exception flow, even
-            // when the value it carries is an error.
-            //
-            // This used to look inside the return, and treat an error found
-            // there as something `:!` should catch. That made `$!!` — an early
-            // return, by definition — behave as a throw whenever it happened to
-            // sit inside a `!?`, so a function propagating a failure upwards
-            // was intercepted by its own catch clause instead of returning.
-            // The register VM and the browser engine both returned the value;
-            // only the tree-walker caught it, and `GUIDE.md` § "Value flow"
-            // states the rule the other two follow: "`$!!` … does not throw an
-            // exception, so it cannot be caught with `!?`/`:!`".
-            //
-            // A `<~` of an ordinary value already left through here untouched,
-            // so this is the same path, now taken by every return alike. The
-            // finally clause below still runs: that is what a finally is.
-            Ok(()) => None,
-        };
-
-        // If we have an error, try to find a matching catch clause
-        let mut caught = false;
-        if let Some(ref err_val) = error_value {
-            for catch_clause in &try_stmt.catch_clauses {
-                if self.catch_matches(catch_clause, err_val) {
-                    // Execute catch block with _err variable
-                    self.execute_catch_block(catch_clause, err_val.clone())?;
-                    caught = true;
-                    break;
+        // A pending `Return` is VALUE flow and never exception flow, even when
+        // the value it carries is an error.
+        //
+        // This used to look inside the return, and treat an error found there
+        // as something `:!` should catch. That made `$!!` — an early return, by
+        // definition — behave as a throw whenever it happened to sit inside a
+        // `!?`, so a function propagating a failure upwards was intercepted by
+        // its own catch clause instead of returning. The register VM and the
+        // browser engine both returned the value; only the tree-walker caught
+        // it, and `GUIDE.md` § "Value flow" states the rule the other two
+        // follow: "`$!!` … does not throw an exception, so it cannot be caught
+        // with `!?`/`:!`".
+        //
+        // The error still owed to whoever is outside, and the line it was raised
+        // at. The line travels with it (ZYTW-002): the `:>` below runs
+        // statements, each one moves `cur_stmt_line`, and the error used to be
+        // located on the way out with whatever line the cleanup left behind.
+        let mut pending: Option<(RuntimeError, u32)> = None;
+        if let Err(e) = try_result {
+            self.unwind_scopes_to(scope_depth, loop_depth);
+            let raised_at = self.cur_stmt_line;
+            let err_val = self.runtime_error_to_value(&e);
+            let clause = try_stmt.catch_clauses.iter()
+                .find(|c| self.catch_matches(c, &err_val));
+            match clause {
+                Some(clause) => {
+                    // ZYTW-002: a catch that fails still owes its `:>`. This
+                    // was a `?`, which returned before the finally below —
+                    // against REFERENCE.md ("always executes, regardless of
+                    // error"), the browser engine, and every language with the
+                    // construct.
+                    if let Err(e) = self.execute_catch_block(clause, err_val) {
+                        self.unwind_scopes_to(scope_depth, loop_depth);
+                        pending = Some((e, self.cur_stmt_line));
+                    }
                 }
+                // A filter that matches nothing has handled nothing.
+                None => pending = Some((e, raised_at)),
             }
         }
 
@@ -2054,7 +2070,7 @@ impl<W: Write> Interpreter<W> {
         // afterwards unless the finally raised its own control flow, which
         // legitimately wins.
         if let Some(ref finally) = try_stmt.finally_clause {
-            let pending = std::mem::replace(&mut self.control_flow, ControlFlow::None);
+            let pending_flow = std::mem::replace(&mut self.control_flow, ControlFlow::None);
             let pending_flag = std::mem::replace(&mut self.has_control_flow, false);
             let finally_result = self.execute_block(&finally.block);
             // BUG-ZYB-011: a `:>` is cleanup, and cleanup does not decide what
@@ -2068,17 +2084,33 @@ impl<W: Write> Interpreter<W> {
             // warn against relying on it in their own style guides. Zymbol
             // takes the warning instead of the feature, and the analyzer says
             // so at the `<~` rather than letting it look like it did something.
-            self.control_flow = pending;
+            // A cleanup that fails is the error that leaves: the one it was
+            // carrying is replaced, as in every language with a finally — and so
+            // is a return it was carrying. Restoring that return before
+            // propagating let it travel on with the error: it cut the caller's
+            // `>> f() ¶` after the value and before the `¶`, and reached the top
+            // level as the program's exit status (ZYTW-002).
+            if let Err(e) = finally_result {
+                self.unwind_scopes_to(scope_depth, loop_depth);
+                return Err(e);
+            }
+            self.control_flow = pending_flow;
             self.has_control_flow = pending_flag;
-            finally_result?;
         }
 
-        // If error wasn't caught, propagate it
-        if error_value.is_some() && !caught {
-            try_result?;
+        if let Some((e, raised_at)) = pending {
+            self.cur_stmt_line = raised_at;
+            return Err(e);
         }
-
         Ok(())
+    }
+
+    /// Put the scope stack back to the depth a `!?` found it at (ZYTW-003).
+    fn unwind_scopes_to(&mut self, scope_depth: usize, loop_depth: usize) {
+        while self.scope_stack.len() > scope_depth {
+            self.pop_scope();
+        }
+        self.loop_scope_depths.truncate(loop_depth);
     }
 
     /// Convert a RuntimeError to an ErrorValue
@@ -2091,28 +2123,18 @@ impl<W: Write> Interpreter<W> {
             // `!?` classifies it by exactly the same text, so attaching a file
             // never moves an error from one `##` family to another.
             RuntimeError::Generic { message, .. } | RuntimeError::Located { message, .. } => {
-                // Try to classify the error based on message content
-                let lower_msg = message.to_lowercase();
-                // Checked before the rest: an integer that left its range is a
-                // ##Range whatever else the message happens to mention.
-                if lower_msg.contains("overflow") || lower_msg.contains("out of range") {
-                    Value::Error(ErrorValue::range(message.clone()))
-                // Before the index branch: a missing key is a ##Key even though
-                // the reader reached it through the index syntax `d["k"]`.
-                } else if lower_msg.contains("no key") {
-                    Value::Error(ErrorValue::key(message.clone()))
-                } else if lower_msg.contains("index") || lower_msg.contains("out of bounds") {
-                    Value::Error(ErrorValue::index(message.clone()))
-                } else if lower_msg.contains("type") {
-                    Value::Error(ErrorValue::type_error(message.clone()))
-                } else if lower_msg.contains("division") || lower_msg.contains("divide by zero")
-                    || lower_msg.contains("modulo") {
-                    Value::Error(ErrorValue::div(message.clone()))
-                } else if lower_msg.contains("parse") {
-                    Value::Error(ErrorValue::parse(message.clone()))
-                } else {
-                    Value::Error(ErrorValue::generic(message.clone()))
-                }
+                // The family is read from the words, by the rule both Rust
+                // engines share (`zymbol_common::errkind`, GLB-010).
+                let m = message.clone();
+                Value::Error(match zymbol_common::errkind::error_kind_of_message(message) {
+                    "Range" => ErrorValue::range(m),
+                    "Key" => ErrorValue::key(m),
+                    "Index" => ErrorValue::index(m),
+                    "Type" => ErrorValue::type_error(m),
+                    "Div" => ErrorValue::div(m),
+                    "Parse" => ErrorValue::parse(m),
+                    _ => ErrorValue::generic(m),
+                })
             }
             RuntimeError::ModuleNotFound { path } => {
                 Value::Error(ErrorValue::io(format!("module not found: {}", path)))
