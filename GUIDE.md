@@ -1146,7 +1146,11 @@ b = 3
 >> a % b ¶   // 1  (modulo)
 >> a ^ b ¶   // 1000 (exponentiation)
 >> -a ¶      // -10 (unary negation)
+>> +a ¶      // 10  (unary plus: a number as it is)
 ```
+
+Unary `+` and `-` take a number and nothing else: `+"a"` and `-"a"` are errors, not
+conversions.
 
 ### Comparison
 
