@@ -1925,6 +1925,15 @@ impl Compiler {
         if let Some(step_e) = step_expr_opt {
             let r_step_tmp = self.compile_expr(step_e, ctx)?;
             ctx.emit(Instruction::CopyReg(r_step, r_step_tmp));
+            // A literal positive step needs no check; anything else is known
+            // only at run time, and 0 or a negative one would never end.
+            let literal_positive = matches!(
+                step_e.unwrap_group(),
+                Expr::Literal(lit) if matches!(lit.value, Literal::Int(n) if n > 0)
+            );
+            if !literal_positive {
+                ctx.emit(Instruction::LoopStepCheck(r_step));
+            }
         } else {
             ctx.emit(Instruction::LoadInt(r_step, 1));
         }
@@ -5139,7 +5148,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::ArrayInsert(d, i, v) => { upd(*d); upd(*i); upd(*v); }
             Instruction::ArrayLen(d, a) | Instruction::ArrayContains(d, a, _)
             | Instruction::ArraySlice(d, a, _) => { upd(*d); upd(*a); }
-            Instruction::DestructureCheck(s, _) => upd(*s),
+            Instruction::DestructureCheck(s, _) | Instruction::LoopStepCheck(s) => upd(*s),
             Instruction::DestructureAbsorb(d, s, _) => { upd(*d); upd(*s); }
             Instruction::ArrayMap(d, a, f) | Instruction::ArrayFilter(d, a, f) => { upd(*d); upd(*a); upd(*f); }
             Instruction::ArrayReduce(d, a, i, f) => { upd(*d); upd(*a); upd(*i); upd(*f); }

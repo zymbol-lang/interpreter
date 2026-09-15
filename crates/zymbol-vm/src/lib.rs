@@ -3238,6 +3238,15 @@ impl<W: Write> VM<W> {
                         }));
                     }
                 }
+                &Instruction::LoopStepCheck(step) => {
+                    let n = match self.reg_get(step) {
+                        Value::Int(n) => *n,
+                        _ => 1,
+                    };
+                    if n <= 0 {
+                        raise!(VmError::Generic(format!("step must be positive, got {n}")));
+                    }
+                }
                 &Instruction::DestructureRest(dst, src, from, trailing) => {
                     let (len, is_tuple) = match self.reg_get(src) {
                         Value::Array(a) => (a.len(), false),

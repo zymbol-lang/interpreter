@@ -176,6 +176,11 @@ pub enum Instruction {
     /// `true` demands a tuple `( … )`, `false` an array `[ … ]`. Errors on a
     /// mismatch instead of reinterpreting the value (REFERENCE.md L32).
     DestructureCheck(Reg, bool),
+    /// Refuse a range loop's step that is an Int and not positive. The loop
+    /// adds the step's magnitude in the range's own direction, so 0 never
+    /// advances and a negative one walks away from the end: without this both
+    /// never terminate (GLB-014 A).
+    LoopStepCheck(Reg),
     /// dst = the remainder of src from 1-based index `idx`: Unit when nothing is
     /// left, the bare element when exactly one is, and a collection when several
     /// are — keeping src's own shape (REFERENCE.md L33).
