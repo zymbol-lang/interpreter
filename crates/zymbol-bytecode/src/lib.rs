@@ -189,6 +189,15 @@ pub enum Instruction {
     /// dst = +src: an Int or a Float as it is, anything else refused
     /// (GLB-019 B). Emitted only when src is not known to be numeric.
     Pos(Reg, Reg),
+    /// `\ name` on a function local: its slot is marked destroyed at RUN time
+    /// and emptied. Only for names some `\` in the body names — whether that
+    /// `\` executes is not decidable when it is compiled (ZYVM-005).
+    DestroyLocal(Reg, u16),
+    /// Raise `use after destruction` if the slot was destroyed. Emitted before
+    /// a read of a name some `\` in the body names, and only then.
+    CheckAlive(Reg, u16),
+    /// An assignment gives a destroyed name a life again: clear its mark.
+    Revive(Reg),
     /// dst = the remainder of src from 1-based index `idx`: Unit when nothing is
     /// left, the bare element when exactly one is, and a collection when several
     /// are — keeping src's own shape (REFERENCE.md L33).

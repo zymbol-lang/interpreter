@@ -154,6 +154,9 @@ struct FunctionCtx {
     /// it emits, so an instruction can be traced back to the line that asked
     /// for it without threading a span through every compile_* function.
     cur_src: SrcPos,
+    /// Names some `\` in this body ends. Their destruction is tracked at run
+    /// time, and reading one checks it (ZYVM-005).
+    destroyable: HashSet<String>,
 }
 
 impl FunctionCtx {
@@ -162,6 +165,7 @@ impl FunctionCtx {
             register_map: HashMap::new(),
             hot_vars: HashSet::new(),
             postfix_hot_vars: HashSet::new(),
+            destroyable: HashSet::new(),
             reg_types: Vec::new(),
             next_reg: 0,
             instructions: Vec::new(),
@@ -358,6 +362,34 @@ fn expr_is_always_bool(expr: &Expr) -> bool {
 /// Auto-free (v0.0.8): overwrite each scheduled variable's register with Unit
 /// right after its last use, releasing the heap value it held. Names without
 /// a register (never materialized on this path) are skipped.
+/// Every name a `\` ends anywhere in these statements, nested blocks included.
+/// Nested function and lambda bodies are not entered: they have their own ctx.
+fn destroyed_names(stmts: &[Statement], out: &mut HashSet<String>) {
+    for stmt in stmts {
+        match stmt {
+            Statement::LifetimeEnd(l) => { out.insert(l.variable_name.clone()); }
+            Statement::If(i) => {
+                destroyed_names(&i.then_block.statements, out);
+                for b in &i.else_if_branches { destroyed_names(&b.block.statements, out); }
+                if let Some(e) = &i.else_block { destroyed_names(&e.statements, out); }
+            }
+            Statement::Loop(l) => destroyed_names(&l.body.statements, out),
+            Statement::Try(t) => {
+                destroyed_names(&t.try_block.statements, out);
+                for c in &t.catch_clauses { destroyed_names(&c.block.statements, out); }
+                if let Some(f) = &t.finally_clause { destroyed_names(&f.block.statements, out); }
+            }
+            Statement::Match(m) => {
+                for c in &m.cases {
+                    if let Some(b) = &c.block { destroyed_names(&b.statements, out); }
+                }
+            }
+            Statement::TuiBlock(t) => destroyed_names(&t.body.statements, out),
+            _ => {}
+        }
+    }
+}
+
 fn emit_auto_free(ctx: &mut FunctionCtx, names: &[String]) {
     for name in names {
         if let Ok(reg) = ctx.get_reg(name) {
@@ -622,6 +654,7 @@ impl Compiler {
             &compiler.auto_free_excluded,
         );
         let mut ctx = FunctionCtx::new("<main>");
+        destroyed_names(&program.statements, &mut ctx.destroyable);
         for (i, stmt) in program.statements.iter().enumerate() {
             if !matches!(stmt, Statement::FunctionDecl(_)) {
                 compiler.compile_stmt(stmt, &mut ctx)?;
@@ -1049,6 +1082,7 @@ impl Compiler {
 
     fn compile_function(&mut self, decl: &FunctionDecl) -> Result<Chunk, CompileError> {
         let mut ctx = FunctionCtx::new(&decl.name);
+        destroyed_names(&decl.body.statements, &mut ctx.destroyable);
         // Bind parameters to the first N registers
         for param in &decl.parameters {
             ctx.alloc_reg(&param.name)?;
@@ -1108,6 +1142,7 @@ impl Compiler {
         self.function_index.insert(closure_name.clone(), func_idx);
 
         let mut closure_ctx = FunctionCtx::new(&closure_name);
+        destroyed_names(&stmts, &mut closure_ctx.destroyable);
         for param in &params {
             closure_ctx.alloc_reg(param)?;
         }
@@ -1302,6 +1337,18 @@ impl Compiler {
             Statement::Try(ts) => self.compile_try(ts, ctx),
             Statement::LifetimeEnd(lifetime_end) => {
                 let name = &lifetime_end.variable_name;
+                // A local keeps its register: whether this `\` runs is only
+                // known at run time, so the slot is marked there and every
+                // read of the name checks the mark. Dropping the binding here
+                // refused a read after a `\` inside a branch that never ran
+                // (ZYVM-005). File variables keep their own path below.
+                if !self.file_var_map.contains_key(name) && ctx.destroyable.contains(name) {
+                    if let Ok(r) = ctx.get_reg(name) {
+                        let nidx = self.intern_string(name) as u16;
+                        ctx.emit(Instruction::DestroyLocal(r, nidx));
+                        return Ok(());
+                    }
+                }
                 if let Ok(r) = ctx.get_reg(name) {
                     ctx.emit(Instruction::LoadUnit(r));
                     ctx.register_map.remove(name);
@@ -1399,6 +1446,24 @@ impl Compiler {
     }
 
     fn compile_assignment(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        sugar: AssignSugar,
+        ctx: &mut FunctionCtx,
+    ) -> Result<(), CompileError> {
+        self.compile_assignment_inner(name, value, sugar, ctx)?;
+        // Assigning a destroyed local gives it a life again (after the value is
+        // computed, so a read of the name on the right still sees it dead).
+        if ctx.destroyable.contains(name) && !self.file_var_map.contains_key(name) {
+            if let Ok(r) = ctx.get_reg(name) {
+                ctx.emit(Instruction::Revive(r));
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_assignment_inner(
         &mut self,
         name: &str,
         value: &Expr,
@@ -2082,6 +2147,10 @@ impl Compiler {
             Expr::Literal(lit) => self.compile_literal(lit, ctx),
             Expr::Identifier(id) => {
                 if let Ok(r) = ctx.get_reg(&id.name) {
+                    if ctx.destroyable.contains(&id.name) && !self.file_var_map.contains_key(&id.name) {
+                        let nidx = self.intern_string(&id.name) as u16;
+                        ctx.emit(Instruction::CheckAlive(r, nidx));
+                    }
                     return Ok(r);
                 }
                 // Hot/pre_hot variable (x° or °x) on RHS: auto-initialize to neutral element if not yet defined
@@ -4005,6 +4074,9 @@ impl Compiler {
         self.function_index.insert(lambda_name.clone(), func_idx);
 
         let mut lambda_ctx = FunctionCtx::new(&lambda_name);
+        if let LambdaBody::Block(block) = &lam.body {
+            destroyed_names(&block.statements, &mut lambda_ctx.destroyable);
+        }
         // Params occupy registers [0..num_params)
         for param in &lam.params {
             lambda_ctx.alloc_reg(param)?;
@@ -4078,6 +4150,10 @@ impl Compiler {
                     }
                     // Get the register for the variable
                     if let Ok(r) = ctx.get_reg(&var_name) {
+                        if ctx.destroyable.contains(&var_name) && !self.file_var_map.contains_key(&var_name) {
+                            let nidx = self.intern_string(&var_name) as u16;
+                            ctx.emit(Instruction::CheckAlive(r, nidx));
+                        }
                         parts.push(BuildPart::Reg(r));
                     } else if let Some(mc) = self.global_consts.get(&var_name).cloned() {
                         // A top-level constant, which is in scope inside every
@@ -5212,7 +5288,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::ArrayLen(d, a) | Instruction::ArrayContains(d, a, _)
             | Instruction::ArraySlice(d, a, _) => { upd(*d); upd(*a); }
             Instruction::DestructureCheck(s, _) | Instruction::LoopStepCheck(s)
-            | Instruction::OutputSlotCheck(s, _) => upd(*s),
+            | Instruction::OutputSlotCheck(s, _) | Instruction::DestroyLocal(s, _)
+            | Instruction::CheckAlive(s, _) | Instruction::Revive(s) => upd(*s),
             Instruction::LoopBoundsCheck(a, b) => { upd(*a); upd(*b); }
             Instruction::DestructureAbsorb(d, s, _) => { upd(*d); upd(*s); }
             Instruction::ArrayMap(d, a, f) | Instruction::ArrayFilter(d, a, f) => { upd(*d); upd(*a); upd(*f); }
