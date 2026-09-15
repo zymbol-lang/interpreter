@@ -37,3 +37,4 @@ pub use def_use::{
 pub use type_check::{TypeChecker, TypeEnv, ZymbolType};
 pub use last_use::{auto_free_exclusions, mentioned_names, region_schedule};
 pub use loop_context::check_loop_context;
+pub use interpolation::interpolated_names;
