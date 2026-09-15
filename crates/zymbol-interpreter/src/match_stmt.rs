@@ -27,16 +27,8 @@ fn literal_to_value(lit: &Literal) -> Value {
 impl<W: Write> Interpreter<W> {
     /// Execute match statement: ?? expr { cases } (discards return value)
     pub(crate) fn execute_match_statement(&mut self, match_expr: &MatchExpr) -> Result<()> {
-        // Check if match returns values (warn if unused)
-        let has_values = match_expr.cases.iter().any(|case| case.value.is_some());
-
-        if has_values {
-            // Warning: match returns values but they're being discarded
-            eprintln!("warning: match expression returns values but result is unused");
-            eprintln!("  --> consider assigning to a variable: `result = ?? expr {{ ... }}`");
-            eprintln!("  --> or use execution-only form: `?? expr {{ pattern => {{ block }} }}`");
-        }
-
+        // A match whose arms give values, used as a statement, is warned about
+        // by the semantic analyzer, before anything runs (GLB-016).
         // Execute match as statement (discard return value)
         self.eval_match(match_expr)?;
         Ok(())

@@ -1364,6 +1364,20 @@ impl TypeChecker {
             }
 
             Statement::Match(match_stmt) => {
+                // A `??` alone on a line whose arms give values throws those
+                // values away. It is a property of what is written, not of
+                // which arm runs, so it belongs here and not in an engine: the
+                // tree-walker used to print it while running, and only when
+                // that line was reached (GLB-016).
+                if match_stmt.cases.iter().any(|case| case.value.is_some()) {
+                    self.warnings.push(
+                        Diagnostic::warning("match expression returns values but result is unused")
+                            .with_span(match_stmt.span)
+                            .with_help(
+                                "assign it — `r = ?? v { … }` — or give each arm a block: `pattern => { … }`",
+                            ),
+                    );
+                }
                 let scrutinee_type = self.infer_expr(&match_stmt.scrutinee);
 
                 for case in &match_stmt.cases {
