@@ -1903,7 +1903,16 @@ impl<W: Write> VM<W> {
                 // operand is refused, with the tree-walker's words.
                 &Instruction::And(dst, a, b) => { let (va, vb) = rb2!(a, b, "AND"); wreg!(dst, Value::Bool(va && vb)); }
                 &Instruction::Or (dst, a, b) => { let (va, vb) = rb2!(a, b, "OR");  wreg!(dst, Value::Bool(va || vb)); }
-                &Instruction::Not(dst, src)  => { let v = rreg!(src).is_truthy(); wreg!(dst, Value::Bool(!v)); }
+                // `!` takes a Bool and nothing else: `!7` is refused, not
+                // coerced — there is no truthiness (GUIDE § Logical, GLB-019 A).
+                &Instruction::Not(dst, src)  => {
+                    let v = match rreg!(src) {
+                        Value::Bool(b) => *b,
+                        other => raise!(VmError::Generic(format!(
+                            "logical NOT requires boolean operand, got {}", other.type_name()))),
+                    };
+                    wreg!(dst, Value::Bool(!v));
+                }
                 &Instruction::IsInt(dst, src) => { let v = matches!(rreg!(src), Value::Int(_)); wreg!(dst, Value::Bool(v)); }
                 &Instruction::AsLoopCond(dst, src) => {
                     match rreg!(src) {
