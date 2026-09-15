@@ -792,7 +792,19 @@ impl<W: Write> Interpreter<W> {
                                 vec![items[j].clone(), items[j + 1].clone()],
                                 &op.span,
                             )?;
-                            let a_before_b = matches!(keep, Value::Bool(true));
+                            // A comparator answers a Bool. Anything else used
+                            // to read as false here and as truthy in the VM,
+                            // three orders for one program (GLB-024).
+                            let a_before_b = match keep {
+                                Value::Bool(b) => b,
+                                other => return Err(RuntimeError::Generic {
+                                    message: format!(
+                                        "sort comparator must return a Bool, got {}",
+                                        other.type_ident()
+                                    ),
+                                    span: op.span,
+                                }),
+                            };
                             if !a_before_b {
                                 Rc::make_mut(&mut items).swap(j, j + 1);
                             }

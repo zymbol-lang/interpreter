@@ -2409,7 +2409,9 @@ words = ["banana", "apple", "cherry", "date"]
 
 **Custom comparator** — use `$^` (no `+`/`-`) with a two-argument lambda that returns
 `#1` if the first element should come before the second. The direction is encoded
-entirely in the comparator (`<` for ascending, `>` for descending). Required for
+entirely in the comparator (`<` for ascending, `>` for descending). It must answer a
+**Bool**: `$^ (a, b -> a - b)` is a runtime error, not a sort that reads `0` as false
+and any other number as true — there is no truthiness. Required for
 sorting named or positional tuple arrays by field:
 
 ```zymbol
