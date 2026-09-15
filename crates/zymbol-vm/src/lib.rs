@@ -3202,6 +3202,15 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::ArrayReduce(dst, arr_reg, init_reg, func_reg) => {
                     let callable = self.reg_get(func_reg).clone();
+                    // Before the array, as the tree-walker checks it: a one-
+                    // parameter lambda is a mistake, not a fold, and calling it
+                    // anyway answered the initial value (GLB-015 A).
+                    if let Value::Function(_, n) | Value::Closure(_, n, _) = &callable {
+                        if *n != 2 {
+                            raise!(VmError::Generic(format!(
+                                "reduce lambda requires 2 parameters (accumulator, element), got {n}")));
+                        }
+                    }
                     let arr = match self.reg_get(arr_reg).clone() {
                         Value::Array(a) => a.as_ref().clone(),
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
