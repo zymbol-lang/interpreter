@@ -3289,6 +3289,16 @@ impl<W: Write> VM<W> {
                         raise!(VmError::TypeError { expected: "Int range bounds", got: got.to_string() });
                     }
                 }
+                &Instruction::OutputSlotCheck(slot, admits_tuple) => {
+                    let bad = match self.reg_get(slot) {
+                        Value::Int(_) => None,
+                        Value::Tuple(_) if admits_tuple => None,
+                        other => Some(other.to_string_repr()),
+                    };
+                    if let Some(got) = bad {
+                        raise!(VmError::Generic(format!(">>~ slot expects Int, got {got}")));
+                    }
+                }
                 &Instruction::DestructureRest(dst, src, from, trailing) => {
                     let (len, is_tuple) = match self.reg_get(src) {
                         Value::Array(a) => (a.len(), false),

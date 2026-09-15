@@ -183,6 +183,9 @@ pub enum Instruction {
     LoopStepCheck(Reg),
     /// Refuse a range loop whose bounds are not both Int (GLB-014 B).
     LoopBoundsCheck(Reg, Reg),
+    /// Refuse a written `>>~` slot that is not an Int (GLB-018 B). `true` also
+    /// admits a Tuple: a lone slot may hold the whole dense position.
+    OutputSlotCheck(Reg, bool),
     /// dst = the remainder of src from 1-based index `idx`: Unit when nothing is
     /// left, the bare element when exactly one is, and a collection when several
     /// are — keeping src's own shape (REFERENCE.md L33).
