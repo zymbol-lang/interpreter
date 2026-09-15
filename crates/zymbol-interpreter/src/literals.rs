@@ -44,6 +44,12 @@ impl<W: Write> Interpreter<W> {
                 }
                 if end < chars.len() {
                     let var_name: String = chars[start..end].iter().collect();
+                    // A name destroyed with `\` is refused here as it is when
+                    // read on its own; it used to stay in the text as `{x}`
+                    // (GLB-025).
+                    if self.dead_variables.contains(&var_name) {
+                        self.check_variable_alive(&var_name, span)?;
+                    }
                     // A variable, or a named function read as a value — what
                     // `var_name` alone evaluates to (GLB-018 H: `{f}` printed
                     // itself here while `>> f` printed <funct/1>).

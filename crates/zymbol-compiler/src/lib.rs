@@ -4093,6 +4093,13 @@ impl Compiler {
                         let r = ctx.alloc_temp()?;
                         ctx.emit(Instruction::LoadGlobal(r, gvar_idx));
                         parts.push(BuildPart::Reg(r));
+                    } else if let Some(&gvar_idx) = self.file_var_map.get(&var_name) {
+                        // A script's file variable, read as `x` alone reads it:
+                        // LoadGlobal is also what refuses one destroyed with `\`
+                        // (GLB-025), where this used to fall to the literal text.
+                        let r = ctx.alloc_temp()?;
+                        ctx.emit(Instruction::LoadGlobal(r, gvar_idx));
+                        parts.push(BuildPart::Reg(r));
                     } else if self.function_index.contains_key(&var_name)
                         || self.module_scope.contains_key(&var_name)
                     {
@@ -4104,6 +4111,16 @@ impl Compiler {
                         let ident = Expr::Identifier(zymbol_ast::IdentifierExpr::new(var_name.clone(), span));
                         let r = self.compile_expr(&ident, ctx)?;
                         parts.push(BuildPart::Reg(r));
+                    } else if self.in_function_body {
+                        // What `x` alone does here: a name that no longer
+                        // resolves in a function body — a local destroyed with
+                        // `\` — is refused at run time (GLB-025).
+                        let msg = format!("'{}' is undefined — did you mean '{}°' (hot definition)?", var_name, var_name);
+                        let idx = self.intern_string(&msg);
+                        ctx.emit(Instruction::RaiseError(idx));
+                        let text = format!("{{{}}}", var_name);
+                        let lit = self.intern_string(&text);
+                        parts.push(BuildPart::Lit(lit));
                     } else {
                         // Genuinely unknown — the analyzer refuses it first
                         // (GLB-018 A); literal text is only the backstop.
