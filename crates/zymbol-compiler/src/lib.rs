@@ -1350,6 +1350,7 @@ impl Compiler {
             Statement::OutputPos(op) => {
                 // Compile each slot: None → LoadUnit, Some(expr) → compile expr
                 let mut slot_regs = Vec::with_capacity(op.slots.len());
+                let lone_slot = op.slots.len() == 1;
                 for slot in &op.slots {
                     let r = match slot {
                         None => {
@@ -1357,7 +1358,14 @@ impl Compiler {
                             ctx.emit(Instruction::LoadUnit(r));
                             r
                         }
-                        Some(expr) => self.compile_expr(expr, ctx)?,
+                        Some(expr) => {
+                            // Checked as soon as it is evaluated, as the
+                            // tree-walker does: a written slot is an Int, and
+                            // only a lone one may carry the dense tuple.
+                            let r = self.compile_expr(expr, ctx)?;
+                            ctx.emit(Instruction::OutputSlotCheck(r, lone_slot));
+                            r
+                        }
                     };
                     slot_regs.push(r);
                 }
@@ -5155,7 +5163,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::ArrayInsert(d, i, v) => { upd(*d); upd(*i); upd(*v); }
             Instruction::ArrayLen(d, a) | Instruction::ArrayContains(d, a, _)
             | Instruction::ArraySlice(d, a, _) => { upd(*d); upd(*a); }
-            Instruction::DestructureCheck(s, _) | Instruction::LoopStepCheck(s) => upd(*s),
+            Instruction::DestructureCheck(s, _) | Instruction::LoopStepCheck(s)
+            | Instruction::OutputSlotCheck(s, _) => upd(*s),
             Instruction::LoopBoundsCheck(a, b) => { upd(*a); upd(*b); }
             Instruction::DestructureAbsorb(d, s, _) => { upd(*d); upd(*s); }
             Instruction::ArrayMap(d, a, f) | Instruction::ArrayFilter(d, a, f) => { upd(*d); upd(*a); upd(*f); }
