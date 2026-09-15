@@ -3215,9 +3215,11 @@ impl Compiler {
         ctx.emit(Instruction::LoadUnit(dst)); // default result
 
         let mut end_patches: Vec<usize> = Vec::new();
+        let mut has_wildcard = false;
 
         for case in &m.cases {
             if matches!(case.pattern, Pattern::Wildcard(_)) {
+                has_wildcard = true;
                 // Wildcard matches everything: compile body, store to dst, jump to end
                 if let Some(val) = &case.value {
                     let r = self.compile_expr(val, ctx)?;
@@ -3253,6 +3255,13 @@ impl Compiler {
             for p in skip_patches {
                 ctx.patch_jump(p, next_case);
             }
+        }
+
+        // Falling past the last case means no arm matched. That aborts, as in
+        // the tree-walker: a `##_` nobody computed must not flow on (GLB-016).
+        if !has_wildcard {
+            let idx = self.intern_string("no pattern matched in match expression");
+            ctx.emit(Instruction::RaiseError(idx));
         }
 
         let end_label = ctx.current_label();
