@@ -44,8 +44,12 @@ impl<W: Write> Interpreter<W> {
                 }
                 if end < chars.len() {
                     let var_name: String = chars[start..end].iter().collect();
-                    // Look up the variable; if not found, leave `{var}` as-is
-                    let maybe_display = self.get_variable(&var_name)
+                    // A variable, or a named function read as a value — what
+                    // `var_name` alone evaluates to (GLB-018 H: `{f}` printed
+                    // itself here while `>> f` printed <funct/1>).
+                    let maybe_display = self.get_variable(&var_name).cloned()
+                        .or_else(|| self.functions.get(&var_name)
+                            .map(|def| Value::Function(self.func_def_to_value(def))))
                         .map(|v| self.format_value(&v));
                     if let Some(display) = maybe_display {
                         result.push_str(&display);
