@@ -1077,6 +1077,15 @@ impl TypeChecker {
             }
 
             Statement::Input(input) => {
+                // The prompt is printed before the line is read: its names must
+                // already exist, the one being read included.
+                if let Some(zymbol_ast::InputPrompt::Interpolated(parts)) = &input.prompt {
+                    for part in parts {
+                        if let zymbol_lexer::StringPart::Variable(name) = part {
+                            self.check_interpolated_name(name, input.span);
+                        }
+                    }
+                }
                 // Input always produces a string
                 self.env.define_var(&input.variable, ZymbolType::String);
             }
@@ -2159,6 +2168,28 @@ impl TypeChecker {
         unified
     }
 
+    /// Refuse a `{name}` interpolation of a name that is nothing: not a
+    /// variable, a function or a module alias. It used to print `{name}` as
+    /// text in all three engines, silently — a misspelt name showed up as its
+    /// own spelling — and the author decided it is a static error (GLB-018 A).
+    ///
+    /// A name that does exist is read like any identifier, so a file variable
+    /// interpolated inside a function crosses MEM-2 exactly as `k` alone would —
+    /// otherwise `"{k}"` there kept printing `{k}`.
+    fn check_interpolated_name(&mut self, name: &str, span: Span) {
+        if self.env.lookup_var(name).is_some() {
+            self.check_reach_out_of_scope(name, span);
+        } else if self.env.lookup_function(name).is_none()
+            && !self.module_aliases.contains(name)
+        {
+            self.errors.push(
+                Diagnostic::error(format!("undefined variable '{name}' in string interpolation"))
+                    .with_span(span)
+                    .with_help("variables must be defined before use; a literal brace is written \\{"),
+            );
+        }
+    }
+
     /// Infer the type of an expression
     fn infer_expr(&mut self, expr: &Expr) -> ZymbolType {
         match expr {
@@ -2168,7 +2199,13 @@ impl TypeChecker {
             Expr::Literal(lit) => match &lit.value {
                 Literal::Int(_) => ZymbolType::Int,
                 Literal::Float(_) => ZymbolType::Float,
-                Literal::String(_) | Literal::InterpolatedString(_) => ZymbolType::String,
+                Literal::InterpolatedString(s) => {
+                    for name in crate::interpolation::interpolated_names(s) {
+                        self.check_interpolated_name(&name, lit.span);
+                    }
+                    ZymbolType::String
+                }
+                Literal::String(_) => ZymbolType::String,
                 Literal::Char(_) => ZymbolType::Char,
                 Literal::Bool(_) => ZymbolType::Bool,
                 Literal::Unit => ZymbolType::Unit,

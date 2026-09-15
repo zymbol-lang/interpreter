@@ -12,6 +12,7 @@
 
 
 mod call_arity;
+mod interpolation;
 mod modules;
 mod stdlib_access;
 mod variable_analysis;

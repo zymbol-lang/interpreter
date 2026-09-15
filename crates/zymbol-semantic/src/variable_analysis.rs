@@ -952,34 +952,8 @@ impl VariableAnalyzer {
                 // for {varname} would produce false positives (e.g. "\{foo\}" stores
                 // "{foo}" as a plain string but never resolves 'foo').
                 if let Literal::InterpolatedString(s) = &lit.value {
-                    let mut in_var = false;
-                    let mut var_name = String::new();
-                    for ch in s.chars() {
-                        if ch == '{' && !in_var {
-                            in_var = true;
-                            var_name.clear();
-                        } else if ch == '}' && in_var {
-                            in_var = false;
-                            if !var_name.is_empty() {
-                                self.use_variable(&var_name, lit.span);
-                            }
-                        } else if in_var {
-                            // Same identifier rule as the lexer. A narrower one
-                            // here reported "unused variable" for names the
-                            // interpolation does resolve — pIqaD and emoji
-                            // identifiers, which are not is_alphanumeric.
-                            let ok = if var_name.is_empty() {
-                                zymbol_lexer::Lexer::is_ident_start(ch)
-                            } else {
-                                zymbol_lexer::Lexer::is_ident_continue(ch)
-                            };
-                            if ok {
-                                var_name.push(ch);
-                            } else {
-                                // Non-identifier char inside {…} — not a variable reference
-                                in_var = false;
-                            }
-                        }
+                    for name in crate::interpolation::interpolated_names(s) {
+                        self.use_variable(&name, lit.span);
                     }
                 }
             }
