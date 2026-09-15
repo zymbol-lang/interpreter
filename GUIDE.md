@@ -4877,6 +4877,18 @@ result = <\ "echo 'scale=2; 355/113' | bc" \>
 > **Note**: Trailing `\n` is stripped automatically (consistent with shell `$(...)` substitution).
 > Internal newlines are preserved. Add `¶` explicitly when needed.
 
+A **collection** placed in the command becomes shell words: its elements joined
+with spaces, at any depth — not its display form, whose `(`, `[` and `#` the
+shell would read as syntax or as a comment. A **function** cannot be placed in a
+command at all, not even inside a collection:
+
+```zymbol
+files = ["a.txt", "b.txt"]
+>> <\ "echo " files \> ¶        // → a.txt b.txt
+pair = (3, "x")
+>> <\ "echo " pair \> ¶         // → 3 x
+```
+
 ### Execute Script `</ file.zy />`
 
 Executes another Zymbol script and captures its output:
