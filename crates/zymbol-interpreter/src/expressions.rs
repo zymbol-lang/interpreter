@@ -287,7 +287,7 @@ impl<W: Write> Interpreter<W> {
                     Value::Int(n) => Ok(Value::Int(n)),
                     Value::Float(f) => Ok(Value::Float(f)),
                     _ => Err(RuntimeError::Generic {
-                        message: format!("unary plus requires numeric operand, got {:?}", operand),
+                        message: format!("unary plus requires numeric operand, got {}", operand.type_ident()),
                         span: unary.span,
                     }),
                 }

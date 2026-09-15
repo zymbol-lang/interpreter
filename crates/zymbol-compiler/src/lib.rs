@@ -2807,8 +2807,15 @@ impl Compiler {
             }
             UnaryOp::Not => Instruction::Not(dst, r),
             UnaryOp::Pos => {
-                ctx.emit(Instruction::CopyReg(dst, r));
-                return Ok(dst);
+                // A copy only when the operand is known to be a number; `+"a"`
+                // used to come out as `a` (GLB-019 B).
+                let ty = ctx.get_reg_type(r);
+                if matches!(ty, StaticType::Int | StaticType::Float) {
+                    ctx.emit(Instruction::CopyReg(dst, r));
+                    ctx.set_reg_type(dst, ty);
+                    return Ok(dst);
+                }
+                Instruction::Pos(dst, r)
             }
         };
         ctx.emit(instr);
@@ -5138,7 +5145,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::CmpEqImm(d, s, _) | Instruction::CmpNeImm(d, s, _)
             | Instruction::CmpLtImm(d, s, _) | Instruction::CmpLeImm(d, s, _)
             | Instruction::CmpGtImm(d, s, _) | Instruction::CmpGeImm(d, s, _) => { upd(*d); upd(*s); }
-            Instruction::Not(d, s) | Instruction::IsInt(d, s)
+            Instruction::Not(d, s) | Instruction::Pos(d, s) | Instruction::IsInt(d, s)
             | Instruction::AsLoopCond(d, s) => { upd(*d); upd(*s); }
             Instruction::And(d, a, b) | Instruction::Or(d, a, b) => { upd(*d); upd(*a); upd(*b); }
             Instruction::Return(r) | Instruction::Print(r)

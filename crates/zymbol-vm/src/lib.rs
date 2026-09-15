@@ -3298,6 +3298,14 @@ impl<W: Write> VM<W> {
                         raise!(VmError::TypeError { expected: "Int range bounds", got: got.to_string() });
                     }
                 }
+                &Instruction::Pos(dst, src) => {
+                    let v = match rreg!(src) {
+                        v @ (Value::Int(_) | Value::Float(_)) => v.clone(),
+                        other => raise!(VmError::Generic(format!(
+                            "unary plus requires numeric operand, got {}", other.type_name()))),
+                    };
+                    wreg!(dst, v);
+                }
                 &Instruction::OutputSlotCheck(slot, admits_tuple) => {
                     let bad = match self.reg_get(slot) {
                         Value::Int(_) => None,
