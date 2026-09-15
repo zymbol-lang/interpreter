@@ -4804,8 +4804,20 @@ fn collect_free_in_expr(
                 }
             }
         }
-        // Literals and shell expressions have no capturable sub-expressions
-        Expr::Literal(_) | Expr::Execute(_) | Expr::BashExec(_) | Expr::TerminalSize(_) => {}
+        // A name read inside a string is captured like any other — a nested
+        // lambda's `"m={m}"` used to print `{m}` (ZYTW-005, same walk here).
+        Expr::Literal(lit) => {
+            if let Literal::InterpolatedString(s) = &lit.value {
+                for name in zymbol_semantic::interpolated_names(s) {
+                    if !locals.contains(&name) && outer_ctx.register_map.contains_key(&name)
+                        && seen.insert(name.clone()) {
+                            free.push(name);
+                        }
+                }
+            }
+        }
+        // Shell expressions have no capturable sub-expressions
+        Expr::Execute(_) | Expr::BashExec(_) | Expr::TerminalSize(_) => {}
     }
 }
 

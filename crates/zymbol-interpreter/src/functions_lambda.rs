@@ -1001,7 +1001,19 @@ fn collect_refs_in_expr(
             }
         }
         // Literals and shell exprs have no capturable sub-expressions
-        Expr::Literal(_) | Expr::Execute(_) | Expr::BashExec(_) | Expr::TerminalSize(_) => {}
+        // A name read inside a string is a reference like any other. Leaving
+        // it out meant `"{log}{s}"` in a lambda never captured `log`, and the
+        // interpolation kept `{log}` as text (ZYTW-005).
+        Expr::Literal(lit) => {
+            if let zymbol_common::Literal::InterpolatedString(s) = &lit.value {
+                for name in zymbol_semantic::interpolated_names(s) {
+                    if !locals.contains(name.as_str()) {
+                        refs.insert(name);
+                    }
+                }
+            }
+        }
+        Expr::Execute(_) | Expr::BashExec(_) | Expr::TerminalSize(_) => {}
     }
 }
 

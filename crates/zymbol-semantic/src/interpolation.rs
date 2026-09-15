@@ -8,7 +8,7 @@
 /// Every name interpolated in the text of a `Literal::InterpolatedString`, in
 /// order. Escaped braces were already turned into `\x01`/`\x02` by the lexer,
 /// so any `{` here opens an interpolation. The identifier rule is the lexer's.
-pub(crate) fn interpolated_names(s: &str) -> Vec<String> {
+pub fn interpolated_names(s: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut in_var = false;
     let mut var_name = String::new();
