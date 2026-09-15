@@ -3252,10 +3252,14 @@ impl<W: Write> VM<W> {
                                         vec![items[j].clone(), items[j + 1].clone()],
                                         program,
                                     ) {
-                                        Ok(keep) => keep,
+                                        // A comparator answers a Bool, and no
+                                        // truthiness stands in for one (GLB-024).
+                                        Ok(Value::Bool(keep)) => keep,
+                                        Ok(other) => break 'calls Err(VmError::Generic(format!(
+                                            "sort comparator must return a Bool, got {}", other.type_name()))),
                                         Err(e) => break 'calls Err(e),
                                     };
-                                    if !keep.is_truthy() {
+                                    if !keep {
                                         items.swap(j, j + 1);
                                     }
                                 }
