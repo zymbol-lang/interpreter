@@ -1147,6 +1147,9 @@ pub struct VM<W: Write> {
     /// set because the message needs the name and `LoadGlobal` only carries an
     /// index. Assigning the name again revives it, which `StoreGlobal` does.
     destroyed_globals: std::collections::HashMap<u16, String>,
+    /// Absolute value-stack slots of function locals ended with `\` that have
+    /// not been assigned since (ZYVM-005). Empty unless a program destroys one.
+    destroyed_slots: std::collections::HashSet<usize>,
     /// CLI arguments passed after the script path (argv[1..], skipping --vm flags)
     cli_args: Vec<String>,
     /// The code a top-level `<~ n` asked the program to end with (GAP-ZYB-006).
@@ -1178,6 +1181,7 @@ impl<W: Write> VM<W> {
             numeral_mode: 0x0030, // ASCII_BASE default
             global_vars: Vec::new(),
             destroyed_globals: std::collections::HashMap::new(),
+            destroyed_slots: std::collections::HashSet::new(),
             cli_args: Vec::new(),
             exit_code: None,
             cur_ip: 0,
@@ -3309,6 +3313,27 @@ impl<W: Write> VM<W> {
                     };
                     if let Some(got) = bad {
                         raise!(VmError::TypeError { expected: "Int range bounds", got: got.to_string() });
+                    }
+                }
+                &Instruction::DestroyLocal(reg, name_idx) => {
+                    let _ = name_idx;
+                    let abs = self.frame_stack.last().unwrap().base as usize + reg as usize;
+                    self.destroyed_slots.insert(abs);
+                    self.reg_set(reg, Value::Unit);
+                }
+                &Instruction::CheckAlive(reg, name_idx) => {
+                    let dead = !self.destroyed_slots.is_empty()
+                        && self.destroyed_slots.contains(&(self.frame_stack.last().unwrap().base as usize + reg as usize));
+                    if dead {
+                        let name = program.string_pool[name_idx as usize].clone();
+                        raise!(VmError::Generic(format!(
+                            "use after destruction: variable '{}' was destroyed after its last use", name)));
+                    }
+                }
+                &Instruction::Revive(reg) => {
+                    if !self.destroyed_slots.is_empty() {
+                        let abs = self.frame_stack.last().unwrap().base as usize + reg as usize;
+                        self.destroyed_slots.remove(&abs);
                     }
                 }
                 &Instruction::Pos(dst, src) => {
