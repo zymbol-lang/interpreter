@@ -2582,7 +2582,7 @@ impl Compiler {
             Literal::InterpolatedString(s) => {
                 // {var} interpolation — use BuildStr; sentinel resolved after interpolation
                 if s.contains('{') {
-                    return self.compile_interpolated_string(s, ctx);
+                    return self.compile_interpolated_string(s, lit.span, ctx);
                 }
                 // No real {var} — just sentinel resolution
                 let resolved = s.replace('\x01', "{").replace('\x02', "}");
@@ -4050,6 +4050,7 @@ impl Compiler {
     fn compile_interpolated_string(
         &mut self,
         s: &str,
+        span: zymbol_span::Span,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
         // Parse `{...}` patterns
@@ -4092,9 +4093,20 @@ impl Compiler {
                         let r = ctx.alloc_temp()?;
                         ctx.emit(Instruction::LoadGlobal(r, gvar_idx));
                         parts.push(BuildPart::Reg(r));
+                    } else if self.function_index.contains_key(&var_name)
+                        || self.module_scope.contains_key(&var_name)
+                    {
+                        // A named function, read as the value `f` alone is —
+                        // captures and module siblings included, which is why
+                        // it goes through the identifier's own path. It used to
+                        // fall to the literal branch: `{f}` printed itself while
+                        // `>> f` printed <funct/1> (GLB-018 H).
+                        let ident = Expr::Identifier(zymbol_ast::IdentifierExpr::new(var_name.clone(), span));
+                        let r = self.compile_expr(&ident, ctx)?;
+                        parts.push(BuildPart::Reg(r));
                     } else {
-                        // Genuinely unknown — treat as literal text, which is
-                        // what the tree-walker does too.
+                        // Genuinely unknown — the analyzer refuses it first
+                        // (GLB-018 A); literal text is only the backstop.
                         let text = format!("{{{}}}", var_name);
                         let idx = self.intern_string(&text);
                         parts.push(BuildPart::Lit(idx));
