@@ -259,6 +259,20 @@ interpolates like any other.
 > program whose identifiers were valid everywhere else could still fail to
 > interpolate them.
 
+**The name has to exist.** `{name}` is read exactly as `name` alone would be:
+a name that is nothing — not a variable, a function or a module alias — is a
+static error, and so is a file variable interpolated inside a function (a
+function is a self-contained space). That holds in every string and in the
+prompt of `<<`. A literal brace is written `\{`.
+
+```text
+>> "total: {totla}" ¶      error: undefined variable 'totla' in string interpolation
+>> "\{totla}" ¶             prints {totla}
+```
+
+> Until 2026-09-15 an undefined name stayed in the output as its own spelling,
+> in every engine and with no diagnostic: a typo printed `{totla}`.
+
 ### Numeric Literals
 
 Integer literals may use any Unicode digit script, but a single literal must use one script consistently:
@@ -4045,7 +4059,7 @@ end-to-end in v0.0.7.
 ```zymbol
 <# std/db => db
 
-db::connect("c", "Driver={SQLite3};Database=/tmp/demo.db;")
+db::connect("c", "Driver=\{SQLite3\};Database=/tmp/demo.db;")
 db::exec("c", "CREATE TABLE socios(cod INTEGER PRIMARY KEY, nombre TEXT)")
 db::exec("c", "INSERT INTO socios(cod, nombre) VALUES(?, ?)", (1, "O'Brien & Co."))
 
@@ -4069,7 +4083,7 @@ db::disconnect("c")
 
   ```zymbol
   <# std/db => db
-  db::connect("c", "Driver={SQLite3};Database=/tmp/demo_nulos.db;")
+  db::connect("c", "Driver=\{SQLite3\};Database=/tmp/demo_nulos.db;")
   db::exec("c", "DROP TABLE IF EXISTS socios")
   db::exec("c", "CREATE TABLE socios(cod INTEGER PRIMARY KEY, nota TEXT)")
   db::exec("c", "INSERT INTO socios(cod, nota) VALUES(1, NULL)")
