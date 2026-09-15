@@ -607,6 +607,22 @@ fn holds_function(v: &Value) -> bool {
     }
 }
 
+/// The text a value becomes inside `<\ … \>`: a collection is its elements
+/// joined with spaces, at any depth — shell words, the tree-walker's
+/// `value_to_bash_str`. Its display form (`[1, 2]`, `(3, x)`, `#(…)`) is shell
+/// syntax or a comment to `sh` (GLB-017 G).
+fn shell_text(v: &Value) -> String {
+    match v {
+        Value::Array(items) | Value::Tuple(items) => {
+            items.iter().map(shell_text).collect::<Vec<_>>().join(" ")
+        }
+        Value::NamedTuple(fields) => {
+            fields.iter().map(|(_, v)| shell_text(v)).collect::<Vec<_>>().join(" ")
+        }
+        other => other.to_string_repr(),
+    }
+}
+
 fn run_in_shell(cmd: &str) -> Result<std::process::Output, VmError> {
     let mut shell =
         zymbol_common::shell::shell_command(cmd).map_err(|e| VmError::Generic(e.to_string()))?;
@@ -3613,7 +3629,7 @@ impl<W: Write> VM<W> {
                     for part in parts {
                         match part {
                             BuildPart::Lit(idx) => cmd.push_str(&program.string_pool[*idx as usize]),
-                            BuildPart::Reg(r) => cmd.push_str(&self.reg_get(*r).to_string_repr()),
+                            BuildPart::Reg(r) => cmd.push_str(&shell_text(self.reg_get(*r))),
                         }
                     }
                     let out = match run_in_shell(&cmd) { Ok(o) => o, Err(e) => raise!(e.into()) };
