@@ -595,6 +595,18 @@ impl VmError {
 /// a script runs in. A spawn failure names the program, which the previous
 /// `failed to execute bash command: program not found` did not — it named a shell
 /// the code was not even running.
+/// Whether a value is, or holds anywhere inside it, a function or a lambda.
+/// A function has no text a shell could take; the tree-walker refuses it at any
+/// depth of the collection it is joined from (GLB-017 A).
+fn holds_function(v: &Value) -> bool {
+    match v {
+        Value::Function(..) | Value::Closure(..) => true,
+        Value::Array(items) | Value::Tuple(items) => items.iter().any(holds_function),
+        Value::NamedTuple(fields) => fields.iter().any(|(_, v)| holds_function(v)),
+        _ => false,
+    }
+}
+
 fn run_in_shell(cmd: &str) -> Result<std::process::Output, VmError> {
     let mut shell =
         zymbol_common::shell::shell_command(cmd).map_err(|e| VmError::Generic(e.to_string()))?;
@@ -3589,6 +3601,14 @@ impl<W: Write> VM<W> {
                 // ── Shell execution ───────────────────────────────────────────
                 Instruction::BashExec(dst, parts) => {
                     let dst = *dst;
+                    let passes_function = parts.iter().any(|part| {
+                        matches!(part, BuildPart::Reg(r) if holds_function(self.reg_get(*r)))
+                    });
+                    if passes_function {
+                        raise!(VmError::Generic(
+                            "cannot use function in bash command interpolation".to_string()
+                        ));
+                    }
                     let mut cmd = String::new();
                     for part in parts {
                         match part {
