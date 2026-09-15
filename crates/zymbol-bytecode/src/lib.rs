@@ -186,6 +186,9 @@ pub enum Instruction {
     /// Refuse a written `>>~` slot that is not an Int (GLB-018 B). `true` also
     /// admits a Tuple: a lone slot may hold the whole dense position.
     OutputSlotCheck(Reg, bool),
+    /// dst = +src: an Int or a Float as it is, anything else refused
+    /// (GLB-019 B). Emitted only when src is not known to be numeric.
+    Pos(Reg, Reg),
     /// dst = the remainder of src from 1-based index `idx`: Unit when nothing is
     /// left, the bare element when exactly one is, and a collection when several
     /// are — keeping src's own shape (REFERENCE.md L33).
