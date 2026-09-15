@@ -425,6 +425,16 @@ impl VariableAnalyzer {
             }
 
             Statement::Input(input) => {
+                // The prompt is printed before the line is read, so the names it
+                // interpolates are read first. It is not an Expr, and skipping it
+                // reported a variable used only there as unused (GLB-023).
+                if let Some(zymbol_ast::InputPrompt::Interpolated(parts)) = &input.prompt {
+                    for part in parts {
+                        if let zymbol_lexer::StringPart::Variable(name) = part {
+                            self.use_variable(name, input.span);
+                        }
+                    }
+                }
                 // Input creates a variable if it doesn't exist
                 if !self.variables.contains_key(&input.variable) {
                     self.declare_variable(
@@ -433,7 +443,6 @@ impl VariableAnalyzer {
                         false,
                     );
                 }
-                // InputPrompt is not an Expr, so we skip analyzing it
             }
 
             Statement::If(if_stmt) => {
