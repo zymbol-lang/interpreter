@@ -3241,10 +3241,24 @@ impl<W: Write> VM<W> {
                 &Instruction::LoopStepCheck(step) => {
                     let n = match self.reg_get(step) {
                         Value::Int(n) => *n,
-                        _ => 1,
+                        other => raise!(VmError::TypeError {
+                            expected: "an Int step",
+                            got: other.type_name().to_string(),
+                        }),
                     };
                     if n <= 0 {
                         raise!(VmError::Generic(format!("step must be positive, got {n}")));
+                    }
+                }
+                &Instruction::LoopBoundsCheck(start, end) => {
+                    // No `for` here: raise! continues the dispatch loop, and
+                    // inside an inner loop it would continue that one instead.
+                    let bad = match (self.reg_get(start), self.reg_get(end)) {
+                        (Value::Int(_), Value::Int(_)) => None,
+                        (Value::Int(_), other) | (other, _) => Some(other.type_name()),
+                    };
+                    if let Some(got) = bad {
+                        raise!(VmError::TypeError { expected: "Int range bounds", got: got.to_string() });
                     }
                 }
                 &Instruction::DestructureRest(dst, src, from, trailing) => {

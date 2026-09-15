@@ -1937,6 +1937,13 @@ impl Compiler {
         } else {
             ctx.emit(Instruction::LoadInt(r_step, 1));
         }
+        // After the step, as the tree-walker checks them: a bound that is not
+        // an Int would otherwise count in Floats (GLB-014 B).
+        if ctx.get_reg_type(r_start_tmp) != StaticType::Int
+            || ctx.get_reg_type(r_end_tmp) != StaticType::Int
+        {
+            ctx.emit(Instruction::LoopBoundsCheck(r_cnt, r_end));
+        }
 
         // Detect direction: r_fwd = (r_cnt <= r_end)  → Bool
         ctx.emit(Instruction::CmpLe(r_fwd, r_cnt, r_end));
@@ -5149,6 +5156,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::ArrayLen(d, a) | Instruction::ArrayContains(d, a, _)
             | Instruction::ArraySlice(d, a, _) => { upd(*d); upd(*a); }
             Instruction::DestructureCheck(s, _) | Instruction::LoopStepCheck(s) => upd(*s),
+            Instruction::LoopBoundsCheck(a, b) => { upd(*a); upd(*b); }
             Instruction::DestructureAbsorb(d, s, _) => { upd(*d); upd(*s); }
             Instruction::ArrayMap(d, a, f) | Instruction::ArrayFilter(d, a, f) => { upd(*d); upd(*a); upd(*f); }
             Instruction::ArrayReduce(d, a, i, f) => { upd(*d); upd(*a); upd(*i); upd(*f); }
