@@ -249,6 +249,17 @@ impl<W: Write> Interpreter<W> {
         let f: f64 = match value {
             Value::Int(n) => n as f64,
             Value::Float(f) => f,
+            // A string that reads as a number is formatted, as `#.` and `#!`
+            // already take one and the VM always did (GLB-029, decided
+            // 2026-09-15). Digits in any script, as there.
+            Value::String(ref s) if {
+                let normalized = ascii_digits(s.trim());
+                normalized.parse::<i64>().is_ok() || normalized.parse::<f64>().is_ok()
+            } => {
+                let normalized = ascii_digits(s.trim());
+                normalized.parse::<i64>().map(|n| n as f64)
+                    .unwrap_or_else(|_| normalized.parse::<f64>().unwrap_or(0.0))
+            }
             _ => {
                 return Err(RuntimeError::Generic {
                     message: format!(
