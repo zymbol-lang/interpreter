@@ -83,11 +83,19 @@ impl<W: Write> Interpreter<W> {
             script_interp.set_cli_args(args_strings);
         }
 
-        // Execute the program
+        // Execute the program. A failure is reported the way the CLI reports
+        // it — the message, then where — which is exactly the text the VM passes
+        // on, since the VM runs the subscript as a process and its message is
+        // that process's stderr. This engine used to print Rust's `Debug` of the
+        // error instead: `Located { message: "division by zero", file: …,
+        // line: 1, column: 0 }` (GLB-017 B).
         script_interp.execute(&program)
-            .map_err(|e| RuntimeError::Generic {
-                message: format!("error executing {}: {:?}", file_path.display(), e),
-                span: execute.span,
+            .map_err(|e| {
+                let mut message = format!("Runtime error: {}", e);
+                if let Some((file, line)) = e.location() {
+                    message.push_str(&format!("\n  --> {}:{}", file, line));
+                }
+                RuntimeError::Generic { message, span: execute.span }
             })?;
 
         // Convert captured output to string
