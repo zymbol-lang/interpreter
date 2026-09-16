@@ -239,8 +239,8 @@ nums$< (0, (acc,x) -> acc+x) // reduce (initial, lambda)
 `!?` try · `:!` catch (bare or typed) · `:>` finally · `_err` holds the caught error ·
 `v$!` is-error · `v$!!` propagate to caller.
 
-Kinds: `##Div` `##Index` `##Type` `##Range` (numeric limits) `##Parse` `##IO` `##Network`
-`##DB` `##_`. Std-library environmental failures come back as **soft error values** to test
+Kinds: `##Div` `##Index` `##Key` `##Range` (numeric limits) `##Type` `##Parse` `##IO`
+`##Network` `##DB` `##Time` `##_`. Std-library environmental failures come back as **soft error values** to test
 with `$!`, not as raised errors; type/arity mistakes raise.
 
 ---

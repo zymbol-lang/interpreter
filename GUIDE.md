@@ -3538,14 +3538,22 @@ r6 = 7 |> (x -> x * factor)
 
 | Type | When |
 |------|------|
-| `##IO` | File / network operations |
 | `##Div` | Division by zero |
 | `##Index` | Index out of bounds |
+| `##Key` | Key not in a dictionary |
+| `##Range` | Outside the safe integer range |
 | `##Type` | Type mismatch |
 | `##Parse` | Data parsing failure |
+| `##IO` | File / system operations |
 | `##Network` | Network errors |
 | `##DB` | Database errors (`std/db`) |
+| `##Time` | A date that does not exist, an unknown zone or unit (`std/time`) |
 | `##_` | Generic catch-all |
+
+`##Div` to `##Type` come from the operation that fails. `##Parse` to `##Time` are
+also the kinds of the soft error values the standard modules return, tested with
+`$!`. These are the eleven kinds an engine produces; the parser accepts any name
+after `##`, and a name that is not one of them simply never matches.
 
 ```zymbol
 // Typed catch example
