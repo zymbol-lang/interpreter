@@ -92,7 +92,7 @@ impl<W: Write> Interpreter<W> {
                     Value::Char(c) => { let mut out = s; out.push(c); out }
                     Value::String(ref suffix) => { let mut out = s; out.push_str(suffix); out }
                     _ => return Err(RuntimeError::Generic {
-                        message: format!("$+ on string requires char or string element, got {:?}", element),
+                        message: format!("$+ on string requires char or string element, got {}", element.type_label()),
                         span: op.span,
                     }),
                 };
@@ -147,7 +147,7 @@ impl<W: Write> Interpreter<W> {
             Value::Int(n) => n,
             _ => {
                 return Err(RuntimeError::Generic {
-                    message: format!("remove index must be an integer, got {:?}", index_value),
+                    message: format!("remove index must be an integer, got {}", index_value.type_label()),
                     span: op.span,
                 })
             }
@@ -402,7 +402,7 @@ impl<W: Write> Interpreter<W> {
                 let index = match index_value {
                     Value::Int(n) => n,
                     _ => return Err(RuntimeError::Generic {
-                        message: format!("array update index must be an integer, got {:?}", index_value),
+                        message: format!("array update index must be an integer, got {}", index_value.type_label()),
                         span: op.span,
                     }),
                 };
@@ -415,7 +415,7 @@ impl<W: Write> Interpreter<W> {
                 let index = match index_value {
                     Value::Int(n) => n,
                     _ => return Err(RuntimeError::Generic {
-                        message: format!("tuple update index must be an integer, got {:?}", index_value),
+                        message: format!("tuple update index must be an integer, got {}", index_value.type_label()),
                         span: op.span,
                     }),
                 };
@@ -532,7 +532,7 @@ impl<W: Write> Interpreter<W> {
                 Value::Int(n) => n,
                 _ => {
                     return Err(RuntimeError::Generic {
-                        message: format!("slice start must be an integer, got {:?}", start_value),
+                        message: format!("slice start must be an integer, got {}", start_value.type_label()),
                         span: op.span,
                     })
                 }
@@ -548,7 +548,7 @@ impl<W: Write> Interpreter<W> {
                 Value::Int(n) => n,
                 _ => {
                     return Err(RuntimeError::Generic {
-                        message: format!("slice end must be an integer, got {:?}", end_value),
+                        message: format!("slice end must be an integer, got {}", end_value.type_label()),
                         span: op.span,
                     })
                 }
@@ -660,7 +660,7 @@ impl<W: Write> Interpreter<W> {
                 Ok(Value::array(result))
             }
             _ => Err(RuntimeError::Generic {
-                message: format!("map requires array, got {:?}", collection),
+                message: format!("map requires array, got {}", collection.type_label()),
                 span: op.span,
             }),
         }
@@ -699,7 +699,7 @@ impl<W: Write> Interpreter<W> {
                         Value::Bool(false) => {}
                         _ => {
                             return Err(RuntimeError::Generic {
-                                message: format!("filter lambda must return boolean, got {:?}", keep),
+                                message: format!("filter lambda must return boolean, got {}", keep.type_label()),
                                 span: op.span,
                             });
                         }
@@ -709,7 +709,7 @@ impl<W: Write> Interpreter<W> {
                 Ok(Value::array(result))
             }
             _ => Err(RuntimeError::Generic {
-                message: format!("filter requires array, got {:?}", collection),
+                message: format!("filter requires array, got {}", collection.type_label()),
                 span: op.span,
             }),
         }
@@ -758,7 +758,7 @@ impl<W: Write> Interpreter<W> {
                 Ok(accumulator)
             }
             _ => Err(RuntimeError::Generic {
-                message: format!("reduce requires array, got {:?}", collection),
+                message: format!("reduce requires array, got {}", collection.type_label()),
                 span: op.span,
             }),
         }
@@ -823,7 +823,7 @@ impl<W: Write> Interpreter<W> {
                 Ok(Value::Array(items))
             }
             _ => Err(RuntimeError::Generic {
-                message: format!("sort requires an array, got {:?}", collection),
+                message: format!("sort requires an array, got {}", collection.type_label()),
                 span: op.span,
             }),
         }
@@ -838,7 +838,7 @@ impl<W: Write> Interpreter<W> {
         let index = match index_val {
             Value::Int(n) => n,
             _ => return Err(RuntimeError::Generic {
-                message: format!("$+[i] index must be an integer, got {:?}", index_val),
+                message: format!("$+[i] index must be an integer, got {}", index_val.type_label()),
                 span: op.span,
             }),
         };
@@ -893,13 +893,13 @@ impl<W: Write> Interpreter<W> {
                         Ok(Value::String(chars.iter().collect()))
                     }
                     _ => Err(RuntimeError::Generic {
-                        message: format!("$+[i] on string requires char or string element, got {:?}", element),
+                        message: format!("$+[i] on string requires char or string element, got {}", element.type_label()),
                         span: op.span,
                     }),
                 }
             }
             _ => Err(RuntimeError::Generic {
-                message: format!("$+[i] requires an array, tuple, or string, got {:?}", collection),
+                message: format!("$+[i] requires an array, tuple, or string, got {}", collection.type_label()),
                 span: op.span,
             }),
         }
@@ -955,14 +955,14 @@ impl<W: Write> Interpreter<W> {
                         s.clone()
                     }
                     _ => return Err(RuntimeError::Generic {
-                        message: format!("$- on string requires char or string value, got {:?}", value),
+                        message: format!("$- on string requires char or string value, got {}", value.type_label()),
                         span: op.span,
                     }),
                 };
                 Ok(Value::String(result))
             }
             _ => Err(RuntimeError::Generic {
-                message: format!("$- requires an array, tuple, or string, got {:?}", collection),
+                message: format!("$- requires an array, tuple, or string, got {}", collection.type_label()),
                 span: op.span,
             }),
         }
@@ -1001,14 +1001,14 @@ impl<W: Write> Interpreter<W> {
                         s.replace(pattern.as_str(), "")
                     }
                     _ => return Err(RuntimeError::Generic {
-                        message: format!("$-- on string requires char or string value, got {:?}", value),
+                        message: format!("$-- on string requires char or string value, got {}", value.type_label()),
                         span: op.span,
                     }),
                 };
                 Ok(Value::String(result))
             }
             _ => Err(RuntimeError::Generic {
-                message: format!("$-- requires an array, tuple, or string, got {:?}", collection),
+                message: format!("$-- requires an array, tuple, or string, got {}", collection.type_label()),
                 span: op.span,
             }),
         }
@@ -1024,7 +1024,7 @@ impl<W: Write> Interpreter<W> {
             Value::NamedTuple(f) => f.len(),
             Value::String(s) => s.chars().count(),
             _ => return Err(RuntimeError::Generic {
-                message: format!("$-[..] requires an array, tuple, or string, got {:?}", collection),
+                message: format!("$-[..] requires an array, tuple, or string, got {}", collection.type_label()),
                 span: op.span,
             }),
         };
@@ -1039,7 +1039,7 @@ impl<W: Write> Interpreter<W> {
                     (n - 1) as usize  // normalize 1-based to 0-based
                 }
                 other => return Err(RuntimeError::Generic {
-                    message: format!("$-[..] start must be an integer, got {:?}", other),
+                    message: format!("$-[..] start must be an integer, got {}", other.type_label()),
                     span: op.span,
                 }),
             }
@@ -1064,7 +1064,7 @@ impl<W: Write> Interpreter<W> {
                     n as usize  // range: 1-based inclusive = 0-based exclusive; count: raw count
                 }
                 other => return Err(RuntimeError::Generic {
-                    message: format!("$-[..] end must be an integer, got {:?}", other),
+                    message: format!("$-[..] end must be an integer, got {}", other.type_label()),
                     span: op.span,
                 }),
             }
@@ -1231,7 +1231,7 @@ fn get_at_step(col: &Value, step: &Value, span: zymbol_span::Span) -> Result<Val
     match step {
         Value::Int(n) => get_at_idx(col, *n, span),
         other => Err(RuntimeError::Generic {
-            message: format!("a navigation step is a position or a key, got {:?}", other),
+            message: format!("a navigation step is a position or a key, got {}", other.type_label()),
             span,
         }),
     }
@@ -1256,7 +1256,7 @@ fn set_at_step(col: Value, step: &Value, new_val: Value, span: zymbol_span::Span
     match step {
         Value::Int(n) => set_at_idx(col, *n, new_val, span),
         other => Err(RuntimeError::Generic {
-            message: format!("a navigation step is a position or a key, got {:?}", other),
+            message: format!("a navigation step is a position or a key, got {}", other.type_label()),
             span,
         }),
     }
@@ -1269,7 +1269,7 @@ fn get_at_idx(col: &Value, index: i64, span: zymbol_span::Span) -> Result<Value>
         Value::Tuple(tup)  => (tup.len(), Box::new(|i| tup[i].clone())),
         Value::NamedTuple(fields) => (fields.len(), Box::new(|i| fields[i].1.clone())),
         other => return Err(RuntimeError::Generic {
-            message: format!("cannot index into {:?} during deep update", other),
+            message: format!("cannot index into {} during deep update", other.type_label()),
             span,
         }),
     };
@@ -1299,7 +1299,7 @@ fn set_at_idx(col: Value, index: i64, new_val: Value, span: zymbol_span::Span) -
             Ok(Value::NamedTuple(fields))
         }
         other => Err(RuntimeError::Generic {
-            message: format!("cannot update {:?} during deep update", other),
+            message: format!("cannot update {} during deep update", other.type_label()),
             span,
         }),
     }

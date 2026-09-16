@@ -154,7 +154,7 @@ impl<W: Write> Interpreter<W> {
                             span: step_expr.span(),
                         }),
                         other => return Err(RuntimeError::Generic {
-                            message: format!("step must be an integer, got {:?}", other),
+                            message: format!("step must be an integer, got {}", other.type_label()),
                             span: step_expr.span(),
                         }),
                     }
@@ -163,7 +163,7 @@ impl<W: Write> Interpreter<W> {
                 let (start, end) = match (start_val, end_val) {
                     (Value::Int(s), Value::Int(e)) => (s, e),
                     (sv, ev) => return Err(RuntimeError::Generic {
-                        message: format!("range bounds must be integers, got {:?} and {:?}", sv, ev),
+                        message: format!("range bounds must be integers, got {} and {}", sv.type_label(), ev.type_label()),
                         span: range_expr.start.span(),
                     }),
                 };
