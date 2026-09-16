@@ -109,6 +109,13 @@ impl Parser {
     }
 
     /// Parse an error type: ##IO, ##Network, ##Parse, etc.
+    ///
+    /// The helps list every kind an engine produces, in the order of the
+    /// manual's table: raised ones first (`##Div` … `##Type`), then the ones a
+    /// standard module returns as a value (`##Parse` … `##Time`), then `##_`.
+    /// They listed three, and seven, of the eleven — `##Key`, `##Range`, `##DB`
+    /// and `##Time` were missing from the text a reader turns to precisely when
+    /// they do not know what kinds there are (GLB-022).
     fn parse_error_type(&mut self) -> Result<ErrorType, Diagnostic> {
         let start_token = self.peek().clone();
 
@@ -116,7 +123,7 @@ impl Parser {
         if !matches!(start_token.kind, TokenKind::Hash) {
             return Err(Diagnostic::error("expected '##' for error type")
                 .with_span(start_token.span)
-                .with_help("error types use ## prefix: ##IO, ##Network, ##Parse"));
+                .with_help("error types use ## prefix: ##Div, ##Index, ##Key, ##Range, ##Type, ##Parse, ##IO, ##Network, ##DB, ##Time, ##_"));
         }
         self.advance();
 
@@ -125,7 +132,7 @@ impl Parser {
         if !matches!(second_hash.kind, TokenKind::Hash) {
             return Err(Diagnostic::error("expected '##' for error type (missing second #)")
                 .with_span(second_hash.span)
-                .with_help("error types use ## prefix: ##IO, ##Network, ##Parse"));
+                .with_help("error types use ## prefix: ##Div, ##Index, ##Key, ##Range, ##Type, ##Parse, ##IO, ##Network, ##DB, ##Time, ##_"));
         }
         self.advance();
 
@@ -137,7 +144,7 @@ impl Parser {
             _ => {
                 return Err(Diagnostic::error("expected error type name after '##'")
                     .with_span(name_token.span)
-                    .with_help("valid error types: ##IO, ##Network, ##Parse, ##Index, ##Type, ##Div, ##_"));
+                    .with_help("valid error types: ##Div, ##Index, ##Key, ##Range, ##Type, ##Parse, ##IO, ##Network, ##DB, ##Time, ##_"));
             }
         };
         self.advance();
