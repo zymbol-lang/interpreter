@@ -4056,7 +4056,8 @@ Where the zone cannot be determined it returns a soft error instead of guessing.
 **Error convention.** Type/arity mistakes raise a hard `RuntimeError` (the program is
 malformed). Recoverable environmental failures — file not found, network timeout, malformed
 JSON, SQL errors — come back as a **soft `Error` value** (`##IO(...)`, `##Network(...)`,
-`##Parse(...)`, `##DB(...)`) that you test with `$!` or catch with `!?`, rather than aborting:
+`##Parse(...)`, `##DB(...)`) that you test with `$!` rather than aborting. It is a value,
+not a thrown error, so `!? … :!` does not catch it — `$!` does:
 
 ```zymbol
 <# std/io => io
@@ -4160,8 +4161,8 @@ db::disconnect("c")
 - **Transactions**: `tx(name, batch)` runs an array of `(sql, params)` tuples atomically;
   low-level `begin`/`commit`/`rollback` plus nested `savepoint`/`release`/`rollback_to`.
 - **Utilities**: `exec_script` (multi-statement SQL), `table_exists`.
-- SQL failures return a **soft `##DB(...)` error** (testable with `$!`, catchable with
-  `!? … :! ##DB`); wrong argument types abort hard, like every stdlib module.
+- SQL failures return a **soft `##DB(...)` error**, tested with `$!` — a value, so a
+  `:! ##DB` never sees it; wrong argument types abort hard, like every stdlib module.
 
 ### Distributing a Multi-File Program (`.zyp`)
 
