@@ -154,9 +154,12 @@ fn bind_params(params: Vec<Value>, span: Span) -> Result<Vec<Box<dyn InputParame
             Value::Char(c) => Box::new(c.to_string().into_parameter()),
             // NULL of (nominally) text type — drivers coerce as needed.
             Value::Unit => Box::new(Option::<String>::None.into_parameter()),
+            // The value's type, as the VM names it (`##fn`, `##[]`, …). It
+            // was formatted with `{:?}`, which for a lambda printed its whole
+            // body with every span in it (ZYTW-004).
             other => {
                 return Err(type_err(
-                    format!("db: cannot bind {:?} as a parameter", other),
+                    format!("db: cannot bind {} as a parameter", other.type_name()),
                     span,
                 ))
             }
