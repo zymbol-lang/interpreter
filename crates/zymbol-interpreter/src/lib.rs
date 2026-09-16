@@ -601,6 +601,32 @@ impl Value {
         }
     }
 
+    /// The type as a diagnostic names it, the way the analyzer does: `Int`,
+    /// `[Int]`, `(Int, String)`, `#(k: Int)`, `Function`
+    /// (`zymbol_common::typeword`, decided 2026-09-16). A message says what KIND
+    /// of value arrived, never the value itself — `got Float`, not
+    /// `got Float(1.5)`. It supersedes [`Self::type_ident`], which names a
+    /// collection by its shape alone (`Array`), as the steps of the plan reach
+    /// each engine.
+    pub fn type_label(&self) -> String {
+        use zymbol_common::typeword as tw;
+        match self {
+            Value::Int(_) => tw::INT.to_string(),
+            Value::Float(_) => tw::FLOAT.to_string(),
+            Value::String(_) => tw::STRING.to_string(),
+            Value::Char(_) => tw::CHAR.to_string(),
+            Value::Bool(_) => tw::BOOL.to_string(),
+            Value::Unit => tw::UNIT.to_string(),
+            Value::Error(_) => tw::ERROR.to_string(),
+            Value::Function(_) => tw::FUNCTION.to_string(),
+            Value::Array(items) => tw::array(items.iter().map(Value::type_label)),
+            Value::Tuple(items) => tw::tuple(items.iter().map(Value::type_label)),
+            Value::NamedTuple(fields) => {
+                tw::dict(fields.iter().map(|(k, v)| (k.as_str(), v.type_label())))
+            }
+        }
+    }
+
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Int(_)        => "###",

@@ -15,6 +15,7 @@ pub mod num;
 pub mod shell;
 pub mod stdlib;
 pub mod typesym;
+pub mod typeword;
 
 use indexmap::IndexMap;
 use std::fmt;

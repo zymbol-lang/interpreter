@@ -25,7 +25,7 @@ impl<W: Write> Interpreter<W> {
                     Value::Int(n) => n,
                     _ => {
                         return Err(RuntimeError::Generic {
-                            message: format!("range start must be an integer, got {:?}", start_value),
+                            message: format!("range start must be an integer, got {}", start_value.type_label()),
                             span: range_expr.start.span(),
                         })
                     }
@@ -35,7 +35,7 @@ impl<W: Write> Interpreter<W> {
                     Value::Int(n) => n,
                     _ => {
                         return Err(RuntimeError::Generic {
-                            message: format!("range end must be an integer, got {:?}", end_value),
+                            message: format!("range end must be an integer, got {}", end_value.type_label()),
                             span: range_expr.end.span(),
                         })
                     }
@@ -54,7 +54,7 @@ impl<W: Write> Interpreter<W> {
                         }
                         _ => {
                             return Err(RuntimeError::Generic {
-                                message: format!("step must be an integer, got {:?}", step_value),
+                                message: format!("step must be an integer, got {}", step_value.type_label()),
                                 span: step_expr.span(),
                             })
                         }
@@ -393,7 +393,7 @@ impl<W: Write> Interpreter<W> {
             Value::Int(n) => *n,
             _ => {
                 return Err(RuntimeError::Generic {
-                    message: format!("index must be an integer, got {:?}", index_value),
+                    message: format!("index must be an integer, got {}", index_value.type_label()),
                     span,
                 })
             }
@@ -480,7 +480,7 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             _ => Err(RuntimeError::Generic {
-                message: format!("cannot index {:?} - only arrays, tuples, and strings are indexable", collection),
+                message: format!("cannot index {} - only arrays, tuples, and strings are indexable", collection.type_label()),
                 span,
             }),
         }

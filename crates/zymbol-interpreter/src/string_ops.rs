@@ -53,7 +53,7 @@ impl<W: Write> Interpreter<W> {
             Value::String(ref s) => s.clone(),
             _ => {
                 return Err(RuntimeError::Generic {
-                    message: format!("$~~ requires a string, got {:?}", string_value),
+                    message: format!("$~~ requires a string, got {}", string_value.type_label()),
                     span: op.span,
                 })
             }
@@ -64,7 +64,7 @@ impl<W: Write> Interpreter<W> {
             Value::String(ref s) => s.clone(),
             _ => {
                 return Err(RuntimeError::Generic {
-                    message: format!("$~~ replacement must be a string, got {:?}", replacement_value),
+                    message: format!("$~~ replacement must be a string, got {}", replacement_value.type_label()),
                     span: op.span,
                 })
             }
@@ -84,7 +84,7 @@ impl<W: Write> Interpreter<W> {
                 Value::Int(n) => Some(n as usize),
                 _ => {
                     return Err(RuntimeError::Generic {
-                        message: format!("$~~ count must be an integer, got {:?}", count_value),
+                        message: format!("$~~ count must be an integer, got {}", count_value.type_label()),
                         span: op.span,
                     })
                 }
@@ -150,7 +150,7 @@ impl<W: Write> Interpreter<W> {
             }
             _ => {
                 return Err(RuntimeError::Generic {
-                    message: format!("$~~ pattern must be a string or char, got {:?}", pattern_value),
+                    message: format!("$~~ pattern must be a string or char, got {}", pattern_value.type_label()),
                     span: op.span,
                 })
             }
@@ -181,7 +181,7 @@ impl<W: Write> Interpreter<W> {
                 Ok(Value::Array(arr))
             }
             other => Err(RuntimeError::Generic {
-                message: format!("$++ requires a string or array as base, got {:?}", other),
+                message: format!("$++ requires a string or array as base, got {}", other.type_label()),
                 span: op.span,
             }),
         }
@@ -195,7 +195,7 @@ impl<W: Write> Interpreter<W> {
         let string = match string_value {
             Value::String(s) => s,
             _ => return Err(RuntimeError::Generic {
-                message: format!("$/ requires a string on the left, got {:?}", string_value),
+                message: format!("$/ requires a string on the left, got {}", string_value.type_label()),
                 span: op.span,
             }),
         };
@@ -204,7 +204,7 @@ impl<W: Write> Interpreter<W> {
             Value::Char(c) => string.split(c).map(|p| Value::String(p.to_string())).collect(),
             Value::String(ref s) => string.split(s.as_str()).map(|p| Value::String(p.to_string())).collect(),
             _ => return Err(RuntimeError::Generic {
-                message: format!("$/ delimiter must be a char or string, got {:?}", delimiter_value),
+                message: format!("$/ delimiter must be a char or string, got {}", delimiter_value.type_label()),
                 span: op.span,
             }),
         };
