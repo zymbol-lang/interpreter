@@ -183,17 +183,42 @@ Zymbol source files are UTF-8. All Unicode scripts are supported in identifiers,
 
 ### Identifiers
 
-An identifier begins with a Unicode letter or `_`, followed by zero or more Unicode letters, digits, or `_`.
+An identifier is written with the characters the language does not need for
+something else. It begins with any character that is not whitespace, not a
+digit, not one of the operator characters, and not invisible; after the first
+character, digits are allowed too.
 
 ```
-identifier ::= (letter | '_') (letter | digit | '_')*
-letter     ::= any character for which Unicode is_alphabetic() returns true
-digit      ::= any character for which Unicode is_alphanumeric() returns true (but not alphabetic)
+identifier ::= start continue*
+start      ::= any character that is not whitespace, a digit, an operator
+               character, or invisible
+continue   ::= start | digit | ZWJ | ZWNJ
+operator   ::= one of  > < = ! + - * / % ^ & | ? : . , ; ( ) [ ] { } @ ~ # $ ¶ \
+               and the backtick, which names nothing and is no operator either
+invisible  ::= a Unicode format (Cf) or control character — U+00AD, U+200B,
+               U+200F, U+2060, U+FEFF and the rest of that table
 ```
 
-All scripts are allowed: `camelCase`, `snake_case`, `PascalCase`, `café`, `αβγ`, `変数`, `متغير` are all valid identifiers.
+All scripts are allowed: `camelCase`, `snake_case`, `PascalCase`, `café`, `αβγ`,
+`変数`, `متغير` are all valid identifiers, and so is any visible symbol the
+language has no token for — `€precio`, `a±b`, `§total`, `_🔑`.
 
-Identifiers must not collide with symbolic operators (e.g., `$>`, `@`, `?` are not identifiers).
+Three edges are decided rather than accidental:
+
+- **An invisible character is not a letter.** A zero-width space or a soft
+  hyphen inside a name is refused, and the diagnostic names it by code point
+  (`unexpected character: U+200B`) rather than quoting a character that would
+  show the reader nothing.
+- **ZWJ (U+200D) and ZWNJ (U+200C) are allowed inside a name**, never at its
+  start: Devanagari, Persian, Kannada, Telugu and Sinhala need them to spell a
+  word correctly, and a name is a word.
+- **A byte order mark is skipped when it is the first character of the file**,
+  as editors on Windows write it. Anywhere else it is an ordinary invisible
+  character, and therefore an error.
+
+Identifiers must not collide with symbolic operators (e.g., `$>`, `@`, `?` are
+not identifiers). The quotes and `°` are read before a name begins, so they
+do not appear in one either.
 
 ### Comments
 

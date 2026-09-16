@@ -381,10 +381,15 @@ impl Lexer {
             offset += ch.len_utf8() as u32;
         }
         byte_offsets.push(offset);
+        // A byte order mark at the very start is how some editors save UTF-8,
+        // and it is not part of the program. It used to glue itself to the
+        // first name, so such a file could not run (GLB-026 A). Anywhere else
+        // it is an invisible character like any other.
+        let current = usize::from(chars.first() == Some(&'\u{FEFF}'));
         Self {
             source: chars,
             byte_offsets,
-            current: 0,
+            current,
             line: 1,
             column: 1,
             file_id,
@@ -425,6 +430,13 @@ impl Lexer {
             return true;
         }
 
+        // The backtick and invisible characters are never part of a name, and
+        // ZWJ/ZWNJ may continue one but not begin it (GLB-026 B, decided
+        // 2026-09-15). A name that looks the same as another must be the same.
+        if ch == '`' || Self::is_invisible_char(ch) {
+            return false;
+        }
+
         // Allow any Unicode letter (covers all languages: English, Chinese, Arabic, Hindi, etc.)
         if ch.is_alphabetic() {
             return true;
@@ -442,6 +454,14 @@ impl Lexer {
     ///
     /// Public for the same reason as `is_ident_start`.
     pub fn is_ident_continue(ch: char) -> bool {
+        // ZWJ and ZWNJ spell words in Sinhala, Devanagari, Persian, Kannada and
+        // Telugu, so a name may contain them (GLB-026 B).
+        if ch == '\u{200C}' || ch == '\u{200D}' {
+            return true;
+        }
+        if ch == '`' || Self::is_invisible_char(ch) {
+            return false;
+        }
         // Allow alphanumeric and underscore
         if ch.is_alphanumeric() || ch == '_' {
             return true;
@@ -449,6 +469,22 @@ impl Lexer {
 
         // Allow any non-whitespace, non-operator Unicode character
         !ch.is_whitespace() && !Self::is_operator_char(ch)
+    }
+
+    /// A character that renders as nothing: a control character, or a Unicode
+    /// format character (general category Cf). The table is explicit, and the
+    /// browser engine carries the same one, so both read a name the same way
+    /// whatever Unicode version their platform knows.
+    pub fn is_invisible_char(ch: char) -> bool {
+        if ch.is_control() {
+            return true;
+        }
+        matches!(ch as u32,
+            0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891
+            | 0x08E2 | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064
+            | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD
+            | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001
+            | 0xE0020..=0xE007F)
     }
 
     /// Check if a character is a Zymbol operator
@@ -948,14 +984,20 @@ impl Lexer {
             return self.lex_identifier(start);
         }
 
-        // Unknown character
+        // Unknown character. An invisible one is named by its code point —
+        // quoting it would show the reader nothing.
         self.advance();
         let span = self.span(start);
+        let shown = if Self::is_invisible_char(ch) {
+            format!("U+{:04X}", ch as u32)
+        } else {
+            format!("'{}'", ch)
+        };
         self.diagnostics.push(
-            Diagnostic::error(format!("unexpected character: '{}'", ch))
+            Diagnostic::error(format!("unexpected character: {}", shown))
                 .with_span(span),
         );
-        Token::new(TokenKind::Error(format!("unexpected character: '{}'", ch)), span)
+        Token::new(TokenKind::Error(format!("unexpected character: {}", shown)), span)
     }
 
 
