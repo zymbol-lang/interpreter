@@ -61,8 +61,8 @@ impl<W: Write> Interpreter<W> {
             Value::String(ref s) => Ok(Value::Int(if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 })),
             _ => Err(RuntimeError::Generic {
                 message: format!(
-                    "cannot get length of {:?} - only arrays, tuples, and strings have length",
-                    collection
+                    "cannot get length of {} - only arrays, tuples, and strings have length",
+                    collection.type_label()
                 ),
                 span: op.span,
             }),
@@ -100,8 +100,8 @@ impl<W: Write> Interpreter<W> {
             }
             _ => Err(RuntimeError::Generic {
                 message: format!(
-                    "cannot append to {:?} - only arrays, tuples, and strings support $+",
-                    collection
+                    "cannot append to {} - only arrays, tuples, and strings support $+",
+                    collection.type_label()
                 ),
                 span: op.span,
             }),
@@ -241,8 +241,8 @@ impl<W: Write> Interpreter<W> {
             }
             _ => Err(RuntimeError::Generic {
                 message: format!(
-                    "cannot remove from {:?} - only arrays, tuples, and strings support $-[i]",
-                    collection
+                    "cannot remove from {} - only arrays, tuples, and strings support $-[i]",
+                    collection.type_label()
                 ),
                 span: op.span,
             }),
@@ -276,8 +276,8 @@ impl<W: Write> Interpreter<W> {
                     Value::String(s) => s.clone(),
                     other => return Err(RuntimeError::Generic {
                         message: format!(
-                            "a dictionary is asked about a key, so `$?` needs a String, got {:?}",
-                            other
+                            "a dictionary is asked about a key, so `$?` needs a String, got {}",
+                            other.type_label()
                         ),
                         span: op.span,
                     }),
@@ -299,8 +299,8 @@ impl<W: Write> Interpreter<W> {
                     }
                     _ => Err(RuntimeError::Generic {
                         message: format!(
-                            "string contains only supports char or string search, got {:?}",
-                            element
+                            "string contains only supports char or string search, got {}",
+                            element.type_label()
                         ),
                         span: op.span,
                     }),
@@ -308,8 +308,8 @@ impl<W: Write> Interpreter<W> {
             }
             _ => Err(RuntimeError::Generic {
                 message: format!(
-                    "cannot search {:?} - only arrays, tuples, and strings support contains",
-                    collection
+                    "cannot search {} - only arrays, tuples, and strings support contains",
+                    collection.type_label()
                 ),
                 span: op.span,
             }),
@@ -336,8 +336,8 @@ impl<W: Write> Interpreter<W> {
                     v @ (Value::Int(_) | Value::String(_)) => indices.push(v),
                     other => return Err(RuntimeError::Generic {
                         message: format!(
-                            "a navigation step is a position (Int) or a dictionary key (String), got {:?}",
-                            other
+                            "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                            other.type_label()
                         ),
                         span: op.span,
                     }),
@@ -487,8 +487,8 @@ impl<W: Write> Interpreter<W> {
                     }
                     _ => Err(RuntimeError::Generic {
                         message: format!(
-                            "named tuple update index must be an integer or field name (string), got {:?}",
-                            index_value
+                            "named tuple update index must be an integer or field name (string), got {}",
+                            index_value.type_label()
                         ),
                         span: op.span,
                     }),
@@ -517,8 +517,8 @@ impl<W: Write> Interpreter<W> {
             _ => {
                 return Err(RuntimeError::Generic {
                     message: format!(
-                        "cannot slice {:?} - only arrays, tuples, named tuples, and strings support slice",
-                        collection
+                        "cannot slice {} - only arrays, tuples, named tuples, and strings support slice",
+                        collection.type_label()
                     ),
                     span: op.span,
                 });
@@ -1157,8 +1157,8 @@ impl<W: Write> Interpreter<W> {
                     _ => {
                         return Err(RuntimeError::Generic {
                             message: format!(
-                                "$?? on string requires char or string value, got {:?}",
-                                value
+                                "$?? on string requires char or string value, got {}",
+                                value.type_label()
                             ),
                             span: op.span,
                         })
@@ -1168,8 +1168,8 @@ impl<W: Write> Interpreter<W> {
             }
             _ => Err(RuntimeError::Generic {
                 message: format!(
-                    "$?? requires an array, tuple, or string, got {:?}",
-                    collection
+                    "$?? requires an array, tuple, or string, got {}",
+                    collection.type_label()
                 ),
                 span: op.span,
             }),

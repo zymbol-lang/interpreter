@@ -263,8 +263,8 @@ impl<W: Write> Interpreter<W> {
             _ => {
                 return Err(RuntimeError::Generic {
                     message: format!(
-                        "format expressions only work with numbers, got {:?}",
-                        value
+                        "format expressions only work with numbers, got {}",
+                        value.type_label()
                     ),
                     span: op.span,
                 });
@@ -380,8 +380,8 @@ impl<W: Write> Interpreter<W> {
 
             _ => Err(RuntimeError::Generic {
                 message: format!(
-                    "base conversion expressions work with char, int, or string, got {:?}",
-                    value
+                    "base conversion expressions work with char, int, or string, got {}",
+                    value.type_label()
                 ),
                 span: op.span,
             }),
@@ -425,8 +425,8 @@ impl<W: Write> Interpreter<W> {
             _ => {
                 return Err(RuntimeError::Generic {
                     message: format!(
-                        "round expressions only work with numbers or numeric strings, got {:?}",
-                        value
+                        "round expressions only work with numbers or numeric strings, got {}",
+                        value.type_label()
                     ),
                     span: op.span,
                 });
@@ -475,8 +475,8 @@ impl<W: Write> Interpreter<W> {
             _ => {
                 return Err(RuntimeError::Generic {
                     message: format!(
-                        "truncate expressions only work with numbers or numeric strings, got {:?}",
-                        value
+                        "truncate expressions only work with numbers or numeric strings, got {}",
+                        value.type_label()
                     ),
                     span: op.span,
                 });

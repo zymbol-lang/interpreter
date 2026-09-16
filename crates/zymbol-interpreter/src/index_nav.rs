@@ -29,8 +29,8 @@ impl<W: Write> Interpreter<W> {
                 Value::Int(n) => n,
                 other => return Err(RuntimeError::Generic {
                     message: format!(
-                        "a navigation step is a position (Int) or a dictionary key (String), got {:?}",
-                        other
+                        "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                        other.type_label()
                     ),
                     span: step.index.span(),
                 }),
@@ -170,8 +170,8 @@ impl<W: Write> Interpreter<W> {
                 Value::Int(n) => n,
                 other => return Err(RuntimeError::Generic {
                     message: format!(
-                        "a navigation step is a position (Int) or a dictionary key (String), got {:?}",
-                        other
+                        "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                        other.type_label()
                     ),
                     span: step.index.span(),
                 }),
@@ -192,8 +192,8 @@ impl<W: Write> Interpreter<W> {
             Value::Int(n) => Ok(n),
             other => Err(RuntimeError::Generic {
                 message: format!(
-                    "navigation index must be an integer, got {:?}",
-                    other
+                    "navigation index must be an integer, got {}",
+                    other.type_label()
                 ),
                 span: expr.span(),
             }),
@@ -266,8 +266,8 @@ fn descend(
         }
         other => Err(RuntimeError::Generic {
             message: format!(
-                "cannot index into {:?} — expected array, tuple, or string",
-                other
+                "cannot index into {} — expected array, tuple, or string",
+                other.type_label()
             ),
             span: op_span,
         }),
