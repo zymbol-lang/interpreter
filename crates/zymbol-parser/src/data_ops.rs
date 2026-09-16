@@ -53,12 +53,12 @@ impl Parser {
         let precision = match self.peek().kind.clone() {
             TokenKind::Dot => {
                 self.advance(); // consume .
-                let n = self.parse_format_precision(prefix_str)?;
+                let n = self.parse_format_precision(prefix_str, &format!("{}.", prefix_str))?;
                 Some(PrecisionOp::Round(n))
             }
             TokenKind::Not => {
                 self.advance(); // consume !
-                let n = self.parse_format_precision(prefix_str)?;
+                let n = self.parse_format_precision(prefix_str, &format!("{}!", prefix_str))?;
                 Some(PrecisionOp::Truncate(n))
             }
             _ => None,
@@ -91,19 +91,25 @@ impl Parser {
 
     /// Parse the decimal count after '.' or '!' in a format expression.
     ///
+    /// `prefix_str` is the operator the message names (`#,`, `#.`); `count_op`
+    /// is everything written before the count, which is what a help that shows
+    /// the whole form has to repeat — `#,.`, `#,!`, `#.`, `#!`. The help used to
+    /// build `{prefix}.2`, which is right only after `#,` and `#^`: after `#.` it
+    /// taught `#..2|value|`, and after `#!` it taught `#!.2|value|` (GLB-021).
+    ///
     /// A literal keeps its fast path. Anything else — a name, a call, a
     /// parenthesised expression — is kept as an expression and evaluated when
     /// the program runs (GAP-ZYB-001): the number of decimals a money amount
     /// takes belongs to the currency, so it is configuration and cannot always
     /// be written in the source.
-    fn parse_format_precision(&mut self, prefix_str: &str) -> Result<zymbol_ast::Precision, Diagnostic> {
+    fn parse_format_precision(&mut self, prefix_str: &str, count_op: &str) -> Result<zymbol_ast::Precision, Diagnostic> {
         let precision_token = self.peek().clone();
         match &precision_token.kind {
             TokenKind::Integer(n) => {
                 if *n < 0 {
                     return Err(Diagnostic::error("precision must be a non-negative integer")
                         .with_span(precision_token.span)
-                        .with_help(format!("format expression syntax: {}.N|expr| where N >= 0", prefix_str)));
+                        .with_help(format!("format expression syntax: {}N|expr| where N >= 0", count_op)));
                 }
                 let n = *n as u32;
                 self.advance(); // consume integer
@@ -132,8 +138,8 @@ impl Parser {
             _ => Err(Diagnostic::error(format!("expected a decimal count after '{}'", prefix_str))
                 .with_span(precision_token.span)
                 .with_help(format!(
-                    "write the count or the name of a variable holding it: {}.2|value| or {}.n|value|",
-                    prefix_str, prefix_str
+                    "write the count or the name of a variable holding it: {}2|value| or {}n|value|",
+                    count_op, count_op
                 ))),
         }
     }
@@ -187,7 +193,7 @@ impl Parser {
 
         // The decimal count: a literal, or an expression evaluated at run time
         // (GAP-ZYB-001 — see `Precision`).
-        let precision = self.parse_format_precision("#.")?;
+        let precision = self.parse_format_precision("#.", "#.")?;
 
         // Expect opening |
         let pipe_token = self.peek().clone();
@@ -221,7 +227,7 @@ impl Parser {
 
         // The decimal count: a literal, or an expression evaluated at run time
         // (GAP-ZYB-001 — see `Precision`).
-        let precision = self.parse_format_precision("#!")?;
+        let precision = self.parse_format_precision("#!", "#!")?;
 
         // Expect opening |
         let pipe_token = self.peek().clone();
