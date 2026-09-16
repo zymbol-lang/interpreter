@@ -111,8 +111,8 @@ impl<W: Write> Interpreter<W> {
                     Value::Tuple(items) => Ok(items.to_vec()),
                     _ => Err(RuntimeError::Generic {
                         message: format!(
-                            "can only iterate over ranges, arrays, strings, tuples and dictionaries, got {:?}",
-                            value
+                            "can only iterate over ranges, arrays, strings, tuples and dictionaries, got {}",
+                            value.type_label()
                         ),
                         span: expr.span(),
                     }),
