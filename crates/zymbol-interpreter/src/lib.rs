@@ -1618,6 +1618,21 @@ impl<W: Write> Interpreter<W> {
             // stopped here; this one used to walk past and keep going, so the
             // same file printed different things under `--vm`.
             if let ControlFlow::Return(value) = &self.control_flow {
+                // A `$!!` that carries an error out of the top level: the caller
+                // it propagates to is the operating system, and the program ends
+                // saying which error ended it — through the same channel, and
+                // with the same `-->` line, as any runtime error. It used to end
+                // with status 1 and nothing on stderr (ZYJS-027, decided
+                // 2026-09-16). A `<~` of an error never gets here: the analyzer
+                // refuses a top-level `<~` that is not an integer.
+                if let Some(v @ Value::Error(_)) = value {
+                    let err = RuntimeError::Generic { message: v.to_display_string(), span: statement.span() };
+                    self.clear_control_flow();
+                    return Err(match self.current_file.as_deref() {
+                        Some(f) => err.locate(f, self.cur_stmt_line),
+                        None => err,
+                    });
+                }
                 self.exit_code = Some(match value {
                     Some(Value::Int(n)) => *n,
                     // No value: ended deliberately, with nothing to report.

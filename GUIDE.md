@@ -3594,6 +3594,17 @@ process(value) {
 handler = (x -> { x$!! <~ "ok" })   // error in → error out; otherwise "ok"
 ```
 
+Outside any function the caller is the operating system: a `$!!` on an error ends
+the program, **saying which error ended it**, as any runtime error does —
+
+```
+Runtime error: ##IO(No such file or directory (os error 2))
+  --> main.zy:4
+```
+
+— and the exit status is 1. That holds inside a top-level `!?` too: nothing was
+thrown, so no `:!` sees it.
+
 ### Nested Try Blocks
 
 ```zymbol
