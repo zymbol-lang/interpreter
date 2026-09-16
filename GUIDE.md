@@ -4435,6 +4435,23 @@ sci = #^|xsci|
 >> #^!3|xsci| ¶    // → 1.234e4  (truncate to 3 significant digits)
 ```
 
+#### An operator is written together
+
+A precision or format operator is one symbol, written in pieces that touch: the
+operator (`#.`, `#!`, `#,`, `#^`), the `.` or `!` of an inline precision, the
+count, and the `|` that opens the value. A blank or a comment between two pieces
+is refused, with the diagnostic of the piece that is not where it should be. The
+value between the bars is an ordinary expression and keeps its blanks.
+
+```
+#.2|v|        ✓
+#.2| v |      ✓  the blanks are inside the value
+#. 2|v|       ✗  expected a decimal count after '#.'
+#.2 |v|       ✗  expected '|' after precision
+#, .2|v|      ✗  expected '|' after format operator '#,'
+#,.2 |v|      ✗  expected '|' after format operator '#,'
+```
+
 #### Separators and the numeral mode
 
 A formatted number's digits follow the active numeral mode, exactly as `>>` does
