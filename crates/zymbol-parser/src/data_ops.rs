@@ -17,6 +17,20 @@ use zymbol_lexer::TokenKind;
 use crate::Parser;
 
 impl Parser {
+    /// Does the next token begin exactly where the previous piece ended?
+    ///
+    /// A format operator is one symbol written in pieces — `#,` or `#^`, then
+    /// `.` or `!`, the count, and the `|` that opens the value; `#.` and `#!`,
+    /// the count and the `|`. The lexer reads the pieces as separate tokens, so
+    /// `#. 2|v|` and `#,.2 |v|` used to parse and run, while the browser engine
+    /// refused them. Decided 2026-09-16: the operator is written together
+    /// (GLB-031). A blank, or a comment, between two pieces is refused with the
+    /// diagnostic of the piece that is not where it should be. The value between
+    /// the bars is an ordinary expression and keeps its blanks.
+    fn touches(&self, end: u32) -> bool {
+        self.peek().span.start.byte_offset == end
+    }
+
     /// Parse numeric evaluation expression: #|expr|
     pub(crate) fn parse_numeric_eval(&mut self) -> Result<Expr, Diagnostic> {
         let start_token = self.advance(); // consume #|
@@ -49,24 +63,35 @@ impl Parser {
             FormatKind::Scientific => "#^",
         };
 
-        // Optional precision: .N (round) or !N (truncate)
-        let precision = match self.peek().kind.clone() {
-            TokenKind::Dot => {
-                self.advance(); // consume .
-                let n = self.parse_format_precision(prefix_str, &format!("{}.", prefix_str))?;
-                Some(PrecisionOp::Round(n))
+        // Optional precision: .N (round) or !N (truncate). Only when it touches
+        // the operator: `#, .2|v|` is not a precision, and the `|` check below
+        // refuses it.
+        let mut last_end = start_token.span.end.byte_offset;
+        let precision = if !self.touches(last_end) {
+            None
+        } else {
+            match self.peek().kind.clone() {
+                TokenKind::Dot => {
+                    let mark = self.advance(); // consume .
+                    let (n, end) = self.parse_format_precision(
+                        prefix_str, &format!("{}.", prefix_str), mark.span.end.byte_offset)?;
+                    last_end = end;
+                    Some(PrecisionOp::Round(n))
+                }
+                TokenKind::Not => {
+                    let mark = self.advance(); // consume !
+                    let (n, end) = self.parse_format_precision(
+                        prefix_str, &format!("{}!", prefix_str), mark.span.end.byte_offset)?;
+                    last_end = end;
+                    Some(PrecisionOp::Truncate(n))
+                }
+                _ => None,
             }
-            TokenKind::Not => {
-                self.advance(); // consume !
-                let n = self.parse_format_precision(prefix_str, &format!("{}!", prefix_str))?;
-                Some(PrecisionOp::Truncate(n))
-            }
-            _ => None,
         };
 
-        // Expect opening |
+        // Expect opening |, touching what came before it
         let pipe_token = self.peek().clone();
-        if !matches!(pipe_token.kind, TokenKind::Pipe) {
+        if !matches!(pipe_token.kind, TokenKind::Pipe) || !self.touches(last_end) {
             return Err(Diagnostic::error(format!("expected '|' after format operator '{}'", prefix_str))
                 .with_span(pipe_token.span)
                 .with_help(format!("format expression syntax: {}|expr| or {}.N|expr|", prefix_str, prefix_str)));
@@ -102,9 +127,20 @@ impl Parser {
     /// the program runs (GAP-ZYB-001): the number of decimals a money amount
     /// takes belongs to the currency, so it is configuration and cannot always
     /// be written in the source.
-    fn parse_format_precision(&mut self, prefix_str: &str, count_op: &str) -> Result<zymbol_ast::Precision, Diagnostic> {
+    ///
+    /// `prev_end` is where the piece before the count ends: a count that does
+    /// not touch it is no count (GLB-031). Returns the precision and where the
+    /// count ends, for the `|` that has to touch it in turn.
+    fn parse_format_precision(
+        &mut self,
+        prefix_str: &str,
+        count_op: &str,
+        prev_end: u32,
+    ) -> Result<(zymbol_ast::Precision, u32), Diagnostic> {
         let precision_token = self.peek().clone();
-        match &precision_token.kind {
+        let count_end = precision_token.span.end.byte_offset;
+        let kind = if self.touches(prev_end) { precision_token.kind.clone() } else { TokenKind::Eof };
+        match &kind {
             TokenKind::Integer(n) => {
                 if *n < 0 {
                     return Err(Diagnostic::error("precision must be a non-negative integer")
@@ -113,7 +149,7 @@ impl Parser {
                 }
                 let n = *n as u32;
                 self.advance(); // consume integer
-                Ok(zymbol_ast::Precision::Literal(n))
+                Ok((zymbol_ast::Precision::Literal(n), count_end))
             }
             // A computed count, written as a plain name.
             //
@@ -131,9 +167,12 @@ impl Parser {
                 let name = name.clone();
                 let span = precision_token.span;
                 self.advance();
-                Ok(zymbol_ast::Precision::Dynamic(Box::new(Expr::Identifier(
-                    zymbol_ast::IdentifierExpr::new(name, span),
-                ))))
+                Ok((
+                    zymbol_ast::Precision::Dynamic(Box::new(Expr::Identifier(
+                        zymbol_ast::IdentifierExpr::new(name, span),
+                    ))),
+                    count_end,
+                ))
             }
             _ => Err(Diagnostic::error(format!("expected a decimal count after '{}'", prefix_str))
                 .with_span(precision_token.span)
@@ -193,11 +232,12 @@ impl Parser {
 
         // The decimal count: a literal, or an expression evaluated at run time
         // (GAP-ZYB-001 — see `Precision`).
-        let precision = self.parse_format_precision("#.", "#.")?;
+        let (precision, count_end) =
+            self.parse_format_precision("#.", "#.", start_token.span.end.byte_offset)?;
 
-        // Expect opening |
+        // Expect opening |, touching the count
         let pipe_token = self.peek().clone();
-        if !matches!(pipe_token.kind, TokenKind::Pipe) {
+        if !matches!(pipe_token.kind, TokenKind::Pipe) || !self.touches(count_end) {
             return Err(Diagnostic::error("expected '|' after precision")
                 .with_span(pipe_token.span)
                 .with_help("round expression syntax: #.N|expr|"));
@@ -227,11 +267,12 @@ impl Parser {
 
         // The decimal count: a literal, or an expression evaluated at run time
         // (GAP-ZYB-001 — see `Precision`).
-        let precision = self.parse_format_precision("#!", "#!")?;
+        let (precision, count_end) =
+            self.parse_format_precision("#!", "#!", start_token.span.end.byte_offset)?;
 
-        // Expect opening |
+        // Expect opening |, touching the count
         let pipe_token = self.peek().clone();
-        if !matches!(pipe_token.kind, TokenKind::Pipe) {
+        if !matches!(pipe_token.kind, TokenKind::Pipe) || !self.touches(count_end) {
             return Err(Diagnostic::error("expected '|' after precision")
                 .with_span(pipe_token.span)
                 .with_help("truncate expression syntax: #!N|expr|"));
