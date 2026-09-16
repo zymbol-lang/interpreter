@@ -2042,6 +2042,14 @@ impl<W: Write> VM<W> {
                     );
 
                     if self.frame_stack.is_empty() {
+                        // A `$!!` that carries an error out of the top level ends
+                        // the program saying which error it was, as a runtime
+                        // error — `run` locates it at this Return, compiled from
+                        // the `$!!` statement's line (ZYJS-027, decided
+                        // 2026-09-16). It used to end with status 1 and nothing.
+                        if let Value::Error(e) = &result {
+                            return Err(VmError::Generic(e.as_ref().to_string()));
+                        }
                         // GAP-ZYB-006: a `<~` that reaches the top level ends
                         // the program, and its value is the exit status. The
                         // stop was already here — only the value was being
