@@ -1492,7 +1492,8 @@ on digits past it returns the string unchanged rather than a rounded number.
   program is malformed; execution aborts as usual.
 - **Soft `Error` value** — recoverable environmental failures (file not found, network
   timeout, malformed JSON, SQL error). The function **returns** an error value instead of
-  aborting; test it with `$!`, propagate it with `$!!`, or catch it with `!? … :! ##Kind`.
+  aborting; test it with `$!` and propagate it with `$!!`. It is a value, not a thrown
+  error, so a `:!` never sees it — not even one around the call (GLB-032).
 
 | Kind | Returned by |
 |------|-------------|
