@@ -1905,11 +1905,11 @@ impl<W: Write> VM<W> {
                         let s = match &self.value_stack[base + str_reg as usize] {
                             Value::String(s) => s.as_str().to_owned(),
                             Value::Char(c)   => c.to_string(),
-                            other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$* requires a string, got {}", other.type_label()))),
                         };
                         let n = match &self.value_stack[base + n_reg as usize] {
                             Value::Int(n) if *n >= 0 => *n as usize,
-                            other => raise!(VmError::TypeError { expected: "non-negative Int", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$* repetition count must be an integer, got {}", other.type_label()))),
                         };
                         s.repeat(n)
                     };
@@ -3351,7 +3351,7 @@ impl<W: Write> VM<W> {
                         matches!(v, Value::Array(_))
                     };
                     if !ok {
-                        let got = v.tw_type_name_owned();
+                        let got = v.type_label();
                         raise!(VmError::Generic(if wants_tuple {
                             format!("tuple pattern '( … )' requires a tuple, got {got}")
                         } else {
@@ -3523,7 +3523,7 @@ impl<W: Write> VM<W> {
                 &Instruction::RequireDict(src) => {
                     let v = self.reg_get(src);
                     if !matches!(v, Value::NamedTuple(_)) {
-                        let got = v.tw_type_name_owned();
+                        let got = v.type_label();
                         raise!(VmError::Generic(format!(
                             "the pattern #(…) requires a dictionary, got {}\nhelp: #(key: name) = d unpacks a dictionary; use (a, b) for a tuple, [a, b] for an array",
                             got
@@ -3552,9 +3552,10 @@ impl<W: Write> VM<W> {
                                 arr.get(i).cloned().unwrap_or(Value::Unit)
                             } else {
                                 let field_name = field_name.clone();
+                                let got = Value::Array(arr.clone()).type_label();
                                 raise!(VmError::Generic(format!(
                                     "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
-                                    zymbol_common::typesym::ARRAY, field_name
+                                    got, field_name
                                 )));
                             }
                         }
@@ -3566,7 +3567,7 @@ impl<W: Write> VM<W> {
                             )));
                         }
                         other => {
-                            let got = other.tw_type_name_owned();
+                            let got = other.type_label();
                             let field_name = field_name.clone();
                             raise!(VmError::Generic(format!(
                                 "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
@@ -4369,7 +4370,7 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
         }
         other => Err(VmError::Generic(format!(
             "$~ writes into a collection, and this is {}\nhelp: use a[1]$~ v on an array or tuple, d[\"key\"]$~ v on a #(…)",
-            other.tw_type_name_owned()
+            other.type_label()
         ))),
     }
 }

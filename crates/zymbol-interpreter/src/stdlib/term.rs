@@ -79,7 +79,7 @@ pub(crate) fn truncate(s: &str, cols: i64) -> String {
 // --- Native functions --------------------------------------------------------
 
 fn err_width(args: &[Value], span: Span) -> RuntimeError {
-    let got = args.first().map(|v| v.type_name()).unwrap_or("nothing");
+    let got = args.first().map(|v| v.type_label()).unwrap_or_else(|| "nothing".to_string());
     RuntimeError::Generic {
         message: format!("term::width: expected a String or Char, got {got}"),
         span,

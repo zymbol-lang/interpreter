@@ -21,7 +21,7 @@ impl<W: Write> Interpreter<W> {
             Value::String(s) => s.clone(),
             Value::Char(c)   => c.to_string(),
             _ => return Err(RuntimeError::Generic {
-                message: format!("$* requires a string, got {}", self.value_type_name(&string_val)),
+                message: format!("$* requires a string, got {}", string_val.type_label()),
                 span: op.span,
             }),
         };
@@ -32,7 +32,7 @@ impl<W: Write> Interpreter<W> {
                 span: op.span,
             }),
             other => return Err(RuntimeError::Generic {
-                message: format!("$* repetition count must be an integer, got {}", self.value_type_name(&other)),
+                message: format!("$* repetition count must be an integer, got {}", other.type_label()),
                 span: op.span,
             }),
         };

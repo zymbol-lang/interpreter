@@ -32,8 +32,9 @@ fn as_f64(v: &Value) -> Option<f64> {
 }
 
 fn type_err(fname: &str, args: &[Value]) -> String {
-    let types: Vec<&str> = args.iter().map(|v| v.zymbol_type_name()).collect();
-    format!("mat::{}: incompatible argument type(s) {:?}", fname, types)
+    // The types in words, joined — as the tree-walker says them since GLB-033.
+    let types: Vec<String> = args.iter().map(|v| v.type_label()).collect();
+    format!("mat::{}: incompatible argument type(s) {}", fname, types.join(", "))
 }
 
 // ── std/math ─────────────────────────────────────────────────────────────────
@@ -700,7 +701,7 @@ fn db_bind_params(params: Vec<Value>) -> Result<Vec<Box<dyn InputParameter>>, St
             Value::String(s) => Box::new(s.as_str().to_string().into_parameter()),
             Value::Char(c) => Box::new(c.to_string().into_parameter()),
             Value::Unit => Box::new(Option::<String>::None.into_parameter()),
-            other => return Err(format!("db: cannot bind {} as a parameter", other.zymbol_type_name())),
+            other => return Err(format!("db: cannot bind {} as a parameter", other.type_label())),
         };
         out.push(boxed);
     }
@@ -1254,7 +1255,7 @@ fn term_width(args: Vec<Value>) -> Result<Value, String> {
         Some(Value::Char(c))   => Ok(Value::Int(UnicodeWidthChar::width(*c).unwrap_or(0) as i64)),
         other => Err(format!(
             "term::width: expected a String or Char, got {}",
-            other.map(|v| v.zymbol_type_name()).unwrap_or("nothing")
+            other.map(|v| v.type_label()).unwrap_or_else(|| "nothing".to_string())
         )),
     }
 }

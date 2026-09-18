@@ -24,9 +24,11 @@ fn as_f64(v: &Value) -> Option<f64> {
 }
 
 fn type_err(fname: &str, args: &[Value], span: Span) -> RuntimeError {
-    let types: Vec<&str> = args.iter().map(|v| v.type_name()).collect();
+    let types: Vec<String> = args.iter().map(|v| v.type_label()).collect();
     RuntimeError::Generic {
-        message: format!("mat::{}: incompatible argument type(s) {:?}", fname, types),
+        // The types in words, joined — it printed Rust's `Debug` of a list of
+        // symbols: `["##\"", "###"]` (GLB-033).
+        message: format!("mat::{}: incompatible argument type(s) {}", fname, types.join(", ")),
         span,
     }
 }

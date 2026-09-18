@@ -497,7 +497,7 @@ impl<W: Write> Interpreter<W> {
             _ => Err(RuntimeError::Generic {
                 message: format!(
                     "$~ writes into a collection, and this is {}\nhelp: use a[1]$~ v on an array or tuple, d[\"key\"]$~ v on a #(…)",
-                    crate::base_type_symbol(&collection)
+                    collection.type_label()
                 ),
                 span: op.span,
             }),
