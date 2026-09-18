@@ -159,7 +159,7 @@ fn bind_params(params: Vec<Value>, span: Span) -> Result<Vec<Box<dyn InputParame
             // body with every span in it (ZYTW-004).
             other => {
                 return Err(type_err(
-                    format!("db: cannot bind {} as a parameter", other.type_name()),
+                    format!("db: cannot bind {} as a parameter", other.type_label()),
                     span,
                 ))
             }

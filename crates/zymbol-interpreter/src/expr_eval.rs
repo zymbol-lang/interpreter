@@ -205,7 +205,7 @@ impl<W: Write> Interpreter<W> {
 
         // Not a module access, evaluate as regular member access (for named tuples)
         let object = self.eval_expr(&member.object)?;
-        let got = crate::base_type_symbol(&object);
+        let got = object.type_label();
 
         match object {
             Value::NamedTuple(fields) => {

@@ -1867,7 +1867,7 @@ impl<W: Write> Interpreter<W> {
                     _ => return Err(RuntimeError::Generic {
                         message: format!(
                             "array pattern '[ … ]' requires an array, got {}",
-                            self.value_type_name(&rhs)
+                            rhs.type_label()
                         ),
                         span,
                     }),
@@ -1880,7 +1880,7 @@ impl<W: Write> Interpreter<W> {
                     _ => return Err(RuntimeError::Generic {
                         message: format!(
                             "tuple pattern '( … )' requires a tuple, got {}",
-                            self.value_type_name(&rhs)
+                            rhs.type_label()
                         ),
                         span,
                     }),
@@ -1893,7 +1893,7 @@ impl<W: Write> Interpreter<W> {
                     _ => return Err(RuntimeError::Generic {
                         message: format!(
                             "the pattern #(…) requires a dictionary, got {}\nhelp: #(key: name) = d unpacks a dictionary; use (a, b) for a tuple, [a, b] for an array",
-                            crate::base_type_symbol(&rhs)
+                            rhs.type_label()
                         ),
                         span,
                     }),
