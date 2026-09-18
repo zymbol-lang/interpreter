@@ -391,6 +391,20 @@ impl<W: Write> Interpreter<W> {
         // Extract index
         let index = match index_value {
             Value::Int(n) => *n,
+            // A String reaches a dictionary KEY, so on anything else it says so
+            // — the same failure the navigation form reports, and since 3.5b
+            // (decided 2026-09-16) the same words: the register VM compiles
+            // `v["k"]` and `v[1>"k"]` to one instruction and cannot tell them
+            // apart, and two texts for one failure were two texts too many.
+            Value::String(_) => {
+                return Err(RuntimeError::Generic {
+                    message: format!(
+                        "a String addresses a dictionary key, and this is {}",
+                        collection.type_label()
+                    ),
+                    span,
+                })
+            }
             _ => {
                 return Err(RuntimeError::Generic {
                     message: format!("index must be an integer, got {}", index_value.type_label()),
@@ -480,7 +494,9 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             _ => Err(RuntimeError::Generic {
-                message: format!("cannot index {} - only arrays, tuples, and strings are indexable", collection.type_label()),
+                // One text for one failure, whether the index came through
+                // `v[1]` or `v[1>1]` (step 3.5b, decided 2026-09-16).
+                message: format!("cannot index into {} — expected array, tuple, or string", collection.type_label()),
                 span,
             }),
         }

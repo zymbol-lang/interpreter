@@ -216,7 +216,7 @@ impl<W: Write> Interpreter<W> {
                 other => Err(RuntimeError::Generic {
                     message: format!(
                         "decimal count must be a whole number, got {}",
-                        other.type_name()
+                        other.type_label()
                     ),
                     span,
                 }),

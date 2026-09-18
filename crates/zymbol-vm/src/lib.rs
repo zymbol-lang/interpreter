@@ -288,6 +288,30 @@ impl Value {
         }
     }
 
+    /// The type as a diagnostic names it, the way the analyzer does: `Int`,
+    /// `[Int]`, `(Int, String)`, `#(k: Int)`, `Function`
+    /// (`zymbol_common::typeword`, decided 2026-09-16). The tree-walker's
+    /// `Value::type_label`, over this engine's values: a message says what kind
+    /// of value arrived, and both engines name it with one table.
+    pub fn type_label(&self) -> String {
+        use zymbol_common::typeword as tw;
+        match self {
+            Value::Int(_) => tw::INT.to_string(),
+            Value::Float(_) => tw::FLOAT.to_string(),
+            Value::String(_) => tw::STRING.to_string(),
+            Value::Char(_) => tw::CHAR.to_string(),
+            Value::Bool(_) => tw::BOOL.to_string(),
+            Value::Unit => tw::UNIT.to_string(),
+            Value::Error(_) => tw::ERROR.to_string(),
+            Value::Function(_, _) | Value::Closure(_, _, _) => tw::FUNCTION.to_string(),
+            Value::Array(items) => tw::array(items.iter().map(Value::type_label)),
+            Value::Tuple(items) => tw::tuple(items.iter().map(Value::type_label)),
+            Value::NamedTuple(fields) => {
+                tw::dict(fields.iter().map(|(k, v)| (k.as_str(), v.type_label())))
+            }
+        }
+    }
+
     /// Returns the Zymbol symbolic type name used in stdlib error messages.
     pub fn zymbol_type_name(&self) -> &'static str {
         match self {
@@ -564,6 +588,12 @@ pub enum VmError {
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Generic(String),
+    /// A type mistake worded as the tree-walker words that operation —
+    /// `map requires array, got Int` — and still of the `##Type` family, which
+    /// `TypeError`'s generic `this needs X and got Y` was (step 3.5b, decided
+    /// 2026-09-16). The type is named with `Value::type_label`.
+    #[error("{0}")]
+    TypeMsg(String),
 
     /// A runtime error that knows where it happened. Built once, at the edge of
     /// `run`, from the instruction pointer the VM was on — so the hot loop pays
@@ -653,14 +683,10 @@ fn fmt_comma_int(n: i64) -> String {
 fn vm_precision_from(v: &Value) -> Result<u32, VmError> {
     match v {
         Value::Int(n) if *n >= 0 => Ok(*n as u32),
-        Value::Int(n) => Err(VmError::TypeError {
-            expected: "a decimal count that is not negative",
-            got: n.to_string(),
-        }),
-        other => Err(VmError::TypeError {
-            expected: "a whole number as the decimal count",
-            got: other.type_name().to_string(),
-        }),
+        // Worded as the tree-walker words them (step 3.5b).
+        Value::Int(n) => Err(VmError::TypeMsg(format!("decimal count must not be negative, got {}", n))),
+        other => Err(VmError::TypeMsg(format!(
+            "decimal count must be a whole number, got {}", other.type_label()))),
     }
 }
 
@@ -1087,7 +1113,7 @@ use zymbol_lexer::digit_blocks::ascii_number as normalize_unicode_digits;
 /// a ##_ here, and `:! ##Type` could not meet it (GLB-010).
 fn vm_error_kind(e: &VmError) -> &'static str {
     match e {
-        VmError::TypeError { .. } | VmError::CastError { .. } => "Type",
+        VmError::TypeError { .. } | VmError::CastError { .. } | VmError::TypeMsg(_) => "Type",
         VmError::DivisionByZero | VmError::ModuloByZero => "Div",
         VmError::IntOverflow { .. } | VmError::CastOverflow { .. } => "Range",
         VmError::IndexOutOfBounds { .. } | VmError::IndexZero => "Index",
@@ -1869,7 +1895,7 @@ impl<W: Write> VM<W> {
                     let n = match rreg!(src) {
                         Value::String(s)      => if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 },
                         Value::Array(arr)     => arr.len() as i64,
-                        other => raise!(VmError::TypeError { expected: "String or Array", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("cannot get length of {} - only arrays, tuples, and strings have length", other.type_label()))),
                     };
                     wreg!(dst, Value::Int(n));
                 }
@@ -2133,7 +2159,7 @@ impl<W: Write> VM<W> {
                             }
                             *s = ZyStr::new(buf);
                         }
-                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("cannot append to {} - only arrays, tuples, and strings support $+", other.type_label()))),
                     }
                 }
                 &Instruction::ArrayGet(dst, arr_reg, idx_reg) => {
@@ -2168,9 +2194,18 @@ impl<W: Write> VM<W> {
                             first
                         )));
                     }
-                    let idx = match self.as_int(idx_reg) {
-                        Ok(n) => n,
-                        Err(e) => raise!(e),
+                    // The words of the tree-walker for each of the two ways
+                    // this can fail (step 3.5b): a String reaches a dictionary
+                    // key, and anything else that is not an Int is not an index.
+                    let idx = match self.reg_get(idx_reg) {
+                        Value::Int(n) => *n,
+                        Value::String(_) => {
+                            let label = self.value_stack[base + arr_reg as usize].type_label();
+                            raise!(VmError::TypeMsg(format!(
+                                "a String addresses a dictionary key, and this is {}", label)))
+                        }
+                        other => raise!(VmError::TypeMsg(format!(
+                            "index must be an integer, got {}", other.type_label()))),
                     };
                     let val = match &self.value_stack[base + arr_reg as usize] {
                         Value::Array(arr) => {
@@ -2208,7 +2243,8 @@ impl<W: Write> VM<W> {
                             let ch = s.chars().nth(i as usize).unwrap();
                             Value::Char(ch)
                         }
-                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!(
+                            "cannot index into {} — expected array, tuple, or string", other.type_label()))),
                     };
                     self.reg_set(dst, val);
                 }
@@ -2238,10 +2274,7 @@ impl<W: Write> VM<W> {
                         )),
                         Value::Array(arr) => Value::Array(arr.clone()),
                         Value::Tuple(t) => Value::Tuple(t.clone()),
-                        other => raise!(VmError::TypeError {
-                            expected: "String, Array or dictionary",
-                            got: other.type_name().to_string(),
-                        }),
+                        other => raise!(VmError::TypeMsg(format!("can only iterate over ranges, arrays, strings, tuples and dictionaries, got {}", other.type_label()))),
                     };
                     self.reg_set(dst, val);
                 }
@@ -2275,7 +2308,7 @@ impl<W: Write> VM<W> {
                         Value::Array(rc_arr) => {
                             let idx = match idx_val {
                                 Value::Int(n) => n,
-                                other => raise!(VmError::TypeError { expected: "Int", got: other.type_name().to_string() }),
+                                other => raise!(VmError::TypeMsg(format!("array update index must be an integer, got {}", other.type_label()))),
                             };
                             let arr = Rc::make_mut(rc_arr);
                             let i = if idx == 0 { raise!(VmError::IndexZero);
@@ -2313,7 +2346,7 @@ impl<W: Write> VM<W> {
                                         fields.push((name.as_str().to_string(), val));
                                     }
                                 }
-                                other => raise!(VmError::TypeError { expected: "Int or String", got: other.type_name().to_string() }),
+                                other => raise!(VmError::TypeMsg(format!("named tuple update index must be an integer or field name (string), got {}", other.type_label()))),
                             }
                         }
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
@@ -2325,7 +2358,7 @@ impl<W: Write> VM<W> {
                         Value::String(s) => if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 },
                         Value::Tuple(items) => items.len() as i64,
                         Value::NamedTuple(fields) => fields.len() as i64,
-                        other => raise!(VmError::TypeError { expected: "Array or String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("cannot get length of {} - only arrays, tuples, and strings have length", other.type_label()))),
                     };
                     self.reg_set(dst, Value::Int(n));
                 }
@@ -2387,7 +2420,7 @@ impl<W: Write> VM<W> {
                             chars.remove(i as usize);
                             Value::String(ZyStr::new(chars.iter().collect()))
                         }
-                        other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("cannot remove from {} - only arrays, tuples, and strings support $-[i]", other.type_label()))),
                     };
                     self.value_stack[base + arr_reg as usize] = result;
                 }
@@ -2425,11 +2458,11 @@ impl<W: Write> VM<W> {
                                         let _ = found; out.iter().collect()
                                     }
                                 }
-                                _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
+                                _ => raise!(VmError::TypeMsg(format!("$- on string requires char or string value, got {}", val.type_label()))),
                             };
                             self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(result));
                         }
-                        other => raise!(VmError::TypeError { expected: "Array or String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("$- requires an array, tuple, or string, got {}", other.type_label()))),
                     }
                 }
 
@@ -2451,11 +2484,11 @@ impl<W: Write> VM<W> {
                                     if p.is_empty() { rc_s.to_string() }
                                     else { rc_s.replace(p.as_str(), "") }
                                 }
-                                _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
+                                _ => raise!(VmError::TypeMsg(format!("$-- on string requires char or string value, got {}", val.type_label()))),
                             };
                             self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(result));
                         }
-                        other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("$-- requires an array, tuple, or string, got {}", other.type_label()))),
                     }
                 }
 
@@ -2490,11 +2523,11 @@ impl<W: Write> VM<W> {
                                 Value::String(ref ins) => {
                                     for (j, c) in ins.chars().enumerate() { chars.insert(i + j, c); }
                                 }
-                                _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
+                                _ => raise!(VmError::TypeMsg(format!("$+[i] on string requires char or string element, got {}", val.type_label()))),
                             }
                             self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(chars.iter().collect()));
                         }
-                        other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("$+[i] requires an array, tuple, or string, got {}", other.type_label()))),
                     }
                 }
 
@@ -2534,7 +2567,7 @@ impl<W: Write> VM<W> {
                             }
                             self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(chars.iter().collect()));
                         }
-                        other => raise!(VmError::TypeError { expected: "Array, Tuple, NamedTuple, or String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("$-[..] requires an array, tuple, or string, got {}", other.type_label()))),
                     }
                 }
 
@@ -2544,7 +2577,12 @@ impl<W: Write> VM<W> {
                     if v == val { ip = label as usize; }
                 }
                 &Instruction::MatchRange(reg, lo, hi, label) => {
-                    let v = match self.as_int(reg) { Ok(v) => v, Err(e) => raise!(e) };
+                    // A range pattern matches numbers; anything else is the
+                    // tree-walker's `range pattern type mismatch` (step 3.5b).
+                    let v = match self.reg_get(reg) {
+                        Value::Int(n) => *n,
+                        _ => raise!(VmError::TypeMsg("range pattern type mismatch".to_string())),
+                    };
                     if v >= lo && v <= hi { ip = label as usize; }
                 }
                 &Instruction::MatchStr(reg, idx, label) => {
@@ -2595,8 +2633,8 @@ impl<W: Write> VM<W> {
                                 let sep = sep.clone();
                                 s.split(sep.as_str()).map(|p| Value::String(ZyStr::from_str_ref(p))).collect()
                             }
-                            (Value::String(_), other) => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
-                            (other, _) => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            (Value::String(_), other) => raise!(VmError::TypeMsg(format!("$/ delimiter must be a char or string, got {}", other.type_label()))),
+                            (other, _) => raise!(VmError::TypeMsg(format!("$/ requires a string on the left, got {}", other.type_label()))),
                         }
                     };
                     self.reg_set(dst, Value::Array(Rc::new(parts)));
@@ -2609,8 +2647,8 @@ impl<W: Write> VM<W> {
                         match (s_v, sep_v) {
                             (Value::String(s), Value::Char(c))   => intrinsics::split::count(s.as_str(), *c),
                             (Value::String(s), Value::String(sep)) => intrinsics::split::count_str(s.as_str(), sep.as_str()),
-                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                            (Value::String(_), o) => raise!(VmError::TypeMsg(format!("$/ delimiter must be a char or string, got {}", o.type_label()))),
+                            (o, _) => raise!(VmError::TypeMsg(format!("$/ requires a string on the left, got {}", o.type_label()))),
                         }
                     };
                     self.reg_set(dst, Value::Int(count));
@@ -2623,8 +2661,8 @@ impl<W: Write> VM<W> {
                         match (s_v, sep_v) {
                             (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
                             (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
-                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                            (Value::String(_), o) => raise!(VmError::TypeMsg(format!("$/ delimiter must be a char or string, got {}", o.type_label()))),
+                            (o, _) => raise!(VmError::TypeMsg(format!("$/ requires a string on the left, got {}", o.type_label()))),
                         }
                     };
                     let parts: Vec<String> = match &sep_owned {
@@ -2632,6 +2670,10 @@ impl<W: Write> VM<W> {
                         Value::String(sep_s) => s_owned.split(sep_s.as_str()).map(str::to_string).collect(),
                         _ => unreachable!(),
                     };
+                    // The split first, then the function — the tree-walker's order.
+                    if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
+                        raise!(VmError::TypeMsg("map requires lambda function".to_string()));
+                    }
                     let mut results = Vec::with_capacity(parts.len());
                     let outcome: Result<(), VmError> = 'calls: {
                         for part in parts {
@@ -2654,8 +2696,8 @@ impl<W: Write> VM<W> {
                         match (s_v, sep_v) {
                             (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
                             (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
-                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                            (Value::String(_), o) => raise!(VmError::TypeMsg(format!("$/ delimiter must be a char or string, got {}", o.type_label()))),
+                            (o, _) => raise!(VmError::TypeMsg(format!("$/ requires a string on the left, got {}", o.type_label()))),
                         }
                     };
                     let parts: Vec<String> = match &sep_owned {
@@ -2663,6 +2705,10 @@ impl<W: Write> VM<W> {
                         Value::String(sep_s) => s_owned.split(sep_s.as_str()).map(str::to_string).collect(),
                         _ => unreachable!(),
                     };
+                    // The split first, then the function — the tree-walker's order.
+                    if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
+                        raise!(VmError::TypeMsg("filter requires lambda function".to_string()));
+                    }
                     let mut results = Vec::new();
                     let outcome: Result<(), VmError> = 'calls: {
                         for part in parts {
@@ -2686,8 +2732,8 @@ impl<W: Write> VM<W> {
                         match (s_v, sep_v) {
                             (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
                             (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
-                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                            (Value::String(_), o) => raise!(VmError::TypeMsg(format!("$/ delimiter must be a char or string, got {}", o.type_label()))),
+                            (o, _) => raise!(VmError::TypeMsg(format!("$/ requires a string on the left, got {}", o.type_label()))),
                         }
                     };
                     let parts: Vec<String> = match &sep_owned {
@@ -2695,6 +2741,10 @@ impl<W: Write> VM<W> {
                         Value::String(sep_s) => s_owned.split(sep_s.as_str()).map(str::to_string).collect(),
                         _ => unreachable!(),
                     };
+                    // The split first, then the function — the tree-walker's order.
+                    if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
+                        raise!(VmError::TypeMsg("reduce requires lambda function".to_string()));
+                    }
                     let outcome: Result<(), VmError> = 'calls: {
                         for part in parts {
                             let elem = Value::String(ZyStr::new(part));
@@ -2716,7 +2766,7 @@ impl<W: Write> VM<W> {
                             (Value::String(s), Value::Char(c))    => s.contains(*c),
                             (Value::String(s), Value::String(sub)) => s.contains(sub.as_str()),
                             (Value::String(_), _) => false,
-                            (other, _) => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            (other, _) => raise!(VmError::TypeMsg(format!("cannot search {} - only arrays, tuples, and strings support contains", other.type_label()))),
                         }
                     };
                     wreg!(dst, Value::Bool(result));
@@ -2748,7 +2798,7 @@ impl<W: Write> VM<W> {
                                 s[byte_lo..byte_hi].to_string()
                             }
                         }
-                        other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("cannot slice {} - only arrays, tuples, named tuples, and strings support slice", other.type_label()))),
                     };
                     self.reg_set(dst, Value::String(ZyStr::new(result)));
                 }
@@ -2774,10 +2824,7 @@ impl<W: Write> VM<W> {
                         Value::NamedTuple(nt) => Value::Array(Rc::new(
                             nt.iter().map(|(k, _)| Value::String(ZyStr::new(k.clone()))).collect::<Vec<_>>(),
                         )),
-                        other => raise!(VmError::TypeError {
-                            expected: "String or Array",
-                            got: other.type_name().to_string(),
-                        }),
+                        other => raise!(VmError::TypeMsg(format!("can only iterate over ranges, arrays, strings, tuples and dictionaries, got {}", other.type_label()))),
                     };
                     wreg!(dst, val);
                 }
@@ -2853,8 +2900,8 @@ impl<W: Write> VM<W> {
                                     .map(|(i, _)| Value::Int((i + 1) as i64))
                                     .collect()
                             }
-                            (Value::String(_), other) => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
-                            (other, _) => raise!(VmError::TypeError { expected: "String, Array, or Tuple", got: other.type_name().to_string() }),
+                            (Value::String(_), other) => raise!(VmError::TypeMsg(format!("$?? on string requires char or string value, got {}", other.type_label()))),
+                            (other, _) => raise!(VmError::TypeMsg(format!("$?? requires an array, tuple, or string, got {}", other.type_label()))),
                         }
                     };
                     wreg!(dst, Value::Array(Rc::new(positions)));
@@ -2935,16 +2982,16 @@ impl<W: Write> VM<W> {
                     let result = {
                         let s = match &self.value_stack[base + str_reg as usize] {
                             Value::String(s) => s.clone(),
-                            other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$~~ requires a string, got {}", other.type_label()))),
                         };
                         let rep = match &self.value_stack[base + rep_reg as usize] {
                             Value::String(r) => r.clone(),
-                            other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$~~ replacement must be a string, got {}", other.type_label()))),
                         };
                         match &self.value_stack[base + pat_reg as usize] {
                             Value::String(pat) => s.replace(pat.as_str(), rep.as_str()),
                             Value::Char(c) => s.replace(*c, rep.as_str()),
-                            other => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$~~ pattern must be a string or char, got {}", other.type_label()))),
                         }
                     };
                     wreg!(dst, Value::String(ZyStr::new(result)));
@@ -2953,11 +3000,11 @@ impl<W: Write> VM<W> {
                     let result = {
                         let s = match &self.value_stack[base + str_reg as usize] {
                             Value::String(s) => s.clone(),
-                            other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$~~ requires a string, got {}", other.type_label()))),
                         };
                         let rep = match &self.value_stack[base + rep_reg as usize] {
                             Value::String(r) => r.clone(),
-                            other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$~~ replacement must be a string, got {}", other.type_label()))),
                         };
                         let max = ri!(n_reg).max(0) as usize;
                         // Avoid heap-allocating a String for char patterns: use char directly.
@@ -2966,7 +3013,7 @@ impl<W: Write> VM<W> {
                         let pat = match &self.value_stack[base + pat_reg as usize] {
                             Value::String(p) => Pat::Str(p.as_str()),
                             Value::Char(c) => Pat::Ch(*c),
-                            other => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$~~ pattern must be a string or char, got {}", other.type_label()))),
                         };
                         if max == 0 {
                             match pat {
@@ -3110,13 +3157,10 @@ impl<W: Write> VM<W> {
                             Value::String(key) => {
                                 fields.iter().any(|(k, _)| k.as_str() == key.as_str())
                             }
-                            other => raise!(VmError::TypeError {
-                                expected: "String",
-                                got: other.type_name().to_string(),
-                            }),
+                            other => raise!(VmError::TypeMsg(format!("a dictionary is asked about a key, so `$?` needs a String, got {}", other.type_label()))),
                         },
                         Value::Tuple(t) => t.as_ref().iter().any(|v| v.equals(&elem)),
-                        other => raise!(VmError::TypeError { expected: "Array or String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("cannot search {} - only arrays, tuples, and strings support contains", other.type_label()))),
                     };
                     self.reg_set(dst, Value::Bool(result));
                 }
@@ -3170,15 +3214,21 @@ impl<W: Write> VM<W> {
                             let hi_norm = hi_norm.max(lo_norm);
                             Value::String(ZyStr::new(chars[lo_norm..hi_norm].iter().collect()))
                         }
-                        other => raise!(VmError::TypeError { expected: "Array, Tuple, NamedTuple, or String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("cannot slice {} - only arrays, tuples, named tuples, and strings support slice", other.type_label()))),
                     };
                     self.reg_set(dst, result);
                 }
                 &Instruction::ArrayMap(dst, arr_reg, func_reg) => {
                     let callable = self.reg_get(func_reg).clone();
+                    // The function before the array, as the tree-walker checks
+                    // them — so an empty array with no function is refused too;
+                    // it used to answer `[]` (step 3.5b).
+                    if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
+                        raise!(VmError::TypeMsg("map requires lambda function".to_string()));
+                    }
                     let arr = match self.reg_get(arr_reg).clone() {
                         Value::Array(a) => a.as_ref().clone(),
-                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("map requires array, got {}", other.type_label()))),
                     };
                     let mut results = Vec::with_capacity(arr.len());
                     let outcome: Result<(), VmError> = 'calls: {
@@ -3195,9 +3245,15 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::ArrayFilter(dst, arr_reg, func_reg) => {
                     let callable = self.reg_get(func_reg).clone();
+                    // The function before the array, as the tree-walker checks
+                    // them — so an empty array with no function is refused too;
+                    // it used to answer `[]` (step 3.5b).
+                    if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
+                        raise!(VmError::TypeMsg("filter requires lambda function".to_string()));
+                    }
                     let arr = match self.reg_get(arr_reg).clone() {
                         Value::Array(a) => a.as_ref().clone(),
-                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("filter requires array, got {}", other.type_label()))),
                     };
                     let mut results = Vec::new();
                     let outcome: Result<(), VmError> = 'calls: {
@@ -3214,6 +3270,9 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::ArrayReduce(dst, arr_reg, init_reg, func_reg) => {
                     let callable = self.reg_get(func_reg).clone();
+                    if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
+                        raise!(VmError::TypeMsg("reduce requires lambda function".to_string()));
+                    }
                     // Before the array, as the tree-walker checks it: a one-
                     // parameter lambda is a mistake, not a fold, and calling it
                     // anyway answered the initial value (GLB-015 A).
@@ -3225,7 +3284,7 @@ impl<W: Write> VM<W> {
                     }
                     let arr = match self.reg_get(arr_reg).clone() {
                         Value::Array(a) => a.as_ref().clone(),
-                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("reduce requires array, got {}", other.type_label()))),
                     };
                     let mut acc = self.reg_get(init_reg).clone();
                     let outcome: Result<(), VmError> = 'calls: {
@@ -3243,7 +3302,7 @@ impl<W: Write> VM<W> {
                 &Instruction::ArraySort(dst, arr_reg, ascending, func_reg) => {
                     let arr = match self.reg_get(arr_reg).clone() {
                         Value::Array(a) => a.as_ref().clone(),
-                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("sort requires an array, got {}", other.type_label()))),
                     };
                     let mut items = arr;
                     if func_reg == u16::MAX {
@@ -3300,13 +3359,19 @@ impl<W: Write> VM<W> {
                         }));
                     }
                 }
+                &Instruction::CallableCheck(reg, pipe) => {
+                    if !matches!(self.reg_get(reg), Value::Function(..) | Value::Closure(..)) {
+                        raise!(VmError::TypeMsg(if pipe {
+                            "pipe operator requires a callable function or lambda"
+                        } else {
+                            "expression is not callable"
+                        }.to_string()));
+                    }
+                }
                 &Instruction::LoopStepCheck(step) => {
                     let n = match self.reg_get(step) {
                         Value::Int(n) => *n,
-                        other => raise!(VmError::TypeError {
-                            expected: "an Int step",
-                            got: other.type_name().to_string(),
-                        }),
+                        other => raise!(VmError::TypeMsg(format!("step must be an integer, got {}", other.type_label()))),
                     };
                     if n <= 0 {
                         raise!(VmError::Generic(format!("step must be positive, got {n}")));
@@ -3316,11 +3381,15 @@ impl<W: Write> VM<W> {
                     // No `for` here: raise! continues the dispatch loop, and
                     // inside an inner loop it would continue that one instead.
                     let bad = match (self.reg_get(start), self.reg_get(end)) {
-                        (Value::Int(_), Value::Int(_)) => None,
-                        (Value::Int(_), other) | (other, _) => Some(other.type_name()),
+                        (Value::Int(_), Value::Int(_)) => false,
+                        _ => true,
                     };
-                    if let Some(got) = bad {
-                        raise!(VmError::TypeError { expected: "Int range bounds", got: got.to_string() });
+                    if bad {
+                        // Both bounds named, as the tree-walker names them.
+                        raise!(VmError::TypeMsg(format!(
+                            "range bounds must be integers, got {} and {}",
+                            self.reg_get(start).type_label(), self.reg_get(end).type_label()
+                        )));
                     }
                 }
                 &Instruction::DestroyLocal(reg, name_idx) => {
@@ -3617,10 +3686,7 @@ impl<W: Write> VM<W> {
                                 ))),
                             }
                         }
-                        other => raise!(VmError::TypeError {
-                            expected: "Char, Int, or String",
-                            got: other.type_name().to_string(),
-                        }),
+                        other => raise!(VmError::TypeMsg(format!("base conversion expressions work with char, int, or string, got {}", other.type_label()))),
                     };
                     self.reg_set(dst, result);
                 }
@@ -3804,9 +3870,7 @@ impl<W: Write> VM<W> {
                             Ok(f) => f,
                             // The tree-walker rejects a non-number here; returning
                             // 0.0 silently made the two engines disagree.
-                            Err(_) => raise!(VmError::TypeError {
-                                expected: "number", got: other.type_name().to_string()
-                            }),
+                            Err(_) => raise!(VmError::TypeMsg(format!("format expressions only work with numbers, got {}", other.type_label()))),
                         },
                     };
                     let s = map_numeral_number(vm_fmt_thousands(f, prec_kind, prec_n), self.numeral_mode);
@@ -3818,9 +3882,7 @@ impl<W: Write> VM<W> {
                         Value::Float(f) => *f,
                         other => match ascii_digits(other.to_string().trim()).parse::<f64>() {
                             Ok(f) => f,
-                            Err(_) => raise!(VmError::TypeError {
-                                expected: "number", got: other.type_name().to_string()
-                            }),
+                            Err(_) => raise!(VmError::TypeMsg(format!("format expressions only work with numbers, got {}", other.type_label()))),
                         },
                     };
                     let s = map_numeral_number(vm_fmt_scientific(f, prec_kind, prec_n), self.numeral_mode);
@@ -3842,7 +3904,7 @@ impl<W: Write> VM<W> {
                                 "cannot convert string '{}' to number for rounding", s.as_ref()
                             ))),
                         },
-                        other => raise!(VmError::TypeError { expected: "number", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("round expressions only work with numbers or numeric strings, got {}", other.type_label()))),
                     };
                     let m = 10_f64.powi(precision as i32);
                     self.reg_set(dst, Value::Float((f * m).round() / m));
@@ -3857,7 +3919,7 @@ impl<W: Write> VM<W> {
                                 "cannot convert string '{}' to number for truncation", s.as_ref()
                             ))),
                         },
-                        other => raise!(VmError::TypeError { expected: "number", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("truncate expressions only work with numbers or numeric strings, got {}", other.type_label()))),
                     };
                     let m = 10_f64.powi(precision as i32);
                     self.reg_set(dst, Value::Float((f * m).trunc() / m));
@@ -3926,8 +3988,7 @@ impl<W: Write> VM<W> {
                         Value::Int(n) if *n >= 0 => *n as u64,
                         Value::Int(n) => raise!(VmError::Generic(format!(
                             "@~ requires non-negative ms, got {}", n))),
-                        other => raise!(VmError::TypeError {
-                            expected: "Int", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("@~ requires integer milliseconds, got {}", other.type_label()))),
                     };
                     std::thread::sleep(std::time::Duration::from_millis(ms));
                 }
@@ -4257,7 +4318,10 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
     fn int_step(step: &Value) -> Result<i64, VmError> {
         match step {
             Value::Int(n) => Ok(*n),
-            other => Err(VmError::TypeError { expected: "Int", got: other.type_name().to_string() }),
+            // The tree-walker's words for a step that is neither (step 3.5b).
+            other => Err(VmError::TypeMsg(format!(
+                "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                other.type_label()))),
         }
     }
     match col {

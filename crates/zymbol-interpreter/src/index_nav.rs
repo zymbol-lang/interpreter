@@ -192,7 +192,8 @@ impl<W: Write> Interpreter<W> {
             Value::Int(n) => Ok(n),
             other => Err(RuntimeError::Generic {
                 message: format!(
-                    "navigation index must be an integer, got {}",
+                    // The same words as a plain index: one failure, one text.
+                    "index must be an integer, got {}",
                     other.type_label()
                 ),
                 span: expr.span(),
@@ -216,8 +217,8 @@ fn descend_key(collection: Value, key: &str, op_span: zymbol_span::Span) -> Resu
         },
         other => Err(RuntimeError::Generic {
             message: format!(
-                "a String navigation step addresses a dictionary key, and this is {}",
-                other.type_name()
+                "a String addresses a dictionary key, and this is {}",
+                other.type_label()
             ),
             span: op_span,
         }),
