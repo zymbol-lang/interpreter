@@ -2370,6 +2370,7 @@ impl Compiler {
                 let r_val = self.compile_expr(&pipe.left, ctx)?;
                 // Evaluate the callable
                 let r_fn = self.compile_expr(&pipe.callable, ctx)?;
+                ctx.emit(Instruction::CallableCheck(r_fn, true));
                 // Build argument list: _ → r_val, Expr(e) → compile(e)
                 let mut arg_regs = Vec::with_capacity(pipe.arguments.len());
                 for arg in &pipe.arguments {
@@ -3050,6 +3051,12 @@ impl Compiler {
         } else {
             // Dynamic call: callable is a variable holding a Function value
             let callee_reg = self.compile_expr(call.callable.as_ref(), ctx)?;
+            // A callee that is an expression (`v[1](2)`) is refused as the
+            // tree-walker refuses it. A NAME that holds something else keeps
+            // the generic text: the three engines word that case three ways.
+            if !matches!(call.callable.unwrap_group(), Expr::Identifier(_)) {
+                ctx.emit(Instruction::CallableCheck(callee_reg, false));
+            }
             ctx.emit(Instruction::CallDynamic(dst, callee_reg, arg_regs));
         }
         Ok(dst)
@@ -5288,6 +5295,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::ArrayLen(d, a) | Instruction::ArrayContains(d, a, _)
             | Instruction::ArraySlice(d, a, _) => { upd(*d); upd(*a); }
             Instruction::DestructureCheck(s, _) | Instruction::LoopStepCheck(s)
+            | Instruction::CallableCheck(s, _)
             | Instruction::OutputSlotCheck(s, _) | Instruction::DestroyLocal(s, _)
             | Instruction::CheckAlive(s, _) | Instruction::Revive(s) => upd(*s),
             Instruction::LoopBoundsCheck(a, b) => { upd(*a); upd(*b); }

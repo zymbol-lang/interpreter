@@ -183,6 +183,12 @@ pub enum Instruction {
     LoopStepCheck(Reg),
     /// Refuse a range loop whose bounds are not both Int (GLB-014 B).
     LoopBoundsCheck(Reg, Reg),
+    /// Refuse a call whose callee is not a function or a lambda, worded as the
+    /// tree-walker words it: `true` for a pipe (`pipe operator requires a
+    /// callable function or lambda`), `false` for a call on an expression
+    /// (`expression is not callable`). Both used to fall to `CallDynamic`'s
+    /// generic `this needs Function and got Int` (step 3.5b).
+    CallableCheck(Reg, bool),
     /// Refuse a written `>>~` slot that is not an Int (GLB-018 B). `true` also
     /// admits a Tuple: a lone slot may hold the whole dense position.
     OutputSlotCheck(Reg, bool),

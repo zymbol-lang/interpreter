@@ -89,7 +89,7 @@ impl<W: Write> Interpreter<W> {
                 span: sleep.span,
             }),
             other => return Err(RuntimeError::Generic {
-                message: format!("@~ requires integer milliseconds, got {}", self.value_type_name(&other)),
+                message: format!("@~ requires integer milliseconds, got {}", other.type_label()),
                 span: sleep.span,
             }),
         };
