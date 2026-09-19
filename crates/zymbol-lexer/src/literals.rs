@@ -100,6 +100,16 @@ impl Lexer {
                                 .with_span(span)
                                 .with_help("close the interpolation with }"),
                         );
+                        // Take the `"` that stopped us: it is the one that ENDS
+                        // this string. Leaving it behind made the next token
+                        // start a SECOND string there, and that one ran to end
+                        // of file — "unterminated string literal", a second
+                        // error about the first one's leftovers, and the reader
+                        // was told to add a closing quote that is already
+                        // written (GLB-028).
+                        if !self.is_at_end() {
+                            self.advance();
+                        }
                         return Token::new(TokenKind::Error("unterminated interpolation".to_string()), span);
                     }
                     if self.current_char() == '}' {
