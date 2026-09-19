@@ -237,6 +237,62 @@ impl Parser {
         answer
     }
 
+    /// A statement that is an expression — and, when that expression is an
+    /// editing `$`, the in-place edit it spells.
+    ///
+    /// Decision 12, the rule of the result: a `$` edit whose result is the
+    /// whole statement modifies in place. It desugars to
+    /// `name = <the same expression>`, which is observably the same thing
+    /// because collections assign by value and there is no aliasing (DI-04) —
+    /// and the sugar marker keeps the source form for the formatter and for the
+    /// tuple guard. Before this, a bare `arr$+ 3` parsed, ran, and did nothing
+    /// at all, with no warning (DI-01).
+    ///
+    /// Shared by the plain name and the hot one. The hot branch used to return
+    /// a bare `Statement::Expr` here, so giving it the bracket gate without
+    /// this would have bought `x°[1]$~ 5` a parse and DI-01 all over again.
+    fn parse_expr_or_edit_statement(&mut self) -> Result<Statement, Diagnostic> {
+        let expr = self.parse_expr()?;
+        let span = expr.span();
+        let mk = |root: EditRoot, value: Expr, written: Option<Box<Expr>>| {
+            Ok(Statement::Assignment(Assignment {
+                name: root.name,
+                value,
+                span,
+                // The edit writes back to the name the receiver came from, so
+                // it writes back with that name's anchoring: `x°[1]$~ 5` is a
+                // write to the loop-local `x`, not to whatever `x` ordinary
+                // scoping would find.
+                hot: root.hot,
+                pre_hot: root.pre_hot,
+                sugar: AssignSugar::InPlaceEdit,
+                written,
+            }))
+        };
+        match classify_edit(&expr) {
+            EditAnchor::Whole(root) => return mk(root, expr, None),
+            EditAnchor::Path(root, steps) => {
+                // The rewrite is what runs; the original is what the formatter
+                // reprints (FORMATTER_RULES §2.1).
+                let written = Box::new(expr.clone());
+                let value = rewrite_edit_at_path(expr, &root, steps, span);
+                return mk(root, value, Some(written));
+            }
+            // Decision 20, finally enforced: an edit with nowhere to write is
+            // refused. The comment on the old `in_place_edit_target` had
+            // promised this since it was written and nothing did it — the
+            // statement fell through to `Statement::Expr`, ran, and threw the
+            // result away in silence.
+            EditAnchor::Unanchored(help) => {
+                return Err(Diagnostic::error("this edit has nothing to write into")
+                    .with_span(span)
+                    .with_help(help));
+            }
+            EditAnchor::NotAnEdit => {}
+        }
+        Ok(Statement::Expr(ExprStatement::new(expr, span)))
+    }
+
     /// Refuse `arr[i][j]` — chained brackets, at any depth and in any position.
     ///
     /// Nesting is navigated with `>`: `arr[i>j]`. The *write* form was withdrawn
@@ -458,54 +514,7 @@ impl Parser {
                     if is_assignment_op {
                         self.parse_assignment()
                     } else {
-                        let expr = self.parse_expr()?;
-                        let span = expr.span();
-                        // Decision 12, the rule of the result: a `$` edit whose
-                        // result is the whole statement modifies in place. It
-                        // desugars to `name = <the same expression>`, which is
-                        // observably the same thing because collections assign
-                        // by value and there is no aliasing (DI-04) — and the
-                        // sugar marker keeps the source form for the formatter
-                        // and for the tuple guard.
-                        //
-                        // Before this, a bare `arr$+ 3` parsed, ran, and did
-                        // nothing at all, with no warning (DI-01).
-                        let mk = |name: String, value: Expr, written: Option<Box<Expr>>| {
-                            Ok(Statement::Assignment(Assignment {
-                                name,
-                                value,
-                                span,
-                                hot: false,
-                                pre_hot: false,
-                                sugar: AssignSugar::InPlaceEdit,
-                                written,
-                            }))
-                        };
-                        match classify_edit(&expr) {
-                            EditAnchor::Whole(name) => return mk(name, expr, None),
-                            EditAnchor::Path(name, steps) => {
-                                // The rewrite is what runs; the original is what
-                                // the formatter reprints (FORMATTER_RULES §2.1).
-                                let written = Box::new(expr.clone());
-                                let value = rewrite_edit_at_path(expr, &name, steps, span);
-                                return mk(name, value, Some(written));
-                            }
-                            // Decision 20, finally enforced: an edit with
-                            // nowhere to write is refused. The comment on the
-                            // old `in_place_edit_target` had promised this
-                            // since it was written and nothing did it — the
-                            // statement fell through to `Statement::Expr`, ran,
-                            // and threw the result away in silence.
-                            EditAnchor::Unanchored(help) => {
-                                return Err(Diagnostic::error(
-                                    "this edit has nothing to write into",
-                                )
-                                .with_span(span)
-                                .with_help(help));
-                            }
-                            EditAnchor::NotAnEdit => {}
-                        }
-                        Ok(Statement::Expr(ExprStatement::new(expr, span)))
+                        self.parse_expr_or_edit_statement()
                     }
                 }
             }
@@ -522,16 +531,25 @@ impl Parser {
                         | TokenKind::CaretAssign
                         | TokenKind::PlusPlus
                         | TokenKind::MinusMinus
-                        | TokenKind::LBracket
                         | TokenKind::DollarExclaimExclaim
                     ))
-                    .unwrap_or(false);
+                    .unwrap_or(false)
+                    // `x°[` used to route here unconditionally, where the plain
+                    // `x[` has asked `is_indexed_assignment` since decision 12.
+                    // The asymmetry cost the hot name both halves of the form:
+                    // `x°[1]$~ 5` — the edit COLLECTIONS.md declares — and the
+                    // bare read `x°[1]` were refused, while the very same read
+                    // in any expression position (`>> x°[1] ¶`) worked. What
+                    // they were refused WITH was the last caller of the
+                    // withdrawn indexed assignment's message, whose help taught
+                    // `arr[i] = val` (GLB-027).
+                    || (matches!(self.peek_ahead(1).map(|t| t.kind.clone()),
+                                 Some(TokenKind::LBracket))
+                        && self.is_indexed_assignment());
                 if is_assignment_op {
                     self.parse_assignment()
                 } else {
-                    let expr = self.parse_expr()?;
-                    let span = expr.span();
-                    Ok(Statement::Expr(ExprStatement::new(expr, span)))
+                    self.parse_expr_or_edit_statement()
                 }
             }
             TokenKind::PreHotIdent(_) => {
@@ -1765,11 +1783,22 @@ enum EditAnchor {
     /// so discarding its result is dead code (decision 19), not this.
     NotAnEdit,
     /// The receiver IS the name: `arr$+ 3`, `arr[i]$~ v`, `d.k$~ v`.
-    Whole(String),
+    Whole(EditRoot),
     /// The receiver is inside the name, at this path: `d.x$+ 3`, `d.x["y"]$~ 5`.
-    Path(String, Vec<Box<Expr>>),
+    Path(EditRoot, Vec<Box<Expr>>),
     /// An edit with nowhere to write, and why.
     Unanchored(&'static str),
+}
+
+/// The name an edit writes back to, with the anchoring it was written with.
+///
+/// `°` is not decoration on the receiver: it says which scope the name lives
+/// in. The desugaring assigns to that name, so it has to assign with the same
+/// anchoring or `x°[1]$~ 5` would write somewhere else than `x°` reads.
+struct EditRoot {
+    name: String,
+    hot: bool,
+    pre_hot: bool,
 }
 
 const CHAINED_BRACKETS: &str = "a bracket after a bracket is what the navigator is for: write `d[\"x\">\"y\"]$~ value`";
@@ -1800,10 +1829,14 @@ fn edit_receiver(expr: &Expr) -> Option<&Expr> {
 /// navigator spelled twice, and `d["x">"y"]` is the form. The dot composes
 /// freely — it is a different syntax, not a second spelling of the same one —
 /// so `d.x["y"]`, `d["x"].y` and `d.x.y` all name a place.
-fn flatten_receiver(e: &Expr) -> Result<(String, Vec<Box<Expr>>), &'static str> {
-    fn go(e: &Expr, out: &mut Vec<Box<Expr>>) -> Result<String, &'static str> {
+fn flatten_receiver(e: &Expr) -> Result<(EditRoot, Vec<Box<Expr>>), &'static str> {
+    fn go(e: &Expr, out: &mut Vec<Box<Expr>>) -> Result<EditRoot, &'static str> {
         match e.unwrap_group() {
-            Expr::Identifier(i) => Ok(i.name.clone()),
+            Expr::Identifier(i) => Ok(EditRoot {
+                name: i.name.clone(),
+                hot: i.hot,
+                pre_hot: i.pre_hot,
+            }),
             Expr::Index(ix) => {
                 if matches!(ix.array.unwrap_group(), Expr::Index(_) | Expr::DeepIndex(_)) {
                     return Err(CHAINED_BRACKETS);
@@ -1870,11 +1903,16 @@ fn classify_edit(expr: &Expr) -> EditAnchor {
 /// `d.x` and what lands in `d` is `d` with that key replaced.
 fn rewrite_edit_at_path(
     expr: Expr,
-    root: &str,
+    root: &EditRoot,
     steps: Vec<Box<Expr>>,
     span: zymbol_span::Span,
 ) -> Expr {
-    let root_expr = Expr::Identifier(IdentifierExpr::new(root.to_string(), span));
+    let root_expr = Expr::Identifier(IdentifierExpr {
+        name: root.name.clone(),
+        span,
+        hot: root.hot,
+        pre_hot: root.pre_hot,
+    });
     let path = NavPath {
         steps: steps
             .into_iter()
