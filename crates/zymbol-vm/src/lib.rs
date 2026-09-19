@@ -1909,7 +1909,12 @@ impl<W: Write> VM<W> {
                         };
                         let n = match &self.value_stack[base + n_reg as usize] {
                             Value::Int(n) if *n >= 0 => *n as usize,
-                            other => raise!(VmError::TypeMsg(format!("$* repetition count must be an integer, got {}", other.type_label()))),
+                            // A count that IS an Int and is negative is the
+                            // other message, as in the tree-walker.
+                            Value::Int(n) => raise!(VmError::TypeMsg(format!(
+                                "$* repetition count must be non-negative, got {}", n))),
+                            other => raise!(VmError::TypeMsg(format!(
+                                "$* repetition count must be an integer, got {}", other.type_label()))),
                         };
                         s.repeat(n)
                     };
