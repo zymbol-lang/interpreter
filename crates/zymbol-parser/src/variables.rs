@@ -7,7 +7,7 @@
 //! - Increment/decrement: ++, --
 //! - Lifetime end: \variable (explicit destruction)
 
-use zymbol_ast::{Assignment, AssignSugar, BinaryExpr, CollectionUpdateExpr, ConstDecl, DestructureAssign, DestructureItem, DestructurePattern, ErrorPropagateExpr, Expr, ExprStatement, IdentifierExpr, IndexExpr, LifetimeEnd, LiteralExpr, Statement};
+use zymbol_ast::{Assignment, AssignSugar, BinaryExpr, ConstDecl, DestructureAssign, DestructureItem, DestructurePattern, ErrorPropagateExpr, Expr, ExprStatement, IdentifierExpr, LifetimeEnd, LiteralExpr, Statement};
 use zymbol_common::{BinaryOp, Literal};
 use zymbol_error::Diagnostic;
 use zymbol_lexer::TokenKind;
@@ -24,15 +24,48 @@ impl Parser {
             _ => return Err(Diagnostic::error("expected identifier").with_span(ident_token.span)),
         };
 
-        // Check for indexed assignment: arr[i] = val
-        // Desugar to: arr = arr[i]$~ val  (CollectionUpdate)
+        // `name[…]` at statement head — the withdrawn indexed assignment.
+        //
+        // The whole branch is a refusal now. `is_indexed_assignment` is the only
+        // route into it and it answers true only when an assignment operator
+        // follows the bracket group, so every shape that arrives here is the
+        // form decision 6 withdrew. What replaced it, `arr[i]$~ value`, is an
+        // expression and is parsed as one, by `parse_expr_or_edit_statement` —
+        // the desugaring that used to sit below this used to serve `arr[i] = v`
+        // and went out with the form.
+        //
+        // It outlived the form by one message: the fall-through here still said
+        // "expected '=' after index expression for indexed assignment" and
+        // helped with `syntax: arr[i] = val`, the very form refused two lines
+        // above. Only `x°[` could still reach it, because the hot name skipped
+        // the gate — and it reached it for `x°[1]$~ 5` and for the bare read
+        // `x°[1]`, both of which are now parsed as what they are (GLB-027).
         if matches!(self.peek().kind, TokenKind::LBracket) {
             self.advance(); // consume '['
+            // Read the index and its ']' so the refusal can point past them and
+            // so a chained bracket is seen as one.
             let index_expr = self.parse_expr()?;
             let rbracket = self.peek().clone();
             if !matches!(rbracket.kind, TokenKind::RBracket) {
-                return Err(Diagnostic::error("expected ']' after index expression")
-                    .with_span(rbracket.span));
+                // One text per failure: a bracket opened for an index and never
+                // closed is the same failure here as in any expression, so it
+                // gets the same words. This site had its own — "expected ']'
+                // after index expression", with no help — and `x[1 2] = 5` is
+                // what still reaches it. Which of the two helps is
+                // `is_nav_index`'s choice in `parse_output_item_postfix`; here
+                // the index has already been parsed, and a `>` in it is the
+                // same answer.
+                let navigating = matches!(
+                    index_expr.unwrap_group(),
+                    Expr::Binary(b) if b.op == BinaryOp::Gt
+                );
+                return Err(Diagnostic::error("expected ']' after index")
+                    .with_span(rbracket.span)
+                    .with_help(if navigating {
+                        "array indexing must use brackets: arr[index] or arr[i>j]"
+                    } else {
+                        "array indexing must use brackets: arr[index]"
+                    }));
             }
             self.advance(); // consume ']'
 
@@ -56,7 +89,6 @@ impl Parser {
                 )));
             }
 
-            let assign_tok = self.peek().clone();
             // Decision 6 of Divergente_ES/forma/README.md: the indexed
             // assignment is withdrawn, in all three collections.
             //
@@ -70,84 +102,16 @@ impl Parser {
             // statement, which is decision 12 and landed first: prohibiting the
             // old form while the new one did not parse would have left the
             // language with no way at all to change an element.
-            if matches!(
-                assign_tok.kind,
-                TokenKind::Assign
-                    | TokenKind::PlusAssign
-                    | TokenKind::MinusAssign
-                    | TokenKind::StarAssign
-                    | TokenKind::SlashAssign
-                    | TokenKind::PercentAssign
-                    | TokenKind::CaretAssign
-            ) {
-                // Recovery belongs to the loop that catches this — see
-                // `skip_statement` and GLB-007. Skipping here too ran it twice
-                // and the second run took the block's closing brace.
-                return Err(Diagnostic::error(format!(
-                    "indexed assignment does not exist: '{}[…] =' is not a form of Zymbol",
-                    name
-                ))
-                .with_span(ident_token.span.to(&assign_tok.span))
-                .with_help(format!(
-                    "use '{}[i]$~ value' to modify in place — '=' gives a value to a NAME, '$~' changes part of a collection",
-                    name
-                )));
-            }
-            let compound_op = match assign_tok.kind {
-                TokenKind::Assign => None,
-                TokenKind::PlusAssign => Some(BinaryOp::Add),
-                TokenKind::MinusAssign => Some(BinaryOp::Sub),
-                TokenKind::StarAssign => Some(BinaryOp::Mul),
-                TokenKind::SlashAssign => Some(BinaryOp::Div),
-                TokenKind::PercentAssign => Some(BinaryOp::Mod),
-                TokenKind::CaretAssign => Some(BinaryOp::Pow),
-                _ => {
-                    return Err(Diagnostic::error("expected '=' after index expression for indexed assignment")
-                        .with_span(assign_tok.span)
-                        .with_help("syntax: arr[i] = val  or  arr[i] += val"));
-                }
-            };
-            self.advance(); // consume operator
-
-            let rhs = self.parse_expr()?;
-
-            // For compound ops: arr[i] += rhs  →  arr[i]$~ (arr[i] + rhs)
-            let value_expr = if let Some(op) = compound_op {
-                let arr_ident = Expr::Identifier(IdentifierExpr::new(name.clone(), ident_token.span));
-                let current_elem = Expr::Index(IndexExpr::new(
-                    Box::new(arr_ident),
-                    Box::new(index_expr.clone()),
-                    ident_token.span.to(&rbracket.span),
-                ));
-                let rhs_span = rhs.span();
-                Expr::Binary(BinaryExpr::new(
-                    op,
-                    Box::new(current_elem),
-                    Box::new(rhs),
-                    ident_token.span.to(&rhs_span),
-                ))
-            } else {
-                rhs
-            };
-
-            let span = ident_token.span.to(&value_expr.span());
-
-            // Build arr[i] target expression
-            let target_arr = Expr::Identifier(IdentifierExpr::new(name.clone(), ident_token.span));
-            let index_node = Expr::Index(IndexExpr::new(
-                Box::new(target_arr),
-                Box::new(index_expr),
-                ident_token.span.to(&rbracket.span),
-            ));
-
-            // Wrap in CollectionUpdate: arr[i]$~ value_expr
-            let update_expr = Expr::CollectionUpdate(CollectionUpdateExpr::new(
-                Box::new(index_node),
-                Box::new(value_expr),
-                span,
-            ));
-
-            return Ok(Statement::Assignment(Assignment { name, value: update_expr, span, hot, pre_hot, written: None, sugar: compound_op.map(AssignSugar::IndexedCompound).unwrap_or(AssignSugar::IndexedAssign) }));
+            let assign_tok = self.peek().clone();
+            return Err(Diagnostic::error(format!(
+                "indexed assignment does not exist: '{}[…] =' is not a form of Zymbol",
+                name
+            ))
+            .with_span(ident_token.span.to(&assign_tok.span))
+            .with_help(format!(
+                "use '{}[i]$~ value' to modify in place — '=' gives a value to a NAME, '$~' changes part of a collection",
+                name
+            )));
         }
 
         let assign_token = self.peek();
