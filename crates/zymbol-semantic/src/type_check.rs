@@ -89,10 +89,13 @@ impl ZymbolType {
                 format!("({})", names.join(", "))
             }
             ZymbolType::NamedTuple(fields) => {
+                // `#(k: Int)`, as a dictionary is written and as every runtime
+                // message names it (GLB-033, decided 2026-09-16). It used to be
+                // `(k: Int)`, which reads like a positional tuple with labels.
                 let names: Vec<String> = fields.iter()
                     .map(|(n, t)| format!("{}: {}", n, t.name()))
                     .collect();
-                format!("({})", names.join(", "))
+                format!("#({})", names.join(", "))
             }
             ZymbolType::Function(params, ret) => {
                 let param_names: Vec<String> = params.iter().map(|p| p.name()).collect();
