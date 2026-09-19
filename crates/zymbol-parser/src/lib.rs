@@ -78,16 +78,24 @@ impl Parser {
         } else {
             // Executable program: imports first, then statements
             while matches!(self.peek().kind, TokenKind::ModuleImport) {
+                let stmt_start = self.current;
                 match self.parse_import_statement() {
                     Ok(import) => imports.push(import),
                     Err(diag) => {
                         self.diagnostics.push(diag);
-                        self.advance();
+                        // One token was not enough: `<# ./2bad => m` reported
+                        // `expected module path` and then `unexpected token:
+                        // FatArrow` about the `=>` the first error had already
+                        // decided was unreachable. The other two recovery loops
+                        // have skipped the whole statement since GLB-007; this
+                        // one was left behind (GLB-028).
+                        self.skip_statement(stmt_start, false);
                     }
                 }
             }
 
             while !self.is_at_end() {
+                let stmt_start = self.current;
                 match self.parse_statement() {
                     Ok(stmt) => {
                         statements.push(stmt);
@@ -98,7 +106,9 @@ impl Parser {
                     Err(diag) => {
                         self.diagnostics.push(diag);
                         // Past the whole statement — see `skip_statement`.
-                        self.skip_statement();
+                        // The start is what tells it how many braces the
+                        // refusal left open behind the cursor.
+                        self.skip_statement(stmt_start, false);
                     }
                 }
             }
@@ -107,6 +117,32 @@ impl Parser {
         if self.diagnostics.is_empty() {
             Ok(Program::new_with_module(module_decl, imports, statements))
         } else {
+            // A parser diagnostic that points AT a token the lexer already
+            // refused is a second error about the first one's leftovers — and
+            // it prints the lexer's payload in Rust's Debug spelling to a
+            // reader who never asked: `expected expression, found
+            // Error("invalid float: '1.0e+'")`. The lexer has said what is
+            // wrong with that token and the parser has nothing to add
+            // (GLB-028).
+            //
+            // Only `check` and the LSP reach here with such a token at all:
+            // `run` and `build` stop on the lexer's diagnostics and never
+            // parse. Which is why this cascade was three times the size on the
+            // surface an editor uses — 31 programs against 10.
+            //
+            // The list can end up empty, and that is the right answer: the file
+            // is still refused, and the one message it deserves has already
+            // been emitted by the lexer.
+            let refused: Vec<zymbol_span::Span> = self
+                .tokens
+                .iter()
+                .filter(|t| matches!(t.kind, TokenKind::Error(_)))
+                .map(|t| t.span)
+                .collect();
+            if !refused.is_empty() {
+                self.diagnostics
+                    .retain(|d| !d.span.is_some_and(|s| refused.contains(&s)));
+            }
             Err(self.diagnostics)
         }
     }
@@ -124,26 +160,69 @@ impl Parser {
     ///
     /// Called by a refusal that has already decided the whole statement is
     /// wrong: there is nothing further to learn from parsing its tail.
-    pub(crate) fn skip_statement(&mut self) {
+    /// `stmt_start` is where the failed statement BEGAN.
+    ///
+    /// A refusal raised inside a body — a match arm, a catch header, an
+    /// `_?` — leaves braces open behind the cursor, and a skip that starts
+    /// counting from zero stops on the `}` that closes them instead of
+    /// swallowing it. The next round then reads a lone brace as a statement:
+    /// `unexpected token: RBrace`, a second error about the first one's
+    /// leftovers (GLB-028). Counting from the statement's first token is what
+    /// tells the skip how deep it already is.
+    /// `inside_block` says whether a `parse_block` is running above this skip.
+    /// If one is, it stops on the `}` that closes it and the skip must leave it
+    /// alone; at the top level nothing is waiting for a stray `}`, so it has to
+    /// be consumed or recovery never moves past it.
+    pub(crate) fn skip_statement(&mut self, stmt_start: usize, inside_block: bool) {
         // Always advance at least once: the caller is recovering from a failed
         // statement, and a skip that can consume nothing turns recovery into a
         // loop. `}` and `;` end a statement, so stopping ON them is right —
         // stopping on them without having moved is not.
         if self.is_at_end() { return; }
-        let mut line = self.peek().span.start.line;
-        self.advance();
         // A statement that has a BODY is not over at its head, and the body's
         // braces have to be counted or the skip stops inside it (GLB-007).
         // `? m[1][1] == 1 { >> "si" ¶ }` fails in the CONDITION, so no
         // `parse_block` is running to own the `{ … }`; the old skip walked to
         // the `}`, stopped there, and the next round read a lone brace as a
-        // statement — `unexpected token: RBrace`, a second error about the
-        // first one's leftovers. Which is this function's whole purpose.
+        // statement. Which is this function's whole purpose.
         //
         // `depth` is what tells the two braces apart: one this statement opened
         // (skip it, body and all) from one that closes the block we are inside
-        // (leave it — it belongs to `parse_block`, which stops on it).
-        let mut depth = 0usize;
+        // (leave it — it belongs to `parse_block`, which stops on it). It starts
+        // at whatever the failed statement left open, not at zero: that is the
+        // half of GLB-007 that stayed broken, and it is why `?? v { 1 "uno" … }`
+        // and `:! ## { … }` each reported a brace they had already opened.
+        let mut depth = self.tokens[stmt_start..self.current.min(self.tokens.len())]
+            .iter()
+            .fold(0usize, |d, t| match t.kind {
+                TokenKind::LBrace => d + 1,
+                TokenKind::RBrace => d.saturating_sub(1),
+                _ => d,
+            });
+        // A `}` at depth 0 is not this statement's: it closes the block we are
+        // inside, and `parse_block` stops on it. Taking it anyway ate the brace
+        // that closed a function body, so the module's own brace was read as
+        // that body's and the module was reported unclosed — a second error
+        // about the first one's leftovers. The mandatory advance below is what
+        // keeps recovery moving, and it is only mandatory for a statement that
+        // consumed nothing: one that got somewhere has already made progress.
+        if inside_block
+            && depth == 0
+            && matches!(self.peek().kind, TokenKind::RBrace)
+            && self.current > stmt_start
+        {
+            return;
+        }
+        let mut line = self.peek().span.start.line;
+        // The first token is taken whatever it is, but it is still counted:
+        // `_? {` refuses standing ON the brace that opens the else body, and an
+        // uncounted one put the skip back outside a body it was inside.
+        match self.peek().kind {
+            TokenKind::LBrace => depth += 1,
+            TokenKind::RBrace => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        self.advance();
         while !self.is_at_end() {
             match self.peek().kind {
                 TokenKind::LBrace => depth += 1,
@@ -653,6 +732,7 @@ impl Parser {
         let mut statements = Vec::new();
 
         while !matches!(self.peek().kind, TokenKind::RBrace) && !self.is_at_end() {
+            let stmt_start = self.current;
             match self.parse_statement() {
                 Ok(stmt) => {
                     // A function is free in a script or part of a module —
@@ -690,7 +770,7 @@ impl Parser {
                     // keyword. The real message was the first; the other 21 were
                     // the parser talking about its own leftovers, and they bury
                     // the one a reader can act on.
-                    self.skip_statement();
+                    self.skip_statement(stmt_start, true);
                 }
             }
         }
