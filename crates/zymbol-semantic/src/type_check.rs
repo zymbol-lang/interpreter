@@ -1465,6 +1465,47 @@ impl TypeChecker {
                 self.env.define_var(&ki.variable, ZymbolType::Char);
             }
 
+            // `>>| { … }` — the alternate screen. Its body is ordinary code and
+            // is checked as such.
+            //
+            // There was no arm here at all, so everything THIS pass does was off
+            // inside the block: arity, the collection element rule, the names
+            // read from an interpolated string, the range-direction warning.
+            // The other passes — `variable_analysis`, `last_use`,
+            // `loop_context`, `def_use` — do descend, which is what made the
+            // hole hard to see: the unused-variable warnings did come out of a
+            // TUI block, so it looked checked (GLB-030). It is the fourth time
+            // this shape has appeared: an arm that does not descend turns off
+            // EVERY check of its pass, not one.
+            //
+            // A scope, because `execute_block` pushes one: a name defined inside
+            // the block is gone after it, and this pass has to agree.
+            Statement::TuiBlock(tb) => {
+                self.env.enter_scope();
+                for st in &tb.body.statements {
+                    self.check_statement(st);
+                }
+                self.env.exit_scope();
+            }
+
+            // `>>~ (row, col) > items` — positioned output. Same hole, and this
+            // one is written 539 times across the corpus and the examples: both
+            // the slots and the items were expressions nothing looked at.
+            Statement::OutputPos(op) => {
+                for slot in op.slots.iter().flatten() {
+                    self.infer_expr(slot);
+                }
+                for item in &op.items {
+                    self.infer_expr(item);
+                }
+            }
+
+            // `@~ ms` — the pause. Its duration was an expression nothing looked
+            // at either.
+            Statement::Sleep(sl) => {
+                self.infer_expr(&sl.duration);
+            }
+
             // Other statements don't need type checking
             _ => {}
         }
