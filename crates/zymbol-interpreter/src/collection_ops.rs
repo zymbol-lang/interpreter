@@ -883,7 +883,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(mut arr) => {
                 if i > arr.len() {
                     return Err(RuntimeError::Generic {
-                        message: format!("$+[{}] index out of bounds for array of length {}", i, arr.len()),
+                        message: format!("$+[{}] index out of bounds for array of length {}", index, arr.len()),
                         span: op.span,
                     });
                 }
@@ -893,7 +893,7 @@ impl<W: Write> Interpreter<W> {
             Value::Tuple(mut tup) => {
                 if i > tup.len() {
                     return Err(RuntimeError::Generic {
-                        message: format!("$+[{}] index out of bounds for tuple of length {}", i, tup.len()),
+                        message: format!("$+[{}] index out of bounds for tuple of length {}", index, tup.len()),
                         span: op.span,
                     });
                 }
@@ -908,7 +908,7 @@ impl<W: Write> Interpreter<W> {
                 let mut chars: Vec<char> = s.chars().collect();
                 if i > chars.len() {
                     return Err(RuntimeError::Generic {
-                        message: format!("$+[{}] index out of bounds for string of length {}", i, chars.len()),
+                        message: format!("$+[{}] index out of bounds for string of length {}", index, chars.len()),
                         span: op.span,
                     });
                 }
