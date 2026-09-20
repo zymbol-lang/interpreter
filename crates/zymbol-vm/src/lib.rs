@@ -2188,6 +2188,11 @@ impl<W: Write> VM<W> {
                             }
                             *s = ZyStr::new(buf);
                         }
+                        // A dictionary is addressed by key, so an append has no
+                        // name to give what it adds. Worded as the tree-walker
+                        // words it rather than as a generic "unsupported".
+                        Value::NamedTuple(_) => raise!(VmError::TypeMsg(
+                            "$+ is not supported on named tuples — no field name available".to_string())),
                         other => raise!(VmError::TypeMsg(format!("cannot append to {} - only arrays, tuples, and strings support $+", other.type_label()))),
                     }
                 }
@@ -2413,14 +2418,14 @@ impl<W: Write> VM<W> {
                             Value::NamedTuple(Rc::new(out));
                         continue;
                     }
-                    let idx = match self.as_int(idx_reg) { Ok(v) => v, Err(e) => raise!(e) };
+                    let idx = match self.as_int_for(idx_reg, "remove index") { Ok(v) => v, Err(e) => raise!(e) };
                     let result = match std::mem::replace(&mut self.value_stack[base + arr_reg as usize], Value::Unit) {
                         Value::Array(mut rc_arr) => {
                             let arr = Rc::make_mut(&mut rc_arr);
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
+                                raise!(VmError::IndexMsg(format!("index out of bounds: index {} for array of length {}", idx, arr.len())));
                             }
                             arr.remove(i as usize);
                             Value::Array(rc_arr)
@@ -2430,7 +2435,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { tup.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= tup.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() , container: "tuple" });
+                                raise!(VmError::IndexMsg(format!("index out of bounds: index {} for tuple of length {}", idx, tup.len())));
                             }
                             tup.remove(i as usize);
                             Value::Tuple(Rc::new(tup))
@@ -2444,7 +2449,7 @@ impl<W: Write> VM<W> {
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { chars.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= chars.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() , container: "string" });
+                                raise!(VmError::IndexMsg(format!("index out of bounds: index {} for string of length {}", idx, chars.len())));
                             }
                             chars.remove(i as usize);
                             Value::String(ZyStr::new(chars.iter().collect()))
@@ -2522,13 +2527,17 @@ impl<W: Write> VM<W> {
                 }
 
                 &Instruction::ArrayInsert(arr_reg, idx_reg, val_reg) => {
-                    let idx = match self.as_int(idx_reg) { Ok(v) => v, Err(e) => raise!(e) };
+                    let idx = match self.reg_get(idx_reg) {
+                        Value::Int(n) => *n,
+                        other => raise!(VmError::TypeMsg(format!(
+                            "$+[i] index must be an integer, got {}", other.type_label()))),
+                    };
                     let val = self.reg_get(val_reg).clone();
                     match self.value_stack[base + arr_reg as usize].clone() {
                         Value::Array(rc_arr) => {
                             let mut arr = rc_arr.as_ref().clone();
                             if idx <= 0 || (idx - 1) as usize > arr.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
+                                raise!(VmError::IndexMsg(format!("$+[{}] index out of bounds for array of length {}", idx, arr.len())));
                             }
                             arr.insert((idx - 1) as usize, val);
                             self.value_stack[base + arr_reg as usize] = Value::Array(Rc::new(arr));
@@ -2536,7 +2545,7 @@ impl<W: Write> VM<W> {
                         Value::Tuple(rc_tup) => {
                             let mut tup = rc_tup.as_ref().clone();
                             if idx <= 0 || (idx - 1) as usize > tup.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() , container: "tuple" });
+                                raise!(VmError::IndexMsg(format!("$+[{}] index out of bounds for tuple of length {}", idx, tup.len())));
                             }
                             tup.insert((idx - 1) as usize, val);
                             self.value_stack[base + arr_reg as usize] = Value::Tuple(Rc::new(tup));
@@ -2544,7 +2553,7 @@ impl<W: Write> VM<W> {
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
                             if idx <= 0 || (idx - 1) as usize > chars.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() , container: "string" });
+                                raise!(VmError::IndexMsg(format!("$+[{}] index out of bounds for string of length {}", idx, chars.len())));
                             }
                             let i = (idx - 1) as usize;
                             match val {
@@ -2556,14 +2565,18 @@ impl<W: Write> VM<W> {
                             }
                             self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(chars.iter().collect()));
                         }
+                        // Same reason as `$+`: a dictionary has no field name
+                        // to give what is inserted.
+                        Value::NamedTuple(_) => raise!(VmError::TypeMsg(
+                            "$+[i] is not supported on named tuples — no field name available".to_string())),
                         other => raise!(VmError::TypeMsg(format!("$+[i] requires an array, tuple, or string, got {}", other.type_label()))),
                     }
                 }
 
                 &Instruction::ArrayRemoveRange(arr_reg, lo_reg) => {
                     // hi_reg = lo_reg + 1 by compiler convention
-                    let lo_raw = match self.as_int(lo_reg) { Ok(v) => v, Err(e) => raise!(e) };
-                    let hi_raw = match self.as_int(lo_reg + 1) { Ok(v) => v, Err(e) => raise!(e) };
+                    let lo_raw = match self.as_int_for(lo_reg, "$-[..] start") { Ok(v) => v, Err(e) => raise!(e) };
+                    let hi_raw = match self.as_int_for(lo_reg + 1, "$-[..] end") { Ok(v) => v, Err(e) => raise!(e) };
                     // Strict (D2 revoked, 2026-09-20): the bounds are checked
                     // against the collection instead of being clamped and then
                     // silently skipped. `[1, 2]$-[1..9]` left the array
@@ -2835,8 +2848,8 @@ impl<W: Write> VM<W> {
                     wreg!(dst, Value::Bool(result));
                 }
                 &Instruction::StrSlice(dst, str_reg, lo_reg) => {
-                    let lo_val = match self.as_int(lo_reg) { Ok(v) => v, Err(e) => raise!(e) };
-                    let hi_val = match self.as_int(lo_reg + 1) { Ok(v) => v, Err(e) => raise!(e) };
+                    let lo_val = match self.as_int_for(lo_reg, "slice start") { Ok(v) => v, Err(e) => raise!(e) };
+                    let hi_val = match self.as_int_for(lo_reg + 1, "slice end") { Ok(v) => v, Err(e) => raise!(e) };
                     let result = match &self.value_stack[base + str_reg as usize] {
                         Value::String(s) => {
                             if s.is_ascii() {
@@ -3072,7 +3085,10 @@ impl<W: Write> VM<W> {
                         // Strict (D2 revoked, 2026-09-20): a negative count was
                         // clamped to 0, and 0 means "all" in the branch below —
                         // so `"aa"$~~["a":"b":-1]` replaced the WHOLE string.
-                        let n_raw = ri!(n_reg);
+                        let n_raw = match self.as_int_for(n_reg, "$~~ count") {
+                            Ok(v) => v,
+                            Err(e) => raise!(e),
+                        };
                         if n_raw < 0 {
                             raise!(VmError::IndexMsg(format!(
                                 "replacement count must be non-negative, got {}", n_raw)));
@@ -3237,8 +3253,8 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::ArraySlice(dst, arr_reg, lo_reg) => {
                     // hi_reg = lo_reg + 1 by compiler convention
-                    let lo = match self.as_int(lo_reg) { Ok(v) => v, Err(e) => raise!(e) };
-                    let hi = match self.as_int(lo_reg + 1) { Ok(v) => v, Err(e) => raise!(e) };
+                    let lo = match self.as_int_for(lo_reg, "slice start") { Ok(v) => v, Err(e) => raise!(e) };
+                    let hi = match self.as_int_for(lo_reg + 1, "slice end") { Ok(v) => v, Err(e) => raise!(e) };
                     let result = match self.reg_get(arr_reg) {
                         Value::Array(arr) => {
                             let arr = arr.as_ref();
@@ -4244,6 +4260,17 @@ impl<W: Write> VM<W> {
     }
 
     #[inline(always)]
+    /// The same read, but naming the operation that asked — which is how the
+    /// tree-walker words it: `slice start must be an integer, got String`
+    /// rather than a bare `this needs Int and got String` (step 4.3).
+    fn as_int_for(&self, reg: Reg, what: &str) -> Result<i64, VmError> {
+        match self.reg_get(reg) {
+            Value::Int(n) => Ok(*n),
+            other => Err(VmError::TypeMsg(format!(
+                "{} must be an integer, got {}", what, other.type_label()))),
+        }
+    }
+
     fn as_int(&self, reg: Reg) -> Result<i64, VmError> {
         match self.reg_get(reg) {
             Value::Int(n) => Ok(*n),
@@ -4405,6 +4432,15 @@ fn missing_key_msg(key: &str, available: &[String]) -> String {
 }
 
 fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmError> {
+    vm_deep_set_at(col, path, new_val, path.len() == 1)
+}
+
+/// `single` is true only for a one-step write — `a[i]\u{24}~ v`. The tree-walker
+/// words that one after the collection (`array update index must be an
+/// integer`) and a longer path after the step (`a navigation step is a
+/// position (Int) or a dictionary key (String)`), and the two are not the same
+/// sentence (step 4.3).
+fn vm_deep_set_at(col: Value, path: &[Value], new_val: Value, single: bool) -> Result<Value, VmError> {
     let Some((step, rest)) = path.split_first() else {
         return Ok(new_val);
     };
@@ -4418,9 +4454,11 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
         }
         Ok(i as usize)
     }
-    fn int_step(step: &Value) -> Result<i64, VmError> {
+    fn int_step_of(step: &Value, single: bool, container: &str) -> Result<i64, VmError> {
         match step {
             Value::Int(n) => Ok(*n),
+            other if single => Err(VmError::TypeMsg(format!(
+                "{} update index must be an integer, got {}", container, other.type_label()))),
             // The tree-walker's words for a step that is neither (step 3.5b).
             other => Err(VmError::TypeMsg(format!(
                 "a navigation step is a position (Int) or a dictionary key (String), got {}",
@@ -4430,16 +4468,16 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
     match col {
         Value::Array(mut rc) => {
             let arr = Rc::make_mut(&mut rc);
-            let i = resolve(int_step(step)?, arr.len(), "array")?;
+            let i = resolve(int_step_of(step, single, "array")?, arr.len(), "array")?;
             let sub = mem::replace(&mut arr[i], Value::Unit);
-            arr[i] = vm_deep_set(sub, rest, new_val)?;
+            arr[i] = vm_deep_set_at(sub, rest, new_val, false)?;
             Ok(Value::Array(rc))
         }
         Value::Tuple(mut rc) => {
             let tup = Rc::make_mut(&mut rc);
-            let i = resolve(int_step(step)?, tup.len(), "tuple")?;
+            let i = resolve(int_step_of(step, single, "tuple")?, tup.len(), "tuple")?;
             let sub = mem::replace(&mut tup[i], Value::Unit);
-            tup[i] = vm_deep_set(sub, rest, new_val)?;
+            tup[i] = vm_deep_set_at(sub, rest, new_val, false)?;
             Ok(Value::Tuple(rc))
         }
         Value::NamedTuple(mut rc) => {
@@ -4467,7 +4505,7 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
                 }
             };
             let sub = mem::replace(&mut fields[i].1, Value::Unit);
-            fields[i].1 = vm_deep_set(sub, rest, new_val)?;
+            fields[i].1 = vm_deep_set_at(sub, rest, new_val, false)?;
             Ok(Value::NamedTuple(rc))
         }
         other => Err(VmError::TypeMsg(format!(
