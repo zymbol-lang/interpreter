@@ -2850,28 +2850,59 @@ impl<W: Write> VM<W> {
                 &Instruction::StrSlice(dst, str_reg, lo_reg) => {
                     let lo_val = match self.as_int_for(lo_reg, "slice start") { Ok(v) => v, Err(e) => raise!(e) };
                     let hi_val = match self.as_int_for(lo_reg + 1, "slice end") { Ok(v) => v, Err(e) => raise!(e) };
+                    // Strict, and direction-aware (steps 4.3 and 4.4): this used
+                    // to clamp with `.max(0).min(len).max(lo)` and had a byte
+                    // fast path that could not reverse.
                     let result = match &self.value_stack[base + str_reg as usize] {
                         Value::String(s) => {
-                            if s.is_ascii() {
-                                // Fast path: byte indices == char indices
-                                let len = s.len() as i64;
-                                let lo = (if lo_val == 0 { 0i64 } else if lo_val < 0 { len + lo_val } else { lo_val - 1 }).max(0).min(len) as usize;
-                                let hi = (if hi_val < 0 { len + hi_val + 1 } else { hi_val }).max(0).min(len) as usize;
-                                let hi = hi.max(lo);
-                                s[lo..hi].to_string()
-                            } else {
-                                // Unicode: single-pass via char_indices to find byte offsets
-                                let char_len = s.chars().count() as i64;
-                                let lo = (if lo_val == 0 { 0i64 } else if lo_val < 0 { char_len + lo_val } else { lo_val - 1 }).max(0).min(char_len) as usize;
-                                let hi = (if hi_val < 0 { char_len + hi_val + 1 } else { hi_val }).max(0).min(char_len) as usize;
-                                let hi = hi.max(lo);
-                                let mut byte_lo = s.len();
-                                let mut byte_hi = s.len();
-                                for (ci, (bi, _)) in s.char_indices().enumerate() {
-                                    if ci == lo { byte_lo = bi; }
-                                    if ci == hi { byte_hi = bi; break; }
-                                }
-                                s[byte_lo..byte_hi].to_string()
+                            let chars: Vec<char> = s.chars().collect();
+                            match slice_span(lo_val, hi_val, chars.len()) {
+                                Ok(SliceSpan::Up(a, b)) => chars[a..b].iter().collect::<String>(),
+                                Ok(SliceSpan::Down(a, b)) =>
+                                    (b..=a).rev().map(|p| chars[(p - 1) as usize]).collect::<String>(),
+                                Err(e) => raise!(e),
+                            }
+                        }
+                        other => raise!(VmError::TypeMsg(format!("cannot slice {} - only arrays, tuples, named tuples, and strings support slice", other.type_label()))),
+                    };
+                    self.reg_set(dst, Value::String(ZyStr::new(result)));
+                }
+                &Instruction::ArraySliceCount(dst, arr_reg, lo_reg) => {
+                    let lo = match self.as_int_for(lo_reg, "slice start") { Ok(v) => v, Err(e) => raise!(e) };
+                    let n  = match self.as_int_for(lo_reg + 1, "slice count") { Ok(v) => v, Err(e) => raise!(e) };
+                    let result = match self.reg_get(arr_reg) {
+                        Value::Array(a) => {
+                            let a = a.as_ref();
+                            match count_span(lo, n, a.len()) { Ok((x, y)) => Value::Array(Rc::new(a[x..y].to_vec())), Err(e) => raise!(e) }
+                        }
+                        Value::Tuple(t) => {
+                            let t = t.as_ref();
+                            match count_span(lo, n, t.len()) { Ok((x, y)) => Value::Tuple(Rc::new(t[x..y].to_vec())), Err(e) => raise!(e) }
+                        }
+                        Value::NamedTuple(f) => {
+                            let first = f.first().map(|(k, _)| k.clone());
+                            raise!(VmError::TypeMsg(dict_not_positional("d$[a..b]", first.as_deref())));
+                        }
+                        Value::String(st) => {
+                            let chars: Vec<char> = st.chars().collect();
+                            match count_span(lo, n, chars.len()) {
+                                Ok((x, y)) => Value::String(ZyStr::new(chars[x..y].iter().collect::<String>())),
+                                Err(e) => raise!(e),
+                            }
+                        }
+                        other => raise!(VmError::TypeMsg(format!("cannot slice {} - only arrays, tuples, named tuples, and strings support slice", other.type_label()))),
+                    };
+                    self.reg_set(dst, result);
+                }
+                &Instruction::StrSliceCount(dst, str_reg, lo_reg) => {
+                    let lo = match self.as_int_for(lo_reg, "slice start") { Ok(v) => v, Err(e) => raise!(e) };
+                    let n  = match self.as_int_for(lo_reg + 1, "slice count") { Ok(v) => v, Err(e) => raise!(e) };
+                    let result = match &self.value_stack[base + str_reg as usize] {
+                        Value::String(s) => {
+                            let chars: Vec<char> = s.chars().collect();
+                            match count_span(lo, n, chars.len()) {
+                                Ok((x, y)) => chars[x..y].iter().collect::<String>(),
+                                Err(e) => raise!(e),
                             }
                         }
                         other => raise!(VmError::TypeMsg(format!("cannot slice {} - only arrays, tuples, named tuples, and strings support slice", other.type_label()))),
@@ -3258,19 +3289,21 @@ impl<W: Write> VM<W> {
                     let result = match self.reg_get(arr_reg) {
                         Value::Array(arr) => {
                             let arr = arr.as_ref();
-                            let (lo_norm, hi_norm) = match range_bounds(lo, hi, arr.len(), RangeUse::Slice) {
-                                Ok(v) => v,
+                            match slice_span(lo, hi, arr.len()) {
+                                Ok(SliceSpan::Up(a, b)) => Value::Array(Rc::new(arr[a..b].to_vec())),
+                                Ok(SliceSpan::Down(a, b)) => Value::Array(Rc::new(
+                                    (b..=a).rev().map(|p| arr[(p - 1) as usize].clone()).collect::<Vec<_>>())),
                                 Err(e) => raise!(e),
-                            };
-                            Value::Array(Rc::new(arr[lo_norm..hi_norm].to_vec()))
+                            }
                         }
                         Value::Tuple(tup) => {
                             let tup = tup.as_ref();
-                            let (lo_norm, hi_norm) = match range_bounds(lo, hi, tup.len(), RangeUse::Slice) {
-                                Ok(v) => v,
+                            match slice_span(lo, hi, tup.len()) {
+                                Ok(SliceSpan::Up(a, b)) => Value::Tuple(Rc::new(tup[a..b].to_vec())),
+                                Ok(SliceSpan::Down(a, b)) => Value::Tuple(Rc::new(
+                                    (b..=a).rev().map(|p| tup[(p - 1) as usize].clone()).collect::<Vec<_>>())),
                                 Err(e) => raise!(e),
-                            };
-                            Value::Tuple(Rc::new(tup[lo_norm..hi_norm].to_vec()))
+                            }
                         }
                         Value::NamedTuple(fields) => {
                             let fields = fields.as_ref();
@@ -4393,6 +4426,41 @@ enum RangeUse { Slice, Remove }
 /// `[1, 2, 3]$[3..1]` answered `[]` — a bound the program computed wrong came
 /// back as a plausible collection, and nothing said so. The numbers in the
 /// message are the ones the reader WROTE, not these offsets (GLB-047).
+/// A slice, once its written bounds have been read: ascending gives the 0-based
+/// half-open pair, descending gives the 1-based inclusive pair to walk backwards.
+///
+/// D3 (step 4.4): `a$[3..1]` BUILDS, by reversing — it is the only reversal the
+/// language has, since `$^-` sorts. Only the direction is read this way; a bound
+/// outside the collection is still refused, and a COUNT never reverses, which is
+/// why `$[i:n]` has its own instruction.
+enum SliceSpan { Up(usize, usize), Down(i64, i64) }
+
+/// `coll$[start:count]` — a count is a quantity, never a direction.
+fn count_span(lo: i64, n: i64, len: usize) -> Result<(usize, usize), VmError> {
+    let l = len as i64;
+    let start = if lo == 0 { 0 } else if lo < 0 { l + lo } else { lo - 1 };
+    if n < 0 {
+        return Err(VmError::IndexMsg(format!("slice count must be non-negative, got {}", n)));
+    }
+    let end = start + n;
+    if start < 0 || start > l || end > l {
+        return Err(VmError::IndexMsg(format!(
+            "slice indices out of bounds: [{}:{}] for collection of length {}", lo, n, len)));
+    }
+    Ok((start as usize, end as usize))
+}
+
+fn slice_span(lo: i64, hi: i64, len: usize) -> Result<SliceSpan, VmError> {
+    let l = len as i64;
+    let lo_pos = if lo == 0 { 1 } else if lo < 0 { l + lo + 1 } else { lo };
+    let hi_pos = if hi < 0 { l + hi + 1 } else { hi };
+    if lo_pos > hi_pos && hi_pos >= 1 && lo_pos <= l {
+        return Ok(SliceSpan::Down(lo_pos, hi_pos));
+    }
+    let (a, b) = range_bounds(lo, hi, len, RangeUse::Slice)?;
+    Ok(SliceSpan::Up(a, b))
+}
+
 fn range_bounds(lo: i64, hi: i64, len: usize, use_: RangeUse) -> Result<(usize, usize), VmError> {
     let l = len as i64;
     let lo_n = if lo == 0 { 0 } else if lo < 0 { l + lo } else { lo - 1 };

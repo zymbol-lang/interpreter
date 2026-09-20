@@ -3878,14 +3878,9 @@ impl Compiler {
         // Fill r_hi with end value
         if let Some(end) = &cs.end {
             let r_end = self.compile_expr(end, ctx)?;
-            if cs.count_based {
-                // [start:count] → actual_end (0-based exclusive) = (start-1) + count = start + count - 1
-                // VM normalizes lo as lo-1, so hi must account for 1-based offset too.
-                ctx.emit(Instruction::AddInt(r_hi, r_lo, r_end));
-                ctx.emit(Instruction::SubIntImm(r_hi, r_hi, 1));
-            } else {
-                ctx.emit(Instruction::CopyReg(r_hi, r_end));
-            }
+            // The count travels as a COUNT: folding it into an end made
+            // `$[2:0]` arrive as `2..1`, which D3 now reads as a direction.
+            ctx.emit(Instruction::CopyReg(r_hi, r_end));
         } else {
             // slice to end: use length
             if ctx.get_reg_type(r_coll) == StaticType::String {
@@ -3897,10 +3892,12 @@ impl Compiler {
         let dst = ctx.alloc_temp()?;
         let coll_ty = ctx.get_reg_type(r_coll);
         if coll_ty == StaticType::String {
-            ctx.emit(Instruction::StrSlice(dst, r_coll, r_lo));
+            ctx.emit(if cs.count_based { Instruction::StrSliceCount(dst, r_coll, r_lo) }
+                     else { Instruction::StrSlice(dst, r_coll, r_lo) });
             ctx.set_reg_type(dst, StaticType::String);
         } else {
-            ctx.emit(Instruction::ArraySlice(dst, r_coll, r_lo));
+            ctx.emit(if cs.count_based { Instruction::ArraySliceCount(dst, r_coll, r_lo) }
+                     else { Instruction::ArraySlice(dst, r_coll, r_lo) });
         }
         Ok(dst)
     }
@@ -5293,7 +5290,9 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             | Instruction::ArrayRemoveAll(d, a) | Instruction::ArrayRemoveRange(d, a) => { upd(*d); upd(*a); }
             Instruction::ArrayInsert(d, i, v) => { upd(*d); upd(*i); upd(*v); }
             Instruction::ArrayLen(d, a) | Instruction::ArrayContains(d, a, _)
-            | Instruction::ArraySlice(d, a, _) => { upd(*d); upd(*a); }
+            | Instruction::ArraySlice(d, a, _)
+            | Instruction::ArraySliceCount(d, a, _)
+            | Instruction::StrSliceCount(d, a, _) => { upd(*d); upd(*a); }
             Instruction::DestructureCheck(s, _) | Instruction::LoopStepCheck(s)
             | Instruction::CallableCheck(s, _)
             | Instruction::OutputSlotCheck(s, _) | Instruction::DestroyLocal(s, _)

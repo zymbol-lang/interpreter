@@ -153,6 +153,12 @@ pub enum Instruction {
     ArrayContains(Reg, Reg, Reg),
     /// dst = arr[lo..hi] (exclusive hi, like Python slicing)
     ArraySlice(Reg, Reg, Reg),
+    /// `coll$[start:count]` — the COUNT form, kept apart from `ArraySlice`
+    /// because a count never reverses: `$[2:0]` is the empty slice and
+    /// `$[2..1]` is two elements backwards (D3, step 4.4). `lo_reg + 1` holds
+    /// the count, not an end.
+    ArraySliceCount(Reg, Reg, Reg),
+    StrSliceCount(Reg, Reg, Reg),
     /// HOF: dst = arr.map(lambda_reg)
     ArrayMap(Reg, Reg, Reg),
     /// HOF: dst = arr.filter(lambda_reg)
