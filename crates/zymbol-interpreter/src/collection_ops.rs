@@ -610,6 +610,52 @@ impl<W: Write> Interpreter<W> {
             });
         }
 
+        // D3: a slice written from a higher position to a lower one BUILDS, by
+        // reversing — `a$[3..1]` is positions 3, 2 and 1 in that order. It is
+        // the only way the language has to reverse: `$^-` SORTS descending,
+        // which is a different question.
+        //
+        // Only the direction is read this way. A bound outside the collection
+        // is still refused above, and a count (`$[i:n]`) never reverses: a
+        // count of 0 is an empty slice and a negative one is refused.
+        // The direction is read from what was WRITTEN, not from the offsets:
+        // `a$[2..1]` normalizes to start == end, which is indistinguishable
+        // from an empty ascending slice, and it is a descending one.
+        let lo_pos = if written_start == 0 { 1 }
+            else if written_start < 0 { length as i64 + written_start + 1 }
+            else { written_start };
+        let hi_pos = if written_end < 0 { length as i64 + written_end + 1 } else { written_end };
+        if lo_pos > hi_pos && !op.count_based && hi_pos >= 1 && lo_pos <= length as i64 {
+            let take = |v: &[Value]| -> Vec<Value> {
+                (hi_pos..=lo_pos).rev().map(|p| v[(p - 1) as usize].clone()).collect()
+            };
+            return match collection {
+                Value::Array(arr) => Ok(Value::array(take(&arr))),
+                Value::Tuple(tup) => Ok(Value::tuple(take(&tup))),
+                Value::String(st) => {
+                    let chars: Vec<char> = st.chars().collect();
+                    Ok(Value::String(
+                        (hi_pos..=lo_pos).rev().map(|p| chars[(p - 1) as usize]).collect::<String>().into(),
+                    ))
+                }
+                Value::NamedTuple(fields) => Err(RuntimeError::kinded(
+                    "Type",
+                    dict_not_positional("d$[a..b]", fields.first().map(|(k, _)| k.as_str())),
+                    op.span,
+                )),
+                other => Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "cannot slice {} - only arrays, tuples, named tuples, and strings support slice",
+                        other.type_label()
+                    ),
+                    op.span,
+                )),
+            };
+        }
+
+        // A count never reverses: `$[i:n]` with a negative count is refused
+        // where it is read, and 0 is the empty slice.
         if start > end {
             return Err(RuntimeError::Generic {
                 message: format!(
