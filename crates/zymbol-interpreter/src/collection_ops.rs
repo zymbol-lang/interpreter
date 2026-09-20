@@ -570,6 +570,13 @@ impl<W: Write> Interpreter<W> {
             length as i64
         };
 
+        // What the reader WROTE, kept for the diagnostics below: `start` becomes a
+        // 0-based offset two lines down and `end` stays 1-based-inclusive, so a
+        // message built from them told whoever wrote `$[3..1]` that "start (2)
+        // cannot be greater than end (1)" — two numbers that are not in their
+        // program, and a relation about the wrong values (GLB-047).
+        let (written_start, written_end) = (start, raw_end);
+
         // Normalize indices (1-based: positive i maps to internal i-1; 0 = default start)
         let start = if start == 0 {
             // None/default: maps to 0-based start (first element)
@@ -597,7 +604,7 @@ impl<W: Write> Interpreter<W> {
             return Err(RuntimeError::Generic {
                 message: format!(
                     "slice indices out of bounds: [{}..{}] for collection of length {}",
-                    start, end, length
+                    written_start, written_end, length
                 ),
                 span: op.span,
             });
@@ -607,7 +614,7 @@ impl<W: Write> Interpreter<W> {
             return Err(RuntimeError::Generic {
                 message: format!(
                     "slice start ({}) cannot be greater than end ({})",
-                    start, end
+                    written_start, written_end
                 ),
                 span: op.span,
             });
@@ -1055,6 +1062,10 @@ impl<W: Write> Interpreter<W> {
             )),
         };
 
+        // What the reader WROTE, for the diagnostics below — see the slice above.
+        let mut written_start: i64 = 1;
+        let written_end: i64;
+
         let start = if let Some(ref s_expr) = op.start {
             match self.eval_expr(s_expr)? {
                 Value::Int(n) => {
@@ -1062,6 +1073,7 @@ impl<W: Write> Interpreter<W> {
                         message: format!("$-[start..] start must be positive (1-based), got {}", n),
                         span: op.span,
                     }); }
+                    written_start = n;
                     (n - 1) as usize  // normalize 1-based to 0-based
                 }
                 other => return Err(RuntimeError::Generic {
@@ -1087,6 +1099,7 @@ impl<W: Write> Interpreter<W> {
                             span: op.span,
                         });
                     }
+                    written_end = n;
                     n as usize  // range: 1-based inclusive = 0-based exclusive; count: raw count
                 }
                 other => return Err(RuntimeError::Generic {
@@ -1094,20 +1107,20 @@ impl<W: Write> Interpreter<W> {
                     span: op.span,
                 }),
             }
-        } else { length };
+        } else { written_end = length as i64; length };
 
         // count_based: end field holds count → actual_end = start + count
         let end = if op.count_based { start + raw_end } else { raw_end };
 
         if start > end {
             return Err(RuntimeError::Generic {
-                message: format!("$-[start..end]: start ({}) cannot be greater than end ({})", start, end),
+                message: format!("$-[start..end]: start ({}) cannot be greater than end ({})", written_start, written_end),
                 span: op.span,
             });
         }
         if start > length || end > length {
             return Err(RuntimeError::Generic {
-                message: format!("$-[{}..{}] out of bounds for collection of length {}", start, end, length),
+                message: format!("$-[{}..{}] out of bounds for collection of length {}", written_start, written_end, length),
                 span: op.span,
             });
         }
