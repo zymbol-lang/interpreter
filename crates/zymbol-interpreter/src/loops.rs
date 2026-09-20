@@ -88,10 +88,11 @@ impl<W: Write> Interpreter<W> {
                 message: format!("@~ requires non-negative duration, got {}", n),
                 span: sleep.span,
             }),
-            other => return Err(RuntimeError::Generic {
-                message: format!("@~ requires integer milliseconds, got {}", other.type_label()),
-                span: sleep.span,
-            }),
+            other => return Err(RuntimeError::kinded(
+                "Type",
+                format!("@~ requires integer milliseconds, got {}", other.type_label()),
+                sleep.span,
+            )),
         };
         std::thread::sleep(std::time::Duration::from_millis(ms));
         Ok(())
@@ -153,19 +154,21 @@ impl<W: Write> Interpreter<W> {
                             message: format!("step must be positive, got {}", n),
                             span: step_expr.span(),
                         }),
-                        other => return Err(RuntimeError::Generic {
-                            message: format!("step must be an integer, got {}", other.type_label()),
-                            span: step_expr.span(),
-                        }),
+                        other => return Err(RuntimeError::kinded(
+                            "Type",
+                            format!("step must be an integer, got {}", other.type_label()),
+                            step_expr.span(),
+                        )),
                     }
                 } else { 1i64 };
 
                 let (start, end) = match (start_val, end_val) {
                     (Value::Int(s), Value::Int(e)) => (s, e),
-                    (sv, ev) => return Err(RuntimeError::Generic {
-                        message: format!("range bounds must be integers, got {} and {}", sv.type_label(), ev.type_label()),
-                        span: range_expr.start.span(),
-                    }),
+                    (sv, ev) => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("range bounds must be integers, got {} and {}", sv.type_label(), ev.type_label()),
+                        range_expr.start.span(),
+                    )),
                 };
 
                 let forward = start <= end;

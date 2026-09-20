@@ -59,13 +59,14 @@ impl<W: Write> Interpreter<W> {
             Value::Tuple(ref tup) => Ok(Value::Int(tup.len() as i64)),
             Value::NamedTuple(ref fields) => Ok(Value::Int(fields.len() as i64)),
             Value::String(ref s) => Ok(Value::Int(if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 })),
-            _ => Err(RuntimeError::Generic {
-                message: format!(
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
                     "cannot get length of {} - only arrays, tuples, and strings have length",
                     collection.type_label()
                 ),
-                span: op.span,
-            }),
+                op.span,
+            )),
         }
     }
 
@@ -98,13 +99,14 @@ impl<W: Write> Interpreter<W> {
                 };
                 Ok(Value::String(result))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!(
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
                     "cannot append to {} - only arrays, tuples, and strings support $+",
                     collection.type_label()
                 ),
-                span: op.span,
-            }),
+                op.span,
+            )),
         }
     }
 
@@ -136,20 +138,22 @@ impl<W: Write> Interpreter<W> {
         }
 
         if let (Value::NamedTuple(fields), Value::Int(_)) = (&collection, &index_value) {
-            return Err(RuntimeError::Generic {
-                message: dict_not_positional("d$-[n]", fields.first().map(|(k, _)| k.as_str())),
-                span: op.span,
-            });
+            return Err(RuntimeError::kinded(
+                "Type",
+                dict_not_positional("d$-[n]", fields.first().map(|(k, _)| k.as_str())),
+                op.span,
+            ));
         }
 
         // Extract index as integer
         let index = match index_value {
             Value::Int(n) => n,
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!("remove index must be an integer, got {}", index_value.type_label()),
-                    span: op.span,
-                })
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("remove index must be an integer, got {}", index_value.type_label()),
+                    op.span,
+                ))
             }
         };
 
@@ -239,13 +243,14 @@ impl<W: Write> Interpreter<W> {
                 chars.remove(i as usize);
                 Ok(Value::String(chars.iter().collect()))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!(
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
                     "cannot remove from {} - only arrays, tuples, and strings support $-[i]",
                     collection.type_label()
                 ),
-                span: op.span,
-            }),
+                op.span,
+            )),
         }
     }
 
@@ -306,13 +311,14 @@ impl<W: Write> Interpreter<W> {
                     }),
                 }
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!(
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
                     "cannot search {} - only arrays, tuples, and strings support contains",
                     collection.type_label()
                 ),
-                span: op.span,
-            }),
+                op.span,
+            )),
         }
     }
 
@@ -334,13 +340,14 @@ impl<W: Write> Interpreter<W> {
                 }
                 match self.eval_expr(&step.index)? {
                     v @ (Value::Int(_) | Value::String(_)) => indices.push(v),
-                    other => return Err(RuntimeError::Generic {
-                        message: format!(
+                    other => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!(
                             "a navigation step is a position (Int) or a dictionary key (String), got {}",
                             other.type_label()
                         ),
-                        span: op.span,
-                    }),
+                        op.span,
+                    )),
                 }
             }
             let root = self.eval_expr(&di.array)?;
@@ -401,10 +408,11 @@ impl<W: Write> Interpreter<W> {
             Value::Array(mut arr) => {
                 let index = match index_value {
                     Value::Int(n) => n,
-                    _ => return Err(RuntimeError::Generic {
-                        message: format!("array update index must be an integer, got {}", index_value.type_label()),
-                        span: op.span,
-                    }),
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("array update index must be an integer, got {}", index_value.type_label()),
+                        op.span,
+                    )),
                 };
                 let len = arr.len();
                 let i = resolve_int(index, len, op.span, "array")?;
@@ -414,10 +422,11 @@ impl<W: Write> Interpreter<W> {
             Value::Tuple(mut tup) => {
                 let index = match index_value {
                     Value::Int(n) => n,
-                    _ => return Err(RuntimeError::Generic {
-                        message: format!("tuple update index must be an integer, got {}", index_value.type_label()),
-                        span: op.span,
-                    }),
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("tuple update index must be an integer, got {}", index_value.type_label()),
+                        op.span,
+                    )),
                 };
                 let len = tup.len();
                 let i = if index == 0 {
@@ -455,13 +464,14 @@ impl<W: Write> Interpreter<W> {
                     // value. `d[2]$~ v` is exactly the failure decision 11
                     // describes — adding a key changes what sits at each
                     // position — applied to a mutation.
-                    Value::Int(_) => Err(RuntimeError::Generic {
-                        message: dict_not_positional(
+                    Value::Int(_) => Err(RuntimeError::kinded(
+                        "Type",
+                        dict_not_positional(
                             "d[n]$~ value",
                             fields.first().map(|(k, _)| k.as_str()),
                         ),
-                        span: op.span,
-                    }),
+                        op.span,
+                    )),
                     Value::String(name) => {
                         for (field_name, field_value) in std::rc::Rc::make_mut(&mut fields) {
                             if *field_name == name {
@@ -485,22 +495,24 @@ impl<W: Write> Interpreter<W> {
                         Rc::make_mut(&mut fields).push((name.clone(), new_value));
                         Ok(Value::NamedTuple(fields))
                     }
-                    _ => Err(RuntimeError::Generic {
-                        message: format!(
+                    _ => Err(RuntimeError::kinded(
+                        "Type",
+                        format!(
                             "named tuple update index must be an integer or field name (string), got {}",
                             index_value.type_label()
                         ),
-                        span: op.span,
-                    }),
+                        op.span,
+                    )),
                 }
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!(
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
                     "$~ writes into a collection, and this is {}\nhelp: use a[1]$~ v on an array or tuple, d[\"key\"]$~ v on a #(…)",
                     collection.type_label()
                 ),
-                span: op.span,
-            }),
+                op.span,
+            )),
         }
     }
 
@@ -515,13 +527,14 @@ impl<W: Write> Interpreter<W> {
             Value::NamedTuple(fields) => fields.len(),
             Value::String(s) => s.chars().count(),
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!(
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
                         "cannot slice {} - only arrays, tuples, named tuples, and strings support slice",
                         collection.type_label()
                     ),
-                    span: op.span,
-                });
+                    op.span,
+                ));
             }
         };
 
@@ -613,10 +626,11 @@ impl<W: Write> Interpreter<W> {
             // No key-based replacement, and it does not get one: "the first
             // two keys" is not a question a dictionary should answer, which is
             // why Python's `dict` has no slicing either.
-            Value::NamedTuple(fields) => Err(RuntimeError::Generic {
-                message: dict_not_positional("d$[a..b]", fields.first().map(|(k, _)| k.as_str())),
-                span: op.span,
-            }),
+            Value::NamedTuple(fields) => Err(RuntimeError::kinded(
+                "Type",
+                dict_not_positional("d$[a..b]", fields.first().map(|(k, _)| k.as_str())),
+                op.span,
+            )),
             Value::String(s) => {
                 // Convert string to chars, slice, then back to string
                 let chars: Vec<char> = s.chars().collect();
@@ -636,10 +650,11 @@ impl<W: Write> Interpreter<W> {
         let func = match lambda {
             Value::Function(f) => f,
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: "map requires lambda function".to_string(),
-                    span: op.span,
-                });
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    "map requires lambda function".to_string(),
+                    op.span,
+                ));
             }
         };
 
@@ -659,10 +674,11 @@ impl<W: Write> Interpreter<W> {
 
                 Ok(Value::array(result))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("map requires array, got {}", collection.type_label()),
-                span: op.span,
-            }),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("map requires array, got {}", collection.type_label()),
+                op.span,
+            )),
         }
     }
 
@@ -674,10 +690,11 @@ impl<W: Write> Interpreter<W> {
         let func = match lambda {
             Value::Function(f) => f,
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: "filter requires lambda function".to_string(),
-                    span: op.span,
-                });
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    "filter requires lambda function".to_string(),
+                    op.span,
+                ));
             }
         };
 
@@ -708,10 +725,11 @@ impl<W: Write> Interpreter<W> {
 
                 Ok(Value::array(result))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("filter requires array, got {}", collection.type_label()),
-                span: op.span,
-            }),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("filter requires array, got {}", collection.type_label()),
+                op.span,
+            )),
         }
     }
 
@@ -724,10 +742,11 @@ impl<W: Write> Interpreter<W> {
         let func = match lambda {
             Value::Function(f) => f,
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: "reduce requires lambda function".to_string(),
-                    span: op.span,
-                });
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    "reduce requires lambda function".to_string(),
+                    op.span,
+                ));
             }
         };
 
@@ -757,10 +776,11 @@ impl<W: Write> Interpreter<W> {
 
                 Ok(accumulator)
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("reduce requires array, got {}", collection.type_label()),
-                span: op.span,
-            }),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("reduce requires array, got {}", collection.type_label()),
+                op.span,
+            )),
         }
     }
 
@@ -822,10 +842,11 @@ impl<W: Write> Interpreter<W> {
 
                 Ok(Value::Array(items))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("sort requires an array, got {}", collection.type_label()),
-                span: op.span,
-            }),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("sort requires an array, got {}", collection.type_label()),
+                op.span,
+            )),
         }
     }
 
@@ -837,10 +858,11 @@ impl<W: Write> Interpreter<W> {
 
         let index = match index_val {
             Value::Int(n) => n,
-            _ => return Err(RuntimeError::Generic {
-                message: format!("$+[i] index must be an integer, got {}", index_val.type_label()),
-                span: op.span,
-            }),
+            _ => return Err(RuntimeError::kinded(
+                "Type",
+                format!("$+[i] index must be an integer, got {}", index_val.type_label()),
+                op.span,
+            )),
         };
         if index <= 0 {
             return Err(RuntimeError::Generic {
@@ -898,10 +920,11 @@ impl<W: Write> Interpreter<W> {
                     }),
                 }
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("$+[i] requires an array, tuple, or string, got {}", collection.type_label()),
-                span: op.span,
-            }),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("$+[i] requires an array, tuple, or string, got {}", collection.type_label()),
+                op.span,
+            )),
         }
     }
 
@@ -961,10 +984,11 @@ impl<W: Write> Interpreter<W> {
                 };
                 Ok(Value::String(result))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("$- requires an array, tuple, or string, got {}", collection.type_label()),
-                span: op.span,
-            }),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("$- requires an array, tuple, or string, got {}", collection.type_label()),
+                op.span,
+            )),
         }
     }
 
@@ -1007,10 +1031,11 @@ impl<W: Write> Interpreter<W> {
                 };
                 Ok(Value::String(result))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("$-- requires an array, tuple, or string, got {}", collection.type_label()),
-                span: op.span,
-            }),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("$-- requires an array, tuple, or string, got {}", collection.type_label()),
+                op.span,
+            )),
         }
     }
 
@@ -1023,10 +1048,11 @@ impl<W: Write> Interpreter<W> {
             Value::Tuple(t) => t.len(),
             Value::NamedTuple(f) => f.len(),
             Value::String(s) => s.chars().count(),
-            _ => return Err(RuntimeError::Generic {
-                message: format!("$-[..] requires an array, tuple, or string, got {}", collection.type_label()),
-                span: op.span,
-            }),
+            _ => return Err(RuntimeError::kinded(
+                "Type",
+                format!("$-[..] requires an array, tuple, or string, got {}", collection.type_label()),
+                op.span,
+            )),
         };
 
         let start = if let Some(ref s_expr) = op.start {
@@ -1094,10 +1120,11 @@ impl<W: Write> Interpreter<W> {
             Value::Array(mut arr) => { Rc::make_mut(&mut arr).drain(start..end); Ok(Value::Array(arr)) }
             Value::Tuple(mut tup) => { Rc::make_mut(&mut tup).drain(start..end); Ok(Value::Tuple(tup)) }
             // Removing a RUN of keys by position: same family, same refusal.
-            Value::NamedTuple(fields) => Err(RuntimeError::Generic {
-                message: dict_not_positional("d$-[a..b]", fields.first().map(|(k, _)| k.as_str())),
-                span: op.span,
-            }),
+            Value::NamedTuple(fields) => Err(RuntimeError::kinded(
+                "Type",
+                dict_not_positional("d$-[a..b]", fields.first().map(|(k, _)| k.as_str())),
+                op.span,
+            )),
             Value::String(s) => {
                 let mut chars: Vec<char> = s.chars().collect();
                 chars.drain(start..end);
@@ -1166,13 +1193,14 @@ impl<W: Write> Interpreter<W> {
                 };
                 Ok(Value::array(positions))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!(
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
                     "$?? requires an array, tuple, or string, got {}",
                     collection.type_label()
                 ),
-                span: op.span,
-            }),
+                op.span,
+            )),
         }
     }
 }
@@ -1223,10 +1251,11 @@ fn get_at_step(col: &Value, step: &Value, span: zymbol_span::Span) -> Result<Val
         };
     }
     if let (Value::NamedTuple(fields), Value::Int(_)) = (col, step) {
-        return Err(RuntimeError::Generic {
-            message: dict_not_positional("d[n>…]", fields.first().map(|(k, _)| k.as_str())),
+        return Err(RuntimeError::kinded(
+            "Type",
+            dict_not_positional("d[n>…]", fields.first().map(|(k, _)| k.as_str())),
             span,
-        });
+        ));
     }
     match step {
         Value::Int(n) => get_at_idx(col, *n, span),
@@ -1248,10 +1277,11 @@ fn set_at_step(col: Value, step: &Value, new_val: Value, span: zymbol_span::Span
         return Ok(Value::NamedTuple(fields));
     }
     if let (Value::NamedTuple(fields), Value::Int(_)) = (&col, step) {
-        return Err(RuntimeError::Generic {
-            message: dict_not_positional("d[n>…]$~ value", fields.first().map(|(k, _)| k.as_str())),
+        return Err(RuntimeError::kinded(
+            "Type",
+            dict_not_positional("d[n>…]$~ value", fields.first().map(|(k, _)| k.as_str())),
             span,
-        });
+        ));
     }
     match step {
         Value::Int(n) => set_at_idx(col, *n, new_val, span),
@@ -1268,10 +1298,11 @@ fn get_at_idx(col: &Value, index: i64, span: zymbol_span::Span) -> Result<Value>
         Value::Array(arr)  => (arr.len(), Box::new(|i| arr[i].clone())),
         Value::Tuple(tup)  => (tup.len(), Box::new(|i| tup[i].clone())),
         Value::NamedTuple(fields) => (fields.len(), Box::new(|i| fields[i].1.clone())),
-        other => return Err(RuntimeError::Generic {
-            message: format!("cannot index into {} during deep update", other.type_label()),
+        other => return Err(RuntimeError::kinded(
+            "Type",
+            format!("cannot index into {} during deep update", other.type_label()),
             span,
-        }),
+        )),
     };
     let i = resolve_idx(index, len, span)?;
     Ok(get_fn(i))

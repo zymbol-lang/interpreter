@@ -134,10 +134,11 @@ impl<W: Write> Interpreter<W> {
             CastKind::ToIntRound => match value {
                 Value::Int(_) => Ok(value),
                 Value::Float(f) => cast_to_int(f.round(), "###", op.span),
-                other => Err(RuntimeError::Generic {
-                    message: format!("### requires a numeric value, got {}", value_type(other)),
-                    span: op.span,
-                }),
+                other => Err(RuntimeError::kinded(
+                    "Type",
+                    format!("### requires a numeric value, got {}", value_type(other)),
+                    op.span,
+                )),
             },
             CastKind::ToIntTrunc => match value {
                 Value::Int(_) => Ok(value),
@@ -147,10 +148,11 @@ impl<W: Write> Interpreter<W> {
                 // literal and stripping its prefix), and it makes characters
                 // classifiable by range.
                 Value::Char(c) => Ok(Value::Int(c as u32 as i64)),
-                other => Err(RuntimeError::Generic {
-                    message: format!("##! requires a numeric value or Char, got {}", value_type(other)),
-                    span: op.span,
-                }),
+                other => Err(RuntimeError::kinded(
+                    "Type",
+                    format!("##! requires a numeric value or Char, got {}", value_type(other)),
+                    op.span,
+                )),
             },
         }
     }
@@ -209,17 +211,19 @@ impl<W: Write> Interpreter<W> {
             zymbol_ast::Precision::Literal(n) => Ok(*n),
             zymbol_ast::Precision::Dynamic(expr) => match self.eval_expr(expr)? {
                 Value::Int(n) if n >= 0 => Ok(n as u32),
-                Value::Int(n) => Err(RuntimeError::Generic {
-                    message: format!("decimal count must not be negative, got {}", n),
+                Value::Int(n) => Err(RuntimeError::kinded(
+                    "Index",
+                    format!("decimal count must not be negative, got {}", n),
                     span,
-                }),
-                other => Err(RuntimeError::Generic {
-                    message: format!(
+                )),
+                other => Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
                         "decimal count must be a whole number, got {}",
                         other.type_label()
                     ),
                     span,
-                }),
+                )),
             },
         }
     }
@@ -261,13 +265,14 @@ impl<W: Write> Interpreter<W> {
                     .unwrap_or_else(|_| normalized.parse::<f64>().unwrap_or(0.0))
             }
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!(
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
                         "format expressions only work with numbers, got {}",
                         value.type_label()
                     ),
-                    span: op.span,
-                });
+                    op.span,
+                ));
             }
         };
 
@@ -378,13 +383,14 @@ impl<W: Write> Interpreter<W> {
                 Ok(Value::Char(ch))
             }
 
-            _ => Err(RuntimeError::Generic {
-                message: format!(
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
                     "base conversion expressions work with char, int, or string, got {}",
                     value.type_label()
                 ),
-                span: op.span,
-            }),
+                op.span,
+            )),
         }
     }
 
@@ -423,13 +429,14 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!(
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
                         "round expressions only work with numbers or numeric strings, got {}",
                         value.type_label()
                     ),
-                    span: op.span,
-                });
+                    op.span,
+                ));
             }
         };
 
@@ -473,13 +480,14 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!(
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
                         "truncate expressions only work with numbers or numeric strings, got {}",
                         value.type_label()
                     ),
-                    span: op.span,
-                });
+                    op.span,
+                ));
             }
         };
 

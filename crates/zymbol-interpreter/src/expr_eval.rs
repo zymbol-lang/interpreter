@@ -53,10 +53,11 @@ impl<W: Write> Interpreter<W> {
                             })
                         }
                         _ => {
-                            return Err(RuntimeError::Generic {
-                                message: format!("step must be an integer, got {}", step_value.type_label()),
-                                span: step_expr.span(),
-                            })
+                            return Err(RuntimeError::kinded(
+                                "Type",
+                                format!("step must be an integer, got {}", step_value.type_label()),
+                                step_expr.span(),
+                            ))
                         }
                     }
                 } else {
@@ -109,13 +110,14 @@ impl<W: Write> Interpreter<W> {
                     // system is dynamic and `#?` validates each element, so
                     // walking a mixed collection is not walking blind.
                     Value::Tuple(items) => Ok(items.to_vec()),
-                    _ => Err(RuntimeError::Generic {
-                        message: format!(
+                    _ => Err(RuntimeError::kinded(
+                        "Type",
+                        format!(
                             "can only iterate over ranges, arrays, strings, tuples and dictionaries, got {}",
                             value.type_label()
                         ),
-                        span: expr.span(),
-                    }),
+                        expr.span(),
+                    )),
                 }
             }
         }
@@ -379,13 +381,14 @@ impl<W: Write> Interpreter<W> {
         // address there is, and the size is fixed.
         if let (Value::NamedTuple(fields), Value::Int(_)) = (collection, index_value) {
             let first = fields.first().map(|(k, _)| k.clone()).unwrap_or_else(|| "clave".into());
-            return Err(RuntimeError::Generic {
-                message: format!(
+            return Err(RuntimeError::kinded(
+                "Type",
+                format!(
                     "a dictionary is addressed by key, not by position\nhelp: use d[\"{}\"] — adding a key changes what sits at each position",
                     first
                 ),
                 span,
-            });
+            ));
         }
 
         // Extract index
@@ -397,19 +400,21 @@ impl<W: Write> Interpreter<W> {
             // `v["k"]` and `v[1>"k"]` to one instruction and cannot tell them
             // apart, and two texts for one failure were two texts too many.
             Value::String(_) => {
-                return Err(RuntimeError::Generic {
-                    message: format!(
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
                         "a String addresses a dictionary key, and this is {}",
                         collection.type_label()
                     ),
                     span,
-                })
+                ))
             }
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!("index must be an integer, got {}", index_value.type_label()),
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("index must be an integer, got {}", index_value.type_label()),
                     span,
-                })
+                ))
             }
         };
 
@@ -493,12 +498,13 @@ impl<W: Write> Interpreter<W> {
                     }),
                 }
             }
-            _ => Err(RuntimeError::Generic {
-                // One text for one failure, whether the index came through
-                // `v[1]` or `v[1>1]` (step 3.5b, decided 2026-09-16).
-                message: format!("cannot index into {} — expected array, tuple, or string", collection.type_label()),
+            // One text for one failure, whether the index came through
+            // `v[1]` or `v[1>1]` (step 3.5b, decided 2026-09-16).
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("cannot index into {} — expected array, tuple, or string", collection.type_label()),
                 span,
-            }),
+            )),
         }
     }
 
