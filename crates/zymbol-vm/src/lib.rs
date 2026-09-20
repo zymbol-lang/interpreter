@@ -1887,14 +1887,22 @@ impl<W: Write> VM<W> {
                             }
                             Value::Array(Rc::new(new_arr))
                         }
-                        other => {
-                            let mut s = self.numeral_repr(&other);
+                        Value::String(_) => {
+                            let mut s = self.numeral_repr(&base_val);
                             for &ir in item_regs {
                                 let part = self.numeral_repr(rreg!(ir));
                                 s.push_str(&part);
                             }
                             Value::String(ZyStr::new(s))
                         }
+                        // Strict (D2 revoked, 2026-09-20): `$++` builds onto a
+                        // string or an array. Anything else was turned into its
+                        // display form and built onto, so `5 $++ "a"` answered
+                        // `5a` where the tree-walker refuses.
+                        other => raise!(VmError::TypeMsg(format!(
+                            "$++ requires a string or array as base, got {}",
+                            other.type_label()
+                        ))),
                     };
                     wreg!(dst, result);
                 }
@@ -2162,12 +2170,21 @@ impl<W: Write> VM<W> {
                         Value::Tuple(rc_tup) => Rc::make_mut(rc_tup).push(val),
                         Value::String(s) => {
                             // $+ on string: d $+ s → string concatenation
-                            use std::fmt::Write as _;
                             let mut buf = s.clone().try_into_string();
                             match val {
                                 Value::String(r) => buf.push_str(r.as_str()),
                                 Value::Char(c) => buf.push(c),
-                                other => { let _ = write!(buf, "{}", other); }
+                                // Strict (D2 revoked, 2026-09-20): a string is
+                                // made of characters, so `$+` takes a Char or a
+                                // String and nothing else. Writing whatever
+                                // `Display` produced turned `"ab"$+ 5` into
+                                // `ab5` — the juxtaposition of the language
+                                // smuggled in through an append, which the
+                                // tree-walker has always refused.
+                                other => raise!(VmError::TypeMsg(format!(
+                                    "$+ on string requires char or string element, got {}",
+                                    other.type_label()
+                                ))),
                             }
                             *s = ZyStr::new(buf);
                         }
@@ -2547,10 +2564,37 @@ impl<W: Write> VM<W> {
                     // hi_reg = lo_reg + 1 by compiler convention
                     let lo_raw = match self.as_int(lo_reg) { Ok(v) => v, Err(e) => raise!(e) };
                     let hi_raw = match self.as_int(lo_reg + 1) { Ok(v) => v, Err(e) => raise!(e) };
-                    // lo: 0=default start (1-based 1 = internal 0), positive=1-based (subtract 1), negative=not supported
-                    let lo = (if lo_raw == 0 { 0i64 } else { lo_raw - 1 }).max(0) as usize;
-                    // hi: positive=1-based inclusive (stays same as 0-based exclusive)
-                    let hi = hi_raw.max(0) as usize;
+                    // Strict (D2 revoked, 2026-09-20): the bounds are checked
+                    // against the collection instead of being clamped and then
+                    // silently skipped. `[1, 2]$-[1..9]` left the array
+                    // untouched and said nothing, and `$-[0..2]` emptied it,
+                    // because a 0 came through `.max(0)` as a valid start.
+                    // Refused here in the tree-walker's words.
+                    if lo_raw <= 0 && lo_raw != 0 {
+                        raise!(VmError::IndexMsg(format!(
+                            "$-[start..] start must be positive (1-based), got {}", lo_raw)));
+                    }
+                    if lo_raw == 0 {
+                        raise!(VmError::IndexMsg(
+                            "$-[start..] start must be positive (1-based), got 0".to_string()));
+                    }
+                    if hi_raw <= 0 {
+                        raise!(VmError::IndexMsg(format!(
+                            "$-[..end] end must be positive (1-based), got {}", hi_raw)));
+                    }
+                    let len_of = match &self.value_stack[base + arr_reg as usize] {
+                        Value::Array(a) => Some(a.len()),
+                        Value::Tuple(t) => Some(t.len()),
+                        Value::String(st) => Some(st.chars().count()),
+                        _ => None,
+                    };
+                    let (lo, hi) = match len_of {
+                        Some(n) => match range_bounds(lo_raw, hi_raw, n, RangeUse::Remove) {
+                            Ok(v) => v,
+                            Err(e) => raise!(e),
+                        },
+                        None => (0usize, 0usize),
+                    };
                     match self.value_stack[base + arr_reg as usize].clone() {
                         Value::Array(rc_arr) => {
                             let mut arr = rc_arr.as_ref().clone();
@@ -2777,7 +2821,14 @@ impl<W: Write> VM<W> {
                         match (s_val, e_val) {
                             (Value::String(s), Value::Char(c))    => s.contains(*c),
                             (Value::String(s), Value::String(sub)) => s.contains(sub.as_str()),
-                            (Value::String(_), _) => false,
+                            // Strict (D2 revoked, 2026-09-20): answering `false`
+                            // to `"ab"$? 5` reads as "the 5 is not there", and
+                            // the question was never well written — a string
+                            // holds characters. The tree-walker refuses it.
+                            (Value::String(_), other) => raise!(VmError::TypeMsg(format!(
+                                "string contains only supports char or string search, got {}",
+                                other.type_label()
+                            ))),
                             (other, _) => raise!(VmError::TypeMsg(format!("cannot search {} - only arrays, tuples, and strings support contains", other.type_label()))),
                         }
                     };
@@ -3018,7 +3069,15 @@ impl<W: Write> VM<W> {
                             Value::String(r) => r.clone(),
                             other => raise!(VmError::TypeMsg(format!("$~~ replacement must be a string, got {}", other.type_label()))),
                         };
-                        let max = ri!(n_reg).max(0) as usize;
+                        // Strict (D2 revoked, 2026-09-20): a negative count was
+                        // clamped to 0, and 0 means "all" in the branch below —
+                        // so `"aa"$~~["a":"b":-1]` replaced the WHOLE string.
+                        let n_raw = ri!(n_reg);
+                        if n_raw < 0 {
+                            raise!(VmError::IndexMsg(format!(
+                                "replacement count must be non-negative, got {}", n_raw)));
+                        }
+                        let max = n_raw as usize;
                         // Avoid heap-allocating a String for char patterns: use char directly.
                         #[derive(Copy, Clone)]
                         enum Pat<'a> { Ch(char), Str(&'a str) }
@@ -3183,22 +3242,18 @@ impl<W: Write> VM<W> {
                     let result = match self.reg_get(arr_reg) {
                         Value::Array(arr) => {
                             let arr = arr.as_ref();
-                            let len = arr.len() as i64;
-                            // lo: 0=default start (internal 0), positive=1-based (subtract 1), negative=from end
-                            let lo_norm = (if lo == 0 { 0i64 } else if lo < 0 { len + lo } else { lo - 1 }).max(0).min(len) as usize;
-                            // hi: positive=1-based inclusive = 0-based exclusive (no change); negative=len+hi+1
-                            let hi_norm = (if hi < 0 { len + hi + 1 } else { hi }).max(0).min(len) as usize;
-                            let lo_norm = lo_norm.min(arr.len());
-                            let hi_norm = hi_norm.min(arr.len()).max(lo_norm);
+                            let (lo_norm, hi_norm) = match range_bounds(lo, hi, arr.len(), RangeUse::Slice) {
+                                Ok(v) => v,
+                                Err(e) => raise!(e),
+                            };
                             Value::Array(Rc::new(arr[lo_norm..hi_norm].to_vec()))
                         }
                         Value::Tuple(tup) => {
                             let tup = tup.as_ref();
-                            let len = tup.len() as i64;
-                            let lo_norm = (if lo == 0 { 0i64 } else if lo < 0 { len + lo } else { lo - 1 }).max(0).min(len) as usize;
-                            let hi_norm = (if hi < 0 { len + hi + 1 } else { hi }).max(0).min(len) as usize;
-                            let lo_norm = lo_norm.min(tup.len());
-                            let hi_norm = hi_norm.min(tup.len()).max(lo_norm);
+                            let (lo_norm, hi_norm) = match range_bounds(lo, hi, tup.len(), RangeUse::Slice) {
+                                Ok(v) => v,
+                                Err(e) => raise!(e),
+                            };
                             Value::Tuple(Rc::new(tup[lo_norm..hi_norm].to_vec()))
                         }
                         Value::NamedTuple(fields) => {
@@ -4298,6 +4353,41 @@ fn tuple_immutable_msg(name: &str) -> String {
 /// mutable dictionary a position is not a stable address. A positional WRITE is
 /// strictly worse than a positional read, since it corrupts data rather than
 /// returning the wrong value.
+/// Which of the two range operators is asking, so the refusal is worded the way
+/// the tree-walker words that operation.
+#[derive(Clone, Copy)]
+enum RangeUse { Slice, Remove }
+
+/// Normalize a written `lo..hi` into the 0-based half-open pair, refusing what
+/// the tree-walker refuses.
+///
+/// Strict (D2 revoked by the author, 2026-09-20). The VM clamped with
+/// `.max(0).min(len)` and `.max(lo)`, so `[1, 2]$[1..9]` answered `[1, 2]` and
+/// `[1, 2, 3]$[3..1]` answered `[]` — a bound the program computed wrong came
+/// back as a plausible collection, and nothing said so. The numbers in the
+/// message are the ones the reader WROTE, not these offsets (GLB-047).
+fn range_bounds(lo: i64, hi: i64, len: usize, use_: RangeUse) -> Result<(usize, usize), VmError> {
+    let l = len as i64;
+    let lo_n = if lo == 0 { 0 } else if lo < 0 { l + lo } else { lo - 1 };
+    let hi_n = if hi < 0 { l + hi + 1 } else { hi };
+    if lo_n < 0 || hi_n < 0 || lo_n > l || hi_n > l {
+        return Err(VmError::IndexMsg(match use_ {
+            RangeUse::Slice => format!(
+                "slice indices out of bounds: [{}..{}] for collection of length {}", lo, hi, len),
+            RangeUse::Remove => format!(
+                "$-[{}..{}] out of bounds for collection of length {}", lo, hi, len),
+        }));
+    }
+    if lo_n > hi_n {
+        return Err(VmError::IndexMsg(match use_ {
+            RangeUse::Slice => format!("slice start ({}) cannot be greater than end ({})", lo, hi),
+            RangeUse::Remove => format!(
+                "$-[start..end]: start ({}) cannot be greater than end ({})", lo, hi),
+        }));
+    }
+    Ok((lo_n as usize, hi_n as usize))
+}
+
 fn dict_not_positional(op: &str, first_key: Option<&str>) -> String {
     let k = first_key.unwrap_or("clave");
     format!(
