@@ -27,14 +27,16 @@ impl<W: Write> Interpreter<W> {
         };
         let n = match count_val {
             Value::Int(n) if n >= 0 => n as usize,
-            Value::Int(n) => return Err(RuntimeError::Generic {
-                message: format!("$* repetition count must be non-negative, got {}", n),
-                span: op.span,
-            }),
-            other => return Err(RuntimeError::Generic {
-                message: format!("$* repetition count must be an integer, got {}", other.type_label()),
-                span: op.span,
-            }),
+            Value::Int(n) => return Err(RuntimeError::kinded(
+                "Index",
+                format!("$* repetition count must be non-negative, got {}", n),
+                op.span,
+            )),
+            other => return Err(RuntimeError::kinded(
+                "Type",
+                format!("$* repetition count must be an integer, got {}", other.type_label()),
+                op.span,
+            )),
         };
         Ok(Value::String(s.repeat(n)))
     }
@@ -194,10 +196,11 @@ impl<W: Write> Interpreter<W> {
 
         let string = match string_value {
             Value::String(s) => s,
-            _ => return Err(RuntimeError::Generic {
-                message: format!("$/ requires a string on the left, got {}", string_value.type_label()),
-                span: op.span,
-            }),
+            _ => return Err(RuntimeError::kinded(
+                "Type",
+                format!("$/ requires a string on the left, got {}", string_value.type_label()),
+                op.span,
+            )),
         };
 
         let parts: Vec<Value> = match delimiter_value {

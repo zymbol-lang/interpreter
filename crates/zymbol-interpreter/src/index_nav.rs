@@ -27,13 +27,14 @@ impl<W: Write> Interpreter<W> {
             }
             let idx = match step_val {
                 Value::Int(n) => n,
-                other => return Err(RuntimeError::Generic {
-                    message: format!(
+                other => return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
                         "a navigation step is a position (Int) or a dictionary key (String), got {}",
                         other.type_label()
                     ),
-                    span: step.index.span(),
-                }),
+                    step.index.span(),
+                )),
             };
             current = descend(current, idx, step.index.span(), di.span)?;
         }
@@ -121,10 +122,11 @@ impl<W: Write> Interpreter<W> {
 
             let (start, end) = match (start_idx, end_idx) {
                 (i, j) if i < 0 || j < 0 => {
-                    return Err(RuntimeError::Generic {
-                        message: "range indices in nav path must be positive integers".to_string(),
+                    return Err(RuntimeError::kinded(
+                        "Index",
+                        "range indices in nav path must be positive integers".to_string(),
                         span,
-                    })
+                    ))
                 }
                 (i, j) => (i, j),
             };
@@ -168,13 +170,14 @@ impl<W: Write> Interpreter<W> {
             }
             let idx = match step_val {
                 Value::Int(n) => n,
-                other => return Err(RuntimeError::Generic {
-                    message: format!(
+                other => return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
                         "a navigation step is a position (Int) or a dictionary key (String), got {}",
                         other.type_label()
                     ),
-                    span: step.index.span(),
-                }),
+                    step.index.span(),
+                )),
             };
             let next = descend(current, idx, step.index.span(), span)?;
             self.walk_steps(next, rest, span)
@@ -190,14 +193,15 @@ impl<W: Write> Interpreter<W> {
         let val = self.eval_expr(expr)?;
         match val {
             Value::Int(n) => Ok(n),
-            other => Err(RuntimeError::Generic {
-                message: format!(
+            other => Err(RuntimeError::kinded(
+                "Type",
+                format!(
                     // The same words as a plain index: one failure, one text.
                     "index must be an integer, got {}",
                     other.type_label()
                 ),
-                span: expr.span(),
-            }),
+                expr.span(),
+            )),
         }
     }
 }
@@ -215,13 +219,14 @@ fn descend_key(collection: Value, key: &str, op_span: zymbol_span::Span) -> Resu
                 })
             }
         },
-        other => Err(RuntimeError::Generic {
-            message: format!(
+        other => Err(RuntimeError::kinded(
+            "Type",
+            format!(
                 "a String addresses a dictionary key, and this is {}",
                 other.type_label()
             ),
-            span: op_span,
-        }),
+            op_span,
+        )),
     }
 }
 
@@ -265,13 +270,14 @@ fn descend(
             let i = resolve_index(index, len, op_span, "string")?;
             Ok(Value::String(chars[i].to_string()))
         }
-        other => Err(RuntimeError::Generic {
-            message: format!(
+        other => Err(RuntimeError::kinded(
+            "Type",
+            format!(
                 "cannot index into {} — expected array, tuple, or string",
                 other.type_label()
             ),
-            span: op_span,
-        }),
+            op_span,
+        )),
     }
 }
 

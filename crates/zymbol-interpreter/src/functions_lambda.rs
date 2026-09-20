@@ -288,10 +288,11 @@ impl<W: Write> Interpreter<W> {
                         self.eval_lambda_call(func, arg_values, &call.span)
                     }
                     _ => {
-                        Err(RuntimeError::Generic {
-                            message: "expression is not callable".to_string(),
-                            span: call.span,
-                        })
+                        Err(RuntimeError::kinded(
+                            "Type",
+                            "expression is not callable".to_string(),
+                            call.span,
+                        ))
                     }
                 }
             }

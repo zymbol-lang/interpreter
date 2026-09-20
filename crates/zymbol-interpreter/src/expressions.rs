@@ -43,10 +43,11 @@ impl<W: Write> Interpreter<W> {
                 self.eval_lambda_call(func, arg_values, &pipe.span)
             }
             _ => {
-                Err(RuntimeError::Generic {
-                    message: "pipe operator requires a callable function or lambda".to_string(),
-                    span: pipe.span,
-                })
+                Err(RuntimeError::kinded(
+                    "Type",
+                    "pipe operator requires a callable function or lambda".to_string(),
+                    pipe.span,
+                ))
             }
         }
     }

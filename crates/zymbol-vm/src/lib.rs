@@ -595,6 +595,13 @@ pub enum VmError {
     #[error("{0}")]
     TypeMsg(String),
 
+    /// A message whose family is `##Index`: the type is right and the VALUE is
+    /// not — a count that came out negative, an index below 1. D1 puts those in
+    /// `##Index`, and `TypeMsg` was the only message-carrying variant there
+    /// was, so they were answering `##Type`.
+    #[error("{0}")]
+    IndexMsg(String),
+
     /// A runtime error that knows where it happened. Built once, at the edge of
     /// `run`, from the instruction pointer the VM was on — so the hot loop pays
     /// two stores per instruction and nothing more. `Display` is the message
@@ -684,7 +691,7 @@ fn vm_precision_from(v: &Value) -> Result<u32, VmError> {
     match v {
         Value::Int(n) if *n >= 0 => Ok(*n as u32),
         // Worded as the tree-walker words them (step 3.5b).
-        Value::Int(n) => Err(VmError::TypeMsg(format!("decimal count must not be negative, got {}", n))),
+        Value::Int(n) => Err(VmError::IndexMsg(format!("decimal count must not be negative, got {}", n))),
         other => Err(VmError::TypeMsg(format!(
             "decimal count must be a whole number, got {}", other.type_label()))),
     }
@@ -1116,7 +1123,7 @@ fn vm_error_kind(e: &VmError) -> &'static str {
         VmError::TypeError { .. } | VmError::CastError { .. } | VmError::TypeMsg(_) => "Type",
         VmError::DivisionByZero | VmError::ModuloByZero => "Div",
         VmError::IntOverflow { .. } | VmError::CastOverflow { .. } => "Range",
-        VmError::IndexOutOfBounds { .. } | VmError::IndexZero => "Index",
+        VmError::IndexOutOfBounds { .. } | VmError::IndexZero | VmError::IndexMsg(_) => "Index",
         VmError::Io(_) => "IO",
         VmError::Generic(m) | VmError::Located { message: m, .. } => {
             zymbol_common::errkind::error_kind_of_message(m)
@@ -1911,7 +1918,7 @@ impl<W: Write> VM<W> {
                             Value::Int(n) if *n >= 0 => *n as usize,
                             // A count that IS an Int and is negative is the
                             // other message, as in the tree-walker.
-                            Value::Int(n) => raise!(VmError::TypeMsg(format!(
+                            Value::Int(n) => raise!(VmError::IndexMsg(format!(
                                 "$* repetition count must be non-negative, got {}", n))),
                             other => raise!(VmError::TypeMsg(format!(
                                 "$* repetition count must be an integer, got {}", other.type_label()))),
@@ -2194,7 +2201,7 @@ impl<W: Write> VM<W> {
                     {
                         let first = fields.first().map(|(k, _)| k.clone())
                             .unwrap_or_else(|| "clave".to_string());
-                        raise!(VmError::Generic(format!(
+                        raise!(VmError::TypeMsg(format!(
                             "a dictionary is addressed by key, not by position\nhelp: use d[\"{}\"] — adding a key changes what sits at each position",
                             first
                         )));
@@ -2331,7 +2338,7 @@ impl<W: Write> VM<W> {
                                 // the positional read decision 11 withdrew.
                                 Value::Int(_) => {
                                     let first = fields.first().map(|(k, _)| k.clone());
-                                    raise!(VmError::Generic(dict_not_positional(
+                                    raise!(VmError::TypeMsg(dict_not_positional(
                                         "d[n]$~ value", first.as_deref())));
                                 }
                                 #[allow(unreachable_patterns)]
@@ -2413,7 +2420,7 @@ impl<W: Write> VM<W> {
                         }
                         Value::NamedTuple(rc_fields) => {
                             let first = rc_fields.first().map(|(k, _)| k.clone());
-                            raise!(VmError::Generic(dict_not_positional("d$-[n]", first.as_deref())));
+                            raise!(VmError::TypeMsg(dict_not_positional("d$-[n]", first.as_deref())));
                         }
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
@@ -2563,7 +2570,7 @@ impl<W: Write> VM<W> {
                             let fields = rc_nt.as_ref().clone();
                             let _ = (lo, hi);
                             let first = fields.first().map(|(k, _)| k.clone());
-                            raise!(VmError::Generic(dict_not_positional("d$-[a..b]", first.as_deref())));
+                            raise!(VmError::TypeMsg(dict_not_positional("d$-[a..b]", first.as_deref())));
                         }
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
@@ -3204,7 +3211,7 @@ impl<W: Write> VM<W> {
                             // "the first two keys" is not a question a dictionary
                             // should answer — Python's `dict` has no slicing.
                             let first = fields.first().map(|(k, _)| k.clone());
-                            raise!(VmError::Generic(dict_not_positional("d$[a..b]", first.as_deref())));
+                            raise!(VmError::TypeMsg(dict_not_positional("d$[a..b]", first.as_deref())));
                         }
                         // Strings slice too. The tree-walker has always allowed
                         // `s$[3..]`; the VM only reached this instruction when
@@ -4365,7 +4372,7 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
                 // decision 11 withdrew.
                 _ => {
                     let first = fields.first().map(|(k, _)| k.clone());
-                    return Err(VmError::Generic(dict_not_positional(
+                    return Err(VmError::TypeMsg(dict_not_positional(
                         "d[n]$~ value", first.as_deref())));
                 }
             };
@@ -4373,7 +4380,7 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
             fields[i].1 = vm_deep_set(sub, rest, new_val)?;
             Ok(Value::NamedTuple(rc))
         }
-        other => Err(VmError::Generic(format!(
+        other => Err(VmError::TypeMsg(format!(
             "$~ writes into a collection, and this is {}\nhelp: use a[1]$~ v on an array or tuple, d[\"key\"]$~ v on a #(…)",
             other.type_label()
         ))),

@@ -78,6 +78,24 @@ pub enum RuntimeError {
     /// message and nothing else, so `!?` catches text that has not changed.
     #[error("{message}")]
     Located { message: String, file: String, line: u32, column: u32 },
+
+    /// An error that says which `##` family it belongs to, rather than leaving
+    /// it to be read from its words.
+    ///
+    /// The other two engines have always had this half: the register VM in the
+    /// variant it raises (`VmError::TypeMsg` and its siblings) and the browser
+    /// engine in `ZyRuntimeError(msg, kind)`. The tree-walker had only the
+    /// other half — the shared word rule in `zymbol_common::errkind` — and
+    /// words cannot tell `index must be an integer` (a wrong TYPE) from
+    /// `index out of bounds` (a wrong VALUE): "index" matches first and both
+    /// landed in `##Index`. A `:! ##Type` is part of the language, so the same
+    /// failure has to land in the same family in all three (GLB-010, D1).
+    ///
+    /// It WRAPS rather than adding a field, so the 200-odd sites that have
+    /// nothing to declare keep saying nothing and go on being read by the
+    /// words. Only a site that knows its family says so.
+    #[error("{inner}")]
+    Kinded { kind: &'static str, inner: Box<RuntimeError> },
 }
 
 impl RuntimeError {
@@ -105,7 +123,25 @@ impl RuntimeError {
                     column: 0,
                 }
             }
+            // The family travels with the error, and learning where it
+            // happened does not change it.
+            RuntimeError::Kinded { kind, inner } => RuntimeError::Kinded {
+                kind,
+                inner: Box::new(inner.locate(file, line)),
+            },
             other => other,
+        }
+    }
+
+    /// An error that declares its `##` family.
+    ///
+    /// `kind` is the family without the `##`: `"Type"`, `"Index"`, `"Range"`,
+    /// `"Key"`, `"Div"`, `"Parse"`. D1: a wrong TYPE is `##Type` and a wrong
+    /// VALUE is `##Index`.
+    pub fn kinded(kind: &'static str, message: impl Into<String>, span: Span) -> Self {
+        RuntimeError::Kinded {
+            kind,
+            inner: Box::new(RuntimeError::Generic { message: message.into(), span }),
         }
     }
 
@@ -118,6 +154,7 @@ impl RuntimeError {
     pub fn location(&self) -> Option<(&str, u32)> {
         match self {
             RuntimeError::Located { file, line, .. } => Some((file, *line)),
+            RuntimeError::Kinded { inner, .. } => inner.location(),
             _ => None,
         }
     }
@@ -2157,6 +2194,20 @@ impl<W: Write> Interpreter<W> {
     /// Convert a RuntimeError to an ErrorValue
     fn runtime_error_to_value(&self, error: &RuntimeError) -> Value {
         match error {
+            // A family declared at the raise site wins over the words, which is
+            // the rule the other two engines already follow.
+            RuntimeError::Kinded { kind, inner } => {
+                let m = inner.to_string();
+                Value::Error(match *kind {
+                    "Range" => ErrorValue::range(m),
+                    "Key" => ErrorValue::key(m),
+                    "Index" => ErrorValue::index(m),
+                    "Type" => ErrorValue::type_error(m),
+                    "Div" => ErrorValue::div(m),
+                    "Parse" => ErrorValue::parse(m),
+                    _ => ErrorValue::generic(m),
+                })
+            }
             RuntimeError::Io(io_err) => {
                 Value::Error(ErrorValue::io(io_err.to_string()))
             }
