@@ -1051,6 +1051,20 @@ impl TypeChecker {
             }
 
             Statement::ConstDecl(const_decl) => {
+                // A constant is declared once. The tree-walker refused a second
+                // `C := …` at RUN time and the other two printed the new value;
+                // the rule belongs here, where `check` sees it and all three
+                // inherit it — the same place `C = 2` is refused (D5,
+                // GLB-019 C).
+                if self.env.is_constant(&const_decl.name) {
+                    self.errors.push(
+                        Diagnostic::error(format!(
+                            "constant '{}' already declared", const_decl.name))
+                            .with_span(const_decl.span)
+                            .with_help("a constant is declared once; use a different name")
+                    );
+                    return;
+                }
                 let value_type = self.infer_expr(&const_decl.value);
                 self.env.define_const(&const_decl.name, value_type);
             }
@@ -1088,6 +1102,18 @@ impl TypeChecker {
                             self.check_interpolated_name(name, input.span);
                         }
                     }
+                }
+                // `<< C` writes what was read into the name, so a constant
+                // refuses it exactly as `C = 2` does (D5). The tree-walker and
+                // the VM used to overwrite it in silence.
+                if self.env.is_constant(&input.variable) {
+                    self.errors.push(
+                        Diagnostic::error(format!(
+                            "cannot reassign constant '{}'", input.variable))
+                            .with_span(input.span)
+                            .with_help("constants declared with ':=' cannot be modified")
+                    );
+                    return;
                 }
                 // Input always produces a string
                 self.env.define_var(&input.variable, ZymbolType::String);
@@ -1233,15 +1259,36 @@ impl TypeChecker {
                 if let Some(iter_var) = &loop_stmt.iterator_var {
                     // Infer type from iterable
                     let iter_type = if let Some(iterable) = &loop_stmt.iterable {
-                        match self.infer_expr(iterable) {
-                            ZymbolType::Array(elem) => *elem,
-                            ZymbolType::String => ZymbolType::Char,
-                            _ => ZymbolType::Any,
+                        // A range is legal exactly here, so it is read without
+                        // `infer_expr`, which refuses one anywhere else (D4).
+                        if let Expr::Range(range) = iterable.unwrap_group() {
+                            self.infer_expr(&range.start);
+                            self.infer_expr(&range.end);
+                            if let Some(step) = &range.step { self.infer_expr(step); }
+                            ZymbolType::Int
+                        } else {
+                            match self.infer_expr(iterable) {
+                                ZymbolType::Array(elem) => *elem,
+                                ZymbolType::String => ZymbolType::Char,
+                                _ => ZymbolType::Any,
+                            }
                         }
                     } else {
                         ZymbolType::Int // Range loop
                     };
-                    self.env.define_var(iter_var, iter_type);
+                    // The iterator is written on every turn, so a constant
+                    // refuses to be one (D5). The tree-walker and the VM left
+                    // the loop's last value in it.
+                    if self.env.is_constant(iter_var) {
+                        self.errors.push(
+                            Diagnostic::error(format!(
+                                "cannot reassign constant '{}'", iter_var))
+                                .with_span(loop_stmt.span)
+                                .with_help("constants declared with ':=' cannot be modified")
+                        );
+                    } else {
+                        self.env.define_var(iter_var, iter_type);
+                    }
                 }
                 // `@ (k, v):pares` defines every name its pattern binds. The
                 // element types are not known statically — the pattern may sit
@@ -1249,7 +1296,29 @@ impl TypeChecker {
                 // each name is `Any`, exactly as `(k, v) = par` leaves them.
                 if let Some(pattern) = &loop_stmt.iterator_pattern {
                     if let Some(iterable) = &loop_stmt.iterable {
-                        let _ = self.infer_expr(iterable);
+                        // D4: a pattern over a RANGE is refused here, not at the
+                        // first element. A range yields Ints and no pattern
+                        // destructures an Int, so the form can never come out
+                        // right in any engine — which makes it syntactic, and a
+                        // syntactic refusal does not depend on the flow and has
+                        // none of GLB-008's false positives. The tree-walker
+                        // failed on the first element, the VM said `range
+                        // outside loop` about a range that is in one, and zyjs
+                        // did not parse it at all.
+                        if matches!(iterable.unwrap_group(), Expr::Range(_)) {
+                            self.errors.push(
+                                Diagnostic::error(
+                                    "tuple pattern '( … )' requires a tuple, got Int",
+                                )
+                                .with_span(loop_stmt.span)
+                                .with_help(
+                                    "a range yields whole numbers; use '@ name:a..b' and no pattern",
+                                ),
+                            );
+                        }
+                        if !matches!(iterable.unwrap_group(), Expr::Range(_)) {
+                            let _ = self.infer_expr(iterable);
+                        }
                     }
                     for name in pattern.bound_names() {
                         self.env.define_var(&name, ZymbolType::Any);
@@ -2711,7 +2780,17 @@ impl TypeChecker {
                 ZymbolType::Function(param_types, Box::new(return_type))
             }
 
-            Expr::Range(_) => ZymbolType::Array(Box::new(ZymbolType::Int)),
+            Expr::Range(r) => {
+                // The loop reads its own iterable without coming through here,
+                // so reaching this arm means the range is somewhere it cannot
+                // be (D4).
+                self.errors.push(
+                    Diagnostic::error("ranges can only be used in for-each loops")
+                        .with_span(r.span)
+                        .with_help("write '@ name:a..b { … }'; a range is not a value"),
+                );
+                ZymbolType::Array(Box::new(ZymbolType::Int))
+            }
 
             // Collection operations
             //
