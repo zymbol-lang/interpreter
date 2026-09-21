@@ -409,12 +409,23 @@ impl VariableAnalyzer {
                 // Analyze value expression first
                 self.analyze_expr(&const_decl.value);
 
-                // Then record constant declaration
-                self.declare_variable(
-                    const_decl.name.clone(),
-                    const_decl.span,
-                    true,
-                );
+                // A second `C := …` does not displace the first: the type
+                // checker refuses that program (D5), so the declaration never
+                // takes effect. Recording it retired the first one, and a
+                // retired declaration nothing used is reported unused — so
+                // `C := 1  C := 2  >> C ¶` warned that C was never used while
+                // printing it two lines down.
+                let already_const = self
+                    .variables
+                    .get(&const_decl.name)
+                    .is_some_and(|v| v.is_const);
+                if !already_const {
+                    self.declare_variable(
+                        const_decl.name.clone(),
+                        const_decl.span,
+                        true,
+                    );
+                }
             }
 
             Statement::Output(output) => {
