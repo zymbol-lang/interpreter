@@ -131,18 +131,30 @@ impl<W: Write> Interpreter<W> {
                 (i, j) => (i, j),
             };
 
-            if start < 1 || end < start {
-                return Err(RuntimeError::Generic {
-                    message: format!(
-                        "invalid nav range {}..{} — indices are 1-based and start must be ≤ end",
-                        start, end
-                    ),
+            if start < 1 || end < 1 {
+                return Err(RuntimeError::kinded(
+                    "Index",
+                    format!("invalid nav range {}..{} — indices are 1-based", start, end),
                     span,
-                });
+                ));
             }
 
+            // D3: a nav range written from a higher position to a lower one
+            // BUILDS, by reversing — `v[1>3..1]` walks positions 3, 2 and 1 in
+            // that order, the same way `a$[3..1]` reads. It is the only way the
+            // language has to reverse; `$^-` SORTS descending, which is a
+            // different question.
+            //
+            // Only the direction is read this way. A position outside the
+            // collection is still refused, by `descend` just below.
+            let positions: Vec<i64> = if start <= end {
+                (start..=end).collect()
+            } else {
+                (end..=start).rev().collect()
+            };
+
             let mut collected = Vec::new();
-            for i in start..=end {
+            for i in positions {
                 let elem = descend(current.clone(), i, step.index.span(), span)?;
                 if rest.is_empty() {
                     collected.push(elem);

@@ -2546,16 +2546,34 @@ impl Compiler {
                 let r_start_tmp = self.compile_expr(&range_step.index, ctx)?;
                 let r_end_tmp   = self.compile_expr(range_step.range_end.as_ref().unwrap(), ctx)?;
 
-                let r_i   = ctx.alloc_temp()?;
-                let r_end = ctx.alloc_temp()?;
-                let r_cmp = ctx.alloc_temp()?;
-                let r_one = ctx.alloc_temp()?;
+                let r_i    = ctx.alloc_temp()?;
+                let r_end  = ctx.alloc_temp()?;
+                let r_cmp  = ctx.alloc_temp()?;
+                let r_step = ctx.alloc_temp()?;
+                let r_zero = ctx.alloc_temp()?;
+                let r_diff = ctx.alloc_temp()?;
                 ctx.emit(Instruction::CopyReg(r_i, r_start_tmp));
                 ctx.emit(Instruction::CopyReg(r_end, r_end_tmp));
-                ctx.emit(Instruction::LoadInt(r_one, 1));
+                ctx.emit(Instruction::LoadInt(r_zero, 0));
+
+                // D3: a nav range written from a higher position to a lower one
+                // BUILDS, by reversing — `v[1>3..1]` walks positions 3, 2 and 1
+                // in that order, the same way `a$[3..1]` reads. The direction is
+                // a run-time value, so the counter walks by a STEP of +1 or -1
+                // decided here, rather than by a hard-coded increment.
+                ctx.emit(Instruction::LoadInt(r_step, 1));
+                ctx.emit(Instruction::CmpGt(r_cmp, r_i, r_end));
+                let asc_patch = ctx.emit_jump_if_not_placeholder(r_cmp);
+                ctx.emit(Instruction::LoadInt(r_step, -1));
+                let after_step = ctx.current_label();
+                ctx.patch_jump(asc_patch, after_step);
 
                 let loop_start = ctx.current_label();
-                ctx.emit(Instruction::CmpGt(r_cmp, r_i, r_end));
+                // Done when `(i - end) * step > 0`: one test that reads both
+                // directions, since the step carries the sign.
+                ctx.emit(Instruction::SubInt(r_diff, r_i, r_end));
+                ctx.emit(Instruction::MulInt(r_diff, r_diff, r_step));
+                ctx.emit(Instruction::CmpGt(r_cmp, r_diff, r_zero));
                 let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
 
                 // Get element at loop counter r_i
@@ -2565,7 +2583,7 @@ impl Compiler {
                 // Recurse: apply remaining steps steps[k+1..] to r_elem
                 self.compile_nav_path_collect(r_elem, &steps[k + 1..], r_collect, ctx)?;
 
-                ctx.emit(Instruction::AddInt(r_i, r_i, r_one));
+                ctx.emit(Instruction::AddInt(r_i, r_i, r_step));
                 ctx.emit(Instruction::Jump(loop_start));
 
                 let loop_end = ctx.current_label();
