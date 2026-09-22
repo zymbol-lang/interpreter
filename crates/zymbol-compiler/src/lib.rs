@@ -3982,20 +3982,25 @@ impl Compiler {
         // Fill r_hi with end value
         if let Some(end) = &cr.end {
             let r_end = self.compile_expr(end, ctx)?;
-            if cr.count_based {
-                // [start:count] → actual_end (0-based exclusive) = (start-1) + count = start + count - 1
-                // VM normalizes lo as lo-1, so hi must account for 1-based offset too.
-                ctx.emit(Instruction::AddInt(r_hi, r_lo, r_end));
-                ctx.emit(Instruction::SubIntImm(r_hi, r_hi, 1));
-            } else {
-                ctx.emit(Instruction::CopyReg(r_hi, r_end));
-            }
+            // The count travels as a COUNT, like the slice's does since step
+            // 4.4. Folding it into an end (`AddInt` + `SubIntImm`) made the VM
+            // unable to tell `$-[1:-1]` from `$-[1..0]`, so it reported the end
+            // where the reader wrote a count, and refused `$-[1:0]`, which asks
+            // to remove nothing.
+            ctx.emit(Instruction::CopyReg(r_hi, r_end));
+        } else if cr.count_based {
+            // `$-[start:]` has no count; removing to the end is the range form.
+            ctx.emit(Instruction::ArrayLen(r_hi, r_coll));
         } else {
             ctx.emit(Instruction::ArrayLen(r_hi, r_coll));
         }
         let dst = ctx.alloc_temp()?;
         ctx.emit(Instruction::CopyReg(dst, r_coll));
-        ctx.emit(Instruction::ArrayRemoveRange(dst, r_lo));
+        ctx.emit(if cr.count_based && cr.end.is_some() {
+            Instruction::ArrayRemoveCount(dst, r_lo)
+        } else {
+            Instruction::ArrayRemoveRange(dst, r_lo)
+        });
         Ok(dst)
     }
 
@@ -5305,7 +5310,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::DestructureRest(d, s, _, _) => { upd(*d); upd(*s); }
             Instruction::DestructureTail(d, s, _, _, _) => { upd(*d); upd(*s); }
             Instruction::ArrayRemove(d, a) | Instruction::ArrayRemoveValue(d, a)
-            | Instruction::ArrayRemoveAll(d, a) | Instruction::ArrayRemoveRange(d, a) => { upd(*d); upd(*a); }
+            | Instruction::ArrayRemoveAll(d, a) | Instruction::ArrayRemoveRange(d, a)
+            | Instruction::ArrayRemoveCount(d, a) => { upd(*d); upd(*a); }
             Instruction::ArrayInsert(d, i, v) => { upd(*d); upd(*i); upd(*v); }
             Instruction::ArrayLen(d, a) | Instruction::ArrayContains(d, a, _)
             | Instruction::ArraySlice(d, a, _)

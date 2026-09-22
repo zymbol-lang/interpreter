@@ -149,6 +149,13 @@ pub enum Instruction {
     ArrayInsert(Reg, Reg, Reg),
     /// Remove elements [lo..hi) from arr in-place ($-[lo..hi]); hi_reg = lo_reg + 1
     ArrayRemoveRange(Reg, Reg),
+    /// `coll$-[start:count]` — the COUNT form, kept apart from
+    /// `ArrayRemoveRange` for the same reason `ArraySliceCount` is kept apart
+    /// from `ArraySlice`: folding the count into an end loses it. `$-[1:-1]`
+    /// arrived as an end of -1 and was reported as one, and `$-[1:0]` arrived
+    /// as an end of 0 and was refused, where removing nothing is what it asks
+    /// for. `lo_reg + 1` holds the count, not an end.
+    ArrayRemoveCount(Reg, Reg),
     /// dst = arr.contains(elem)
     ArrayContains(Reg, Reg, Reg),
     /// dst = arr[lo..hi] (exclusive hi, like Python slicing)

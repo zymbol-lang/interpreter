@@ -1181,10 +1181,27 @@ impl<W: Write> Interpreter<W> {
             ));
         }
         if start > length || end > length {
-            return Err(RuntimeError::Generic {
-                message: format!("$-[{}..{}] out of bounds for collection of length {}", written_start, written_end, length),
-                span: op.span,
-            });
+            // The message is spelled the way the reader spelled it: a count is
+            // `$-[2:3]`, a range is `$-[2..3]`, and they are different requests
+            // — `[2:3]` asks for three positions from the second, `[2..3]` for
+            // two. Printing one as the other told whoever wrote `$-[2:3]` that
+            // positions 2 to 3 were out of bounds in a collection that has
+            // three. Same rule as GLB-047, on the form it had not reached.
+            return Err(RuntimeError::kinded(
+                "Index",
+                if op.count_based {
+                    format!(
+                        "$-[{}:{}] out of bounds for collection of length {}",
+                        written_start, written_end, length
+                    )
+                } else {
+                    format!(
+                        "$-[{}..{}] out of bounds for collection of length {}",
+                        written_start, written_end, length
+                    )
+                },
+                op.span,
+            ));
         }
         // i == j → no-op
         if start == end {
