@@ -1432,7 +1432,11 @@ fn get_at_idx(col: &Value, index: i64, span: zymbol_span::Span) -> Result<Value>
         Value::NamedTuple(fields) => (fields.len(), Box::new(|i| fields[i].1.clone())),
         other => return Err(RuntimeError::kinded(
             "Type",
-            format!("cannot index into {} during deep update", other.type_label()),
+            // Writing through a step that lands on a non-collection fails for
+            // the same reason READING through it does, so it says the same
+            // thing (GLB-045). Naming the operation told the reader when it
+            // happened, never what was wrong.
+            format!("cannot index into {} — expected array, tuple, or string", other.type_label()),
             span,
         )),
     };

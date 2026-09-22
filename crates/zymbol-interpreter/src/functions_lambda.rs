@@ -228,9 +228,25 @@ impl<W: Write> Interpreter<W> {
 
                 // Not a lambda variable - look up as traditional function
                 let func_def = self.functions.get(&ident.name).cloned().ok_or_else(|| {
-                    RuntimeError::Generic {
-                        message: format!("undefined function: '{}'", ident.name),
-                        span: call.span,
+                    // A name that EXISTS and holds something else is not a
+                    // missing function, and saying so sent the reader looking
+                    // for one that was never absent (GLB-034, decided
+                    // 2026-09-22). A name that is genuinely undefined never
+                    // reaches here — the analyzer refuses it statically — but
+                    // the distinction is made anyway, because a diagnostic that
+                    // depends on another pass running first is one bug away
+                    // from lying.
+                    if self.get_variable(&ident.name).is_some() {
+                        RuntimeError::kinded(
+                            "Type",
+                            format!("'{}' is not a function", ident.name),
+                            call.span,
+                        )
+                    } else {
+                        RuntimeError::Generic {
+                            message: format!("undefined function: '{}'", ident.name),
+                            span: call.span,
+                        }
                     }
                 })?;
 
