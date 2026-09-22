@@ -2639,6 +2639,63 @@ impl<W: Write> VM<W> {
                         other => raise!(VmError::TypeMsg(format!("$-[..] requires an array, tuple, or string, got {}", other.type_label()))),
                     }
                 }
+                &Instruction::ArrayRemoveCount(arr_reg, lo_reg) => {
+                    // count_reg = lo_reg + 1 by compiler convention. The count
+                    // arrives as a count: folding it into an end lost it, so
+                    // `$-[1:-1]` was reported as an end of -1 and `$-[1:0]` was
+                    // refused where it asks to remove nothing. The tree-walker's
+                    // words, on the tree-walker's boundaries.
+                    let lo_raw = match self.as_int_for(lo_reg, "$-[..] start") { Ok(v) => v, Err(e) => raise!(e) };
+                    let n = match self.as_int_for(lo_reg + 1, "$-[..] count") { Ok(v) => v, Err(e) => raise!(e) };
+                    if lo_raw <= 0 {
+                        raise!(VmError::IndexMsg(format!(
+                            "$-[start..] start must be positive (1-based), got {}", lo_raw)));
+                    }
+                    if n < 0 {
+                        raise!(VmError::IndexMsg(format!(
+                            "$-[..] count must be non-negative, got {}", n)));
+                    }
+                    let len_of = match &self.value_stack[base + arr_reg as usize] {
+                        Value::Array(a) => Some(a.len()),
+                        Value::Tuple(t) => Some(t.len()),
+                        Value::String(st) => Some(st.chars().count()),
+                        _ => None,
+                    };
+                    let (lo, hi) = match len_of {
+                        Some(len) => {
+                            let start = lo_raw - 1;
+                            let end = start + n;
+                            if start > len as i64 || end > len as i64 {
+                                raise!(VmError::IndexMsg(format!(
+                                    "$-[{}:{}] out of bounds for collection of length {}", lo_raw, n, len)));
+                            }
+                            (start as usize, end as usize)
+                        }
+                        None => (0usize, 0usize),
+                    };
+                    match self.value_stack[base + arr_reg as usize].clone() {
+                        Value::Array(rc_arr) => {
+                            let mut arr = rc_arr.as_ref().clone();
+                            arr.drain(lo..hi);
+                            self.value_stack[base + arr_reg as usize] = Value::Array(Rc::new(arr));
+                        }
+                        Value::Tuple(rc_tup) => {
+                            let mut tup = rc_tup.as_ref().clone();
+                            tup.drain(lo..hi);
+                            self.value_stack[base + arr_reg as usize] = Value::Tuple(Rc::new(tup));
+                        }
+                        Value::NamedTuple(rc_nt) => {
+                            let first = rc_nt.as_ref().first().map(|(k, _)| k.clone());
+                            raise!(VmError::TypeMsg(dict_not_positional("d$-[a..b]", first.as_deref())));
+                        }
+                        Value::String(rc_s) => {
+                            let mut chars: Vec<char> = rc_s.chars().collect();
+                            chars.drain(lo..hi);
+                            self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(chars.iter().collect()));
+                        }
+                        other => raise!(VmError::TypeMsg(format!("$-[..] requires an array, tuple, or string, got {}", other.type_label()))),
+                    }
+                }
 
                 // ── Pattern match ────────────────────────────────────────────
                 &Instruction::MatchInt(reg, val, label) => {
