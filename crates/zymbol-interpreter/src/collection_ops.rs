@@ -84,18 +84,20 @@ impl<W: Write> Interpreter<W> {
                 Rc::make_mut(&mut tup).push(element);
                 Ok(Value::Tuple(tup))
             }
-            Value::NamedTuple(_) => Err(RuntimeError::Generic {
-                message: "$+ is not supported on named tuples — no field name available".to_string(),
-                span: op.span,
-            }),
+            Value::NamedTuple(_) => Err(RuntimeError::kinded(
+                "Type",
+                "$+ is not supported on named tuples — no field name available".to_string(),
+                op.span,
+            )),
             Value::String(s) => {
                 let result = match element {
                     Value::Char(c) => { let mut out = s; out.push(c); out }
                     Value::String(ref suffix) => { let mut out = s; out.push_str(suffix); out }
-                    _ => return Err(RuntimeError::Generic {
-                        message: format!("$+ on string requires char or string element, got {}", element.type_label()),
-                        span: op.span,
-                    }),
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("$+ on string requires char or string element, got {}", element.type_label()),
+                        op.span,
+                    )),
                 };
                 Ok(Value::String(result))
             }
@@ -279,13 +281,14 @@ impl<W: Write> Interpreter<W> {
             Value::NamedTuple(ref fields) => {
                 let key = match &element {
                     Value::String(s) => s.clone(),
-                    other => return Err(RuntimeError::Generic {
-                        message: format!(
+                    other => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!(
                             "a dictionary is asked about a key, so `$?` needs a String, got {}",
                             other.type_label()
                         ),
-                        span: op.span,
-                    }),
+                        op.span,
+                    )),
                 };
                 Ok(Value::Bool(fields.iter().any(|(k, _)| *k == key)))
             }
@@ -302,13 +305,14 @@ impl<W: Write> Interpreter<W> {
                         let found = s.contains(substring.as_str());
                         Ok(Value::Bool(found))
                     }
-                    _ => Err(RuntimeError::Generic {
-                        message: format!(
+                    _ => Err(RuntimeError::kinded(
+                        "Type",
+                        format!(
                             "string contains only supports char or string search, got {}",
                             element.type_label()
                         ),
-                        span: op.span,
-                    }),
+                        op.span,
+                    )),
                 }
             }
             _ => Err(RuntimeError::kinded(
@@ -544,10 +548,11 @@ impl<W: Write> Interpreter<W> {
             match start_value {
                 Value::Int(n) => n,
                 _ => {
-                    return Err(RuntimeError::Generic {
-                        message: format!("slice start must be an integer, got {}", start_value.type_label()),
-                        span: op.span,
-                    })
+                    return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("slice start must be an integer, got {}", start_value.type_label()),
+                        op.span,
+                    ))
                 }
             }
         } else {
@@ -560,10 +565,11 @@ impl<W: Write> Interpreter<W> {
             match end_value {
                 Value::Int(n) => n,
                 _ => {
-                    return Err(RuntimeError::Generic {
-                        message: format!("slice end must be an integer, got {}", end_value.type_label()),
-                        span: op.span,
-                    })
+                    return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("slice end must be an integer, got {}", end_value.type_label()),
+                        op.span,
+                    ))
                 }
             }
         } else {
@@ -946,10 +952,11 @@ impl<W: Write> Interpreter<W> {
                 Rc::make_mut(&mut tup).insert(i, element);
                 Ok(Value::Tuple(tup))
             }
-            Value::NamedTuple(_) => Err(RuntimeError::Generic {
-                message: "$+[i] is not supported on named tuples — no field name available".to_string(),
-                span: op.span,
-            }),
+            Value::NamedTuple(_) => Err(RuntimeError::kinded(
+                "Type",
+                "$+[i] is not supported on named tuples — no field name available".to_string(),
+                op.span,
+            )),
             Value::String(s) => {
                 let mut chars: Vec<char> = s.chars().collect();
                 if i > chars.len() {
@@ -967,10 +974,11 @@ impl<W: Write> Interpreter<W> {
                         }
                         Ok(Value::String(chars.iter().collect()))
                     }
-                    _ => Err(RuntimeError::Generic {
-                        message: format!("$+[i] on string requires char or string element, got {}", element.type_label()),
-                        span: op.span,
-                    }),
+                    _ => Err(RuntimeError::kinded(
+                        "Type",
+                        format!("$+[i] on string requires char or string element, got {}", element.type_label()),
+                        op.span,
+                    )),
                 }
             }
             _ => Err(RuntimeError::kinded(
@@ -1030,10 +1038,11 @@ impl<W: Write> Interpreter<W> {
                         }
                         s.clone()
                     }
-                    _ => return Err(RuntimeError::Generic {
-                        message: format!("$- on string requires char or string value, got {}", value.type_label()),
-                        span: op.span,
-                    }),
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("$- on string requires char or string value, got {}", value.type_label()),
+                        op.span,
+                    )),
                 };
                 Ok(Value::String(result))
             }
@@ -1077,10 +1086,11 @@ impl<W: Write> Interpreter<W> {
                         if pattern.is_empty() { return Ok(Value::String(s)); }
                         s.replace(pattern.as_str(), "")
                     }
-                    _ => return Err(RuntimeError::Generic {
-                        message: format!("$-- on string requires char or string value, got {}", value.type_label()),
-                        span: op.span,
-                    }),
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("$-- on string requires char or string value, got {}", value.type_label()),
+                        op.span,
+                    )),
                 };
                 Ok(Value::String(result))
             }
@@ -1115,17 +1125,19 @@ impl<W: Write> Interpreter<W> {
         let start = if let Some(ref s_expr) = op.start {
             match self.eval_expr(s_expr)? {
                 Value::Int(n) => {
-                    if n <= 0 { return Err(RuntimeError::Generic {
-                        message: format!("$-[start..] start must be positive (1-based), got {}", n),
-                        span: op.span,
-                    }); }
+                    if n <= 0 { return Err(RuntimeError::kinded(
+                        "Index",
+                        format!("$-[start..] start must be positive (1-based), got {}", n),
+                        op.span,
+                    )); }
                     written_start = n;
                     (n - 1) as usize  // normalize 1-based to 0-based
                 }
-                other => return Err(RuntimeError::Generic {
-                    message: format!("$-[..] start must be an integer, got {}", other.type_label()),
-                    span: op.span,
-                }),
+                other => return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("$-[..] start must be an integer, got {}", other.type_label()),
+                    op.span,
+                )),
             }
         } else { 0 };
 
@@ -1134,24 +1146,27 @@ impl<W: Write> Interpreter<W> {
                 Value::Int(n) => {
                     if !op.count_based && n <= 0 {
                         // For range-based $-[start..end], end must be positive (1-based)
-                        return Err(RuntimeError::Generic {
-                            message: format!("$-[..end] end must be positive (1-based), got {}", n),
-                            span: op.span,
-                        });
+                        return Err(RuntimeError::kinded(
+                            "Index",
+                            format!("$-[..end] end must be positive (1-based), got {}", n),
+                            op.span,
+                        ));
                     }
                     if n < 0 {
-                        return Err(RuntimeError::Generic {
-                            message: format!("$-[..] count must be non-negative, got {}", n),
-                            span: op.span,
-                        });
+                        return Err(RuntimeError::kinded(
+                            "Index",
+                            format!("$-[..] count must be non-negative, got {}", n),
+                            op.span,
+                        ));
                     }
                     written_end = n;
                     n as usize  // range: 1-based inclusive = 0-based exclusive; count: raw count
                 }
-                other => return Err(RuntimeError::Generic {
-                    message: format!("$-[..] end must be an integer, got {}", other.type_label()),
-                    span: op.span,
-                }),
+                other => return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("$-[..] end must be an integer, got {}", other.type_label()),
+                    op.span,
+                )),
             }
         } else { written_end = length as i64; length };
 
@@ -1159,10 +1174,11 @@ impl<W: Write> Interpreter<W> {
         let end = if op.count_based { start + raw_end } else { raw_end };
 
         if start > end {
-            return Err(RuntimeError::Generic {
-                message: format!("$-[start..end]: start ({}) cannot be greater than end ({})", written_start, written_end),
-                span: op.span,
-            });
+            return Err(RuntimeError::kinded(
+                "Index",
+                format!("$-[start..end]: start ({}) cannot be greater than end ({})", written_start, written_end),
+                op.span,
+            ));
         }
         if start > length || end > length {
             return Err(RuntimeError::Generic {
@@ -1241,13 +1257,14 @@ impl<W: Write> Interpreter<W> {
                             .collect()
                     }
                     _ => {
-                        return Err(RuntimeError::Generic {
-                            message: format!(
+                        return Err(RuntimeError::kinded(
+                            "Type",
+                            format!(
                                 "$?? on string requires char or string value, got {}",
                                 value.type_label()
                             ),
-                            span: op.span,
-                        })
+                            op.span,
+                        ))
                     }
                 };
                 Ok(Value::array(positions))

@@ -65,10 +65,11 @@ impl<W: Write> Interpreter<W> {
         let replacement = match replacement_value {
             Value::String(ref s) => s.clone(),
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!("$~~ replacement must be a string, got {}", replacement_value.type_label()),
-                    span: op.span,
-                })
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("$~~ replacement must be a string, got {}", replacement_value.type_label()),
+                    op.span,
+                ))
             }
         };
 
@@ -77,18 +78,20 @@ impl<W: Write> Interpreter<W> {
             let count_value = self.eval_expr(count_expr)?;
             match count_value {
                 Value::Int(n) if n < 0 => {
-                    return Err(RuntimeError::Generic {
-                        message: format!("replacement count must be non-negative, got {}", n),
-                        span: op.span,
-                    });
+                    return Err(RuntimeError::kinded(
+                        "Index",
+                        format!("replacement count must be non-negative, got {}", n),
+                        op.span,
+                    ));
                 }
                 Value::Int(0) => None, // 0 means replace all
                 Value::Int(n) => Some(n as usize),
                 _ => {
-                    return Err(RuntimeError::Generic {
-                        message: format!("$~~ count must be an integer, got {}", count_value.type_label()),
-                        span: op.span,
-                    })
+                    return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("$~~ count must be an integer, got {}", count_value.type_label()),
+                        op.span,
+                    ))
                 }
             }
         } else {
@@ -151,10 +154,11 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!("$~~ pattern must be a string or char, got {}", pattern_value.type_label()),
-                    span: op.span,
-                })
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("$~~ pattern must be a string or char, got {}", pattern_value.type_label()),
+                    op.span,
+                ))
             }
         };
 
@@ -182,10 +186,11 @@ impl<W: Write> Interpreter<W> {
                 }
                 Ok(Value::Array(arr))
             }
-            other => Err(RuntimeError::Generic {
-                message: format!("$++ requires a string or array as base, got {}", other.type_label()),
-                span: op.span,
-            }),
+            other => Err(RuntimeError::kinded(
+                "Type",
+                format!("$++ requires a string or array as base, got {}", other.type_label()),
+                op.span,
+            )),
         }
     }
 
@@ -206,10 +211,11 @@ impl<W: Write> Interpreter<W> {
         let parts: Vec<Value> = match delimiter_value {
             Value::Char(c) => string.split(c).map(|p| Value::String(p.to_string())).collect(),
             Value::String(ref s) => string.split(s.as_str()).map(|p| Value::String(p.to_string())).collect(),
-            _ => return Err(RuntimeError::Generic {
-                message: format!("$/ delimiter must be a char or string, got {}", delimiter_value.type_label()),
-                span: op.span,
-            }),
+            _ => return Err(RuntimeError::kinded(
+                "Type",
+                format!("$/ delimiter must be a char or string, got {}", delimiter_value.type_label()),
+                op.span,
+            )),
         };
 
         Ok(Value::array(parts))
