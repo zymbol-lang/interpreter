@@ -3550,6 +3550,15 @@ impl<W: Write> VM<W> {
                         }.to_string()));
                     }
                 }
+                &Instruction::CallableCheckNamed(reg, idx) => {
+                    if !matches!(self.reg_get(reg), Value::Function(..) | Value::Closure(..)) {
+                        // The name, not the type it happens to hold: in a line
+                        // with several calls the name is what finds the one
+                        // that failed (GLB-034).
+                        raise!(VmError::TypeMsg(format!(
+                            "'{}' is not a function", program.string_pool[idx as usize])));
+                    }
+                }
                 &Instruction::LoopStepCheck(step) => {
                     let n = match self.reg_get(step) {
                         Value::Int(n) => *n,
@@ -4681,6 +4690,14 @@ fn vm_deep_set_at(col: Value, path: &[Value], new_val: Value, single: bool) -> R
             fields[i].1 = vm_deep_set_at(sub, rest, new_val, false)?;
             Ok(Value::NamedTuple(rc))
         }
+        // A step that lands on something that is not a collection fails for the
+        // same reason READING it does, so it says what the read says (GLB-045,
+        // decided 2026-09-22). `single` keeps the other case apart: there the
+        // receiver itself is not a collection, and naming `$~` is what helps.
+        other if !single => Err(VmError::TypeMsg(format!(
+            "cannot index into {} — expected array, tuple, or string",
+            other.type_label()
+        ))),
         other => Err(VmError::TypeMsg(format!(
             "$~ writes into a collection, and this is {}\nhelp: use a[1]$~ v on an array or tuple, d[\"key\"]$~ v on a #(…)",
             other.type_label()

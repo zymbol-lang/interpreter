@@ -202,6 +202,11 @@ pub enum Instruction {
     /// (`expression is not callable`). Both used to fall to `CallDynamic`'s
     /// generic `this needs Function and got Int` (step 3.5b).
     CallableCheck(Reg, bool),
+    /// `name(…)` where `name` holds something that is not a function. Carries
+    /// the name so the message can say it: `'v' is not a function`. Separate
+    /// from `CallableCheck` because that one has no name to print — its callee
+    /// is an expression (GLB-034, decided 2026-09-22).
+    CallableCheckNamed(Reg, StrIdx),
     /// Refuse a written `>>~` slot that is not an Int (GLB-018 B). `true` also
     /// admits a Tuple: a lone slot may hold the whole dense position.
     OutputSlotCheck(Reg, bool),
