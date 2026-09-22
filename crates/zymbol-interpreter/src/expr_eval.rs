@@ -11,115 +11,48 @@ use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
 
 impl<W: Write> Interpreter<W> {
-    /// Evaluate an iterable expression (range, array, or string)
-    /// Used primarily for for-each loops
+    /// Evaluate an iterable expression: an array, string, tuple or dictionary.
+    ///
+    /// A range never reaches here. `run_loop` walks `@ var:a..b` in place on its
+    /// own fast path, and `@ (patrón):a..b` has been a static error since D4, so
+    /// the `Expr::Range` arm this function used to carry became unreachable —
+    /// and with it the only two sites that said `range start/end must be an
+    /// integer`. What a non-integer bound actually reports is `loops.rs`'s
+    /// `range bounds must be integers`, which names both bounds in one message.
     pub(crate) fn eval_iterable(&mut self, expr: &Expr) -> Result<Vec<Value>> {
-        match expr {
-            Expr::Range(range_expr) => {
-                // Evaluate start and end
-                let start_value = self.eval_expr(&range_expr.start)?;
-                let end_value = self.eval_expr(&range_expr.end)?;
-
-                // Extract integers
-                let start = match start_value {
-                    Value::Int(n) => n,
-                    _ => {
-                        return Err(RuntimeError::Generic {
-                            message: format!("range start must be an integer, got {}", start_value.type_label()),
-                            span: range_expr.start.span(),
-                        })
-                    }
-                };
-
-                let end = match end_value {
-                    Value::Int(n) => n,
-                    _ => {
-                        return Err(RuntimeError::Generic {
-                            message: format!("range end must be an integer, got {}", end_value.type_label()),
-                            span: range_expr.end.span(),
-                        })
-                    }
-                };
-
-                // Evaluate optional step (default: 1)
-                let step = if let Some(step_expr) = &range_expr.step {
-                    let step_value = self.eval_expr(step_expr)?;
-                    match step_value {
-                        Value::Int(n) if n > 0 => n,
-                        Value::Int(n) if n <= 0 => {
-                            return Err(RuntimeError::Generic {
-                                message: format!("step must be positive, got {}", n),
-                                span: step_expr.span(),
-                            })
-                        }
-                        _ => {
-                            return Err(RuntimeError::kinded(
-                                "Type",
-                                format!("step must be an integer, got {}", step_value.type_label()),
-                                step_expr.span(),
-                            ))
-                        }
-                    }
-                } else {
-                    1  // Default step
-                };
-
-                // Create range vector (inclusive) with step
-                // Support both forward (1..10:2) and reverse (10..1:2) ranges
-                let values: Vec<Value> = if start <= end {
-                    // Forward range: 1..10:2 → [1, 3, 5, 7, 9]
-                    (0..)
-                        .map(|i| start + i * step)
-                        .take_while(|&x| x <= end)
-                        .map(Value::Int)
-                        .collect()
-                } else {
-                    // Reverse range: 10..1:2 → [10, 8, 6, 4, 2]
-                    (0..)
-                        .map(|i| start - i * step)
-                        .take_while(|&x| x >= end)
-                        .map(Value::Int)
-                        .collect()
-                };
-
-                Ok(values)
+        // Try to evaluate as expression - might be an array, string, or identifier
+        let value = self.eval_expr(expr)?;
+        match value {
+            Value::Array(elements) => Ok(crate::own_elements(elements)),
+            Value::String(s) => {
+                // Convert string to array of chars for iteration
+                Ok(s.chars().map(Value::Char).collect())
             }
-            _ => {
-                // Try to evaluate as expression - might be an array, string, or identifier
-                let value = self.eval_expr(expr)?;
-                match value {
-                    Value::Array(elements) => Ok(crate::own_elements(elements)),
-                    Value::String(s) => {
-                        // Convert string to array of chars for iteration
-                        Ok(s.chars().map(Value::Char).collect())
-                    }
-                    // A dictionary yields its KEYS, in insertion order — `for k
-                    // in d` as Python spells it. With `d[k]` available the key
-                    // is enough to reach the value, so no destructuring pattern
-                    // has to be introduced into `@` (decision 8).
-                    //
-                    // A dictionary whose keys cannot be enumerated only serves
-                    // when the program already knows what it holds, which is the
-                    // definition of a record — the thing decision 7 stopped it
-                    // from being.
-                    Value::NamedTuple(fields) => Ok(fields
-                        .iter()
-                        .map(|(k, _)| Value::String(k.clone()))
-                        .collect()),
-                    // A positional tuple is walked too (decision 21): the type
-                    // system is dynamic and `#?` validates each element, so
-                    // walking a mixed collection is not walking blind.
-                    Value::Tuple(items) => Ok(items.to_vec()),
-                    _ => Err(RuntimeError::kinded(
-                        "Type",
-                        format!(
-                            "can only iterate over ranges, arrays, strings, tuples and dictionaries, got {}",
-                            value.type_label()
-                        ),
-                        expr.span(),
-                    )),
-                }
-            }
+            // A dictionary yields its KEYS, in insertion order — `for k
+            // in d` as Python spells it. With `d[k]` available the key
+            // is enough to reach the value, so no destructuring pattern
+            // has to be introduced into `@` (decision 8).
+            //
+            // A dictionary whose keys cannot be enumerated only serves
+            // when the program already knows what it holds, which is the
+            // definition of a record — the thing decision 7 stopped it
+            // from being.
+            Value::NamedTuple(fields) => Ok(fields
+                .iter()
+                .map(|(k, _)| Value::String(k.clone()))
+                .collect()),
+            // A positional tuple is walked too (decision 21): the type
+            // system is dynamic and `#?` validates each element, so
+            // walking a mixed collection is not walking blind.
+            Value::Tuple(items) => Ok(items.to_vec()),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
+                    "can only iterate over ranges, arrays, strings, tuples and dictionaries, got {}",
+                    value.type_label()
+                ),
+                expr.span(),
+            )),
         }
     }
 
