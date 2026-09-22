@@ -3399,9 +3399,12 @@ impl<W: Write> VM<W> {
                     if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
                         raise!(VmError::TypeMsg("map requires lambda function".to_string()));
                     }
-                    let arr = match self.reg_get(arr_reg).clone() {
-                        Value::Array(a) => a.as_ref().clone(),
-                        other => raise!(VmError::TypeMsg(format!("map requires array, got {}", other.type_label()))),
+                    let original = self.reg_get(arr_reg).clone();
+                    let arr = match hof_items(&original) {
+                        Some(v) => v,
+                        None => raise!(VmError::TypeMsg(format!(
+                            "map requires array, tuple, string or dictionary, got {}",
+                            original.type_label()))),
                     };
                     let mut results = Vec::with_capacity(arr.len());
                     let outcome: Result<(), VmError> = 'calls: {
@@ -3414,7 +3417,7 @@ impl<W: Write> VM<W> {
                         Ok(())
                     };
                     if let Err(e) = outcome { raise!(e); }
-                    self.reg_set(dst, Value::Array(Rc::new(results)));
+                    self.reg_set(dst, hof_rebuild(&original, results));
                 }
                 &Instruction::ArrayFilter(dst, arr_reg, func_reg) => {
                     let callable = self.reg_get(func_reg).clone();
@@ -3424,9 +3427,12 @@ impl<W: Write> VM<W> {
                     if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
                         raise!(VmError::TypeMsg("filter requires lambda function".to_string()));
                     }
-                    let arr = match self.reg_get(arr_reg).clone() {
-                        Value::Array(a) => a.as_ref().clone(),
-                        other => raise!(VmError::TypeMsg(format!("filter requires array, got {}", other.type_label()))),
+                    let original = self.reg_get(arr_reg).clone();
+                    let arr = match hof_items(&original) {
+                        Some(v) => v,
+                        None => raise!(VmError::TypeMsg(format!(
+                            "filter requires array, tuple, string or dictionary, got {}",
+                            original.type_label()))),
                     };
                     let mut results = Vec::new();
                     let outcome: Result<(), VmError> = 'calls: {
@@ -3439,7 +3445,7 @@ impl<W: Write> VM<W> {
                         Ok(())
                     };
                     if let Err(e) = outcome { raise!(e); }
-                    self.reg_set(dst, Value::Array(Rc::new(results)));
+                    self.reg_set(dst, hof_rebuild(&original, results));
                 }
                 &Instruction::ArrayReduce(dst, arr_reg, init_reg, func_reg) => {
                     let callable = self.reg_get(func_reg).clone();
@@ -3455,9 +3461,12 @@ impl<W: Write> VM<W> {
                                 "reduce lambda requires 2 parameters (accumulator, element), got {n}")));
                         }
                     }
-                    let arr = match self.reg_get(arr_reg).clone() {
-                        Value::Array(a) => a.as_ref().clone(),
-                        other => raise!(VmError::TypeMsg(format!("reduce requires array, got {}", other.type_label()))),
+                    let original = self.reg_get(arr_reg).clone();
+                    let arr = match hof_items(&original) {
+                        Some(v) => v,
+                        None => raise!(VmError::TypeMsg(format!(
+                            "reduce requires array, tuple, string or dictionary, got {}",
+                            original.type_label()))),
                     };
                     let mut acc = self.reg_get(init_reg).clone();
                     let outcome: Result<(), VmError> = 'calls: {
@@ -4493,6 +4502,45 @@ enum RangeUse { Slice, Remove }
 enum SliceSpan { Up(usize, usize), Down(i64, i64) }
 
 /// `coll$[start:count]` — a count is a quantity, never a direction.
+/// What a higher-order operator walks, and how the result is put back.
+///
+/// The loop's rule: what `@ e:v` hands over is what `v$> (e -> …)` transforms.
+/// A DICTIONARY therefore yields its KEYS, exactly as `@ k:d` does (decision 8).
+/// Mirrors `hof_items` in the tree-walker.
+fn hof_items(collection: &Value) -> Option<Vec<Value>> {
+    match collection {
+        Value::Array(a) => Some(a.as_ref().clone()),
+        Value::Tuple(t) => Some(t.as_ref().clone()),
+        Value::String(s) => Some(s.chars().map(Value::Char).collect()),
+        Value::NamedTuple(f) => Some(f.iter().map(|(k, _)| Value::String(ZyStr::new(k.clone()))).collect()),
+        _ => None,
+    }
+}
+
+/// Rebuild the shape the elements came from. Keys walked out of a dictionary
+/// are a list once they are out, so that case answers an array.
+fn hof_rebuild(original: &Value, items: Vec<Value>) -> Value {
+    match original {
+        Value::Tuple(_) => Value::Tuple(Rc::new(items)),
+        Value::String(_) => {
+            if items.iter().all(|v| matches!(v, Value::Char(_) | Value::String(_))) {
+                let mut out = String::new();
+                for v in &items {
+                    match v {
+                        Value::Char(c) => out.push(*c),
+                        Value::String(s) => out.push_str(s.as_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                Value::String(ZyStr::new(out))
+            } else {
+                Value::Array(Rc::new(items))
+            }
+        }
+        _ => Value::Array(Rc::new(items)),
+    }
+}
+
 fn count_span(lo: i64, n: i64, len: usize) -> Result<(usize, usize), VmError> {
     let l = len as i64;
     let start = if lo == 0 { 0 } else if lo < 0 { l + lo } else { lo - 1 };

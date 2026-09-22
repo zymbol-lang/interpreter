@@ -717,31 +717,74 @@ impl<W: Write> Interpreter<W> {
             }
         };
 
-        match collection {
-            Value::Array(arr) => {
-                let mut result = Vec::new();
-
-                for element in crate::own_elements(arr) {
-                    // Call lambda with element
-                    let transformed = self.eval_lambda_call(
-                        func.clone(),
-                        vec![element],
-                        &op.span,
-                    )?;
-                    result.push(transformed);
-                }
-
-                Ok(Value::array(result))
+        let items = match Self::hof_items(&collection) {
+            Some(v) => v,
+            None => {
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "map requires array, tuple, string or dictionary, got {}",
+                        collection.type_label()
+                    ),
+                    op.span,
+                ))
             }
-            _ => Err(RuntimeError::kinded(
-                "Type",
-                format!("map requires array, got {}", collection.type_label()),
-                op.span,
-            )),
+        };
+
+        let mut result = Vec::new();
+        for element in items {
+            let transformed = self.eval_lambda_call(func.clone(), vec![element], &op.span)?;
+            result.push(transformed);
         }
+        Ok(Self::hof_rebuild(&collection, result))
     }
 
     /// Evaluate collection filter: collection$| (x -> x > 0)
+    /// What a higher-order operator walks, and how the result is put back.
+    ///
+    /// The rule is the loop's rule: what `@ e:v` hands over is what
+    /// `v$> (e -> …)` transforms. That makes one sentence cover all four
+    /// collections instead of a list — and it is why a DICTIONARY yields its
+    /// KEYS here, exactly as it does in `@ k:d` (decision 8).
+    fn hof_items(collection: &Value) -> Option<Vec<Value>> {
+        match collection {
+            Value::Array(arr) => Some(arr.as_ref().clone()),
+            Value::Tuple(tup) => Some(tup.as_ref().clone()),
+            Value::String(s) => Some(s.chars().map(Value::Char).collect()),
+            Value::NamedTuple(fields) => {
+                Some(fields.iter().map(|(k, _)| Value::String(k.clone())).collect())
+            }
+            _ => None,
+        }
+    }
+
+    /// Rebuild the shape the elements came from. A dictionary walked by key has
+    /// no shape to go back into, so it answers an array — the keys are a list
+    /// once they are out.
+    fn hof_rebuild(original: &Value, items: Vec<Value>) -> Value {
+        match original {
+            Value::Tuple(_) => Value::tuple(items),
+            Value::String(_) => {
+                if items.iter().all(|v| matches!(v, Value::Char(_) | Value::String(_))) {
+                    let mut out = String::new();
+                    for v in &items {
+                        match v {
+                            Value::Char(c) => out.push(*c),
+                            Value::String(s) => out.push_str(s),
+                            _ => unreachable!(),
+                        }
+                    }
+                    Value::String(out.into())
+                } else {
+                    // A lambda that turns characters into something else has
+                    // left the string behind; the honest shape is an array.
+                    Value::array(items)
+                }
+            }
+            _ => Value::array(items),
+        }
+    }
+
     pub(crate) fn eval_collection_filter(&mut self, op: &zymbol_ast::CollectionFilterExpr) -> Result<Value> {
         let collection = self.eval_expr(&op.collection)?;
         let lambda = self.eval_expr(&op.lambda)?;
@@ -757,39 +800,36 @@ impl<W: Write> Interpreter<W> {
             }
         };
 
-        match collection {
-            Value::Array(arr) => {
-                let mut result = Vec::new();
-
-                for element in crate::own_elements(arr) {
-                    // Call lambda with element
-                    let keep = self.eval_lambda_call(
-                        func.clone(),
-                        vec![element.clone()],
-                        &op.span,
-                    )?;
-
-                    // Check if result is boolean
-                    match keep {
-                        Value::Bool(true) => result.push(element),
-                        Value::Bool(false) => {}
-                        _ => {
-                            return Err(RuntimeError::Generic {
-                                message: format!("filter lambda must return boolean, got {}", keep.type_label()),
-                                span: op.span,
-                            });
-                        }
-                    }
-                }
-
-                Ok(Value::array(result))
+        let items = match Self::hof_items(&collection) {
+            Some(v) => v,
+            None => {
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "filter requires array, tuple, string or dictionary, got {}",
+                        collection.type_label()
+                    ),
+                    op.span,
+                ))
             }
-            _ => Err(RuntimeError::kinded(
-                "Type",
-                format!("filter requires array, got {}", collection.type_label()),
-                op.span,
-            )),
+        };
+
+        let mut result = Vec::new();
+        for element in items {
+            let keep = self.eval_lambda_call(func.clone(), vec![element.clone()], &op.span)?;
+            match keep {
+                Value::Bool(true) => result.push(element),
+                Value::Bool(false) => {}
+                _ => {
+                    return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("filter lambda must return boolean, got {}", keep.type_label()),
+                        op.span,
+                    ));
+                }
+            }
         }
+        Ok(Self::hof_rebuild(&collection, result))
     }
 
     /// Evaluate collection reduce: collection$< (0, (acc, x) -> acc + x)
@@ -820,27 +860,26 @@ impl<W: Write> Interpreter<W> {
             });
         }
 
-        match collection {
-            Value::Array(arr) => {
-                let mut accumulator = initial;
-
-                for element in crate::own_elements(arr) {
-                    // Call lambda with (accumulator, element)
-                    accumulator = self.eval_lambda_call(
-                        func.clone(),
-                        vec![accumulator, element],
-                        &op.span,
-                    )?;
-                }
-
-                Ok(accumulator)
+        let items = match Self::hof_items(&collection) {
+            Some(v) => v,
+            None => {
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "reduce requires array, tuple, string or dictionary, got {}",
+                        collection.type_label()
+                    ),
+                    op.span,
+                ))
             }
-            _ => Err(RuntimeError::kinded(
-                "Type",
-                format!("reduce requires array, got {}", collection.type_label()),
-                op.span,
-            )),
+        };
+
+        let mut accumulator = initial;
+        for element in items {
+            accumulator =
+                self.eval_lambda_call(func.clone(), vec![accumulator, element], &op.span)?;
         }
+        Ok(accumulator)
     }
 
     /// Evaluate collection sort: collection$^+ or collection$^-
