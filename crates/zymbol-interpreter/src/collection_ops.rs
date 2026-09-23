@@ -461,6 +461,41 @@ impl<W: Write> Interpreter<W> {
                 Rc::make_mut(&mut tup)[i] = new_value;
                 Ok(Value::Tuple(tup))
             }
+            // A string IS an array of characters, and is addressed like one
+            // (decided 2026-09-22): `s[1]$~ "z"` writes at position 1, exactly
+            // as it does on an array. Only a char or a string may be written —
+            // the same rule `$+ on string requires char or string element`
+            // already states, and the reason collections are STRICT (GLB-046).
+            Value::String(st) => {
+                let index = match index_value {
+                    Value::Int(n) => n,
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("string update index must be an integer, got {}", index_value.type_label()),
+                        op.span,
+                    )),
+                };
+                let piece = match &new_value {
+                    Value::Char(c) => c.to_string(),
+                    Value::String(s2) => s2.to_string(),
+                    other => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("$~ on string requires char or string value, got {}", other.type_label()),
+                        op.span,
+                    )),
+                };
+                let mut chars: Vec<char> = st.chars().collect();
+                let len = chars.len();
+                let i = resolve_int(index, len, op.span, "string")?;
+                // A multi-character value takes the place of the one character,
+                // the way replacing an element of an array puts one value where
+                // one value was — the element just happens to be longer.
+                let mut out = String::new();
+                for (n, c) in chars.drain(..).enumerate() {
+                    if n == i { out.push_str(&piece); } else { out.push(c); }
+                }
+                Ok(Value::String(out.into()))
+            }
             Value::NamedTuple(mut fields) => {
                 match index_value {
                     // A positional WRITE is strictly worse than a positional
@@ -1430,6 +1465,12 @@ fn get_at_idx(col: &Value, index: i64, span: zymbol_span::Span) -> Result<Value>
         Value::Array(arr)  => (arr.len(), Box::new(|i| arr[i].clone())),
         Value::Tuple(tup)  => (tup.len(), Box::new(|i| tup[i].clone())),
         Value::NamedTuple(fields) => (fields.len(), Box::new(|i| fields[i].1.clone())),
+        // A string IS an array of characters and is walked like one
+        // (decided 2026-09-22): a step into it yields the character there.
+        Value::String(st) => {
+            let chars: Vec<char> = st.chars().collect();
+            (chars.len(), Box::new(move |i| Value::Char(chars[i])))
+        }
         other => return Err(RuntimeError::kinded(
             "Type",
             // Writing through a step that lands on a non-collection fails for
@@ -1465,10 +1506,31 @@ fn set_at_idx(col: Value, index: i64, new_val: Value, span: zymbol_span::Span) -
             Rc::make_mut(&mut fields)[i].1 = new_val;
             Ok(Value::NamedTuple(fields))
         }
-        other => Err(RuntimeError::Generic {
-            message: format!("cannot update {} during deep update", other.type_label()),
+        // The write half of the same rule. Only a char or a string goes in,
+        // as `$+ on string requires char or string element` already says.
+        Value::String(st) => {
+            let mut chars: Vec<char> = st.chars().collect();
+            let piece = match &new_val {
+                Value::Char(c) => c.to_string(),
+                Value::String(s2) => s2.to_string(),
+                other => return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("$~ on string requires char or string value, got {}", other.type_label()),
+                    span,
+                )),
+            };
+            let i = resolve_idx(index, chars.len(), span)?;
+            let mut out = String::new();
+            for (n, c) in chars.drain(..).enumerate() {
+                if n == i { out.push_str(&piece); } else { out.push(c); }
+            }
+            Ok(Value::String(out.into()))
+        }
+        other => Err(RuntimeError::kinded(
+            "Type",
+            format!("cannot update {} during deep update", other.type_label()),
             span,
-        }),
+        )),
     }
 }
 
