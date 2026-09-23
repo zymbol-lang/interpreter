@@ -4662,6 +4662,31 @@ fn vm_deep_set_at(col: Value, path: &[Value], new_val: Value, single: bool) -> R
             tup[i] = vm_deep_set_at(sub, rest, new_val, false)?;
             Ok(Value::Tuple(rc))
         }
+        // A string IS an array of characters, and is addressed like one
+        // (decided 2026-09-22). Only a char or a string may be written, the
+        // same rule `$+ on string requires char or string element` states.
+        // It is a LEAF: there is nothing inside a character to descend into.
+        Value::String(st) => {
+            let mut chars: Vec<char> = st.chars().collect();
+            let i = resolve(int_step_of(step, single, "string")?, chars.len(), "string")?;
+            if !rest.is_empty() {
+                // The step landed on a character, and there is nothing inside
+                // one to descend into — the read path's sentence.
+                return Err(VmError::TypeMsg(
+                    "cannot index into Char — expected array, tuple, or string".to_string()));
+            }
+            let piece = match &new_val {
+                Value::Char(c) => c.to_string(),
+                Value::String(s2) => s2.as_ref().to_string(),
+                other => return Err(VmError::TypeMsg(format!(
+                    "$~ on string requires char or string value, got {}", other.type_label()))),
+            };
+            let mut out = String::new();
+            for (n, c) in chars.drain(..).enumerate() {
+                if n == i { out.push_str(&piece); } else { out.push(c); }
+            }
+            Ok(Value::String(ZyStr::new(out)))
+        }
         Value::NamedTuple(mut rc) => {
             let fields = Rc::make_mut(&mut rc);
             let i = match step {
