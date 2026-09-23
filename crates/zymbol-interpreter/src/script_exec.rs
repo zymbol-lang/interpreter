@@ -50,8 +50,29 @@ impl<W: Write> Interpreter<W> {
         let (tokens, lex_diagnostics) = lexer.tokenize();
 
         if !lex_diagnostics.is_empty() {
+            // The same sentence `load_module` gives, with the same detail: one
+            // engine had two spellings for one failure — `1 lexer errors in
+            // ./sub/lexico.zy` here and `1 lexer error(s) in 'm/lexico.zy'`
+            // plus the offending line there — and neither told the reader WHERE
+            // in the file. Running a script and importing a module are two
+            // doors into the same lexer.
+            let detail: Vec<String> = lex_diagnostics.iter().map(|d| {
+                let loc = d.span
+                    .map(|sp| format!("{}:{}:{}", file_path.display(), sp.start.line, sp.start.column))
+                    .unwrap_or_else(|| file_path.display().to_string());
+                let mut msg = format!("  {}: {}", loc, d.message);
+                if let Some(help) = &d.help {
+                    msg.push_str(&format!("\n    help: {}", help));
+                }
+                msg
+            }).collect();
             return Err(RuntimeError::Generic {
-                message: format!("{} lexer errors in {}", lex_diagnostics.len(), file_path.display()),
+                message: format!(
+                    "{} lexer error(s) in '{}'\n{}",
+                    lex_diagnostics.len(),
+                    file_path.display(),
+                    detail.join("\n")
+                ),
                 span: execute.span,
             });
         }

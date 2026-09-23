@@ -756,7 +756,31 @@ impl Compiler {
         // Lex + parse
         let file_id = zymbol_span::FileId(0);
         let lexer = zymbol_lexer::Lexer::new(&source, file_id);
-        let (tokens, _lex_errs) = lexer.tokenize();
+        let (tokens, lex_errs) = lexer.tokenize();
+        // The lexer's own errors, reported as the lexer's — this engine threw
+        // them away and let the parser trip over the broken tokens, so a module
+        // with an unterminated string was announced as `1 parse error(s)` where
+        // the tree-walker and zyjs both say `1 lexer error(s)`. Two stages, two
+        // sentences, as `load_module` has always had them.
+        if !lex_errs.is_empty() {
+            let shown_path = path.display().to_string();
+            let detail: Vec<String> = lex_errs.iter().map(|d| {
+                let loc = d.span
+                    .map(|s| format!("{}:{}:{}", shown_path, s.start.line, s.start.column))
+                    .unwrap_or_else(|| shown_path.clone());
+                let mut msg = format!("  {}: {}", loc, d.message);
+                if let Some(help) = &d.help {
+                    msg.push_str(&format!("\n    help: {}", help));
+                }
+                msg
+            }).collect();
+            return Err(CompileError::ModuleParse(format!(
+                "{} lexer error(s) in '{}'\n{}",
+                lex_errs.len(),
+                shown_path,
+                detail.join("\n")
+            )));
+        }
         let parser = zymbol_parser::Parser::new(tokens);
         let module_prog = parser.parse().map_err(|errors| {
             // The path as written, not `canonical` — same rule as the semantic gate

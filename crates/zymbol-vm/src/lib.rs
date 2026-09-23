@@ -559,8 +559,6 @@ pub enum VmError {
     // what the program did wrong.
     #[error("this needs {expected} and got {got}")]
     TypeError { expected: &'static str, got: String },
-    #[error("{op} requires a numeric value, got {got}")]
-    CastError { op: &'static str, got: String },
     #[error("division by zero")]
     DivisionByZero,
     #[error("modulo by zero")]
@@ -1120,7 +1118,7 @@ use zymbol_lexer::digit_blocks::ascii_number as normalize_unicode_digits;
 /// a ##_ here, and `:! ##Type` could not meet it (GLB-010).
 fn vm_error_kind(e: &VmError) -> &'static str {
     match e {
-        VmError::TypeError { .. } | VmError::CastError { .. } | VmError::TypeMsg(_) => "Type",
+        VmError::TypeError { .. } | VmError::TypeMsg(_) => "Type",
         VmError::DivisionByZero | VmError::ModuloByZero => "Div",
         VmError::IntOverflow { .. } | VmError::CastOverflow { .. } => "Range",
         VmError::IndexOutOfBounds { .. } | VmError::IndexZero | VmError::IndexMsg(_) => "Index",
@@ -1770,7 +1768,8 @@ impl<W: Write> VM<W> {
                     let v = match rreg!(src) {
                         Value::Int(n)   => *n as f64,
                         Value::Float(f) => *f,
-                        other => raise!(VmError::CastError { op: "##.", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!(
+                            "##. requires a numeric value, got {}", other.type_name()))),
                     };
                     wreg!(dst, Value::Float(v));
                 }
@@ -1781,7 +1780,8 @@ impl<W: Write> VM<W> {
                             None => raise!(VmError::CastOverflow { op: "###" }),
                         },
                         Value::Int(n)   => *n,
-                        other => raise!(VmError::CastError { op: "###", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!(
+                            "### requires a numeric value, got {}", other.type_name()))),
                     };
                     wreg!(dst, Value::Int(v));
                 }
