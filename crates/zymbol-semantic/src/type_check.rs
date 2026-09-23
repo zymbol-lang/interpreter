@@ -74,6 +74,22 @@ fn consulting_op_name(expr: &Expr) -> Option<&'static str> {
     })
 }
 
+
+/// The name a read is ultimately about, when the `°` marker sits on it.
+///
+/// `°acc`, `°acc[1]`, `°acc[1>2]`, `°acc$[1..2]` are all one name with the
+/// marker on it and something done to it afterwards.
+fn hot_base_ident(expr: &Expr) -> Option<&zymbol_ast::IdentifierExpr> {
+    match expr {
+        Expr::Identifier(id) => Some(id),
+        Expr::Index(i) => hot_base_ident(&i.array),
+        Expr::DeepIndex(d) => hot_base_ident(&d.array),
+        Expr::CollectionSlice(c) => hot_base_ident(&c.collection),
+        Expr::Group(g) => hot_base_ident(&g.expr),
+        _ => None,
+    }
+}
+
 impl ZymbolType {
     /// Get a human-readable name for this type
     pub fn name(&self) -> String {
@@ -1073,8 +1089,23 @@ impl TypeChecker {
                 for expr in &output.exprs {
                     // Hot/pre_hot identifiers in output context are always wrong:
                     // `°` marks initialization, but >> is a read operation.
-                    if let Expr::Identifier(ident) = expr {
-                        if ident.hot || ident.pre_hot {
+                    //
+                    // The marker is on the NAME, so whatever is done to that name
+                    // afterwards does not change the fact: `>> °acc[1] ¶` is the
+                    // same mistake as `>> °acc ¶`. This used to look at the
+                    // expression itself, so a subscript, a navigation or a slice
+                    // in between hid it and the two Rust engines printed the
+                    // value while zyjs refused it (GLB-035, decided 2026-09-23).
+                    // Directly the name, or the name underneath a subscript.
+                    // The two are not the same question: `x°[i]` is a legitimate
+                    // EDIT target — `syntax-variables/hot-index-edit` declares
+                    // it and all three engines run it — so only the PREFIX is
+                    // wrong once something is done to the name. `°x` anchors
+                    // above the loop and `x°` anchors at it; reading through the
+                    // first asks for an anchoring that a read cannot give.
+                    let direct = matches!(expr, Expr::Identifier(_));
+                    if let Some(ident) = hot_base_ident(expr) {
+                        if (direct && (ident.hot || ident.pre_hot)) || ident.pre_hot {
                             // The `°` marker must be dropped regardless of its
                             // position (prefix `pre_hot` or suffix `hot`): output
                             // just reads the bare name.

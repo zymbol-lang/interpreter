@@ -633,6 +633,14 @@ impl Parser {
             }
             TokenKind::PreHotIdent(_) => {
                 // Pre-hot identifier (°x): only valid as LHS of assignment
+                //
+                // The `[` case is included for the same reason the plain
+                // identifier above includes it: `°x[1] = 5` fails for what it
+                // IS — indexed assignment, which the language does not have —
+                // and putting a `°` in front does not change that. Without this
+                // the marker was diagnosed first, so the same mistake got one
+                // sentence with `°` and another without (GLB-035, decided
+                // 2026-09-23).
                 let is_assignment_op = self.peek_ahead(1)
                     .map(|t| matches!(t.kind,
                         TokenKind::Assign
@@ -645,7 +653,10 @@ impl Parser {
                         | TokenKind::PlusPlus
                         | TokenKind::MinusMinus
                     ))
-                    .unwrap_or(false);
+                    .unwrap_or(false)
+                    || (matches!(self.peek_ahead(1).map(|t| t.kind.clone()),
+                                 Some(TokenKind::LBracket))
+                        && self.is_indexed_assignment());
                 if is_assignment_op {
                     self.parse_assignment()
                 } else {
