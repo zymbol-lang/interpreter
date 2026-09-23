@@ -2554,6 +2554,9 @@ impl Compiler {
                 let r_diff = ctx.alloc_temp()?;
                 ctx.emit(Instruction::CopyReg(r_i, r_start_tmp));
                 ctx.emit(Instruction::CopyReg(r_end, r_end_tmp));
+                // Both bounds, before anything walks them: `r_end == r_i + 1`
+                // holds because the two were allocated back to back above.
+                ctx.emit(Instruction::NavRangeCheck(r_i));
                 ctx.emit(Instruction::LoadInt(r_zero, 0));
 
                 // D3: a nav range written from a higher position to a lower one
@@ -5329,6 +5332,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::DestructureCheck(s, _) | Instruction::LoopStepCheck(s)
             | Instruction::CallableCheck(s, _)
             | Instruction::CallableCheckNamed(s, _)
+            | Instruction::NavRangeCheck(s)
             | Instruction::OutputSlotCheck(s, _) | Instruction::DestroyLocal(s, _)
             | Instruction::CheckAlive(s, _) | Instruction::Revive(s) => upd(*s),
             Instruction::LoopBoundsCheck(a, b) => { upd(*a); upd(*b); }

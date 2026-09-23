@@ -3559,6 +3559,25 @@ impl<W: Write> VM<W> {
                             "'{}' is not a function", program.string_pool[idx as usize])));
                     }
                 }
+                &Instruction::NavRangeCheck(reg) => {
+                    // `index`, not `nav range start`: a bound of a navigation
+                    // range says what a plain index says, which is what the
+                    // other two engines say and what step 3.5b decided. The
+                    // label this helper takes IS the message.
+                    let a = match self.as_int_for(reg, "index") { Ok(v) => v, Err(e) => raise!(e) };
+                    let b = match self.as_int_for(reg + 1, "index") { Ok(v) => v, Err(e) => raise!(e) };
+                    // The tree-walker's order: a negative bound is its own
+                    // failure, and only then is a zero one. Reversing them made
+                    // `v[1>-1..2]` report an index 0 that is not in the program.
+                    if a < 0 || b < 0 {
+                        raise!(VmError::IndexMsg(
+                            "range indices in nav path must be positive integers".to_string()));
+                    }
+                    if a < 1 || b < 1 {
+                        raise!(VmError::IndexMsg(format!(
+                            "invalid nav range {}..{} — indices are 1-based", a, b)));
+                    }
+                }
                 &Instruction::LoopStepCheck(step) => {
                     let n = match self.reg_get(step) {
                         Value::Int(n) => *n,

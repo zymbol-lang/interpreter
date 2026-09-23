@@ -1461,6 +1461,12 @@ fn set_at_step(col: Value, step: &Value, new_val: Value, span: zymbol_span::Span
 
 /// Read element at 1-based (or negative) integer index from any indexable Value.
 fn get_at_idx(col: &Value, index: i64, span: zymbol_span::Span) -> Result<Value> {
+    let container = match col {
+        Value::Array(_) => "array",
+        Value::String(_) => "string",
+        Value::NamedTuple(_) => "named tuple",
+        _ => "tuple",
+    };
     let (len, get_fn): (usize, Box<dyn Fn(usize) -> Value>) = match col {
         Value::Array(arr)  => (arr.len(), Box::new(|i| arr[i].clone())),
         Value::Tuple(tup)  => (tup.len(), Box::new(|i| tup[i].clone())),
@@ -1481,7 +1487,7 @@ fn get_at_idx(col: &Value, index: i64, span: zymbol_span::Span) -> Result<Value>
             span,
         )),
     };
-    let i = resolve_idx(index, len, span)?;
+    let i = resolve_idx(index, len, span, container)?;
     Ok(get_fn(i))
 }
 
@@ -1490,19 +1496,19 @@ fn set_at_idx(col: Value, index: i64, new_val: Value, span: zymbol_span::Span) -
     match col {
         Value::Array(mut arr) => {
             let len = arr.len();
-            let i = resolve_idx(index, len, span)?;
+            let i = resolve_idx(index, len, span, "array")?;
             Rc::make_mut(&mut arr)[i] = new_val;
             Ok(Value::Array(arr))
         }
         Value::Tuple(mut tup) => {
             let len = tup.len();
-            let i = resolve_idx(index, len, span)?;
+            let i = resolve_idx(index, len, span, "tuple")?;
             Rc::make_mut(&mut tup)[i] = new_val;
             Ok(Value::Tuple(tup))
         }
         Value::NamedTuple(mut fields) => {
             let len = fields.len();
-            let i = resolve_idx(index, len, span)?;
+            let i = resolve_idx(index, len, span, "named tuple")?;
             Rc::make_mut(&mut fields)[i].1 = new_val;
             Ok(Value::NamedTuple(fields))
         }
@@ -1519,7 +1525,7 @@ fn set_at_idx(col: Value, index: i64, new_val: Value, span: zymbol_span::Span) -
                     span,
                 )),
             };
-            let i = resolve_idx(index, chars.len(), span)?;
+            let i = resolve_idx(index, chars.len(), span, "string")?;
             let mut out = String::new();
             for (n, c) in chars.drain(..).enumerate() {
                 if n == i { out.push_str(&piece); } else { out.push(c); }
@@ -1534,19 +1540,40 @@ fn set_at_idx(col: Value, index: i64, new_val: Value, span: zymbol_span::Span) -
     }
 }
 
-fn resolve_idx(index: i64, len: usize, span: zymbol_span::Span) -> Result<usize> {
+/// The navigation path's own index resolution.
+///
+/// It said `index 0 is invalid — Zymbol uses 1-based indexing` and
+/// `index out of bounds: 9 for collection of length 2`, where READING the same
+/// position says the sentence the three engines agreed on — with the help, and
+/// naming the container. Two sets of words in one engine for one failure, and
+/// only one of them aligned; the write half was simply never brought over.
+fn resolve_idx(
+    index: i64,
+    len: usize,
+    span: zymbol_span::Span,
+    container: &str,
+) -> Result<usize> {
     if index == 0 {
-        return Err(RuntimeError::Generic {
-            message: "index 0 is invalid — Zymbol uses 1-based indexing".to_string(),
+        return Err(RuntimeError::kinded(
+            "Index",
+            "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)",
             span,
-        });
+        ));
     }
     let i = if index < 0 { len as i64 + index } else { index - 1 };
     if i < 0 || i as usize >= len {
-        return Err(RuntimeError::Generic {
-            message: format!("index out of bounds: {} for collection of length {}", index, len),
+        // One COMPLETE literal per container, never one template with a hole:
+        // the message inventory pairs engines by how a message is built.
+        return Err(RuntimeError::kinded(
+            "Index",
+            match container {
+                "array"  => format!("array index out of bounds: index {} for array of length {}", index, len),
+                "string" => format!("string index out of bounds: index {} for string of length {}", index, len),
+                "named tuple" => format!("named tuple index out of bounds: index {} for tuple of length {}", index, len),
+                _ => format!("tuple index out of bounds: index {} for tuple of length {}", index, len),
+            },
             span,
-        });
+        ));
     }
     Ok(i as usize)
 }

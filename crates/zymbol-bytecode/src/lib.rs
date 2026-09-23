@@ -207,6 +207,11 @@ pub enum Instruction {
     /// from `CallableCheck` because that one has no name to print — its callee
     /// is an expression (GLB-034, decided 2026-09-22).
     CallableCheckNamed(Reg, StrIdx),
+    /// The bounds of a navigation range (`v[1>a..b]`), checked BEFORE the loop
+    /// walks them. `reg + 1` holds the end. Without it the loop simply asked
+    /// `ArrayGet` for position 0 and the reader got `index 0 is invalid` — true
+    /// for a plain index, and for `v[1>-1..2]` plainly false, since -1 is not 0.
+    NavRangeCheck(Reg),
     /// Refuse a written `>>~` slot that is not an Int (GLB-018 B). `true` also
     /// admits a Tuple: a lone slot may hold the whole dense position.
     OutputSlotCheck(Reg, bool),
