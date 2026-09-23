@@ -20,6 +20,34 @@ impl Parser {
         Ok(Statement::Sleep(Sleep::new(Box::new(duration), span)))
     }
 
+
+    /// `@! nombre` — a bare jump followed by a name that is read and thrown away.
+    ///
+    /// It reads as the labelled jump it is one character away from, and it is
+    /// not one: the label goes INSIDE the jump. Left alone, the program runs
+    /// the bare `@!`, leaves the innermost loop only, and a `@:principal { }`
+    /// with no exit condition spins for ever — measured in all three engines
+    /// (GLB-041, decided 2026-09-23). The name must be on the SAME line: a name
+    /// on the next line is an ordinary statement with its own warning.
+    fn refuse_label_after_jump(&mut self, kw: &str, line: u32) -> Result<(), Diagnostic> {
+        if let TokenKind::Ident(name) = &self.peek().kind {
+            if self.peek().span.start.line == line {
+                let name = name.clone();
+                let span = self.peek().span;
+                return Err(Diagnostic::error(format!(
+                    "'{} {}' is a bare '{}' and a name that is read and discarded, not a labelled jump",
+                    kw, name, kw
+                ))
+                .with_span(span)
+                .with_help(format!(
+                    "the label goes inside the jump: write '@:{}{}' to target the loop labelled '{}'",
+                    name, &kw[1..], name
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Parse break statement: @! or @:label!
     pub(crate) fn parse_break(&mut self) -> Result<Statement, Diagnostic> {
         let token = self.advance(); // consume @! or @:label!
@@ -29,6 +57,9 @@ impl Parser {
             TokenKind::AtColonLabelBreak(name) => Some(name.clone()),
             _ => None,
         };
+        if label.is_none() {
+            self.refuse_label_after_jump("@!", start_span.start.line)?;
+        }
 
         Ok(Statement::Break(Break::new(label, start_span)))
     }
@@ -42,6 +73,9 @@ impl Parser {
             TokenKind::AtColonLabelContinue(name) => Some(name.clone()),
             _ => None,
         };
+        if label.is_none() {
+            self.refuse_label_after_jump("@>", start_span.start.line)?;
+        }
 
         Ok(Statement::Continue(Continue::new(label, start_span)))
     }
