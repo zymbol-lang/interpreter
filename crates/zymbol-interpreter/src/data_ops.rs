@@ -126,10 +126,14 @@ impl<W: Write> Interpreter<W> {
             CastKind::ToFloat => match value {
                 Value::Float(_) => Ok(value),
                 Value::Int(n) => Ok(Value::Float(n as f64)),
-                other => Err(RuntimeError::Generic {
-                    message: format!("##. requires a numeric value, got {}", value_type(other)),
-                    span: op.span,
-                }),
+                // Kinded, like every other cast: without it the word-based
+                // classifier found no "type" in the sentence and answered
+                // `##_`, so `!?` sorted `##.` one way and `###` another.
+                other => Err(RuntimeError::kinded(
+                    "Type",
+                    format!("##. requires a numeric value, got {}", value_type(other)),
+                    op.span,
+                )),
             },
             CastKind::ToIntRound => match value {
                 Value::Int(_) => Ok(value),

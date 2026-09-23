@@ -1794,7 +1794,11 @@ impl<W: Write> VM<W> {
                         Value::Int(n)   => *n,
                         // Char → its Unicode code point (matches the tree-walker).
                         Value::Char(c)  => *c as u32 as i64,
-                        other => raise!(VmError::CastError { op: "##!", got: other.type_name().to_string() }),
+                        // `##!` takes a Char (it answers its code point), so
+                        // its sentence says so. `##.` and `###` do not, and
+                        // keep the shorter one.
+                        other => raise!(VmError::TypeMsg(format!(
+                            "##! requires a numeric value or Char, got {}", other.type_name()))),
                     };
                     wreg!(dst, Value::Int(v));
                 }
@@ -3892,9 +3896,17 @@ impl<W: Write> VM<W> {
                                 Ok(code) => raise!(VmError::Generic(format!(
                                     "character code must be in range 0..0x10FFFF, got {}", code
                                 ))),
-                                Err(_) => raise!(VmError::Generic(format!(
-                                    "failed to parse '{}' as base-{} number", stripped, radix
-                                ))),
+                                // The base is NAMED, as the tree-walker and
+                                // zyjs name it. `base-16` is the radix this
+                                // engine happens to hold; `hexadecimal` is what
+                                // the reader wrote. One complete literal per
+                                // base, never a template with a hole.
+                                Err(_) => raise!(VmError::Generic(match radix {
+                                    2 => format!("failed to parse '{}' as binary number", stripped),
+                                    8 => format!("failed to parse '{}' as octal number", stripped),
+                                    16 => format!("failed to parse '{}' as hexadecimal number", stripped),
+                                    _ => format!("failed to parse '{}' as decimal number", stripped),
+                                })),
                             }
                         }
                         other => raise!(VmError::TypeMsg(format!("base conversion expressions work with char, int, or string, got {}", other.type_label()))),
@@ -4198,7 +4210,7 @@ impl<W: Write> VM<W> {
                     let ms = match rreg!(reg) {
                         Value::Int(n) if *n >= 0 => *n as u64,
                         Value::Int(n) => raise!(VmError::Generic(format!(
-                            "@~ requires non-negative ms, got {}", n))),
+                            "@~ requires non-negative duration, got {}", n))),
                         other => raise!(VmError::TypeMsg(format!("@~ requires integer milliseconds, got {}", other.type_label()))),
                     };
                     std::thread::sleep(std::time::Duration::from_millis(ms));
