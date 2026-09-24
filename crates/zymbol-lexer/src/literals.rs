@@ -41,6 +41,16 @@ impl Lexer {
         self.source[self.current..].contains(&'"')
     }
 
+    /// Does this interpolation close at all before the file ends?
+    ///
+    /// Tells `{b ` apart from `{b+c}`: the first never closes, so what is wrong
+    /// with it is that it is open; the second closes and what is wrong is the
+    /// character inside it. Both engines have to make the same cut, or the
+    /// second of the two errors differs.
+    fn has_closing_brace_ahead(&self) -> bool {
+        self.source[self.current..].contains(&'}')
+    }
+
     fn skip_rest_of_string(&mut self) {
         while !self.is_at_end() && self.current_char() != '"' {
             if self.current_char() == '\\' {
@@ -148,18 +158,30 @@ impl Lexer {
                         // name only the character the interpolation tripped on,
                         // which is the symptom of reading past a quote that was
                         // never closed.
-                        if !self.has_closing_quote_ahead() {
+                        let quote_open = !self.has_closing_quote_ahead();
+                        if quote_open {
                             self.diagnostics.push(
                                 Diagnostic::error("unterminated string literal")
                                     .with_span(span)
                                     .with_help("add closing \" to end the string"),
                             );
                         }
-                        self.diagnostics.push(
-                            Diagnostic::error("invalid character in string interpolation")
-                                .with_span(span)
-                                .with_help("interpolation must be {identifier} — use \\{ for a literal brace"),
-                        );
+                        if quote_open && !self.has_closing_brace_ahead() {
+                            // Nothing closes this interpolation either, so what
+                            // is wrong with it is that it is open — not the
+                            // character the scan happened to stop on.
+                            self.diagnostics.push(
+                                Diagnostic::error("unterminated string interpolation")
+                                    .with_span(span)
+                                    .with_help("close the interpolation with }"),
+                            );
+                        } else {
+                            self.diagnostics.push(
+                                Diagnostic::error("invalid character in string interpolation")
+                                    .with_span(span)
+                                    .with_help("interpolation must be {identifier} — use \\{ for a literal brace"),
+                            );
+                        }
                         self.skip_rest_of_string();
                         return Token::new(TokenKind::Error("invalid interpolation".to_string()), span);
                     }
