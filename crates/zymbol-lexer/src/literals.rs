@@ -166,13 +166,43 @@ impl Lexer {
                 // escape was refused. Two spellings of the same JSON, one
                 // accepted and one not, with nothing to say why.
                 let span = self.span(start);
-                self.diagnostics.push(
-                    Diagnostic::error("unmatched '}' in string")
-                        .with_span(span)
-                        .with_help("the escape is symmetric — write \\} for a literal brace, as \\{ is for the opening one"),
-                );
+                let brace_line = self.position().line;
+                if brace_line == start.line {
+                    // Same line as the opening quote: the string is closed and
+                    // the brace really is what is wrong — `"a}b"`, or the
+                    // half-escaped `"\\{\\"n\\":1}"`.
+                    self.diagnostics.push(
+                        Diagnostic::error("unmatched '}' in string")
+                            .with_span(span)
+                            .with_help("the escape is symmetric — write \\} for a literal brace, as \\{ is for the opening one"),
+                    );
+                } else {
+                    // A later line: the quote never closed and the string ran on
+                    // and swallowed a `}` that was closing a BLOCK. Naming the
+                    // brace described what the lexer saw; what the reader needs
+                    // is that the quote on this line was never closed — nobody
+                    // writes a bare brace inside a text without escaping it
+                    // (GLB-038, decided 2026-09-23). The line break cannot be
+                    // the boundary: a string may legitimately span lines.
+                    self.diagnostics.push(
+                        Diagnostic::error("unterminated string literal")
+                            .with_span(span)
+                            // ONE complete template, and no literal brace in
+                            // it. The inventory harvests the literal as typed:
+                            // `format!` needs `}}` for one brace, which pairs
+                            // with no other engine's `}`, and splitting the
+                            // sentence to dodge that leaves two fragments that
+                            // pair with nothing at all. Saying "closing brace"
+                            // in words costs the reader nothing and keeps one
+                            // sentence in every engine.
+                            .with_help(format!(
+                                "the string opened here ran on and swallowed the closing brace on line {} — add the closing quote, or escape the brace to keep it inside the text",
+                                brace_line
+                            )),
+                    );
+                }
                 self.skip_rest_of_string();
-                return Token::new(TokenKind::Error("unmatched close brace".to_string()), span);
+                return Token::new(TokenKind::Error("unterminated string".to_string()), span);
             } else {
                 current_text.push(ch);
                 self.advance();

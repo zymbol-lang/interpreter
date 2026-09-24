@@ -143,6 +143,7 @@ impl Parser {
                 self.diagnostics
                     .retain(|d| !d.span.is_some_and(|s| refused.contains(&s)));
             }
+
             Err(self.diagnostics)
         }
     }
@@ -788,6 +789,34 @@ impl Parser {
 
         let end_token = self.peek().clone();
         if !matches!(end_token.kind, TokenKind::RBrace) {
+            // A string that never closed swallows whatever follows it, braces
+            // included, so the brace this block is missing is one the reader
+            // DID write — the string ate it. Blaming it sends them to fix a
+            // correct line (GLB-038, decided 2026-09-23). Suppressed where it
+            // is raised rather than filtered by its text afterwards: the
+            // message inventory harvests string literals, and a comparison
+            // against one reads exactly like a message of its own.
+            // A string that never closed swallows whatever follows it, braces
+            // included, so the brace this block is missing is one the reader
+            // DID write — the string ate it, and blaming it sends them to fix a
+            // correct line (GLB-038, decided 2026-09-23).
+            //
+            // The refusal is still raised, but carrying the SPAN of the lexer's
+            // error token, which the filter at the end of `parse` already drops
+            // as a cascade. Reusing that mechanism keeps this out of the message
+            // inventory: a literal compared against a diagnostic reads exactly
+            // like a diagnostic of its own, and the harvest cannot tell them
+            // apart.
+            if let Some(err_span) = self
+                .tokens
+                .iter()
+                .find(|t| matches!(t.kind, TokenKind::Error(_)))
+                .map(|t| t.span)
+            {
+                return Err(Diagnostic::error("expected '}' to close block")
+                    .with_span(err_span)
+                    .with_help("blocks must be enclosed in braces"));
+            }
             return Err(Diagnostic::error("expected '}' to close block")
                 .with_span(end_token.span)
                 .with_help("blocks must be enclosed in braces"));
