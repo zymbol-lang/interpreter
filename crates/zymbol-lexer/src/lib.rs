@@ -976,6 +976,22 @@ impl Lexer {
                 }
                 _ => unreachable!(),
             };
+            // `°` anchors a name ABOVE the loop so it outlives the loop; `_`
+            // makes a name private to its block. On the same name they ask for
+            // opposite things, and the engines disagreed about what the pair
+            // meant — one accepted it, one refused the accumulation — while no
+            // program in the workspace used it (GLB-039, decided 2026-09-24).
+            if let Some(bare) = name.strip_prefix('_') {
+                let span = self.span(start);
+                self.diagnostics.push(
+                    Diagnostic::error(format!(
+                        "'°{}' anchors the name above the loop and '_' keeps it inside its block — the two markers contradict each other",
+                        name
+                    ))
+                    .with_span(span)
+                    .with_help(format!("use '°{}' to accumulate a value you read after the loop", bare)),
+                );
+            }
             return Token::new(TokenKind::PreHotIdent(name), self.span(start));
         }
 
@@ -1020,6 +1036,19 @@ impl Lexer {
         if ident.ends_with('°') {
             let stripped = &ident[..ident.len() - '°'.len_utf8()];
             if !stripped.is_empty() {
+                // The suffix form of the same contradiction: `x°` anchors AT
+                // the loop, and `_` still keeps the name inside its block.
+                if let Some(bare) = stripped.strip_prefix('_') {
+                    let span = self.span(start);
+                    self.diagnostics.push(
+                        Diagnostic::error(format!(
+                            "'{}°' anchors the name at the loop and '_' keeps it inside its block — the two markers contradict each other",
+                            stripped
+                        ))
+                        .with_span(span)
+                        .with_help(format!("use '{}°' to accumulate a value you read after the loop", bare)),
+                    );
+                }
                 return Token::new(TokenKind::HotIdent(stripped.to_string()), self.span(start));
             }
         }

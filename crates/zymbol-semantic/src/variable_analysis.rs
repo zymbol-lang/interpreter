@@ -113,23 +113,18 @@ impl ScopeTree {
                 )));
             }
 
-            // Check if it's in a child scope (accessing from outer scope)
-            if self.is_ancestor(self.current, decl_scope_id) {
-                return Err(Diagnostic::error(format!(
-                    "cannot access underscore variable '{}' from outer scope",
-                    name
-                ))
-                .with_span(*usage_span)
-                .with_note(format!(
-                    "'{}' was declared at {}:{}",
-                    name, decl_span.start.line, decl_span.start.column
-                ))
-                .with_help(format!(
-                    "underscore variables are strictly local to their declaration block\n\
-                     '{}' was declared in an inner scope and is not accessible here",
-                    name
-                )));
-            }
+            // Reading from OUTSIDE a name declared in an inner block used to say
+            // "cannot access underscore variable '_t' from outer scope", and then
+            // the ordinary check said "undefined variable '_t'" as well — one
+            // sentence that the name exists and is hidden, one that it does not
+            // exist. The second is the true one: a name declared inside a block
+            // is never visible outside it, underscore or not, and the same
+            // program without the `_` fails the same way. So the underscore
+            // was not the cause, and a reader who removed it was still stuck.
+            //
+            // The one shape that made the name really exist outside — `°_t`,
+            // anchored above the loop — is refused by the lexer now, which left
+            // this message no case of its own (GLB-039, decided 2026-09-24).
 
             // If neither ancestor relationship exists, it's in a sibling/unrelated scope
             // This is OK - sibling scopes can have independent _variables with same names
