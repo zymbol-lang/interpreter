@@ -32,6 +32,15 @@ impl Lexer {
     /// the closing `"` opened a new string that never ended. `js::decode("{…}")`
     /// printed a cascade of three errors here and one in the browser engine
     /// (DM-10). Only the first of the three was about anything the program did.
+    /// Is there a closing quote left in this file at all?
+    ///
+    /// Asked before recovering from a bad interpolation, so the reader is told
+    /// about BOTH things that are open when both are — the quote first, because
+    /// it opened first, and then the brace (GLB-038, decided 2026-09-24).
+    fn has_closing_quote_ahead(&self) -> bool {
+        self.source[self.current..].contains(&'"')
+    }
+
     fn skip_rest_of_string(&mut self) {
         while !self.is_at_end() && self.current_char() != '"' {
             if self.current_char() == '\\' {
@@ -134,6 +143,18 @@ impl Lexer {
                         self.advance();
                     } else {
                         let span = self.span(start);
+                        // Both are open when both are open, and the quote comes
+                        // first because it opened first. `>> "a{b ¶` used to
+                        // name only the character the interpolation tripped on,
+                        // which is the symptom of reading past a quote that was
+                        // never closed.
+                        if !self.has_closing_quote_ahead() {
+                            self.diagnostics.push(
+                                Diagnostic::error("unterminated string literal")
+                                    .with_span(span)
+                                    .with_help("add closing \" to end the string"),
+                            );
+                        }
                         self.diagnostics.push(
                             Diagnostic::error("invalid character in string interpolation")
                                 .with_span(span)
