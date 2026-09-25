@@ -1088,7 +1088,7 @@ including arithmetic works; comparison and the logical operators do not:
 The refusal says so, in all three engines since v0.0.9:
 
 ```text
-error: expected expression, found Eq
+error: expected expression, found '=='
   --> x.zy:3:6
   = help: '>>' takes arithmetic; parenthesise a comparison  →  >> (a == b) ¶
 ```

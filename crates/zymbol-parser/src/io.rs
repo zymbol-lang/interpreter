@@ -272,8 +272,8 @@ impl Parser {
                         TokenKind::And => "&&", _ => "||",
                     };
                     return Err(Diagnostic::error(format!(
-                        "expected expression, found {:?}",
-                        token.kind
+                        "expected expression, found {}",
+                        token.kind.quoted()
                     ))
                     .with_help(format!(
                         "'>>' takes arithmetic; parenthesise a comparison  →  >> (a {} b) ¶",

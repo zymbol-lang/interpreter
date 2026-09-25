@@ -307,8 +307,8 @@ impl Parser {
             }
             _ => {
                 return Err(Diagnostic::error(format!(
-                    "expected pattern, found {:?}",
-                    token.kind
+                    "expected pattern, found {}",
+                    token.kind.quoted()
                 ))
                 .with_span(token.span));
             }

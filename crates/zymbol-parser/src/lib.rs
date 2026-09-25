@@ -725,7 +725,7 @@ impl Parser {
                 .with_help("move this `<#` above the first statement in the file")),
             TokenKind::Error(msg) => Err(Diagnostic::error(msg.clone())
                 .with_span(token.span)),
-            _ => Err(Diagnostic::error(format!("unexpected token: {:?}", token.kind))
+            _ => Err(Diagnostic::error(format!("unexpected token: {}", token.kind.quoted()))
                 .with_span(token.span)
                 .with_help("expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\\\, or identifier)")),
         }
@@ -1666,8 +1666,8 @@ impl Parser {
             TokenKind::Eof => Err(Diagnostic::error("expected expression, found end of file")
                 .with_span(token.span)),
             _ => Err(Diagnostic::error(format!(
-                "expected expression, found {:?}",
-                token.kind
+                "expected expression, found {}",
+                token.kind.quoted()
             ))
             .with_span(token.span)),
         }

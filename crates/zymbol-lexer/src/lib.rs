@@ -335,6 +335,102 @@ pub enum TokenKind {
     Error(String),
 }
 
+impl TokenKind {
+    /// The token as a diagnostic quotes it: `'='`, `'}'`, `'5'`, `"texto"`,
+    /// `end of file`.
+    ///
+    /// Decided 2026-09-25 (GLB-028): a refusal names what the program HAS
+    /// WRITTEN, the way `expected ')' after expression` already did. It used to
+    /// print the variant — `found Assign`, `unexpected token: Integer(5)` —
+    /// which is this lexer's inside, in Rust's `Debug` spelling. A char or a
+    /// string literal brings its own quotes and is not wrapped again. `zyjs`
+    /// spells tokens with the same table (`Parser.tokenSpelling`).
+    pub fn quoted(&self) -> String {
+        match self {
+            TokenKind::Eof => "end of file".to_string(),
+            TokenKind::Error(msg) => msg.clone(),
+            TokenKind::LineComment(_) | TokenKind::BlockComment(_) => "a comment".to_string(),
+            TokenKind::Char(_) | TokenKind::String(_) | TokenKind::StringInterpolated(_) => self.spelling(),
+            _ => format!("'{}'", self.spelling()),
+        }
+    }
+
+    /// How the token is written in source — its canonical spelling, so an
+    /// alternative digit script reads as ASCII here.
+    pub fn spelling(&self) -> String {
+        use TokenKind::*;
+        let fixed = match self {
+            Output => ">>", OutputClear => ">>!", OutputQuery => ">>?", OutputGate => ">>|",
+            OutputPos => ">>~", Input => "<<", KeyBlock => "<<|", KeyNonBlock => "<<|?",
+            Assign => "=", FatArrow => "=>", ConstAssign => ":=", Comma => ",", Colon => ":",
+            Semicolon => ";", Plus => "+", Minus => "-", Star => "*", Slash => "/",
+            Percent => "%", Caret => "^",
+            DollarHash => "$#", DollarPlus => "$+", DollarMinus => "$-", DollarQuestion => "$?",
+            DollarTilde => "$~", DollarLBracket => "$[", DollarGt => "$>", DollarPipe => "$|",
+            DollarLt => "$<", DollarPlusLBracket => "$+[", DollarMinusLBracket => "$-[",
+            DollarCaretPlus => "$^+", DollarCaretMinus => "$^-", DollarCaret => "$^",
+            DollarQuestionQuestion => "$??", DollarPlusPlus => "$++", DollarMinusMinus => "$--",
+            DollarTildeTilde => "$~~", DollarSlash => "$/", DollarStar => "$*",
+            DollarExclaim => "$!", DollarExclaimExclaim => "$!!",
+            PlusAssign => "+=", MinusAssign => "-=", StarAssign => "*=", SlashAssign => "/=",
+            PercentAssign => "%=", CaretAssign => "^=", PlusPlus => "++", MinusMinus => "--",
+            Gt => ">", Lt => "<", Ge => ">=", Le => "<=", Eq => "==", Neq => "<>",
+            And => "&&", Or => "||", Not => "!",
+            Question => "?", DoubleQuestion => "??", Underscore => "_", ElseIf => "_?",
+            TryBlock => "!?", CatchBlock => ":!", FinallyBlock => ":>",
+            At => "@", AtBreak => "@!", AtContinue => "@>", AtTilde => "@~",
+            Dot => ".", DotDot => "..", Newline => "¶", Backslash2 => "\\\\", Backslash => "\\",
+            HashComma => "#,", HashCaret => "#^", BaseBinary => "0b", BaseOctal => "0o",
+            BaseDecimal => "0d", BaseHex => "0x", Pipe => "|", PipeOp => "|>",
+            HashPipe => "#|", HashQuestion => "#?", HashLParen => "#(", HashDot => "#.",
+            HashExclaim => "#!", HashHashUnderscore => "##_", HashHashDot => "##.",
+            HashHashHash => "###", HashHashBang => "##!", HashHashQuote => "##\"",
+            HashHashApos => "##'",
+            LBrace => "{", RBrace => "}", LBracket => "[", RBracket => "]",
+            LParen => "(", RParen => ")", Return => "<~", Tilde => "~", Arrow => "->",
+            Hash => "#", ExportBlock => "#>", ModuleImport => "<#", ScopeResolution => "::",
+            CliArgsCapture => "><", BashOpen => "<\\", BashClose => "\\>",
+            _ => "",
+        };
+        if !fixed.is_empty() {
+            return fixed.to_string();
+        }
+        match self {
+            String(s) => format!("\"{}\"", s),
+            StringInterpolated(parts) => {
+                let body: std::string::String = parts.iter().map(|p| match p {
+                    StringPart::Text(t) => t.clone(),
+                    StringPart::Variable(v) => format!("{{{}}}", v),
+                }).collect();
+                format!("\"{}\"", body)
+            }
+            Integer(n) => n.to_string(),
+            Float(f) => f.to_string(),
+            Char(c) => format!("'{}'", c),
+            Boolean(b) => if *b { "#1".to_string() } else { "#0".to_string() },
+            SetNumeralMode(cp) => {
+                let zero = char::from_u32(*cp).unwrap_or('0');
+                let nine = char::from_u32(*cp + 9).unwrap_or('9');
+                format!("#{}{}#", zero, nine)
+            }
+            Ident(name) => name.clone(),
+            HotIdent(name) => format!("{}°", name),
+            PreHotIdent(name) => format!("°{}", name),
+            AtLabel(l) => format!("@{}", l),
+            AtColonLabel(l) => format!("@:{}", l),
+            AtColonLabelBreak(l) => format!("@:{}!", l),
+            AtColonLabelContinue(l) => format!("@:{}>", l),
+            ExecuteCommand(path) => format!("</ {} />", path),
+            LineComment(_) | BlockComment(_) => "//".to_string(),
+            Eof => std::string::String::new(),
+            Error(msg) => msg.clone(),
+            // Every fixed token is spelled in the table above.
+            _ => std::string::String::new(),
+        }
+    }
+}
+
+
 /// A token with its kind and source location
 #[derive(Debug, Clone)]
 pub struct Token {
