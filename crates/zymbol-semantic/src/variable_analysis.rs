@@ -106,8 +106,10 @@ impl ScopeTree {
                     "'{}' was declared at {}:{}",
                     name, decl_span.start.line, decl_span.start.column
                 ))
+                // One line: a `\n` here printed its second half flush left,
+                // after the `= help:` block, where it read as a stray line.
                 .with_help(format!(
-                    "underscore variables are strictly local to their declaration block\n\
+                    "underscore variables are strictly local to their declaration block: \
                      '{}' was declared in an outer scope and cannot be accessed from nested blocks",
                     name
                 )));
