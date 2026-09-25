@@ -265,6 +265,10 @@ impl DiagnosticPipeline {
             }
         }
 
+        // Editor-only hints: a name character that looks like a symbol. Never
+        // part of `zymbol check` (decided 2026-09-25) — see `confusables`.
+        lsp_diagnostics.extend(crate::confusables::collect(document));
+
         lsp_diagnostics
     }
 }
