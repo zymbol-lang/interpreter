@@ -1202,6 +1202,17 @@ pub struct VM<W: Write> {
 }
 
 impl<W: Write> VM<W> {
+    /// A new frame starts at `base`, and every slot from there up belongs to
+    /// it: a mark left by a frame that already returned is not its business.
+    /// The marks are absolute, so without this a function that destroyed its
+    /// parameter failed the NEXT time it was called — `>> p` read the previous
+    /// call's mark (GLB-055, found on 2026-09-25 by calling it twice).
+    fn forget_destroyed_from(&mut self, base: usize) {
+        if !self.destroyed_slots.is_empty() {
+            self.destroyed_slots.retain(|&slot| slot < base);
+        }
+    }
+
     pub fn new(output: W) -> Self {
         Self {
             value_stack: Vec::with_capacity(4096),  // ~160KB, covers deep recursion
@@ -2009,6 +2020,7 @@ impl<W: Write> VM<W> {
                         unsafe { *self.value_stack.get_unchecked_mut(new_base + i) = val; }
                     }
 
+                    self.forget_destroyed_from(new_base);
                     let wb = mem::take(&mut self.pending_output_writeback);
                     self.frame_stack.push(FrameInfo {
                         base: new_base as u32,
@@ -3281,6 +3293,7 @@ impl<W: Write> VM<W> {
                         }
                     }
 
+                    self.forget_destroyed_from(new_base);
                     let wb = mem::take(&mut self.pending_output_writeback);
                     self.frame_stack.push(FrameInfo {
                         base: new_base as u32,
@@ -3607,9 +3620,14 @@ impl<W: Write> VM<W> {
                     }
                 }
                 &Instruction::DestroyLocal(reg, name_idx) => {
-                    let _ = name_idx;
                     let abs = self.frame_stack.last().unwrap().base as usize + reg as usize;
-                    self.destroyed_slots.insert(abs);
+                    // A second `\` that runs is a use after the first (MEM-8,
+                    // GLB-055): the same error a read gives.
+                    if !self.destroyed_slots.insert(abs) {
+                        let name = program.string_pool[name_idx as usize].clone();
+                        raise!(VmError::Generic(format!(
+                            "use after destruction: variable '{}' was destroyed after its last use", name)));
+                    }
                     self.reg_set(reg, Value::Unit);
                 }
                 &Instruction::CheckAlive(reg, name_idx) => {
@@ -4199,6 +4217,11 @@ impl<W: Write> VM<W> {
 
                 &Instruction::DestroyGlobal(gvar_idx, name_idx) => {
                     let name = self.string_rcs[name_idx as usize].to_string();
+                    if self.destroyed_globals.contains_key(&gvar_idx) {
+                        raise!(VmError::Generic(format!(
+                            "use after destruction: variable '{}' was destroyed \
+                             after its last use", name)));
+                    }
                     self.destroyed_globals.insert(gvar_idx, name);
                     if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
                         *slot = Value::Unit;
@@ -4458,6 +4481,7 @@ impl<W: Write> VM<W> {
                 if slot < num_regs { self.value_stack[new_base + slot] = uv.clone(); }
             }
         }
+        self.forget_destroyed_from(new_base);
         self.frame_stack.push(FrameInfo {
             base: new_base as u32,
             ip: 0,

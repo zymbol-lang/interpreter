@@ -1370,7 +1370,12 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Destroy a variable immediately (remove from all scopes and mark as dead)
-    fn destroy_variable(&mut self, var_name: &str) {
+    ///
+    /// A name the analyser let through that is no longer in any scope was
+    /// destroyed by a `\` that RAN, and a second `\` is a use after that
+    /// destruction (MEM-8, GLB-055) — the same error, and the same run-time
+    /// moment, as a read.
+    fn destroy_variable(&mut self, var_name: &str, span: &Span) -> Result<()> {
         // A destroyed root constant must not resurrect through the global table.
         if !self.global_consts.is_empty() {
             self.global_consts.remove(var_name);
@@ -1380,9 +1385,19 @@ impl<W: Write> Interpreter<W> {
             if scope.remove(var_name).is_some() {
                 // Found and removed - mark as dead
                 self.dead_variables.insert(var_name.to_string());
-                return;
+                return Ok(());
             }
         }
+        if self.dead_variables.contains(var_name) {
+            return Err(RuntimeError::Generic {
+                message: format!(
+                    "use after destruction: variable '{}' was destroyed after its last use",
+                    var_name
+                ),
+                span: *span,
+            });
+        }
+        Ok(())
     }
 
     /// Auto-free (v0.0.8): destroy a variable scheduled after its last use.
@@ -1837,8 +1852,7 @@ impl<W: Write> Interpreter<W> {
                 Ok(())
             }
             Statement::LifetimeEnd(lifetime_end) => {
-                self.destroy_variable(&lifetime_end.variable_name);
-                Ok(())
+                self.destroy_variable(&lifetime_end.variable_name, &lifetime_end.span)
             }
             Statement::DestructureAssign(d) => self.eval_destructure_assign(d),
             Statement::Try(try_stmt) => self.execute_try(try_stmt),
