@@ -23,6 +23,7 @@
 //! - **Symbol Index**: Three-level index for go-to-def and find-refs
 
 pub mod cache;
+pub mod confusables;
 pub mod diagnostics;
 pub mod document;
 pub mod module_index;
