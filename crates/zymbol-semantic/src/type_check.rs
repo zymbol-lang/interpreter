@@ -401,6 +401,11 @@ pub struct TypeChecker {
     /// promises the change travels back to the caller, so the argument has to be
     /// something that can be written to (REFERENCE.md L34).
     output_slots: HashMap<String, Vec<usize>>,
+    /// Each function's parameters as its CALLER writes them — `a, b, c<~` — for
+    /// the `expected signature:` help of an arity error (GLB-040). `<~` is
+    /// there because the call has to spell it; `~` is not, because a working
+    /// copy never reaches the caller.
+    param_lists: HashMap<String, String>,
 }
 
 impl TypeChecker {
@@ -415,6 +420,13 @@ impl TypeChecker {
         if !slots.is_empty() {
             self.output_slots.insert(func.name.clone(), slots);
         }
+        let written: Vec<String> = func.parameters.iter()
+            .map(|p| match p.kind {
+                zymbol_ast::ParameterKind::Output => format!("{}<~", p.name),
+                _ => p.name.clone(),
+            })
+            .collect();
+        self.param_lists.insert(func.name.clone(), written.join(", "));
     }
 
     /// A `<~` parameter sends its change back to the caller's variable. When the
@@ -501,6 +513,7 @@ impl TypeChecker {
             guarded_bounds: Vec::new(),
             index_receiver_kinds: HashMap::new(),
             output_slots: HashMap::new(),
+            param_lists: HashMap::new(),
         }
     }
 
@@ -2726,10 +2739,15 @@ impl TypeChecker {
                                     ident.name, param_types.len(), arg_types.len()
                                 ))
                                 .with_span(call.span)
+                                // The parameters as the declaration writes them,
+                                // decided 2026-09-25 (GLB-040). It printed the
+                                // INFERRED types — `g(Number, Number)`, `g(Any,
+                                // Any)` — which are not Zymbol's type names and
+                                // which zyjs, with no inference, could not give.
                                 .with_help(format!(
                                     "expected signature: {}({})",
                                     ident.name,
-                                    param_types.iter().map(|t| t.name()).collect::<Vec<_>>().join(", ")
+                                    self.param_lists.get(&ident.name).map(String::as_str).unwrap_or("")
                                 ))
                             );
                         } else {
