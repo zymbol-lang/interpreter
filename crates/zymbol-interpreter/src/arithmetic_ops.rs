@@ -356,7 +356,7 @@ impl<W: Write> Interpreter<W> {
                 } else {
                     Err(RuntimeError::Generic {
                         message: format!(
-                            "cannot compare string '{}' with integer {} using operator '{:?}'",
+                            "cannot compare string '{}' with integer {} using operator '{}'",
                             s, i, op
                         ),
                         span: Span::new(
@@ -375,7 +375,7 @@ impl<W: Write> Interpreter<W> {
                 } else {
                     Err(RuntimeError::Generic {
                         message: format!(
-                            "cannot compare integer {} with string '{}' using operator '{:?}'",
+                            "cannot compare integer {} with string '{}' using operator '{}'",
                             i, s, op
                         ),
                         span: Span::new(
@@ -392,7 +392,7 @@ impl<W: Write> Interpreter<W> {
                 } else {
                     Err(RuntimeError::Generic {
                         message: format!(
-                            "cannot compare string '{}' with float {} using operator '{:?}'",
+                            "cannot compare string '{}' with float {} using operator '{}'",
                             s, f, op
                         ),
                         span: Span::new(
@@ -409,7 +409,7 @@ impl<W: Write> Interpreter<W> {
                 } else {
                     Err(RuntimeError::Generic {
                         message: format!(
-                            "cannot compare float {} with string '{}' using operator '{:?}'",
+                            "cannot compare float {} with string '{}' using operator '{}'",
                             f, s, op
                         ),
                         span: Span::new(
@@ -427,7 +427,7 @@ impl<W: Write> Interpreter<W> {
                 // wordings, and the documentation could only quote one. The
                 // family names types now, in all three engines.
                 message: format!(
-                    "cannot compare values with operator '{:?}': {} and {}",
+                    "cannot compare values with operator '{}': {} and {}",
                     op, left.type_ident(), right.type_ident()
                 ),
                 span: Span::new(
