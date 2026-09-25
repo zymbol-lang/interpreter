@@ -1746,13 +1746,13 @@ impl<W: Write> VM<W> {
                 // the same ordering rule the general form uses. They used to
                 // read the register through `ri!`, so `'a' < 7` was refused
                 // here as "this needs a number and got Char" and there as
-                // "cannot compare values with operator 'Lt': Char and Int":
+                // "cannot compare values with operator '<': Char and Int":
                 // one comparison, two refusals, decided by whether the
                 // right-hand side happened to be a literal small enough to fold.
-                &Instruction::CmpLtImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Lt"); wreg!(dst, Value::Bool(ord_lt(r))); }
-                &Instruction::CmpLeImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Le"); wreg!(dst, Value::Bool(ord_le(r))); }
-                &Instruction::CmpGtImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Gt"); wreg!(dst, Value::Bool(ord_gt(r))); }
-                &Instruction::CmpGeImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Ge"); wreg!(dst, Value::Bool(ord_ge(r))); }
+                &Instruction::CmpLtImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "<"); wreg!(dst, Value::Bool(ord_lt(r))); }
+                &Instruction::CmpLeImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "<="); wreg!(dst, Value::Bool(ord_le(r))); }
+                &Instruction::CmpGtImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, ">"); wreg!(dst, Value::Bool(ord_gt(r))); }
+                &Instruction::CmpGeImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, ">="); wreg!(dst, Value::Bool(ord_ge(r))); }
 
                 // ── Float arithmetic ────────────────────────────────────────
                 &Instruction::AddFloat(dst, a, b) => { let (va, vb) = rf2!(a, b, "+"); wreg!(dst, Value::Float(va + vb)); }
@@ -1954,10 +1954,10 @@ impl<W: Write> VM<W> {
                 // ── Comparison ──────────────────────────────────────────────
                 &Instruction::CmpEq(dst, a, b) => { let r = cmp_direct(rreg!(a), rreg!(b)); wreg!(dst, Value::Bool(r == 0)); }
                 &Instruction::CmpNe(dst, a, b) => { let r = cmp_direct(rreg!(a), rreg!(b)); wreg!(dst, Value::Bool(r != 0)); }
-                &Instruction::CmpLt(dst, a, b) => { let r = ord_or_raise!(a, b, "Lt"); wreg!(dst, Value::Bool(ord_lt(r))); }
-                &Instruction::CmpLe(dst, a, b) => { let r = ord_or_raise!(a, b, "Le"); wreg!(dst, Value::Bool(ord_le(r))); }
-                &Instruction::CmpGt(dst, a, b) => { let r = ord_or_raise!(a, b, "Gt"); wreg!(dst, Value::Bool(ord_gt(r))); }
-                &Instruction::CmpGe(dst, a, b) => { let r = ord_or_raise!(a, b, "Ge"); wreg!(dst, Value::Bool(ord_ge(r))); }
+                &Instruction::CmpLt(dst, a, b) => { let r = ord_or_raise!(a, b, "<"); wreg!(dst, Value::Bool(ord_lt(r))); }
+                &Instruction::CmpLe(dst, a, b) => { let r = ord_or_raise!(a, b, "<="); wreg!(dst, Value::Bool(ord_le(r))); }
+                &Instruction::CmpGt(dst, a, b) => { let r = ord_or_raise!(a, b, ">"); wreg!(dst, Value::Bool(ord_gt(r))); }
+                &Instruction::CmpGe(dst, a, b) => { let r = ord_or_raise!(a, b, ">="); wreg!(dst, Value::Bool(ord_ge(r))); }
 
                 // ── Logical ─────────────────────────────────────────────────
                 // ZYVM-001: these read both operands through `is_truthy()`, so
