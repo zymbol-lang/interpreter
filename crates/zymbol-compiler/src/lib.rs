@@ -1366,7 +1366,7 @@ impl Compiler {
                 // read of the name checks the mark. Dropping the binding here
                 // refused a read after a `\` inside a branch that never ran
                 // (ZYVM-005). File variables keep their own path below.
-                if !self.file_var_map.contains_key(name) && ctx.destroyable.contains(name) {
+                if self.destroyed_locally(name, ctx) {
                     if let Ok(r) = ctx.get_reg(name) {
                         let nidx = self.intern_string(name) as u16;
                         ctx.emit(Instruction::DestroyLocal(r, nidx));
@@ -1383,9 +1383,17 @@ impl Compiler {
                 // again. The global has to be ended at RUN time, because
                 // whether the `\` executes is not decidable here: inside a
                 // branch that never runs it destroys nothing.
-                if let Some(&gidx) = self.file_var_map.get(name) {
-                    let nidx = self.intern_string(name) as u16;
-                    ctx.emit(Instruction::DestroyGlobal(gidx, nidx));
+                //
+                // Only from `<main>`, which is the only body that WRITES a file
+                // variable too: anywhere else the name is that body's own copy,
+                // and it was ended above. Without the guard a lambda's `\ x`
+                // ended the file's `x` (GLB-055; MEM-6: a lambda writes only
+                // what it declares).
+                if ctx.name == "<main>" {
+                    if let Some(&gidx) = self.file_var_map.get(name) {
+                        let nidx = self.intern_string(name) as u16;
+                        ctx.emit(Instruction::DestroyGlobal(gidx, nidx));
+                    }
                 }
                 Ok(())
             }
@@ -1469,6 +1477,15 @@ impl Compiler {
         Ok(())
     }
 
+    /// Whether a `\` of `name` in this body is tracked on its own register
+    /// (ZYVM-005). A script's file variable is tracked as a global instead, but
+    /// only in `<main>`: in any other body the name is a local copy — captured
+    /// by a lambda, or a function's own — and its life is that body's.
+    fn destroyed_locally(&self, name: &str, ctx: &FunctionCtx) -> bool {
+        ctx.destroyable.contains(name)
+            && (ctx.name != "<main>" || !self.file_var_map.contains_key(name))
+    }
+
     fn compile_assignment(
         &mut self,
         name: &str,
@@ -1479,7 +1496,7 @@ impl Compiler {
         self.compile_assignment_inner(name, value, sugar, ctx)?;
         // Assigning a destroyed local gives it a life again (after the value is
         // computed, so a read of the name on the right still sees it dead).
-        if ctx.destroyable.contains(name) && !self.file_var_map.contains_key(name) {
+        if self.destroyed_locally(name, ctx) {
             if let Ok(r) = ctx.get_reg(name) {
                 ctx.emit(Instruction::Revive(r));
             }
@@ -2171,7 +2188,7 @@ impl Compiler {
             Expr::Literal(lit) => self.compile_literal(lit, ctx),
             Expr::Identifier(id) => {
                 if let Ok(r) = ctx.get_reg(&id.name) {
-                    if ctx.destroyable.contains(&id.name) && !self.file_var_map.contains_key(&id.name) {
+                    if self.destroyed_locally(&id.name, ctx) {
                         let nidx = self.intern_string(&id.name) as u16;
                         ctx.emit(Instruction::CheckAlive(r, nidx));
                     }
@@ -4213,7 +4230,7 @@ impl Compiler {
                     }
                     // Get the register for the variable
                     if let Ok(r) = ctx.get_reg(&var_name) {
-                        if ctx.destroyable.contains(&var_name) && !self.file_var_map.contains_key(&var_name) {
+                        if self.destroyed_locally(&var_name, ctx) {
                             let nidx = self.intern_string(&var_name) as u16;
                             ctx.emit(Instruction::CheckAlive(r, nidx));
                         }

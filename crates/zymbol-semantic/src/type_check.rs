@@ -972,20 +972,7 @@ impl TypeChecker {
     /// ways — directly and as a value — which is a different question from
     /// whether a lambda may capture.
     fn check_reach_out_of_scope(&mut self, name: &str, span: zymbol_span::Span) {
-        let Some(&boundary) = self.strong_boundary.last() else {
-            return;                     // file level: nothing to cross
-        };
-        // `None` is a constant, which MEM-1 makes global on purpose.
-        let Some(depth) = self.env.var_depth(name) else {
-            return;
-        };
-        if depth >= boundary {
-            return;                     // its own parameter, or its own local
-        }
-        if self.is_module && depth == 0 {
-            // MEM-4, not a crossing: a module's functions are exactly who may
-            // read and write its state, and a module body has no other top
-            // level for MEM-2 to be about.
+        if !self.crosses_strong_boundary(name) {
             return;
         }
         self.errors.push(
@@ -995,6 +982,72 @@ impl TypeChecker {
                 .with_help(format!(
                     "a function is a self-contained space: a value crosses into it \
                      as a parameter, never by being in view — pass '{}' as one", name)));
+    }
+
+    /// Whether `name`, visible here, belongs to a scope outside the innermost
+    /// strong environment — the crossing MEM-2 forbids, for a read and for `\`.
+    fn crosses_strong_boundary(&self, name: &str) -> bool {
+        let Some(&boundary) = self.strong_boundary.last() else {
+            return false;               // file level: nothing to cross
+        };
+        // `None` is a constant, which MEM-1 makes global on purpose.
+        let Some(depth) = self.env.var_depth(name) else {
+            return false;
+        };
+        if depth >= boundary {
+            return false;               // its own parameter, or its own local
+        }
+        if self.is_module && depth == 0 {
+            // MEM-4, not a crossing: a module's functions are exactly who may
+            // read and write its state, and a module body has no other top
+            // level for MEM-2 to be about.
+            return false;
+        }
+        true
+    }
+
+    /// `\ name` — MEM-8, decided 2026-09-25 (GLB-055).
+    ///
+    /// `\` is a statement about a lifetime, and one that names nothing alive is
+    /// a wrong statement. Whether a `\` RAN is only known at run time — that is
+    /// why a second `\ x` is a run-time error — but whether a name is visible
+    /// here is decided the way a read decides it: `? #0 { >> nada ¶ }` was
+    /// already refused before anything runs. Before this, both Rust engines
+    /// accepted `\ nada` in silence, and `\ f`, `\ m` and a `\ K` inside a
+    /// function were statements that did nothing at all.
+    ///
+    /// Only a variable can be destroyed: a constant (MEM-1), a function and a
+    /// module alias live as long as the program.
+    fn check_lifetime_end(&mut self, name: &str, span: Span) {
+        if self.env.is_constant(name) {
+            self.errors.push(
+                Diagnostic::error(format!("cannot destroy constant '{}'", name))
+                    .with_span(span)
+                    .with_help("a constant lives as long as the program; only a variable can be destroyed"));
+        } else if self.env.lookup_var(name).is_some() {
+            if self.crosses_strong_boundary(name) {
+                self.errors.push(
+                    Diagnostic::error(format!(
+                        "'{}' is destroyed from outside this function", name))
+                        .with_span(span)
+                        .with_help("a function is a self-contained space: it can end the life of its own names, never of one it cannot see"));
+            }
+        } else if self.env.lookup_function(name).is_some() {
+            self.errors.push(
+                Diagnostic::error(format!("cannot destroy function '{}'", name))
+                    .with_span(span)
+                    .with_help("a function lives as long as the program; only a variable can be destroyed"));
+        } else if self.module_aliases.contains(name) {
+            self.errors.push(
+                Diagnostic::error(format!("cannot destroy module alias '{}'", name))
+                    .with_span(span)
+                    .with_help("a module alias lives as long as the program; only a variable can be destroyed"));
+        } else {
+            self.errors.push(
+                Diagnostic::error(format!("undefined variable '{}'", name))
+                    .with_span(span)
+                    .with_help("variables must be defined before use"));
+        }
     }
 
     fn check_statement(&mut self, stmt: &Statement) {
@@ -1604,6 +1657,10 @@ impl TypeChecker {
             // at either.
             Statement::Sleep(sl) => {
                 self.infer_expr(&sl.duration);
+            }
+
+            Statement::LifetimeEnd(end) => {
+                self.check_lifetime_end(&end.variable_name, end.span);
             }
 
             // Other statements don't need type checking
