@@ -1066,7 +1066,17 @@ impl VariableAnalyzer {
                 continue;
             }
 
-            if var_info.is_unused() {
+            // A constant nobody reads is named as what it is (GLB-061, decided
+            // 2026-09-25). An assignment to it is refused by the type checker,
+            // so "assigned but never read" does not apply either.
+            if var_info.is_const && (var_info.is_unused() || var_info.is_write_only()) {
+                self.diagnostics.push(VariableDiagnostic {
+                    severity: Severity::Warning,
+                    message: format!("unused constant '{}'", var_info.name),
+                    span: var_info.declaration_span,
+                    help: Some("consider removing this constant".to_string()),
+                });
+            } else if var_info.is_unused() {
                 self.diagnostics.push(VariableDiagnostic {
                     severity: Severity::Warning,
                     message: format!("unused variable '{}'", var_info.name),
