@@ -534,11 +534,14 @@ impl<W: Write> Interpreter<W> {
                         Rc::make_mut(&mut fields).push((name.clone(), new_value));
                         Ok(Value::NamedTuple(fields))
                     }
+                    // Any other kind of index is the same mistake, told in the
+                    // same words as the VM and zyjs tell it (P4-3, decided
+                    // 2026-09-26): it said "named tuple update index must be…".
                     _ => Err(RuntimeError::kinded(
                         "Type",
-                        format!(
-                            "named tuple update index must be an integer or field name (string), got {}",
-                            index_value.type_label()
+                        dict_not_positional(
+                            "d[n]$~ value",
+                            fields.first().map(|(k, _)| k.as_str()),
                         ),
                         op.span,
                     )),
@@ -1397,6 +1400,16 @@ fn deep_update_value(
         return Ok(new_val);
     }
     let idx = &indices[0];
+    // Every step here belongs to an EDIT, so a position into a dictionary is
+    // told as one — `d[n>…]$~ value`, as zyjs tells it. Reading the step
+    // first gave the read's sentence, `d[n>…]` (step P4-3).
+    if let (Value::NamedTuple(fields), Value::Int(_)) = (&col, idx) {
+        return Err(RuntimeError::kinded(
+            "Type",
+            dict_not_positional("d[n>…]$~ value", fields.first().map(|(k, _)| k.as_str())),
+            span,
+        ));
+    }
     let sub = get_at_step(&col, idx, span)?;
     let updated_sub = deep_update_value(sub, &indices[1..], new_val, span)?;
     set_at_step(col, idx, updated_sub, span)

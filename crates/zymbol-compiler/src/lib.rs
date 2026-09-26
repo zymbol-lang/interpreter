@@ -2555,6 +2555,7 @@ impl Compiler {
         let mut current = r_base;
         for step in &path.steps {
             let r_idx = self.compile_expr(&step.index, ctx)?;
+            ctx.emit(Instruction::NavStepCheck(current, r_idx));
             let dst = ctx.alloc_temp()?;
             ctx.emit(Instruction::ArrayGet(dst, current, r_idx));
             current = dst;
@@ -5413,7 +5414,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             | Instruction::NavRangeCheck(s)
             | Instruction::OutputSlotCheck(s, _) | Instruction::DestroyLocal(s, _)
             | Instruction::CheckAlive(s, _) | Instruction::Revive(s) => upd(*s),
-            Instruction::LoopBoundsCheck(a, b) => { upd(*a); upd(*b); }
+            Instruction::LoopBoundsCheck(a, b) | Instruction::NavStepCheck(a, b) => { upd(*a); upd(*b); }
             Instruction::DestructureAbsorb(d, s, _) => { upd(*d); upd(*s); }
             Instruction::ArrayMap(d, a, f) | Instruction::ArrayFilter(d, a, f) => { upd(*d); upd(*a); upd(*f); }
             Instruction::ArrayReduce(d, a, i, f) => { upd(*d); upd(*a); upd(*i); upd(*f); }
