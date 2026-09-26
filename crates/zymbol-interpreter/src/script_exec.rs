@@ -26,8 +26,12 @@ impl<W: Write> Interpreter<W> {
         let file_path = if Path::new(&execute.path).is_absolute() {
             PathBuf::from(&execute.path)
         } else {
-            let current_dir = self.current_file
+            // The file the `</` is written in: inside a module's function that
+            // is the module, not the program that called it (GLB-017 I,
+            // decided 2026-09-26).
+            let current_dir = self.current_module_path
                 .as_ref()
+                .or(self.current_file.as_ref())
                 .and_then(|p| p.parent())
                 .unwrap_or(&self.base_dir);
             current_dir.join(&execute.path)
@@ -39,6 +43,17 @@ impl<W: Write> Interpreter<W> {
                 message: format!("file not found: {}", file_path.display()),
                 span: execute.span,
             });
+        }
+
+        // GLB-017 I, decided 2026-09-26: the subscript runs in this process,
+        // down the same road `zymbol run` takes — analysed, run by the engine
+        // that runs the caller, and a failure carries what the CLI would have
+        // written, without the warnings.
+        if let Some(runner) = self.subscript_runner.clone() {
+            return match runner(&file_path) {
+                Ok(printed) => Ok(Value::String(printed)),
+                Err(failure) => Err(RuntimeError::Generic { message: failure, span: execute.span }),
+            };
         }
 
         // Read the file

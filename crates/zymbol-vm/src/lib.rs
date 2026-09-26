@@ -1157,6 +1157,10 @@ impl Drop for TuiGuard {
 // VM — Sprint 5C: flat register stack
 // ──────────────────────────────────────────────────────────────────────────────
 
+/// What runs a subscript: the resolved path in, what the program printed out,
+/// or the failure as `zymbol run` writes it.
+pub type SubscriptRunner = std::rc::Rc<dyn Fn(&std::path::Path) -> Result<String, String>>;
+
 pub struct VM<W: Write> {
     /// Flat register stack: all registers of all frames concatenated.
     /// value_stack[base..] are the registers of the current (top) frame.
@@ -1183,6 +1187,10 @@ pub struct VM<W: Write> {
     destroyed_slots: std::collections::HashSet<usize>,
     /// CLI arguments passed after the script path (argv[1..], skipping --vm flags)
     cli_args: Vec<String>,
+    /// Runs a subscript `</ file />` as `zymbol run --vm` runs a program
+    /// (GLB-017 I). The CLI installs it; a program built into a standalone
+    /// executable has none, and its subscripts are refused.
+    subscript_runner: Option<SubscriptRunner>,
     /// The code a top-level `<~ n` asked the program to end with (GAP-ZYB-006).
     exit_code: Option<i64>,
     /// The instruction the dispatch loop is on, and which chunk it belongs to
@@ -1225,6 +1233,7 @@ impl<W: Write> VM<W> {
             destroyed_globals: std::collections::HashMap::new(),
             destroyed_slots: std::collections::HashSet::new(),
             cli_args: Vec::new(),
+            subscript_runner: None,
             exit_code: None,
             cur_ip: 0,
             cur_chunk: u32::MAX,
@@ -1235,6 +1244,11 @@ impl<W: Write> VM<W> {
     }
 
     /// Set CLI arguments before running (argv after the script path, minus VM flags).
+    /// Install the runner for `</ file />` (GLB-017 I).
+    pub fn set_subscript_runner(&mut self, runner: SubscriptRunner) {
+        self.subscript_runner = Some(runner);
+    }
+
     pub fn set_cli_args(&mut self, args: Vec<String>) {
         self.cli_args = args;
     }
@@ -4068,17 +4082,24 @@ impl<W: Write> VM<W> {
                             BuildPart::Reg(r) => cmd.push_str(&self.reg_get(*r).to_string_repr()),
                         }
                     }
-                    let out = match run_in_shell(&cmd) { Ok(o) => o, Err(e) => raise!(e.into()) };
-                    if !out.status.success() {
-                        let mut msg = String::from_utf8_lossy(&out.stderr).into_owned();
-                        if msg.is_empty() {
-                            msg = String::from_utf8_lossy(&out.stdout).into_owned();
-                        }
-                        let msg = msg.trim_end().to_string();
-                        raise!(VmError::Generic(msg));
+                    // GLB-017 I, decided 2026-09-26: in this process, down
+                    // the road `zymbol run --vm` takes, through the runner the
+                    // CLI installs. The same refusal as the tree-walker when
+                    // there is no such file.
+                    let path = std::path::PathBuf::from(&cmd);
+                    if !path.exists() {
+                        raise!(VmError::Generic(format!("file not found: {}", path.display())));
                     }
-                    let result = String::from_utf8_lossy(&out.stdout).into_owned();
-                    self.reg_set(dst, Value::String(ZyStr::new(result)));
+                    let Some(runner) = self.subscript_runner.clone() else {
+                        raise!(VmError::Generic(format!(
+                            "cannot run '{}': a subscript needs the zymbol command, and this program runs without it",
+                            path.display()
+                        )));
+                    };
+                    match runner(&path) {
+                        Ok(printed) => self.reg_set(dst, Value::String(ZyStr::new(printed))),
+                        Err(failure) => raise!(VmError::Generic(failure)),
+                    }
                 }
 
                 // ── Format ops ────────────────────────────────────────────────
