@@ -487,12 +487,24 @@ impl VariableAnalyzer {
                 self.enter_scope();
 
                 // If it's a for-each loop, the iterator variable is declared INSIDE the loop scope
+                //
+                // Unless it names a constant: the type checker refuses that loop
+                // (D5), so the iterator never exists, and declaring it anyway
+                // retired the constant and reported it unused while the program
+                // read it (GLB-056, step P4.7) — the same reason `ConstDecl`
+                // skips a second declaration below.
                 if let Some(iterator_var) = &loop_stmt.iterator_var {
-                    self.declare_variable(
-                        iterator_var.clone(),
-                        loop_stmt.span,
-                        false,
-                    );
+                    let is_const = self
+                        .variables
+                        .get(iterator_var)
+                        .is_some_and(|v| v.is_const);
+                    if !is_const {
+                        self.declare_variable(
+                            iterator_var.clone(),
+                            loop_stmt.span,
+                            false,
+                        );
+                    }
                 }
                 // `@ (k, v):pares` declares every name its pattern binds, the
                 // same way a single iterator name is declared.

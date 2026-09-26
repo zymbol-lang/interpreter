@@ -53,12 +53,6 @@ pub enum RuntimeError {
     #[error("module not found: {path}")]
     ModuleNotFound { path: String },
 
-    #[error("module '{module}' does not export function '{function}'")]
-    FunctionNotExported { module: String, function: String },
-
-    #[error("module '{module}' does not export constant '{constant}'")]
-    ConstantNotExported { module: String, constant: String },
-
     #[error("circular dependency detected")]
     CircularDependency,
 
@@ -2244,18 +2238,6 @@ impl<W: Write> Interpreter<W> {
             }
             RuntimeError::ModuleNotFound { path } => {
                 Value::Error(ErrorValue::io(format!("module not found: {}", path)))
-            }
-            RuntimeError::FunctionNotExported { module, function } => {
-                Value::Error(ErrorValue::generic(format!(
-                    "function '{}' not exported from module '{}'",
-                    function, module
-                )))
-            }
-            RuntimeError::ConstantNotExported { module, constant } => {
-                Value::Error(ErrorValue::generic(format!(
-                    "constant '{}' not exported from module '{}'",
-                    constant, module
-                )))
             }
             RuntimeError::CircularDependency => {
                 Value::Error(ErrorValue::generic("circular dependency detected"))
