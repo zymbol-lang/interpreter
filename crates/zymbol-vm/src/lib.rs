@@ -2548,6 +2548,12 @@ impl<W: Write> VM<W> {
                         other => raise!(VmError::TypeMsg(format!(
                             "$+[i] index must be an integer, got {}", other.type_label()))),
                     };
+                    // The tree-walker's words for a position below 1 (P4-3 E4,
+                    // decided 2026-09-26); the bounds check below keeps the end.
+                    if idx <= 0 {
+                        raise!(VmError::IndexMsg(format!(
+                            "$+[i] index must be positive (1-based, use 1 to insert at the beginning), got {}", idx)));
+                    }
                     let val = self.reg_get(val_reg).clone();
                     match self.value_stack[base + arr_reg as usize].clone() {
                         Value::Array(rc_arr) => {
