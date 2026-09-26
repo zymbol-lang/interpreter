@@ -74,6 +74,34 @@ fn consulting_op_name(expr: &Expr) -> Option<&'static str> {
     })
 }
 
+/// The operator of a statement that computes a value out of names and
+/// literals alone and throws it away: `x > 1`, `a + b * 2`.
+///
+/// Decided on 2026-09-26 (ZYJS-035): such a statement is valid and warns, the
+/// way a bare `x` already did. zyjs refused `x > 1` and split `x + 1` in two,
+/// while both Rust engines accepted it in silence.
+///
+/// Only arithmetic, comparison and logic over names, literals and parentheses.
+/// A call anywhere inside may be there for its effect, and a `|>` is a call.
+fn pure_statement_op(expr: &Expr) -> Option<BinaryOp> {
+    fn pure(e: &Expr) -> bool {
+        match e {
+            Expr::Literal(_) | Expr::Identifier(_) => true,
+            Expr::Group(g) => pure(&g.expr),
+            Expr::Unary(u) => pure(&u.operand),
+            Expr::Binary(b) => pure_op(b.op) && pure(&b.left) && pure(&b.right),
+            _ => false,
+        }
+    }
+    fn pure_op(op: BinaryOp) -> bool {
+        op.is_arithmetic() || op.is_comparison() || matches!(op, BinaryOp::And | BinaryOp::Or)
+    }
+    match expr {
+        Expr::Binary(b) if pure(expr) => Some(b.op),
+        _ => None,
+    }
+}
+
 
 /// The name a read is ultimately about, when the `°` marker sits on it.
 ///
@@ -1642,6 +1670,20 @@ impl TypeChecker {
                 // call sits inside it: the call's effect still happens, and the
                 // `$#` wrapped around it is still pointless. The warning points
                 // at the operator, not at the call.
+                if let Some(op) = pure_statement_op(expr_stmt.expr.unwrap_group()) {
+                    let help = if op.is_comparison() || matches!(op, BinaryOp::And | BinaryOp::Or) {
+                        "to branch on it, write `? condition { … }` — otherwise remove it, or use the result"
+                    } else {
+                        "remove it, or use the result — assign it, print it, or pass it on"
+                    };
+                    self.warnings.push(
+                        Diagnostic::warning(format!(
+                            "this statement does nothing: `{op}` computes a value and it is discarded"
+                        ))
+                        .with_span(expr_stmt.expr.span())
+                        .with_help(help),
+                    );
+                }
                 if let Some(op) = consulting_op_name(expr_stmt.expr.unwrap_group()) {
                     self.warnings.push(
                         Diagnostic::warning(format!(
