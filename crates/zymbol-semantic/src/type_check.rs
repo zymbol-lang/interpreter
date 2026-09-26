@@ -231,6 +231,9 @@ pub struct TypeEnv {
     /// `x = "a"` is still a change from Int, while `scopes` keeps saying Unit
     /// for every check that asks what `x` holds right now.
     real_types: Vec<HashMap<String, ZymbolType>>,
+    /// Constants whose value is written in the source as an integer — `A := 1`,
+    /// `B := -3` — so a range bounded by them has a direction anyone can read.
+    literal_int_consts: HashSet<String>,
 }
 
 impl TypeEnv {
@@ -242,6 +245,7 @@ impl TypeEnv {
             constants: HashMap::new(),
             param_constraints: HashMap::new(),
             real_types: vec![HashMap::new()],
+            literal_int_consts: HashSet::new(),
         }
     }
 
@@ -286,6 +290,34 @@ impl TypeEnv {
             self.scopes.pop();
             self.real_types.pop();
         }
+    }
+
+    /// An integer written in the source, or `-` one.
+    pub fn is_int_literal(e: &Expr) -> bool {
+        match e.unwrap_group() {
+            Expr::Literal(lit) => matches!(lit.value, zymbol_common::Literal::Int(_)),
+            Expr::Unary(u) => matches!(u.op, UnaryOp::Neg | UnaryOp::Pos)
+                && matches!(u.operand.unwrap_group(),
+                            Expr::Literal(lit) if matches!(lit.value, zymbol_common::Literal::Int(_))),
+            _ => false,
+        }
+    }
+
+    /// Record that constant `name` was declared with an integer written in the
+    /// source.
+    pub fn note_literal_int_const(&mut self, name: &str) {
+        self.literal_int_consts.insert(name.to_string());
+    }
+
+    /// A range bound whose value is read off the source: an integer written
+    /// there, or a constant declared with one (decided 2026-09-25). A variable,
+    /// or a constant computed from an expression, is not.
+    pub fn is_known_int_bound(&self, e: &Expr) -> bool {
+        if Self::is_int_literal(e) {
+            return true;
+        }
+        matches!(e.unwrap_group(), Expr::Identifier(id)
+            if self.literal_int_consts.contains(&id.name) && self.constants.contains_key(&id.name))
     }
 
     /// The last type other than Unit that `name` held, innermost scope first.
@@ -1185,6 +1217,9 @@ impl TypeChecker {
                     return;
                 }
                 let value_type = self.infer_expr(&const_decl.value);
+                if TypeEnv::is_int_literal(&const_decl.value) {
+                    self.env.note_literal_int_const(&const_decl.name);
+                }
                 self.env.define_const(&const_decl.name, value_type);
             }
 
@@ -1345,13 +1380,15 @@ impl TypeChecker {
                 // be read off the source.
                 if let Some(iterable) = &loop_stmt.iterable {
                     if let Expr::Range(range) = iterable.unwrap_group() {
-                        let is_int_literal = |e: &Expr| matches!(
-                            e.unwrap_group(),
-                            Expr::Literal(lit) if matches!(lit.value, zymbol_common::Literal::Int(_))
-                        );
+                        // Both bounds read off the source — an integer written
+                        // there, `-1` included, or a constant declared with one
+                        // — have a direction anyone can see (decided 2026-09-25,
+                        // from `LIM_INI..LIM_FIN`; `-1..1` warned too, because
+                        // `-1` is an expression).
                         let guarded = Self::expr_key(&range.end)
                             .is_some_and(|k| self.guarded_bounds.contains(&k));
-                        if !guarded && !(is_int_literal(&range.start) && is_int_literal(&range.end)) {
+                        if !guarded && !(self.env.is_known_int_bound(&range.start)
+                                         && self.env.is_known_int_bound(&range.end)) {
                             self.warnings.push(
                                 Diagnostic::warning(
                                     "range direction is decided at runtime: if the end \
