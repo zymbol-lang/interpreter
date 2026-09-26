@@ -225,6 +225,12 @@ pub struct TypeEnv {
     constants: HashMap<String, ZymbolType>,
     /// Parameter constraints during inference (param_name -> constraints)
     param_constraints: HashMap<String, Vec<TypeConstraint>>,
+    /// The last type each variable held that was not Unit, scope by scope in
+    /// step with `scopes`. `##_` is the absence of a value and does not change
+    /// a variable's type (GLB-043, decided 2026-09-25): `x = 1`, `x = ##_`,
+    /// `x = "a"` is still a change from Int, while `scopes` keeps saying Unit
+    /// for every check that asks what `x` holds right now.
+    real_types: Vec<HashMap<String, ZymbolType>>,
 }
 
 impl TypeEnv {
@@ -235,6 +241,7 @@ impl TypeEnv {
             functions: HashMap::new(),
             constants: HashMap::new(),
             param_constraints: HashMap::new(),
+            real_types: vec![HashMap::new()],
         }
     }
 
@@ -270,12 +277,29 @@ impl TypeEnv {
     /// Enter a new scope
     pub fn enter_scope(&mut self) {
         self.scopes.push(HashMap::new());
+        self.real_types.push(HashMap::new());
     }
 
     /// Exit the current scope
     pub fn exit_scope(&mut self) {
         if self.scopes.len() > 1 {
             self.scopes.pop();
+            self.real_types.pop();
+        }
+    }
+
+    /// The last type other than Unit that `name` held, innermost scope first.
+    pub fn last_real_type(&self, name: &str) -> Option<&ZymbolType> {
+        self.real_types.iter().rev().find_map(|scope| scope.get(name))
+    }
+
+    /// Record `ty` as what `name` really holds, unless it is Unit.
+    pub fn note_real_type(&mut self, name: &str, ty: &ZymbolType) {
+        if *ty == ZymbolType::Unit {
+            return;
+        }
+        if let Some(scope) = self.real_types.last_mut() {
+            scope.insert(name.to_string(), ty.clone());
         }
     }
 
@@ -1117,18 +1141,31 @@ impl TypeChecker {
                 }
 
                 // Check for type consistency on reassignment - this is a WARNING
+                //
+                // Unit on either side is not a change of type (GLB-043, decided
+                // 2026-09-25): emptying a variable with `##_`, or filling one that
+                // started empty, is the ordinary use of an absent value. What the
+                // new value is compared with is the last type that was not Unit.
                 if let Some(existing_type) = self.env.lookup_var(&assign.name).cloned() {
-                    if !existing_type.is_compatible_with(&value_type) {
-                        self.warnings.push(
-                            Diagnostic::warning(format!(
-                                "type mismatch: '{}' was {} but assigned {}",
-                                assign.name, existing_type.name(), value_type.name()
-                            ))
-                            .with_span(assign.span)
-                        );
+                    let was = if existing_type == ZymbolType::Unit {
+                        self.env.last_real_type(&assign.name).cloned()
+                    } else {
+                        Some(existing_type)
+                    };
+                    if let Some(was) = was {
+                        if value_type != ZymbolType::Unit && !was.is_compatible_with(&value_type) {
+                            self.warnings.push(
+                                Diagnostic::warning(format!(
+                                    "type mismatch: '{}' was {} but assigned {}",
+                                    assign.name, was.name(), value_type.name()
+                                ))
+                                .with_span(assign.span)
+                            );
+                        }
                     }
                 }
 
+                self.env.note_real_type(&assign.name, &value_type);
                 self.env.define_var(&assign.name, value_type);
             }
 
