@@ -736,8 +736,12 @@ impl ModuleAnalyzer {
             if let Some(ref export_block) = module_decl.export_block {
                 for item in &export_block.items {
                     if let ExportItem::Own { name, span, .. } = item {
-                        // Validate by internal name (the symbol that must exist in this file)
-                        if !defined_functions.contains(name) && !defined_constants.contains(name) {
+                        // Validate by internal name (the symbol that must exist in this file).
+                        // A module VARIABLE exists: the type checker refuses exporting it
+                        // with its own sentence, so this does not also say "not found".
+                        let is_variable = program.statements.iter().any(|s|
+                            matches!(s, Statement::Assignment(a) if &a.name == name));
+                        if !defined_functions.contains(name) && !defined_constants.contains(name) && !is_variable {
                             self.diagnostics.push(
                                 SemanticError::ItemNotFound {
                                     item: name.clone(),

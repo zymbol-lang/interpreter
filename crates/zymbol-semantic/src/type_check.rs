@@ -652,6 +652,7 @@ impl TypeChecker {
 
         self.is_module = program.module_decl.is_some();
         self.check_name_collisions(program);
+        self.check_exported_variables(program);
 
         // First pass: collect function declarations with placeholder types
         for stmt in &program.statements {
@@ -817,6 +818,7 @@ impl TypeChecker {
 
         self.is_module = program.module_decl.is_some();
         self.check_name_collisions(program);
+        self.check_exported_variables(program);
 
         // First pass: collect function declarations with placeholder types
         for stmt in &program.statements {
@@ -1116,6 +1118,35 @@ impl TypeChecker {
                 Diagnostic::error(format!("undefined variable '{}'", name))
                     .with_span(span)
                     .with_help("variables must be defined before use"));
+        }
+    }
+
+    /// A module's `#>` block names constants and functions; a variable is the
+    /// module's own state and cannot leave it (P4-3 E6, decided 2026-09-26).
+    /// Refused here, on the export block and before anything runs, because
+    /// this analysis is what every engine runs on a module it loads. It was
+    /// refused only where the name was READ — at run time in two engines, at
+    /// compile time in the VM — and `zymbol check` said `E005: Item 'n' not
+    /// found in module`, which is false: `n` is there.
+    fn check_exported_variables(&mut self, program: &Program) {
+        let Some(export_block) = program.module_decl.as_ref()
+            .and_then(|m| m.export_block.as_ref()) else { return };
+        let variables: HashSet<&str> = program.statements.iter()
+            .filter_map(|s| match s {
+                Statement::Assignment(a) => Some(a.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        for item in &export_block.items {
+            if let zymbol_ast::ExportItem::Own { name, span, .. } = item {
+                if variables.contains(name.as_str()) {
+                    self.errors.push(
+                        Diagnostic::error(format!(
+                            "'{}' is a variable: a module exports constants and functions", name))
+                            .with_span(*span)
+                            .with_help("declare it with ':=' if it never changes, or export a function that returns it"));
+                }
+            }
         }
     }
 
