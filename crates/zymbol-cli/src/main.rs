@@ -361,6 +361,10 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         return Ok(1);
     }
 
+    // `check_stdlib_access` reads tokens, not the AST (a re-export in an
+    // export block is not an expression).
+    let tokens_for_stdlib = tokens.clone();
+
     // Parse
     let parser = ZParser::new(tokens);
     let program = match parser.parse() {
@@ -473,12 +477,30 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
+    type_checker.set_module_exports(zymbol_semantic::module_exports(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
     let type_errors = type_checker.check_errors(&program);
 
     // Type errors are fatal - stop execution
     if !type_errors.is_empty() {
         let mut bag = DiagnosticBag::new();
         for err in type_errors {
+            bag.add(err);
+        }
+        bag.emit_all(&source_map);
+        return Ok(1);
+    }
+
+    // A member a `std/` module does not have — `math::nada(1)`, `math.NADA` —
+    // is refused here as `check` refuses it (ZYVM-008, decided 2026-09-26).
+    // Only `check` and the editor asked, so `run` refused it when the line ran,
+    // and in a branch that never ran it said nothing.
+    let stdlib_errors = zymbol_semantic::check_stdlib_access(&tokens_for_stdlib, &program.imports);
+    if !stdlib_errors.is_empty() {
+        let mut bag = DiagnosticBag::new();
+        for err in stdlib_errors {
             bag.add(err);
         }
         bag.emit_all(&source_map);
@@ -702,6 +724,10 @@ fn build_file(path: PathBuf, output: Option<PathBuf>, release: bool) -> Result<(
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
     type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
+    type_checker.set_module_exports(zymbol_semantic::module_exports(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
@@ -1219,6 +1245,10 @@ fn check_source(
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
     type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
+    type_checker.set_module_exports(zymbol_semantic::module_exports(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));

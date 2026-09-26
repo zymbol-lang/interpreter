@@ -170,6 +170,115 @@ pub fn arities_of_module_file(path: &Path) -> Option<ModuleArities> {
     arities_of_file(path, 0)
 }
 
+// ── What each alias exports, by kind ─────────────────────────────────────────
+//
+// ZYVM-008, decided 2026-09-26: a member the module does not export — `m.nada`,
+// `m::nada()` — is refused before the program runs, in all three engines and in
+// `zymbol check`, the way an undefined local name already was. The VM refused
+// the read at compile time and with no location; the tree-walker and zyjs
+// refused it only when the line ran, so in a branch that never ran they said
+// nothing; and a missing function was refused at run time by all three.
+//
+// Only user modules: a `std/` alias is checked by `check_stdlib_access`, with
+// its own words. A module whose export block cannot be resolved in full — a
+// missing file, a parse error, a re-export that leads nowhere, a name that is
+// neither a function nor a constant — contributes nothing, so a use of it is
+// left to run time instead of refused on a guess.
+
+/// The names one module exports, split by how they are reached: a constant is
+/// read with `.`, a function is called with `::`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModuleExports {
+    pub constants: std::collections::BTreeSet<String>,
+    pub functions: std::collections::BTreeSet<String>,
+}
+
+/// The same, per import alias.
+pub type AliasExports = HashMap<String, ModuleExports>;
+
+/// Build the export table for every user-module import in `program`.
+pub fn module_exports(imports: &[ImportStmt], base_dir: &Path) -> AliasExports {
+    let mut table = AliasExports::new();
+    for import in imports {
+        if import.path.is_stdlib() {
+            continue;
+        }
+        if let Some(exports) = exports_of_import(import, base_dir, 0) {
+            table.insert(import.alias.clone(), exports);
+        }
+    }
+    table
+}
+
+fn exports_of_import(import: &ImportStmt, base_dir: &Path, depth: usize) -> Option<ModuleExports> {
+    if import.path.is_stdlib() {
+        let path = format!("std/{}", import.path.components[1..].join("/"));
+        let module = stdlib::module(&path)?;
+        return Some(ModuleExports {
+            constants: module.constants.iter().map(|c| c.to_string()).collect(),
+            functions: module.functions.iter().map(|f| f.name.to_string()).collect(),
+        });
+    }
+    let resolved = import.path.resolve_from(base_dir)?;
+    exports_of_file(&resolved, depth)
+}
+
+fn exports_of_file(path: &Path, depth: usize) -> Option<ModuleExports> {
+    if depth > MAX_REEXPORT_DEPTH {
+        return None;
+    }
+    let source = std::fs::read_to_string(path).ok()?;
+    let program = parse(&source)?;
+    let module_decl = program.module_decl.as_ref()?;
+    let export_block = module_decl.export_block.as_ref()?;
+
+    let mut functions = std::collections::HashSet::new();
+    let mut constants = std::collections::HashSet::new();
+    for stmt in &program.statements {
+        match stmt {
+            Statement::FunctionDecl(decl) => { functions.insert(decl.name.as_str()); }
+            Statement::ConstDecl(decl) => { constants.insert(decl.name.as_str()); }
+            _ => {}
+        }
+    }
+
+    let module_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut exports = ModuleExports::default();
+    for item in &export_block.items {
+        match item {
+            ExportItem::Own { name, rename, .. } => {
+                let public = rename.clone().unwrap_or_else(|| name.clone());
+                if functions.contains(name.as_str()) {
+                    exports.functions.insert(public);
+                } else if constants.contains(name.as_str()) {
+                    exports.constants.insert(public);
+                } else {
+                    return None;
+                }
+            }
+            ExportItem::ReExport { module_alias, item_name, rename, .. } => {
+                let source_import = program.imports.iter().find(|i| &i.alias == module_alias)?;
+                let source = exports_of_import(source_import, module_dir, depth + 1)?;
+                let public = rename.clone().unwrap_or_else(|| item_name.clone());
+                if source.functions.contains(item_name) {
+                    exports.functions.insert(public);
+                } else if source.constants.contains(item_name) {
+                    exports.constants.insert(public);
+                } else {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(exports)
+}
+
+/// The same table for one module file, for the LSP, which holds resolved
+/// module paths in its document cache.
+pub fn exports_of_module_file(path: &Path) -> Option<ModuleExports> {
+    exports_of_file(path, 0)
+}
+
 // ── Output-parameter slots, per alias ────────────────────────────────────────
 //
 // The call-site mark `m::f(x<~)` is checked against the callee's signature the

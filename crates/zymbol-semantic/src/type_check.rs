@@ -463,6 +463,10 @@ pub struct TypeChecker {
     /// Which slots of each module function are `<~` outputs, so `m::f(x<~)` is
     /// checked like `f(x<~)`. Supplied beside the arities; empty means unchecked.
     module_out_slots: crate::call_arity::AliasOutSlots,
+    /// What each user-module alias exports, so a member it does not have is
+    /// refused before the program runs (ZYVM-008). Supplied beside the
+    /// arities; an alias with no entry is left to run time.
+    module_exports: crate::call_arity::AliasExports,
     /// Nesting depth of @ loop bodies currently being analyzed.
     /// Used to suppress "redundant °" warnings inside loops, where every iteration
     /// re-executes the same statement (°x is needed on every iteration, not just the first).
@@ -593,6 +597,7 @@ impl TypeChecker {
             strong_boundary: Vec::new(),
             is_module: false,
             module_out_slots: crate::call_arity::AliasOutSlots::new(),
+            module_exports: crate::call_arity::AliasExports::new(),
             loop_depth: 0,
             guarded_bounds: Vec::new(),
             index_receiver_kinds: HashMap::new(),
@@ -665,6 +670,21 @@ impl TypeChecker {
 
     pub fn set_module_arities(&mut self, arities: crate::call_arity::AliasArities) {
         self.module_arities = arities;
+    }
+
+    /// Supply what each user-module alias exports, enabling the refusal of
+    /// `m.nada` and `m::nada()` before the program runs (ZYVM-008).
+    pub fn set_module_exports(&mut self, exports: crate::call_arity::AliasExports) {
+        self.module_exports = exports;
+    }
+
+    /// The exports behind `alias`, when it names a module and not a variable
+    /// that happens to share its name.
+    fn exports_of_alias(&self, alias: &str) -> Option<&crate::call_arity::ModuleExports> {
+        if self.env.lookup_var(alias).is_some() {
+            return None;
+        }
+        self.module_exports.get(alias)
     }
 
     /// Check a program and return all diagnostics (errors + warnings)
@@ -2860,6 +2880,35 @@ impl TypeChecker {
             }
 
             Expr::MemberAccess(member) => {
+                // `m.nada` — a constant the module does not export. The words
+                // are the ones all three engines gave when the line ran.
+                if !member.is_module_access {
+                    if let Expr::Identifier(alias) = member.object.unwrap_group() {
+                        if let Some(exports) = self.exports_of_alias(&alias.name) {
+                            if !exports.constants.contains(&member.field) {
+                                let available = if exports.constants.is_empty() {
+                                    "none".to_string()
+                                } else {
+                                    exports.constants.iter().cloned().collect::<Vec<_>>().join(", ")
+                                };
+                                let mut diag = Diagnostic::error(format!(
+                                    "Module '{}' has no constant '{}'. Available constants: {}",
+                                    alias.name, member.field, available
+                                ))
+                                .with_span(member.span);
+                                // A function read with `.` — the words `std/`
+                                // gives the same slip.
+                                if exports.functions.contains(&member.field) {
+                                    diag = diag.with_help(format!(
+                                        "call it with '::': {}::{}(…)", alias.name, member.field
+                                    ));
+                                }
+                                self.errors.push(diag);
+                                return ZymbolType::Unknown;
+                            }
+                        }
+                    }
+                }
                 let obj_type = self.infer_expr(&member.object);
                 match obj_type {
                     ZymbolType::NamedTuple(fields) => {
@@ -2945,6 +2994,26 @@ impl TypeChecker {
                 // table the caller supplied. Without a table, or for a name the
                 // module does not export (reported separately), nothing is said.
                 if let Expr::MemberAccess(access) = call.callable.unwrap_group() {
+                    // `m::nada()`, and `m.nada()` which calls the same way: a
+                    // function the module does not export (ZYVM-008).
+                    if let Expr::Identifier(alias) = access.object.unwrap_group() {
+                        if let Some(exports) = self.exports_of_alias(&alias.name) {
+                            if !exports.functions.contains(&access.field) {
+                                let mut diag = Diagnostic::error(format!(
+                                    "module '{}' does not export function '{}'",
+                                    alias.name, access.field
+                                ))
+                                .with_span(call.span);
+                                if exports.constants.contains(&access.field) {
+                                    diag = diag.with_help(format!(
+                                        "read it with '.': {}.{}", alias.name, access.field
+                                    ));
+                                }
+                                self.errors.push(diag);
+                                return ZymbolType::Unknown;
+                            }
+                        }
+                    }
                     if access.is_module_access {
                         if let Expr::Identifier(alias) = access.object.unwrap_group() {
                             // The call-site output mark, checked against the module's
