@@ -1946,24 +1946,48 @@ positionally.
 
 ### Function Scope
 
-A function **captures** what its body reads from the file, by value, and a write
-inside it stays inside the call:
+A named function is a **self-contained space**. It does not read the file it is
+written in — a value crosses into it as a parameter, and in no other way:
 
 ```zymbol
 global = 100
 
 test() {
-    <~ global + 1
+    <~ global + 1     // ❌ 'global' is not in scope here
 }
-
->> test() ¶       // → 101
+```
+```text
+error: 'global' is read from outside this function
+  = help: a function is a self-contained space: a value crosses into it as a
+    parameter, never by being in view — pass 'global' as one
 ```
 
-Captured, not shared: the value is read when the function is **called**, and
-assigning to that name inside the body writes a local copy that dies with the
-call. Module state is the other thing — a module's functions share it and their
-writes persist — and that difference is what makes one of them state and the
-other capture.
+Pass it:
+
+```zymbol
+global = 100
+sumar(base, n) { <~ base + n }
+
+>> sumar(global, 1) ¶     // → 101
+```
+
+A write inside the call stays inside it. `p~` marks a **working copy**: the body
+may reassign that parameter freely and the caller's variable is untouched. Only
+`<~`, written at the signature *and* at the call site, sends a change back — see
+"Output Parameters" above.
+
+```zymbol
+sube(n~) {
+    n = n + 1
+    <~ n
+}
+
+x = 5
+>> sube(x) ¶     // → 6
+>> x ¶           // → 5
+```
+
+The caller's `x` never moved: `n~` gave the body a copy to work on.
 
 > **Exception — constants pierce the isolation.** Top-level `:=` constants are
 > globally scoped by design: they are readable (never writable) inside any
@@ -1975,21 +1999,34 @@ other capture.
 > >> area(2) ¶                 // → 12.56
 > ```
 
-Functions used **as first-class values** capture the scope at the point of assignment (like lambdas):
+**Module state is the other thing.** A module's own functions share its variables
+and their writes persist from one call to the next (section 12). That difference
+— a parameter that arrives and a module variable that stays — is what makes one
+of them a value and the other state.
+
+### Functions as First-Class Values
+
+A named function is a value: assign it, pass it, put it in an array.
 
 ```zymbol
-base = 10
-adder(n) { <~ n + base }   // 'base' is out of scope in direct call
+dup(x) { <~ x * 2 }
 
-f = adder          // captures current scope: { base: 10 }
->> f(5) ¶          // → 15
-
-// Changing base after assignment does NOT affect f (capture is by value)
-base = 99
->> f(5) ¶          // → 15  (captured base=10 is unchanged)
+f = dup
+>> f(5) ¶            // → 10
+>> [1,2,3]$> f ¶     // → [2, 4, 6]
 ```
 
-> See section 10 for lambdas, which always capture scope at definition time.
+**Nothing is captured**, and there is nothing to capture: a named function cannot
+read the surrounding scope in the first place. Both ways of reaching it — calling
+it directly, and calling it through a name that holds it — behave identically.
+
+> Earlier versions of this guide described a function as capturing the file's
+> variables by value, and a function used as a value as capturing the scope at
+> the point of assignment. Both described the engine as it was before the
+> isolation was restored; neither example compiles today.
+
+> Lambdas are the other case and section 10 is where they live: a lambda is a
+> **light** environment, so it *does* read the scope it is written in.
 
 ### Where Functions Can Be Called
 
@@ -2064,8 +2101,7 @@ r = nums$> (x -> double(x))   // ✅ explicit lambda
 |------|-----|
 | Reusable logic | Named function `fn(params) { }` |
 | Recursion | Named function (lambdas cannot self-reference) |
-| Capture outer scope at definition | Lambda `x -> expr` |
-| Capture scope at point of use | Named function assigned to variable |
+| Read a value from the surrounding scope | Lambda `x -> expr` — a named function cannot; pass it as a parameter |
 | Pass as argument (first-class) | Named function directly OR lambda |
 | Return from another function | Named function OR lambda |
 | HOF operand | Named function directly: `arr$> double` |
@@ -2225,40 +2261,47 @@ To share mutable state across calls, use a named function with a module-level va
 
 ### Named Functions vs Lambdas
 
-Named functions and lambdas capture the same way (v0.0.9): **by value, with the
-write isolated**.
+They are **not** the same environment, and that is the difference to carry:
+
+| | reads the scope it is written in | a write inside it escapes |
+|---|---|---|
+| named function | **no** — it is a *strong* environment | no |
+| lambda | **yes**, by value at creation — it is *light* | no |
 
 ```zymbol
 x = 42
-peek() { <~ x }
->> peek() ¶        // → 42
+
+ojea = () -> x     // a lambda is light: it reads the file it sits in
+>> ojea() ¶        // → 42
 ```
 
-> **This was asymmetric until v0.0.9**, and the asymmetry is worth knowing about
-> because programs were written around it. A direct call was *isolated* and the
-> same function taken as a value *captured*, so one body meant two things
-> depending on how it was reached:
->
-> ```zymbol
-> base = 10
-> adder(n) { <~ n + base }
->
-> adder(5)       // was: runtime error: undefined variable: 'base'
-> f = adder
-> >> f(5) ¶      // → 15, then as now
->
-> base = 99
-> >> f(5) ¶      // → 15  (snapshot — change to base does not affect f)
-> ```
->
-> So `adder(5)` and `(f = adder)(5)` were **not equivalent** when the body named
-> anything from outside, and nothing in the source said which one you were
-> looking at. That is why it went: one rule now, and it is the lambda's.
+The same body as a named function does not compile, and the message says what to
+do instead:
 
-**The one difference that remains** is *when* the value is read, and it follows
-from what each form is. A function taken as a value is a snapshot of that
-moment, so a later change to the file does not reach it; a direct call reads the
-file when it is called. Both are by value, and neither lets a write escape.
+```zymbol
+x = 42
+peek() { <~ x }    // ❌ error: 'x' is read from outside this function
+                   //    = help: pass 'x' as a parameter
+```
+
+> **This took two reversals to settle, and both are worth knowing** because
+> programs were written around each of them.
+>
+> Until **2026-08-24** the two ways of reaching one named function disagreed: a
+> direct call was *isolated* and the same function taken as a value *captured*.
+> With `base = 10` and `adder(n) { <~ n + base }`, `adder(5)` was a runtime error
+> while `f = adder` followed by `f(5)` gave `15` — one body meaning two things,
+> with nothing in the source saying which one you were looking at
+> (`ERROR-ZYB-002`).
+>
+> That was closed by making **both** paths capture. On **2026-09-13** it was
+> closed the other way instead, which is the state above: **both paths are
+> isolated**. The incoherence is gone either way; what the second reading also
+> keeps is the rule that a function's inputs are visible at its call site.
+
+**What remains true of both** is that neither lets a write escape, and that a
+lambda's read is a snapshot: it takes the value at creation, so a later change to
+that variable does not reach it.
 
 **Module state is the other thing.** A module's functions *share* its variables
 and their writes persist — that is what module state is for, and it is the only
