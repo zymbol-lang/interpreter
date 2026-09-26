@@ -259,9 +259,18 @@ impl<W: Write> Interpreter<W> {
                 self.eval_traditional_function_call(func_def, &call.arguments, &call.span, None, Some(&ident.name))
             }
 
-            // Member access: could be module::function or object.method (only module supported)
+            // Member access: a module's function when the object is an import
+            // alias; otherwise the dot reads a value — a dictionary key — which
+            // is then called, as in the VM and zyjs (step P4-3). Every `x.f(…)`
+            // used to be taken for a module call: `d.f(1)` on a dictionary
+            // holding a lambda said "undefined module alias: 'd'", and `.f(2)`
+            // on an Int said "member function calls not supported".
             Expr::MemberAccess(member) => {
-                // Check if it's a module function call: module.function
+                let is_module = matches!(member.object.unwrap_group(),
+                    Expr::Identifier(id) if self.import_aliases.contains_key(&id.name));
+                if !is_module {
+                    return self.call_evaluated(call);
+                }
                 if let Expr::Identifier(module_ident) = member.object.unwrap_group() {
                     let module_alias = &module_ident.name;
                     let func_name = &member.field;
@@ -296,34 +305,31 @@ impl<W: Write> Interpreter<W> {
                     return self.eval_traditional_function_call(func_def, &call.arguments, &call.span, Some((module_alias.clone(), module_path.clone())), None);
                 }
 
-                // Not a module function - error
-                Err(RuntimeError::Generic {
-                    message: "member function calls not supported".to_string(),
-                    span: call.span,
-                })
+                self.call_evaluated(call)
             }
 
             // Any other expression: evaluate it and expect a Value::Function
-            _ => {
-                let callable_value = self.eval_expr(&call.callable)?;
+            _ => self.call_evaluated(call),
+        }
+    }
 
-                match callable_value {
-                    Value::Function(func) => {
-                        let mut arg_values = Vec::with_capacity(call.arguments.len());
-                        for arg in &call.arguments {
-                            arg_values.push(self.eval_expr(arg)?);
-                        }
-                        self.eval_lambda_call(func, arg_values, &call.span)
-                    }
-                    _ => {
-                        Err(RuntimeError::kinded(
-                            "Type",
-                            "expression is not callable".to_string(),
-                            call.span,
-                        ))
-                    }
+    /// Evaluate the callee as a value and call it: what a call is when it is
+    /// neither a named function nor a module's.
+    fn call_evaluated(&mut self, call: &zymbol_ast::FunctionCallExpr) -> Result<Value> {
+        let callable_value = self.eval_expr(&call.callable)?;
+        match callable_value {
+            Value::Function(func) => {
+                let mut arg_values = Vec::with_capacity(call.arguments.len());
+                for arg in &call.arguments {
+                    arg_values.push(self.eval_expr(arg)?);
                 }
+                self.eval_lambda_call(func, arg_values, &call.span)
             }
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                "expression is not callable".to_string(),
+                call.span,
+            )),
         }
     }
 
