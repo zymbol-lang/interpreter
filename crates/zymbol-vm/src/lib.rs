@@ -3273,6 +3273,16 @@ impl<W: Write> VM<W> {
                     let num_params = callee_chunk.num_params as usize;
                     let num_regs = callee_chunk.num_registers as usize;
 
+                    // A callable value called with the wrong number of
+                    // arguments is refused, as the tree-walker refuses it. It
+                    // ran: a missing argument arrived as Unit and failed later,
+                    // somewhere else, and an extra one was copied over the
+                    // callee's captured registers (step P4.6).
+                    if arg_regs.len() != num_params {
+                        raise!(VmError::Generic(format!(
+                            "lambda expects {} arguments, got {}", num_params, arg_regs.len())));
+                    }
+
                     // Save caller IP
                     self.frame_stack.last_mut().unwrap().ip = ip as u32;
 
