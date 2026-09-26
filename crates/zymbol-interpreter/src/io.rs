@@ -292,6 +292,17 @@ impl<W: Write> Interpreter<W> {
     /// TUI block: >>| { } — alternate screen + raw mode
     pub(crate) fn execute_tui_block(&mut self, tb: &TuiBlock) -> Result<()> {
         use crossterm::{execute, terminal, cursor};
+        // Without a terminal on both ends the refusal is the language's, not the
+        // operating system's — `No such device or address (os error 6)` here is
+        // something else on Windows. zyjs says the same (P4-3 E5, 2026-09-26).
+        {
+            use std::io::IsTerminal;
+            if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+                return Err(RuntimeError::Generic {
+                    message: "failed to enable raw mode: not a terminal".to_string(), span: tb.span,
+                });
+            }
+        }
         terminal::enable_raw_mode().map_err(|e| RuntimeError::Generic {
             message: format!("failed to enable raw mode: {}", e), span: tb.span,
         })?;

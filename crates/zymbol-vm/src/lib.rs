@@ -4392,6 +4392,14 @@ impl<W: Write> VM<W> {
                 }
 
                 Instruction::EnterTui => {
+                    // The language's words when there is no terminal, as in the
+                    // tree-walker and zyjs (P4-3 E5, 2026-09-26).
+                    {
+                        use std::io::IsTerminal;
+                        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+                            raise!(VmError::Generic("failed to enable raw mode: not a terminal".to_string()));
+                        }
+                    }
                     if let Err(e) = crossterm::terminal::enable_raw_mode() {
                         raise!(VmError::Generic(format!("failed to enable raw mode: {}", e)));
                     }
