@@ -3073,6 +3073,7 @@ impl Compiler {
             Expr::Identifier(id) => self.function_index.get(&id.name)
                 .or_else(|| self.module_scope.get(&id.name))
                 .copied(),
+            Expr::MemberAccess(ma) if Self::local_hides_alias(ma, ctx) => None,
             Expr::MemberAccess(ma) => {
                 if let Expr::Identifier(obj) = ma.object.unwrap_group() {
                     // Module call: obj::func → look up "obj::func" in function_index
@@ -3090,7 +3091,7 @@ impl Compiler {
         if maybe_func_idx.is_none() {
             if let Expr::MemberAccess(ma) = call.callable.unwrap_group() {
                 if let Expr::Identifier(obj) = ma.object.unwrap_group() {
-                    if self.known_module_aliases.contains(&obj.name) {
+                    if self.known_module_aliases.contains(&obj.name) && !Self::local_hides_alias(ma, ctx) {
                         let msg = format!("module '{}' does not export function '{}'", obj.name, ma.field);
                         let idx = self.intern_string(&msg);
                         // Compile arguments for side effects (dropped), then emit RaiseError
@@ -3373,6 +3374,18 @@ impl Compiler {
         Ok(dst)
     }
 
+    /// `m.x` where a variable `m` of a function hides the import alias `m`:
+    /// the dot reads the variable (GLB-070, decided 2026-09-26). A function is
+    /// its own strong environment, so MEM-7 lets it reuse the name. A variable
+    /// of the file lives where the `<#` does, and there the alias keeps the
+    /// dot (`corpus/modules_scope/alias_shadowed_by_variable.zy`). `m::f`
+    /// names the module whatever the scope holds.
+    fn local_hides_alias(ma: &zymbol_ast::MemberAccessExpr, ctx: &FunctionCtx) -> bool {
+        !ma.is_module_access
+            && ctx.name != "<main>"
+            && matches!(ma.object.unwrap_group(), Expr::Identifier(obj) if ctx.get_reg(&obj.name).is_ok())
+    }
+
     fn compile_member_access(
         &mut self,
         ma: &zymbol_ast::MemberAccessExpr,
@@ -3380,6 +3393,13 @@ impl Compiler {
     ) -> Result<Reg, CompileError> {
         // Check if this is a module constant access (alias.CONST_NAME)
         if let Expr::Identifier(obj) = ma.object.unwrap_group() {
+            if Self::local_hides_alias(ma, ctx) {
+                let r_obj = self.compile_expr(&ma.object, ctx)?;
+                let field_idx = self.intern_string(&ma.field);
+                let dst = ctx.alloc_temp()?;
+                ctx.emit(Instruction::NamedTupleGet(dst, r_obj, field_idx));
+                return Ok(dst);
+            }
             let key = format!("{}.{}", obj.name, ma.field);
             if let Some(mc) = self.module_constants.get(&key).cloned() {
                 return self.emit_module_const(&mc, ctx);

@@ -680,8 +680,10 @@ impl TypeChecker {
 
     /// The exports behind `alias`, when it names a module and not a variable
     /// that happens to share its name.
-    fn exports_of_alias(&self, alias: &str) -> Option<&crate::call_arity::ModuleExports> {
-        if self.env.lookup_var(alias).is_some() {
+    fn exports_of_alias(&self, alias: &str, scoped: bool) -> Option<&crate::call_arity::ModuleExports> {
+        // Only behind a `.`: `m::f` names the module whatever the scope holds
+        // (GLB-070).
+        if !scoped && self.env.lookup_var(alias).is_some() {
             return None;
         }
         self.module_exports.get(alias)
@@ -2884,7 +2886,7 @@ impl TypeChecker {
                 // are the ones all three engines gave when the line ran.
                 if !member.is_module_access {
                     if let Expr::Identifier(alias) = member.object.unwrap_group() {
-                        if let Some(exports) = self.exports_of_alias(&alias.name) {
+                        if let Some(exports) = self.exports_of_alias(&alias.name, false) {
                             if !exports.constants.contains(&member.field) {
                                 let available = if exports.constants.is_empty() {
                                     "none".to_string()
@@ -2997,7 +2999,7 @@ impl TypeChecker {
                     // `m::nada()`, and `m.nada()` which calls the same way: a
                     // function the module does not export (ZYVM-008).
                     if let Expr::Identifier(alias) = access.object.unwrap_group() {
-                        if let Some(exports) = self.exports_of_alias(&alias.name) {
+                        if let Some(exports) = self.exports_of_alias(&alias.name, access.is_module_access) {
                             if !exports.functions.contains(&access.field) {
                                 let mut diag = Diagnostic::error(format!(
                                     "module '{}' does not export function '{}'",

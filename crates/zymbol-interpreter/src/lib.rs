@@ -956,6 +956,14 @@ impl<W: Write> Interpreter<W> {
         None
     }
 
+    /// A variable of the running function with this name: behind a `.` it hides
+    /// the import alias of the same name (GLB-070, decided 2026-09-26). A
+    /// variable of the file lives where the `<#` does, and there the alias
+    /// keeps the dot.
+    pub(crate) fn variable_hides_alias(&self, name: &str) -> bool {
+        self.call_depth > 0 && self.scope_stack.iter().any(|scope| scope.contains_key(name))
+    }
+
     /// Get a mutable reference to a variable, searching from innermost to outermost scope.
     #[inline(always)]
     fn get_variable_mut(&mut self, name: &str) -> Option<&mut Value> {

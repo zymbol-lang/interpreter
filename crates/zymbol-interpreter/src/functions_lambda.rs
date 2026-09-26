@@ -266,8 +266,11 @@ impl<W: Write> Interpreter<W> {
             // holding a lambda said "undefined module alias: 'd'", and `.f(2)`
             // on an Int said "member function calls not supported".
             Expr::MemberAccess(member) => {
+                // A variable of the running function with the alias's name hides it
+                // behind a `.`, never behind `::` (GLB-070, decided 2026-09-26).
                 let is_module = matches!(member.object.unwrap_group(),
-                    Expr::Identifier(id) if self.import_aliases.contains_key(&id.name));
+                    Expr::Identifier(id) if self.import_aliases.contains_key(&id.name)
+                        && (member.is_module_access || !self.variable_hides_alias(&id.name)));
                 if !is_module {
                     return self.call_evaluated(call);
                 }
