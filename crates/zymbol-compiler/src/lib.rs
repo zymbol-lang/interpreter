@@ -1477,6 +1477,22 @@ impl Compiler {
         Ok(())
     }
 
+    /// `r_cmp = (r_val == n)` for an integer pattern. The immediate form only
+    /// when `n` fits it: `*n as i32` truncated a larger literal, so `3000000000`
+    /// never matched itself and matched `-1294967296` instead (step P4-2).
+    fn emit_int_eq(&mut self, ctx: &mut FunctionCtx, r_cmp: Reg, r_val: Reg, n: i64)
+        -> Result<(), CompileError>
+    {
+        if let Ok(small) = i32::try_from(n) {
+            ctx.emit(Instruction::CmpEqImm(r_cmp, r_val, small));
+        } else {
+            let r_n = ctx.alloc_temp()?;
+            ctx.emit(Instruction::LoadInt(r_n, n));
+            ctx.emit(Instruction::CmpEq(r_cmp, r_val, r_n));
+        }
+        Ok(())
+    }
+
     /// Whether a `\` of `name` in this body is tracked on its own register
     /// (ZYVM-005). A script's file variable is tracked as a global instead, but
     /// only in `<main>`: in any other body the name is a local copy — captured
@@ -3490,10 +3506,16 @@ impl Compiler {
             Pattern::Literal(lit, _) => {
                     let skip_patch = match lit {
                         zymbol_common::Literal::Int(n) => {
-                            // Emit CmpEqImm + JumpIfNot
                             let r_cmp = ctx.alloc_temp()?;
-                            ctx.emit(Instruction::CmpEqImm(r_cmp, r_sub, *n as i32));
+                            self.emit_int_eq(ctx, r_cmp, r_sub, *n)?;
                             ctx.emit_jump_if_not_placeholder(r_cmp)
+                        }
+                        zymbol_common::Literal::Float(f) => {
+                            let r_f = ctx.alloc_temp()?;
+                            ctx.emit(Instruction::LoadFloat(r_f, *f));
+                            let r_eq = ctx.alloc_temp()?;
+                            ctx.emit(Instruction::CmpEq(r_eq, r_sub, r_f));
+                            ctx.emit_jump_if_not_placeholder(r_eq)
                         }
                         zymbol_common::Literal::String(s) | zymbol_common::Literal::InterpolatedString(s) => {
                             let resolved = s.replace('\x01', "{").replace('\x02', "}");
@@ -3582,7 +3604,16 @@ impl Compiler {
                                 match lit {
                                     zymbol_common::Literal::Int(n) => {
                                         let r_cmp = ctx.alloc_temp()?;
-                                        ctx.emit(Instruction::CmpEqImm(r_cmp, r_elem, *n as i32));
+                                        self.emit_int_eq(ctx, r_cmp, r_elem, *n)?;
+                                        struct_skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
+                                    }
+                                    // It fell to `_ => {}` below: a decimal element
+                                    // was not compared, so it matched anything.
+                                    zymbol_common::Literal::Float(f) => {
+                                        let r_f = ctx.alloc_temp()?;
+                                        ctx.emit(Instruction::LoadFloat(r_f, *f));
+                                        let r_cmp = ctx.alloc_temp()?;
+                                        ctx.emit(Instruction::CmpEq(r_cmp, r_elem, r_f));
                                         struct_skip_patches.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                                     }
                                     zymbol_common::Literal::String(s) | zymbol_common::Literal::InterpolatedString(s) => {
@@ -3658,7 +3689,13 @@ impl Compiler {
                                 let r_cmp = ctx.alloc_temp()?;
                                 match lit {
                                     zymbol_common::Literal::Int(n) => {
-                                        ctx.emit(Instruction::CmpEqImm(r_cmp, r_sub, *n as i32));
+                                        self.emit_int_eq(ctx, r_cmp, r_sub, *n)?;
+                                        jump_to_body_patches.push(ctx.emit(Instruction::JumpIf(r_cmp, 0)));
+                                    }
+                                    zymbol_common::Literal::Float(f) => {
+                                        let r_f = ctx.alloc_temp()?;
+                                        ctx.emit(Instruction::LoadFloat(r_f, *f));
+                                        ctx.emit(Instruction::CmpEq(r_cmp, r_sub, r_f));
                                         jump_to_body_patches.push(ctx.emit(Instruction::JumpIf(r_cmp, 0)));
                                     }
                                     zymbol_common::Literal::String(s) | zymbol_common::Literal::InterpolatedString(s) => {
