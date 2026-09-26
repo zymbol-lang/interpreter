@@ -226,6 +226,12 @@ impl<W: Write> Interpreter<W> {
                     return self.eval_lambda_call(func, arg_values, &call.span);
                 }
 
+                // A lambda variable ended with `\` is not a missing function:
+                // say what happened, as the VM and zyjs do (ZYTW-007, step P4.7).
+                if !self.functions.contains_key(&ident.name) {
+                    self.check_variable_alive(&ident.name, &call.span)?;
+                }
+
                 // Not a lambda variable - look up as traditional function
                 let func_def = self.functions.get(&ident.name).cloned().ok_or_else(|| {
                     // A name that EXISTS and holds something else is not a
@@ -274,10 +280,16 @@ impl<W: Write> Interpreter<W> {
                         }
                     })?;
 
+                    // A Generic, so it is located (`--> file:line`) and caught
+                    // with the sentence it prints — the VM's and zyjs's. The
+                    // dedicated variant printed one sentence and put another,
+                    // `function 'f' not exported from module 'm'`, into `_err`
+                    // (step P4.7).
                     let func_def = module.functions.get(func_name).cloned().ok_or_else(|| {
-                        RuntimeError::FunctionNotExported {
-                            module: module_alias.clone(),
-                            function: func_name.clone(),
+                        RuntimeError::Generic {
+                            message: format!("module '{}' does not export function '{}'",
+                                             module_alias, func_name),
+                            span: call.span,
                         }
                     })?;
 

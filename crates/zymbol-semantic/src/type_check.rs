@@ -1178,7 +1178,17 @@ impl TypeChecker {
                 // 2026-09-25): emptying a variable with `##_`, or filling one that
                 // started empty, is the ordinary use of an absent value. What the
                 // new value is compared with is the last type that was not Unit.
-                if let Some(existing_type) = self.env.lookup_var(&assign.name).cloned() {
+                //
+                // A name that lives on the other side of a function's boundary
+                // is not this assignment's: writing it inside a function makes a
+                // local (MEM-2), so there is no earlier type to compare with.
+                // It compared the function's `x` with the file's (GLB-058).
+                let existing = if self.crosses_strong_boundary(&assign.name) {
+                    None
+                } else {
+                    self.env.lookup_var(&assign.name).cloned()
+                };
+                if let Some(existing_type) = existing {
                     let was = if existing_type == ZymbolType::Unit {
                         self.env.last_real_type(&assign.name).cloned()
                     } else {
