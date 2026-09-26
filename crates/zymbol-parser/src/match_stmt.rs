@@ -9,6 +9,7 @@ use zymbol_ast::{Expr, LiteralExpr, MatchCase, MatchExpr, Pattern, Statement};
 use zymbol_common::{BinaryOp, Literal};
 use zymbol_error::Diagnostic;
 use zymbol_lexer::TokenKind;
+use zymbol_span::Span;
 use crate::Parser;
 
 impl Parser {
@@ -130,6 +131,39 @@ impl Parser {
     }
 
     /// Parse a single (non-alternative) pattern
+    /// An integer pattern whose value is already read: `n`, or `n..m` when a
+    /// `..` follows. Either end may carry a `-`.
+    fn finish_int_pattern(&mut self, n: i64, start_span: Span) -> Result<Pattern, Diagnostic> {
+        if !matches!(self.peek().kind, TokenKind::DotDot) {
+            return Ok(Pattern::Literal(Literal::Int(n), start_span));
+        }
+        self.advance(); // consume ..
+        let end_token = self.peek().clone();
+        let (end_n, end_span) = match &end_token.kind {
+            TokenKind::Integer(end_n) => {
+                let end_n = *end_n;
+                self.advance();
+                (end_n, end_token.span)
+            }
+            TokenKind::Minus
+                if matches!(self.peek_ahead(1).map(|t| &t.kind), Some(TokenKind::Integer(_))) =>
+            {
+                self.advance(); // consume -
+                let num = self.advance();
+                let TokenKind::Integer(end_n) = num.kind else { unreachable!() }; // guarded above
+                (-end_n, end_token.span.to(&num.span))
+            }
+            _ => {
+                return Err(Diagnostic::error("expected integer after '..' in range pattern")
+                    .with_span(end_token.span));
+            }
+        };
+        let span = start_span.to(&end_span);
+        let start_expr = Box::new(Expr::Literal(LiteralExpr::new(Literal::Int(n), start_span)));
+        let end_expr = Box::new(Expr::Literal(LiteralExpr::new(Literal::Int(end_n), end_span)));
+        Ok(Pattern::Range(start_expr, end_expr, span))
+    }
+
     fn parse_pattern_primary(&mut self) -> Result<Pattern, Diagnostic> {
         let token = self.peek().clone();
 
@@ -143,40 +177,26 @@ impl Parser {
                 self.advance(); // consume string
                 Pattern::Literal(Literal::String(s), token.span)
             }
+            // A negative number is a literal like any other (GLB-062, decided
+            // 2026-09-26): `-1 => …`, and in a range `-5..-1`. Only a sign
+            // followed by a number: `-x` is still not a pattern.
+            TokenKind::Minus
+                if matches!(self.peek_ahead(1).map(|t| &t.kind),
+                            Some(TokenKind::Integer(_)) | Some(TokenKind::Float(_))) =>
+            {
+                self.advance(); // consume -
+                let num = self.advance();
+                let span = token.span.to(&num.span);
+                match num.kind {
+                    TokenKind::Integer(n) => self.finish_int_pattern(-n, span)?,
+                    TokenKind::Float(f) => Pattern::Literal(Literal::Float(-f), span),
+                    _ => unreachable!(), // guarded by the match above
+                }
+            }
             TokenKind::Integer(n) => {
                 let n = *n;
-                let start_span = token.span;
                 self.advance(); // consume integer
-
-                // Check for range pattern: int..int
-                if matches!(self.peek().kind, TokenKind::DotDot) {
-                    self.advance(); // consume ..
-
-                    let end_token = self.peek().clone();
-                    match &end_token.kind {
-                        TokenKind::Integer(end_n) => {
-                            let end_n = *end_n;
-                            self.advance(); // consume end integer
-
-                            let span = start_span.to(&end_token.span);
-                            let start_expr = Box::new(Expr::Literal(LiteralExpr::new(
-                                Literal::Int(n),
-                                start_span,
-                            )));
-                            let end_expr = Box::new(Expr::Literal(LiteralExpr::new(
-                                Literal::Int(end_n),
-                                end_token.span,
-                            )));
-                            Pattern::Range(start_expr, end_expr, span)
-                        }
-                        _ => {
-                            return Err(Diagnostic::error("expected integer after '..' in range pattern")
-                                .with_span(end_token.span));
-                        }
-                    }
-                } else {
-                    Pattern::Literal(Literal::Int(n), token.span)
-                }
+                self.finish_int_pattern(n, token.span)?
             }
             TokenKind::Char(c) => {
                 let c = *c;
