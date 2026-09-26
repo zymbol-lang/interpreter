@@ -4506,6 +4506,13 @@ impl<W: Write> VM<W> {
         };
         let num_params = chunk.num_params as usize;
         let num_regs = chunk.num_registers as usize;
+        // The count check CallDynamic makes (GLB-063), on the calls `$>`, `$|`,
+        // `$<` and `$^` make: a named function of two parameters handed to `$>`
+        // ran with Unit in the second and failed later, somewhere else.
+        if args.len() != num_params {
+            return Err(VmError::Generic(format!(
+                "lambda expects {} arguments, got {}", num_params, args.len())));
+        }
 
         let floor = self.frame_stack.len();
         let new_base = self.value_stack.len();
