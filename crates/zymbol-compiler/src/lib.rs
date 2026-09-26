@@ -3416,10 +3416,14 @@ impl Compiler {
             if matches!(case.pattern, Pattern::Wildcard(_)) {
                 has_wildcard = true;
                 // Wildcard matches everything: compile body, store to dst, jump to end
+                // The value first, then the arm's block: `p => v { … }` gives
+                // `v` and runs the block, as the tree-walker does. The `else`
+                // here dropped the block whenever there was a value (ZYVM-009).
                 if let Some(val) = &case.value {
                     let r = self.compile_expr(val, ctx)?;
                     ctx.emit(Instruction::CopyReg(dst, r));
-                } else if let Some(block) = &case.block {
+                }
+                if let Some(block) = &case.block {
                     self.compile_block(block, ctx)?;
                 }
                 let j = ctx.emit_jump_placeholder();
@@ -3440,7 +3444,8 @@ impl Compiler {
             if let Some(val) = &case.value {
                 let r = self.compile_expr(val, ctx)?;
                 ctx.emit(Instruction::CopyReg(dst, r));
-            } else if let Some(block) = &case.block {
+            }
+            if let Some(block) = &case.block {
                 self.compile_block(block, ctx)?;
             }
             let j = ctx.emit_jump_placeholder();
