@@ -168,6 +168,10 @@ impl Analyzer {
                         &program.imports,
                         base_dir,
                     ));
+                    type_checker.set_module_exports(zymbol_semantic::module_exports(
+                        &program.imports,
+                        base_dir,
+                    ));
                 }
                 var_analyzer
                     .semantic_errors()
@@ -694,22 +698,59 @@ impl Analyzer {
             }
         }
 
-        // Validate module access in the code
+        // Re-exports in the export block. The rest of the file's `alias::f` and
+        // `alias.K` are the type checker's (ZYVM-008).
         let tokens = doc.token_list();
         self.validate_module_access(path, tokens, &mut diagnostics);
 
         diagnostics
     }
 
-    /// Validate module access patterns in the code
+    /// Validate the re-exports of an export block: `#> { base::ghost_fn }`.
+    ///
+    /// Only inside `#> { … }`. Everywhere else `alias::f` and `alias.K` are the
+    /// type checker's since ZYVM-008 (2026-09-26), in the words `zymbol check`
+    /// and `zymbol run` use; this scan used to cover the whole file, and the
+    /// editor showed both. A re-export is not an expression, so the checker
+    /// does not see it, and `zymbol check` says nothing about a missing one —
+    /// here it is still the only thing that does (E006, E007, E010).
     fn validate_module_access(
         &self,
         from_file: &Path,
         tokens: &[zymbol_lexer::Token],
         diagnostics: &mut Vec<lsp_types::Diagnostic>,
     ) {
+        let mut in_export = vec![false; tokens.len()];
+        let mut k = 0;
+        while k < tokens.len() {
+            if matches!(tokens[k].kind, zymbol_lexer::TokenKind::ExportBlock) {
+                let mut depth = 0usize;
+                let mut j = k + 1;
+                while j < tokens.len() {
+                    match tokens[j].kind {
+                        zymbol_lexer::TokenKind::LBrace => depth += 1,
+                        zymbol_lexer::TokenKind::RBrace => {
+                            depth = depth.saturating_sub(1);
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    in_export[j] = true;
+                    j += 1;
+                }
+                k = j;
+            }
+            k += 1;
+        }
+
         let mut i = 0;
         while i + 2 < tokens.len() {
+            if !in_export[i] {
+                i += 1;
+                continue;
+            }
             // Look for patterns: alias :: symbol or alias . symbol
             if let zymbol_lexer::TokenKind::Ident(alias) = &tokens[i].kind {
                 let is_function_call =
