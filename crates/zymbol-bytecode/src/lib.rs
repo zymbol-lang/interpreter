@@ -212,6 +212,10 @@ pub enum Instruction {
     /// `ArrayGet` for position 0 and the reader got `index 0 is invalid` — true
     /// for a plain index, and for `v[1>-1..2]` plainly false, since -1 is not 0.
     NavRangeCheck(Reg),
+    /// One step of a navigation READ (`v[1>k]`), checked before its `ArrayGet`:
+    /// a position into a dictionary, or a step that is neither Int nor String,
+    /// is refused in the navigation's words (step P4-3).
+    NavStepCheck(Reg, Reg),
     /// Refuse a written `>>~` slot that is not an Int (GLB-018 B). `true` also
     /// admits a Tuple: a lone slot may hold the whole dense position.
     OutputSlotCheck(Reg, bool),

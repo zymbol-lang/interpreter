@@ -271,11 +271,15 @@ fn descend(
             let i = resolve_index(index, len, op_span, "tuple")?;
             Ok(elems[i].clone())
         }
-        Value::NamedTuple(fields) => {
-            let len = fields.len();
-            let i = resolve_index(index, len, op_span, "named tuple")?;
-            Ok(fields[i].1.clone())
-        }
+        // A dictionary is addressed by key, never by position (decision 11):
+        // this read `v[1>1]` of `[#(a: 1)]` as the first value, while the flat
+        // `d[1]` and both other engines refuse it (step P4-3).
+        Value::NamedTuple(fields) => Err(RuntimeError::kinded(
+            "Type",
+            crate::collection_ops::dict_not_positional(
+                "d[n>…]", fields.first().map(|(k, _)| k.as_str())),
+            op_span,
+        )),
         Value::String(s) => {
             let chars: Vec<char> = s.chars().collect();
             let len = chars.len();

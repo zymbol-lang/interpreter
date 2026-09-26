@@ -3586,6 +3586,20 @@ impl<W: Write> VM<W> {
                             "'{}' is not a function", program.string_pool[idx as usize])));
                     }
                 }
+                &Instruction::NavStepCheck(coll, idx) => {
+                    // A step of a navigation read: its own words, which `ArrayGet`
+                    // (the plain index) cannot know it owes (step P4-3).
+                    match (self.reg_get(coll), self.reg_get(idx)) {
+                        (Value::NamedTuple(fields), Value::Int(_)) => {
+                            let first = fields.first().map(|(k, _)| k.clone());
+                            raise!(VmError::TypeMsg(dict_not_positional("d[n>…]", first.as_deref())));
+                        }
+                        (_, Value::Int(_)) | (_, Value::String(_)) => {}
+                        (_, other) => raise!(VmError::TypeMsg(format!(
+                            "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                            other.type_label()))),
+                    }
+                }
                 &Instruction::NavRangeCheck(reg) => {
                     // `index`, not `nav range start`: a bound of a navigation
                     // range says what a plain index says, which is what the
@@ -4770,6 +4784,21 @@ fn vm_deep_set_at(col: Value, path: &[Value], new_val: Value, single: bool) -> R
                 // A positional WRITE corrupts data rather than returning the
                 // wrong value: strictly worse than the positional read that
                 // decision 11 withdrew.
+                //
+                // Inside a navigation the words are the navigation's, as the
+                // tree-walker and zyjs give them: `d[n>…]$~ value`, and for a
+                // step that is neither Int nor String the navigation-step
+                // sentence (step P4-3).
+                Value::Int(_) if !single => {
+                    let first = fields.first().map(|(k, _)| k.clone());
+                    return Err(VmError::TypeMsg(dict_not_positional(
+                        "d[n>…]$~ value", first.as_deref())));
+                }
+                other if !single => {
+                    return Err(VmError::TypeMsg(format!(
+                        "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                        other.type_label())));
+                }
                 _ => {
                     let first = fields.first().map(|(k, _)| k.clone());
                     return Err(VmError::TypeMsg(dict_not_positional(
