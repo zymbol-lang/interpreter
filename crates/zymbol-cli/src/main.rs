@@ -332,6 +332,16 @@ fn prepend_self_to_path() {
 /// that used to `exit(1)` now returns `Ok(1)` instead, so a caller holding a `TempDir` (or any
 /// other RAII guard) gets to run its `Drop` before the process actually exits.
 fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
+    run_program(path, opts, std::io::stdout(), &mut Report::terminal())
+}
+
+/// The whole of `zymbol run`: read, analyse, run. `out` receives what the
+/// program prints, and `report` what the CLI has to say about it.
+///
+/// A subscript `</ file />` goes down this same road (GLB-017 I, decided
+/// 2026-09-26), with its output in a buffer and a report that keeps the
+/// failure and drops the warnings — see [`subscript_runner`].
+fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &mut Report) -> Result<i32> {
     let RunOpts { display_name, args, use_vm } = opts;
 
     // Read source file
@@ -357,7 +367,7 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         for diag in lex_diagnostics {
             bag.add(diag);
         }
-        bag.emit_all(&source_map);
+        report.bag(&bag, &source_map);
         return Ok(1);
     }
 
@@ -374,7 +384,7 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
             for diag in diagnostics {
                 bag.add(diag);
             }
-            bag.emit_all(&source_map);
+            report.bag(&bag, &source_map);
             return Ok(1);
         }
     };
@@ -382,11 +392,11 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
     // Module files are not directly executable
     if program.module_decl.is_some() {
         let module_name = program.module_decl.as_ref().map(|m| m.name.as_str()).unwrap_or("?");
-        eprintln!("warning: '{}' is a module file and cannot be run directly", display_name);
+        report.error(&format!("warning: '{}' is a module file and cannot be run directly", display_name));
         // `=>`, not the pre-v0.0.6 `<=`: that spelling is rejected by the parser
         // (`test_import_le_syntax_rejected`), so the help was handing out an
         // import line that cannot parse. The browser engine already said `=>`.
-        eprintln!("  = help: module '{}' is meant to be imported with <# ./{} => alias", module_name, path.file_stem().and_then(|s| s.to_str()).unwrap_or("module"));
+        report.error(&format!("  = help: module '{}' is meant to be imported with <# ./{} => alias", module_name, path.file_stem().and_then(|s| s.to_str()).unwrap_or("module")));
         return Ok(1);
     }
 
@@ -401,23 +411,23 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         for err in semantic_errors {
             bag.add(err.clone());
         }
-        bag.emit_all(&source_map);
+        report.bag(&bag, &source_map);
         return Ok(1);
     }
 
     // Show variable analysis warnings but continue
     if !warnings.is_empty() {
         for warning in &warnings {
-            eprintln!("warning: {}", warning.message);
-            eprintln!("  --> {}:{}:{}",
+            report.warning(&format!("warning: {}", warning.message));
+            report.warning(&format!("  --> {}:{}:{}",
                 display_name,
                 warning.span.start.line,
                 warning.span.start.column
-            );
+            ));
             if let Some(help) = &warning.help {
-                eprintln!("  = help: {}", help);
+                report.warning(&format!("  = help: {}", help));
             }
-            eprintln!();
+            report.warning("");
         }
     }
 
@@ -444,7 +454,7 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
             bag.add(err);
         }
         if !bag.is_empty() {
-            bag.emit_all(&source_map);
+            report.bag(&bag, &source_map);
             return Ok(1);
         }
     }
@@ -460,7 +470,7 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         for err in loop_errors {
             bag.add(err);
         }
-        bag.emit_all(&source_map);
+        report.bag(&bag, &source_map);
         return Ok(1);
     }
 
@@ -489,7 +499,7 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         for err in type_errors {
             bag.add(err);
         }
-        bag.emit_all(&source_map);
+        report.bag(&bag, &source_map);
         return Ok(1);
     }
 
@@ -503,7 +513,7 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         for err in stdlib_errors {
             bag.add(err);
         }
-        bag.emit_all(&source_map);
+        report.bag(&bag, &source_map);
         return Ok(1);
     }
 
@@ -542,30 +552,30 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
                     AmbiguityReason::ConditionalUse => "variable is used in some branches but not others",
                     AmbiguityReason::MultipleExitPaths => "multiple possible last uses",
                 };
-                eprintln!("warning: ambiguous lifetime for '{}'", chain.variable);
-                eprintln!("  --> {}:{}:{}", display_name,
-                    ambiguity.suggested_span.start.line, ambiguity.suggested_span.start.column);
-                eprintln!("  = note: {}", reason);
-                eprintln!("  = help: consider using explicit lifetime annotation");
-                eprintln!();
+                report.warning(&format!("warning: ambiguous lifetime for '{}'", chain.variable));
+                report.warning(&format!("  --> {}:{}:{}", display_name,
+                    ambiguity.suggested_span.start.line, ambiguity.suggested_span.start.column));
+                report.warning(&format!("  = note: {}", reason));
+                report.warning(&format!("  = help: consider using explicit lifetime annotation"));
+                report.warning("");
             }
         }
     }
 
     // Show type warnings but continue execution
     for warning in type_checker.get_warnings() {
-        eprintln!("warning: {}", warning.message);
+        report.warning(&format!("warning: {}", warning.message));
         if let Some(span) = &warning.span {
-            eprintln!("  --> {}:{}:{}",
+            report.warning(&format!("  --> {}:{}:{}",
                 display_name,
                 span.start.line,
                 span.start.column
-            );
+            ));
         }
         if let Some(help) = &warning.help {
-            eprintln!("  = help: {}", help);
+            report.warning(&format!("  = help: {}", help));
         }
-        eprintln!();
+        report.warning("");
     }
 
     if use_vm {
@@ -579,23 +589,24 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
                     zymbol_compiler::CompileError::ModuleParse(_) |
                     zymbol_compiler::CompileError::ModuleNotFound(_)
                 ) {
-                    eprintln!("Runtime error: {}", e);
+                    report.error(&format!("Runtime error: {}", e));
                 } else {
                     // Never the engine's name: a reader is told what the
                     // LANGUAGE refuses, not which of its three implementations
                     // noticed. `VM compile error:` on a program the tree-walker
                     // refuses too is a fact about our build, not about Zymbol.
-                    eprintln!("error: {}", e);
+                    report.error(&format!("error: {}", e));
                 }
                 return Ok(1);
             }
         };
-        let mut vm = VM::new(std::io::stdout());
+        let mut vm = VM::new(out);
         vm.set_cli_args(args.clone());
+        vm.set_subscript_runner(subscript_runner(true, args.clone()));
         if let Err(e) = vm.run(&compiled) {
-            eprintln!("Runtime error: {}", e);
+            report.error(&format!("Runtime error: {}", e));
             if let Some((file, line)) = e.location() {
-                eprintln!("  --> {}:{}", file, line);
+                report.error(&format!("  --> {}:{}", file, line));
             }
             return Ok(1);
         }
@@ -605,7 +616,8 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         }
     } else {
         // Execute with tree-walker interpreter
-        let mut interpreter = Interpreter::new();
+        let mut interpreter = Interpreter::with_output(out);
+        interpreter.set_subscript_runner(subscript_runner(false, args.clone()));
 
         // Set the current file path for module resolution
         interpreter.set_current_file(path);
@@ -619,12 +631,12 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         interpreter.set_cli_args(args);
 
         if let Err(e) = interpreter.execute(&program) {
-            eprintln!("Runtime error: {}", e);
+            report.error(&format!("Runtime error: {}", e));
             // Where it happened, spelled as the warnings above spell it. An
             // error with no location says nothing extra rather than guessing at
             // the entry file: a program of five modules gives no way to guess.
             if let Some((file, line)) = e.location() {
-                eprintln!("  --> {}:{}", file, line);
+                report.error(&format!("  --> {}:{}", file, line));
             }
             return Ok(1);
         }
@@ -635,6 +647,81 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
     }
 
     Ok(0)
+}
+
+/// Where `run` writes what it has to say about a program.
+///
+/// On a terminal, everything goes to stderr as it always did. For a subscript
+/// the failure is kept, as text without colour, to become the error the caller
+/// sees (and `_err`), and the warnings are dropped: a subscript that runs
+/// cleanly never showed them either.
+struct Report {
+    captured: Option<String>,
+    failed: bool,
+}
+
+impl Report {
+    fn terminal() -> Self {
+        Report { captured: None, failed: false }
+    }
+
+    fn capture() -> Self {
+        Report { captured: Some(String::new()), failed: false }
+    }
+
+    fn warning(&mut self, line: &str) {
+        if self.captured.is_none() {
+            eprintln!("{}", line);
+        }
+    }
+
+    fn error(&mut self, line: &str) {
+        self.failed = true;
+        match &mut self.captured {
+            None => eprintln!("{}", line),
+            Some(text) => {
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+    }
+
+    fn bag(&mut self, bag: &DiagnosticBag, source_map: &SourceMap) {
+        for diag in bag.iter() {
+            let text = diag.render(source_map, self.captured.is_none());
+            if diag.severity == zymbol_error::Severity::Warning {
+                if self.captured.is_none() {
+                    eprint!("{}", text);
+                }
+            } else {
+                self.failed = true;
+                match &mut self.captured {
+                    None => eprint!("{}", text),
+                    Some(buf) => buf.push_str(&text),
+                }
+            }
+        }
+    }
+}
+
+/// The runner both engines call for `</ file />` (GLB-017 I, decided
+/// 2026-09-26): the subscript is analysed and run in this process by the
+/// engine that runs its caller, and gives back what it printed — or, when it
+/// fails, what `zymbol run` would have written about it, without the
+/// warnings. The VM used to shell out to whatever `zymbol` was on the PATH,
+/// always in the tree-walker, and passed the child's whole stderr on.
+fn subscript_runner(use_vm: bool, args: Vec<String>) -> zymbol_interpreter::SubscriptRunner {
+    std::rc::Rc::new(move |file: &Path| {
+        let mut printed = Vec::new();
+        let mut report = Report::capture();
+        let opts = RunOpts { display_name: None, args: args.clone(), use_vm };
+        run_program(file, opts, &mut printed, &mut report).map_err(|e| format!("{:#}", e))?;
+        if report.failed {
+            let text = report.captured.unwrap_or_default();
+            return Err(text.trim_end().to_string());
+        }
+        Ok(String::from_utf8_lossy(&printed).into_owned())
+    })
 }
 
 fn build_file(path: PathBuf, output: Option<PathBuf>, release: bool) -> Result<()> {

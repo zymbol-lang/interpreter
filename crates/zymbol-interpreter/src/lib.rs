@@ -689,6 +689,10 @@ impl Value {
 }
 
 /// Interpreter for executing Zymbol programs
+/// What runs a subscript: the resolved path in, what the program printed out,
+/// or the failure as `zymbol run` writes it.
+pub type SubscriptRunner = std::rc::Rc<dyn Fn(&std::path::Path) -> std::result::Result<String, String>>;
+
 pub struct Interpreter<W: Write> {
     output: W,
     /// Stack of variable scopes (lexical scoping)
@@ -737,6 +741,11 @@ pub struct Interpreter<W: Write> {
     exit_code: Option<i64>,
     /// CLI arguments passed to the script
     cli_args: Option<Vec<Value>>,
+    /// Runs a subscript `</ file />` the way `zymbol run` runs a program, and
+    /// hands back what it printed or the failure as the CLI writes it. The CLI
+    /// installs it (GLB-017 I); without it the subscript runs in the legacy
+    /// in-process path below, which is what the REPL gets.
+    subscript_runner: Option<SubscriptRunner>,
     /// Auto-free (v0.0.8): top-level statement index → variables to destroy
     /// after that statement (last-use analysis, computed in `execute()`)
     destruction_schedule: HashMap<usize, Vec<String>>,
@@ -1249,6 +1258,7 @@ impl Interpreter<std::io::Stdout> {
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             exit_code: None,
             cli_args: None,
+            subscript_runner: None,
             destruction_schedule: HashMap::new(),
             dead_variables: HashSet::new(),
             has_any_const: false,
@@ -1306,6 +1316,7 @@ impl<W: Write> Interpreter<W> {
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             exit_code: None,
             cli_args: None,
+            subscript_runner: None,
             destruction_schedule: HashMap::new(),
             dead_variables: HashSet::new(),
             has_any_const: false,
@@ -1441,6 +1452,11 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Set CLI arguments
+    /// Install the runner for `</ file />` (GLB-017 I).
+    pub fn set_subscript_runner(&mut self, runner: SubscriptRunner) {
+        self.subscript_runner = Some(runner);
+    }
+
     pub fn set_cli_args(&mut self, args: Vec<String>) {
         // Convert strings to Value::String
         let args_values: Vec<Value> = args.into_iter()

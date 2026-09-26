@@ -456,6 +456,10 @@ pub struct Compiler {
     /// restored around each module, so a module's bodies are stamped with the
     /// module even though the compiler is one object for the whole program.
     cur_file: u16,
+    /// The directory of the file being compiled, when it is a module: a
+    /// subscript `</ file />` inside it is resolved from there, not from the
+    /// program's (GLB-017 I). `None` for the program itself.
+    cur_dir: Option<PathBuf>,
     /// Local function scope active during module compilation (plain name → FuncIdx).
     /// Allows module functions to call private sibling functions.
     module_scope: HashMap<String, FuncIdx>,
@@ -532,6 +536,7 @@ impl Compiler {
             loading_stack: HashSet::new(),
             files: vec![main_name.unwrap_or("").to_string()],
             cur_file: 0,
+            cur_dir: None,
             module_scope: HashMap::new(),
             global_var_map: HashMap::new(),
             global_var_inits: Vec::new(),
@@ -847,6 +852,7 @@ impl Compiler {
         // module's file. Saved and restored rather than set once: a module that
         // imports another must go back to being itself when that one is done.
         let saved_file = self.cur_file;
+        let saved_dir = self.cur_dir.replace(module_base_dir.clone());
         let module_file_idx = {
             let name = zymbol_span::display_path(&path);
             match self.files.iter().position(|f| *f == name) {
@@ -1085,6 +1091,7 @@ impl Compiler {
         // being whichever file asked for it.
         self.loading_stack.remove(&canonical);
         self.cur_file = saved_file;
+        self.cur_dir = saved_dir;
 
         Ok(())
     }
@@ -2444,21 +2451,26 @@ impl Compiler {
             }
             // ── 4H: Execute expression </ file.zy /> → Execute instruction ──
             Expr::Execute(exec) => {
-                // Resolve path relative to base_dir (same as WT's eval_execute).
-                // Absolute paths are used as-is; everything else is joined to base_dir.
+                // Resolve the path from the file the `</` is written in — the
+                // module's directory inside a module (GLB-017 I, 2026-09-26) —
+                // and from base_dir in the program itself. Absolute paths are
+                // used as-is.
                 // `is_absolute` rather than a leading `/`: on Windows `D:\lib\x.zy`
                 // is absolute and has no leading slash, so testing for one filed it
                 // as relative and joined it onto base_dir, producing nonsense.
                 let abs_path = if std::path::Path::new(&exec.path).is_absolute() {
                     exec.path.clone()
-                } else if let Some(ref base) = self.base_dir {
+                } else if let Some(base) = self.cur_dir.as_ref().or(self.base_dir.as_ref()) {
                     base.join(&exec.path).to_string_lossy().to_string()
                 } else {
                     exec.path.clone()
                 };
-                // Build: zymbol run <absolute-path>
-                let cmd = format!("zymbol run \"{}\"", abs_path);
-                let idx = self.intern_string(&cmd);
+                // The resolved path, and nothing else: the VM hands it to the
+                // runner the CLI installed (GLB-017 I). It used to be a shell
+                // command, `zymbol run "<path>"`, which ran whatever `zymbol`
+                // was first on the PATH, always in the tree-walker, and let a
+                // `"` in the path out of its quotes.
+                let idx = self.intern_string(&abs_path);
                 let dst = ctx.alloc_temp()?;
                 ctx.emit(Instruction::Execute(dst, vec![BuildPart::Lit(idx)]));
                 ctx.set_reg_type(dst, StaticType::String);
