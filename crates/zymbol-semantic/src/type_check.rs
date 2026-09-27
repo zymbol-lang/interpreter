@@ -119,6 +119,22 @@ fn hot_base_ident(expr: &Expr) -> Option<&zymbol_ast::IdentifierExpr> {
 }
 
 impl ZymbolType {
+    /// True when nothing in this type is `Any` or `Unknown`, at any depth.
+    ///
+    /// Compatibility treats an undetermined type as matching everything, which
+    /// is right for refusing (no false errors) and wrong for asserting: a
+    /// statement about what a value *is* needs every part of its type decided.
+    pub fn is_determined(&self) -> bool {
+        match self {
+            ZymbolType::Any | ZymbolType::Unknown => false,
+            ZymbolType::Array(t) => t.is_determined(),
+            ZymbolType::Tuple(ts) => ts.iter().all(|t| t.is_determined()),
+            ZymbolType::NamedTuple(fs) => fs.iter().all(|(_, t)| t.is_determined()),
+            ZymbolType::Function(ps, r) => ps.iter().all(|t| t.is_determined()) && r.is_determined(),
+            _ => true,
+        }
+    }
+
     /// Get a human-readable name for this type
     pub fn name(&self) -> String {
         match self {
@@ -2796,9 +2812,11 @@ impl TypeChecker {
                 } else {
                     let first_type = self.infer_expr(&arr.elements[0]);
                     let mut mixed = false;
+                    let mut all_determined = first_type.is_determined();
 
                     for (i, elem) in arr.elements.iter().skip(1).enumerate() {
                         let elem_type = self.infer_expr(elem);
+                        all_determined &= elem_type.is_determined();
                         if !self.types_compatible(&elem_type, &first_type) {
                             mixed = true;
                             // `#[…]` declares the mix, so there is nothing to
@@ -2824,7 +2842,13 @@ impl TypeChecker {
                     // that exists gets used, and the warning keeps it in its
                     // place, with the same mechanism that already flags an
                     // unused variable.
-                    if arr.declared_mixed && !mixed {
+                    // Only when every element's type is decided: an undecided
+                    // one is compatible with everything, so `#[f(1), "x"]` was
+                    // "not mixed" and warned "every element is Any" — a claim
+                    // the analyser could not make, over a mix that is real at
+                    // run time (Depurando_GO.md DG-07). zyjs already asked for
+                    // every kind to be known before warning.
+                    if arr.declared_mixed && !mixed && all_determined {
                         self.warnings.push(
                             Diagnostic::warning(format!(
                                 "this `#[…]` has no mixed types: every element is {}",
@@ -3730,6 +3754,30 @@ mod tests {
         let (params, ret) = sig.unwrap();
         assert_eq!(params.len(), 2);
         assert_eq!(*ret, ZymbolType::Int);
+    }
+
+    // ── Decision 18: `#[…]` that turns out homogeneous (Depurando_GO DG-07) ──
+
+    fn mix_unneeded(src: &str) -> Vec<String> {
+        warnings_for(src).into_iter().filter(|m| m.contains("has no mixed types")).collect()
+    }
+
+    #[test]
+    fn declared_mix_of_known_equal_types_warns() {
+        let w = mix_unneeded("h = #[1, 2]\n>> h ¶\n");
+        assert_eq!(w, vec!["this `#[…]` has no mixed types: every element is Int"]);
+    }
+
+    /// An element the analyser cannot type is compatible with everything, so it
+    /// never proves a mix — and it never proves the absence of one either.
+    /// `#[id(1), "x"]` is a real mix at run time; this warned "every element is
+    /// Any" over it.
+    #[test]
+    fn declared_mix_with_an_untyped_element_does_not_warn() {
+        let src = "id(p) { <~ p }\n";
+        assert!(mix_unneeded(&format!("{src}c = #[id(1), \"x\"]\n>> c ¶\n")).is_empty());
+        assert!(mix_unneeded(&format!("{src}c = #[id(1), id(\"x\")]\n>> c ¶\n")).is_empty());
+        assert!(mix_unneeded(&format!("{src}c = #[1, id(2)]\n>> c ¶\n")).is_empty());
     }
 }
 
