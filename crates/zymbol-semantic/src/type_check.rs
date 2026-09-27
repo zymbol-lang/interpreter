@@ -453,6 +453,12 @@ pub struct TypeChecker {
     /// environment that is reading it, which is the crossing the premise
     /// forbids. Empty at file level, where there is nothing to cross.
     strong_boundary: Vec<usize>,
+    /// The line of the import that bound each module alias, for MEM-7's
+    /// refusal of a file variable that takes an alias's name (GLB-070).
+    alias_lines: HashMap<String, usize>,
+    /// The names already refused: once per name, at its first binding, as zyjs
+    /// does — every later assignment is the same fault.
+    alias_refused: HashSet<String>,
     /// Whether the file being checked is a module. In a module the top level is
     /// not "the file's variables" but the module's own STATE, which MEM-4 says
     /// its functions are the ones that read and write it. Without this the
@@ -595,6 +601,8 @@ impl TypeChecker {
             module_aliases: HashSet::new(),
             module_arities: crate::call_arity::AliasArities::new(),
             strong_boundary: Vec::new(),
+            alias_lines: HashMap::new(),
+            alias_refused: HashSet::new(),
             is_module: false,
             module_out_slots: crate::call_arity::AliasOutSlots::new(),
             module_exports: crate::call_arity::AliasExports::new(),
@@ -696,8 +704,11 @@ impl TypeChecker {
 
         // Register import aliases so they are not flagged as undefined variables
         self.module_aliases.clear();
+        self.alias_lines.clear();
+        self.alias_refused.clear();
         for import in &program.imports {
             self.module_aliases.insert(import.alias.clone());
+            self.alias_lines.insert(import.alias.clone(), import.span.start.line as usize);
         }
 
         self.is_module = program.module_decl.is_some();
@@ -862,8 +873,11 @@ impl TypeChecker {
 
         // Register import aliases so they are not flagged as undefined variables
         self.module_aliases.clear();
+        self.alias_lines.clear();
+        self.alias_refused.clear();
         for import in &program.imports {
             self.module_aliases.insert(import.alias.clone());
+            self.alias_lines.insert(import.alias.clone(), import.span.start.line as usize);
         }
 
         self.is_module = program.module_decl.is_some();
@@ -989,6 +1003,7 @@ impl TypeChecker {
                     // One function, defined twice. The last one used to win, in
                     // silence: a redefinition is indistinguishable from an edit
                     // that forgot to delete what it replaced.
+                    self.check_alias_name(&func.name, func.span, "function");
                     if let Some(first) = functions.get(func.name.as_str()) {
                         self.errors.push(
                             Diagnostic::error(format!(
@@ -1200,9 +1215,34 @@ impl TypeChecker {
         }
     }
 
+    /// MEM-7 reaches the import alias (GLB-070, decided 2026-09-26): within a
+    /// strong environment a name designates one thing, and the file — or the
+    /// module — is one. A variable, a constant or a function of the file that
+    /// takes an alias's name made `m.K` mean the variable in one place and the
+    /// module in another. Inside a function the name is free, and there the
+    /// variable hides the alias behind a `.`.
+    fn check_alias_name(&mut self, name: &str, span: Span, kind: &str) {
+        if !self.strong_boundary.is_empty() {
+            return;
+        }
+        let Some(&import_line) = self.alias_lines.get(name) else { return };
+        if !self.alias_refused.insert(name.to_string()) {
+            return;
+        }
+        self.errors.push(
+            Diagnostic::error(format!(
+                "'{}' is both a module alias and a {} in this file", name, kind))
+                .with_span(span)
+                .with_help(format!(
+                    "a file is one strong environment and a name designates one thing in it \
+                     (the import is at line {}) — rename the {}; inside a function the name is free",
+                    import_line, kind)));
+    }
+
     fn check_statement(&mut self, stmt: &Statement) {
         match stmt {
             Statement::Assignment(assign) => {
+                self.check_alias_name(&assign.name, assign.span, "variable");
                 // Hot LHS (x°) or pre-hot LHS (°x): pre-declare before inferring RHS
                 if (assign.hot || assign.pre_hot) && self.env.lookup_var(&assign.name).is_none() {
                     self.env.define_var(&assign.name, ZymbolType::Any);
@@ -1307,6 +1347,7 @@ impl TypeChecker {
                     );
                     return;
                 }
+                self.check_alias_name(&const_decl.name, const_decl.span, "constant");
                 let value_type = self.infer_expr(&const_decl.value);
                 if TypeEnv::is_int_literal(&const_decl.value) {
                     self.env.note_literal_int_const(&const_decl.name);
@@ -1376,11 +1417,13 @@ impl TypeChecker {
                     return;
                 }
                 // Input always produces a string
+                self.check_alias_name(&input.variable, input.span, "variable");
                 self.env.define_var(&input.variable, ZymbolType::String);
             }
 
             Statement::CliArgsCapture(capture) => {
                 // >< identifier — declares identifier as Array in the current scope
+                self.check_alias_name(&capture.variable_name, capture.span, "variable");
                 self.env.define_var(&capture.variable_name, ZymbolType::Array(Box::new(ZymbolType::String)));
             }
 
@@ -1549,6 +1592,7 @@ impl TypeChecker {
                                 .with_help("constants declared with ':=' cannot be modified")
                         );
                     } else {
+                        self.check_alias_name(iter_var, loop_stmt.span, "variable");
                         self.env.define_var(iter_var, iter_type);
                     }
                 }
@@ -1583,6 +1627,7 @@ impl TypeChecker {
                         }
                     }
                     for name in pattern.bound_names() {
+                        self.check_alias_name(&name, loop_stmt.span, "variable");
                         self.env.define_var(&name, ZymbolType::Any);
                     }
                 }
@@ -1801,12 +1846,14 @@ impl TypeChecker {
                         );
                         continue;
                     }
+                    self.check_alias_name(&name, d.span, "variable");
                     self.env.define_var(&name, ZymbolType::Any);
                 }
             }
 
             Statement::KeyInput(ki) => {
                 // <<| var and <<|? var always produce Char
+                self.check_alias_name(&ki.variable, ki.span, "variable");
                 self.env.define_var(&ki.variable, ZymbolType::Char);
             }
 
