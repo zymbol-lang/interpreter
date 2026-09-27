@@ -3910,6 +3910,23 @@ An import written after a statement is `error: imports must come before any stat
 every engine. (Before v0.0.9 the browser engine ran such a file anyway, so a program written
 in the playground could fail to parse outside it — see REFERENCE.md L40.)
 
+### An import nobody uses
+
+An alias the file never names again — not as `alias::fn`, not as `alias.CONST`, not in a
+re-export — is a warning in every engine, on `run` and on `check`. The program still runs.
+
+```text
+<# ./calc => c
+<# ./calc => sobra
+>> c::add(1, 2) ¶
+warning: import 'sobra' is never used
+help: remove the import, or call into it as sobra::name or sobra.NAME
+```
+
+There is no way to silence it: a variable is sometimes assigned only to be discarded, an
+import never is. Delete the line. (Added in v0.0.10: in the GO game a frozen engine was
+imported, offered on the menu and never called, and nothing said so.)
+
 ### Export Aliases
 
 ```zymbol
