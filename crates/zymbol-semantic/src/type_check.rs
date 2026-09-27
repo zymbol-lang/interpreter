@@ -3415,7 +3415,15 @@ impl TypeChecker {
             },
 
             // Data operations
-            Expr::NumericEval(_) => ZymbolType::Float,
+            // `#|s|` gives an Int or a Float depending on what the text says,
+            // which is only known when it runs: Number, not Float (GLB-071).
+            // Float refused `a[#|"2"|]` as an index — GO/集計.zy, eight times —
+            // while zyjs ran it. The operand is inferred like any other, or an
+            // undefined name inside the bars was never reported.
+            Expr::NumericEval(ne) => {
+                self.infer_expr(&ne.expr);
+                ZymbolType::Number
+            }
             // `x#?` answers a tuple, and the OPERAND is inferred like any other
             // expression — which is how an undefined name in it gets reported.
             //
