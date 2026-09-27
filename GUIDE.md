@@ -1342,6 +1342,34 @@ x = 7
 
 `{ }` braces are **required** even for single-statement bodies.
 
+### Code that cannot run
+
+Three shapes are warned about in every engine, on `run` and on `check`, because they
+can be decided without running anything. The program still runs.
+
+```text
+f(x) {
+    <~ x
+    >> "never" ¶      // after '<~' (or '@!', '@>') in the same block
+}
+g(x) {
+    ? x > 0 { <~ 1 } _ { <~ 2 }
+    >> "never" ¶      // every branch of the '?' above leaves the block
+}
+? #0 { >> "never" ¶ }                   // its condition is always #0
+? 1 == 2 { >> "never" ¶ }               // literals only: folded
+? #1 { >> "a" ¶ } _ { >> "never" ¶ }    // an earlier condition is always #1
+@ #0 { >> "never" ¶ }                   // a loop that never runs
+```
+
+A condition is folded only when it is made of Bool and number literals, `!`, unary `-`,
+`&&`, `||` and the comparisons. Anything that depends on a value — a variable, a call —
+is never folded: whether a branch can run for the values a program actually produces is
+not something a warning can decide.
+
+`? #1 { … }` with no other branch is **not** warned about: it is how a block with a scope
+of its own is written (see *Variable Scope*), and everything in it runs.
+
 ---
 
 ## 7. Match
