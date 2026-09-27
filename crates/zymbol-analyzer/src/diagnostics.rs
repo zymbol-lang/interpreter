@@ -231,6 +231,14 @@ impl DiagnosticPipeline {
                 lsp_diagnostics.push(to_lsp_diagnostic(&diag));
             }
 
+            // An import whose alias the file never names again (HLZ-015) — the
+            // same function `zymbol check` and `run` call.
+            for diag in
+                zymbol_semantic::check_unused_imports(document.token_list(), &program.imports)
+            {
+                lsp_diagnostics.push(to_lsp_diagnostic(&diag));
+            }
+
             // Def-use analysis for ambiguous lifetimes
             let cfg = zymbol_semantic::ControlFlowGraph::build_sequential(&program.statements);
             let mut def_use_analyzer = zymbol_semantic::DefUseAnalyzer::new();

@@ -562,8 +562,10 @@ fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &m
         }
     }
 
-    // Show type warnings but continue execution
-    for warning in type_checker.get_warnings() {
+    // Show type warnings but continue execution. An import nobody uses is
+    // reported with them, as `check` reports it (HLZ-015).
+    let unused_imports = zymbol_semantic::check_unused_imports(&tokens_for_stdlib, &program.imports);
+    for warning in type_checker.get_warnings().iter().chain(unused_imports.iter()) {
         report.warning(&format!("warning: {}", warning.message));
         if let Some(span) = &warning.span {
             report.warning(&format!("  --> {}:{}:{}",
@@ -1353,7 +1355,10 @@ fn check_source(
 
     // Report type warnings
     let mut type_warning_count = 0;
-    for diag in type_checker.get_warnings() {
+    // An import whose alias the file never names again (HLZ-015), counted and
+    // printed with the type warnings.
+    let unused_imports = zymbol_semantic::check_unused_imports(&tokens_for_stdlib, &program.imports);
+    for diag in type_checker.get_warnings().iter().chain(unused_imports.iter()) {
         if !report_warnings {
             continue;
         }

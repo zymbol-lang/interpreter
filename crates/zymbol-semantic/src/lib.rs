@@ -15,6 +15,7 @@ mod call_arity;
 mod interpolation;
 mod modules;
 mod stdlib_access;
+mod unused_imports;
 mod variable_analysis;
 mod cfg;
 mod def_use;
@@ -29,6 +30,7 @@ pub use call_arity::{
 };
 pub use modules::{SemanticError, ExportedItem, ExportTable, ModuleAnalyzer};
 pub use stdlib_access::check_stdlib_access;
+pub use unused_imports::check_unused_imports;
 pub use variable_analysis::{VariableAnalyzer, VariableInfo, VariableDiagnostic, Severity};
 pub use cfg::{ControlFlowGraph, CfgNode, CfgEdge, EdgeCondition, NodeId};
 pub use def_use::{
