@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use std::fs;
 use std::path::{Path, PathBuf};
 use zymbol_compiler::Compiler;
-use zymbol_error::DiagnosticBag;
+use zymbol_error::{Diagnostic, DiagnosticBag};
 use zymbol_formatter::{format_with_config, FormatterConfig};
 use zymbol_interpreter::Interpreter;
 use zymbol_lexer::Lexer;
@@ -493,8 +493,19 @@ fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &m
     ));
     let type_errors = type_checker.check_errors(&program);
 
-    // Type errors are fatal - stop execution
+    // The warnings of this phase: the type checker's, an import nobody uses
+    // (HLZ-015) and code that cannot run (HLZ-016).
+    let mut phase_warnings: Vec<Diagnostic> = type_checker.get_warnings().to_vec();
+    phase_warnings.extend(zymbol_semantic::check_unused_imports(&tokens_for_stdlib, &program.imports));
+    phase_warnings.extend(zymbol_semantic::check_unreachable(&program));
+
+    // Type errors are fatal - stop execution. The phase's warnings go out
+    // first: `check` reports them next to the errors and the browser engine
+    // did too, and `run` dropped them — `? x { }` with an Int `x` warned in
+    // `check` and said nothing in a `run` that was refused for another reason
+    // (GO/Depurando_GO.md DG-08).
     if !type_errors.is_empty() {
+        emit_phase_warnings(report, &phase_warnings, &display_name);
         let mut bag = DiagnosticBag::new();
         for err in type_errors {
             bag.add(err);
@@ -509,6 +520,7 @@ fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &m
     // and in a branch that never ran it said nothing.
     let stdlib_errors = zymbol_semantic::check_stdlib_access(&tokens_for_stdlib, &program.imports);
     if !stdlib_errors.is_empty() {
+        emit_phase_warnings(report, &phase_warnings, &display_name);
         let mut bag = DiagnosticBag::new();
         for err in stdlib_errors {
             bag.add(err);
@@ -562,23 +574,8 @@ fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &m
         }
     }
 
-    // Show type warnings but continue execution. An import nobody uses is
-    // reported with them, as `check` reports it (HLZ-015).
-    let unused_imports = zymbol_semantic::check_unused_imports(&tokens_for_stdlib, &program.imports);
-    for warning in type_checker.get_warnings().iter().chain(unused_imports.iter()) {
-        report.warning(&format!("warning: {}", warning.message));
-        if let Some(span) = &warning.span {
-            report.warning(&format!("  --> {}:{}:{}",
-                display_name,
-                span.start.line,
-                span.start.column
-            ));
-        }
-        if let Some(help) = &warning.help {
-            report.warning(&format!("  = help: {}", help));
-        }
-        report.warning("");
-    }
+    // Show the phase's warnings but continue execution.
+    emit_phase_warnings(report, &phase_warnings, &display_name);
 
     if use_vm {
         // Sprint 4: Register VM path
@@ -712,6 +709,24 @@ impl Report {
 /// fails, what `zymbol run` would have written about it, without the
 /// warnings. The VM used to shell out to whatever `zymbol` was on the PATH,
 /// always in the tree-walker, and passed the child's whole stderr on.
+/// Print the warnings of the type-checking phase, as `run` prints them.
+fn emit_phase_warnings(report: &mut Report, warnings: &[Diagnostic], display_name: &str) {
+    for warning in warnings {
+        report.warning(&format!("warning: {}", warning.message));
+        if let Some(span) = &warning.span {
+            report.warning(&format!("  --> {}:{}:{}",
+                display_name,
+                span.start.line,
+                span.start.column
+            ));
+        }
+        if let Some(help) = &warning.help {
+            report.warning(&format!("  = help: {}", help));
+        }
+        report.warning("");
+    }
+}
+
 fn subscript_runner(use_vm: bool, args: Vec<String>) -> zymbol_interpreter::SubscriptRunner {
     std::rc::Rc::new(move |file: &Path| {
         let mut printed = Vec::new();
@@ -1355,9 +1370,10 @@ fn check_source(
 
     // Report type warnings
     let mut type_warning_count = 0;
-    // An import whose alias the file never names again (HLZ-015), counted and
-    // printed with the type warnings.
-    let unused_imports = zymbol_semantic::check_unused_imports(&tokens_for_stdlib, &program.imports);
+    // An import whose alias the file never names again (HLZ-015) and code that
+    // cannot run (HLZ-016), counted and printed with the type warnings.
+    let mut unused_imports = zymbol_semantic::check_unused_imports(&tokens_for_stdlib, &program.imports);
+    unused_imports.extend(zymbol_semantic::check_unreachable(&program));
     for diag in type_checker.get_warnings().iter().chain(unused_imports.iter()) {
         if !report_warnings {
             continue;

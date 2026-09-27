@@ -239,6 +239,11 @@ impl DiagnosticPipeline {
                 lsp_diagnostics.push(to_lsp_diagnostic(&diag));
             }
 
+            // Code that cannot run (HLZ-016) — the same pass as the CLI.
+            for diag in zymbol_semantic::check_unreachable(program) {
+                lsp_diagnostics.push(to_lsp_diagnostic(&diag));
+            }
+
             // Def-use analysis for ambiguous lifetimes
             let cfg = zymbol_semantic::ControlFlowGraph::build_sequential(&program.statements);
             let mut def_use_analyzer = zymbol_semantic::DefUseAnalyzer::new();
