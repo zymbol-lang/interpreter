@@ -700,10 +700,10 @@ all fixed in v0.0.8, each with its own regression test. चतुरङ्गम
 recorded at the foot of its entry. ZyBank's thirty-three closed against that same release, which
 is what an LDV log looks like once the cycle completes: closing one is a language change or a
 reasoned rejection, and neither is the application author's call. The method, its decalogue, and
-the index of the eight logs are in **`zymbol-design/LDV.md`**.
+the index of the nine logs are in **`zymbol-design/LDV.md`**.
 
-The projects carry a second load at the same time. They are written across six natural
-languages — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese, Sanskrit — which is what
+The projects carry a second load at the same time. They are written across seven natural
+languages — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese, Sanskrit, Greek — which is what
 turns "a wordless grammar means language-neutral" from a claim into a result: no flags, no special
 modes, no translation layer at the syntax level. Sanskrit adds the case the earlier six could
 not make: Devanagari is the first script where a single identifier needs combining marks to be
@@ -723,6 +723,7 @@ once.
 | [囲碁 (Igo)](https://github.com/zymbol-lang/zy-GO) | **v0.0.8** | 日本語 (Japanese) | Recursive flood fill at depth, state threading across modules, double-width glyph grid, application-level i18n in 5 languages, `std/term` |
 | [चतुरङ्गम् (Chaturanga)](https://github.com/zymbol-lang/zyChaturanga) | **v0.0.9** | संस्कृतम् (Sanskrit) | Devanagari identifiers with conjuncts and visarga, alpha-beta search over make/unmake, mixed-script module names, numeral script as an i18n axis |
 | [ZyBank](https://github.com/zymbol-lang/ZyBank) | **v0.0.9** | Español | `std/db` in an application, money as integers with a per-currency exponent, dictionaries, configuration precedence, functions across module boundaries, keyboard input and typed fields in raw mode |
+| [GoL (Ζωή)](https://github.com/zymbol-lang/ZyGoL) | **v0.0.9** | Ελληνικά (Greek) | Conway's Game of Life with B/S rules, an application whose tests *and* their runner are Zymbol, the only suite graded on all three engines, four locales incl. Devanagari digits |
 
 ---
 
