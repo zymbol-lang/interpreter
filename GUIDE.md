@@ -638,7 +638,24 @@ Both engines (tree-walker and `--vm`) validate identically. A leading sign is al
 // → [one, two, three]
 ```
 
-`><` works in both engines (tree-walker and `--vm`).
+`><` works in all three engines (tree-walker, `--vm` and the browser engine).
+
+**Where `zymbol run`'s own options stop.** The options of `run` itself — `--vm`,
+`--tw`, `--script`, `--keep-temp` and `-h`/`--help` — are recognised after the
+file name until the first argument that is not one of them; from there on,
+everything goes to the program. A bare `--` ends them explicitly:
+
+```bash
+zymbol run app.zy --help          # zymbol's help: the program never runs
+zymbol run app.zy -- --help       # the program gets ["--help"]
+zymbol run app.zy --vm -- --vm    # runs under the VM, the program gets ["--vm"]
+zymbol run app.zy --version       # the program gets ["--version"]: not an option of run
+zymbol run app.zyp -- --help      # the same for a package
+```
+
+So a program that answers `--help` — which is every program with a command
+line — is documented with `--` in front of it, or reached through a wrapper that
+adds it. Found by GoL (GAP-GOL-005).
 
 ### Exit Status — `<~` at the top level
 
