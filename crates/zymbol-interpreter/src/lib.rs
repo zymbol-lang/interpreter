@@ -691,7 +691,9 @@ impl Value {
 /// Interpreter for executing Zymbol programs
 /// What runs a subscript: the resolved path in, what the program printed out,
 /// or the failure as `zymbol run` writes it.
-pub type SubscriptRunner = std::rc::Rc<dyn Fn(&std::path::Path) -> std::result::Result<String, String>>;
+/// Runs a subscript: its printed output and the exit status it gave, or the
+/// text of a failure.
+pub type SubscriptRunner = std::rc::Rc<dyn Fn(&std::path::Path) -> std::result::Result<(String, i32), String>>;
 
 pub struct Interpreter<W: Write> {
     output: W,
@@ -2091,6 +2093,19 @@ impl<W: Write> Interpreter<W> {
             Expr::BashExec(bash) => self.eval_bash_exec(bash),
             Expr::Round(op) => self.eval_round(op),
             Expr::Trunc(op) => self.eval_trunc(op),
+            Expr::ErrorConstruct(e) => {
+                // ##Kind("message") — a soft error value, never a raise
+                // (GAP-GOL-003). The analyser refuses a message whose type it
+                // knows is not text; this is the case it could not know.
+                match self.eval_expr(&e.message)? {
+                    Value::String(m) => Ok(Value::Error(ErrorValue::new(e.kind.clone(), m))),
+                    other => Err(RuntimeError::kinded(
+                        "Type",
+                        format!("an error's message is a String, got {}", other.type_label()),
+                        e.message.span(),
+                    )),
+                }
+            }
             Expr::ErrorCheck(check) => {
                 // expr$! - returns #1 if expression is an error, #0 otherwise
                 let value = self.eval_expr(&check.expr)?;

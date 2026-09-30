@@ -980,6 +980,7 @@ fn collect_refs_in_expr(
             }
         }
         Expr::ErrorCheck(op)     => collect_refs_in_expr(&op.expr, locals, refs),
+        Expr::ErrorConstruct(e)  => collect_refs_in_expr(&e.message, locals, refs),
         Expr::ErrorPropagate(op) => collect_refs_in_expr(&op.expr, locals, refs),
         Expr::Pipe(pipe) => {
             collect_refs_in_expr(&pipe.left, locals, refs);

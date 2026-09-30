@@ -1065,6 +1065,11 @@ impl<'a> FormatVisitor<'a> {
             Expr::Round(round) => self.format_round(round),
             Expr::Trunc(trunc) => self.format_trunc(trunc),
             Expr::ErrorCheck(check) => self.format_error_check(check),
+            Expr::ErrorConstruct(e) => {
+                self.output.write(&format!("##{}(", e.kind));
+                self.format_expr(&e.message);
+                self.output.write(")");
+            }
             Expr::ErrorPropagate(prop) => self.format_error_propagate(prop),
             Expr::DeepIndex(di) => self.format_deep_index(di),
             Expr::FlatExtract(fe) => self.format_flat_extract(fe),
@@ -1748,6 +1753,17 @@ impl<'a> FormatVisitor<'a> {
                         self.output.write(" || ");
                     }
                     self.format_pattern(alt);
+                }
+            }
+            // `##Kind`, `##Kind(_)`, `##Kind(m)` — written back as written.
+            Pattern::ErrorKind(kind, binding, span) => {
+                self.output.write(&format!("##{kind}"));
+                match binding {
+                    Some(name) => self.output.write(&format!("({name})")),
+                    None if span.end.byte_offset - span.start.byte_offset > kind.len() as u32 + 2 => {
+                        self.output.write("(_)")
+                    }
+                    None => {}
                 }
             }
         }

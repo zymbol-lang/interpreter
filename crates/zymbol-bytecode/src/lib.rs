@@ -357,6 +357,13 @@ pub enum Instruction {
     // ── Error check ──────────────────────────────────────────────────────
     /// dst = src$!  → Bool: #1 if src is an error value, #0 otherwise
     IsError(Reg, Reg),
+    /// dst = ##Kind(msg) → a soft error value; the kind is in the string pool,
+    /// the message a register that must hold a String (GAP-GOL-003)
+    MakeError(Reg, StrIdx, Reg),
+    /// dst = src is an error of the kind in the string pool → Bool (`##Kind` pattern)
+    ErrorKindIs(Reg, Reg, StrIdx),
+    /// dst = the message of the error in src → String (`##Kind(m)` binding)
+    ErrorMessage(Reg, Reg),
 
     /// Raise a runtime error with message from string pool (for deferred errors)
     RaiseError(StrIdx),

@@ -119,7 +119,7 @@ Sub-script: `out = </ ./sub.zy />`.
 ? x > 100 { … } _? x > 0 { … } _ { … }      // braces always required
 ```
 
-`??` match — six pattern kinds, first match wins, `||` joins alternatives of any kinds:
+`??` match — seven pattern kinds, first match wins, `||` joins alternatives of any kinds:
 
 ```zymbol
 g = ?? score {
@@ -132,7 +132,9 @@ g = ?? score {
 }
 ```
 
-No binding patterns (`n => n * 2` is not implemented).
+No binding patterns (`n => n * 2` is not implemented) — with one exception: an error
+pattern, `##Parse(msg) => …`, matches an error of that kind and puts its message in
+`msg`. It stands alone in its arm (not inside `||` or a list).
 
 ---
 

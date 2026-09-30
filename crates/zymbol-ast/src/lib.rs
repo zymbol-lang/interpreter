@@ -71,7 +71,7 @@ pub use index_nav::{
 mod error_handling;
 pub use error_handling::{
     TryStmt, CatchClause, ErrorType, FinallyClause,
-    ErrorCheckExpr, ErrorPropagateExpr,
+    ErrorCheckExpr, ErrorConstructExpr, ErrorPropagateExpr,
 };
 
 /// A complete Zymbol program
@@ -248,6 +248,8 @@ pub enum Expr {
     NumericCast(NumericCastExpr),
     /// Error check expression: expr$! - returns #1 if error, #0 otherwise
     ErrorCheck(ErrorCheckExpr),
+    /// Error construction: ##Kind("message") - a soft error value
+    ErrorConstruct(ErrorConstructExpr),
     /// Error propagate expression: expr$!! - propagates error to caller
     ErrorPropagate(ErrorPropagateExpr),
     /// Deep scalar access: arr[i>j>k] — returns value at the given depth
@@ -489,6 +491,7 @@ impl Expr {
             Expr::Trunc(trunc) => trunc.span,
             Expr::NumericCast(cast) => cast.span,
             Expr::ErrorCheck(check) => check.span,
+            Expr::ErrorConstruct(e) => e.span,
             Expr::ErrorPropagate(prop) => prop.span,
             Expr::DeepIndex(di) => di.span,
             Expr::FlatExtract(fe) => fe.span,

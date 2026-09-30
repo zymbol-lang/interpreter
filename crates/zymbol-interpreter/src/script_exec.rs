@@ -50,8 +50,16 @@ impl<W: Write> Interpreter<W> {
         // that runs the caller, and a failure carries what the CLI would have
         // written, without the warnings.
         if let Some(runner) = self.subscript_runner.clone() {
+            // A status the subscript GIVES (`<~ 3`) is a soft ##IO error, and a
+            // subscript that fails is still raised (D2 and D8, 2026-09-30):
+            // reporting a failure and crashing are two things, and GLB-017 I
+            // decided the second.
             return match runner(&file_path) {
-                Ok(printed) => Ok(Value::String(printed)),
+                Ok((printed, 0)) => Ok(Value::String(printed)),
+                Ok((printed, code)) => Ok(Value::Error(crate::ErrorValue::new(
+                    "IO",
+                    zymbol_common::shell::exit_failure_message(Some(code), &printed),
+                ))),
                 Err(failure) => Err(RuntimeError::Generic { message: failure, span: execute.span }),
             };
         }
@@ -169,6 +177,17 @@ impl<W: Write> Interpreter<W> {
             ),
             span: bash.span,
         })?;
+
+        // A status other than 0 is a soft ##IO error that carries it (GAP-GOL-011,
+        // D2): a failed command and one that printed nothing used to be the same
+        // empty string, and nothing could tell them apart.
+        if !output.status.success() {
+            let said = zymbol_common::shell::failure_text(&output);
+            return Ok(Value::Error(crate::ErrorValue::new(
+                "IO",
+                zymbol_common::shell::exit_failure_message(output.status.code(), &said),
+            )));
+        }
 
         // Capture both stdout and stderr
         let mut result = String::from_utf8_lossy(&output.stdout).to_string();

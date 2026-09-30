@@ -1802,6 +1802,12 @@ impl TypeChecker {
                     // Validate pattern type against scrutinee
                     self.check_pattern_type(&case.pattern, &scrutinee_type);
 
+                    // `##Kind(m) =>`: `m` is the message, a String, in this arm only.
+                    let bound = case.pattern.bound_name();
+                    if let Some(name) = bound {
+                        self.env.enter_scope();
+                        self.env.define_var(name, ZymbolType::String);
+                    }
                     if let Some(value) = &case.value {
                         self.infer_expr(value);
                     }
@@ -1810,6 +1816,9 @@ impl TypeChecker {
                         for stmt in &block.statements {
                             self.check_statement(stmt);
                         }
+                        self.env.exit_scope();
+                    }
+                    if bound.is_some() {
                         self.env.exit_scope();
                     }
                 }
@@ -2544,6 +2553,10 @@ impl TypeChecker {
                     self.check_pattern_type(alt, scrutinee_type);
                 }
             }
+
+            // `##Kind(m)`: an error of that kind. Any scrutinee may be one — a
+            // function that returns a value or an error is the case it is for.
+            Pattern::ErrorKind(..) => {}
         }
     }
 
@@ -3469,6 +3482,26 @@ impl TypeChecker {
 
             // Error handling
             Expr::ErrorCheck(_) => ZymbolType::Bool,
+            // `##Kind("message")`: the message is text. Refused here when its
+            // type is known and is not a String; left to run time otherwise.
+            Expr::ErrorConstruct(e) => {
+                let t = self.infer_expr(&e.message);
+                if matches!(t, ZymbolType::Int | ZymbolType::Float | ZymbolType::Number
+                    | ZymbolType::Char | ZymbolType::Bool | ZymbolType::Unit
+                    | ZymbolType::Array(_) | ZymbolType::Tuple(_) | ZymbolType::NamedTuple(_)
+                    | ZymbolType::Function(..) | ZymbolType::Error)
+                {
+                    self.errors.push(
+                        Diagnostic::error(format!(
+                            "an error's message is a String, got {}", t.name()))
+                        .with_span(e.message.span())
+                        .with_help(format!(
+                            "build the text first: ##{}(\"…\"), or ##{}(\"\" x) to turn a value into it",
+                            e.kind, e.kind)),
+                    );
+                }
+                ZymbolType::Error
+            }
             Expr::ErrorPropagate(op) => self.infer_expr(&op.expr),
 
             // Execution
@@ -3485,6 +3518,13 @@ impl TypeChecker {
                     // Validate pattern type against scrutinee
                     self.check_pattern_type(&case.pattern, &scrutinee_type);
 
+                    // `##Kind(m) =>`: `m` is the message, a String, in this arm only.
+                    let bound = case.pattern.bound_name();
+                    if let Some(name) = bound {
+                        self.env.enter_scope();
+                        self.env.define_var(name, ZymbolType::String);
+                    }
+
                     // Infer value type
                     if let Some(value) = &case.value {
                         case_types.push(self.infer_expr(value));
@@ -3500,6 +3540,9 @@ impl TypeChecker {
                         if !matches!(block_type, ZymbolType::Unit) {
                             case_types.push(block_type);
                         }
+                        self.env.exit_scope();
+                    }
+                    if bound.is_some() {
                         self.env.exit_scope();
                     }
                 }

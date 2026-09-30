@@ -627,6 +627,13 @@ impl DefUseAnalyzer {
                     // Analyze pattern guards
                     self.analyze_pattern(&case.pattern, node_index);
 
+                    // `##Kind(m) =>` defines `m` for the arm; like a loop's
+                    // iterator, the arm owns its lifetime.
+                    let bound = case.pattern.bound_name();
+                    if let Some(name) = bound {
+                        self.scope_depth += 1;
+                        self.define_arm_binding(name, case.pattern.span(), node_index);
+                    }
                     // Analyze case value
                     if let Some(ref value) = case.value {
                         self.analyze_expr(value, node_index);
@@ -638,6 +645,9 @@ impl DefUseAnalyzer {
                         for stmt in &block.statements {
                             self.analyze_statement(stmt, node_index);
                         }
+                        self.scope_depth -= 1;
+                    }
+                    if bound.is_some() {
                         self.scope_depth -= 1;
                     }
                 }
@@ -782,6 +792,13 @@ impl DefUseAnalyzer {
                     // Analyze pattern guards
                     self.analyze_pattern(&case.pattern, node_index);
 
+                    // `##Kind(m) =>` defines `m` for the arm; like a loop's
+                    // iterator, the arm owns its lifetime.
+                    let bound = case.pattern.bound_name();
+                    if let Some(name) = bound {
+                        self.scope_depth += 1;
+                        self.define_arm_binding(name, case.pattern.span(), node_index);
+                    }
                     if let Some(ref value_expr) = case.value {
                         self.analyze_expr(value_expr, node_index);
                     }
@@ -791,6 +808,9 @@ impl DefUseAnalyzer {
                         for stmt in &block.statements {
                             self.analyze_statement(stmt, node_index);
                         }
+                        self.scope_depth -= 1;
+                    }
+                    if bound.is_some() {
                         self.scope_depth -= 1;
                     }
                 }
@@ -994,6 +1014,10 @@ impl DefUseAnalyzer {
                 self.analyze_expr(&check.expr, node_index);
             }
 
+            Expr::ErrorConstruct(e) => {
+                self.analyze_expr(&e.message, node_index);
+            }
+
             Expr::ErrorPropagate(prop) => {
                 // Analyze the inner expression
                 self.analyze_expr(&prop.expr, node_index);
@@ -1032,6 +1056,24 @@ impl DefUseAnalyzer {
         }
     }
 
+    /// A name a match arm's pattern binds (`##Kind(m)`): defined here, and not
+    /// tracked for automatic destruction — the arm owns it, as a loop owns its
+    /// iterator.
+    fn define_arm_binding(&mut self, name: &str, span: zymbol_span::Span, node_index: usize) {
+        let depth = self.scope_depth;
+        let chain = self.chains.entry(name.to_string()).or_insert_with(|| DefUseChain::new(name.to_string()));
+        chain.loop_bound = true;
+        if chain.definitions.is_empty() {
+            chain.add_definition(Definition {
+                var_name: name.to_string(),
+                node: node_index,
+                span,
+                is_underscore: name.starts_with('_'),
+                scope_depth: depth,
+            });
+        }
+    }
+
     /// Analyze pattern for variable uses
     fn analyze_pattern(&mut self, pattern: &zymbol_ast::Pattern, node_index: usize) {
         use zymbol_ast::Pattern;
@@ -1066,6 +1108,8 @@ impl DefUseAnalyzer {
                     self.analyze_pattern(alt, node_index);
                 }
             }
+            // A binding, defined by the arm (`define_arm_binding`), not a use.
+            Pattern::ErrorKind(..) => {}
         }
     }
 

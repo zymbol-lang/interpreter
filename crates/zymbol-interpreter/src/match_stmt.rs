@@ -44,20 +44,20 @@ impl<W: Write> Interpreter<W> {
             // Check if pattern matches
             if let Some(matched) = self.pattern_matches(&case.pattern, &scrutinee_value)? {
                 if matched {
-                    // Pattern matched
-                    // Determine return value: either from value expr or Unit
-                    let result = if let Some(ref value_expr) = case.value {
-                        self.eval_expr(value_expr)?
-                    } else {
-                        Value::Unit
-                    };
-
-                    // Execute optional block (for side effects)
-                    if let Some(ref block) = case.block {
-                        self.execute_block(block)?;
+                    // `##Kind(m) =>` puts the error's message in `m` as `m = …`
+                    // would: a visible `m` is assigned (no shadowing, MEM-7),
+                    // and a new one lives in the arm's scope, which closes on
+                    // every way out.
+                    let bound = case.pattern.bound_name();
+                    if let (Some(name), Value::Error(e)) = (bound, &scrutinee_value) {
+                        self.push_scope();
+                        self.set_variable(name, Value::String(e.message.clone()));
                     }
-
-                    return Ok(result);
+                    let outcome = self.eval_match_arm(case);
+                    if bound.is_some() {
+                        self.pop_scope();
+                    }
+                    return outcome;
                 }
             }
         }
@@ -69,6 +69,19 @@ impl<W: Write> Interpreter<W> {
         })
     }
 
+    /// The arm's value, or Unit, after its optional block has run.
+    fn eval_match_arm(&mut self, case: &zymbol_ast::MatchCase) -> Result<Value> {
+        let result = if let Some(ref value_expr) = case.value {
+            self.eval_expr(value_expr)?
+        } else {
+            Value::Unit
+        };
+        if let Some(ref block) = case.block {
+            self.execute_block(block)?;
+        }
+        Ok(result)
+    }
+
     /// Check if a pattern matches a value
     /// Returns Some(true) if matched, Some(false) if not matched (but guard failed), None if pattern doesn't match
     pub(crate) fn pattern_matches(&mut self, pattern: &Pattern, value: &Value) -> Result<Option<bool>> {
@@ -77,6 +90,11 @@ impl<W: Write> Interpreter<W> {
                 // Wildcard matches everything
                 Ok(Some(true))
             }
+            // An error of this kind; any other value, or another kind, does not.
+            Pattern::ErrorKind(kind, _, _) => match value {
+                Value::Error(e) if e.error_type == *kind => Ok(Some(true)),
+                _ => Ok(None),
+            },
             Pattern::Literal(lit, _) => {
                 // Check if literal equals value
                 let pattern_value = match lit {

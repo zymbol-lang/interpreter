@@ -112,6 +112,7 @@ impl Parser {
         let first = self.parse_pattern_primary()?;
 
         if !matches!(self.peek().kind, TokenKind::Or) {
+            Self::refuse_error_in_list(&first)?;
             return Ok(first);
         }
 
@@ -127,7 +128,31 @@ impl Parser {
             .last()
             .expect("alternatives always contains the first pattern")
             .span();
+        for alt in &alternatives {
+            Self::refuse_error_in_list(alt)?;
+            // A name bound in one alternative would not exist when another matched.
+            if let Pattern::ErrorKind(_, Some(_), span) = alt {
+                return Err(Diagnostic::error("a pattern that names an error's message stands alone in its arm")
+                    .with_span(*span)
+                    .with_help("give it an arm of its own, or match the kind without naming the message: ##Kind(_)"));
+            }
+        }
         Ok(Pattern::Or(alternatives, start_span.to(&end_span)))
+    }
+
+    /// An element of a list pattern is a value compared with an element of the
+    /// array; an error pattern takes a value apart, and belongs to an arm.
+    fn refuse_error_in_list(p: &Pattern) -> Result<(), Diagnostic> {
+        let Pattern::List(items, _) = p else { return Ok(()) };
+        for item in items {
+            if let Pattern::ErrorKind(_, _, span) = item {
+                return Err(Diagnostic::error("an error pattern is not an element of a list pattern")
+                    .with_span(*span)
+                    .with_help("match the error in an arm of its own: ##Kind(m) => …"));
+            }
+            Self::refuse_error_in_list(item)?;
+        }
+        Ok(())
     }
 
     /// Parse a single (non-alternative) pattern
@@ -168,6 +193,50 @@ impl Parser {
         let token = self.peek().clone();
 
         let pattern = match &token.kind {
+            // `##Kind`, `##Kind(_)`, `##Kind(name)` — an error of that kind
+            // (GAP-GOL-016). Written together, as the constructor is.
+            TokenKind::Hash
+                if matches!(self.peek_ahead(1).map(|t| t.kind.clone()), Some(TokenKind::Hash))
+                    && matches!(self.peek_ahead(2).map(|t| t.kind.clone()),
+                                Some(TokenKind::Ident(_))) =>
+            {
+                let first = self.advance();
+                let second = self.advance();
+                let name_tok = self.advance();
+                let TokenKind::Ident(kind) = name_tok.kind.clone() else { unreachable!() };
+                if second.span.start.byte_offset != first.span.end.byte_offset
+                    || name_tok.span.start.byte_offset != second.span.end.byte_offset
+                {
+                    return Err(Diagnostic::error(format!("an error kind is written together: ##{kind}"))
+                        .with_span(first.span.to(&name_tok.span)));
+                }
+                let open = self.peek().clone();
+                if !matches!(open.kind, TokenKind::LParen)
+                    || open.span.start.byte_offset != name_tok.span.end.byte_offset
+                {
+                    return Ok(Pattern::ErrorKind(kind, None, first.span.to(&name_tok.span)));
+                }
+                self.advance(); // (
+                let inner = self.advance();
+                let binding = match &inner.kind {
+                    TokenKind::Ident(n) => Some(n.clone()),
+                    TokenKind::Underscore => None,
+                    _ => {
+                        return Err(Diagnostic::error(
+                            "an error pattern names its message, or ignores it with _")
+                            .with_span(inner.span)
+                            .with_help(format!("##{kind}(message) binds it for the arm; ##{kind}(_) or ##{kind} matches the kind alone")));
+                    }
+                };
+                let close = self.peek().clone();
+                if !matches!(close.kind, TokenKind::RParen) {
+                    return Err(Diagnostic::error("expected ')' to close the error pattern")
+                        .with_span(close.span)
+                        .with_help(format!("an error pattern is written ##{kind}(message)")));
+                }
+                self.advance();
+                Pattern::ErrorKind(kind, binding, first.span.to(&close.span))
+            }
             TokenKind::Underscore => {
                 self.advance(); // consume _
                 Pattern::Wildcard(token.span)

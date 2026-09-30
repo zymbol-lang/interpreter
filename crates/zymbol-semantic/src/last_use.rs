@@ -117,6 +117,8 @@ fn scan_pattern(p: &Pattern, m: &mut Mentions) {
                 scan_pattern(alt, m);
             }
         }
+        // `##Kind(m)` binds a name for its arm; it reads nothing.
+        Pattern::ErrorKind(..) => {}
     }
 }
 
@@ -454,6 +456,7 @@ fn scan_expr(expr: &Expr, m: &mut Mentions) {
         }
         Expr::NumericCast(op) => scan_expr(&op.expr, m),
         Expr::ErrorCheck(op) => scan_expr(&op.expr, m),
+        Expr::ErrorConstruct(e) => scan_expr(&e.message, m),
         Expr::ErrorPropagate(op) => scan_expr(&op.expr, m),
         Expr::DeepIndex(di) => {
             scan_expr(&di.array, m);
@@ -1034,6 +1037,7 @@ pub(crate) fn walk_sub_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
         }
         Expr::NumericCast(op) => f(&op.expr),
         Expr::ErrorCheck(op) => f(&op.expr),
+        Expr::ErrorConstruct(e) => f(&e.message),
         Expr::ErrorPropagate(op) => f(&op.expr),
         Expr::DeepIndex(di) => {
             f(&di.array);
