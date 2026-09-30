@@ -44,6 +44,11 @@ pub enum Pattern {
     /// Alternative pattern: p1 || p2 || p3 — matches if any alternative matches.
     /// Alternatives are tested left to right; the first one that matches wins.
     Or(Vec<Pattern>, Span),
+    /// Error pattern: `##Kind`, `##Kind(_)` or `##Kind(name)` — matches an error
+    /// value of that kind, and the third form binds its message to `name` for the
+    /// arm (GAP-GOL-016). The spelling that builds the error takes it apart, as
+    /// `(a, b)` builds a tuple and destructures one.
+    ErrorKind(String, Option<String>, Span),
 }
 
 impl MatchExpr {
@@ -106,6 +111,16 @@ impl Pattern {
             Pattern::Comparison(_, _, span) => *span,
             Pattern::Ident(_, span) => *span,
             Pattern::Or(_, span) => *span,
+            Pattern::ErrorKind(_, _, span) => *span,
+        }
+    }
+
+    /// The name this arm's pattern binds, if any: only `##Kind(name)`, and only
+    /// standing alone — the parser refuses one inside `||` or a list.
+    pub fn bound_name(&self) -> Option<&str> {
+        match self {
+            Pattern::ErrorKind(_, Some(name), _) => Some(name),
+            _ => None,
         }
     }
 }

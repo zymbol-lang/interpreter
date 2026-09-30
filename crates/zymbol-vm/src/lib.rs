@@ -386,8 +386,9 @@ impl Value {
             Value::Error(s) => {
                 let t = s.as_ref();
                 match (t.find('('), t.strip_suffix(')')) {
-                    (Some(i), Some(no_paren)) => no_paren[i + 1..].len() as i64,
-                    _ => t.len() as i64,
+                    // Code points, like `$#` and like `#?` on a String.
+                    (Some(i), Some(no_paren)) => no_paren[i + 1..].chars().count() as i64,
+                    _ => t.chars().count() as i64,
                 }
             }
             _ => 0,
@@ -1159,7 +1160,7 @@ impl Drop for TuiGuard {
 
 /// What runs a subscript: the resolved path in, what the program printed out,
 /// or the failure as `zymbol run` writes it.
-pub type SubscriptRunner = std::rc::Rc<dyn Fn(&std::path::Path) -> Result<String, String>>;
+pub type SubscriptRunner = std::rc::Rc<dyn Fn(&std::path::Path) -> Result<(String, i32), String>>;
 
 pub struct VM<W: Write> {
     /// Flat register stack: all registers of all frames concatenated.
@@ -4057,6 +4058,14 @@ impl<W: Write> VM<W> {
                         }
                     }
                     let out = match run_in_shell(&cmd) { Ok(o) => o, Err(e) => raise!(e.into()) };
+                    // A status other than 0 is a soft ##IO error (GAP-GOL-011, D2).
+                    if !out.status.success() {
+                        let said = zymbol_common::shell::failure_text(&out);
+                        self.reg_set(dst, Value::Error(ZyStr::new(format!(
+                            "##IO({})",
+                            zymbol_common::shell::exit_failure_message(out.status.code(), &said)))));
+                        continue;
+                    }
                     // Capture both stdout and stderr (mirrors tree-walker behavior)
                     let mut result = String::from_utf8_lossy(&out.stdout).into_owned();
                     if !out.stderr.is_empty() {
@@ -4096,8 +4105,13 @@ impl<W: Write> VM<W> {
                             path.display()
                         )));
                     };
+                    // D2 and D8: a status the subscript GIVES is a soft ##IO
+                    // error; a failure is still raised (GLB-017 I).
                     match runner(&path) {
-                        Ok(printed) => self.reg_set(dst, Value::String(ZyStr::new(printed))),
+                        Ok((printed, 0)) => self.reg_set(dst, Value::String(ZyStr::new(printed))),
+                        Ok((printed, code)) => self.reg_set(dst, Value::Error(ZyStr::new(format!(
+                            "##IO({})",
+                            zymbol_common::shell::exit_failure_message(Some(code), &printed))))),
                         Err(failure) => raise!(VmError::Generic(failure)),
                     }
                 }
@@ -4221,6 +4235,42 @@ impl<W: Write> VM<W> {
                 &Instruction::IsError(dst, src) => {
                     let is_err = matches!(self.reg_get(src), Value::Error(_));
                     self.reg_set(dst, Value::Bool(is_err));
+                }
+                // ##Kind("message") — the same form a soft error from std/*
+                // prints as, and the one `#?` and `:!` read the kind back from.
+                // `##Kind` as a pattern: the value is an error, and of that kind.
+                // An error is held as its display, "##Kind(message)".
+                &Instruction::ErrorKindIs(dst, src, kind_idx) => {
+                    let is = match self.reg_get(src) {
+                        Value::Error(s) => s.as_ref()
+                            .strip_prefix("##")
+                            .and_then(|t| t.strip_prefix(program.string_pool[kind_idx as usize].as_str()))
+                            .is_some_and(|t| t.starts_with('(')),
+                        _ => false,
+                    };
+                    self.reg_set(dst, Value::Bool(is));
+                }
+                &Instruction::ErrorMessage(dst, src) => {
+                    let msg = match self.reg_get(src) {
+                        Value::Error(s) => {
+                            let t = s.as_ref();
+                            match (t.find('('), t.strip_suffix(')')) {
+                                (Some(i), Some(body)) => body[i + 1..].to_string(),
+                                _ => String::new(),
+                            }
+                        }
+                        _ => String::new(),
+                    };
+                    self.reg_set(dst, Value::String(ZyStr::new(msg)));
+                }
+                &Instruction::MakeError(dst, kind_idx, msg) => {
+                    let v = match self.reg_get(msg) {
+                        Value::String(m) => Value::Error(ZyStr::new(format!(
+                            "##{}({})", program.string_pool[kind_idx as usize], m.as_ref()))),
+                        other => raise!(VmError::TypeMsg(format!(
+                            "an error's message is a String, got {}", other.type_label()))),
+                    };
+                    self.reg_set(dst, v);
                 }
                 &Instruction::LoadErrorKind(dst) => {
                     let kind = self.frame_stack.last()

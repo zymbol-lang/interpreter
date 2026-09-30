@@ -190,13 +190,16 @@ impl<W: Write> Interpreter<W> {
         let count: i64 = match &value {
             Value::Int(n) => n.to_string().len() as i64,
             Value::Float(f) => f.to_string().len() as i64,
-            Value::String(s) => s.len() as i64,
+            // Code points, as `$#` counts them and as the VM and the browser
+            // engine answer `#?`. It was bytes: `"vacía"#?` said 6 here and 5
+            // in the other two engines (found by BUG-GOL-015).
+            Value::String(s) => s.chars().count() as i64,
             Value::Char(_) | Value::Bool(_) => 1,
             Value::Array(arr) => arr.len() as i64,
             Value::Tuple(tup) => tup.len() as i64,
             Value::NamedTuple(fields) => fields.len() as i64,
             Value::Function(func) => func.params.len() as i64,
-            Value::Error(err) => err.message.len() as i64,
+            Value::Error(err) => err.message.chars().count() as i64,
             Value::Unit => 0,
         };
 

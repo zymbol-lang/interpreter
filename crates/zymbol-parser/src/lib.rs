@@ -1578,6 +1578,16 @@ impl Parser {
                     span,
                 }))
             }
+            // `##Kind("message")` — an error value (GAP-GOL-003). `##` then a
+            // name is the error kind, as in `:! ##Parse`; in an expression it
+            // needs its message, and the whole mark is written together.
+            TokenKind::Hash
+                if matches!(self.peek_ahead(1).map(|t| t.kind.clone()), Some(TokenKind::Hash))
+                    && matches!(self.peek_ahead(2).map(|t| t.kind.clone()),
+                                Some(TokenKind::Ident(_))) =>
+            {
+                self.parse_error_construct()
+            }
             // `#[…]` — declared-mixed array (decision 15). A bare `#` at
             // expression position is otherwise the module mark, and `#` followed
             // by `[` is unambiguous.
@@ -1702,6 +1712,46 @@ impl Parser {
     }
 
     /// Peek ahead at token at offset from current position (skipping comments)
+    /// `##Kind("message")`. Called with the first `#` current and `#`, a name
+    /// after it (checked by the caller).
+    fn parse_error_construct(&mut self) -> Result<Expr, Diagnostic> {
+        let first = self.advance().clone(); // #
+        let second = self.advance().clone(); // #
+        let name_tok = self.advance().clone();
+        let kind = match &name_tok.kind {
+            TokenKind::Ident(n) => n.clone(),
+            _ => unreachable!(), // the caller checked it is a name
+        };
+        let together = second.span.start.byte_offset == first.span.end.byte_offset
+            && name_tok.span.start.byte_offset == second.span.end.byte_offset;
+        let open = self.peek().clone();
+        if !together
+            || !matches!(open.kind, TokenKind::LParen)
+            || open.span.start.byte_offset != name_tok.span.end.byte_offset
+        {
+            return Err(Diagnostic::error(format!(
+                "an error kind in an expression builds an error value, and needs its message: ##{kind}(\"…\")"))
+                .with_span(first.span.to(&name_tok.span))
+                .with_help(format!(
+                    "write it together, with the message in parentheses: ##{kind}(\"what went wrong\") — `:! ##{kind}` is where a kind stands alone")));
+        }
+        self.advance(); // (
+        // A delimited position, like a call argument: `##Parse("line " n)`.
+        let message = self.parse_expr_juxt()?;
+        let close = self.peek().clone();
+        if !matches!(close.kind, TokenKind::RParen) {
+            return Err(Diagnostic::error("expected ')' to close the error's message")
+                .with_span(close.span)
+                .with_help(format!("an error value is written ##{kind}(\"message\")")));
+        }
+        self.advance();
+        Ok(Expr::ErrorConstruct(zymbol_ast::ErrorConstructExpr {
+            kind,
+            message: Box::new(message),
+            span: first.span.to(&close.span),
+        }))
+    }
+
     fn peek_ahead(&self, offset: usize) -> Option<&Token> {
         let mut idx = self.current;
         let mut non_comment_count = 0;

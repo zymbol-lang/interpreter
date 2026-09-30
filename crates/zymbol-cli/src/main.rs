@@ -732,12 +732,14 @@ fn subscript_runner(use_vm: bool, args: Vec<String>) -> zymbol_interpreter::Subs
         let mut printed = Vec::new();
         let mut report = Report::capture();
         let opts = RunOpts { display_name: None, args: args.clone(), use_vm };
-        run_program(file, opts, &mut printed, &mut report).map_err(|e| format!("{:#}", e))?;
+        let code = run_program(file, opts, &mut printed, &mut report).map_err(|e| format!("{:#}", e))?;
         if report.failed {
             let text = report.captured.unwrap_or_default();
             return Err(text.trim_end().to_string());
         }
-        Ok(String::from_utf8_lossy(&printed).into_owned())
+        // The status goes back with the output: a `<~ 3` the subscript gave is
+        // what its caller reads (D2).
+        Ok((String::from_utf8_lossy(&printed).into_owned(), code))
     })
 }
 

@@ -560,12 +560,29 @@ impl VariableAnalyzer {
                 for case in &match_stmt.cases {
                     self.analyze_pattern(&case.pattern);
 
+                    // `##Kind(m) =>` is a birth like `m = …`: a name already
+                    // visible is assigned (MEM-7 — one name, one thing), and a
+                    // new one lives in the arm and no further.
+                    let bound = case.pattern.bound_name();
+                    if let Some(name) = bound {
+                        self.enter_scope();
+                        if self.variables.contains_key(name) {
+                            self.assign_variable(name, case.pattern.span());
+                        } else {
+                            self.declare_variable(name.to_string(), case.pattern.span(), false);
+                        }
+                    }
+
                     if let Some(value) = &case.value {
                         self.analyze_expr(value);
                     }
 
                     if let Some(block) = &case.block {
                         self.analyze_block(block);
+                    }
+
+                    if bound.is_some() {
+                        self.exit_scope();
                     }
                 }
             }
@@ -689,6 +706,8 @@ impl VariableAnalyzer {
             Pattern::Or(alternatives, _) => {
                 for alt in alternatives { self.analyze_pattern(alt); }
             }
+            // Binds a name; the arm's scope declares it (see the match arms).
+            Pattern::ErrorKind(..) => {}
         }
     }
 
@@ -759,12 +778,29 @@ impl VariableAnalyzer {
                 for case in &match_expr.cases {
                     self.analyze_pattern(&case.pattern);
 
+                    // `##Kind(m) =>` is a birth like `m = …`: a name already
+                    // visible is assigned (MEM-7 — one name, one thing), and a
+                    // new one lives in the arm and no further.
+                    let bound = case.pattern.bound_name();
+                    if let Some(name) = bound {
+                        self.enter_scope();
+                        if self.variables.contains_key(name) {
+                            self.assign_variable(name, case.pattern.span());
+                        } else {
+                            self.declare_variable(name.to_string(), case.pattern.span(), false);
+                        }
+                    }
+
                     if let Some(value) = &case.value {
                         self.analyze_expr(value);
                     }
 
                     if let Some(block) = &case.block {
                         self.analyze_block(block);
+                    }
+
+                    if bound.is_some() {
+                        self.exit_scope();
                     }
                 }
             }
@@ -1003,6 +1039,10 @@ impl VariableAnalyzer {
             // Error handling expressions
             Expr::ErrorCheck(check) => {
                 self.analyze_expr(&check.expr);
+            }
+
+            Expr::ErrorConstruct(e) => {
+                self.analyze_expr(&e.message);
             }
 
             Expr::ErrorPropagate(prop) => {

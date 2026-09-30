@@ -1392,8 +1392,8 @@ of its own is written (see *Variable Scope*), and everything in it runs.
 ## 7. Match
 
 `??` is **pure pattern matching** — it does not evaluate boolean conditions (use `?`/`_?` for
-conditional branching). Six pattern types are available: Literal, Range, Comparison, Wildcard,
-Ident, and List. Any of them can be combined with `||` into alternatives.
+conditional branching). Seven pattern types are available: Literal, Range, Comparison, Wildcard,
+Ident, List and Error. Any of them can be combined with `||` into alternatives.
 
 ### Literal and Range Patterns
 
@@ -1503,6 +1503,36 @@ data = [10, 20, 30]
 }
 // → three elements
 ```
+
+### Error Patterns — `##Kind(m)`
+
+The spelling that builds an error takes it apart. `##Kind(m)` matches an error of
+that kind and puts its message in `m`; `##Kind(_)` and `##Kind` match the kind alone,
+as `:! ##Kind` does.
+
+```zymbol
+leer_regla(t) {
+    ? t$# == 0 { <~ ##Parse("regla vacía") }
+    <~ t
+}
+describir(r) {
+    <~ ?? r {
+        ##Parse(msg) => ("no se pudo leer: " msg)
+        ##IO         => "sin archivo"
+        _            => ("regla: " r)
+    }
+}
+>> describir(leer_regla("")) ¶      // → no se pudo leer: regla vacía
+>> describir(leer_regla("B3")) ¶    // → regla: B3
+```
+
+- **It is the only pattern that creates a name**, and the name is born the way
+  `m = …` is born: a `m` already visible is assigned, a new one lives in the arm.
+- **It stands alone in its arm.** `##A(m) || ##B(m)` is refused — `m` would not
+  exist when the other alternative matched — and so is an error pattern inside a
+  list pattern. `##A(_) || ##B` is fine.
+- The message is bound, never compared: `##Parse("x") => …` is refused. Bind it
+  and compare in the arm.
 
 ### Or Patterns — Alternatives with `||`
 
@@ -3656,6 +3686,34 @@ after `##`, and a name that is not one of them simply never matches.
 // → index out of bounds
 ```
 
+### `##Kind("message")` — Build an Error Value
+
+A program builds the same soft error the standard modules return: the kind, written
+as `:!` writes it, and the message in parentheses.
+
+```zymbol
+leer_regla(t) {
+    ? t$# == 0 { <~ ##Parse("regla vacía") }
+    <~ t
+}
+r = leer_regla("")
+>> r ¶          // → ##Parse(regla vacía)
+>> r$! ¶        // → #1
+>> r#? ¶        // → (##Parse, 11, ##Parse(regla vacía))
+```
+
+- **It is a value, not a raise.** `$!` sees it and `$!!` propagates it; a `:!`
+  does not, because nothing was thrown — the same as a soft error from `std/io`.
+- **The kind is any name**, as it is after `:!`: `##Parse`, `##IO`, or a kind of
+  the program's own, in any script (`##Regla`, `##Κανόνας`).
+- **The message is a String**, and it is a delimited position like a call
+  argument, so it juxtaposes: `##Parse("line " n)`. A message the analyser knows
+  is not text is refused before running; one it cannot know raises `##Type`.
+- **Written together**: `##Parse ("x")` and `## Parse("x")` are refused, and
+  `##Parse` alone stands only after `:!`.
+- **Read it back with a pattern**: `?? r { ##Parse(msg) => … }` puts the message in
+  `msg` (§ 7, Error Patterns).
+
 ### `$!` — Check if Value is an Error
 
 ```zymbol
@@ -5064,6 +5122,27 @@ result = <\ "echo 'scale=2; 355/113' | bc" \>
 > **Note**: Trailing `\n` is stripped automatically (consistent with shell `$(...)` substitution).
 > Internal newlines are preserved. Add `¶` explicitly when needed.
 
+**A command that fails is an error value.** A status other than 0 gives a soft
+`##IO` error whose message starts with the status — `exit 3`, then `: ` and what
+the command said (its stderr, or its stdout when it wrote nothing to stderr). A
+status of 0 gives the output, as always. Read it back with a pattern:
+
+```zymbol
+ver(r) {
+    <~ ?? r {
+        ##IO(m) => ("falló: " m)
+        _       => ("salida: " r)
+    }
+}
+>> ver(<\ "echo hola" \>) ¶                  // → salida: hola
+>> ver(<\ "echo sin permiso >&2; exit 2" \>) ¶  // → falló: exit 2: sin permiso
+```
+
+A command whose failure is part of the normal flow — `printenv` of a variable that
+is not set, a `grep` that finds nothing — is tested with `$!` where it used to be
+tested for `""`. Before v0.0.10 a failed command and one that printed nothing were
+the same empty string (GAP-GOL-011).
+
 A **collection** placed in the command becomes shell words: its elements joined
 with spaces, at any depth — not its display form, whose `(`, `[` and `#` the
 shell would read as syntax or as a comment. A **function** cannot be placed in a
@@ -5084,6 +5163,12 @@ Executes another Zymbol script and captures its output:
 output = </ ./subscript.zy />
 >> output
 ```
+
+A subscript that **gives** a status other than 0 (`<~ 3` at its top level) returns
+a soft `##IO` error, `##IO(exit 3: <what it printed>)`, read back as above. A
+subscript that **fails** — a runtime error — is still raised, carrying what
+`zymbol run` would have written, and a `:!` catches it. Reporting a failure and
+crashing are two different things.
 
 > For a list of bugs fixed in each version, see [CHANGELOG.md](CHANGELOG.md).
 

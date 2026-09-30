@@ -1587,6 +1587,16 @@ impl Compiler {
             }
             _ => self.compile_expr(value, ctx)?,
         };
+        self.store_to_name(name, src, ctx)
+    }
+
+    /// `name = <src>`: where a value that is already in a register goes when a
+    /// name is born or re-assigned — a module global, a script's file variable
+    /// (written back from the file body), or a local register. Shared by `=` and
+    /// by the `##Kind(m) =>` arm binding, which is a birth like any other.
+    fn store_to_name(&mut self, name: &str, src: Reg, ctx: &mut FunctionCtx)
+        -> Result<(), CompileError>
+    {
         let src_ty = ctx.get_reg_type(src);
 
         // If this name is a module global var, emit StoreGlobal instead of local register assign
@@ -2400,6 +2410,13 @@ impl Compiler {
                         ctx.emit(Instruction::TruncFloatDyn(dst, src, pr))
                     }
                 };
+                Ok(dst)
+            }
+            Expr::ErrorConstruct(e) => {
+                let msg = self.compile_expr(&e.message, ctx)?;
+                let kind = self.intern_string(&e.kind);
+                let dst = ctx.alloc_temp()?;
+                ctx.emit(Instruction::MakeError(dst, kind, msg));
                 Ok(dst)
             }
             Expr::ErrorCheck(ec) => {
@@ -3473,6 +3490,17 @@ impl Compiler {
                 ctx.patch_jump(p, body_label);
             }
 
+            // `##Kind(m) =>`: the message goes into `m` as `m = …` would — the
+            // register of a visible `m` (no shadowing, MEM-7), a new one
+            // otherwise. The analyser keeps a new `m` from being read after
+            // the arm.
+            if let Some(name) = case.pattern.bound_name() {
+                let r_msg = ctx.alloc_temp()?;
+                ctx.emit(Instruction::ErrorMessage(r_msg, r_sub));
+                ctx.set_reg_type(r_msg, StaticType::String);
+                self.store_to_name(name, r_msg, ctx)?;
+            }
+
             if let Some(val) = &case.value {
                 let r = self.compile_expr(val, ctx)?;
                 ctx.emit(Instruction::CopyReg(dst, r));
@@ -3480,6 +3508,7 @@ impl Compiler {
             if let Some(block) = &case.block {
                 self.compile_block(block, ctx)?;
             }
+
             let j = ctx.emit_jump_placeholder();
             end_patches.push(j);
 
@@ -3521,6 +3550,14 @@ impl Compiler {
         match pattern {
             Pattern::Wildcard(_) => {
                 // Always matches: nothing to emit, fall through to the body
+            }
+            // `##Kind(…)`: an error of this kind. The binding, if any, is made
+            // by the arm (`compile_match_expr`), after the test has passed.
+            Pattern::ErrorKind(kind, _, _) => {
+                let idx = self.intern_string(kind);
+                let r_is = ctx.alloc_temp()?;
+                ctx.emit(Instruction::ErrorKindIs(r_is, r_sub, idx));
+                skips.push(ctx.emit_jump_if_not_placeholder(r_is));
             }
             Pattern::Or(alternatives, _) => {
                 // Test alternatives left to right; the first match jumps to the body
@@ -4971,6 +5008,7 @@ fn collect_free_in_expr(
             }
         }
         Expr::ErrorCheck(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
+        Expr::ErrorConstruct(e) => collect_free_in_expr(&e.message, locals, outer_ctx, seen, free),
         Expr::ErrorPropagate(op) => collect_free_in_expr(&op.expr, locals, outer_ctx, seen, free),
         Expr::Pipe(pipe) => {
             collect_free_in_expr(&pipe.left, locals, outer_ctx, seen, free);
@@ -5063,6 +5101,8 @@ fn collect_free_in_pattern(
         zymbol_ast::Pattern::Comparison(_, expr, _) => {
             collect_free_in_expr(expr, locals, outer_ctx, seen, free);
         }
+        // Binds a name for its arm; reads none from outside.
+        zymbol_ast::Pattern::ErrorKind(..) => {}
         zymbol_ast::Pattern::Ident(name, _) => {
             if !locals.contains(name) && outer_ctx.get_reg(name).is_ok() && !seen.contains(name) {
                 seen.insert(name.clone());
@@ -5484,6 +5524,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::FmtThousands(d, s, _, _) | Instruction::FmtScientific(d, s, _, _)
             | Instruction::NumericEval(d, s) | Instruction::TypeOf(d, s)
             | Instruction::IsError(d, s) | Instruction::IsArray(d, s)
+            | Instruction::MakeError(d, _, s)
+            | Instruction::ErrorKindIs(d, s, _) | Instruction::ErrorMessage(d, s)
             | Instruction::BaseConvert(d, s, _) => { upd(*d); upd(*s); }
             Instruction::RoundFloat(d, s, _) | Instruction::TruncFloat(d, s, _) => { upd(*d); upd(*s); }
             Instruction::LoadErrorKind(d) => upd(*d),
