@@ -13,6 +13,9 @@ pub struct ExecuteExpr {
     pub path: String,  // Path to .zy file to execute
     /// `true` when the user wrote the path in quotes: </ "path.zy" />
     pub quoted: bool,
+    /// The words after the path: the subscript's command line (D10). Empty means
+    /// the subscript inherits its caller's arguments.
+    pub args: Vec<String>,
     pub span: Span,
 }
 

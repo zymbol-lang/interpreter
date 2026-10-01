@@ -3526,6 +3526,8 @@ name = "zymbol-common"
 version = "0.0.9"
 dependencies = [
  "indexmap",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]
@@ -3635,6 +3637,7 @@ dependencies = [
  "toml",
  "zip",
  "zymbol-ast",
+ "zymbol-common",
  "zymbol-lexer",
  "zymbol-parser",
  "zymbol-span",

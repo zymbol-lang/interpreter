@@ -60,6 +60,13 @@ enum Commands {
         #[arg(long)]
         keep_temp: bool,
 
+        /// Run a full-screen program with no terminal: `>>|` draws on a virtual
+        /// screen of 24×80, `<<|` reads its keys from FILE (one per line: a
+        /// character, SPACE, ENTER, ESC, TAB, BACKSPACE, UP/DOWN/LEFT/RIGHT,
+        /// CTRL+X, or WAIT n), and each block's last frame is printed as text.
+        #[arg(long, value_name = "FILE")]
+        keys: Option<PathBuf>,
+
         /// Arguments to pass to the script
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -148,8 +155,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { file, vm, tw, script, keep_temp, args } => {
-            on_program_stack(move || run_file(file, args, vm, tw, script, keep_temp))
+        Commands::Run { file, vm, tw, script, keep_temp, keys, args } => {
+            on_program_stack(move || run_file(file, args, vm, tw, script, keep_temp, keys))
         }
         Commands::Build { file, output, release } => build_file(file, output, release),
         Commands::Package { path, output, scripts, name, version, dry_run } => {
@@ -206,6 +213,8 @@ struct RunOpts {
     display_name: Option<String>,
     args: Vec<String>,
     use_vm: bool,
+    /// `--keys` (D11): the virtual screen and its key script, if asked for.
+    keys: Option<zymbol_common::vscreen::KeyScript>,
 }
 
 fn run_file(
@@ -215,11 +224,26 @@ fn run_file(
     use_tw: bool,
     script: Option<String>,
     keep_temp: bool,
+    keys_file: Option<PathBuf>,
 ) -> Result<()> {
+    let keys = match keys_file {
+        None => None,
+        Some(f) => {
+            let text = fs::read_to_string(&f)
+                .with_context(|| format!("--keys: cannot read {}", f.display()))?;
+            match zymbol_common::vscreen::KeyScript::parse(&text) {
+                Ok(k) => Some(k),
+                Err(e) => {
+                    eprintln!("error: --keys {}: {}", f.display(), e);
+                    std::process::exit(2);
+                }
+            }
+        }
+    };
     if is_zyp(&path) {
-        return run_zyp(path, args, use_vm, use_tw, script, keep_temp);
+        return run_zyp(path, args, use_vm, use_tw, script, keep_temp, keys);
     }
-    let code = run_file_inner(&path, RunOpts { display_name: None, args, use_vm })?;
+    let code = run_file_inner(&path, RunOpts { display_name: None, args, use_vm, keys })?;
     std::process::exit(code);
 }
 
@@ -247,6 +271,7 @@ fn run_zyp(
     force_tw: bool,
     script: Option<String>,
     keep_temp: bool,
+    keys: Option<zymbol_common::vscreen::KeyScript>,
 ) -> Result<()> {
     // No `.with_context("failed to open …")` here: every PackageError already names the
     // package and says what was wrong with it, so adding a wrapper only stacks a second
@@ -286,7 +311,7 @@ fn run_zyp(
     let entry_abs = pkg.script_abs_path(temp.path(), &entry_name, &entry_path)?;
     let display_name = format!("{}!{}", path.display(), entry_path);
 
-    let code = run_file_inner(&entry_abs, RunOpts { display_name: Some(display_name), args, use_vm })?;
+    let code = run_file_inner(&entry_abs, RunOpts { display_name: Some(display_name), args, use_vm, keys })?;
 
     if keep_temp {
         let kept = temp.keep();
@@ -342,7 +367,7 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
 /// 2026-09-26), with its output in a buffer and a report that keeps the
 /// failure and drops the warnings — see [`subscript_runner`].
 fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &mut Report) -> Result<i32> {
-    let RunOpts { display_name, args, use_vm } = opts;
+    let RunOpts { display_name, args, use_vm, keys } = opts;
 
     // Read source file
     let source = fs::read_to_string(path)
@@ -602,6 +627,9 @@ fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &m
         let mut vm = VM::new(out);
         vm.set_cli_args(args.clone());
         vm.set_subscript_runner(subscript_runner(true, args.clone()));
+        if let Some(k) = keys.clone() {
+            vm.set_keys(k);
+        }
         if let Err(e) = vm.run(&compiled) {
             report.error(&format!("Runtime error: {}", e));
             if let Some((file, line)) = e.location() {
@@ -617,6 +645,9 @@ fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &m
         // Execute with tree-walker interpreter
         let mut interpreter = Interpreter::with_output(out);
         interpreter.set_subscript_runner(subscript_runner(false, args.clone()));
+        if let Some(k) = keys.clone() {
+            interpreter.set_keys(k);
+        }
 
         // Set the current file path for module resolution
         interpreter.set_current_file(path);
@@ -728,10 +759,14 @@ fn emit_phase_warnings(report: &mut Report, warnings: &[Diagnostic], display_nam
 }
 
 fn subscript_runner(use_vm: bool, args: Vec<String>) -> zymbol_interpreter::SubscriptRunner {
-    std::rc::Rc::new(move |file: &Path| {
+    std::rc::Rc::new(move |file: &Path, own: &[String]| {
         let mut printed = Vec::new();
         let mut report = Report::capture();
-        let opts = RunOpts { display_name: None, args: args.clone(), use_vm };
+        // The words after the path are the subscript's command line (D10);
+        // without any it inherits the caller's, as it always has.
+        let args = if own.is_empty() { args.clone() } else { own.to_vec() };
+        // A subscript gets the words after its path, never the caller's `--keys`.
+        let opts = RunOpts { display_name: None, args, use_vm, keys: None };
         let code = run_program(file, opts, &mut printed, &mut report).map_err(|e| format!("{:#}", e))?;
         if report.failed {
             let text = report.captured.unwrap_or_default();

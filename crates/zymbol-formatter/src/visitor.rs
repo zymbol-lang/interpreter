@@ -2063,6 +2063,14 @@ impl<'a> FormatVisitor<'a> {
         } else {
             self.output.write(&exec.path);
         }
+        for arg in &exec.args {
+            self.output.write(" ");
+            if arg.is_empty() || arg.chars().any(char::is_whitespace) {
+                self.output.write(&format!("\"{arg}\""));
+            } else {
+                self.output.write(arg);
+            }
+        }
         self.output.write("/>");
     }
 

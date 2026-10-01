@@ -94,7 +94,11 @@ impl<W: Write> Interpreter<W> {
                 sleep.span,
             )),
         };
-        std::thread::sleep(std::time::Duration::from_millis(ms));
+        // Under --keys a delay paces nothing anyone watches; the key script's
+        // WAIT counts polls, not milliseconds (D11).
+        if self.headless.is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+        }
         Ok(())
     }
 

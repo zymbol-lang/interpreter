@@ -54,7 +54,7 @@ impl<W: Write> Interpreter<W> {
             // subscript that fails is still raised (D2 and D8, 2026-09-30):
             // reporting a failure and crashing are two things, and GLB-017 I
             // decided the second.
-            return match runner(&file_path) {
+            return match runner(&file_path, &execute.args) {
                 Ok((printed, 0)) => Ok(Value::String(printed)),
                 Ok((printed, code)) => Ok(Value::Error(crate::ErrorValue::new(
                     "IO",
@@ -115,8 +115,10 @@ impl<W: Write> Interpreter<W> {
         // Set the current file for the sub-interpreter
         script_interp.set_current_file(&file_path);
 
-        // Pass CLI args to the sub-interpreter (if we have any)
-        if let Some(ref cli_args) = self.cli_args {
+        // The subscript's own arguments (D10), else the caller's.
+        if !execute.args.is_empty() {
+            script_interp.set_cli_args(execute.args.clone());
+        } else if let Some(ref cli_args) = self.cli_args {
             // Convert Value array to String array for set_cli_args
             let args_strings: Vec<String> = cli_args.iter()
                 .filter_map(|v| match v {

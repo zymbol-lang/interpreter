@@ -27,18 +27,14 @@ impl Parser {
                 .with_help("execute syntax: </ path.zy />"));
         }
 
-        // Strip surrounding quotes if user wrote </ "path.zy" /> (recorded
-        // so the formatter can reprint the quoted form)
-        let quoted = path.starts_with('"') && path.ends_with('"') && path.len() > 1;
-        let path = if quoted {
-            path[1..path.len() - 1].to_string()
-        } else {
-            path
-        };
+        // The path, and the words after it as the subscript's arguments (D10).
+        // `quoted` is recorded so the formatter can reprint `</ "path.zy" />`.
+        let (path, quoted, args) = zymbol_common::shell::split_execute(&path);
 
         Ok(Expr::Execute(ExecuteExpr {
             path,
             quoted,
+            args,
             span: token.span,
         }))
     }

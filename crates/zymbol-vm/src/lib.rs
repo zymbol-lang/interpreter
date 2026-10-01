@@ -1160,7 +1160,7 @@ impl Drop for TuiGuard {
 
 /// What runs a subscript: the resolved path in, what the program printed out,
 /// or the failure as `zymbol run` writes it.
-pub type SubscriptRunner = std::rc::Rc<dyn Fn(&std::path::Path) -> Result<(String, i32), String>>;
+pub type SubscriptRunner = std::rc::Rc<dyn Fn(&std::path::Path, &[String]) -> Result<(String, i32), String>>;
 
 pub struct VM<W: Write> {
     /// Flat register stack: all registers of all frames concatenated.
@@ -1207,6 +1207,10 @@ pub struct VM<W: Write> {
     /// Terminal guards: dropping one restores the terminal, so they live as long
     /// as the TUI they opened — across every nested run of the loop.
     tui_stack: Vec<TuiGuard>,
+    /// `zymbol run --keys` (D11): the virtual screen and the key script, and
+    /// how many `>>|` blocks are open on it. `None` is the ordinary run.
+    headless: Option<zymbol_common::vscreen::Headless>,
+    headless_tui: u32,
     output: W,
 }
 
@@ -1240,6 +1244,8 @@ impl<W: Write> VM<W> {
             cur_chunk: u32::MAX,
             in_flight: None,
             tui_stack: Vec::new(),
+            headless: None,
+            headless_tui: 0,
             output,
         }
     }
@@ -1252,6 +1258,11 @@ impl<W: Write> VM<W> {
 
     pub fn set_cli_args(&mut self, args: Vec<String>) {
         self.cli_args = args;
+    }
+
+    /// `zymbol run --keys FILE` (D11): see the tree-walker's `set_keys`.
+    pub fn set_keys(&mut self, keys: zymbol_common::vscreen::KeyScript) {
+        self.headless = Some(zymbol_common::vscreen::Headless::new(keys));
     }
 
     /// The exit status a top-level `<~ n` asked for, if the program asked
@@ -2169,6 +2180,11 @@ impl<W: Write> VM<W> {
                 }
 
                 // ── I/O ─────────────────────────────────────────────────────
+                &Instruction::Print(reg) if self.headless_tui > 0 => {
+                    // Inside `>>|` under --keys: onto the virtual screen (D11).
+                    let s = self.numeral_repr(&self.value_stack[base + reg as usize]);
+                    if let Some(h) = self.headless.as_mut() { h.screen.write(&s); }
+                }
                 &Instruction::Print(reg) => {
                     let mode = self.numeral_mode;
                     match &self.value_stack[base + reg as usize] {
@@ -2182,6 +2198,9 @@ impl<W: Write> VM<W> {
                         // script too (Display would hand back ASCII digits).
                         other             => write!(self.output, "{}", other.to_display_in(mode))?,
                     }
+                }
+                Instruction::PrintNewline if self.headless_tui > 0 => {
+                    if let Some(h) = self.headless.as_mut() { h.screen.write("\n"); }
                 }
                 Instruction::PrintNewline => {
                     writeln!(self.output)?;
@@ -4084,13 +4103,14 @@ impl<W: Write> VM<W> {
                 // ── Execute expression </ path /> ─────────────────────────────
                 Instruction::Execute(dst, parts) => {
                     let dst = *dst;
-                    let mut cmd = String::new();
-                    for part in parts {
-                        match part {
-                            BuildPart::Lit(idx) => cmd.push_str(&program.string_pool[*idx as usize]),
-                            BuildPart::Reg(r) => cmd.push_str(&self.reg_get(*r).to_string_repr()),
-                        }
-                    }
+                    // The first part is the path, each one after it an argument
+                    // (D10); without any the subscript inherits the caller's.
+                    let text = |part: &BuildPart| match part {
+                        BuildPart::Lit(idx) => program.string_pool[*idx as usize].to_string(),
+                        BuildPart::Reg(r) => self.reg_get(*r).to_string_repr(),
+                    };
+                    let cmd = parts.first().map(&text).unwrap_or_default();
+                    let sub_args: Vec<String> = parts.iter().skip(1).map(&text).collect();
                     // GLB-017 I, decided 2026-09-26: in this process, down
                     // the road `zymbol run --vm` takes, through the runner the
                     // CLI installs. The same refusal as the tree-walker when
@@ -4107,7 +4127,7 @@ impl<W: Write> VM<W> {
                     };
                     // D2 and D8: a status the subscript GIVES is a soft ##IO
                     // error; a failure is still raised (GLB-017 I).
-                    match runner(&path) {
+                    match runner(&path, &sub_args) {
                         Ok((printed, 0)) => self.reg_set(dst, Value::String(ZyStr::new(printed))),
                         Ok((printed, code)) => self.reg_set(dst, Value::Error(ZyStr::new(format!(
                             "##IO({})",
@@ -4337,9 +4357,15 @@ impl<W: Write> VM<W> {
                             "@~ requires non-negative duration, got {}", n))),
                         other => raise!(VmError::TypeMsg(format!("@~ requires integer milliseconds, got {}", other.type_label()))),
                     };
-                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                    // Under --keys the script's WAIT counts polls, not time (D11).
+                    if self.headless.is_none() {
+                        std::thread::sleep(std::time::Duration::from_millis(ms));
+                    }
                 }
 
+                Instruction::ClearScreen if self.headless.is_some() => {
+                    if let Some(h) = self.headless.as_mut() { h.screen.clear(); }
+                }
                 Instruction::ClearScreen => {
                     crossterm::execute!(std::io::stdout(),
                         crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
@@ -4347,10 +4373,31 @@ impl<W: Write> VM<W> {
                 }
 
                 &Instruction::QueryTerminalSize(dst) => {
-                    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+                    let (cols, rows) = if self.headless.is_some() {
+                        (zymbol_common::vscreen::COLS as u16, zymbol_common::vscreen::ROWS as u16)
+                    } else {
+                        crossterm::terminal::size().unwrap_or((80, 24))
+                    };
                     wreg!(dst, Value::Tuple(std::rc::Rc::new(vec![Value::Int(rows as i64), Value::Int(cols as i64)])));
                 }
 
+                &Instruction::ReadKey(dst, blocking) if self.headless.is_some() => {
+                    let h = self.headless.as_mut().expect("guarded");
+                    let (ch, frames) = if blocking {
+                        h.read_blocking()
+                    } else {
+                        let (k, f) = h.read_poll();
+                        (Some(k), f)
+                    };
+                    for frame in frames {
+                        writeln!(self.output, "{}", frame)?;
+                    }
+                    let ch = match ch {
+                        Some(c) => c,
+                        None => raise!(VmError::Generic(zymbol_common::vscreen::OUT_OF_KEYS.to_string())),
+                    };
+                    wreg!(dst, Value::Char(ch));
+                }
                 &Instruction::ReadKey(dst, blocking) => {
                     use crossterm::event::{self, Event};
                     let ch = if blocking {
@@ -4428,6 +4475,19 @@ impl<W: Write> VM<W> {
                     wreg!(*dst, value);
                 }
 
+                Instruction::PrintAt(r_pos, item_regs) if self.headless.is_some() => {
+                    // Position and text on the virtual screen; no styles (D11).
+                    let pos_val = rreg!(*r_pos).clone();
+                    let (fila, col, _bks, _fg, _bg) = vm_extract_pos(pos_val);
+                    let text: String = item_regs.iter()
+                        .map(|&r| self.numeral_repr(rreg!(r)))
+                        .collect();
+                    let h = self.headless.as_mut().expect("guarded");
+                    if let (Some(r), Some(c)) = (fila, col) {
+                        h.screen.move_to(r as i64, c as i64);
+                    }
+                    h.screen.write(&text);
+                }
                 Instruction::PrintAt(r_pos, item_regs) => {
                     let pos_val = rreg!(*r_pos).clone();
                     let (fila, col, bks, fg, bg) = vm_extract_pos(pos_val);
@@ -4462,6 +4522,17 @@ impl<W: Write> VM<W> {
                     std::io::stdout().flush().ok();
                 }
 
+                Instruction::EnterTui if self.headless.is_some() => {
+                    // --keys: no terminal is taken over (D11).
+                    if let Some(h) = self.headless.as_mut() { h.screen.clear(); }
+                    self.headless_tui += 1;
+                }
+                Instruction::ExitTui if self.headless_tui > 0 => {
+                    self.headless_tui -= 1;
+                    let frame = self.headless.as_ref().map(|h| h.screen.frame()).unwrap_or_default();
+                    writeln!(self.output, "{}", frame)?;
+                    self.output.flush()?;
+                }
                 Instruction::EnterTui => {
                     // The language's words when there is no terminal, as in the
                     // tree-walker and zyjs (P4-3 E5, 2026-09-26).

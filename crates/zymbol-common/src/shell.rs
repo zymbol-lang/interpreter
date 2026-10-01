@@ -354,3 +354,43 @@ pub fn failure_text(output: &std::process::Output) -> String {
         err.into_owned()
     }
 }
+
+/// What is written inside `</ … />`: the path, whether it was quoted, and the
+/// arguments after it (D10, 2026-09-30). Words are separated by blanks; a word
+/// in double quotes may contain blanks, and loses the quotes. Everything is
+/// literal — the path because `zymbol package` and AGT-3 read it without
+/// running anything, the arguments because they are written the way a command
+/// line is. With no arguments the subscript inherits its caller's, as before.
+///
+/// One reader for the parser and the packager, so the two cannot disagree about
+/// which word is the file.
+pub fn split_execute(raw: &str) -> (String, bool, Vec<String>) {
+    let mut words: Vec<(String, bool)> = Vec::new();
+    let mut chars = raw.trim().chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        if c == '"' {
+            chars.next();
+            let mut w = String::new();
+            for ch in chars.by_ref() {
+                if ch == '"' { break; }
+                w.push(ch);
+            }
+            words.push((w, true));
+        } else {
+            let mut w = String::new();
+            while let Some(&ch) = chars.peek() {
+                if ch.is_whitespace() { break; }
+                w.push(ch);
+                chars.next();
+            }
+            words.push((w, false));
+        }
+    }
+    let mut it = words.into_iter();
+    let (path, quoted) = it.next().unwrap_or_default();
+    (path, quoted, it.map(|(w, _)| w).collect())
+}
