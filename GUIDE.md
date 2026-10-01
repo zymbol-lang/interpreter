@@ -836,6 +836,37 @@ Enters a full-screen TUI context: alternate screen + raw mode. Cleans up on exit
 > `>>|` errors if the process is not attached to a TTY (e.g. redirected output).
 > Use it only for interactive programs.
 
+### Testing a full-screen program — `zymbol run --keys`
+
+A full-screen program can be run with no terminal at all, from a script of keys:
+
+```bash
+zymbol run app.zy --keys app.keys
+```
+
+`>>|` then draws on a virtual screen of 24 rows by 80 columns instead of taking
+over the terminal, `>>?` answers `(24, 80)`, `<<|` and `<<|?` read the keys from
+the file, `@~` does not wait, and when the block ends its **last frame** is
+written to the output as plain text — styles and colours dropped, columns as a
+terminal lays them out. So the screen can be held in a golden, and a test can
+say what a person would have seen.
+
+The key file has one step per line (blank lines and `#` comments are ignored):
+
+| line | what the program receives |
+|---|---|
+| a single character | that character |
+| `SPACE` `ENTER` `ESC` `TAB` `BACKSPACE` | `' '`, `'\n'`, 27, `'\t'`, 127 — as a real keyboard gives them |
+| `UP` `DOWN` `LEFT` `RIGHT` | `↑` `↓` `←` `→` |
+| `CTRL+S` | the control character, 19 |
+| `WAIT 10` | the next ten `<<|?` find no key — a running loop advances by polls, not by a clock |
+| `SHOW` | the current frame is written to the output — a menu the last frame no longer shows |
+
+A blocking `<<|` with no key left is an error (`--keys: the key script ran out
+while the program waited for a key`): in a test, a program waiting for a key
+nobody wrote has failed, not stalled. Without `--keys`, `>>|` with no terminal
+still fails — the virtual screen is asked for, never guessed.
+
 ---
 
 ## 4. Variables and Constants
@@ -5163,6 +5194,18 @@ Executes another Zymbol script and captures its output:
 output = </ ./subscript.zy />
 >> output
 ```
+
+**Arguments.** The words after the path are the subscript's command line — what
+its `><` reads — written as a shell line is written, and literal like the path:
+
+```zymbol
+lista = </ ./app.zy -L es --list />
+malo  = </ ./app.zy -R "B3 S23" -b />      // a quoted word may hold blanks
+```
+
+With no words after the path, the subscript inherits its caller's arguments. The
+path stays literal on purpose: `zymbol package` reads which files a program can
+reach without running it.
 
 A subscript that **gives** a status other than 0 (`<~ 3` at its top level) returns
 a soft `##IO` error, `##IO(exit 3: <what it printed>)`, read back as above. A

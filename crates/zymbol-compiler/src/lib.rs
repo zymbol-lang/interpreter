@@ -2487,9 +2487,14 @@ impl Compiler {
                 // command, `zymbol run "<path>"`, which ran whatever `zymbol`
                 // was first on the PATH, always in the tree-walker, and let a
                 // `"` in the path out of its quotes.
-                let idx = self.intern_string(&abs_path);
+                // The first part is the path; the rest are the subscript's
+                // arguments, one literal each (D10).
+                let mut parts = vec![BuildPart::Lit(self.intern_string(&abs_path))];
+                for arg in &exec.args {
+                    parts.push(BuildPart::Lit(self.intern_string(arg)));
+                }
                 let dst = ctx.alloc_temp()?;
-                ctx.emit(Instruction::Execute(dst, vec![BuildPart::Lit(idx)]));
+                ctx.emit(Instruction::Execute(dst, parts));
                 ctx.set_reg_type(dst, StaticType::String);
                 Ok(dst)
             }

@@ -22,6 +22,13 @@ impl<W: Write> Interpreter<W> {
         for expr in &output.exprs {
             let value = self.eval_expr(expr)?;
             let s = self.format_value(&value);
+            // Inside `>>|` under --keys the text lands on the virtual screen.
+            if self.tui_depth > 0 {
+                if let Some(h) = self.headless.as_mut() {
+                    h.screen.write(&s);
+                    continue;
+                }
+            }
             write!(self.output, "{}", s)?;
         }
         // In TUI mode (raw mode active) stdout is line-buffered: text without \n stays
@@ -34,6 +41,12 @@ impl<W: Write> Interpreter<W> {
 
     /// Execute newline statement: ¶ OR \\
     pub(crate) fn execute_newline(&mut self, _newline: &Newline) -> Result<()> {
+        if self.tui_depth > 0 {
+            if let Some(h) = self.headless.as_mut() {
+                h.screen.write("\n");
+                return Ok(());
+            }
+        }
         // In raw mode (inside >>| TUI block) \n alone doesn't return to col 1 — need \r\n.
         if self.tui_depth > 0 {
             write!(self.output, "\r\n")?;
@@ -131,6 +144,10 @@ impl<W: Write> Interpreter<W> {
 
     /// Clear screen: >>!
     pub(crate) fn execute_clear_screen(&mut self, cs: &ClearScreen) -> Result<()> {
+        if let Some(h) = self.headless.as_mut() {
+            h.screen.clear();
+            return Ok(());
+        }
         crossterm::execute!(
             std::io::stdout(),
             crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
@@ -147,13 +164,35 @@ impl<W: Write> Interpreter<W> {
     /// returned a size under the other; identical in a real terminal, so the
     /// parity suite never saw it until it ran inside a container.
     pub(crate) fn eval_terminal_size(&mut self, _span: Span) -> Result<Value> {
-        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let (cols, rows) = if self.headless.is_some() {
+            (zymbol_common::vscreen::COLS as u16, zymbol_common::vscreen::ROWS as u16)
+        } else {
+            crossterm::terminal::size().unwrap_or((80, 24))
+        };
         Ok(Value::tuple(vec![Value::Int(rows as i64), Value::Int(cols as i64)]))
     }
 
     /// Blocking / non-blocking key input: <<| var  or  <<|? var
     pub(crate) fn execute_key_input(&mut self, ki: &KeyInput) -> Result<()> {
         use crossterm::event::{self, Event};
+        // Under --keys the keys come from the script (D11).
+        if let Some(h) = self.headless.as_mut() {
+            let (ch, frames) = if ki.blocking {
+                let (k, f) = h.read_blocking();
+                (k, f)
+            } else {
+                let (k, f) = h.read_poll();
+                (Some(k), f)
+            };
+            for frame in frames {
+                writeln!(self.output, "{}", frame)?;
+            }
+            let ch = ch.ok_or_else(|| RuntimeError::Generic {
+                message: zymbol_common::vscreen::OUT_OF_KEYS.to_string(), span: ki.span,
+            })?;
+            self.set_variable(&ki.variable, Value::Char(ch));
+            return Ok(());
+        }
         let ch = if ki.blocking {
             loop {
                 match event::read().map_err(|e| RuntimeError::Generic {
@@ -208,8 +247,20 @@ impl<W: Write> Interpreter<W> {
                         match items.get(i) { Some(Value::Int(n)) => Some(*n), _ => None }
                     };
                     if let (Some(r), Some(c)) = (get_int(0), get_int(1)) {
-                        execute!(std::io::stdout(), cursor::MoveTo(c as u16 - 1, r as u16 - 1))
-                            .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
+                        if let Some(h) = self.headless.as_mut() {
+                            h.screen.move_to(r, c);
+                        } else {
+                            execute!(std::io::stdout(), cursor::MoveTo(c as u16 - 1, r as u16 - 1))
+                                .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
+                        }
+                    }
+                    if self.headless.is_some() {
+                        for item in &op.items {
+                            let v = self.eval_expr(item)?;
+                            let s = self.format_value(&v);
+                            if let Some(h) = self.headless.as_mut() { h.screen.write(&s); }
+                        }
+                        return Ok(());
                     }
                     let bks = get_int(2).unwrap_or(0);
                     let mut styled = false;
@@ -256,6 +307,20 @@ impl<W: Write> Interpreter<W> {
 
         let get = |i: usize| vals.get(i).copied().flatten();
 
+        // Under --keys: position and text on the virtual screen; a frame is
+        // read for what it says, so styles and colours are not kept (D11).
+        if self.headless.is_some() {
+            if let (Some(r), Some(c)) = (get(0), get(1)) {
+                if let Some(h) = self.headless.as_mut() { h.screen.move_to(r, c); }
+            }
+            for expr in &op.items {
+                let v = self.eval_expr(expr)?;
+                let s = self.format_value(&v);
+                if let Some(h) = self.headless.as_mut() { h.screen.write(&s); }
+            }
+            return Ok(());
+        }
+
         if let (Some(r), Some(c)) = (get(0), get(1)) {
             execute!(std::io::stdout(), cursor::MoveTo(c as u16 - 1, r as u16 - 1))
                 .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
@@ -292,6 +357,23 @@ impl<W: Write> Interpreter<W> {
     /// TUI block: >>| { } — alternate screen + raw mode
     pub(crate) fn execute_tui_block(&mut self, tb: &TuiBlock) -> Result<()> {
         use crossterm::{execute, terminal, cursor};
+        // --keys (D11): no terminal is taken over. The block draws on the
+        // virtual screen, and its last frame is written to the output when it
+        // ends. Only when it ends normally: a block that fails is reported by
+        // its error, and the VM, which unwinds past the end of the block, could
+        // not print a frame there — the two engines must agree.
+        if self.headless.is_some() {
+            if let Some(h) = self.headless.as_mut() { h.screen.clear(); }
+            self.tui_depth += 1;
+            let result = self.execute_block(&tb.body);
+            self.tui_depth -= 1;
+            if result.is_ok() {
+                let frame = self.headless.as_ref().map(|h| h.screen.frame()).unwrap_or_default();
+                writeln!(self.output, "{}", frame)?;
+                self.output.flush()?;
+            }
+            return result;
+        }
         // Without a terminal on both ends the refusal is the language's, not the
         // operating system's — `No such device or address (os error 6)` here is
         // something else on Windows. zyjs says the same (P4-3 E5, 2026-09-26).

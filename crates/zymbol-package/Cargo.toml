@@ -12,6 +12,8 @@ description = "Zymbol Package (.zyp): manifest parsing, transitive-dependency cl
 # -compiler/-vm and their transitive deps (clap, tokio, odbc-api, ...). That keeps it
 # usable from a future package manager or the LSP without dragging in the CLI's world.
 zymbol-ast.workspace = true
+# For `shell::split_execute`: the one reader of `</ path args… />` (D10).
+zymbol-common.workspace = true
 zymbol-span.workspace = true
 zymbol-lexer.workspace = true
 zymbol-parser.workspace = true

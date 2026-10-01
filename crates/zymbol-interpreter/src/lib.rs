@@ -693,7 +693,10 @@ impl Value {
 /// or the failure as `zymbol run` writes it.
 /// Runs a subscript: its printed output and the exit status it gave, or the
 /// text of a failure.
-pub type SubscriptRunner = std::rc::Rc<dyn Fn(&std::path::Path) -> std::result::Result<(String, i32), String>>;
+///
+/// The arguments are the words after the path (D10); an empty slice means the
+/// subscript inherits its caller's command line.
+pub type SubscriptRunner = std::rc::Rc<dyn Fn(&std::path::Path, &[String]) -> std::result::Result<(String, i32), String>>;
 
 pub struct Interpreter<W: Write> {
     output: W,
@@ -788,6 +791,9 @@ pub struct Interpreter<W: Write> {
     try_depth: u8,
     /// Depth of active >>| TUI blocks. When > 0, raw mode is active and ¶/\\ must emit \r\n.
     pub(crate) tui_depth: u8,
+    /// `zymbol run --keys` (D11): the screen `>>|` draws on and the keys `<<|`
+    /// reads, when there is no terminal to take over. `None` is the ordinary run.
+    pub(crate) headless: Option<zymbol_common::vscreen::Headless>,
     /// TCO support: name of the currently executing function (None = not in a function).
     /// Used to detect `<~ f(same_args)` tail-call patterns.
     pub(crate) current_function: Option<String>,
@@ -1283,6 +1289,7 @@ impl Interpreter<std::io::Stdout> {
             module_var_mentions: HashMap::new(),
             try_depth: 0,
             tui_depth: 0,
+            headless: None,
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),
@@ -1341,6 +1348,7 @@ impl<W: Write> Interpreter<W> {
             module_var_mentions: HashMap::new(),
             try_depth: 0,
             tui_depth: 0,
+            headless: None,
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),
@@ -1465,6 +1473,12 @@ impl<W: Write> Interpreter<W> {
     /// Install the runner for `</ file />` (GLB-017 I).
     pub fn set_subscript_runner(&mut self, runner: SubscriptRunner) {
         self.subscript_runner = Some(runner);
+    }
+
+    /// `zymbol run --keys FILE` (D11): `>>|` draws on a virtual screen, `<<|`
+    /// reads these keys, and each block's last frame goes to the output.
+    pub fn set_keys(&mut self, keys: zymbol_common::vscreen::KeyScript) {
+        self.headless = Some(zymbol_common::vscreen::Headless::new(keys));
     }
 
     pub fn set_cli_args(&mut self, args: Vec<String>) {
