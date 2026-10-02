@@ -1136,6 +1136,46 @@ impl TypeChecker {
                      as a parameter, never by being in view — pass '{}' as one", name)));
     }
 
+    /// Check for type consistency on reassignment - this is a WARNING
+    ///
+    /// Unit on either side is not a change of type (GLB-043, decided
+    /// 2026-09-25): emptying a variable with `##_`, or filling one that
+    /// started empty, is the ordinary use of an absent value. What the
+    /// new value is compared with is the last type that was not Unit.
+    ///
+    /// A name that lives on the other side of a function's boundary
+    /// is not this assignment's: writing it inside a function makes a
+    /// local (MEM-2), so there is no earlier type to compare with.
+    /// It compared the function's `x` with the file's (GLB-058).
+    ///
+    /// `m = …` asks it, and so does `@ m:…` over a visible `m`, which writes
+    /// the same variable (MEM-7, ERROR-GOL-017).
+    fn warn_type_change(&mut self, name: &str, value_type: &ZymbolType, span: Span) {
+        let existing = if self.crosses_strong_boundary(name) {
+            None
+        } else {
+            self.env.lookup_var(name).cloned()
+        };
+        if let Some(existing_type) = existing {
+            let was = if existing_type == ZymbolType::Unit {
+                self.env.last_real_type(name).cloned()
+            } else {
+                Some(existing_type)
+            };
+            if let Some(was) = was {
+                if *value_type != ZymbolType::Unit && !was.is_compatible_with(value_type) {
+                    self.warnings.push(
+                        Diagnostic::warning(format!(
+                            "type mismatch: '{}' was {} but assigned {}",
+                            name, was.name(), value_type.name()
+                        ))
+                        .with_span(span)
+                    );
+                }
+            }
+        }
+    }
+
     /// Whether `name`, visible here, belongs to a scope outside the innermost
     /// strong environment — the crossing MEM-2 forbids, for a read and for `\`.
     fn crosses_strong_boundary(&self, name: &str) -> bool {
@@ -1309,40 +1349,7 @@ impl TypeChecker {
                     return;
                 }
 
-                // Check for type consistency on reassignment - this is a WARNING
-                //
-                // Unit on either side is not a change of type (GLB-043, decided
-                // 2026-09-25): emptying a variable with `##_`, or filling one that
-                // started empty, is the ordinary use of an absent value. What the
-                // new value is compared with is the last type that was not Unit.
-                //
-                // A name that lives on the other side of a function's boundary
-                // is not this assignment's: writing it inside a function makes a
-                // local (MEM-2), so there is no earlier type to compare with.
-                // It compared the function's `x` with the file's (GLB-058).
-                let existing = if self.crosses_strong_boundary(&assign.name) {
-                    None
-                } else {
-                    self.env.lookup_var(&assign.name).cloned()
-                };
-                if let Some(existing_type) = existing {
-                    let was = if existing_type == ZymbolType::Unit {
-                        self.env.last_real_type(&assign.name).cloned()
-                    } else {
-                        Some(existing_type)
-                    };
-                    if let Some(was) = was {
-                        if value_type != ZymbolType::Unit && !was.is_compatible_with(&value_type) {
-                            self.warnings.push(
-                                Diagnostic::warning(format!(
-                                    "type mismatch: '{}' was {} but assigned {}",
-                                    assign.name, was.name(), value_type.name()
-                                ))
-                                .with_span(assign.span)
-                            );
-                        }
-                    }
-                }
+                self.warn_type_change(&assign.name, &value_type, assign.span);
 
                 self.env.note_real_type(&assign.name, &value_type);
                 self.env.define_var(&assign.name, value_type);
@@ -1609,6 +1616,11 @@ impl TypeChecker {
                         );
                     } else {
                         self.check_alias_name(iter_var, loop_stmt.span, "variable");
+                        // A visible `m` is the variable the loop writes, so a
+                        // change of type is the same change `m = …` warns about
+                        // (ERROR-GOL-017).
+                        self.warn_type_change(iter_var, &iter_type, loop_stmt.span);
+                        self.env.note_real_type(iter_var, &iter_type);
                         self.env.define_var(iter_var, iter_type);
                     }
                 }
