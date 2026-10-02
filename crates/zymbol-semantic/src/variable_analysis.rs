@@ -381,6 +381,22 @@ impl VariableAnalyzer {
         }
     }
 
+    /// A loop iterator binds the way `m = …` binds a visible name: a name in
+    /// view is assigned, and any other is declared inside the loop (MEM-7 —
+    /// one name, one thing; ERROR-GOL-017).
+    ///
+    /// In view, not merely known: `variables` keeps every name the file ever
+    /// declared, so two sibling loops over `i` would make the second assign the
+    /// first loop's `i`, which is gone — and the two unused iterators, one
+    /// warning per site since GLB-003, would come out as one.
+    fn bind_iterator(&mut self, name: &str, span: Span) {
+        if self.current_scope_vars.iter().any(|scope| scope.contains(name)) {
+            self.assign_variable(name, span);
+        } else {
+            self.declare_variable(name.to_string(), span, false);
+        }
+    }
+
     /// Analyze a statement
     fn analyze_statement(&mut self, stmt: &Statement) {
         match stmt {
@@ -486,9 +502,14 @@ impl VariableAnalyzer {
                 // Enter loop body scope first
                 self.enter_scope();
 
-                // If it's a for-each loop, the iterator variable is declared INSIDE the loop scope
+                // The iterator binds like `m = …`: a new name is declared
+                // inside the loop scope, and a name already visible is
+                // ASSIGNED — the block has no namespace of its own (MEM-7), and
+                // every engine writes the outer `m`. Declaring it here as well
+                // retired the outer variable and reported it unused while the
+                // program read it after the loop (ERROR-GOL-017).
                 //
-                // Unless it names a constant: the type checker refuses that loop
+                // A constant is neither: the type checker refuses that loop
                 // (D5), so the iterator never exists, and declaring it anyway
                 // retired the constant and reported it unused while the program
                 // read it (GLB-056, step P4.7) — the same reason `ConstDecl`
@@ -499,18 +520,14 @@ impl VariableAnalyzer {
                         .get(iterator_var)
                         .is_some_and(|v| v.is_const);
                     if !is_const {
-                        self.declare_variable(
-                            iterator_var.clone(),
-                            loop_stmt.span,
-                            false,
-                        );
+                        self.bind_iterator(iterator_var, loop_stmt.span);
                     }
                 }
-                // `@ (k, v):pares` declares every name its pattern binds, the
-                // same way a single iterator name is declared.
+                // `@ (k, v):pares` binds every name its pattern names, the
+                // same way a single iterator name is bound.
                 if let Some(pattern) = &loop_stmt.iterator_pattern {
                     for name in pattern.bound_names() {
-                        self.declare_variable(name, loop_stmt.span, false);
+                        self.bind_iterator(&name, loop_stmt.span);
                     }
                 }
 
