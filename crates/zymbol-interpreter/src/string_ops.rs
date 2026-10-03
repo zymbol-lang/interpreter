@@ -99,60 +99,18 @@ impl<W: Write> Interpreter<W> {
         };
 
         // Pattern can be String or Char
-        let result = match pattern_value {
-            Value::String(ref pattern) => {
-                if pattern.is_empty() {
-                    // Empty pattern - return original string
-                    return Ok(Value::String(string));
-                }
-
-                // Perform replacement
-                if let Some(max) = max_replacements {
-                    // Replace first N occurrences
-                    let mut result = string.clone();
-                    let mut count = 0;
-                    while count < max {
-                        if let Some(pos) = result.find(pattern) {
-                            // Replace this occurrence
-                            let before = &result[0..pos];
-                            let after = &result[pos + pattern.len()..];
-                            result = format!("{}{}{}", before, replacement, after);
-                            count += 1;
-                        } else {
-                            break; // No more occurrences
-                        }
-                    }
-                    result
-                } else {
-                    // Replace all occurrences
-                    string.replace(pattern, &replacement)
-                }
+        let pattern = match pattern_value {
+            // An empty pattern is refused (GLB-078/079, decided 2026-10-03):
+            // where it "occurs" is a choice each host library makes differently.
+            Value::String(ref p) if p.is_empty() => {
+                return Err(RuntimeError::kinded(
+                    "Index",
+                    "$~~ pattern must not be empty",
+                    op.span,
+                ));
             }
-            Value::Char(ch) => {
-                // Convert char to string and replace
-                let pattern_str = ch.to_string();
-
-                if let Some(max) = max_replacements {
-                    // Replace first N occurrences
-                    let mut result = string.clone();
-                    let mut count = 0;
-                    while count < max {
-                        if let Some(pos) = result.find(&pattern_str) {
-                            // Replace this occurrence
-                            let before = &result[0..pos];
-                            let after = &result[pos + pattern_str.len()..];
-                            result = format!("{}{}{}", before, replacement, after);
-                            count += 1;
-                        } else {
-                            break; // No more occurrences
-                        }
-                    }
-                    result
-                } else {
-                    // Replace all occurrences
-                    string.replace(&pattern_str, &replacement)
-                }
-            }
+            Value::String(ref p) => p.clone(),
+            Value::Char(ch) => ch.to_string(),
             _ => {
                 return Err(RuntimeError::kinded(
                     "Type",
@@ -160,6 +118,14 @@ impl<W: Write> Interpreter<W> {
                     op.span,
                 ))
             }
+        };
+
+        // Left to right, never looking again at text already replaced: the
+        // first-N form searched from the start each time, so `"hello"$~~["l":"Ll":2]`
+        // found the `l` it had just written and gave `heLLllo` (GLB-084).
+        let result = match max_replacements {
+            Some(max) => string.replacen(pattern.as_str(), &replacement, max),
+            None => string.replace(pattern.as_str(), &replacement),
         };
 
         Ok(Value::String(result))
@@ -210,6 +176,11 @@ impl<W: Write> Interpreter<W> {
 
         let parts: Vec<Value> = match delimiter_value {
             Value::Char(c) => string.split(c).map(|p| Value::String(p.to_string())).collect(),
+            Value::String(ref s) if s.is_empty() => return Err(RuntimeError::kinded(
+                "Index",
+                "$/ delimiter must not be empty",
+                op.span,
+            )),
             Value::String(ref s) => string.split(s.as_str()).map(|p| Value::String(p.to_string())).collect(),
             _ => return Err(RuntimeError::kinded(
                 "Type",

@@ -2811,6 +2811,8 @@ impl<W: Write> VM<W> {
                                 let c = *c;
                                 s.split(c).map(|p| Value::String(ZyStr::from_str_ref(p))).collect()
                             }
+                            // An empty delimiter is refused (GLB-079, decided 2026-10-03).
+                            (Value::String(_), Value::String(sep)) if sep.is_empty() => raise!(VmError::IndexMsg("$/ delimiter must not be empty".to_string())),
                             (Value::String(s), Value::String(sep)) => {
                                 let sep = sep.clone();
                                 s.split(sep.as_str()).map(|p| Value::String(ZyStr::from_str_ref(p))).collect()
@@ -2828,6 +2830,8 @@ impl<W: Write> VM<W> {
                         let sep_v = &self.value_stack[base + sep_reg as usize];
                         match (s_v, sep_v) {
                             (Value::String(s), Value::Char(c))   => intrinsics::split::count(s.as_str(), *c),
+                            // An empty delimiter is refused (GLB-079, decided 2026-10-03).
+                            (Value::String(_), Value::String(sep)) if sep.is_empty() => raise!(VmError::IndexMsg("$/ delimiter must not be empty".to_string())),
                             (Value::String(s), Value::String(sep)) => intrinsics::split::count_str(s.as_str(), sep.as_str()),
                             (Value::String(_), o) => raise!(VmError::TypeMsg(format!("$/ delimiter must be a char or string, got {}", o.type_label()))),
                             (o, _) => raise!(VmError::TypeMsg(format!("$/ requires a string on the left, got {}", o.type_label()))),
@@ -2842,6 +2846,8 @@ impl<W: Write> VM<W> {
                         let sep_v = &self.value_stack[base + sep_reg as usize];
                         match (s_v, sep_v) {
                             (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            // An empty delimiter is refused (GLB-079, decided 2026-10-03).
+                            (Value::String(_), Value::String(sep)) if sep.is_empty() => raise!(VmError::IndexMsg("$/ delimiter must not be empty".to_string())),
                             (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
                             (Value::String(_), o) => raise!(VmError::TypeMsg(format!("$/ delimiter must be a char or string, got {}", o.type_label()))),
                             (o, _) => raise!(VmError::TypeMsg(format!("$/ requires a string on the left, got {}", o.type_label()))),
@@ -2877,6 +2883,8 @@ impl<W: Write> VM<W> {
                         let sep_v = &self.value_stack[base + sep_reg as usize];
                         match (s_v, sep_v) {
                             (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            // An empty delimiter is refused (GLB-079, decided 2026-10-03).
+                            (Value::String(_), Value::String(sep)) if sep.is_empty() => raise!(VmError::IndexMsg("$/ delimiter must not be empty".to_string())),
                             (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
                             (Value::String(_), o) => raise!(VmError::TypeMsg(format!("$/ delimiter must be a char or string, got {}", o.type_label()))),
                             (o, _) => raise!(VmError::TypeMsg(format!("$/ requires a string on the left, got {}", o.type_label()))),
@@ -2918,6 +2926,8 @@ impl<W: Write> VM<W> {
                         let sep_v = &self.value_stack[base + sep_reg as usize];
                         match (s_v, sep_v) {
                             (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            // An empty delimiter is refused (GLB-079, decided 2026-10-03).
+                            (Value::String(_), Value::String(sep)) if sep.is_empty() => raise!(VmError::IndexMsg("$/ delimiter must not be empty".to_string())),
                             (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
                             (Value::String(_), o) => raise!(VmError::TypeMsg(format!("$/ delimiter must be a char or string, got {}", o.type_label()))),
                             (o, _) => raise!(VmError::TypeMsg(format!("$/ requires a string on the left, got {}", o.type_label()))),
@@ -3088,26 +3098,36 @@ impl<W: Write> VM<W> {
                                         .map(|(i, _)| Value::Int((i + 1) as i64))
                                         .collect()
                                 } else {
-                                    s.char_indices()
+                                    // The position of each match, not its ordinal:
+                                    // `.filter().enumerate()` numbered the matches,
+                                    // and `"ñaña"$?? 'a'` gave [1, 2] (GLB-083).
+                                    s.chars().enumerate()
                                         .filter(|(_, ch)| *ch == c)
-                                        .enumerate()
                                         .map(|(ci, _)| Value::Int((ci + 1) as i64))
                                         .collect()
                                 }
                             }
+                            // An empty pattern is refused (GLB-078, decided 2026-10-03).
+                            (Value::String(_), Value::String(pat)) if pat.is_empty() => {
+                                raise!(VmError::IndexMsg("$?? pattern must not be empty".to_string()))
+                            }
                             (Value::String(s), Value::String(pat)) => {
-                                let pat = pat.clone();
-                                if s.is_ascii() {
+                                // Every position the pattern starts at, overlapping —
+                                // the tree-walker's answer (GLB-081, decided
+                                // 2026-10-03). `match_indices` skipped the overlaps,
+                                // so `"aaa"$?? "aa"` gave [1].
+                                if s.is_ascii() && pat.is_ascii() {
                                     // ASCII fast path: byte_offset == char_offset
-                                    s.match_indices(pat.as_str())
-                                        .map(|(bi, _)| Value::Int((bi + 1) as i64))
+                                    s.as_bytes().windows(pat.len()).enumerate()
+                                        .filter(|(_, w)| *w == pat.as_bytes())
+                                        .map(|(i, _)| Value::Int((i + 1) as i64))
                                         .collect()
                                 } else {
-                                    // Unicode: build char-index map: byte_offset → char_index
-                                    let char_idx: std::collections::HashMap<usize, usize> =
-                                        s.char_indices().enumerate().map(|(ci, (bi, _))| (bi, ci)).collect();
-                                    s.match_indices(pat.as_str())
-                                        .filter_map(|(bi, _)| char_idx.get(&bi).map(|&ci| Value::Int((ci + 1) as i64)))
+                                    let chars: Vec<char> = s.chars().collect();
+                                    let pat: Vec<char> = pat.chars().collect();
+                                    chars.windows(pat.len()).enumerate()
+                                        .filter(|(_, w)| *w == pat.as_slice())
+                                        .map(|(ci, _)| Value::Int((ci + 1) as i64))
                                         .collect()
                                 }
                             }
@@ -3214,6 +3234,8 @@ impl<W: Write> VM<W> {
                             other => raise!(VmError::TypeMsg(format!("$~~ replacement must be a string, got {}", other.type_label()))),
                         };
                         match &self.value_stack[base + pat_reg as usize] {
+                            // An empty pattern is refused (GLB-078/079, decided 2026-10-03).
+                            Value::String(pat) if pat.is_empty() => raise!(VmError::IndexMsg("$~~ pattern must not be empty".to_string())),
                             Value::String(pat) => s.replace(pat.as_str(), rep.as_str()),
                             Value::Char(c) => s.replace(*c, rep.as_str()),
                             other => raise!(VmError::TypeMsg(format!("$~~ pattern must be a string or char, got {}", other.type_label()))),
@@ -3247,6 +3269,7 @@ impl<W: Write> VM<W> {
                         #[derive(Copy, Clone)]
                         enum Pat<'a> { Ch(char), Str(&'a str) }
                         let pat = match &self.value_stack[base + pat_reg as usize] {
+                            Value::String(p) if p.is_empty() => raise!(VmError::IndexMsg("$~~ pattern must not be empty".to_string())),
                             Value::String(p) => Pat::Str(p.as_str()),
                             Value::Char(c) => Pat::Ch(*c),
                             other => raise!(VmError::TypeMsg(format!("$~~ pattern must be a string or char, got {}", other.type_label()))),
