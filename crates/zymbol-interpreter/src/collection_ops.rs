@@ -922,6 +922,25 @@ impl<W: Write> Interpreter<W> {
 
     /// Evaluate collection sort: collection$^+ or collection$^-
     /// Natural order for numbers/strings; custom comparator (a, b) -> Bool for named tuples.
+    /// Ask a `$^` comparator whether `a` goes before `b`. It answers a Bool;
+    /// anything else is a `##Type` (GLB-024 — no truthiness stands in for one).
+    fn sort_comparator_says(
+        &mut self,
+        func: &crate::FunctionValue,
+        a: Value,
+        b: Value,
+        span: zymbol_span::Span,
+    ) -> Result<bool> {
+        match self.eval_lambda_call(func.clone(), vec![a, b], &span)? {
+            Value::Bool(b) => Ok(b),
+            other => Err(RuntimeError::kinded(
+                "Type",
+                format!("sort comparator must return a Bool, got {}", other.type_ident()),
+                span,
+            )),
+        }
+    }
+
     pub(crate) fn eval_collection_sort(&mut self, op: &zymbol_ast::CollectionSortExpr) -> Result<Value> {
         let collection = self.eval_expr(&op.collection)?;
 
@@ -939,32 +958,20 @@ impl<W: Write> Interpreter<W> {
                             span: op.span,
                         }),
                     };
-                    // Bubble sort — stable, correct for small arrays; avoids unsafe sort_by
+                    // Bubble sort, stable (GLB-073, decided 2026-10-03): a pair is
+                    // swapped only when the first does NOT go before the second AND
+                    // the second goes before the first. A strict comparator (`a < b`)
+                    // answers #0 both ways on a tie, and swapping on the first #0
+                    // alone scrambled ties; the second question leaves them in their
+                    // input order, and a non-strict one (`a <= b`) stays as it was.
                     let n = items.len();
                     for i in 0..n {
                         for j in 0..n.saturating_sub(i + 1) {
-                            let keep = self.eval_lambda_call(
-                                func.clone(),
-                                vec![items[j].clone(), items[j + 1].clone()],
-                                &op.span,
-                            )?;
-                            // A comparator answers a Bool. Anything else used
-                            // to read as false here and as truthy in the VM,
-                            // three orders for one program (GLB-024).
-                            let a_before_b = match keep {
-                                Value::Bool(b) => b,
-                                // The kind is `##Type`, decided 2026-09-15: a wrong
-                                // TYPE (D1), not a wrong value.
-                                other => return Err(RuntimeError::kinded(
-                                    "Type",
-                                    format!(
-                                        "sort comparator must return a Bool, got {}",
-                                        other.type_ident()
-                                    ),
-                                    op.span,
-                                )),
-                            };
-                            if !a_before_b {
+                            let (x, y) = (items[j].clone(), items[j + 1].clone());
+                            if self.sort_comparator_says(&func, x.clone(), y.clone(), op.span)? {
+                                continue;
+                            }
+                            if self.sort_comparator_says(&func, y, x, op.span)? {
                                 Rc::make_mut(&mut items).swap(j, j + 1);
                             }
                         }

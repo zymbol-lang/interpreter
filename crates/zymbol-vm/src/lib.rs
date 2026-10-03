@@ -3571,25 +3571,33 @@ impl<W: Write> VM<W> {
                             items.reverse();
                         }
                     } else {
-                        // Custom comparator: bubble sort to avoid unsafe borrow
+                        // Custom comparator: bubble sort, stable (GLB-073, decided
+                        // 2026-10-03) — swap only when the first does NOT go before the
+                        // second AND the second goes before the first, the tree-walker's
+                        // rule. A strict comparator answers #0 both ways on a tie.
                         let callable = self.reg_get(func_reg).clone();
                         let n = items.len();
                         let outcome: Result<(), VmError> = 'calls: {
                             for i in 0..n {
                                 for j in 0..n.saturating_sub(i + 1) {
-                                    let keep = match self.call_callable(
-                                        callable.clone(),
-                                        vec![items[j].clone(), items[j + 1].clone()],
-                                        program,
-                                    ) {
-                                        // A comparator answers a Bool, and no
-                                        // truthiness stands in for one (GLB-024).
-                                        Ok(Value::Bool(keep)) => keep,
-                                        Ok(other) => break 'calls Err(VmError::TypeMsg(format!(
-                                            "sort comparator must return a Bool, got {}", other.type_name()))),
-                                        Err(e) => break 'calls Err(e),
-                                    };
-                                    if !keep {
+                                    let mut says = [false; 2];
+                                    for (k, (x, y)) in [(j, j + 1), (j + 1, j)].into_iter().enumerate() {
+                                        says[k] = match self.call_callable(
+                                            callable.clone(),
+                                            vec![items[x].clone(), items[y].clone()],
+                                            program,
+                                        ) {
+                                            // A comparator answers a Bool, and no
+                                            // truthiness stands in for one (GLB-024).
+                                            Ok(Value::Bool(b)) => b,
+                                            Ok(other) => break 'calls Err(VmError::TypeMsg(format!(
+                                                "sort comparator must return a Bool, got {}", other.type_name()))),
+                                            Err(e) => break 'calls Err(e),
+                                        };
+                                        // The first goes before the second: no second question.
+                                        if k == 0 && says[0] { break; }
+                                    }
+                                    if !says[0] && says[1] {
                                         items.swap(j, j + 1);
                                     }
                                 }
