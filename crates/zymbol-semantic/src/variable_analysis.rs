@@ -768,6 +768,17 @@ impl VariableAnalyzer {
             Expr::Lambda(lambda) => {
                 self.enter_scope();
 
+                // A parameter shadows an outer name for the body only. Declarations
+                // are indexed by name, so lift the outer entry out and put it back
+                // afterwards — otherwise a read after the lambda (`f(base, 2)`)
+                // lands on the parameter's entry and the outer `base` is reported
+                // unused (GLB-074, the shape of GLB-003).
+                let shadowed: Vec<(String, Option<VariableInfo>)> = lambda
+                    .params
+                    .iter()
+                    .map(|p| (p.clone(), self.variables.remove(p)))
+                    .collect();
+
                 // Lambda parameters are considered used
                 for param in &lambda.params {
                     self.declare_variable(param.clone(), lambda.span, false);
@@ -781,6 +792,13 @@ impl VariableAnalyzer {
                     }
                     zymbol_ast::LambdaBody::Block(block) => {
                         self.analyze_block(block);
+                    }
+                }
+
+                for (name, previous) in shadowed {
+                    self.variables.remove(&name);
+                    if let Some(info) = previous {
+                        self.variables.insert(name, info);
                     }
                 }
 
