@@ -2896,7 +2896,12 @@ impl<W: Write> VM<W> {
                         for part in parts {
                             let v = Value::String(ZyStr::new(part));
                             match self.call_callable(callable.clone(), vec![v.clone()], program) {
-                                Ok(keep) => if keep.is_truthy() { results.push(v); },
+                                // A predicate answers a Bool, and no truthiness stands
+                                // in for one (GLB-080, as the sort comparator, GLB-024).
+                                Ok(Value::Bool(true)) => results.push(v),
+                                Ok(Value::Bool(false)) => {}
+                                Ok(other) => break 'calls Err(VmError::TypeMsg(format!(
+                                    "filter lambda must return boolean, got {}", other.type_label()))),
                                 Err(e) => break 'calls Err(e),
                             }
                         }
@@ -3505,7 +3510,12 @@ impl<W: Write> VM<W> {
                     let outcome: Result<(), VmError> = 'calls: {
                         for elem in arr {
                             match self.call_callable(callable.clone(), vec![elem.clone()], program) {
-                                Ok(keep) => if keep.is_truthy() { results.push(elem); },
+                                // A predicate answers a Bool, and no truthiness stands
+                                // in for one (GLB-080, as the sort comparator, GLB-024).
+                                Ok(Value::Bool(true)) => results.push(elem),
+                                Ok(Value::Bool(false)) => {}
+                                Ok(other) => break 'calls Err(VmError::TypeMsg(format!(
+                                    "filter lambda must return boolean, got {}", other.type_label()))),
                                 Err(e) => break 'calls Err(e),
                             }
                         }
