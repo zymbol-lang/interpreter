@@ -953,13 +953,16 @@ impl<W: Write> Interpreter<W> {
                             // three orders for one program (GLB-024).
                             let a_before_b = match keep {
                                 Value::Bool(b) => b,
-                                other => return Err(RuntimeError::Generic {
-                                    message: format!(
+                                // The kind is `##Type`, decided 2026-09-15: a wrong
+                                // TYPE (D1), not a wrong value.
+                                other => return Err(RuntimeError::kinded(
+                                    "Type",
+                                    format!(
                                         "sort comparator must return a Bool, got {}",
                                         other.type_ident()
                                     ),
-                                    span: op.span,
-                                }),
+                                    op.span,
+                                )),
                             };
                             if !a_before_b {
                                 Rc::make_mut(&mut items).swap(j, j + 1);
