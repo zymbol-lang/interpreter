@@ -1343,10 +1343,21 @@ impl<W: Write> Interpreter<W> {
                     Value::String(ref pattern) => {
                         let pattern_chars: Vec<char> = pattern.chars().collect();
                         if pattern_chars.is_empty() {
-                            return Ok(Value::array(vec![]));
+                            return Err(RuntimeError::kinded(
+                                "Index",
+                                "$?? pattern must not be empty",
+                                op.span,
+                            ));
                         }
+                        // Every position the pattern starts at, overlapping
+                        // (GLB-081, decided 2026-10-03). A pattern longer than the text
+                        // is found nowhere — the range below used to slice past
+                        // the end and panic (GLB-082).
                         let mut positions = Vec::new();
-                        for i in 0..=(string_chars.len().saturating_sub(pattern_chars.len())) {
+                        if pattern_chars.len() > string_chars.len() {
+                            return Ok(Value::array(positions));
+                        }
+                        for i in 0..=(string_chars.len() - pattern_chars.len()) {
                             if string_chars[i..i + pattern_chars.len()] == pattern_chars[..] {
                                 positions.push(Value::Int((i + 1) as i64));
                             }
