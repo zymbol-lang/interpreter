@@ -3459,7 +3459,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-analyzer"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "dashmap 6.2.1",
  "lsp-types 0.94.1",
@@ -3478,7 +3478,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-ast"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "zymbol-common",
  "zymbol-lexer",
@@ -3487,7 +3487,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-bytecode"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "bincode",
  "serde",
@@ -3495,7 +3495,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-cli"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3523,7 +3523,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-common"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "indexmap",
  "unicode-segmentation",
@@ -3532,7 +3532,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-compiler"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "bincode",
  "thiserror 2.0.18",
@@ -3548,7 +3548,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-error"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "owo-colors",
  "thiserror 2.0.18",
@@ -3557,7 +3557,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-formatter"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "thiserror 2.0.18",
  "zymbol-ast",
@@ -3570,7 +3570,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-interpreter"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "base64",
  "crossterm",
@@ -3595,14 +3595,14 @@ dependencies = [
 
 [[package]]
 name = "zymbol-intrinsics"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "time",
 ]
 
 [[package]]
 name = "zymbol-lexer"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "zymbol-common",
  "zymbol-error",
@@ -3611,7 +3611,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-lsp"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "dashmap 6.2.1",
  "lsp-types 0.97.0",
@@ -3627,7 +3627,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-package"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "semver",
  "serde",
@@ -3645,7 +3645,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-parser"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "zymbol-ast",
  "zymbol-common",
@@ -3656,7 +3656,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-repl"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "arboard",
  "assert_cmd",
@@ -3674,7 +3674,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-semantic"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "thiserror 2.0.18",
  "zymbol-ast",
@@ -3687,14 +3687,14 @@ dependencies = [
 
 [[package]]
 name = "zymbol-span"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "unicode-segmentation",
 ]
 
 [[package]]
 name = "zymbol-standalone"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3709,7 +3709,7 @@ dependencies = [
 
 [[package]]
 name = "zymbol-vm"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "base64",
  "crossterm",
