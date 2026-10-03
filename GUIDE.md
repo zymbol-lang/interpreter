@@ -2608,6 +2608,23 @@ by_name_desc = db$^ (a, b -> a.name > b.name)
 >> by_name_desc[1].name ¶    // → Carla
 ```
 
+**`$^` is stable**: elements the comparator calls equal keep their input order. With a
+strict comparator (`<`, `>`) a tie answers `#0` both ways, and the pair stays as it
+was. A non-strict one (`<=`, `>=`) gives the same order. The comparator is asked
+again with the two swapped only when it answers `#0`, so it may be called more than
+once for a pair. All three engines ask the same pairs in the same order.
+
+```zymbol
+team = [
+    #(name: "Zara", score: 88),
+    #(name: "Inti", score: 72),
+    #(name: "Luna", score: 95),
+    #(name: "Omar", score: 72)
+]
+ranked = team$^ (a, b -> a.score > b.score)
+>> ranked[3].name " " ranked[4].name ¶    // → Inti Omar
+```
+
 > **Note**: `$^+` and `$^-` are for **primitive arrays** (numbers, strings) without a
 > custom comparator. For named or positional tuple arrays, use `$^` with a lambda.
 > `$^` with a lambda on a primitive array is also valid when you need custom ordering.
