@@ -3517,7 +3517,17 @@ impl TypeChecker {
             Expr::ErrorPropagate(op) => self.infer_expr(&op.expr),
 
             // Execution
-            Expr::Execute(_) | Expr::BashExec(_) => ZymbolType::String,
+            Expr::Execute(_) => ZymbolType::String,
+            // Every argument of `<\ … \>` is an expression (GLB-004), so it is
+            // inferred like one: an undefined name, a wrong-arity call or a
+            // `<~` mark inside it is refused here, as it is anywhere else
+            // (GLB-075 — this arm used to answer `String` without looking).
+            Expr::BashExec(be) => {
+                for arg in &be.args {
+                    self.infer_expr(arg);
+                }
+                ZymbolType::String
+            }
 
             // Match expression
             Expr::Match(match_expr) => {
