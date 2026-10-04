@@ -1983,7 +1983,11 @@ struct EditRoot {
     pre_hot: bool,
 }
 
-const CHAINED_BRACKETS: &str = "a bracket after a bracket is what the navigator is for: write `d[\"x\">\"y\"]$~ value`";
+// A write reaches one place. A bracket with a range in it — `a[1..2]`,
+// `m[1..2>1]` — selects several, and the parser builds a `FlatExtract` for it,
+// so this help was unreachable until GLB-077 routed those receivers here.
+// (`CHAINED_BRACKETS`, its neighbour, was deleted the same day: a bracket after a
+// bracket is refused when it is READ, GLB-072, before any edit can see it.)
 const RANGE_IN_PATH: &str = "a write reaches one place, so its path has no ranges";
 const NO_NAME: &str = "this edits what the expression produced, and nothing holds it — assign the result to a name first";
 
@@ -2020,17 +2024,11 @@ fn flatten_receiver(e: &Expr) -> Result<(EditRoot, Vec<Box<Expr>>), &'static str
                 pre_hot: i.pre_hot,
             }),
             Expr::Index(ix) => {
-                if matches!(ix.array.unwrap_group(), Expr::Index(_) | Expr::DeepIndex(_)) {
-                    return Err(CHAINED_BRACKETS);
-                }
                 let root = go(&ix.array, out)?;
                 out.push(ix.index.clone());
                 Ok(root)
             }
             Expr::DeepIndex(di) => {
-                if matches!(di.array.unwrap_group(), Expr::Index(_) | Expr::DeepIndex(_)) {
-                    return Err(CHAINED_BRACKETS);
-                }
                 let root = go(&di.array, out)?;
                 for step in &di.path.steps {
                     if step.range_end.is_some() {
@@ -2040,6 +2038,7 @@ fn flatten_receiver(e: &Expr) -> Result<(EditRoot, Vec<Box<Expr>>), &'static str
                 }
                 Ok(root)
             }
+            e if is_ranged_path(e) => Err(RANGE_IN_PATH),
             // `d.k` is the same access as `d["k"]`, so it becomes the same step.
             Expr::MemberAccess(ma) if !ma.is_module_access => {
                 let root = go(&ma.object, out)?;
@@ -2055,6 +2054,19 @@ fn flatten_receiver(e: &Expr) -> Result<(EditRoot, Vec<Box<Expr>>), &'static str
     let mut steps = Vec::new();
     let root = go(e, &mut steps)?;
     Ok((root, steps))
+}
+
+/// `a[1..2]` or `m[1..2>1]`: one bracket whose path has a range in it, which
+/// selects several places (GLB-077).
+pub(crate) fn is_ranged_path(e: &Expr) -> bool {
+    match e.unwrap_group() {
+        Expr::FlatExtract(fe) => {
+            !fe.double_bracket
+                && fe.paths.len() == 1
+                && fe.paths[0].steps.iter().any(|s| s.range_end.is_some())
+        }
+        _ => false,
+    }
 }
 
 fn classify_edit(expr: &Expr) -> EditAnchor {
