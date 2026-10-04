@@ -957,199 +957,214 @@ impl Parser {
     pub(crate) fn parse_postfix(&mut self) -> Result<Expr, Diagnostic> {
         let mut expr = self.parse_unary()?;
 
-        // Handle indexing, member access, and chained function calls: arr[index], obj.field, func(args)
-        loop {
-            match self.peek().kind {
-                TokenKind::LBracket => {
-                    // Only treat '[' as a postfix index if it's on the same line.
-                    // A '[' on a new line is either a new statement or an array destructure.
-                    if self.peek().span.start.line != expr.span().end.line {
-                        break;
-                    }
-                    self.reject_chained_index(&expr)?;
-                    if self.is_nav_index() {
-                        expr = self.parse_nav_index(expr)?;
-                    } else {
-                        self.advance(); // consume [
-
-                        let index = self.parse_expr()?;
-
-                        let close_token = self.peek().clone();
-                        if !matches!(close_token.kind, TokenKind::RBracket) {
-                            return Err(Diagnostic::error("expected ']' after index")
-                                .with_span(close_token.span)
-                                .with_help("array indexing must use brackets: arr[index]"));
+        // The two loops below alternate: a `(` on the same line after a `$`
+        // operation is a call on its result, as it already was inside `>>` and
+        // in zyjs — the statement used to end there in an assignment, and
+        // `x = a$? 1 (2)` was refused as a stray `(` (GLB-086, decided 2026-10-03).
+        'postfix: loop {
+            // Handle indexing, member access, and chained function calls: arr[index], obj.field, func(args)
+            loop {
+                match self.peek().kind {
+                    TokenKind::LBracket => {
+                        // Only treat '[' as a postfix index if it's on the same line.
+                        // A '[' on a new line is either a new statement or an array destructure.
+                        if self.peek().span.start.line != expr.span().end.line {
+                            break;
                         }
-                        self.advance(); // consume ]
+                        self.reject_chained_index(&expr)?;
+                        if self.is_nav_index() {
+                            expr = self.parse_nav_index(expr)?;
+                        } else {
+                            self.advance(); // consume [
 
-                        let span = expr.span().to(&close_token.span);
-                        expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
-                    }
-                }
-                TokenKind::Dot => {
-                    self.advance(); // consume .
+                            let index = self.parse_expr()?;
 
-                    // Expect identifier (field name)
-                    let field_token = self.peek().clone();
-                    let field_name = if let TokenKind::Ident(ref name) = field_token.kind {
-                        name.clone()
-                    } else {
-                        return Err(Diagnostic::error("expected field name after '.'")
-                            .with_span(field_token.span)
-                            .with_help("member access requires a field name: object.field"));
-                    };
-                    self.advance(); // consume identifier
-
-                    let span = expr.span().to(&field_token.span);
-                    expr = Expr::MemberAccess(zymbol_ast::MemberAccessExpr::new(
-                        Box::new(expr),
-                        field_name,
-                        span,
-                    ));
-                }
-                TokenKind::LParen => {
-                    // Chained function call: expr(args) — only if on the same line.
-                    // A '(' on a new line starts a new statement (e.g. destructure pattern),
-                    // not a chained call.
-                    // Literals (strings, numbers, bools, chars) are never callable.
-                    if matches!(expr.unwrap_group(), Expr::Literal(_)) {
-                        break;
-                    }
-                    if self.peek().span.start.line != expr.span().end.line {
-                        break;
-                    }
-                    self.advance(); // consume (
-
-                    // Parse arguments
-                    let mut arguments = Vec::new();
-                    let mut out_args: Vec<usize> = Vec::new();
-
-                    if !matches!(self.peek().kind, TokenKind::RParen) {
-                        loop {
-                            arguments.push(self.parse_expr_juxt()?);
-                            // `x<~` — the call-site output mark (REFERENCE.md L36)
-                            if matches!(self.peek().kind, TokenKind::Return) {
-                                self.advance();
-                                out_args.push(arguments.len() - 1);
+                            let close_token = self.peek().clone();
+                            if !matches!(close_token.kind, TokenKind::RBracket) {
+                                return Err(Diagnostic::error("expected ']' after index")
+                                    .with_span(close_token.span)
+                                    .with_help("array indexing must use brackets: arr[index]"));
                             }
+                            self.advance(); // consume ]
 
-                            if matches!(self.peek().kind, TokenKind::Comma) {
-                                self.advance(); // consume ,
-                                continue;
-                            } else {
-                                break;
-                            }
+                            let span = expr.span().to(&close_token.span);
+                            expr = Expr::Index(IndexExpr::new(Box::new(expr), Box::new(index), span));
                         }
                     }
+                    TokenKind::Dot => {
+                        self.advance(); // consume .
 
-                    // Expect )
-                    let rparen_token = self.peek().clone();
-                    if !matches!(rparen_token.kind, TokenKind::RParen) {
-                        return Err(Diagnostic::error("expected ')' after function arguments")
-                            .with_span(rparen_token.span)
-                            .with_help("function call syntax: expr(arg1, arg2, ...)"));
+                        // Expect identifier (field name)
+                        let field_token = self.peek().clone();
+                        let field_name = if let TokenKind::Ident(ref name) = field_token.kind {
+                            name.clone()
+                        } else {
+                            return Err(Diagnostic::error("expected field name after '.'")
+                                .with_span(field_token.span)
+                                .with_help("member access requires a field name: object.field"));
+                        };
+                        self.advance(); // consume identifier
+
+                        let span = expr.span().to(&field_token.span);
+                        expr = Expr::MemberAccess(zymbol_ast::MemberAccessExpr::new(
+                            Box::new(expr),
+                            field_name,
+                            span,
+                        ));
                     }
-                    self.advance(); // consume )
+                    TokenKind::LParen => {
+                        // Chained function call: expr(args) — only if on the same line.
+                        // A '(' on a new line starts a new statement (e.g. destructure pattern),
+                        // not a chained call.
+                        // Literals (strings, numbers, bools, chars) are never callable.
+                        if matches!(expr.unwrap_group(), Expr::Literal(_)) {
+                            break;
+                        }
+                        if self.peek().span.start.line != expr.span().end.line {
+                            break;
+                        }
+                        self.advance(); // consume (
 
-                    let span = expr.span().to(&rparen_token.span);
-                    expr = Expr::FunctionCall(FunctionCallExpr::new_with_out_args(
-                        Box::new(expr),
-                        arguments,
-                        out_args,
-                        span,
-                    ));
-                }
-                _ => break,
-            }
-        }
+                        // Parse arguments
+                        let mut arguments = Vec::new();
+                        let mut out_args: Vec<usize> = Vec::new();
 
-        // Handle collection operators (postfix): $#, $+, $-, $?, $~, $[..], $>, $|, $<
-        loop {
-            let token = self.peek().clone();
-            match token.kind {
-                TokenKind::DollarHash => {
-                    expr = self.parse_collection_length(expr)?;
+                        if !matches!(self.peek().kind, TokenKind::RParen) {
+                            loop {
+                                arguments.push(self.parse_expr_juxt()?);
+                                // `x<~` — the call-site output mark (REFERENCE.md L36)
+                                if matches!(self.peek().kind, TokenKind::Return) {
+                                    self.advance();
+                                    out_args.push(arguments.len() - 1);
+                                }
+
+                                if matches!(self.peek().kind, TokenKind::Comma) {
+                                    self.advance(); // consume ,
+                                    continue;
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Expect )
+                        let rparen_token = self.peek().clone();
+                        if !matches!(rparen_token.kind, TokenKind::RParen) {
+                            return Err(Diagnostic::error("expected ')' after function arguments")
+                                .with_span(rparen_token.span)
+                                .with_help("function call syntax: expr(arg1, arg2, ...)"));
+                        }
+                        self.advance(); // consume )
+
+                        let span = expr.span().to(&rparen_token.span);
+                        expr = Expr::FunctionCall(FunctionCallExpr::new_with_out_args(
+                            Box::new(expr),
+                            arguments,
+                            out_args,
+                            span,
+                        ));
+                    }
+                    _ => break,
                 }
-                TokenKind::DollarPlus => {
-                    expr = self.parse_collection_append(expr)?;
-                }
-                TokenKind::DollarPlusLBracket => {
-                    expr = self.parse_collection_insert(expr)?;
-                }
-                TokenKind::DollarMinus => {
-                    expr = self.parse_collection_remove(expr)?;
-                }
-                TokenKind::DollarMinusLBracket => {
-                    expr = self.parse_collection_remove_positional(expr)?;
-                }
-                TokenKind::DollarQuestion => {
-                    expr = self.parse_collection_contains(expr)?;
-                }
-                TokenKind::DollarQuestionQuestion => {
-                    expr = self.parse_string_find_positions(expr)?;
-                }
-                TokenKind::DollarPlusPlus => {
-                    expr = self.parse_string_insert(expr)?;
-                }
-                TokenKind::DollarMinusMinus => {
-                    expr = self.parse_collection_remove_all(expr)?;
-                }
-                TokenKind::DollarTildeTilde => {
-                    expr = self.parse_string_replace(expr)?;
-                }
-                TokenKind::DollarSlash => {
-                    expr = self.parse_string_split(expr)?;
-                }
-                TokenKind::DollarStar => {
-                    expr = self.parse_string_repeat(expr)?;
-                }
-                TokenKind::DollarTilde => {
-                    expr = self.parse_collection_update(expr)?;
-                }
-                TokenKind::DollarLBracket => {
-                    expr = self.parse_collection_slice(expr)?;
-                }
-                TokenKind::DollarGt => {
-                    expr = self.parse_collection_map(expr)?;
-                }
-                TokenKind::DollarPipe => {
-                    expr = self.parse_collection_filter(expr)?;
-                }
-                TokenKind::DollarLt => {
-                    expr = self.parse_collection_reduce(expr)?;
-                }
-                TokenKind::DollarCaretPlus => {
-                    expr = self.parse_collection_sort(expr, true)?;
-                }
-                TokenKind::DollarCaretMinus => {
-                    expr = self.parse_collection_sort(expr, false)?;
-                }
-                TokenKind::DollarCaret => {
-                    expr = self.parse_collection_sort_custom(expr)?;
-                }
-                TokenKind::HashQuestion => {
-                    // Type metadata operator: expr#?
-                    let start_span = expr.span();
-                    self.advance(); // consume #?
-                    let span = start_span.to(&token.span);
-                    expr = Expr::TypeMetadata(TypeMetadataExpr::new(Box::new(expr), span));
-                }
-                TokenKind::DollarExclaim => {
-                    // Error check operator: expr$!
-                    let start_span = expr.span();
-                    self.advance(); // consume $!
-                    let span = start_span.to(&token.span);
-                    expr = Expr::ErrorCheck(zymbol_ast::ErrorCheckExpr::new(Box::new(expr), span));
-                }
-                TokenKind::DollarExclaimExclaim => {
-                    // Error propagate operator: expr$!!
-                    let start_span = expr.span();
-                    self.advance(); // consume $!!
-                    let span = start_span.to(&token.span);
-                    expr = Expr::ErrorPropagate(zymbol_ast::ErrorPropagateExpr::new(Box::new(expr), span));
-                }
-                _ => break,
             }
+
+            // Handle collection operators (postfix): $#, $+, $-, $?, $~, $[..], $>, $|, $<
+            loop {
+                let token = self.peek().clone();
+                match token.kind {
+                    TokenKind::DollarHash => {
+                        expr = self.parse_collection_length(expr)?;
+                    }
+                    TokenKind::DollarPlus => {
+                        expr = self.parse_collection_append(expr)?;
+                    }
+                    TokenKind::DollarPlusLBracket => {
+                        expr = self.parse_collection_insert(expr)?;
+                    }
+                    TokenKind::DollarMinus => {
+                        expr = self.parse_collection_remove(expr)?;
+                    }
+                    TokenKind::DollarMinusLBracket => {
+                        expr = self.parse_collection_remove_positional(expr)?;
+                    }
+                    TokenKind::DollarQuestion => {
+                        expr = self.parse_collection_contains(expr)?;
+                    }
+                    TokenKind::DollarQuestionQuestion => {
+                        expr = self.parse_string_find_positions(expr)?;
+                    }
+                    TokenKind::DollarPlusPlus => {
+                        expr = self.parse_string_insert(expr)?;
+                    }
+                    TokenKind::DollarMinusMinus => {
+                        expr = self.parse_collection_remove_all(expr)?;
+                    }
+                    TokenKind::DollarTildeTilde => {
+                        expr = self.parse_string_replace(expr)?;
+                    }
+                    TokenKind::DollarSlash => {
+                        expr = self.parse_string_split(expr)?;
+                    }
+                    TokenKind::DollarStar => {
+                        expr = self.parse_string_repeat(expr)?;
+                    }
+                    TokenKind::DollarTilde => {
+                        expr = self.parse_collection_update(expr)?;
+                    }
+                    TokenKind::DollarLBracket => {
+                        expr = self.parse_collection_slice(expr)?;
+                    }
+                    TokenKind::DollarGt => {
+                        expr = self.parse_collection_map(expr)?;
+                    }
+                    TokenKind::DollarPipe => {
+                        expr = self.parse_collection_filter(expr)?;
+                    }
+                    TokenKind::DollarLt => {
+                        expr = self.parse_collection_reduce(expr)?;
+                    }
+                    TokenKind::DollarCaretPlus => {
+                        expr = self.parse_collection_sort(expr, true)?;
+                    }
+                    TokenKind::DollarCaretMinus => {
+                        expr = self.parse_collection_sort(expr, false)?;
+                    }
+                    TokenKind::DollarCaret => {
+                        expr = self.parse_collection_sort_custom(expr)?;
+                    }
+                    TokenKind::HashQuestion => {
+                        // Type metadata operator: expr#?
+                        let start_span = expr.span();
+                        self.advance(); // consume #?
+                        let span = start_span.to(&token.span);
+                        expr = Expr::TypeMetadata(TypeMetadataExpr::new(Box::new(expr), span));
+                    }
+                    TokenKind::DollarExclaim => {
+                        // Error check operator: expr$!
+                        let start_span = expr.span();
+                        self.advance(); // consume $!
+                        let span = start_span.to(&token.span);
+                        expr = Expr::ErrorCheck(zymbol_ast::ErrorCheckExpr::new(Box::new(expr), span));
+                    }
+                    TokenKind::DollarExclaimExclaim => {
+                        // Error propagate operator: expr$!!
+                        let start_span = expr.span();
+                        self.advance(); // consume $!!
+                        let span = start_span.to(&token.span);
+                        expr = Expr::ErrorPropagate(zymbol_ast::ErrorPropagateExpr::new(Box::new(expr), span));
+                    }
+                    _ => break,
+                }
+            }
+
+            let next = self.peek();
+            if matches!(next.kind, TokenKind::LParen)
+                && next.span.start.line == expr.span().end.line
+                && !matches!(expr.unwrap_group(), Expr::Literal(_))
+            {
+                continue 'postfix;
+            }
+            break 'postfix;
         }
 
         Ok(expr)
