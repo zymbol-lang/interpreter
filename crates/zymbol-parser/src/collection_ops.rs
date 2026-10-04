@@ -28,9 +28,49 @@ use zymbol_lexer::TokenKind;
 use crate::Parser;
 
 impl Parser {
+    /// A `(` or `[` on the same line right after an operator that takes no
+    /// operand — `$#`, `$^+`, `$^-`, and `$++` with no item — is refused here,
+    /// in every context (GLB-076, decided 2026-10-03). It used to end the
+    /// statement in an assignment (`unexpected '[' at statement level`, with a
+    /// help about destructuring) and to index or call the result inside `>>`,
+    /// so one program meant two things. Each case has its own complete text, so
+    /// the message inventory reads the same construction in zyjs.
+    pub(crate) fn refuse_after_operandless(&self, op: TokenKind, op_line: u32) -> Result<(), Diagnostic> {
+        let next = self.peek();
+        if next.span.start.line != op_line {
+            return Ok(());
+        }
+        let (message, help) = match (op, &next.kind) {
+            (TokenKind::DollarHash, TokenKind::LBracket) => (
+                "unexpected '[' after '$#'",
+                "to index the result, put the operation in parentheses: (c$#)[i]"),
+            (TokenKind::DollarCaretPlus, TokenKind::LBracket) => (
+                "unexpected '[' after '$^+'",
+                "to index the result, put the operation in parentheses: (c$^+)[i]"),
+            (TokenKind::DollarCaretMinus, TokenKind::LBracket) => (
+                "unexpected '[' after '$^-'",
+                "to index the result, put the operation in parentheses: (c$^-)[i]"),
+            (TokenKind::DollarPlusPlus, TokenKind::LBracket) => (
+                "unexpected '[' after '$++'",
+                "'$++' appends the items written after it; to insert at a position, use c$+[i] value"),
+            (TokenKind::DollarHash, TokenKind::LParen) => (
+                "unexpected '(' after '$#'",
+                "'$#' takes nothing; to use its result, put the operation in parentheses: (c$#)"),
+            (TokenKind::DollarCaretPlus, TokenKind::LParen) => (
+                "unexpected '(' after '$^+'",
+                "'$^+' sorts in natural order and takes no comparator; to sort with one, use c$^ (a, b -> a < b)"),
+            (TokenKind::DollarCaretMinus, TokenKind::LParen) => (
+                "unexpected '(' after '$^-'",
+                "'$^-' sorts in natural order and takes no comparator; to sort with one, use c$^ (a, b -> a > b)"),
+            _ => return Ok(()),
+        };
+        Err(Diagnostic::error(message).with_span(next.span).with_help(help))
+    }
+
     /// Parse collection length: collection$#
     pub(crate) fn parse_collection_length(&mut self, collection: Expr) -> Result<Expr, Diagnostic> {
         let op_token = self.advance(); // consume $#
+        self.refuse_after_operandless(TokenKind::DollarHash, op_token.span.start.line)?;
         let span = collection.span().to(&op_token.span);
 
         Ok(Expr::CollectionLength(CollectionLengthExpr::new(
@@ -443,6 +483,8 @@ impl Parser {
     pub(crate) fn parse_collection_sort(&mut self, collection: Expr, ascending: bool) -> Result<Expr, Diagnostic> {
         let start_span = collection.span();
         let op_token = self.advance(); // consume $^+ or $^-
+        let op = if ascending { TokenKind::DollarCaretPlus } else { TokenKind::DollarCaretMinus };
+        self.refuse_after_operandless(op, op_token.span.start.line)?;
         let span = start_span.to(&op_token.span);
         let sort_expr = CollectionSortExpr::new(Box::new(collection), ascending, None, span);
         if ascending {

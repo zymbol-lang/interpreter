@@ -5,7 +5,7 @@
 
 use zymbol_ast::{
     Assignment, AssignSugar,
-    BasePrefix, Block, CastKind, CollectionLengthExpr, Expr, ExprStatement, FormatKind,
+    BasePrefix, Block, CastKind, Expr, ExprStatement, FormatKind,
     FunctionCallExpr, IdentifierExpr, IndexExpr, LiteralExpr,
     NumericCastExpr, Program, RangeExpr, Statement, TypeMetadataExpr,
 };
@@ -1254,10 +1254,7 @@ impl Parser {
                 // Note: We intentionally skip TokenKind::LParen (function calls) here
                 // Collection operators
                 TokenKind::DollarHash => {
-                    let start_span = expr.span();
-                    self.advance(); // consume $#
-                    let span = start_span.to(&token.span);
-                    expr = Expr::CollectionLength(CollectionLengthExpr::new(Box::new(expr), span));
+                    expr = self.parse_collection_length(expr)?;
                 }
                 TokenKind::DollarPlus => {
                     expr = self.parse_collection_append(expr)?;
