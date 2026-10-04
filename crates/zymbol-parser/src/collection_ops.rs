@@ -280,9 +280,15 @@ impl Parser {
             _ => false,
         };
         if !is_place {
+            // A range selects several places, and a write reaches one (GLB-077).
+            let help = if crate::is_ranged_path(&target) {
+                crate::RANGE_IN_PATH
+            } else {
+                "use: arr[i]$~ value, arr[i>j]$~ value, or d.key$~ value"
+            };
             return Err(Diagnostic::error("collection update ($~) requires a place to write")
                 .with_span(start_span)
-                .with_help("use: arr[i]$~ value, arr[i>j]$~ value, or d.key$~ value"));
+                .with_help(help));
         }
 
         self.advance(); // consume $~
