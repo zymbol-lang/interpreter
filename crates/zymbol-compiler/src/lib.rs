@@ -2795,7 +2795,16 @@ impl Compiler {
 
         // IMM fast path: right operand is a small integer literal
         // Eliminates a LoadInt + temp register for common patterns like `n - 1`, `n <= 1`
-        if let Expr::Literal(lit) = bin.right.unwrap_group() {
+        //
+        // Only for the operators it has an instruction for. A juxtaposition is a
+        // `Concat` with an Int literal on the right too — `x = n 1` is the text
+        // "51" — and it fell into the `unreachable!()` below and panicked (GLB-085).
+        let imm_op = matches!(bin.op,
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul
+            | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow
+            | BinaryOp::Eq | BinaryOp::Neq
+            | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge);
+        if let (true, Expr::Literal(lit)) = (imm_op, bin.right.unwrap_group()) {
             if let Literal::Int(imm) = lit.value {
                 if (i32::MIN as i64..=i32::MAX as i64).contains(&imm) {
                     let imm = imm as i32;
