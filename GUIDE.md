@@ -3472,6 +3472,23 @@ parts2 = "one::two::three" $/ "::"
 >> parts2 ¶   // → [one, two, three]
 ```
 
+`$??` reports every position where the pattern starts, so matches may overlap:
+`"aaaa"$?? "aa"` is `[1, 2, 3]`. A pattern longer than the text is found nowhere (`[]`).
+
+**An empty pattern is refused.** `$??`, `$/` and `$~~` locate occurrences, and there is
+no single answer to where the empty string occurs, so all three raise a `##Index` error
+for `""`. `s$? ""` is still `#1`, and `$-`/`$--` with `""` remove nothing:
+
+```zymbol
+!? {
+    parts = "hello" $/ ""
+    >> parts ¶
+} :! ##Index {
+    >> "refused: " _err ¶    // → refused: ##Index($/ delimiter must not be empty)
+}
+>> ("hello"$? "") ¶          // → #1
+```
+
 ### Build Strings with `$++`
 
 `$++` builds a string (or array) by appending items to a base. All items must
