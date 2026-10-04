@@ -396,6 +396,11 @@ impl Parser {
     /// `arr[[i>j]]` / `arr[p ; q]` build a new collection rather than reach into
     /// one.
     pub(crate) fn reject_chained_index(&mut self, base: &Expr) -> Result<(), Diagnostic> {
+        // Through the parentheses too: `(m[1])[2]` is the navigator written twice
+        // with a group around the first half, not the index of a result
+        // (GLB-087, decided 2026-10-03). The result of an operation or a call
+        // in parentheses is still indexed — `(a$^+)[1]`, `(f())[1]`.
+        let base = base.unwrap_group();
         if !matches!(base, Expr::Index(_) | Expr::DeepIndex(_)) {
             return Ok(());
         }
@@ -452,7 +457,7 @@ impl Parser {
     /// about the notation rather than the receiver, so it is written as the
     /// notation itself.
     fn index_root_name(expr: &Expr) -> String {
-        match expr {
+        match expr.unwrap_group() {
             Expr::Identifier(id) => id.name.clone(),
             Expr::Index(ix) => Self::index_root_name(&ix.array),
             Expr::DeepIndex(dx) => Self::index_root_name(&dx.array),
