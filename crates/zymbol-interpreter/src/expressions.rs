@@ -277,20 +277,24 @@ impl<W: Write> Interpreter<W> {
                 match operand {
                     Value::Int(n) => Ok(Value::Int(-n)),
                     Value::Float(f) => Ok(Value::Float(-f)),
-                    _ => Err(RuntimeError::Generic {
-                        message: format!("negation requires numeric operand, got {}", operand.type_ident()),
-                        span: unary.span,
-                    }),
+                    // A wrong TYPE is a `##Type` (D1; GLB-088).
+                    _ => Err(RuntimeError::kinded(
+                        "Type",
+                        format!("negation requires numeric operand, got {}", operand.type_ident()),
+                        unary.span,
+                    )),
                 }
             }
             zymbol_common::UnaryOp::Pos => {
                 match operand {
                     Value::Int(n) => Ok(Value::Int(n)),
                     Value::Float(f) => Ok(Value::Float(f)),
-                    _ => Err(RuntimeError::Generic {
-                        message: format!("unary plus requires numeric operand, got {}", operand.type_ident()),
-                        span: unary.span,
-                    }),
+                    // A wrong TYPE is a `##Type` (D1; GLB-088).
+                    _ => Err(RuntimeError::kinded(
+                        "Type",
+                        format!("unary plus requires numeric operand, got {}", operand.type_ident()),
+                        unary.span,
+                    )),
                 }
             }
         }
