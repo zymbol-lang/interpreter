@@ -425,14 +425,15 @@ pub enum Instruction {
     /// level — mirrors the tree-walker's `$~` semantics (arr[i]$~, t[i]$~,
     /// nt["field"]$~, and deep arr[i>j>…]$~).
     DeepSet(Reg, Reg, Reg), // (dst_root, idx_path, val)
-    /// `DeepSet` for the *in-place* surface form `t[i] = val`, which is not the
-    /// same statement as the functional `new = t[i]$~ val` even though the
-    /// parser desugars both into a `CollectionUpdate`.
+    /// `DeepSet` for the *in-place* surface form — `t[i]$~ val` written as a
+    /// statement — which is not the same statement as the functional
+    /// `new = t[i]$~ val` even though the parser desugars both into a
+    /// `CollectionUpdate`.
     ///
     /// The difference only matters for a positional tuple: a tuple is immutable
-    /// (GUIDE.md § 12), so `t[i] = val` has to be refused while `new = t[i]$~
+    /// (GUIDE.md § 12), so the statement has to be refused while `new = t[i]$~
     /// val` has to work — it derives a second tuple and leaves the first alone.
-    /// The tree-walker tells them apart by `AssignSugar::IndexedAssign`; the
+    /// The tree-walker tells them apart by `AssignSugar::InPlaceEdit`; the
     /// compiler used to drop that field, so both forms reached `DeepSet` and the
     /// VM silently modified the tuple (`DM-16`).
     ///

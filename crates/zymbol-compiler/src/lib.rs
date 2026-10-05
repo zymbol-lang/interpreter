@@ -1568,19 +1568,14 @@ impl Compiler {
             }
         }
 
-        // `t[i] = val` and `t[i] op= val` were desugared by the parser into a
-        // CollectionUpdate, so by the time they arrive here they look exactly
-        // like the functional `new = t[i]$~ val`. Only `sugar` still records
-        // which one the programmer wrote, and the difference is not cosmetic: a
+        // `t[i]$~ val` written as a statement is desugared by the parser into
+        // `t = t[i]$~ val`, so by the time it arrives here it looks exactly like
+        // the functional `new = t[i]$~ val`. Only `sugar` still records which
+        // one the programmer wrote, and the difference is not cosmetic: a
         // positional tuple must refuse the in-place form and allow the
         // functional one. The compiler used to drop the field, both forms
         // reached `DeepSet`, and the VM modified the tuple in silence (DM-16).
-        let in_place = matches!(
-            sugar,
-            AssignSugar::IndexedAssign
-                | AssignSugar::IndexedCompound(_)
-                | AssignSugar::InPlaceEdit
-        );
+        let in_place = matches!(sugar, AssignSugar::InPlaceEdit);
         let src = match value.unwrap_group() {
             Expr::CollectionUpdate(cu) if in_place => {
                 self.compile_collection_update_as(cu, Some(name), ctx)?

@@ -550,39 +550,6 @@ impl<'a> FormatVisitor<'a> {
                 }
                 // Shape mismatch — fall through to plain printing
             }
-            AssignSugar::IndexedAssign => {
-                // name[i] = rhs   (value is CollectionUpdate{target: Index, value: rhs})
-                if let Expr::CollectionUpdate(cu) = &assign.value {
-                    if let Expr::Index(idx) = cu.target.as_ref() {
-                        self.output.write("[");
-                        self.format_expr(&idx.index);
-                        self.output.write("] = ");
-                        self.format_expr(&cu.value);
-                        return;
-                    }
-                }
-            }
-            AssignSugar::IndexedCompound(op) => {
-                // name[i] op= rhs (value is CollectionUpdate{target: Index,
-                //                  value: Binary{op, left: Index, right: rhs}})
-                if let Expr::CollectionUpdate(cu) = &assign.value {
-                    if let (Expr::Index(idx), Expr::Binary(bin)) =
-                        (cu.target.as_ref(), cu.value.as_ref())
-                    {
-                        if bin.op == op {
-                            if let Some(op_str) = compound_op_str(op) {
-                                self.output.write("[");
-                                self.format_expr(&idx.index);
-                                self.output.write("] ");
-                                self.output.write(op_str);
-                                self.output.write(" ");
-                                self.format_expr(&bin.right);
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
             AssignSugar::InPlaceEdit => unreachable!("handled above"),
             AssignSugar::None => {}
         }
