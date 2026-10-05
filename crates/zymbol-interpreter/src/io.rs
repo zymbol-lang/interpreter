@@ -296,10 +296,15 @@ impl<W: Write> Interpreter<W> {
                     let v = self.eval_expr(expr)?;
                     vals.push(match v {
                         Value::Int(n) => Some(n),
-                        other => return Err(RuntimeError::Generic {
-                            message: format!(">>~ slot expects Int, got {}", other.to_display_string()),
-                            span: op.span,
-                        }),
+                        // A slot of another type is a wrong TYPE: named by its
+                        // type, never its value (GLB-033), and a `##Type` (D1;
+                        // GLB-042, decided 2026-10-05). It printed the value —
+                        // `got fila`, `got 2.5`.
+                        other => return Err(RuntimeError::kinded(
+                            "Type",
+                            format!(">>~ slot expects Int, got {}", other.type_ident()),
+                            op.span,
+                        )),
                     });
                 }
             }
