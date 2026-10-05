@@ -3767,10 +3767,11 @@ impl<W: Write> VM<W> {
                     let bad = match self.reg_get(slot) {
                         Value::Int(_) => None,
                         Value::Tuple(_) if admits_tuple => None,
-                        other => Some(other.to_string_repr()),
+                        // Named by its type, and a `##Type` (GLB-033, D1; GLB-042).
+                        other => Some(other.type_name()),
                     };
                     if let Some(got) = bad {
-                        raise!(VmError::Generic(format!(">>~ slot expects Int, got {got}")));
+                        raise!(VmError::TypeMsg(format!(">>~ slot expects Int, got {got}")));
                     }
                 }
                 &Instruction::DestructureRest(dst, src, from, trailing) => {
