@@ -885,9 +885,14 @@ fn cmp_order_error(va: &Value, vb: &Value, op: &str) -> String {
 /// — where that guidance is exactly right — got the generic "this needs a
 /// number" instead, because it took a different path. The message was tied to
 /// the code route, not to the operator; now it is tied to the operator.
+///
+/// The guidance for `+` is for text on either side; with no text in sight `+`
+/// names the types like every other operator (GLB-059, decided 2026-10-05).
+/// The kind is `##Type` at every raise site (`VmError::TypeMsg`, GLB-088).
 fn arith_type_error(op: &str, a: &Value, b: &Value) -> String {
+    let text = matches!(a, Value::String(_)) || matches!(b, Value::String(_));
     match op {
-        "+" => "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\"".to_string(),
+        "+" if text => "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\"".to_string(),
         "/" => "/ requires numeric operands — use $/ to split strings".to_string(),
         "^" => format!("power operator requires numeric operands: {}, {}", a.type_name(), b.type_name()),
         _   => format!("arithmetic requires numeric operands: {}, {}", a.type_name(), b.type_name()),
@@ -1433,7 +1438,7 @@ impl<W: Write> VM<W> {
                     (Value::Int(x), Value::Int(y)) => Ok((*x, *y)),
                     (va, vb) => Err(arith_type_error($op, va, vb)),
                 };
-                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::TypeMsg(msg)) }
             }}
         }
         macro_rules! rf2 {
@@ -1445,7 +1450,7 @@ impl<W: Write> VM<W> {
                     (Value::Int(x), Value::Int(y))     => Ok((*x as f64, *y as f64)),
                     (va, vb) => Err(arith_type_error($op, va, vb)),
                 };
-                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::TypeMsg(msg)) }
             }}
         }
         // The immediate forms: the other operand is the literal the compiler
@@ -1456,7 +1461,7 @@ impl<W: Write> VM<W> {
                     Value::Int(x) => Ok(*x),
                     va => Err(arith_type_error($op, va, &Value::Int($imm as i64))),
                 };
-                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::TypeMsg(msg)) }
             }}
         }
 
@@ -1557,7 +1562,7 @@ impl<W: Write> VM<W> {
                     Value::Int(n)   => Ok(*n),
                     va => Err(format!("negation requires numeric operand, got {}", va.type_name())),
                 };
-                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::TypeMsg(msg)) }
             }}
         }
         macro_rules! ord_or_raise {
@@ -1796,7 +1801,7 @@ impl<W: Write> VM<W> {
                         Value::Int(n)   => Ok(*n as f64),
                         va => Err(format!("negation requires numeric operand, got {}", va.type_name())),
                     };
-                    let v = match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) };
+                    let v = match read { Ok(v) => v, Err(msg) => raise!(VmError::TypeMsg(msg)) };
                     wreg!(dst, Value::Float(-v));
                 }
 
@@ -3753,7 +3758,7 @@ impl<W: Write> VM<W> {
                 &Instruction::Pos(dst, src) => {
                     let v = match rreg!(src) {
                         v @ (Value::Int(_) | Value::Float(_)) => v.clone(),
-                        other => raise!(VmError::Generic(format!(
+                        other => raise!(VmError::TypeMsg(format!(
                             "unary plus requires numeric operand, got {}", other.type_name()))),
                     };
                     wreg!(dst, v);

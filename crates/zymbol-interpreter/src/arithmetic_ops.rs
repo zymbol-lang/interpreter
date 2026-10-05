@@ -58,10 +58,21 @@ impl<W: Write> Interpreter<W> {
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + *b as f64)),
 
-            _ => Err(RuntimeError::Generic {
-                message: "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\"".to_string(),
-                span: *span,
-            }),
+            // A wrong TYPE is a `##Type` (D1; GLB-088). The guidance about
+            // juxtaposition is for the mistake it was written for — text on
+            // either side; with no text in sight `+` speaks like every other
+            // arithmetic operator and names the types (GLB-059, decided
+            // 2026-10-05). `x + 1` with `x` empty used to talk about strings.
+            _ if matches!(left, Value::String(_)) || matches!(right, Value::String(_)) => Err(RuntimeError::kinded(
+                "Type",
+                "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\"",
+                *span,
+            )),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("arithmetic requires numeric operands: {}, {}", left.type_ident(), right.type_ident()),
+                *span,
+            )),
         }
     }
 
@@ -119,10 +130,12 @@ impl<W: Write> Interpreter<W> {
             // Type promotion: Int op Float → Float
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(float_op(*a as f64, *b))),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(float_op(*a, *b as f64))),
-            _ => Err(RuntimeError::Generic {
-                message: format!("arithmetic requires numeric operands: {}, {}", left.type_ident(), right.type_ident()),
-                span: *span,
-            }),
+            // A wrong TYPE is a `##Type` (D1; GLB-088).
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("arithmetic requires numeric operands: {}, {}", left.type_ident(), right.type_ident()),
+                *span,
+            )),
         }
     }
 
@@ -196,10 +209,12 @@ impl<W: Write> Interpreter<W> {
                     Ok(Value::Float(a / *b as f64))
                 }
             }
-            _ => Err(RuntimeError::Generic {
-                message: "/ requires numeric operands — use $/ to split strings".to_string(),
-                span: *span,
-            }),
+            // A wrong TYPE is a `##Type` (D1; GLB-088).
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                "/ requires numeric operands — use $/ to split strings",
+                *span,
+            )),
         }
     }
 
@@ -225,10 +240,12 @@ impl<W: Write> Interpreter<W> {
             // Type promotion: Int ^ Float → Float
             (Value::Int(base), Value::Float(exp)) => Ok(Value::Float((*base as f64).powf(*exp))),
             (Value::Float(base), Value::Int(exp)) => Ok(Value::Float(base.powf(*exp as f64))),
-            _ => Err(RuntimeError::Generic {
-                message: format!("power operator requires numeric operands: {}, {}", left.type_ident(), right.type_ident()),
-                span: *span,
-            }),
+            // A wrong TYPE is a `##Type` (D1; GLB-088).
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("power operator requires numeric operands: {}, {}", left.type_ident(), right.type_ident()),
+                *span,
+            )),
         }
     }
 
