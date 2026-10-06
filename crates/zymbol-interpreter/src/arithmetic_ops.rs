@@ -372,24 +372,30 @@ impl<W: Write> Interpreter<W> {
                     )))
                 }
             }
-            // String against a number: the string has to be a number too (in any script)
+            // String against a number: the string has to be a number too (in any
+            // script). When it is not, reading it as one is what failed: a
+            // `##Parse` (GLB-094, decided 2026-10-06). Declared here and not left
+            // to the words of the message, because the message carries the text,
+            // and the words of the text decided the family: `"index" < 10` was an
+            // `##Index`, and `"overflow" < 10` a `##Range`.
             (Value::String(s), Value::Int(i)) => {
                 if let Some(s_int) = str_as_int(s) {
                     Ok(Value::Bool(int_compare(s_int, *i)))
                 } else if let Some(s_f) = str_as_float(s) {
                     Ok(Value::Bool(float_compare(s_f, *i as f64)))
                 } else {
-                    Err(RuntimeError::Generic {
-                        message: format!(
+                    Err(RuntimeError::kinded(
+                        "Parse",
+                        format!(
                             "cannot compare string '{}' with integer {} using operator '{}'",
                             s, i, op
                         ),
-                        span: Span::new(
+                        Span::new(
                             zymbol_span::Position::start(),
                             zymbol_span::Position::start(),
                             zymbol_span::FileId(0),
                         ),
-                    })
+                    ))
                 }
             }
             (Value::Int(i), Value::String(s)) => {
@@ -398,51 +404,54 @@ impl<W: Write> Interpreter<W> {
                 } else if let Some(s_f) = str_as_float(s) {
                     Ok(Value::Bool(float_compare(*i as f64, s_f)))
                 } else {
-                    Err(RuntimeError::Generic {
-                        message: format!(
+                    Err(RuntimeError::kinded(
+                        "Parse",
+                        format!(
                             "cannot compare integer {} with string '{}' using operator '{}'",
                             i, s, op
                         ),
-                        span: Span::new(
+                        Span::new(
                             zymbol_span::Position::start(),
                             zymbol_span::Position::start(),
                             zymbol_span::FileId(0),
                         ),
-                    })
+                    ))
                 }
             }
             (Value::String(s), Value::Float(f)) => {
                 if let Some(s_f) = str_as_float(s) {
                     Ok(Value::Bool(float_compare(s_f, *f)))
                 } else {
-                    Err(RuntimeError::Generic {
-                        message: format!(
+                    Err(RuntimeError::kinded(
+                        "Parse",
+                        format!(
                             "cannot compare string '{}' with float {} using operator '{}'",
                             s, f, op
                         ),
-                        span: Span::new(
+                        Span::new(
                             zymbol_span::Position::start(),
                             zymbol_span::Position::start(),
                             zymbol_span::FileId(0),
                         ),
-                    })
+                    ))
                 }
             }
             (Value::Float(f), Value::String(s)) => {
                 if let Some(s_f) = str_as_float(s) {
                     Ok(Value::Bool(float_compare(*f, s_f)))
                 } else {
-                    Err(RuntimeError::Generic {
-                        message: format!(
+                    Err(RuntimeError::kinded(
+                        "Parse",
+                        format!(
                             "cannot compare float {} with string '{}' using operator '{}'",
                             f, s, op
                         ),
-                        span: Span::new(
+                        Span::new(
                             zymbol_span::Position::start(),
                             zymbol_span::Position::start(),
                             zymbol_span::FileId(0),
                         ),
-                    })
+                    ))
                 }
             }
             // GLOBAL-001: this used to interpolate the VALUES —
