@@ -187,6 +187,13 @@ impl ZymbolType {
             | (ZymbolType::Number, ZymbolType::Float)
             | (ZymbolType::Int, ZymbolType::Number)
             | (ZymbolType::Float, ZymbolType::Number) => true,
+            // An array whose element type is not known yet — `[]` is `[Any]` —
+            // has no element type to change: `x = []` then `x = ["a"]` is the
+            // array being filled, not a type change (GLB-093, decided
+            // 2026-10-05). Only that: `[Int]` against `[Float]` still differs.
+            (ZymbolType::Array(a), ZymbolType::Array(b))
+                if matches!(**a, ZymbolType::Any | ZymbolType::Unknown)
+                    || matches!(**b, ZymbolType::Any | ZymbolType::Unknown) => true,
             (a, b) => a == b,
         }
     }
