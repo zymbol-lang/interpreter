@@ -886,14 +886,15 @@ fn cmp_order_error(va: &Value, vb: &Value, op: &str) -> String {
 /// number" instead, because it took a different path. The message was tied to
 /// the code route, not to the operator; now it is tied to the operator.
 ///
-/// The guidance for `+` is for text on either side; with no text in sight `+`
-/// names the types like every other operator (GLB-059, decided 2026-10-05).
+/// The guidance for `+` and for `/` is for text on either side; with no text in
+/// sight they name the types like every other operator (GLB-059, GLB-090,
+/// decided 2026-10-05).
 /// The kind is `##Type` at every raise site (`VmError::TypeMsg`, GLB-088).
 fn arith_type_error(op: &str, a: &Value, b: &Value) -> String {
     let text = matches!(a, Value::String(_)) || matches!(b, Value::String(_));
     match op {
         "+" if text => "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\"".to_string(),
-        "/" => "/ requires numeric operands — use $/ to split strings".to_string(),
+        "/" if text => "/ requires numeric operands — use $/ to split strings".to_string(),
         "^" => format!("power operator requires numeric operands: {}, {}", a.type_name(), b.type_name()),
         _   => format!("arithmetic requires numeric operands: {}, {}", a.type_name(), b.type_name()),
     }

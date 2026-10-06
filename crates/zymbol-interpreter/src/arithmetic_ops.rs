@@ -209,10 +209,18 @@ impl<W: Write> Interpreter<W> {
                     Ok(Value::Float(a / *b as f64))
                 }
             }
-            // A wrong TYPE is a `##Type` (D1; GLB-088).
-            _ => Err(RuntimeError::kinded(
+            // A wrong TYPE is a `##Type` (D1; GLB-088). The guidance about `$/`
+            // is for text on either side; with none in sight `/` names the
+            // types like the rest of its family (GLB-090, decided 2026-10-05 —
+            // the rule `+` follows since GLB-059).
+            _ if matches!(left, Value::String(_)) || matches!(right, Value::String(_)) => Err(RuntimeError::kinded(
                 "Type",
                 "/ requires numeric operands — use $/ to split strings",
+                *span,
+            )),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("arithmetic requires numeric operands: {}, {}", left.type_ident(), right.type_ident()),
                 *span,
             )),
         }
