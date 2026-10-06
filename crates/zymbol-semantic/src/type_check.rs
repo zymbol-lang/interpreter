@@ -379,6 +379,26 @@ impl TypeEnv {
         }
     }
 
+    /// Give `name` the type `ty` in the scope at `depth` — where the name was
+    /// born — or define it in the current scope when `depth` is `None`.
+    pub fn assign_var_at(&mut self, depth: Option<usize>, name: &str, ty: ZymbolType) {
+        match depth.and_then(|d| self.scopes.get_mut(d)) {
+            Some(scope) => { scope.insert(name.to_string(), ty); }
+            None => self.define_var(name, ty),
+        }
+    }
+
+    /// `note_real_type` for the scope at `depth`, as `assign_var_at` places it.
+    pub fn note_real_type_at(&mut self, depth: Option<usize>, name: &str, ty: &ZymbolType) {
+        if *ty == ZymbolType::Unit {
+            return;
+        }
+        match depth.and_then(|d| self.real_types.get_mut(d)) {
+            Some(scope) => { scope.insert(name.to_string(), ty.clone()); }
+            None => self.note_real_type(name, ty),
+        }
+    }
+
     /// Define a variable in the current scope
     pub fn define_var(&mut self, name: &str, ty: ZymbolType) {
         if let Some(scope) = self.scopes.last_mut() {
@@ -469,6 +489,10 @@ pub struct TypeChecker {
     /// environment that is reading it, which is the crossing the premise
     /// forbids. Empty at file level, where there is nothing to cross.
     strong_boundary: Vec<usize>,
+    /// The scope each enclosing lambda opened, innermost last. A lambda reads
+    /// what is around it but its writes stay inside it (MEM-6), so an
+    /// assignment never gives a type to a name born below this floor (GLB-092).
+    lambda_floor: Vec<usize>,
     /// The line of the import that bound each module alias, for MEM-7's
     /// refusal of a file variable that takes an alias's name (GLB-070).
     alias_lines: HashMap<String, usize>,
@@ -617,6 +641,7 @@ impl TypeChecker {
             module_aliases: HashSet::new(),
             module_arities: crate::call_arity::AliasArities::new(),
             strong_boundary: Vec::new(),
+            lambda_floor: Vec::new(),
             alias_lines: HashMap::new(),
             alias_refused: HashSet::new(),
             is_module: false,
@@ -1351,8 +1376,22 @@ impl TypeChecker {
 
                 self.warn_type_change(&assign.name, &value_type, assign.span);
 
-                self.env.note_real_type(&assign.name, &value_type);
-                self.env.define_var(&assign.name, value_type);
+                // An assignment writes the name it reaches (MEM-7, one name, one
+                // thing): a name visible here, on this side of the strong
+                // boundary and not below the innermost lambda (whose writes stay
+                // in it, MEM-6), keeps living where it was born and its type
+                // changes THERE. It used to be defined again in the current
+                // scope, so after `? c { x = 3 }` the analyser had forgotten the
+                // 3 and still warned that `x` was Unit (GLB-092, decided
+                // 2026-10-05). A name not visible here is born here, as before.
+                let home = if self.crosses_strong_boundary(&assign.name) {
+                    None
+                } else {
+                    self.env.var_depth(&assign.name)
+                        .filter(|&d| self.lambda_floor.last().is_none_or(|&floor| d >= floor))
+                };
+                self.env.note_real_type_at(home, &assign.name, &value_type);
+                self.env.assign_var_at(home, &assign.name, value_type);
             }
 
             Statement::ConstDecl(const_decl) => {
@@ -3179,6 +3218,7 @@ impl TypeChecker {
                 for param in &lambda.params {
                     self.env.define_var(param, ZymbolType::Any);
                 }
+                self.lambda_floor.push(self.env.current_scope());
 
                 // Infer return type from body
                 let return_type = match &lambda.body {
@@ -3205,6 +3245,7 @@ impl TypeChecker {
                     }
                 };
 
+                self.lambda_floor.pop();
                 self.env.exit_scope();
 
                 ZymbolType::Function(param_types, Box::new(return_type))
