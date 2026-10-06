@@ -859,20 +859,22 @@ fn cmp_order(va: &Value, vb: &Value) -> Option<i32> {
     }
 }
 
-/// The tree-walker's message for an ordering comparison it refuses to make, so
-/// both engines fail with the same text.
-fn cmp_order_error(va: &Value, vb: &Value, op: &str) -> String {
+/// The tree-walker's refusal for an ordering comparison it will not make, so
+/// both engines fail with the same text — and the same kind: two types that
+/// never compare are a `##Type` (D1; GLB-091). A string against a number is
+/// decided by the text's VALUE (`"5" < 10` compares), and keeps its own kind.
+fn cmp_order_error(va: &Value, vb: &Value, op: &str) -> VmError {
     match (va, vb) {
-        (Value::String(s), Value::Int(i)) =>
-            format!("cannot compare string '{}' with integer {} using operator '{}'", s.as_ref(), i, op),
-        (Value::Int(i), Value::String(s)) =>
-            format!("cannot compare integer {} with string '{}' using operator '{}'", i, s.as_ref(), op),
-        (Value::String(s), Value::Float(f)) =>
-            format!("cannot compare string '{}' with float {} using operator '{}'", s.as_ref(), f, op),
-        (Value::Float(f), Value::String(s)) =>
-            format!("cannot compare float {} with string '{}' using operator '{}'", f, s.as_ref(), op),
-        (a, b) =>
-            format!("cannot compare values with operator '{}': {} and {}", op, a.type_name(), b.type_name()),
+        (Value::String(s), Value::Int(i)) => VmError::Generic(
+            format!("cannot compare string '{}' with integer {} using operator '{}'", s.as_ref(), i, op)),
+        (Value::Int(i), Value::String(s)) => VmError::Generic(
+            format!("cannot compare integer {} with string '{}' using operator '{}'", i, s.as_ref(), op)),
+        (Value::String(s), Value::Float(f)) => VmError::Generic(
+            format!("cannot compare string '{}' with float {} using operator '{}'", s.as_ref(), f, op)),
+        (Value::Float(f), Value::String(s)) => VmError::Generic(
+            format!("cannot compare float {} with string '{}' using operator '{}'", f, s.as_ref(), op)),
+        (a, b) => VmError::TypeMsg(
+            format!("cannot compare values with operator '{}': {} and {}", op, a.type_name(), b.type_name())),
     }
 }
 
@@ -1551,7 +1553,8 @@ impl<W: Write> VM<W> {
                     (Value::Bool(x), Value::Bool(y)) => Ok((*x, *y)),
                     (va, vb) => Err(logical_type_error($op, if matches!(va, Value::Bool(_)) { vb } else { va })),
                 };
-                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+                // A wrong TYPE is a `##Type` (D1; GLB-091).
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::TypeMsg(msg)) }
             }}
         }
         // rn!: the operand of unary `-`. Its refusal used to come out of `ri!`
@@ -1570,9 +1573,7 @@ impl<W: Write> VM<W> {
             ($a:expr, $b:expr, $op:expr) => {
                 match cmp_order(rreg!($a), rreg!($b)) {
                     Some(r) => r,
-                    None => raise!(VmError::Generic(
-                        cmp_order_error(rreg!($a), rreg!($b), $op)
-                    )),
+                    None => raise!(cmp_order_error(rreg!($a), rreg!($b), $op)),
                 }
             };
         }
@@ -1588,7 +1589,7 @@ impl<W: Write> VM<W> {
                             Some(r) => Ok(r),
                             None => Err(cmp_order_error(rreg!($r), &rhs, $op)),
                         };
-                        match read { Ok(r) => r, Err(msg) => raise!(VmError::Generic(msg)) }
+                        match read { Ok(r) => r, Err(e) => raise!(e) }
                     }
                 }
             }};
@@ -2005,7 +2006,8 @@ impl<W: Write> VM<W> {
                 &Instruction::Not(dst, src)  => {
                     let v = match rreg!(src) {
                         Value::Bool(b) => *b,
-                        other => raise!(VmError::Generic(format!(
+                        // A wrong TYPE is a `##Type` (D1; GLB-091).
+                        other => raise!(VmError::TypeMsg(format!(
                             "logical NOT requires boolean operand, got {}", other.type_name()))),
                     };
                     wreg!(dst, Value::Bool(!v));
@@ -3861,7 +3863,8 @@ impl<W: Write> VM<W> {
                     let v = self.reg_get(src);
                     if !matches!(v, Value::Bool(_)) {
                         let msg = logical_type_error(if is_and { "AND" } else { "OR" }, v);
-                        raise!(VmError::Generic(msg));
+                        // A wrong TYPE is a `##Type` (D1; GLB-091).
+                        raise!(VmError::TypeMsg(msg));
                     }
                 }
                 &Instruction::RequireDict(src) => {

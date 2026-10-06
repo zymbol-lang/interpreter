@@ -445,22 +445,25 @@ impl<W: Write> Interpreter<W> {
                     })
                 }
             }
-            _ => Err(RuntimeError::Generic {
-                // GLOBAL-001: this used to interpolate the VALUES —
-                // `String("ab") and Char('c')` — where the VM had only the type
-                // names to hand and zyjs wrote a third form. One refusal, three
-                // wordings, and the documentation could only quote one. The
-                // family names types now, in all three engines.
-                message: format!(
+            // GLOBAL-001: this used to interpolate the VALUES —
+            // `String("ab") and Char('c')` — where the VM had only the type
+            // names to hand and zyjs wrote a third form. One refusal, three
+            // wordings, and the documentation could only quote one. The family
+            // names types now, in all three engines. Two types that never
+            // compare are a wrong TYPE: a `##Type` (D1; GLB-091). A string
+            // against a number, above, is decided by the text's VALUE.
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
                     "cannot compare values with operator '{}': {} and {}",
                     op, left.type_ident(), right.type_ident()
                 ),
-                span: Span::new(
+                Span::new(
                     zymbol_span::Position::start(),
                     zymbol_span::Position::start(),
                     zymbol_span::FileId(0),
                 ),
-            }),
+            )),
         }
     }
 }
