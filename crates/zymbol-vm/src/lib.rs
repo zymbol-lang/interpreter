@@ -601,6 +601,13 @@ pub enum VmError {
     #[error("{0}")]
     IndexMsg(String),
 
+    /// A message whose family is `##Parse`: a text that had to be read as a
+    /// number and is not one — `"a" < 10` (GLB-094). The message carries the
+    /// text, so its words could not be left to decide the family: `"index" < 10`
+    /// was an `##Index`.
+    #[error("{0}")]
+    ParseMsg(String),
+
     /// A runtime error that knows where it happened. Built once, at the edge of
     /// `run`, from the instruction pointer the VM was on — so the hot loop pays
     /// two stores per instruction and nothing more. `Display` is the message
@@ -862,16 +869,17 @@ fn cmp_order(va: &Value, vb: &Value) -> Option<i32> {
 /// The tree-walker's refusal for an ordering comparison it will not make, so
 /// both engines fail with the same text — and the same kind: two types that
 /// never compare are a `##Type` (D1; GLB-091). A string against a number is
-/// decided by the text's VALUE (`"5" < 10` compares), and keeps its own kind.
+/// decided by the text's VALUE (`"5" < 10` compares); when the text is not a
+/// number, reading it as one is what failed, and that is a `##Parse` (GLB-094).
 fn cmp_order_error(va: &Value, vb: &Value, op: &str) -> VmError {
     match (va, vb) {
-        (Value::String(s), Value::Int(i)) => VmError::Generic(
+        (Value::String(s), Value::Int(i)) => VmError::ParseMsg(
             format!("cannot compare string '{}' with integer {} using operator '{}'", s.as_ref(), i, op)),
-        (Value::Int(i), Value::String(s)) => VmError::Generic(
+        (Value::Int(i), Value::String(s)) => VmError::ParseMsg(
             format!("cannot compare integer {} with string '{}' using operator '{}'", i, s.as_ref(), op)),
-        (Value::String(s), Value::Float(f)) => VmError::Generic(
+        (Value::String(s), Value::Float(f)) => VmError::ParseMsg(
             format!("cannot compare string '{}' with float {} using operator '{}'", s.as_ref(), f, op)),
-        (Value::Float(f), Value::String(s)) => VmError::Generic(
+        (Value::Float(f), Value::String(s)) => VmError::ParseMsg(
             format!("cannot compare float {} with string '{}' using operator '{}'", f, s.as_ref(), op)),
         (a, b) => VmError::TypeMsg(
             format!("cannot compare values with operator '{}': {} and {}", op, a.type_name(), b.type_name())),
@@ -1131,6 +1139,7 @@ fn vm_error_kind(e: &VmError) -> &'static str {
         VmError::DivisionByZero | VmError::ModuloByZero => "Div",
         VmError::IntOverflow { .. } | VmError::CastOverflow { .. } => "Range",
         VmError::IndexOutOfBounds { .. } | VmError::IndexZero | VmError::IndexMsg(_) => "Index",
+        VmError::ParseMsg(_) => "Parse",
         VmError::Io(_) => "IO",
         VmError::Generic(m) | VmError::Located { message: m, .. } => {
             zymbol_common::errkind::error_kind_of_message(m)

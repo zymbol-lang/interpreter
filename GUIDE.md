@@ -1251,7 +1251,8 @@ a >= b    // greater than or equal
   No script is privileged: whatever ASCII digits do, every other script does.
 - **Lexicographic** when both sides are non-numeric text (`"abc" < "abd"` → `#1`).
 - **An error** when a number meets text that is not a number
-  (`"abc" > 5` → *cannot compare string 'abc' with integer 5*).
+  (`"abc" > 5` → *cannot compare string 'abc' with integer 5*), and its kind
+  is `##Parse`: reading the text as a number is what failed.
 
 Chars compare by code point and Bools order `#0 < #1`.
 
@@ -3726,7 +3727,7 @@ r6 = 7 |> (x -> x * factor)
 | `##Key` | Key not in a dictionary |
 | `##Range` | Outside the safe integer range |
 | `##Type` | Type mismatch |
-| `##Parse` | Data parsing failure |
+| `##Parse` | Data parsing failure — also a text compared with a number that it is not (`"a" < 10`) |
 | `##IO` | File / system operations |
 | `##Network` | Network errors |
 | `##DB` | Database errors (`std/db`) |
