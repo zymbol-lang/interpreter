@@ -608,6 +608,13 @@ pub enum VmError {
     #[error("{0}")]
     ParseMsg(String),
 
+    /// A message whose family is `##Key`: a key that is not in the dictionary.
+    /// The message carries the key and the keys there are, so their words could
+    /// not be left to decide the family: a key called `overflow` was a
+    /// `##Range` (GLB-097).
+    #[error("{0}")]
+    KeyMsg(String),
+
     /// A runtime error that knows where it happened. Built once, at the edge of
     /// `run`, from the instruction pointer the VM was on — so the hot loop pays
     /// two stores per instruction and nothing more. `Display` is the message
@@ -1140,6 +1147,7 @@ fn vm_error_kind(e: &VmError) -> &'static str {
         VmError::IntOverflow { .. } | VmError::CastOverflow { .. } => "Range",
         VmError::IndexOutOfBounds { .. } | VmError::IndexZero | VmError::IndexMsg(_) => "Index",
         VmError::ParseMsg(_) => "Parse",
+        VmError::KeyMsg(_) => "Key",
         VmError::Io(_) => "IO",
         VmError::Generic(m) | VmError::Located { message: m, .. } => {
             zymbol_common::errkind::error_kind_of_message(m)
@@ -2277,7 +2285,7 @@ impl<W: Write> VM<W> {
                             None => {
                                 let available: Vec<String> =
                                     fields.iter().map(|(k, _)| k.clone()).collect();
-                                raise!(VmError::Generic(missing_key_msg(&key, &available)));
+                                raise!(VmError::KeyMsg(missing_key_msg(&key, &available)));
                             }
                         }
                         continue;
@@ -2478,7 +2486,7 @@ impl<W: Write> VM<W> {
                             None => {
                                 let available: Vec<String> =
                                     fields.iter().map(|(k, _)| k.clone()).collect();
-                                raise!(VmError::Generic(missing_key_msg(&key, &available)));
+                                raise!(VmError::KeyMsg(missing_key_msg(&key, &available)));
                             }
                         }
                         self.value_stack[base + arr_reg as usize] =
@@ -3895,7 +3903,7 @@ impl<W: Write> VM<W> {
                                 Some(v) => v,
                                 None => {
                                     let available: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
-                                    raise!(VmError::Generic(missing_key_msg(&field_name, &available)));
+                                    raise!(VmError::KeyMsg(missing_key_msg(&field_name, &available)));
                                 }
                             }
                         }
@@ -4043,7 +4051,9 @@ impl<W: Write> VM<W> {
                                 // engine happens to hold; `hexadecimal` is what
                                 // the reader wrote. One complete literal per
                                 // base, never a template with a hole.
-                                Err(_) => raise!(VmError::Generic(match radix {
+                                // A `##Parse`, declared: the words of the text
+                                // chose the family (GLB-097).
+                                Err(_) => raise!(VmError::ParseMsg(match radix {
                                     2 => format!("failed to parse '{}' as binary number", stripped),
                                     8 => format!("failed to parse '{}' as octal number", stripped),
                                     16 => format!("failed to parse '{}' as hexadecimal number", stripped),
@@ -4286,7 +4296,7 @@ impl<W: Write> VM<W> {
                         // it used to become 0.0 without a word.
                         Value::String(s) => match ascii_digits(s.as_ref().trim()).parse::<f64>() {
                             Ok(f) => f,
-                            Err(_) => raise!(VmError::Generic(format!(
+                            Err(_) => raise!(VmError::ParseMsg(format!(
                                 "cannot convert string '{}' to number for rounding", s.as_ref()
                             ))),
                         },
@@ -4301,7 +4311,7 @@ impl<W: Write> VM<W> {
                         Value::Float(f) => *f,
                         Value::String(s) => match ascii_digits(s.as_ref().trim()).parse::<f64>() {
                             Ok(f) => f,
-                            Err(_) => raise!(VmError::Generic(format!(
+                            Err(_) => raise!(VmError::ParseMsg(format!(
                                 "cannot convert string '{}' to number for truncation", s.as_ref()
                             ))),
                         },
