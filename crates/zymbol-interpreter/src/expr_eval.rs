@@ -133,10 +133,11 @@ impl<W: Write> Interpreter<W> {
                     return Ok(v.clone());
                 }
                 let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
-                return Err(RuntimeError::Generic {
-                    message: crate::variables::missing_key_msg(&member.field, &available),
-                    span: member.span,
-                });
+                return Err(RuntimeError::kinded(
+                    "Key",
+                    crate::variables::missing_key_msg(&member.field, &available),
+                    member.span,
+                ));
             }
         }
 
@@ -156,10 +157,11 @@ impl<W: Write> Interpreter<W> {
                 let available_fields: Vec<String> = fields.iter()
                     .map(|(name, _)| name.clone())
                     .collect();
-                Err(RuntimeError::Generic {
-                    message: crate::variables::missing_key_msg(&member.field, &available_fields),
-                    span: member.span,
-                })
+                Err(RuntimeError::kinded(
+                    "Key",
+                    crate::variables::missing_key_msg(&member.field, &available_fields),
+                    member.span,
+                ))
             }
             Value::Tuple(_) => {
                 Err(RuntimeError::Generic {
@@ -301,10 +303,11 @@ impl<W: Write> Interpreter<W> {
                 return Ok(Some(v));
             }
             let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
-            return Err(RuntimeError::Generic {
-                message: crate::variables::missing_key_msg(key, &available),
+            return Err(RuntimeError::kinded(
+                "Key",
+                crate::variables::missing_key_msg(key, &available),
                 span,
-            });
+            ));
         }
 
         // Decision 11: a dictionary is addressed by KEY, never by position.

@@ -130,10 +130,11 @@ impl<W: Write> Interpreter<W> {
                 Some(i) => { out.remove(i); }
                 None => {
                     let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
-                    return Err(RuntimeError::Generic {
-                        message: crate::variables::missing_key_msg(&key, &available),
-                        span: op.span,
-                    });
+                    return Err(RuntimeError::kinded(
+                        "Key",
+                        crate::variables::missing_key_msg(&key, &available),
+                        op.span,
+                    ));
                 }
             }
             return Ok(Value::named_tuple(out));
@@ -1444,10 +1445,11 @@ fn get_at_step(col: &Value, step: &Value, span: zymbol_span::Span) -> Result<Val
             Some((_, v)) => Ok(v.clone()),
             None => {
                 let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
-                Err(RuntimeError::Generic {
-                    message: crate::variables::missing_key_msg(key, &available),
+                Err(RuntimeError::kinded(
+                    "Key",
+                    crate::variables::missing_key_msg(key, &available),
                     span,
-                })
+                ))
             }
         };
     }

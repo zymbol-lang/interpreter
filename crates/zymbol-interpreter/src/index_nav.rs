@@ -225,10 +225,11 @@ fn descend_key(collection: Value, key: &str, op_span: zymbol_span::Span) -> Resu
             Some((_, v)) => Ok(v.clone()),
             None => {
                 let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
-                Err(RuntimeError::Generic {
-                    message: crate::variables::missing_key_msg(key, &available),
-                    span: op_span,
-                })
+                Err(RuntimeError::kinded(
+                    "Key",
+                    crate::variables::missing_key_msg(key, &available),
+                    op_span,
+                ))
             }
         },
         other => Err(RuntimeError::kinded(

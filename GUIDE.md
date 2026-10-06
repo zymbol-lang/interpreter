@@ -3727,7 +3727,7 @@ r6 = 7 |> (x -> x * factor)
 | `##Key` | Key not in a dictionary |
 | `##Range` | Outside the safe integer range |
 | `##Type` | Type mismatch |
-| `##Parse` | Data parsing failure — also a text compared with a number that it is not (`"a" < 10`) |
+| `##Parse` | Data parsing failure — also a text read as a number that it is not: compared with one (`"a" < 10`), rounded, truncated or converted by base |
 | `##IO` | File / system operations |
 | `##Network` | Network errors |
 | `##DB` | Database errors (`std/db`) |
@@ -4922,7 +4922,8 @@ its own rather than run as an example:
 
 The `-` sign and the decimal `.` are read as ASCII, matching how they are
 written. A string that is not a number at all is still rejected — `#.1|"abc"|`
-raises `cannot convert string 'abc' to number for rounding` in both engines.
+raises `cannot convert string 'abc' to number for rounding` in every engine, and
+its kind is `##Parse`: reading the text as a number is what failed.
 
 ### Boolean Output
 

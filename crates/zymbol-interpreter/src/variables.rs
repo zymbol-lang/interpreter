@@ -34,6 +34,10 @@ pub(crate) fn tuple_immutable_msg(name: &str) -> String {
 ///
 /// The vocabulary is the decision too: it is a **dictionary**, not a named
 /// tuple. A tuple is immutable by definition and this is not (decision 7).
+///
+/// Every site raises it with its kind declared, `##Key` (GLB-097): the message
+/// carries the key asked for and the keys there are, and their words used to
+/// choose the family — a key called `overflow` was a `##Range`.
 pub(crate) fn missing_key_msg(key: &str, available: &[String]) -> String {
     if available.is_empty() {
         format!("no key '{}' in dictionary — it is empty", key)

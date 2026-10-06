@@ -358,8 +358,11 @@ impl<W: Write> Interpreter<W> {
                     BasePrefix::Decimal => s.parse::<u32>(),
                     BasePrefix::Hex => u32::from_str_radix(s, 16),
                 }
-                .map_err(|_| RuntimeError::Generic {
-                    message: format!(
+                // A `##Parse`, declared: the message carries the text, and its
+                // words chose the family — `0d|"type"|` was a `##Type` (GLB-097).
+                .map_err(|_| RuntimeError::kinded(
+                    "Parse",
+                    format!(
                         "failed to parse '{}' as {} number",
                         s,
                         match op.prefix {
@@ -369,8 +372,8 @@ impl<W: Write> Interpreter<W> {
                             BasePrefix::Hex => "hexadecimal",
                         }
                     ),
-                    span: op.span,
-                })?;
+                    op.span,
+                ))?;
 
                 if code > 0x10FFFF {
                     return Err(RuntimeError::Generic {
@@ -426,13 +429,18 @@ impl<W: Write> Interpreter<W> {
                 } else if let Ok(f) = normalized.parse::<f64>() {
                     f
                 } else {
-                    return Err(RuntimeError::Generic {
-                        message: format!(
+                    // Reading the text as a number is what failed: a `##Parse`,
+                    // as in `0d|…|` and `"a" < 10` (GLB-097, decided 2026-10-06).
+                    // It was a `##_`, and the words of the text could make it
+                    // an `##Index` or a `##Range`.
+                    return Err(RuntimeError::kinded(
+                        "Parse",
+                        format!(
                             "cannot convert string '{}' to number for rounding",
                             s
                         ),
-                        span: op.span,
-                    });
+                        op.span,
+                    ));
                 }
             }
             _ => {
@@ -477,13 +485,18 @@ impl<W: Write> Interpreter<W> {
                 } else if let Ok(f) = normalized.parse::<f64>() {
                     f
                 } else {
-                    return Err(RuntimeError::Generic {
-                        message: format!(
+                    // Reading the text as a number is what failed: a `##Parse`,
+                    // as in `0d|…|` and `"a" < 10` (GLB-097, decided 2026-10-06).
+                    // It was a `##_`, and the words of the text could make it
+                    // an `##Index` or a `##Range`.
+                    return Err(RuntimeError::kinded(
+                        "Parse",
+                        format!(
                             "cannot convert string '{}' to number for truncation",
                             s
                         ),
-                        span: op.span,
-                    });
+                        op.span,
+                    ));
                 }
             }
             _ => {

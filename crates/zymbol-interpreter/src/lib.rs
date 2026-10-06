@@ -1992,10 +1992,11 @@ impl<W: Write> Interpreter<W> {
                     else {
                         let available: Vec<String> =
                             pairs.iter().map(|(k, _)| k.clone()).collect();
-                        return Err(RuntimeError::Generic {
-                            message: crate::variables::missing_key_msg(field, &available),
+                        return Err(RuntimeError::kinded(
+                            "Key",
+                            crate::variables::missing_key_msg(field, &available),
                             span,
-                        });
+                        ));
                     };
                     self.set_variable(var_name, val);
                 }
