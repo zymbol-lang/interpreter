@@ -212,7 +212,7 @@ enum IndexKind {
 }
 
 /// Type constraint for inference
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypeConstraint {
     /// Must be this exact type
     Exact(ZymbolType),
@@ -265,6 +265,61 @@ impl TypeConstraint {
     }
 }
 
+/// What a path through a function's body requires of its parameters: the
+/// constraints it collected, per parameter (GLB-101).
+pub type PathConstraints = HashMap<String, Vec<TypeConstraint>>;
+
+/// The paths through a piece of a function's body: what the paths that return
+/// in it all require, and what the paths that go on to what follows all
+/// require. `None` when there is no such path.
+struct ConstraintPaths {
+    returned: Option<PathConstraints>,
+    falls: Option<PathConstraints>,
+}
+
+impl ConstraintPaths {
+    /// One path, going on to what follows.
+    fn through(at: PathConstraints) -> Self {
+        ConstraintPaths { returned: None, falls: Some(at) }
+    }
+
+    /// The same paths, with what they required replaced by `at`: the shape of
+    /// a block the collector does not read, which still says where its paths
+    /// end.
+    fn requiring(self, at: &PathConstraints) -> Self {
+        ConstraintPaths {
+            returned: self.returned.map(|_| at.clone()),
+            falls: self.falls.map(|_| at.clone()),
+        }
+    }
+}
+
+/// What two sets of paths both require. `None` is "no path", which requires
+/// nothing of the other.
+fn meet_paths(a: Option<PathConstraints>, b: Option<PathConstraints>) -> Option<PathConstraints> {
+    match (a, b) {
+        (None, other) | (other, None) => other,
+        (Some(a), Some(b)) => Some(
+            a.into_iter()
+                .filter_map(|(name, cs)| {
+                    let theirs = b.get(&name)?;
+                    let both: Vec<TypeConstraint> =
+                        cs.into_iter().filter(|c| theirs.contains(c)).collect();
+                    (!both.is_empty()).then_some((name, both))
+                })
+                .collect(),
+        ),
+    }
+}
+
+/// One path going on: what it required so far, and what it requires now.
+fn join_paths(mut path: PathConstraints, more: PathConstraints) -> PathConstraints {
+    for (name, cs) in more {
+        path.entry(name).or_default().extend(cs);
+    }
+    path
+}
+
 /// Type environment for tracking variable types
 #[derive(Debug, Clone)]
 pub struct TypeEnv {
@@ -303,6 +358,17 @@ impl TypeEnv {
     /// Clear parameter constraints (used between inference passes)
     pub fn clear_param_constraints(&mut self) {
         self.param_constraints.clear();
+    }
+
+    /// The constraints collected so far, taken out — so the ones a single
+    /// statement adds can be read apart from the rest (GLB-101).
+    pub fn take_param_constraints(&mut self) -> PathConstraints {
+        std::mem::take(&mut self.param_constraints)
+    }
+
+    /// Put a set of constraints in place of the ones collected.
+    pub fn set_param_constraints(&mut self, constraints: PathConstraints) {
+        self.param_constraints = constraints;
     }
 
     /// Add a constraint for a parameter
@@ -2054,11 +2120,62 @@ impl TypeChecker {
         (param_types, return_type)
     }
 
-    /// Collect type constraints from a block for parameter inference
+    /// Collect type constraints from a block for parameter inference.
+    ///
+    /// A constraint reaches a parameter only when every path through the body
+    /// requires it (GLB-101, decided 2026-10-06). The language is variant: a
+    /// function may treat each type its own way —
+    ///
+    /// ```text
+    /// f(v) { t = v#?  ? t[1] == "###" { <~ v + 1 } _? t[1] == "##\"" { <~ v "1" } }
+    /// ```
+    ///
+    /// — and its returns already unify to `Any`. Collecting every branch into
+    /// one set, as if all of them ran, refused `f("a")`, the call that function
+    /// was written for, while the same dispatch written with `??` was accepted.
+    /// So each path keeps what it evaluated, a `<~` closes it, and a parameter
+    /// is required to be what all of them agree on.
+    ///
+    /// Only how the constraints combine changed, not what is read: a block the
+    /// collector did not read (`!?`, the block arm of a `??`) still contributes
+    /// nothing, and is walked only to see where its paths end. What a path
+    /// requires is therefore always part of what was collected before, and this
+    /// can drop a refusal but never add one.
     fn collect_constraints_from_block(&mut self, block: &Block, params: &[String]) {
-        for stmt in &block.statements {
-            self.collect_constraints_from_statement(stmt, params);
+        let paths = self.constraint_paths_of_block(&block.statements, params, PathConstraints::new());
+        let every = meet_paths(paths.returned, paths.falls).unwrap_or_default();
+        self.env.set_param_constraints(every);
+    }
+
+    /// The paths through `stmts`, each starting from what `start` requires.
+    fn constraint_paths_of_block(
+        &mut self,
+        stmts: &[Statement],
+        params: &[String],
+        start: PathConstraints,
+    ) -> ConstraintPaths {
+        let mut returned = None;
+        let mut here = Some(start);
+        for stmt in stmts {
+            // Nothing reaches the rest of the block once every path has left it.
+            let Some(at) = here.take() else { break };
+            let paths = self.constraint_paths_of_statement(stmt, params, at);
+            returned = meet_paths(returned, paths.returned);
+            here = paths.falls;
         }
+        ConstraintPaths { returned, falls: here }
+    }
+
+    /// What these expressions require of the parameters, kept apart from the
+    /// constraints being inferred.
+    fn constraints_of(&mut self, exprs: &[&Expr], params: &[String]) -> PathConstraints {
+        let saved = self.env.take_param_constraints();
+        for expr in exprs {
+            self.collect_constraints_from_expr(expr, params);
+        }
+        let found = self.env.take_param_constraints();
+        self.env.set_param_constraints(saved);
+        found
     }
 
     /// Define all local variable assignments from a block in the current scope.
@@ -2110,57 +2227,126 @@ impl TypeChecker {
         }
     }
 
-    /// Collect type constraints from a statement
-    fn collect_constraints_from_statement(&mut self, stmt: &Statement, params: &[String]) {
+    /// The paths through one statement, starting from what `at` requires.
+    fn constraint_paths_of_statement(
+        &mut self,
+        stmt: &Statement,
+        params: &[String],
+        at: PathConstraints,
+    ) -> ConstraintPaths {
         match stmt {
             Statement::Assignment(assign) => {
-                self.collect_constraints_from_expr(&assign.value, params);
+                let found = self.constraints_of(&[&assign.value], params);
+                ConstraintPaths::through(join_paths(at, found))
             }
             Statement::ConstDecl(const_decl) => {
-                self.collect_constraints_from_expr(&const_decl.value, params);
+                let found = self.constraints_of(&[&const_decl.value], params);
+                ConstraintPaths::through(join_paths(at, found))
             }
             Statement::Output(output) => {
-                for expr in &output.exprs {
-                    self.collect_constraints_from_expr(expr, params);
-                }
-            }
-            Statement::Return(ret) => {
-                if let Some(value) = &ret.value {
-                    self.collect_constraints_from_expr(value, params);
-                }
-            }
-            Statement::If(if_stmt) => {
-                self.collect_constraints_from_expr(&if_stmt.condition, params);
-                self.collect_constraints_from_block(&if_stmt.then_block, params);
-                for branch in &if_stmt.else_if_branches {
-                    self.collect_constraints_from_expr(&branch.condition, params);
-                    self.collect_constraints_from_block(&branch.block, params);
-                }
-                if let Some(else_block) = &if_stmt.else_block {
-                    self.collect_constraints_from_block(else_block, params);
-                }
-            }
-            Statement::Loop(loop_stmt) => {
-                if let Some(condition) = &loop_stmt.condition {
-                    self.collect_constraints_from_expr(condition, params);
-                }
-                if let Some(iterable) = &loop_stmt.iterable {
-                    self.collect_constraints_from_expr(iterable, params);
-                }
-                self.collect_constraints_from_block(&loop_stmt.body, params);
+                let exprs: Vec<&Expr> = output.exprs.iter().collect();
+                let found = self.constraints_of(&exprs, params);
+                ConstraintPaths::through(join_paths(at, found))
             }
             Statement::Expr(expr_stmt) => {
-                self.collect_constraints_from_expr(&expr_stmt.expr, params);
+                let found = self.constraints_of(&[&expr_stmt.expr], params);
+                ConstraintPaths::through(join_paths(at, found))
             }
-            Statement::Match(match_stmt) => {
-                self.collect_constraints_from_expr(&match_stmt.scrutinee, params);
-                for case in &match_stmt.cases {
-                    if let Some(value) = &case.value {
-                        self.collect_constraints_from_expr(value, params);
-                    }
+            // A `<~` closes its path.
+            Statement::Return(ret) => {
+                let found = match &ret.value {
+                    Some(value) => self.constraints_of(&[&**value], params),
+                    None => PathConstraints::new(),
+                };
+                ConstraintPaths { returned: Some(join_paths(at, found)), falls: None }
+            }
+            // The first condition is read on every path through the `?`; a `_?`
+            // condition only on the paths that reach it. With no `_`, one path
+            // enters no branch at all.
+            Statement::If(if_stmt) => {
+                let found = self.constraints_of(&[&*if_stmt.condition], params);
+                let mut reached = join_paths(at, found);
+                let then = self.constraint_paths_of_block(&if_stmt.then_block.statements, params, reached.clone());
+                let (mut returned, mut falls) = (then.returned, then.falls);
+                for branch in &if_stmt.else_if_branches {
+                    let found = self.constraints_of(&[&*branch.condition], params);
+                    reached = join_paths(reached, found);
+                    let paths = self.constraint_paths_of_block(&branch.block.statements, params, reached.clone());
+                    returned = meet_paths(returned, paths.returned);
+                    falls = meet_paths(falls, paths.falls);
                 }
+                match &if_stmt.else_block {
+                    Some(else_block) => {
+                        let paths = self.constraint_paths_of_block(&else_block.statements, params, reached);
+                        returned = meet_paths(returned, paths.returned);
+                        falls = meet_paths(falls, paths.falls);
+                    }
+                    None => falls = meet_paths(falls, Some(reached)),
+                }
+                ConstraintPaths { returned, falls }
             }
-            _ => {}
+            // The header is read on every path; the body may not run at all, so
+            // it requires something only of the paths that return inside it.
+            Statement::Loop(loop_stmt) => {
+                let mut header: Vec<&Expr> = Vec::new();
+                if let Some(condition) = &loop_stmt.condition {
+                    header.push(condition);
+                }
+                if let Some(iterable) = &loop_stmt.iterable {
+                    header.push(iterable);
+                }
+                let found = self.constraints_of(&header, params);
+                let reached = join_paths(at, found);
+                let body = self.constraint_paths_of_block(&loop_stmt.body.statements, params, reached.clone());
+                ConstraintPaths { returned: body.returned, falls: Some(reached) }
+            }
+            // The scrutinee is read on every path, and each arm is one path. A
+            // value arm's value is read and the path goes on: a `??` written as
+            // a statement discards it (and warns that it does). A block arm was
+            // never read; it still ends the paths that return in it. A value no
+            // arm matches fails there — `no pattern matched` — so it is no path,
+            // with or without a `_` arm.
+            Statement::Match(match_stmt) => {
+                let found = self.constraints_of(&[&*match_stmt.scrutinee], params);
+                let reached = join_paths(at, found);
+                let (mut returned, mut falls) = (None, None);
+                for case in &match_stmt.cases {
+                    let mut arm = match &case.block {
+                        Some(block) => self
+                            .constraint_paths_of_block(&block.statements, params, reached.clone())
+                            .requiring(&reached),
+                        None => ConstraintPaths::through(reached.clone()),
+                    };
+                    if let Some(value) = &case.value {
+                        let found = self.constraints_of(&[value], params);
+                        arm.falls = arm.falls.map(|path| join_paths(path, found));
+                    }
+                    returned = meet_paths(returned, arm.returned);
+                    falls = meet_paths(falls, arm.falls);
+                }
+                ConstraintPaths { returned, falls }
+            }
+            // Nothing under `!?` is required: a failure anywhere in it goes to a
+            // `:!`, which is what writing one is for. A `<~` in it still closes
+            // its path, so what follows is not asked of a path that returned.
+            Statement::Try(try_stmt) => {
+                let body = self
+                    .constraint_paths_of_block(&try_stmt.try_block.statements, params, at.clone())
+                    .requiring(&at);
+                let (mut returned, mut falls) = (body.returned, body.falls);
+                for catch in &try_stmt.catch_clauses {
+                    let paths = self
+                        .constraint_paths_of_block(&catch.block.statements, params, at.clone())
+                        .requiring(&at);
+                    returned = meet_paths(returned, paths.returned);
+                    falls = meet_paths(falls, paths.falls);
+                }
+                ConstraintPaths { returned, falls }
+            }
+            // A jump leaves the block; what the loop requires does not depend on
+            // it.
+            Statement::Break(_) | Statement::Continue(_) => ConstraintPaths { returned: None, falls: None },
+            _ => ConstraintPaths::through(at),
         }
     }
 
