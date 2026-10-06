@@ -1485,9 +1485,22 @@ impl TypeChecker {
                     );
                     return;
                 }
-                // Input always produces a string
+                // The name holds what the marker reads — the table of GUIDE
+                // § Input `<<`. It was a String in every case ("input always
+                // produces a string"), so `<< ### n` then `n * 2` warned
+                // `non-numeric type: String` on a program that prints 14
+                // (GLB-098, decided 2026-10-06). `#|…|` reads a number when the
+                // line is one and the text when it is not: the input decides,
+                // and the analyser cannot tell.
+                let read = match input.cast {
+                    zymbol_ast::InputCast::String | zymbol_ast::InputCast::Text { .. } => ZymbolType::String,
+                    zymbol_ast::InputCast::Int { .. } => ZymbolType::Int,
+                    zymbol_ast::InputCast::Float | zymbol_ast::InputCast::Decimal { .. } => ZymbolType::Float,
+                    zymbol_ast::InputCast::Char => ZymbolType::Char,
+                    zymbol_ast::InputCast::Numeric => ZymbolType::Any,
+                };
                 self.check_alias_name(&input.variable, input.span, "variable");
-                self.env.define_var(&input.variable, ZymbolType::String);
+                self.env.define_var(&input.variable, read);
             }
 
             Statement::CliArgsCapture(capture) => {
