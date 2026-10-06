@@ -2022,9 +2022,14 @@ impl TypeChecker {
         // Infer return type from return statements
         // Suppress false "undefined variable" errors that occur because local vars
         // defined in inner scopes may not be fully visible during signature inference.
+        // The warnings too: the body is checked in the third pass, and what this
+        // one found there was reported twice — `g() { <~ ("a" - 1) }` warned
+        // about the `-` two times (GLB-095).
         let errors_before = self.errors.len();
+        let warnings_before = self.warnings.len();
         let return_type = self.infer_return_type_from_block(&func.body);
         self.errors.truncate(errors_before);
+        self.warnings.truncate(warnings_before);
 
         // Resolve parameter types from constraints
         let param_types: Vec<ZymbolType> = func.parameters.iter()
@@ -3248,7 +3253,15 @@ impl TypeChecker {
                         for stmt in &block.statements {
                             self.check_statement(stmt);
                         }
-                        self.infer_return_type_from_block(block)
+                        // The statements were just checked; reading their `<~`
+                        // again for the return type reported every error and
+                        // warning in them a second time (GLB-095).
+                        let errors_before = self.errors.len();
+                        let warnings_before = self.warnings.len();
+                        let ty = self.infer_return_type_from_block(block);
+                        self.errors.truncate(errors_before);
+                        self.warnings.truncate(warnings_before);
+                        ty
                     }
                 };
 
