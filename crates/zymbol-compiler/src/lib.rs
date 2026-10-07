@@ -3463,6 +3463,10 @@ impl Compiler {
         m: &zymbol_ast::MatchExpr,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
+        // The statement that holds this `??`: the arms' own statements stamp
+        // their lines as they compile, and the error for a value no arm matches
+        // is emitted after them (ZYVM-011).
+        let at = ctx.cur_src;
         let r_sub = self.compile_expr(&m.scrutinee, ctx)?;
         let dst = ctx.alloc_temp()?;
         ctx.emit(Instruction::LoadUnit(dst)); // default result
@@ -3529,9 +3533,16 @@ impl Compiler {
 
         // Falling past the last case means no arm matched. That aborts, as in
         // the tree-walker: a `##_` nobody computed must not flow on (GLB-016).
+        // At the line of the statement, as every runtime error is: stamped
+        // with the last statement of an arm, `?? v { 1 => { >> "uno" ¶ } }`
+        // failed at the `>>` (ZYVM-011). Only this instruction: what follows
+        // keeps the stamp it had, which is the tree-walker's too.
         if !has_wildcard {
+            let inner = ctx.cur_src;
+            ctx.cur_src = at;
             let idx = self.intern_string("no pattern matched in match expression");
             ctx.emit(Instruction::RaiseError(idx));
+            ctx.cur_src = inner;
         }
 
         let end_label = ctx.current_label();
