@@ -2694,13 +2694,13 @@ impl TypeChecker {
                     self.collect_return_types(stmt, return_types);
                 }
             }
+            // An arm's value is not a return: a `??` written as a statement
+            // discards it — the three engines do, and the check warns that it
+            // does. Read as returns, `f(v) { ?? v { 1 => "a"  _ => "b" } }` was
+            // taken to return a String while it returns Unit (GLB-102, decided
+            // 2026-10-07). A `<~` inside an arm's block does return.
             Statement::Match(match_stmt) => {
                 for case in &match_stmt.cases {
-                    if let Some(value) = &case.value {
-                        // Match case values are implicit returns
-                        let ty = self.infer_expr(value);
-                        return_types.push(ty);
-                    }
                     if let Some(block) = &case.block {
                         for stmt in &block.statements {
                             self.collect_return_types(stmt, return_types);
