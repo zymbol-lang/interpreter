@@ -2391,12 +2391,13 @@ impl TypeChecker {
                             self.env.add_param_constraint(&param, TypeConstraint::Numeric);
                         }
                     }
-                    // Logical operations constrain parameters to be boolean
+                    // Logical operations constrain their LEFT side to be boolean.
+                    // The right side runs only when the left does not decide —
+                    // the three engines short-circuit — so it is not on every
+                    // path, and by TYP-2 it requires nothing: `f(a, b) { <~ a &&
+                    // b }` refused `f(#0, 5)`, which answers #0 (GLB-103).
                     BinaryOp::And | BinaryOp::Or => {
                         if let Some(param) = left_param {
-                            self.env.add_param_constraint(&param, TypeConstraint::Boolean);
-                        }
-                        if let Some(param) = right_param {
                             self.env.add_param_constraint(&param, TypeConstraint::Boolean);
                         }
                     }
@@ -2443,9 +2444,12 @@ impl TypeChecker {
                     _ => {}
                 }
 
-                // Recursively collect from children
+                // Recursively collect from children — not from the right side of
+                // `&&` and `||`, which is not on every path (GLB-103).
                 self.collect_constraints_from_expr(&binary.left, params);
-                self.collect_constraints_from_expr(&binary.right, params);
+                if !matches!(binary.op, BinaryOp::And | BinaryOp::Or) {
+                    self.collect_constraints_from_expr(&binary.right, params);
+                }
             }
             Expr::Unary(unary) => {
                 let operand_param = self.get_param_name(&unary.operand, params);
