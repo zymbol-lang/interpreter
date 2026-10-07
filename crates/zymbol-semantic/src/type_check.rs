@@ -194,6 +194,17 @@ impl ZymbolType {
             (ZymbolType::Array(a), ZymbolType::Array(b))
                 if matches!(**a, ZymbolType::Any | ZymbolType::Unknown)
                     || matches!(**b, ZymbolType::Any | ZymbolType::Unknown) => true,
+            // A function is compared part by part, as an argument and an element
+            // are (`types_compatible_static`): the same arity, and each parameter
+            // and the return compatible by this relation. Compared whole,
+            // `f = (a) -> a` then `f = (b) -> b * 2` was a change of type from
+            // `(Any) -> Any` to `(Any) -> Int` (GLB-100, decided 2026-10-07);
+            // `() -> Int` and `() -> String` still are one.
+            (ZymbolType::Function(pa, ra), ZymbolType::Function(pb, rb)) => {
+                pa.len() == pb.len()
+                    && pa.iter().zip(pb.iter()).all(|(a, b)| a.is_compatible_with(b))
+                    && ra.is_compatible_with(rb)
+            }
             (a, b) => a == b,
         }
     }
