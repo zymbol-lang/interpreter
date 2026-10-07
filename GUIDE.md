@@ -1623,6 +1623,13 @@ cmd = ["build", "main.zy"]
 `||` binds only at the top level of an arm, so list elements stay unambiguous: `[1, 2]` is one
 list pattern, never two alternatives. To express alternatives inside a list, use a separate arm.
 
+### When no arm matches
+
+A value no arm matches is an **error**, `Runtime error: no pattern matched in match
+expression` — whether the `??` gives a value (`r = ?? n { … }`) or is written as a
+statement. It is never a silent empty value, and the program does not go on to the next
+line. When every value must land somewhere, end with `_ => …`.
+
 > **⚠ Not implemented**: Identifier binding in patterns (`n => n * 2`).
 
 ---
