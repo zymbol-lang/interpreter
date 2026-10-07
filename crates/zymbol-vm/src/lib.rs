@@ -1336,6 +1336,20 @@ impl<W: Write> VM<W> {
     /// Attach the failing instruction's source position, when the program was
     /// compiled with one. A chunk with no `src` (an older bundle, or one built
     /// before positions existed) reports nothing rather than line 0.
+    /// The source line of the instruction at `ip` of a chunk (`u32::MAX` is
+    /// the main one), or 0 when it has none.
+    fn line_at(program: &CompiledProgram, chunk: u32, ip: u32) -> u32 {
+        let c = if chunk == u32::MAX {
+            &program.main
+        } else {
+            match program.functions.get(chunk as usize) {
+                Some(c) => c,
+                None => return 0,
+            }
+        };
+        c.src.get(ip as usize).map(|p| p.line).unwrap_or(0)
+    }
+
     fn locate(&self, err: VmError, program: &CompiledProgram) -> VmError {
         // Already located — an inner frame that knew better wins.
         if matches!(err, VmError::Located { .. }) {
@@ -1349,7 +1363,28 @@ impl<W: Write> VM<W> {
                 None => return err,
             }
         };
-        let Some(pos) = chunk.src.get(self.cur_ip as usize) else { return err };
+        let mut pos = match chunk.src.get(self.cur_ip as usize) {
+            Some(p) => *p,
+            None => return err,
+        };
+        // A lambda whose body is an expression has no statement, so its
+        // instructions carry no line: the error is at the statement running,
+        // the one that called it — the call instruction just before the return
+        // address the caller's frame saved. Where the tree-walker and zyjs
+        // name that statement, the VM said nothing (ZYVM-012).
+        if pos.line == 0 {
+            for f in self.frame_stack.iter().rev().skip(1) {
+                if f.ip == 0 {
+                    continue;
+                }
+                let line = Self::line_at(program, f.chunk_idx, f.ip - 1);
+                if line > 0 {
+                    let c = if f.chunk_idx == u32::MAX { &program.main } else { &program.functions[f.chunk_idx as usize] };
+                    pos = c.src[(f.ip - 1) as usize];
+                    break;
+                }
+            }
+        }
         if pos.line == 0 {
             return err;
         }
@@ -4777,6 +4812,13 @@ impl<W: Write> VM<W> {
             // `exec` gives back its frames when it raises; one that left
             // through `?` may not have, and the operator must see its own stack.
             Err(_) => {
+                // Raised where no line is — a lambda whose body is an
+                // expression — the error is at the operator that called it,
+                // as it would be for a call written in place (ZYVM-012).
+                if Self::line_at(program, self.cur_chunk, self.cur_ip) == 0 {
+                    self.cur_ip = caller_ip;
+                    self.cur_chunk = caller_chunk;
+                }
                 if self.frame_stack.len() > floor {
                     let floor_base = self.frame_stack[floor].base as usize;
                     self.frame_stack.truncate(floor);
