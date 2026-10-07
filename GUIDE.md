@@ -5254,7 +5254,8 @@ A subscript that **gives** a status other than 0 (`<~ 3` at its top level) retur
 a soft `##IO` error, `##IO(exit 3: <what it printed>)`, read back as above. A
 subscript that **fails** — a runtime error — is still raised, carrying what
 `zymbol run` would have written, and a `:!` catches it. Reporting a failure and
-crashing are two different things.
+crashing are two different things. A subscript that is **not there** raises
+`file not found: …`, an `##IO`.
 
 > For a list of bugs fixed in each version, see [CHANGELOG.md](CHANGELOG.md).
 
