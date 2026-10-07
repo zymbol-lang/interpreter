@@ -27,7 +27,7 @@ retired on 2026-08-17; it appears in this document only as history.
 2. **`>>` never adds a newline.** End with `¶` (or `\\`). `>> ¶` = blank line.
 3. **Juxtaposition concatenates in `>>`; `+` does not.** `>> "n=" n ¶`. `"a" + b` is a type error.
 4. **Unary minus loses to juxtaposition:** `>> "x=" -n ¶` parses as subtraction → error. Write `(-n)`.
-5. **A function sees the file's variables, never another frame's locals.** A named function reads a file-level name at **call** time, by value, and a write inside stays inside the call. A lambda captures the same names at **creation**. Neither sees the caller's locals — pass those as parameters.
+5. **A named function sees only its parameters.** Reading a file-level name inside it is a static error (`'x' is read from outside this function`); pass it in. Constants (`:=`) are global by definition. A lambda reads the scope it is written in and writes only the names it declares.
 6. **`??` is pattern matching, never a boolean chain.** An arm is *operator + value* (`< 0 =>`, `90..100 =>`), subject implicit. Booleans go through `?` / `_?` / `_`.
 7. **Booleans are `#1` / `#0`. There is no null.** Absence is `##_` (Unit).
 8. **`==` never coerces; ordering does.** `"5" == 5` → `#0`, but `"5" > 4` → `#1` (numeric text in any of 69 digit scripts).
@@ -218,8 +218,8 @@ bump(y<~)                           // mark required at the call site too (also 
 ```
 
 Use a tuple return when the values are new (`(v, next) = step(3)`); use `<~` parameters
-when the caller already owns the variables. A named function used as a value captures the
-scope at the point of assignment.
+when the caller already owns the variables. A named function used as a value captures
+nothing: it sees only its parameters, however it is reached.
 
 ```zymbol
 nums$> (x -> x * 2)          // map      | named fn: nums$> double  (NO parentheses)
@@ -332,9 +332,9 @@ gaps: `AGENTIC.md`.
   each an error without the other — so a call says what it changes without
   opening the function. `~` is a working copy; unmarked is by value.
 - **Writes do not escape a call.** No references, no aliasing (`Rc` + copy-on-write
-  is invisible). One read-side door: a named function *does* read the file's
-  top-level names, by value, at call time — a name from a block, from another
-  frame, from the importer or declared after it is refused statically.
+  is invisible). No read-side door either: a named function sees only its
+  parameters, and a file-level name read inside it is refused statically —
+  constants (`:=`) are the one exception, global by definition.
 - **A module owns its environment.** Its mutable bindings cannot be exported
   (`E005`); only constants and functions leave, so module state is reachable
   only through that module's own functions. Identity is the file path: every
