@@ -1412,13 +1412,14 @@ impl<W: Write> Interpreter<W> {
             }
         }
         if self.dead_variables.contains(var_name) {
-            return Err(RuntimeError::Generic {
-                message: format!(
+            return Err(RuntimeError::kinded(
+                "_",
+                format!(
                     "use after destruction: variable '{}' was destroyed after its last use",
                     var_name
                 ),
-                span: *span,
-            });
+                *span,
+            ));
         }
         Ok(())
     }
@@ -1447,13 +1448,14 @@ impl<W: Write> Interpreter<W> {
             return Ok(());
         }
         if self.dead_variables.contains(var_name) {
-            return Err(RuntimeError::Generic {
-                message: format!(
+            return Err(RuntimeError::kinded(
+                "_",
+                format!(
                     "use after destruction: variable '{}' was destroyed after its last use",
                     var_name
                 ),
-                span: *span,
-            });
+                *span,
+            ));
         }
         // Auto-free is invisible by design — reaching this error means the
         // last-use analyzer scheduled a destruction too early.
@@ -2267,6 +2269,8 @@ impl<W: Write> Interpreter<W> {
                     "Type" => ErrorValue::type_error(m),
                     "Div" => ErrorValue::div(m),
                     "Parse" => ErrorValue::parse(m),
+                    // A subscript that is not there (GLB-099).
+                    "IO" => ErrorValue::io(m),
                     _ => ErrorValue::generic(m),
                 })
             }

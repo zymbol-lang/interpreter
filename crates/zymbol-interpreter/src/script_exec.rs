@@ -38,11 +38,14 @@ impl<W: Write> Interpreter<W> {
         };
 
         // Check if file exists
+        // An `##IO`, declared: a file that is not there, and the path's words
+        // chose the family — `</ index_type.zy />` was an `##Index` (GLB-099).
         if !file_path.exists() {
-            return Err(RuntimeError::Generic {
-                message: format!("file not found: {}", file_path.display()),
-                span: execute.span,
-            });
+            return Err(RuntimeError::kinded(
+                "IO",
+                format!("file not found: {}", file_path.display()),
+                execute.span,
+            ));
         }
 
         // GLB-017 I, decided 2026-09-26: the subscript runs in this process,

@@ -163,23 +163,28 @@ impl<W: Write> Interpreter<W> {
                     member.span,
                 ))
             }
+            // The receiver is the wrong type for a name: a `##Type` (D1), declared
+            // here because the message carries the name, and the words of the
+            // name chose the family — `t.index` was an `##Index` (GLB-099).
             Value::Tuple(_) => {
-                Err(RuntimeError::Generic {
-                    message: format!(
+                Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
                         "a positional tuple is addressed by position, not by name: '{}'\nhelp: use t[1] — names live in a dictionary, #(key: value)",
                         member.field
                     ),
-                    span: member.span,
-                })
+                    member.span,
+                ))
             }
             _ => {
-                Err(RuntimeError::Generic {
-                    message: format!(
+                Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
                         "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
                         got, member.field
                     ),
-                    span: member.span,
-                })
+                    member.span,
+                ))
             }
         }
     }

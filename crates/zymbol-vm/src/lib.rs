@@ -615,6 +615,18 @@ pub enum VmError {
     #[error("{0}")]
     KeyMsg(String),
 
+    /// A message whose family is `##IO`: a subscript that is not there, or that
+    /// cannot be run. The message carries the path, and its words chose the
+    /// family — `</ index_type.zy />` was an `##Index` (GLB-099).
+    #[error("{0}")]
+    IoMsg(String),
+
+    /// A message whose family is `##_`, declared rather than read: a name used
+    /// after `\`. The message carries the name, and its words chose the family —
+    /// a variable called `index` was an `##Index` (GLB-099).
+    #[error("{0}")]
+    PlainMsg(String),
+
     /// A runtime error that knows where it happened. Built once, at the edge of
     /// `run`, from the instruction pointer the VM was on — so the hot loop pays
     /// two stores per instruction and nothing more. `Display` is the message
@@ -1148,6 +1160,8 @@ fn vm_error_kind(e: &VmError) -> &'static str {
         VmError::IndexOutOfBounds { .. } | VmError::IndexZero | VmError::IndexMsg(_) => "Index",
         VmError::ParseMsg(_) => "Parse",
         VmError::KeyMsg(_) => "Key",
+        VmError::IoMsg(_) => "IO",
+        VmError::PlainMsg(_) => "_",
         VmError::Io(_) => "IO",
         VmError::Generic(m) | VmError::Located { message: m, .. } => {
             zymbol_common::errkind::error_kind_of_message(m)
@@ -3755,7 +3769,7 @@ impl<W: Write> VM<W> {
                     // GLB-055): the same error a read gives.
                     if !self.destroyed_slots.insert(abs) {
                         let name = program.string_pool[name_idx as usize].clone();
-                        raise!(VmError::Generic(format!(
+                        raise!(VmError::PlainMsg(format!(
                             "use after destruction: variable '{}' was destroyed after its last use", name)));
                     }
                     self.reg_set(reg, Value::Unit);
@@ -3765,7 +3779,7 @@ impl<W: Write> VM<W> {
                         && self.destroyed_slots.contains(&(self.frame_stack.last().unwrap().base as usize + reg as usize));
                     if dead {
                         let name = program.string_pool[name_idx as usize].clone();
-                        raise!(VmError::Generic(format!(
+                        raise!(VmError::PlainMsg(format!(
                             "use after destruction: variable '{}' was destroyed after its last use", name)));
                     }
                 }
@@ -3917,7 +3931,7 @@ impl<W: Write> VM<W> {
                             } else {
                                 let field_name = field_name.clone();
                                 let got = Value::Array(arr.clone()).type_label();
-                                raise!(VmError::Generic(format!(
+                                raise!(VmError::TypeMsg(format!(
                                     "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
                                     got, field_name
                                 )));
@@ -3925,7 +3939,9 @@ impl<W: Write> VM<W> {
                         }
                         Value::Tuple(_) => {
                             let field_name = field_name.clone();
-                            raise!(VmError::Generic(format!(
+                            // A `##Type` (D1), declared: the words of the
+                            // name chose the family (GLB-099).
+                            raise!(VmError::TypeMsg(format!(
                                 "a positional tuple is addressed by position, not by name: '{}'\nhelp: use t[1] — names live in a dictionary, #(key: value)",
                                 field_name
                             )));
@@ -3933,7 +3949,7 @@ impl<W: Write> VM<W> {
                         other => {
                             let got = other.type_label();
                             let field_name = field_name.clone();
-                            raise!(VmError::Generic(format!(
+                            raise!(VmError::TypeMsg(format!(
                                 "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
                                 got, field_name
                             )));
@@ -4187,10 +4203,10 @@ impl<W: Write> VM<W> {
                     // there is no such file.
                     let path = std::path::PathBuf::from(&cmd);
                     if !path.exists() {
-                        raise!(VmError::Generic(format!("file not found: {}", path.display())));
+                        raise!(VmError::IoMsg(format!("file not found: {}", path.display())));
                     }
                     let Some(runner) = self.subscript_runner.clone() else {
-                        raise!(VmError::Generic(format!(
+                        raise!(VmError::IoMsg(format!(
                             "cannot run '{}': a subscript needs the zymbol command, and this program runs without it",
                             path.display()
                         )));
@@ -4385,7 +4401,7 @@ impl<W: Write> VM<W> {
 
                 &Instruction::LoadGlobal(dst, gvar_idx) => {
                     if let Some(name) = self.destroyed_globals.get(&gvar_idx) {
-                        raise!(VmError::Generic(format!(
+                        raise!(VmError::PlainMsg(format!(
                             "use after destruction: variable '{}' was destroyed \
                              after its last use", name)));
                     }
@@ -4409,7 +4425,7 @@ impl<W: Write> VM<W> {
                 &Instruction::DestroyGlobal(gvar_idx, name_idx) => {
                     let name = self.string_rcs[name_idx as usize].to_string();
                     if self.destroyed_globals.contains_key(&gvar_idx) {
-                        raise!(VmError::Generic(format!(
+                        raise!(VmError::PlainMsg(format!(
                             "use after destruction: variable '{}' was destroyed \
                              after its last use", name)));
                     }
