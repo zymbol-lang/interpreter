@@ -245,6 +245,10 @@ pub struct VariableAnalyzer {
     retired: Vec<VariableInfo>,
     /// Set of variable names currently in scope (for shadowing detection)
     current_scope_vars: Vec<HashSet<String>>,
+    /// Names written hot from above a loop (`°s = …`, `s = °s …`). Such a
+    /// variable lives in the scope that holds the loop, not in the loop's body,
+    /// so a later write outside the body still reaches it (GLB-105).
+    persisting: HashSet<String>,
     /// Collected diagnostics
     diagnostics: Vec<VariableDiagnostic>,
     /// Scope tree for tracking block-local _variables
@@ -260,6 +264,7 @@ impl VariableAnalyzer {
             variables: HashMap::new(),
             retired: Vec::new(),
             current_scope_vars: vec![HashSet::new()],
+            persisting: HashSet::new(),
             diagnostics: Vec::new(),
             scope_tree: ScopeTree::new(),
             semantic_errors: Vec::new(),
@@ -277,6 +282,7 @@ impl VariableAnalyzer {
         self.variables.clear();
         self.scope_depth = 0;
         self.current_scope_vars = vec![HashSet::new()];
+        self.persisting.clear();
         self.scope_tree = ScopeTree::new();
         self.semantic_errors.clear();
 
@@ -381,6 +387,26 @@ impl VariableAnalyzer {
         }
     }
 
+    /// Whether a write to `name` reaches a variable that already exists, and so
+    /// assigns it rather than declaring a new one: one in view, or one written
+    /// hot, which lives above its loop.
+    ///
+    /// `variables` keeps every name the file ever declared, and the write used
+    /// to ask only that: `x` assigned in two sibling blocks — two variables, each
+    /// its own scope, `>> x` after either is undefined — came out as one
+    /// variable written twice, `assigned but never read` at the first site and
+    /// nothing at the second (GLB-105, decided 2026-10-07; the iterator's
+    /// version of it was GLB-003, `bind_iterator` below). A `_name` keeps the
+    /// old rule: its scope is the scope tree's business.
+    fn reaches_existing(&self, name: &str) -> bool {
+        if !self.variables.contains_key(name) {
+            return false;
+        }
+        name.starts_with('_')
+            || self.persisting.contains(name)
+            || self.current_scope_vars.iter().any(|scope| scope.contains(name))
+    }
+
     /// A loop iterator binds the way `m = …` binds a visible name: a name in
     /// view is assigned, and any other is declared inside the loop (MEM-7 —
     /// one name, one thing; ERROR-GOL-017).
@@ -403,9 +429,12 @@ impl VariableAnalyzer {
             Statement::Assignment(assignment) => {
                 // First analyze the value expression (to track variable usage)
                 self.analyze_expr(&assignment.value);
+                if assignment.pre_hot {
+                    self.persisting.insert(assignment.name.clone());
+                }
 
                 // Then record the assignment
-                if !self.variables.contains_key(&assignment.name) {
+                if !self.reaches_existing(&assignment.name) {
                     // First assignment - declaration
                     self.declare_variable(
                         assignment.name.clone(),
@@ -460,7 +489,7 @@ impl VariableAnalyzer {
                     }
                 }
                 // Input creates a variable if it doesn't exist
-                if !self.variables.contains_key(&input.variable) {
+                if !self.reaches_existing(&input.variable) {
                     self.declare_variable(
                         input.variable.clone(),
                         input.span,
@@ -583,7 +612,7 @@ impl VariableAnalyzer {
                     let bound = case.pattern.bound_name();
                     if let Some(name) = bound {
                         self.enter_scope();
-                        if self.variables.contains_key(name) {
+                        if self.reaches_existing(name) {
                             self.assign_variable(name, case.pattern.span());
                         } else {
                             self.declare_variable(name.to_string(), case.pattern.span(), false);
@@ -614,7 +643,7 @@ impl VariableAnalyzer {
 
             Statement::CliArgsCapture(capture) => {
                 // CLI args capture creates a variable
-                if !self.variables.contains_key(&capture.variable_name) {
+                if !self.reaches_existing(&capture.variable_name) {
                     self.declare_variable(
                         capture.variable_name.clone(),
                         capture.span,
@@ -639,7 +668,7 @@ impl VariableAnalyzer {
                     }
                 };
                 for (name, span) in names {
-                    if !self.variables.contains_key(&name) {
+                    if !self.reaches_existing(&name) {
                         self.declare_variable(name, span, false);
                     } else {
                         self.assign_variable(&name, span);
@@ -681,7 +710,7 @@ impl VariableAnalyzer {
             Statement::ClearScreen(_) => {}
 
             Statement::KeyInput(ki) => {
-                if !self.variables.contains_key(&ki.variable) {
+                if !self.reaches_existing(&ki.variable) {
                     self.declare_variable(ki.variable.clone(), ki.span, false);
                 } else {
                     self.assign_variable(&ki.variable, ki.span);
@@ -747,6 +776,10 @@ impl VariableAnalyzer {
             Expr::Identifier(ident) => {
                 // This is a variable usage
                 self.use_variable(&ident.name, ident.span);
+                // `s = °s …` anchors `s` above the loop (see `persisting`).
+                if ident.pre_hot {
+                    self.persisting.insert(ident.name.clone());
+                }
             }
 
             Expr::Binary(binary) => {
@@ -819,7 +852,7 @@ impl VariableAnalyzer {
                     let bound = case.pattern.bound_name();
                     if let Some(name) = bound {
                         self.enter_scope();
-                        if self.variables.contains_key(name) {
+                        if self.reaches_existing(name) {
                             self.assign_variable(name, case.pattern.span());
                         } else {
                             self.declare_variable(name.to_string(), case.pattern.span(), false);
