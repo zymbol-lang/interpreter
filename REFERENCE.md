@@ -535,8 +535,8 @@ warning: array '[ … ]' pattern requires an array, got ##)
 
 for a value whose shape is **certain**: a literal in place, a variable whose last assignment
 was one, an element of an array literal, and the return of a function declared in the same
-file. The browser engine decides the first two — it has no type system — and says nothing
-about the other two; neither engine refuses the program, so all three still run every program
+file. The browser engine decides the first two — its analyser reads the shape of a literal
+and of a name, not of an element or of a return — and says nothing about the other two; neither engine refuses the program, so all three still run every program
 identically. What no engine decides statically is a **parameter** and an element of a
 collection built with `$+`, which is where the 38 sites found in `klingon_galaxy` on
 2026-09-10 lived: closing those needs inference across function and module boundaries.

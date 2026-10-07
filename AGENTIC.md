@@ -127,20 +127,24 @@ mechanism, verified semantically neutral — every write detaches first.
 
 ```zymbol
 contador = 10
-toca() {
-    >> "inside reads=" contador ¶     // 10 — read by value, at call time
-    contador = 999                    // stays inside the call
+toca(c) {
+    >> "inside reads=" c ¶            // 10 — it came in as a parameter
+    c = 999                           // stays inside the call
+    >> "inside now=" c ¶              // 999
 }
-toca()
+toca(contador)
 >> "outside=" contador ¶              // 10
 ```
 
-A function never sees another frame's locals. A write inside a call never
-escapes it. One door is open on the read side, and only one: **a named function
-reads the file's top-level names**, by value, at call time. Everything else is
-refused statically — a name declared after the function, a name from a block, a
-name from another frame, a name from the importing script. See G9; the write
-side has no such door.
+A named function sees **only its parameters** (MEM-2). A file-level name read
+inside one is refused statically — `lee() { <~ contador }` is `error: 'contador'
+is read from outside this function`, with `= help: … pass 'contador' as one` —
+and so is a name from a block, from another frame or from the importing script.
+Constants (`:=`) are the one exception, global by definition (MEM-1). A write
+inside a call never escapes it. A lambda is light (MEM-6): it reads the scope it
+is written in — the file at file level, its function inside one — and writes
+only the names it declares. There is no door on either side; G9 below records
+the one that used to be open.
 
 Module state is the deliberate exception to value semantics, and it is fenced: a
 module's mutable bindings **cannot be exported**. `#> { n }` where `n` is a
@@ -289,7 +293,7 @@ indistinguishable from one nobody can justify.
 | ~~G6~~ | **Superseded 2026-09-12 by `MEM-7`.** Two of the four forms I listed were the model working, not defects: a block assignment reaching its container's name is *one* name and no shadowing (`MEM-6`), and a parameter reusing a file-level name is two different strong environments. The two that remain — `f(a, a)`, which answers 2/1/2 depending on the engine, and a silent redefinition — are declared debt with four red cells. | superseded |
 | ~~G7~~ | ~~Module state is shared mutable global memory.~~ **Withdrawn 2026-09-12** — measured, not a gap: it is the intended design (a module owns its environment), and it is fenced. A module's mutable bindings cannot be exported (`E005`), so the state is reachable only through that module's own functions. Identity by file path means one environment per module, which is what "self-contained" requires. The number is not reused. | withdrawn |
 | G8 | **No reproducibility.** `std/random` seeds from the system clock into a thread-local cell, with no seed object exposed to Zymbol. Applications that need a reproducible run (zy-GO's benchmark) implement their own LCG threaded through a `<~` parameter. | open |
-| ~~G9~~ | **Superseded 2026-09-12 by `MEM-2`**, decided and held by 13 cells, four of them red. Original text: a named function reads the file's top-level names it does not declare — by value, at call time, and only names declared lexically before it. `check` says nothing. Harmless as a mutation channel (the copy is one-way), but it makes a function non-relocatable: the same body stops compiling once moved into a module, which is what a refactor does. | open |
+| ~~G9~~ | **Superseded 2026-09-12 by `MEM-2`**, decided and held by 13 cells, four of them red then; implemented 2026-09-13, and all of them green since. Original text: a named function reads the file's top-level names it does not declare — by value, at call time, and only names declared lexically before it. `check` says nothing. Harmless as a mutation channel (the copy is one-way), but it makes a function non-relocatable: the same body stops compiling once moved into a module, which is what a refactor does. | closed 2026-09-13 |
 | G10 | **`?` with a non-Bool condition diverges across all three engines**, with only a warning — and in `zyjs` an array condition warns not at all. Not covered by the corpus. See below. | open |
 
 ### G10 in detail

@@ -2388,7 +2388,7 @@ do instead:
 ```zymbol
 x = 42
 peek() { <~ x }    // ❌ error: 'x' is read from outside this function
-                   //    = help: pass 'x' as a parameter
+                   //    = help: … pass 'x' as one
 ```
 
 > **This took two reversals to settle, and both are worth knowing** because
