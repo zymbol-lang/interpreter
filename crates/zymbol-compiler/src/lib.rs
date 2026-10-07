@@ -3535,14 +3535,13 @@ impl Compiler {
         // the tree-walker: a `##_` nobody computed must not flow on (GLB-016).
         // At the line of the statement, as every runtime error is: stamped
         // with the last statement of an arm, `?? v { 1 => { >> "uno" ¶ } }`
-        // failed at the `>>` (ZYVM-011). Only this instruction: what follows
-        // keeps the stamp it had, which is the tree-walker's too.
+        // failed at the `>>` (ZYVM-011). And so is what follows the `??` in
+        // the same statement — `x = 1 + (?? v { 1 => "uno" { >> "a" ¶ } })`
+        // failed at the `>>` too (GLB-106).
+        ctx.cur_src = at;
         if !has_wildcard {
-            let inner = ctx.cur_src;
-            ctx.cur_src = at;
             let idx = self.intern_string("no pattern matched in match expression");
             ctx.emit(Instruction::RaiseError(idx));
-            ctx.cur_src = inner;
         }
 
         let end_label = ctx.current_label();

@@ -1818,18 +1818,31 @@ impl<W: Write> Interpreter<W> {
 
     /// Execute a single statement
     fn execute_statement(&mut self, statement: &Statement) -> Result<()> {
+        let holder = self.cur_stmt_line;
         // A `<~`, `@!` or `@>` that left an expression of this statement is the
         // statement's own exit: the signal is in `control_flow` (GLB-107).
-        match self.execute_statement_inner(statement) {
+        let result = match self.execute_statement_inner(statement) {
             Err(RuntimeError::Unwind) => Ok(()),
             other => other,
+        };
+        // Finished, with nothing pending: the line goes back to the statement
+        // that holds this one — the block of a `??` arm runs inside an
+        // expression, and an error raised after it in that expression is the
+        // holder's. An error keeps the innermost line, and so does a pending
+        // signal, which the top level reads it for (GLB-106).
+        if result.is_ok() && !self.is_control_flow_pending() {
+            self.cur_stmt_line = holder;
         }
+        result
     }
 
     fn execute_statement_inner(&mut self, statement: &Statement) -> Result<()> {
-        // The line an error raised from here is reported at. Written and never
-        // restored, so the innermost statement that ran is the one named —
-        // which is what the other two engines answer, and what a reader wants.
+        // The line an error raised from here is reported at: the innermost
+        // statement running. `execute_statement` gives it back when this one
+        // finishes, and a call when the function returns, so an error raised
+        // after them in the same statement names that statement — as the other
+        // two engines do. Never given back, the line of the last statement that
+        // ran named an error of the one around it (GLB-106).
         let line = statement.span().start.line;
         if line > 0 { self.cur_stmt_line = line; }
         match statement {

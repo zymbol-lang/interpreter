@@ -127,6 +127,7 @@ impl<W: Write> Interpreter<W> {
                 };
                 // Pop the scope on the error path too, or the lambda's params
                 // leak into the caller's scope view (L16 family).
+                let call_line = self.cur_stmt_line;
                 let mut result = self.eval_expr(expr);
                 // A `$!!` in the body raised an early return. This path skips
                 // take_call_state, so nothing else clears it, and the pending
@@ -146,6 +147,10 @@ impl<W: Write> Interpreter<W> {
                     self.import_aliases = saved;
                 }
                 self.pop_scope();
+                // Returned: the line is the caller's again (GLB-106).
+                if result.is_ok() {
+                    self.cur_stmt_line = call_line;
+                }
                 return result;
             }
         }
@@ -186,6 +191,7 @@ impl<W: Write> Interpreter<W> {
         // (including errors) must run restore_call_state or the caller's
         // variables vanish after a caught error.
         let is_named = func.is_named_fn;
+        let call_line = self.cur_stmt_line;
         let result: Result<Value> = match &func.body {
             // A `<~` in a `??` arm of the body unwinds out of it, and the
             // lambda returns that value (GLB-107).
@@ -224,6 +230,10 @@ impl<W: Write> Interpreter<W> {
         };
 
         self.restore_call_state(saved);
+        // Returned: the line is the caller's again (GLB-106).
+        if result.is_ok() {
+            self.cur_stmt_line = call_line;
+        }
         result
     }
 
@@ -702,6 +712,7 @@ impl<W: Write> Interpreter<W> {
 
         // QW1: execute_block_no_scope — take_call_state already owns scope[0] (params).
         // QW17: TCO loop — if tco_pending is set after execution, rebind params and restart.
+        let call_line = self.cur_stmt_line;
         let return_value = 'tco: loop {
             if let Err(e) = self.execute_body_scheduled(body, auto_free) {
                 // L16 fix: the caller's scope_stack was swapped out by
@@ -832,6 +843,9 @@ impl<W: Write> Interpreter<W> {
             self.functions = caller_functions;
         }
 
+        // Returned: the line is the caller's again, so an error raised after
+        // the call in the same statement names that statement (GLB-106).
+        self.cur_stmt_line = call_line;
         Ok(return_value)
     }
 }
