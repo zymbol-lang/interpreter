@@ -174,39 +174,21 @@ impl ZymbolType {
         matches!(self, ZymbolType::Int | ZymbolType::Float | ZymbolType::Number)
     }
 
-    /// Check if two types are compatible for assignment
+    /// Check if two types are compatible for assignment — whether a
+    /// reassignment is a change of type worth a warning.
+    ///
+    /// It is the relation an argument and an array element are checked with,
+    /// `types_compatible_static`, at every depth: cannot-tell and `Any` fit
+    /// anything, Int and Float fit each other and Number fits either, and an
+    /// array, a tuple, a dictionary or a function fits part by part. The two
+    /// were separate relations, and this one compared a collection whole:
+    /// `t = (1, 2)` then `t = (1, 2.5)` was a change while `x = 1` then
+    /// `x = 2.5` was not, and `x = [1]` then `x = [1.5]` warned although
+    /// `[1, 2.5]` is one array to all three engines (GLB-104, decided
+    /// 2026-10-07; the empty array was GLB-093, the function GLB-100). Unit is
+    /// decided by the caller: a change to or from Unit is not one (GLB-043).
     pub fn is_compatible_with(&self, other: &ZymbolType) -> bool {
-        match (self, other) {
-            (ZymbolType::Any, _) | (_, ZymbolType::Any) => true,
-            (ZymbolType::Unknown, _) | (_, ZymbolType::Unknown) => true,
-            (ZymbolType::Int, ZymbolType::Float) | (ZymbolType::Float, ZymbolType::Int) => true,
-            // Number is "Int or Float, undetermined", so assigning either to a
-            // variable inferred as Number is not a mismatch — it is the value
-            // arriving and settling the question.
-            (ZymbolType::Number, ZymbolType::Int)
-            | (ZymbolType::Number, ZymbolType::Float)
-            | (ZymbolType::Int, ZymbolType::Number)
-            | (ZymbolType::Float, ZymbolType::Number) => true,
-            // An array whose element type is not known yet — `[]` is `[Any]` —
-            // has no element type to change: `x = []` then `x = ["a"]` is the
-            // array being filled, not a type change (GLB-093, decided
-            // 2026-10-05). Only that: `[Int]` against `[Float]` still differs.
-            (ZymbolType::Array(a), ZymbolType::Array(b))
-                if matches!(**a, ZymbolType::Any | ZymbolType::Unknown)
-                    || matches!(**b, ZymbolType::Any | ZymbolType::Unknown) => true,
-            // A function is compared part by part, as an argument and an element
-            // are (`types_compatible_static`): the same arity, and each parameter
-            // and the return compatible by this relation. Compared whole,
-            // `f = (a) -> a` then `f = (b) -> b * 2` was a change of type from
-            // `(Any) -> Any` to `(Any) -> Int` (GLB-100, decided 2026-10-07);
-            // `() -> Int` and `() -> String` still are one.
-            (ZymbolType::Function(pa, ra), ZymbolType::Function(pb, rb)) => {
-                pa.len() == pb.len()
-                    && pa.iter().zip(pb.iter()).all(|(a, b)| a.is_compatible_with(b))
-                    && ra.is_compatible_with(rb)
-            }
-            (a, b) => a == b,
-        }
+        TypeChecker::types_compatible_static(self, other)
     }
 }
 
@@ -2842,6 +2824,9 @@ impl TypeChecker {
         Self::types_compatible_static(actual, expected)
     }
 
+    /// The one compatibility relation: an argument against a parameter, an
+    /// element against the array's, and a reassignment against what the name
+    /// held (`ZymbolType::is_compatible_with`, GLB-104).
     fn types_compatible_static(actual: &ZymbolType, expected: &ZymbolType) -> bool {
         match (actual, expected) {
             // Any/Unknown types are always compatible
