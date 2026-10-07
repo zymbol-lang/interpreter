@@ -90,6 +90,19 @@ pub enum RuntimeError {
     /// words. Only a site that knows its family says so.
     #[error("{inner}")]
     Kinded { kind: &'static str, inner: Box<RuntimeError> },
+
+    /// Not an error: the way out of an expression for a `<~`, `@!` or `@>`
+    /// written in the block of a `??` arm whose value is used. The signal waits
+    /// in `control_flow`, as it does for one written as a statement; this only
+    /// abandons the expression around the `??`, and `execute_statement` turns
+    /// it back into `Ok` at the statement that holds it, so the loop, the
+    /// function or the program takes the signal as usual. Without it the
+    /// expression went on with the arm worth Unit: `x = 1 + (?? v { 1 => {
+    /// <~ 7 } })` failed at the `+` instead of ending the program (GLB-107).
+    /// Its text is never shown, and is too short for the message inventory
+    /// (`zyquality/messages/`) to take it for a diagnostic.
+    #[error("unwinding")]
+    Unwind,
 }
 
 impl RuntimeError {
@@ -1805,6 +1818,15 @@ impl<W: Write> Interpreter<W> {
 
     /// Execute a single statement
     fn execute_statement(&mut self, statement: &Statement) -> Result<()> {
+        // A `<~`, `@!` or `@>` that left an expression of this statement is the
+        // statement's own exit: the signal is in `control_flow` (GLB-107).
+        match self.execute_statement_inner(statement) {
+            Err(RuntimeError::Unwind) => Ok(()),
+            other => other,
+        }
+    }
+
+    fn execute_statement_inner(&mut self, statement: &Statement) -> Result<()> {
         // The line an error raised from here is reported at. Written and never
         // restored, so the innermost statement that ran is the one named —
         // which is what the other two engines answer, and what a reader wants.
@@ -2277,6 +2299,8 @@ impl<W: Write> Interpreter<W> {
             RuntimeError::Io(io_err) => {
                 Value::Error(ErrorValue::io(io_err.to_string()))
             }
+            // Never caught: `execute_statement` takes it first (GLB-107).
+            RuntimeError::Unwind => Value::Error(ErrorValue::generic(error.to_string())),
             // A located error is a `Generic` that learned where it happened —
             // `!?` classifies it by exactly the same text, so attaching a file
             // never moves an error from one `##` family to another.

@@ -78,6 +78,11 @@ impl<W: Write> Interpreter<W> {
         };
         if let Some(ref block) = case.block {
             self.execute_block(block)?;
+            // A `<~`, `@!` or `@>` in the block leaves the expression the `??`
+            // is part of, as it leaves the `??` written as a statement (GLB-107).
+            if self.is_control_flow_pending() {
+                return Err(RuntimeError::Unwind);
+            }
         }
         Ok(result)
     }

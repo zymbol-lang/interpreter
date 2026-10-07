@@ -134,8 +134,10 @@ impl<W: Write> Interpreter<W> {
                 // top level ignored a stray Return, and not harmless once a
                 // top-level Return became the program's exit status
                 // (GAP-ZYB-006): `h = (x -> x$!!)` ended the program mid-file.
+                // A `<~` in a `??` arm of the body unwinds out of it: the
+                // lambda returns that value (GLB-107).
                 if let ControlFlow::Return(value) = &self.control_flow {
-                    if result.is_ok() {
+                    if result.is_ok() || matches!(result, Err(RuntimeError::Unwind)) {
                         result = Ok(value.clone().unwrap_or(Value::Unit));
                     }
                     self.clear_control_flow();
@@ -185,7 +187,21 @@ impl<W: Write> Interpreter<W> {
         // variables vanish after a caught error.
         let is_named = func.is_named_fn;
         let result: Result<Value> = match &func.body {
-            zymbol_ast::LambdaBody::Expr(expr) => self.eval_expr(expr),
+            // A `<~` in a `??` arm of the body unwinds out of it, and the
+            // lambda returns that value (GLB-107).
+            zymbol_ast::LambdaBody::Expr(expr) => match self.eval_expr(expr) {
+                Err(RuntimeError::Unwind) => match std::mem::replace(&mut self.control_flow, ControlFlow::None) {
+                    ControlFlow::Return(val) => {
+                        self.has_control_flow = false;
+                        Ok(val.unwrap_or(Value::Unit))
+                    }
+                    other => {
+                        self.control_flow = other;
+                        Err(RuntimeError::Unwind)
+                    }
+                },
+                other => other,
+            },
             zymbol_ast::LambdaBody::Block(block) => match self.execute_block_no_scope(block) {
                 Err(e) => Err(e),
                 Ok(()) => match std::mem::replace(&mut self.control_flow, ControlFlow::None) {

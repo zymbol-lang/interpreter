@@ -871,7 +871,11 @@ impl TypeChecker {
             Statement::Return(ret) => {
                 let Some(value) = &ret.value else { return };
                 let t = self.infer_expr(value);
-                if !matches!(t, ZymbolType::Int | ZymbolType::Any) {
+                // Reached from the top-level walk and from a `??` inside an
+                // expression, which can be read more than once: one error per
+                // `<~`, and nothing else is reported at the span of the `<~`.
+                let already = self.errors.iter().any(|d| d.span == Some(ret.span));
+                if !already && !matches!(t, ZymbolType::Int | ZymbolType::Any) {
                     self.errors.push(
                         Diagnostic::error(format!(
                             "a top-level `<~` ends the program, so its value is the exit status and must be a whole number — this one is {}",
@@ -3817,6 +3821,16 @@ impl TypeChecker {
                         self.env.enter_scope();
                         for stmt in &block.statements {
                             self.check_statement(stmt);
+                        }
+                        // Outside every function and lambda, a `<~` in the arm
+                        // ends the program, as it does written anywhere else at
+                        // the top level: its value is the exit status. The walk
+                        // of the top level reads statements and never reached
+                        // a `??` inside an expression (GLB-107).
+                        if self.strong_boundary.is_empty() && self.lambda_floor.is_empty() {
+                            for stmt in &block.statements {
+                                self.check_top_level_exit(stmt);
+                            }
                         }
                         let block_type = self.infer_return_type_from_block(block);
                         if !matches!(block_type, ZymbolType::Unit) {
