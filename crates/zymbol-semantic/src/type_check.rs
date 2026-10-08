@@ -3728,14 +3728,18 @@ impl TypeChecker {
             },
 
             // Data operations
-            // `#|s|` gives an Int or a Float depending on what the text says,
-            // which is only known when it runs: Number, not Float (GLB-071).
+            // `#|s|` gives an Int or a Float when the text is a number, and the
+            // text itself when it is not — which is only known when it runs, so
+            // it cannot be told: Any, as the input `<< #|v|` is (GLB-098).
             // Float refused `a[#|"2"|]` as an index — GO/集計.zy, eight times —
-            // while zyjs ran it. The operand is inferred like any other, or an
-            // undefined name inside the bars was never reported.
+            // while zyjs ran it (GLB-071); Number then refused
+            // `h(#|x|)` with `h` wanting a String and `x = "zeta"`, a program
+            // zyjs runs (decided 2026-10-07, with GLB-098's open half). The
+            // operand is inferred like any other, or an undefined name inside
+            // the bars was never reported.
             Expr::NumericEval(ne) => {
                 self.infer_expr(&ne.expr);
-                ZymbolType::Number
+                ZymbolType::Any
             }
             // `x#?` answers a tuple, and the OPERAND is inferred like any other
             // expression — which is how an undefined name in it gets reported.
