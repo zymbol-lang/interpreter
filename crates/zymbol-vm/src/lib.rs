@@ -183,6 +183,17 @@ impl fmt::Display for Value {
 }
 
 impl Value {
+    /// Whether dropping this value frees anything. The scalars are listed, not
+    /// the owners, so a variant added later is dropped until someone says not.
+    #[inline]
+    fn owns_memory(&self) -> bool {
+        !matches!(
+            self,
+            Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Char(_)
+                | Value::Unit | Value::Function(..)
+        )
+    }
+
     /// Readable type name for diagnostics. Mirrors `zymbol-interpreter`'s
     /// `type_word` and (until it was retired) zyml's `type_name`, so a message naming a type reads the
     /// same whichever engine produced it.
@@ -1170,6 +1181,30 @@ fn vm_error_kind(e: &VmError) -> &'static str {
     }
 }
 
+/// Shrink the register stack to `len`, dropping only the values that own memory.
+///
+/// `Vec::truncate` runs `Value`'s drop glue — an out-of-line call — on every
+/// register of the frame being left, and when a function returns most of them
+/// hold an Int, a Bool or `Unit`, which own nothing: in `fib` every one of them
+/// does (ZYVM-010, measured by ZyBench as IDEA-BEN-002).
+#[inline]
+fn truncate_regs(stack: &mut Vec<Value>, len: usize) {
+    if len >= stack.len() {
+        return;
+    }
+    for v in &mut stack[len..] {
+        if v.owns_memory() {
+            *v = Value::Unit; // the old value is dropped here, safely
+        }
+    }
+    // SAFETY: `len` is below the current length, so every element in `0..len`
+    // stays initialised. What is forgotten past `len` owns nothing — the loop
+    // replaced each value that did — so nothing leaks; and were `owns_memory`
+    // ever wrong, the cost would be a leak, never undefined behaviour.
+    unsafe { stack.set_len(len) };
+}
+
+#[inline]
 fn get_chunk(program: &CompiledProgram, chunk_idx: usize) -> &Chunk {
     // chunk_idx == usize::MAX OR u32::MAX as usize both indicate the main chunk
     if chunk_idx >= program.functions.len() {
@@ -1421,7 +1456,7 @@ impl<W: Write> VM<W> {
 
         // Push initial frame for main chunk
         let num_regs = program.main.num_registers as usize;
-        self.value_stack.resize(num_regs, Value::Unit);
+        self.value_stack.resize_with(num_regs, || Value::Unit);
         let main_frame = FrameInfo {
             base: 0,
             ip: 0,
@@ -1558,7 +1593,7 @@ impl<W: Write> VM<W> {
                     while self.frame_stack.len() - 1 > target {
                         let callee_base = self.frame_stack.last().unwrap().base as usize;
                         self.frame_stack.pop();
-                        self.value_stack.truncate(callee_base);
+                        truncate_regs(&mut self.value_stack, callee_base);
                     }
                     let catch = {
                         let frame = self.frame_stack.last_mut().unwrap();
@@ -1583,7 +1618,7 @@ impl<W: Write> VM<W> {
                 if floor > 0 && self.frame_stack.len() > floor {
                     let floor_base = self.frame_stack[floor].base as usize;
                     self.frame_stack.truncate(floor);
-                    self.value_stack.truncate(floor_base);
+                    truncate_regs(&mut self.value_stack, floor_base);
                 }
                 return Err(_err);
             }};
@@ -1673,7 +1708,7 @@ impl<W: Write> VM<W> {
                 // The frame a higher-order operator pushed ran off its end.
                 if self.frame_stack.len() - 1 == floor {
                     self.frame_stack.pop();
-                    self.value_stack.truncate(base);
+                    truncate_regs(&mut self.value_stack, base);
                     return Ok(Value::Unit);
                 }
                 let (return_reg, wb) = {
@@ -1691,7 +1726,7 @@ impl<W: Write> VM<W> {
                 };
                 self.frame_stack.pop();
                 // Truncate: remove callee's registers from flat stack
-                self.value_stack.truncate(base);
+                truncate_regs(&mut self.value_stack, base);
                 // Restore caller's base
                 base = self.frame_stack.last().unwrap().base as usize;
                 // Write Unit as return value
@@ -2112,7 +2147,7 @@ impl<W: Write> VM<W> {
                     // Extend flat stack with Unit (single vectorizable loop), then
                     // overwrite the arg slots with the actual arg values via unsafe
                     // indexed write (no bounds check, no double capacity check).
-                    self.value_stack.resize(new_base + num_regs, Value::Unit);
+                    self.value_stack.resize_with(new_base + num_regs, || Value::Unit);
 
                     // Copy args from caller into callee arg registers
                     for (i, &reg) in arg_regs.iter().enumerate() {
@@ -2158,7 +2193,7 @@ impl<W: Write> VM<W> {
                     // Extend value_stack if callee needs more registers than we have
                     let current_size = self.value_stack.len() - base;
                     if num_regs > current_size {
-                        self.value_stack.resize(base + num_regs, Value::Unit);
+                        self.value_stack.resize_with(base + num_regs, || Value::Unit);
                     }
 
                     // Zero all registers [base..base+num_regs]
@@ -2229,12 +2264,12 @@ impl<W: Write> VM<W> {
 
                     // The frame a higher-order operator pushed has returned.
                     if self.frame_stack.len() == floor {
-                        self.value_stack.truncate(base);
+                        truncate_regs(&mut self.value_stack, base);
                         return Ok(result);
                     }
 
                     // Truncate value_stack: remove callee's registers
-                    self.value_stack.truncate(base);
+                    truncate_regs(&mut self.value_stack, base);
 
                     // Restore caller context — single last() access
                     let caller = self.frame_stack.last().unwrap();
@@ -2940,7 +2975,7 @@ impl<W: Write> VM<W> {
                     let outcome: Result<(), VmError> = 'calls: {
                         for part in parts {
                             let v = Value::String(ZyStr::new(part));
-                            match self.call_callable(callable.clone(), vec![v], program) {
+                            match self.call_callable(callable.clone(), [v], program) {
                                 Ok(r) => results.push(r),
                                 Err(e) => break 'calls Err(e),
                             }
@@ -2977,7 +3012,7 @@ impl<W: Write> VM<W> {
                     let outcome: Result<(), VmError> = 'calls: {
                         for part in parts {
                             let v = Value::String(ZyStr::new(part));
-                            match self.call_callable(callable.clone(), vec![v.clone()], program) {
+                            match self.call_callable(callable.clone(), [v.clone()], program) {
                                 // A predicate answers a Bool, and no truthiness stands
                                 // in for one (GLB-080, as the sort comparator, GLB-024).
                                 Ok(Value::Bool(true)) => results.push(v),
@@ -3019,7 +3054,7 @@ impl<W: Write> VM<W> {
                     let outcome: Result<(), VmError> = 'calls: {
                         for part in parts {
                             let elem = Value::String(ZyStr::new(part));
-                            match self.call_callable(callable.clone(), vec![mem::replace(&mut acc, Value::Unit), elem], program) {
+                            match self.call_callable(callable.clone(), [mem::replace(&mut acc, Value::Unit), elem], program) {
                                 Ok(r) => acc = r,
                                 Err(e) => break 'calls Err(e),
                             }
@@ -3429,7 +3464,7 @@ impl<W: Write> VM<W> {
                     self.frame_stack.last_mut().unwrap().ip = ip as u32;
 
                     let new_base = self.value_stack.len();
-                    self.value_stack.resize(new_base + num_regs, Value::Unit);
+                    self.value_stack.resize_with(new_base + num_regs, || Value::Unit);
 
                     // Copy explicit args into [0..num_args)
                     for (i, &reg) in arg_regs.iter().enumerate() {
@@ -3578,7 +3613,7 @@ impl<W: Write> VM<W> {
                     let mut results = Vec::with_capacity(arr.len());
                     let outcome: Result<(), VmError> = 'calls: {
                         for elem in arr {
-                            match self.call_callable(callable.clone(), vec![elem], program) {
+                            match self.call_callable(callable.clone(), [elem], program) {
                                 Ok(r) => results.push(r),
                                 Err(e) => break 'calls Err(e),
                             }
@@ -3606,7 +3641,7 @@ impl<W: Write> VM<W> {
                     let mut results = Vec::new();
                     let outcome: Result<(), VmError> = 'calls: {
                         for elem in arr {
-                            match self.call_callable(callable.clone(), vec![elem.clone()], program) {
+                            match self.call_callable(callable.clone(), [elem.clone()], program) {
                                 // A predicate answers a Bool, and no truthiness stands
                                 // in for one (GLB-080, as the sort comparator, GLB-024).
                                 Ok(Value::Bool(true)) => results.push(elem),
@@ -3645,7 +3680,7 @@ impl<W: Write> VM<W> {
                     let mut acc = self.reg_get(init_reg).clone();
                     let outcome: Result<(), VmError> = 'calls: {
                         for elem in arr {
-                            match self.call_callable(callable.clone(), vec![mem::replace(&mut acc, Value::Unit), elem], program) {
+                            match self.call_callable(callable.clone(), [mem::replace(&mut acc, Value::Unit), elem], program) {
                                 Ok(r) => acc = r,
                                 Err(e) => break 'calls Err(e),
                             }
@@ -3681,7 +3716,7 @@ impl<W: Write> VM<W> {
                                     for (k, (x, y)) in [(j, j + 1), (j + 1, j)].into_iter().enumerate() {
                                         says[k] = match self.call_callable(
                                             callable.clone(),
-                                            vec![items[x].clone(), items[y].clone()],
+                                            [items[x].clone(), items[y].clone()],
                                             program,
                                         ) {
                                             // A comparator answers a Bool, and no
@@ -4449,8 +4484,11 @@ impl<W: Write> VM<W> {
 
                 &Instruction::StoreGlobal(gvar_idx, src) => {
                     // Assigning revives a destroyed name: `\` ends a life, it
-                    // does not burn the name.
-                    self.destroyed_globals.remove(&gvar_idx);
+                    // does not burn the name. Almost no program destroys a
+                    // global, so the map is nearly always empty: skip the hash.
+                    if !self.destroyed_globals.is_empty() {
+                        self.destroyed_globals.remove(&gvar_idx);
+                    }
                     let val = rreg!(src).clone();
                     if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
                         *slot = val;
@@ -4753,10 +4791,13 @@ impl<W: Write> VM<W> {
     /// 49, so a split, a slice, a format, a `??` over a range, a `$!` or a `!?`
     /// inside the callee all answered `##_` without an error (ZYVM-004). There
     /// is one loop now; an instruction added to it is added everywhere.
-    fn call_callable(
+    ///
+    /// The arguments come as an array, not a `Vec`: every operator passes one or
+    /// two, and a `Vec` was a heap allocation per element of the collection.
+    fn call_callable<const N: usize>(
         &mut self,
         callable: Value,
-        args: Vec<Value>,
+        args: [Value; N],
         program: &CompiledProgram,
     ) -> Result<Value, VmError> {
         let (func_idx, upvalues) = match callable {
@@ -4779,7 +4820,7 @@ impl<W: Write> VM<W> {
 
         let floor = self.frame_stack.len();
         let new_base = self.value_stack.len();
-        self.value_stack.resize(new_base + num_regs, Value::Unit);
+        self.value_stack.resize_with(new_base + num_regs, || Value::Unit);
         for (i, v) in args.into_iter().enumerate() {
             if i < num_regs { self.value_stack[new_base + i] = v; }
         }
@@ -4822,7 +4863,7 @@ impl<W: Write> VM<W> {
                 if self.frame_stack.len() > floor {
                     let floor_base = self.frame_stack[floor].base as usize;
                     self.frame_stack.truncate(floor);
-                    self.value_stack.truncate(floor_base);
+                    truncate_regs(&mut self.value_stack, floor_base);
                 }
             }
         }
