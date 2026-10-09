@@ -3539,6 +3539,15 @@ desc = "Hello {name}, you have {n} items"
 >> desc ¶
 ```
 
+An item may open with a prefix operator — a cast, a `#…|x|` format, `0x|x|`, `!` —
+wherever items are juxtaposed: in an assignment, after `<~` and in `$++` as in `>>`:
+
+```zymbol
+f = 3.7
+label = "rounded=" ###f " flag=" !#1
+>> label ¶    // → rounded=4 flag=#0
+```
+
 Juxtaposition also works **inside** call arguments, array elements, tuple
 elements and grouped expressions — so a composed string can be handed straight
 to a function without an intermediate variable. A comma always separates;
