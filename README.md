@@ -684,8 +684,8 @@ cannot be rerun, so a project earns its keep as a discovery mechanism first. Eve
 distilled into a minimal `.zy` case, a golden and a unit test, and it is that cheap layer that
 names what broke when something does.
 
-The application is not retired afterwards. Seven of the eight are registered in
-`zyquality/project/apps.toml` and run as a gate (`gate = true`, ~40 goldens through both
+The application is not retired afterwards. Nine of the ten are registered in
+`zyquality/project/apps.toml` and run as a gate (`gate = true`, ~60 goldens through both
 engines); `ZyFmtCheck` runs over the LDV applications **by default**, because a formatter's
 damage shows up in hand-aligned tables, five writing systems and modules importing each other,
 and not in a corpus of short files — which is how it found five formatter defects the token
@@ -700,7 +700,7 @@ all fixed in v0.0.8, each with its own regression test. चतुरङ्गम
 recorded at the foot of its entry. ZyBank's thirty-three closed against that same release, which
 is what an LDV log looks like once the cycle completes: closing one is a language change or a
 reasoned rejection, and neither is the application author's call. The method, its decalogue, and
-the index of the nine logs are in **`zymbol-design/LDV.md`**.
+the index of the ten logs are in **`zymbol-design/LDV.md`**.
 
 The projects carry a second load at the same time. They are written across seven natural
 languages — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese, Sanskrit, Greek — which is what
@@ -723,7 +723,8 @@ once.
 | [囲碁 (Igo)](https://github.com/zymbol-lang/zy-GO) | **v0.0.8** | 日本語 (Japanese) | Recursive flood fill at depth, state threading across modules, double-width glyph grid, application-level i18n in 5 languages, `std/term` |
 | [चतुरङ्गम् (Chaturanga)](https://github.com/zymbol-lang/zyChaturanga) | **v0.0.9** | संस्कृतम् (Sanskrit) | Devanagari identifiers with conjuncts and visarga, alpha-beta search over make/unmake, mixed-script module names, numeral script as an i18n axis |
 | [ZyBank](https://github.com/zymbol-lang/ZyBank) | **v0.0.9** | Español | `std/db` in an application, money as integers with a per-currency exponent, dictionaries, configuration precedence, functions across module boundaries, keyboard input and typed fields in raw mode |
-| [GoL (Ζωή)](https://github.com/zymbol-lang/ZyGoL) | **v0.0.9** | Ελληνικά (Greek) | Conway's Game of Life with B/S rules, an application whose tests *and* their runner are Zymbol, the only suite graded on all three engines, four locales incl. Devanagari digits |
+| [GoL (Ζωή)](https://github.com/zymbol-lang/ZyGoL) | **v0.0.9** | Ελληνικά (Greek) | Conway's Game of Life with B/S rules, an application whose tests *and* their runner are Zymbol, the first suite graded on all three engines, four locales incl. Devanagari digits |
+| [ZyBF](https://github.com/zymbol-lang/ZyBF) | **v0.0.10** | Español | A mini LDV: a Brainf*** interpreter whose `.` needed an Int → Char conversion the language did not have — now `##'` — against an independent Python oracle, graded on all three engines |
 
 ---
 
@@ -1236,6 +1237,30 @@ one judges the **balances** rather than the bytes and reports BUG-ZYB-008 instea
 it — the same division `zyquality` makes between goldens and consensus. The browser engine does
 not take part: `std/db` does not exist there, and it has neither a terminal nor a filesystem.
 
+### ZyBF — v0.0.10 · Español · a mini LDV
+
+A Brainf*** interpreter in 96 lines, written on 2026-10-01: a language of symbols interpreted by
+another one. It is the cycle at the smallest size that still runs it — one short program in one
+domain, its log in the canonical form, its suite in the gate — and the domain asked for one thing
+none of the larger projects had: **the character whose code is a value that exists only at run
+time.** Brainf***'s `.` prints the cell as a character, and Zymbol had a literal for a code
+(`0d65` is `'A'`) and a way back (`##!'A'` is `65`), but nothing from a computed Int to its Char.
+The interpreter carried a table of 256 literals indexed at run time.
+
+Its three findings changed v0.0.10: **`##'expr`**, the cast that was missing (GLB-109), with the
+form of its siblings — a code with no character is `##Range`, any other type `##Type`; the
+documents that called a base literal an `Int` when the engines and the design said `Char`
+(GLB-110); and an error that says when a name was read into the expression before it, for two
+statements on one line (GLB-111). Then the program used what it asked for:
+
+```zymbol
+== '.' => { salida = salida ##'cinta[p] }
+```
+
+— 75 lines without the table, the same 13 tests against an independent Python oracle, alike in
+the three engines. That the line needs no intermediate variable came from the same day: a prefix
+operator now opens a juxtaposed operand in an assignment too (GLB-114).
+
 ---
 
 ## Project Layout
@@ -1267,7 +1292,7 @@ interpreter/
 - `zymbol-design/USERAPPI18N.md` — Building a multilingual application: measured layout, runtime language switching, per-language entry points, and the completeness gate
 - `zymbol-design/MEMORY_MODEL.md` — Memory and scoping model: design vs implementation audit (findings MM-1 … MM-11)
 - `zymbol-design/SYMBOLS.md` — Semiotic and morphological reference: the grapheme inventory, how marks agglutinate into operators, the declared homographs and opaque signs, and the rules a new operator must satisfy
-- `zymbol-design/LDV.md` — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the eight gap logs
+- `zymbol-design/LDV.md` — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the ten gap logs
 - [ROADMAP.md](./ROADMAP.md) — What's done, known gaps, and planned work
 - [CHANGELOG.md](./CHANGELOG.md) — Version history
 
