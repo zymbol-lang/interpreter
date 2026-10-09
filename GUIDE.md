@@ -4752,14 +4752,17 @@ parsing.
 ### Base Literals and Conversions
 
 ```zymbol
-// Literals in different bases (result: Char if ASCII range, Int otherwise)
+// Literals in different bases (result: a Char, the character with that code)
 a = 0x41        // hexadecimal → 'A'
 b = 0b01000001  // binary → 'A'
 c = 0o101       // octal → 'A'
 d = 0d65        // explicit decimal → 'A'
+e = 0xFF        // beyond ASCII, still a Char: 'ÿ'
 
 >> a ¶    // → A
 >> b ¶    // → A
+>> e ¶    // → ÿ
+>> ##!e ¶ // → 255
 
 // Convert expression to base string
 hex = 0x|255|    // Int → hex string → "0x00FF"
