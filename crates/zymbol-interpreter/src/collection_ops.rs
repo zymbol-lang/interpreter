@@ -942,6 +942,21 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
+    /// Rule B for one comparison of a merge: the left element goes first unless
+    /// the comparator says it does not AND says the right one does (GLB-073).
+    fn sort_takes_left(
+        &mut self,
+        func: &crate::FunctionValue,
+        left: &Value,
+        right: &Value,
+        span: zymbol_span::Span,
+    ) -> Result<bool> {
+        if self.sort_comparator_says(func, left.clone(), right.clone(), span)? {
+            return Ok(true);
+        }
+        Ok(!self.sort_comparator_says(func, right.clone(), left.clone(), span)?)
+    }
+
     pub(crate) fn eval_collection_sort(&mut self, op: &zymbol_ast::CollectionSortExpr) -> Result<Value> {
         let collection = self.eval_expr(&op.collection)?;
 
@@ -959,24 +974,44 @@ impl<W: Write> Interpreter<W> {
                             span: op.span,
                         }),
                     };
-                    // Bubble sort, stable (GLB-073, decided 2026-10-03): a pair is
-                    // swapped only when the first does NOT go before the second AND
-                    // the second goes before the first. A strict comparator (`a < b`)
-                    // answers #0 both ways on a tie, and swapping on the first #0
-                    // alone scrambled ties; the second question leaves them in their
-                    // input order, and a non-strict one (`a <= b`) stays as it was.
-                    let n = items.len();
-                    for i in 0..n {
-                        for j in 0..n.saturating_sub(i + 1) {
-                            let (x, y) = (items[j].clone(), items[j + 1].clone());
-                            if self.sort_comparator_says(&func, x.clone(), y.clone(), op.span)? {
-                                continue;
+                    // Bottom-up merge sort, the same in the three engines call for
+                    // call (GLB-108, decided 2026-10-09): runs of width 1, 2, 4, …,
+                    // merged left to right. It was a bubble sort that visited every
+                    // pair — quadratic even on sorted input.
+                    //
+                    // Stable by rule B (GLB-073, decided 2026-10-03): the left
+                    // element is taken unless it does NOT go before the right one
+                    // AND the right one goes before it. A strict comparator
+                    // (`a < b`) answers #0 both ways on a tie, so ties keep their
+                    // input order; a non-strict one (`a <= b`) never asks twice.
+                    let mut src: Vec<Value> = items.as_ref().clone();
+                    let n = src.len();
+                    let mut dst: Vec<Value> = Vec::with_capacity(n);
+                    let mut width = 1;
+                    while width < n {
+                        dst.clear();
+                        let mut lo = 0;
+                        while lo < n {
+                            let mid = (lo + width).min(n);
+                            let hi = (lo + 2 * width).min(n);
+                            let (mut i, mut j) = (lo, mid);
+                            while i < mid && j < hi {
+                                if self.sort_takes_left(&func, &src[i], &src[j], op.span)? {
+                                    dst.push(src[i].clone());
+                                    i += 1;
+                                } else {
+                                    dst.push(src[j].clone());
+                                    j += 1;
+                                }
                             }
-                            if self.sort_comparator_says(&func, y, x, op.span)? {
-                                Rc::make_mut(&mut items).swap(j, j + 1);
-                            }
+                            dst.extend_from_slice(&src[i..mid]);
+                            dst.extend_from_slice(&src[j..hi]);
+                            lo = hi;
                         }
+                        std::mem::swap(&mut src, &mut dst);
+                        width *= 2;
                     }
+                    items = Rc::new(src);
                 } else {
                     // Natural order
                     Rc::make_mut(&mut items).sort_by(|a, b| {

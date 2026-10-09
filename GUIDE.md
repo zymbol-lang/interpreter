@@ -2620,7 +2620,9 @@ by_name_desc = db$^ (a, b -> a.name > b.name)
 strict comparator (`<`, `>`) a tie answers `#0` both ways, and the pair stays as it
 was. A non-strict one (`<=`, `>=`) gives the same order. The comparator is asked
 again with the two swapped only when it answers `#0`, so it may be called more than
-once for a pair. All three engines ask the same pairs in the same order.
+once for a pair. All three engines ask the same pairs in the same order. It is a
+merge sort: about n log n comparisons, so sorting 4000 elements with a comparator
+costs about what the natural order costs, not 4000² calls.
 
 ```zymbol
 team = [

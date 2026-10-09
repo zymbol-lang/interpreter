@@ -3721,37 +3721,59 @@ impl<W: Write> VM<W> {
                             items.reverse();
                         }
                     } else {
-                        // Custom comparator: bubble sort, stable (GLB-073, decided
-                        // 2026-10-03) — swap only when the first does NOT go before the
-                        // second AND the second goes before the first, the tree-walker's
-                        // rule. A strict comparator answers #0 both ways on a tie.
+                        // Custom comparator: bottom-up merge sort, the tree-walker's
+                        // call for call (GLB-108, decided 2026-10-09) — runs of width
+                        // 1, 2, 4, …, merged left to right; it was a bubble sort that
+                        // visited every pair. Stable by rule B (GLB-073): the left
+                        // element is taken unless it does NOT go before the right one
+                        // AND the right one goes before it.
                         let callable = self.reg_get(func_reg).clone();
                         let n = items.len();
                         let outcome: Result<(), VmError> = 'calls: {
-                            for i in 0..n {
-                                for j in 0..n.saturating_sub(i + 1) {
-                                    let mut says = [false; 2];
-                                    for (k, (x, y)) in [(j, j + 1), (j + 1, j)].into_iter().enumerate() {
-                                        says[k] = match self.call_callable(
-                                            callable.clone(),
-                                            [items[x].clone(), items[y].clone()],
-                                            program,
-                                        ) {
-                                            // A comparator answers a Bool, and no
-                                            // truthiness stands in for one (GLB-024).
-                                            Ok(Value::Bool(b)) => b,
-                                            Ok(other) => break 'calls Err(VmError::TypeMsg(format!(
-                                                "sort comparator must return a Bool, got {}", other.type_name()))),
-                                            Err(e) => break 'calls Err(e),
-                                        };
-                                        // The first goes before the second: no second question.
-                                        if k == 0 && says[0] { break; }
+                            let mut src = std::mem::take(&mut items);
+                            let mut merged: Vec<Value> = Vec::with_capacity(n);
+                            let mut width = 1;
+                            while width < n {
+                                merged.clear();
+                                let mut lo = 0;
+                                while lo < n {
+                                    let mid = (lo + width).min(n);
+                                    let hi = (lo + 2 * width).min(n);
+                                    let (mut i, mut j) = (lo, mid);
+                                    while i < mid && j < hi {
+                                        let mut says = [false; 2];
+                                        for (k, (x, y)) in [(i, j), (j, i)].into_iter().enumerate() {
+                                            says[k] = match self.call_callable(
+                                                callable.clone(),
+                                                [src[x].clone(), src[y].clone()],
+                                                program,
+                                            ) {
+                                                // A comparator answers a Bool, and no
+                                                // truthiness stands in for one (GLB-024).
+                                                Ok(Value::Bool(b)) => b,
+                                                Ok(other) => break 'calls Err(VmError::TypeMsg(format!(
+                                                    "sort comparator must return a Bool, got {}", other.type_name()))),
+                                                Err(e) => break 'calls Err(e),
+                                            };
+                                            // The left goes first: no second question.
+                                            if k == 0 && says[0] { break; }
+                                        }
+                                        if says[0] || !says[1] {
+                                            merged.push(src[i].clone());
+                                            i += 1;
+                                        } else {
+                                            merged.push(src[j].clone());
+                                            j += 1;
+                                        }
                                     }
-                                    if !says[0] && says[1] {
-                                        items.swap(j, j + 1);
-                                    }
+                                    merged.extend_from_slice(&src[i..mid]);
+                                    merged.extend_from_slice(&src[j..hi]);
+                                    lo = hi;
                                 }
+                                std::mem::swap(&mut src, &mut merged);
+                                width *= 2;
                             }
+                            items = src;
                             Ok(())
                         };
                         if let Err(e) = outcome { raise!(e); }
