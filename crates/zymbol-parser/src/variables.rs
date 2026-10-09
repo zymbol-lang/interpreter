@@ -289,6 +289,13 @@ impl Parser {
     /// Used to detect implicit concatenation: s = "hello" ' ' name " world"
     /// Note: LParen is intentionally excluded — it is ambiguous with lambda
     /// comparators (e.g. arr$^+ (a, b -> ...)) and grouped expressions.
+    ///
+    /// A prefix operator starts an operand too, as it does after `>>` in every
+    /// engine (GLB-114, decided 2026-10-09): the casts, the `#…|x|` formats,
+    /// `0x|x|` and its siblings, and `!`. None of them can be read any other way
+    /// after a complete expression on the same line, and listing only literals
+    /// and names refused `x = "a" ###n`, `<~ "a" #|s|` and `s$++ "b" !ok`, which
+    /// the browser engine and `>> "a" ###n ¶` take.
     pub(crate) fn can_juxtapose(kind: &TokenKind) -> bool {
         matches!(kind,
             TokenKind::String(_) |
@@ -298,7 +305,21 @@ impl Parser {
             TokenKind::Float(_) |
             TokenKind::Boolean(_) |
             TokenKind::Ident(_) |
-            TokenKind::HotIdent(_)
+            TokenKind::HotIdent(_) |
+            TokenKind::HashHashDot |
+            TokenKind::HashHashHash |
+            TokenKind::HashHashBang |
+            TokenKind::HashHashApos |
+            TokenKind::HashPipe |
+            TokenKind::HashDot |
+            TokenKind::HashExclaim |
+            TokenKind::HashComma |
+            TokenKind::HashCaret |
+            TokenKind::BaseBinary |
+            TokenKind::BaseOctal |
+            TokenKind::BaseDecimal |
+            TokenKind::BaseHex |
+            TokenKind::Not
         )
     }
 
