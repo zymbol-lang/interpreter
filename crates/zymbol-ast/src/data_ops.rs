@@ -223,10 +223,14 @@ pub enum CastKind {
     ToIntRound,
     /// ##! — cast to Int truncating (Float 3.7 → 3)
     ToIntTrunc,
+    /// ##' — cast to Char: an Int becomes the character with that code point,
+    /// a Char stays itself. The pair of `##!` on a Char (GLB-109).
+    ToChar,
 }
 
-/// Numeric cast expression: ##.expr / ###expr / ##!expr
-/// Explicit type conversion between numeric types.
+/// Cast expression: ##.expr / ###expr / ##!expr / ##'expr
+/// Explicit type conversion between numeric types, and between an Int code
+/// point and its Char.
 #[derive(Debug, Clone)]
 pub struct NumericCastExpr {
     pub kind: CastKind,

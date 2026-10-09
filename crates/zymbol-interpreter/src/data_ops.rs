@@ -120,6 +120,7 @@ impl<W: Write> Interpreter<W> {
     /// ##.  → Float (lossless from Int, identity from Float)
     /// ###  → Int rounding  (Float 3.7 → 4, Int identity)
     /// ##!  → Int truncating (Float 3.7 → 3, Int identity)
+    /// ##'  → Char (Int code point → its character, Char identity)
     pub(crate) fn eval_numeric_cast(&mut self, op: &NumericCastExpr) -> Result<Value> {
         let value = self.eval_expr(&op.expr)?;
         match op.kind {
@@ -155,6 +156,26 @@ impl<W: Write> Interpreter<W> {
                 other => Err(RuntimeError::kinded(
                     "Type",
                     format!("##! requires a numeric value or Char, got {}", value_type(other)),
+                    op.span,
+                )),
+            },
+            // The pair of `##!` on a Char (GLB-109). Only an Int is a code: a
+            // Float is not one even when it is whole — `##'###f` writes the
+            // rounding — and a code with no character (past 0x10FFFF, or a
+            // surrogate) is `##Range`, like a float no Int can hold.
+            CastKind::ToChar => match value {
+                Value::Char(_) => Ok(value),
+                Value::Int(n) => match u32::try_from(n).ok().and_then(char::from_u32) {
+                    Some(c) => Ok(Value::Char(c)),
+                    None => Err(RuntimeError::kinded(
+                        "Range",
+                        "character out of range: ##' cannot represent this Int".to_string(),
+                        op.span,
+                    )),
+                },
+                other => Err(RuntimeError::kinded(
+                    "Type",
+                    format!("##' requires an Int or Char, got {}", value_type(other)),
                     op.span,
                 )),
             },

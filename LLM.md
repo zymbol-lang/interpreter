@@ -61,7 +61,8 @@ retired on 2026-08-17; it appears in this document only as history.
 Not values: ranges (`1..5`, loop headers only) and module aliases.
 `x#?` → `(type_symbol, count, display)`. `#|"४२"|` → `42` (69 digit scripts, fail-safe:
 returns the input unchanged on failure). Casts: `##.x` Float, `###x` Int (round),
-`##!x` Int (truncate; `Char`→code point). Format: `#.2|x|` round, `#!2|x|` truncate,
+`##!x` Int (truncate; `Char`→code point), `##'x` Char (an Int code point → its character;
+a Float or a code with no character is an error). Format: `#.2|x|` round, `#!2|x|` truncate,
 `#,|x|` commas, `#^|x|` scientific.
 
 ---

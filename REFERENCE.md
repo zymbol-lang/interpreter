@@ -1468,6 +1468,7 @@ kept verbatim although `zyml` has since been retired:
 | `+`, `-`, `*`, `^` | `9007199254740991 + 1` → `integer overflow: 9007199254740991 + 1` |
 | An integer literal | `9223372036854775807` → `integer literal out of range` (lexical, not runtime) |
 | `###` / `##!` on a float | `###1.0e300` → `integer overflow: ### cannot represent this float` |
+| `##'` on an Int that is no character | `##'1114112`, `##'55296`, `##'-1` → `character out of range: ##' cannot represent this Int` |
 
 Operations that **cannot** raise it: unary `-` (the range is symmetric), `/` and
 `%` on integers (a quotient or remainder of in-range operands is in range), and
@@ -1705,6 +1706,7 @@ them will hunt for a bug that is not there (verified 2026-08-17, both engines).
 | `##.expr` | Cast to Float | `##.42` → `42` (Float) |
 | `###expr` | Cast to Int (rounding) | `###3.7` → `4` |
 | `##!expr` | Cast to Int (truncating); `Char` → code point | `##!3.7` → `3`, `##!'A'` → `65` |
+| `##'expr` | Cast to Char: an Int code point → its character; a `Char` stays itself | `##'65` → `'A'`, `##'(##!'a' + 1)` → `'b'` |
 | `#,\|x\|` | Comma format | `#,\|1234567\|` |
 | `#^\|x\|` | Scientific notation | `#^\|12345.0\|` |
 | `0x`, `0b`, `0o`, `0d` | Base literals | `0x41` → `'A'` |
