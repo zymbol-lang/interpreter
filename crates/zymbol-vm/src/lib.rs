@@ -582,6 +582,9 @@ pub enum VmError {
     /// `###`/`##!` on a float with no integer form in range.
     #[error("integer overflow: {op} cannot represent this float")]
     CastOverflow { op: &'static str },
+    /// `##'` on an Int that is no character: past 0x10FFFF, or a surrogate.
+    #[error("character out of range: ##' cannot represent this Int")]
+    CharOutOfRange,
     /// `container` is spelled as the tree-walker spells it — the read path there
     /// names the thing that was too short, and one message that always said
     /// "array" told a program indexing past the end of a STRING that its array
@@ -1167,7 +1170,8 @@ fn vm_error_kind(e: &VmError) -> &'static str {
     match e {
         VmError::TypeError { .. } | VmError::TypeMsg(_) => "Type",
         VmError::DivisionByZero | VmError::ModuloByZero => "Div",
-        VmError::IntOverflow { .. } | VmError::CastOverflow { .. } => "Range",
+        VmError::IntOverflow { .. } | VmError::CastOverflow { .. }
+            | VmError::CharOutOfRange => "Range",
         VmError::IndexOutOfBounds { .. } | VmError::IndexZero | VmError::IndexMsg(_) => "Index",
         VmError::ParseMsg(_) => "Parse",
         VmError::KeyMsg(_) => "Key",
@@ -1946,6 +1950,20 @@ impl<W: Write> VM<W> {
                             "##! requires a numeric value or Char, got {}", other.type_name()))),
                     };
                     wreg!(dst, Value::Int(v));
+                }
+                // `##'`, the pair of `##!` on a Char (GLB-109): only an Int is a
+                // code, and one with no character is `##Range`.
+                &Instruction::IntToChar(dst, src) => {
+                    let c = match rreg!(src) {
+                        Value::Char(c) => *c,
+                        Value::Int(n) => match u32::try_from(*n).ok().and_then(char::from_u32) {
+                            Some(c) => c,
+                            None => raise!(VmError::CharOutOfRange),
+                        },
+                        other => raise!(VmError::TypeMsg(format!(
+                            "##' requires an Int or Char, got {}", other.type_name()))),
+                    };
+                    wreg!(dst, Value::Char(c));
                 }
 
                 // ── String ops ──────────────────────────────────────────────

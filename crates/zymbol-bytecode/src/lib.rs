@@ -57,6 +57,8 @@ pub enum Instruction {
     FloatToIntRound(Reg, Reg),
     /// dst = (src as Float).trunc() as Int  — ##!expr
     FloatToIntTrunc(Reg, Reg),
+    /// dst = the Char whose code point is src (an Int), or src if a Char  — ##'expr
+    IntToChar(Reg, Reg),
 
     // ── String ops ────────────────────────────────────────────────────────
     ConcatStr(Reg, Reg, Reg),

@@ -3722,10 +3722,17 @@ impl TypeChecker {
                 }
             }
 
-            Expr::NumericCast(op) => match op.kind {
-                CastKind::ToFloat => ZymbolType::Float,
-                CastKind::ToIntRound | CastKind::ToIntTrunc => ZymbolType::Int,
-            },
+            // The operand is code like any other: answering the cast's type
+            // without inferring it let a wrong arity, an undefined name or a
+            // missing `<~` inside `###`/`##.`/`##!` pass unchecked (GLB-112).
+            Expr::NumericCast(op) => {
+                self.infer_expr(&op.expr);
+                match op.kind {
+                    CastKind::ToFloat => ZymbolType::Float,
+                    CastKind::ToIntRound | CastKind::ToIntTrunc => ZymbolType::Int,
+                    CastKind::ToChar => ZymbolType::Char,
+                }
+            }
 
             // Data operations
             // `#|s|` gives an Int or a Float when the text is a number, and the

@@ -84,7 +84,7 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 | Numeric eval `#\|x\|` (ASCII + Unicode) | ✅ | ✅ | Unicode normalization via digit_blocks |
 | Type metadata `x#?` | ✅ | ✅ | |
 | Precision `#.N` / `#!N` | ✅ | ✅ | |
-| Casts `##.` / `###` / `##!` | ✅ | ✅ | Corrected v0.0.4 audit — was incorrectly marked ⚠ |
+| Casts `##.` / `###` / `##!` / `##'` | ✅ | ✅ | Corrected v0.0.4 audit — was incorrectly marked ⚠; `##'` (Int → Char) added v0.0.10, GLB-109 |
 | Format `#,\|x\|` / `#^\|x\|` | ✅ | ✅ | Corrected v0.0.4 audit — was incorrectly marked ⚠ |
 | Base literals / conversions | ✅ | ✅ | |
 | BashExec / Execute script | ✅ | ✅ | |
@@ -208,7 +208,7 @@ The canonical grammar is maintained in `zymbol-lang.ebnf`; the copy below is rep
   [D01] Module is a closed block: # name { ... }  (not a standalone declaration)
   [D02] >>? is an expression (Expr::TerminalSize), NOT a statement
   [D03] No guard patterns in match (_?, pattern?) — removed from parser
-  [D04] ##. / ### / ##!  take a parse_postfix() operand, NOT primary_expr
+  [D04] ##. / ### / ##! / ##'  take a parse_postfix() operand, NOT primary_expr
   [D05] $* (StringRepeat) is new; absent in v2.5.0
   [D06] << #|var|  numeric-cast input is new
   [D07] >>~ has up to 5 sparse slots: (row, col, BKS, fg, bg)  not 4
@@ -1106,13 +1106,16 @@ string_concat_build = "$++" , postfix_expr , { postfix_expr } ;
    ============================================================ *)
 
 (*
-  Numeric cast operators (prefix, before the operand).
-  The operand is parsed at postfix level  (#.  ###  ##!).         [D04]
+  Cast operators (prefix, before the operand).
+  The operand is parsed at postfix level  (#.  ###  ##!  ##').    [D04]
+  `##'` in an expression is the cast; after `<<` it is the input typespec,
+  read before any expression.
 *)
 data_prefix =
     "##." , postfix_expr                   (* cast to Float *)
   | "###" , postfix_expr                   (* cast to Int  (round) *)
   | "##!" , postfix_expr                   (* cast to Int  (truncate) *)
+  | "##'" , postfix_expr                   (* Int code point to Char (v0.0.10) *)
   ;
 
 (*
@@ -1270,7 +1273,7 @@ primary_expr =
   | match_expr                             (* ?? expr { cases } *)
   | lambda_expr                            (* x -> expr  or  (a,b) -> expr *)
   | terminal_size_expr                     (* >>? — returns (cols, rows) *)
-  | data_prefix                            (* ##.  ###  ##! *)
+  | data_prefix                            (* ##.  ###  ##!  ##' *)
   | data_wrapped_expr                      (* #|..| #,|..| etc. *)
   | base_literal                           (* 0x  0b  0o *)
   | execute_expr                           (* </ path /> *)
@@ -1569,7 +1572,7 @@ block_comment = "/*" , { block_comment | (* any character *) } , "*/" ;
     $!   $!!
 
   TYPE / DATA
-    ##.  ###  ##!   #|  #,|  #^|  #.N|  #!N|   #?
+    ##.  ###  ##!  ##'   #|  #,|  #^|  #.N|  #!N|   #?
     ##_         the Unit literal, and the wildcard error kind in  :! ##_  (v0.0.9)
 
   TYPE SYMBOLS — what  x#?  answers in its first field (verified 2026-09-07)

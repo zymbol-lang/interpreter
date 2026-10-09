@@ -1688,6 +1688,16 @@ impl Parser {
                 let span = start.to(&expr.span());
                 Ok(Expr::NumericCast(NumericCastExpr::new(CastKind::ToIntTrunc, Box::new(expr), span)))
             }
+            TokenKind::HashHashApos => {
+                // Cast to Char: ##'expr — an Int code point becomes its
+                // character. `<< ##' "msg" c` never reaches here: the input
+                // statement reads its typespec before any expression (GLB-109).
+                let start = self.peek().span;
+                self.advance(); // consume ##'
+                let expr = self.parse_postfix()?;
+                let span = start.to(&expr.span());
+                Ok(Expr::NumericCast(NumericCastExpr::new(CastKind::ToChar, Box::new(expr), span)))
+            }
             TokenKind::HashDot => {
                 // Parse round expression: #.N|expr|
                 self.parse_round_expr()

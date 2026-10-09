@@ -2553,6 +2553,10 @@ impl Compiler {
                         ctx.emit(Instruction::FloatToIntTrunc(dst, r_src));
                         ctx.set_reg_type(dst, StaticType::Int);
                     }
+                    CastKind::ToChar => {
+                        ctx.emit(Instruction::IntToChar(dst, r_src));
+                        ctx.set_reg_type(dst, StaticType::Char);
+                    }
                 }
                 Ok(dst)
             }
@@ -5467,7 +5471,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             | Instruction::MulFloat(d, a, b) | Instruction::DivFloat(d, a, b)
             | Instruction::PowFloat(d, a, b) => { upd(*d); upd(*a); upd(*b); }
             Instruction::NegFloat(d, s) | Instruction::IntToFloat(d, s)
-            | Instruction::FloatToIntRound(d, s) | Instruction::FloatToIntTrunc(d, s) => { upd(*d); upd(*s); }
+            | Instruction::FloatToIntRound(d, s) | Instruction::FloatToIntTrunc(d, s)
+            | Instruction::IntToChar(d, s) => { upd(*d); upd(*s); }
             Instruction::CmpEq(d, a, b) | Instruction::CmpNe(d, a, b)
             | Instruction::CmpLt(d, a, b) | Instruction::CmpLe(d, a, b)
             | Instruction::CmpGt(d, a, b) | Instruction::CmpGe(d, a, b) => { upd(*d); upd(*a); upd(*b); }

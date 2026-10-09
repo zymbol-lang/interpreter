@@ -3732,7 +3732,7 @@ r6 = 7 |> (x -> x * factor)
 | `##Div` | Division by zero |
 | `##Index` | Index out of bounds |
 | `##Key` | Key not in a dictionary |
-| `##Range` | Outside the safe integer range |
+| `##Range` | Outside the safe integer range — or an Int that is no character, given to `##'` |
 | `##Type` | Type mismatch |
 | `##Parse` | Data parsing failure — also a text read as a number that it is not: compared with one (`"a" < 10`), rounded, truncated or converted by base |
 | `##IO` | File / system operations |
@@ -4619,13 +4619,15 @@ t0 = #!0|19.9|
 
 ### Type Conversion Casts
 
-Three prefix operators convert between Int and Float:
+Three prefix operators convert between Int and Float, and a fourth turns a
+code point into its character:
 
 | Operator | Name | Behaviour |
 |----------|------|-----------|
 | `##.expr` | ToFloat | Converts Int or Float to Float |
 | `###expr` | ToIntRound | Converts Float to Int, rounding (half away from zero) |
 | `##!expr` | ToIntTrunc | Converts Float to Int truncating toward zero; a `Char` to its code point |
+| `##'expr` | ToChar | Converts an Int code point to its `Char`; a `Char` stays itself |
 
 > **Convention**: `##.` mirrors `#.N` (round/decimal), `##!` mirrors `#!N` (truncate).
 > `###` is a dedicated rounding cast with no decimal-precision argument.
@@ -4640,6 +4642,27 @@ comparable nor castable):
 c = 'M'
 p = ##!c
 ? p >= 65 && p <= 90 { >> "upper" ¶ }   // → upper
+```
+
+`##'` is the way back: an Int code point becomes the character with that code,
+computed at run time where a base literal (`0x41`) can only be written. Only an
+Int is a code — a Float, even a whole one, is a `##Type` error (write `##'###f`
+to round first) — and a code with no character, past `0x10FFFF`, a surrogate
+(`0xD800`–`0xDFFF`) or below 0, is a `##Range` error. Like its siblings it fails
+when it runs, and its operand is a postfix expression: `##'n#?` is `##'(n#?)`.
+
+```zymbol
+>> ##'65 ¶               // → A
+>> ##'(##!'a' + 1) ¶     // → b
+n = 12354
+c = ##'n
+>> c ¶                   // → あ
+>> ##!c ¶                // → 12354
+!? {
+    >> ##'1114112 ¶
+} :! ##Range {
+    >> "no character" ¶  // → no character
+}
 ```
 
 ```zymbol
