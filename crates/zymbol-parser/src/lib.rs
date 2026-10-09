@@ -730,10 +730,52 @@ impl Parser {
                 .with_help("move this `<#` above the first statement in the file")),
             TokenKind::Error(msg) => Err(Diagnostic::error(msg.clone())
                 .with_span(token.span)),
+            // `s = s + 1  i = i + 1` on one line: the right-hand side of `=`
+            // takes juxtaposition, so the `i` was read as one more operand of
+            // `s + 1`, and the statement that reaches here starts at the second
+            // `=`. The list of statements below offers an identifier — which
+            // `i` is — so it did not help; say what happened (GLB-111). A name
+            // just before an assignment that starts a statement was consumed by
+            // the statement before it: that is the only way to be here.
+            TokenKind::Assign
+            | TokenKind::PlusAssign
+            | TokenKind::MinusAssign
+            | TokenKind::StarAssign
+            | TokenKind::SlashAssign
+            | TokenKind::PercentAssign
+            | TokenKind::CaretAssign
+            | TokenKind::PlusPlus
+            | TokenKind::MinusMinus
+                if self.name_before_current().is_some() =>
+            {
+                let name = self.name_before_current().unwrap_or_default();
+                Err(Diagnostic::error(format!(
+                    "unexpected {}: '{}' was read as part of the expression before it",
+                    token.kind.quoted(), name))
+                    .with_span(token.span)
+                    .with_help("a new statement starts on a new line, or after ';'"))
+            }
             _ => Err(Diagnostic::error(format!("unexpected token: {}", token.kind.quoted()))
                 .with_span(token.span)
                 .with_help("expected statement (>>, <<, ?, ??, @, @!, @>, !?, <~, ¶, \\\\, or identifier)")),
         }
+    }
+
+    /// The name of the token just before the current one, comments skipped,
+    /// when that token is a plain identifier.
+    fn name_before_current(&self) -> Option<String> {
+        let mut idx = self.current;
+        while idx < self.tokens.len() && Self::is_comment(&self.tokens[idx]) {
+            idx += 1;
+        }
+        self.tokens[..idx.min(self.tokens.len())]
+            .iter()
+            .rev()
+            .find(|t| !Self::is_comment(t))
+            .and_then(|t| match &t.kind {
+                TokenKind::Ident(n) => Some(n.clone()),
+                _ => None,
+            })
     }
 
     /// Parse a block: { statements }
