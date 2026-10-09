@@ -45,10 +45,10 @@ retired on 2026-08-17; it appears in this document only as history.
 
 | Type | Literal | `#?` symbol | Notes |
 | --- | --- | --- | --- |
-| Int | `42`, `0x41`, `0b1010`, `0o17`, `0d99` | `###` | safe integer ±(2⁵³−1); `/` on two Ints is integer division |
+| Int | `42` | `###` | safe integer ±(2⁵³−1); `/` on two Ints is integer division |
 | Float | `3.14`, `1.0e10` | `##.` | IEEE-754 double; overflow → `inf` (a value, not an error); `==` exact; NaN false in every direction; prints as digits, never exponent |
 | String | `"hi"`, `"Hi {name}"` | `##"` | interpolation works everywhere; `\{`/`\}` escape braces |
-| Char | `'A'`, `'↑'` | `##'` | |
+| Char | `'A'`, `'↑'`, `0x41`, `0b1010`, `0o17`, `0d99` | `##'` | a base-prefixed literal is a character code, in any range: `0x41` is `'A'`, `0xFF` is `'ÿ'`; its Int is `##!0x41` |
 | Bool | `#1` / `#0` | `##?` | `#0 < #1` |
 | Array | `[1,2,3]` | `##]` | homogeneous by design |
 | List | `#[1,"dos"]` | `##[` | an array holding >1 type. NOT a second type — `#?` reads it from the contents, so `json::decode` answers `##[` with no mark written |
