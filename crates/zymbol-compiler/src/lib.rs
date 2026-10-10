@@ -1590,14 +1590,14 @@ impl Compiler {
         ctx: &mut FunctionCtx,
     ) -> Result<(), CompileError> {
         // A bare `$` edit statement modifies its receiver, and a positional
-        // tuple does not change. `$~` guards itself through `DeepSetInPlace`,
-        // which already holds the root in a register; every other editing
-        // operator gets the check here, once, on the receiver — because
-        // immutability is a property of the value, not of the operator
-        // (forma/tuplas.zy § 6).
-        if sugar == AssignSugar::InPlaceEdit
-            && !matches!(value.unwrap_group(), Expr::CollectionUpdate(_))
-        {
+        // tuple does not change. Every editing operator gets the check here,
+        // once, on the receiver — because immutability is a property of the
+        // value, not of the operator (forma/tuplas.zy § 6) — and BEFORE its
+        // operands: the receiver is read first. `$~` used to be left to
+        // `DeepSetInPlace`, which guards itself but runs after the operands, so
+        // `t[1]$~ f()` on a tuple called `f` and then refused, where the other
+        // two engines refuse without calling it.
+        if sugar == AssignSugar::InPlaceEdit {
             if let Ok(r_recv) = ctx.get_reg(name) {
                 let idx = self.intern_string(name);
                 ctx.emit(Instruction::AssertMutable(r_recv, idx));
@@ -1686,6 +1686,41 @@ impl Compiler {
                     Self::release_state_temps(g, &[t, r_idx], ctx);
                     ctx.emit(Instruction::DetachGlobal(g, t));
                     ctx.emit(Instruction::ArrayRemove(t, r_idx));
+                    ctx.emit(Instruction::StoreGlobal(g, t));
+                    return Ok(());
+                }
+                Receiver::Copy => {}
+            },
+            // `a$++ x y` adds at the end. `ConcatBuild` builds a new collection
+            // unless its destination is its base, and then it adds to it where
+            // it is (GLB-118).
+            Expr::ConcatBuild(cb) => match receiver_of(&cb.base) {
+                Receiver::Own(mirror) => {
+                    let reg = ctx.get_reg(name)?;
+                    let mut item_regs = Vec::with_capacity(cb.items.len());
+                    for item in &cb.items {
+                        item_regs.push(self.compile_expr(item, ctx)?);
+                    }
+                    if let Some(g) = mirror {
+                        ctx.emit(Instruction::DetachGlobal(g, reg));
+                    }
+                    ctx.emit(Instruction::ConcatBuild(reg, reg, item_regs));
+                    if let Some(g) = mirror {
+                        ctx.emit(Instruction::StoreGlobal(g, reg));
+                    }
+                    return Ok(());
+                }
+                Receiver::State(g) => {
+                    let t = self.compile_expr(&cb.base, ctx)?;
+                    let mut item_regs = Vec::with_capacity(cb.items.len());
+                    for item in &cb.items {
+                        item_regs.push(self.compile_expr(item, ctx)?);
+                    }
+                    let mut keep = vec![t];
+                    keep.extend(&item_regs);
+                    Self::release_state_temps(g, &keep, ctx);
+                    ctx.emit(Instruction::DetachGlobal(g, t));
+                    ctx.emit(Instruction::ConcatBuild(t, t, item_regs));
                     ctx.emit(Instruction::StoreGlobal(g, t));
                     return Ok(());
                 }
@@ -4259,19 +4294,23 @@ impl Compiler {
             }
             // Deep: arr[i>j>…]$~ val
             Expr::DeepIndex(di) => {
-                // Same evaluation order as the tree-walker: step indices, root, value
+                // Left to right: the root, then the steps, then the value — as
+                // `t[i]$~ v` already did. The root used to be read after the
+                // steps, here and in the tree-walker, so a step that wrote it
+                // (`m[(f())>1]$~ v`) had its write edited instead of
+                // overwritten, where zyjs answered the other way (GLB-115).
+                if di.path.steps.iter().any(|s| s.range_end.is_some()) {
+                    return Err(CompileError::Unsupported(
+                        "deep update ($~) does not support ranges in the path".into(),
+                    ));
+                }
+                let r_root = self.compile_expr(&di.array, ctx)?;
                 let r_path = ctx.alloc_temp()?;
                 ctx.emit(Instruction::NewArray(r_path));
                 for step in &di.path.steps {
-                    if step.range_end.is_some() {
-                        return Err(CompileError::Unsupported(
-                            "deep update ($~) does not support ranges in the path".into(),
-                        ));
-                    }
                     let r_i = self.compile_expr(&step.index, ctx)?;
                     ctx.emit(Instruction::ArrayPush(r_path, r_i));
                 }
-                let r_root = self.compile_expr(&di.array, ctx)?;
                 let r_val = self.compile_expr(&cu.value, ctx)?;
                 if let Receiver::State(g) = receiver {
                     Self::release_state_temps(g, &[r_root, r_path, r_val], ctx);
