@@ -129,6 +129,20 @@ struct TryCtx {
 // Function compilation context
 // ──────────────────────────────────────────────────────────────────────────────
 
+/// Where an edit whose result goes back into its own receiver writes.
+#[derive(Clone, Copy)]
+enum Receiver {
+    /// Into a copy: the receiver must not change (`u = t[i]$~ v`).
+    Copy,
+    /// Into the variable's own register: nothing else holds the collection —
+    /// except, in a script's body, the mirror slot every file variable is
+    /// written back to. That one is detached for the edit and written again
+    /// after it, like module state.
+    Own(Option<u16>),
+    /// Into module state loaded for the edit: the slot is detached first.
+    State(u16),
+}
+
 struct FunctionCtx {
     /// Variable name → register index
     register_map: HashMap<String, Reg>,
@@ -146,6 +160,24 @@ struct FunctionCtx {
     name: String,
     /// Hot variables (both x° and °x): persist across block scopes, never zeroed by zero_new_vars
     hot_vars: HashSet<String>,
+    /// The variables the statement being compiled writes through an output
+    /// argument (`f(x<~)`). A read of one of them is pinned — copied to a
+    /// temporary where it is evaluated — because a variable's register is read
+    /// when the operator runs, and by then the call has written it back:
+    /// `x + inc(x<~)` answered 16 where left to right is 6 (ZYVM-015).
+    pinned: HashSet<String>,
+    /// This function's parameters. A parameter is the function's own variable
+    /// even when the module has state of the same name: reads always found its
+    /// register first, and writes went to the module's slot — `f(datos) { datos
+    /// = [0]  <~ datos }` returned the argument untouched and replaced the
+    /// module's `datos` (ZYVM-018).
+    params: HashSet<String>,
+    /// Temporaries this statement loaded module state into, as (slot, register).
+    /// Each holds a reference to the collection, and an edit in place needs to
+    /// be its only owner: `tabla[k]$~ tabla[k] + 1` read the cell through a
+    /// second load, and that temporary kept the whole table alive and shared.
+    /// The ones the edit does not use are cleared just before it.
+    state_temps: Vec<(u16, Reg)>,
     /// Postfix-hot variables (x° only): scoped to their loop, reset to Unit when loop ends
     postfix_hot_vars: HashSet<String>,
     /// Source position of every emitted instruction, one entry per instruction.
@@ -164,6 +196,9 @@ impl FunctionCtx {
         Self {
             register_map: HashMap::new(),
             hot_vars: HashSet::new(),
+            pinned: HashSet::new(),
+            params: HashSet::new(),
+            state_temps: Vec::new(),
             postfix_hot_vars: HashSet::new(),
             destroyable: HashSet::new(),
             reg_types: Vec::new(),
@@ -1117,6 +1152,7 @@ impl Compiler {
         // Bind parameters to the first N registers
         for param in &decl.parameters {
             ctx.alloc_reg(&param.name)?;
+            ctx.params.insert(param.name.clone());
         }
         let num_params = decl.parameters.len() as u16;
 
@@ -1176,6 +1212,7 @@ impl Compiler {
         destroyed_names(&stmts, &mut closure_ctx.destroyable);
         for param in &params {
             closure_ctx.alloc_reg(param)?;
+            closure_ctx.params.insert(param.clone());
         }
         let num_params = params.len() as u16;
         // Upvalues occupy registers [num_params..num_params+k)
@@ -1201,6 +1238,24 @@ impl Compiler {
     // ── Statement compilation ───────────────────────────────────────────────
 
     fn compile_stmt(
+        &mut self,
+        stmt: &Statement,
+        ctx: &mut FunctionCtx,
+    ) -> Result<(), CompileError> {
+        // Which variables this statement writes through `<~`: their reads are
+        // pinned while it is compiled (see `FunctionCtx::pinned`). A nested
+        // statement has its own set — statements run one after another, so
+        // what a sibling writes cannot reach back into this one's operands.
+        let written = zymbol_semantic::names_written_through_output(stmt);
+        let saved = std::mem::replace(&mut ctx.pinned, written);
+        let saved_temps = std::mem::take(&mut ctx.state_temps);
+        let out = self.compile_stmt_inner(stmt, ctx);
+        ctx.pinned = saved;
+        ctx.state_temps = saved_temps;
+        out
+    }
+
+    fn compile_stmt_inner(
         &mut self,
         stmt: &Statement,
         ctx: &mut FunctionCtx,
@@ -1546,12 +1601,116 @@ impl Compiler {
             if let Ok(r_recv) = ctx.get_reg(name) {
                 let idx = self.intern_string(name);
                 ctx.emit(Instruction::AssertMutable(r_recv, idx));
+            } else if let Some(&g) = self.global_var_map.get(name) {
+                // Module state has no register to look at, and went unchecked:
+                // `tup$+ 4` inside a module appended to a tuple (ZYVM-016).
+                // Loaded for the check alone and cleared at once — a reference
+                // left behind would make the edit that follows copy.
+                let idx = self.intern_string(name);
+                let t = ctx.alloc_temp()?;
+                ctx.emit(Instruction::LoadGlobal(t, g));
+                ctx.emit(Instruction::AssertMutable(t, idx));
+                ctx.emit(Instruction::LoadUnit(t));
             }
         }
-        // Optimise: arr = arr$+ elem → ArrayPush in-place (O(1), no clone)
+        // An edit whose result goes back into its own receiver — `t[i]$~ v`,
+        // `t$-[i]`, `t$+ v`, written as a statement or as `t = t…` — writes
+        // into the receiver itself instead of a copy of it.
+        //
+        // Left to right still holds (GLB-115, decided 2026-10-10): the
+        // receiver is read first, and an operand that writes it afterwards is
+        // overwritten by the assignment. So a LOCAL is edited in place only
+        // when nothing in the statement writes it through `<~` — otherwise its
+        // read is pinned and the edit runs on that copy, as before. MODULE
+        // STATE is loaded first, like any read, and `DetachGlobal` edits in
+        // place only if the slot still holds the value that was loaded.
+        let is_receiver = |e: &Expr| {
+            matches!(e.unwrap_group(), Expr::Identifier(id) if id.name == name && !id.hot && !id.pre_hot)
+        };
+        // A name that has a register AND is module state without being a
+        // parameter — a loop variable or a destructured name that coincides
+        // with the module's — is read from the register and written to the
+        // slot, which the engines do not agree about (GLB-119, open). It keeps
+        // the copying path, so this changes nothing there.
+        let split = self.global_var_map.contains_key(name) && !ctx.params.contains(name);
+        let own_local = ctx.get_reg(name).is_ok() && !ctx.pinned.contains(name) && !split;
+        let state = if ctx.get_reg(name).is_err() {
+            self.global_var_map.get(name).copied()
+        } else {
+            None
+        };
+        // A script's file variable is mirrored in a slot, written from `<main>`.
+        let mirror = if ctx.name == "<main>" { self.file_var_map.get(name).copied() } else { None };
+        let receiver_of = |root: &Expr| -> Receiver {
+            if !is_receiver(root) {
+                Receiver::Copy
+            } else if own_local {
+                Receiver::Own(mirror)
+            } else if let Some(g) = state {
+                Receiver::State(g)
+            } else {
+                Receiver::Copy
+            }
+        };
+        match value.unwrap_group() {
+            Expr::CollectionUpdate(cu) => {
+                let root = match cu.target.unwrap_group() {
+                    Expr::Index(ix) => Some(ix.array.as_ref()),
+                    Expr::DeepIndex(di) => Some(di.array.as_ref()),
+                    Expr::MemberAccess(ma) if !ma.is_module_access => Some(ma.object.as_ref()),
+                    _ => None,
+                };
+                let receiver = root.map(receiver_of).unwrap_or(Receiver::Copy);
+                if !matches!(receiver, Receiver::Copy) {
+                    let in_place_name = (sugar == AssignSugar::InPlaceEdit).then_some(name);
+                    let src = self.compile_collection_update_as(cu, in_place_name, receiver, ctx)?;
+                    return self.store_to_name(name, src, ctx);
+                }
+            }
+            Expr::CollectionRemoveAt(ra) => match receiver_of(&ra.collection) {
+                Receiver::Own(mirror) => {
+                    let reg = ctx.get_reg(name)?;
+                    let r_idx = self.compile_expr(&ra.index, ctx)?;
+                    if let Some(g) = mirror {
+                        ctx.emit(Instruction::DetachGlobal(g, reg));
+                    }
+                    ctx.emit(Instruction::ArrayRemove(reg, r_idx));
+                    if let Some(g) = mirror {
+                        ctx.emit(Instruction::StoreGlobal(g, reg));
+                    }
+                    return Ok(());
+                }
+                Receiver::State(g) => {
+                    let t = self.compile_expr(&ra.collection, ctx)?;
+                    let r_idx = self.compile_expr(&ra.index, ctx)?;
+                    Self::release_state_temps(g, &[t, r_idx], ctx);
+                    ctx.emit(Instruction::DetachGlobal(g, t));
+                    ctx.emit(Instruction::ArrayRemove(t, r_idx));
+                    ctx.emit(Instruction::StoreGlobal(g, t));
+                    return Ok(());
+                }
+                Receiver::Copy => {}
+            },
+            Expr::CollectionAppend(ca) => {
+                if let Receiver::State(g) = receiver_of(&ca.collection) {
+                    let t = self.compile_expr(&ca.collection, ctx)?;
+                    let r_elem = self.compile_expr(&ca.element, ctx)?;
+                    Self::release_state_temps(g, &[t, r_elem], ctx);
+                    ctx.emit(Instruction::DetachGlobal(g, t));
+                    ctx.emit(Instruction::ArrayPush(t, r_elem));
+                    ctx.emit(Instruction::StoreGlobal(g, t));
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+        // Optimise: arr = arr$+ elem → ArrayPush in-place (O(1), no clone).
+        // Not when the statement writes `arr` through `<~`: the element is
+        // evaluated before the push, and the push would land on what the call
+        // wrote back — the receiver read after its operand.
         if let Expr::CollectionAppend(ca) = value {
             if let Expr::Identifier(ident) = ca.collection.unwrap_group() {
-                if ident.name == name {
+                if ident.name == name && !ctx.pinned.contains(name) {
                     // Hot/pre_hot RHS self-ref (arr = arr°$+ i  or  arr = °arr$+ i):
                     // initialize to [] on first use
                     if (ident.hot || ident.pre_hot) && ctx.get_reg(name).is_err() {
@@ -1578,7 +1737,7 @@ impl Compiler {
         let in_place = matches!(sugar, AssignSugar::InPlaceEdit);
         let src = match value.unwrap_group() {
             Expr::CollectionUpdate(cu) if in_place => {
-                self.compile_collection_update_as(cu, Some(name), ctx)?
+                self.compile_collection_update_as(cu, Some(name), Receiver::Copy, ctx)?
             }
             _ => self.compile_expr(value, ctx)?,
         };
@@ -1594,10 +1753,13 @@ impl Compiler {
     {
         let src_ty = ctx.get_reg_type(src);
 
-        // If this name is a module global var, emit StoreGlobal instead of local register assign
-        if let Some(&gvar_idx) = self.global_var_map.get(name) {
-            ctx.emit(Instruction::StoreGlobal(gvar_idx, src));
-            return Ok(());
+        // If this name is a module global var, emit StoreGlobal instead of local
+        // register assign — unless it is a parameter, which shadows it.
+        if !ctx.params.contains(name) {
+            if let Some(&gvar_idx) = self.global_var_map.get(name) {
+                ctx.emit(Instruction::StoreGlobal(gvar_idx, src));
+                return Ok(());
+            }
         }
 
         // A SCRIPT's file variable is written back ONLY from the file body, so
@@ -2220,6 +2382,17 @@ impl Compiler {
                         let nidx = self.intern_string(&id.name) as u16;
                         ctx.emit(Instruction::CheckAlive(r, nidx));
                     }
+                    // Written through `<~` later in this statement: take its
+                    // value now, where it is evaluated (ZYVM-015).
+                    if ctx.pinned.contains(&id.name) {
+                        let ty = ctx.get_reg_type(r);
+                        let tmp = ctx.alloc_temp()?;
+                        ctx.emit(Instruction::CopyReg(tmp, r));
+                        if ty != StaticType::Unknown {
+                            ctx.set_reg_type(tmp, ty);
+                        }
+                        return Ok(tmp);
+                    }
                     return Ok(r);
                 }
                 // Hot/pre_hot variable (x° or °x) on RHS: auto-initialize to neutral element if not yet defined
@@ -2240,6 +2413,7 @@ impl Compiler {
                 if let Some(&gvar_idx) = self.global_var_map.get(&id.name) {
                     let dst = ctx.alloc_temp()?;
                     ctx.emit(Instruction::LoadGlobal(dst, gvar_idx));
+                    ctx.state_temps.push((gvar_idx, dst));
                     return Ok(dst);
                 }
                 // And then a SCRIPT's file variable, which a function captures:
@@ -3137,11 +3311,22 @@ impl Compiler {
             }
         }
 
-        // Compile arguments
+        // Compile arguments. An output argument is the variable itself — its
+        // register is where the write comes back — so it is not pinned, even
+        // though every other read of that name in the statement is.
         let mut arg_regs = Vec::with_capacity(call.arguments.len());
-        for arg in &call.arguments {
-            let r = self.compile_expr(arg, ctx)?;
-            arg_regs.push(r);
+        for (i, arg) in call.arguments.iter().enumerate() {
+            let unpinned = match arg.unwrap_group() {
+                Expr::Identifier(id) if call.out_args.contains(&i) && ctx.pinned.remove(&id.name) => {
+                    Some(id.name.clone())
+                }
+                _ => None,
+            };
+            let r = self.compile_expr(arg, ctx);
+            if let Some(name) = unpinned {
+                ctx.pinned.insert(name);
+            }
+            arg_regs.push(r?);
         }
         let dst = ctx.alloc_temp()?;
 
@@ -3166,8 +3351,25 @@ impl Compiler {
                     }
                 }
                 if !pairs.is_empty() {
-                    ctx.emit(Instruction::SetupOutputWriteback(pairs));
+                    ctx.emit(Instruction::SetupOutputWriteback(pairs.clone()));
                 }
+                // An output argument that is module state was loaded into a
+                // temporary, and the write came back to that temporary: store
+                // it. The VM lost it, where the tree-walker and zyjs kept it
+                // (ZYVM-014).
+                let to_store: Vec<(u16, Reg)> = pairs.iter().filter_map(|&(i, reg)| {
+                    match call.arguments[i as usize].unwrap_group() {
+                        Expr::Identifier(id) if ctx.get_reg(&id.name).is_err() => {
+                            self.global_var_map.get(&id.name).map(|&g| (g, reg))
+                        }
+                        _ => None,
+                    }
+                }).collect();
+                ctx.emit(Instruction::Call(dst, func_idx, arg_regs));
+                for (g, reg) in to_store {
+                    ctx.emit(Instruction::StoreGlobal(g, reg));
+                }
+                return Ok(dst);
             }
             ctx.emit(Instruction::Call(dst, func_idx, arg_regs));
         } else {
@@ -3970,6 +4172,18 @@ impl Compiler {
         Ok(r_cmp)
     }
 
+    /// Clear the temporaries this statement loaded module state `g` into, except
+    /// the ones the edit about to run reads. See `FunctionCtx::state_temps`.
+    fn release_state_temps(g: u16, keep: &[Reg], ctx: &mut FunctionCtx) {
+        let stale: Vec<Reg> = ctx.state_temps.iter()
+            .filter(|&&(slot, reg)| slot == g && !keep.contains(&reg))
+            .map(|&(_, reg)| reg)
+            .collect();
+        for reg in stale {
+            ctx.emit(Instruction::LoadUnit(reg));
+        }
+    }
+
     fn compile_collection_update(
         &mut self,
         cu: &zymbol_ast::CollectionUpdateExpr,
@@ -3977,7 +4191,7 @@ impl Compiler {
     ) -> Result<Reg, CompileError> {
         // A bare `$~` expression is the functional update: it derives a new
         // collection and a tuple is a legal target.
-        self.compile_collection_update_as(cu, None, ctx)
+        self.compile_collection_update_as(cu, None, Receiver::Copy, ctx)
     }
 
     /// `compile_collection_update`, told whether the source form was the
@@ -3989,8 +4203,30 @@ impl Compiler {
         &mut self,
         cu: &zymbol_ast::CollectionUpdateExpr,
         in_place: Option<&str>,
+        receiver: Receiver,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
+        // Where the write lands. `Copy` is the functional update: `u = t[i]$~ v`
+        // must leave `t` alone, so the root is copied first. When the result
+        // goes back into the root's own variable the copy only made a second
+        // owner of the collection, and the write then copied all of it — every
+        // `t[i]$~ v` cost the size of `t` (ZYVM-013). `Own` writes into the
+        // register that already holds it; `State(g)` does the same for module
+        // state, letting go of the slot's reference first (ZYVM-003).
+        let land = |ctx: &mut FunctionCtx, root: Reg| -> Result<Reg, CompileError> {
+            match receiver {
+                Receiver::Copy => {
+                    let dst = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::CopyReg(dst, root));
+                    Ok(dst)
+                }
+                Receiver::Own(None) => Ok(root),
+                Receiver::Own(Some(g)) | Receiver::State(g) => {
+                    ctx.emit(Instruction::DetachGlobal(g, root));
+                    Ok(root)
+                }
+            }
+        };
         // The assigned variable's name, interned once, so the VM can name it in
         // the refusal exactly as the tree-walker does.
         let target = match in_place {
@@ -4014,8 +4250,10 @@ impl Compiler {
                 ctx.emit(Instruction::NewArray(r_path));
                 ctx.emit(Instruction::ArrayPush(r_path, r_idx));
                 let r_val = self.compile_expr(&cu.value, ctx)?;
-                let dst = ctx.alloc_temp()?;
-                ctx.emit(Instruction::CopyReg(dst, r_arr));
+                if let Receiver::State(g) = receiver {
+                    Self::release_state_temps(g, &[r_arr, r_path, r_val], ctx);
+                }
+                let dst = land(ctx, r_arr)?;
                 ctx.emit(deep_set(dst, r_path, r_val));
                 Ok(dst)
             }
@@ -4035,8 +4273,10 @@ impl Compiler {
                 }
                 let r_root = self.compile_expr(&di.array, ctx)?;
                 let r_val = self.compile_expr(&cu.value, ctx)?;
-                let dst = ctx.alloc_temp()?;
-                ctx.emit(Instruction::CopyReg(dst, r_root));
+                if let Receiver::State(g) = receiver {
+                    Self::release_state_temps(g, &[r_root, r_path, r_val], ctx);
+                }
+                let dst = land(ctx, r_root)?;
                 ctx.emit(deep_set(dst, r_path, r_val));
                 Ok(dst)
             }
@@ -4053,8 +4293,10 @@ impl Compiler {
                 ctx.emit(Instruction::NewArray(r_path));
                 ctx.emit(Instruction::ArrayPush(r_path, r_key));
                 let r_val = self.compile_expr(&cu.value, ctx)?;
-                let dst = ctx.alloc_temp()?;
-                ctx.emit(Instruction::CopyReg(dst, r_obj));
+                if let Receiver::State(g) = receiver {
+                    Self::release_state_temps(g, &[r_obj, r_path, r_val], ctx);
+                }
+                let dst = land(ctx, r_obj)?;
                 ctx.emit(deep_set(dst, r_path, r_val));
                 Ok(dst)
             }
@@ -4295,6 +4537,7 @@ impl Compiler {
         // Params occupy registers [0..num_params)
         for param in &lam.params {
             lambda_ctx.alloc_reg(param)?;
+            lambda_ctx.params.insert(param.clone());
         }
         let num_params = lam.params.len() as u16;
         // Upvalues occupy registers [num_params..num_params+k) in the lambda's chunk
@@ -5558,6 +5801,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::TryLand(s, e) => { upd(*s); upd(*e); }
             Instruction::LoadGlobal(d, _) => upd(*d),
             Instruction::StoreGlobal(_, s) => upd(*s),
+            Instruction::DetachGlobal(_, r) => upd(*r),
             // Two globals and no register: nothing to count.
             Instruction::DestroyGlobal(_, _) => {}
             Instruction::Sleep(r) | Instruction::QueryTerminalSize(r)

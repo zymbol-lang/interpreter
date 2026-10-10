@@ -374,6 +374,11 @@ pub enum Instruction {
     /// Before a Call: pairs of (callee_param_idx, caller_dst_reg) for output params.
     /// On Return, callee's param registers are written back to caller's dst registers.
     SetupOutputWriteback(Vec<(u16, Reg)>),
+    /// Just before an edit of module state `g` whose receiver was loaded into
+    /// `reg`: if the slot still holds that same value, the slot lets go of it,
+    /// so the register is its only owner and the edit writes in place. The VM
+    /// puts it back if the edit fails; `StoreGlobal` ends the detachment.
+    DetachGlobal(u16, Reg),
 
     // ── Module global vars ────────────────────────────────────────────────
     /// Load a module-level global variable: dst = global_vars[idx]

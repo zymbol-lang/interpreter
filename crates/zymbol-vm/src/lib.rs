@@ -1282,6 +1282,11 @@ pub struct VM<W: Write> {
     /// set because the message needs the name and `LoadGlobal` only carries an
     /// index. Assigning the name again revives it, which `StoreGlobal` does.
     destroyed_globals: std::collections::HashMap<u16, String>,
+    /// Module state taken out of its slot for an edit in place: the slot index
+    /// and the absolute register that holds the value meanwhile. Set by
+    /// `DetachGlobal`, cleared by the `StoreGlobal` that follows the edit; if
+    /// the edit fails instead, the value goes back to the slot (ZYVM-003).
+    detached_global: Option<(u16, usize)>,
     /// Absolute value-stack slots of function locals ended with `\` that have
     /// not been assigned since (ZYVM-005). Empty unless a program destroys one.
     destroyed_slots: std::collections::HashSet<usize>,
@@ -1335,6 +1340,7 @@ impl<W: Write> VM<W> {
             numeral_mode: 0x0030, // ASCII_BASE default
             global_vars: Vec::new(),
             destroyed_globals: std::collections::HashMap::new(),
+            detached_global: None,
             destroyed_slots: std::collections::HashSet::new(),
             cli_args: Vec::new(),
             subscript_runner: None,
@@ -1614,6 +1620,18 @@ impl<W: Write> VM<W> {
             ($e:expr, $kind:expr) => {{
                 let _err: VmError = $e;
                 let _kind: &'static str = $kind;
+                // An edit of module state that failed: the value it was
+                // editing goes back to its slot, untouched — the edit
+                // instructions validate before they write.
+                if let Some((g, abs)) = self.detached_global.take() {
+                    // A clone, not a move: the register may be a script
+                    // variable's own, whose mirror slot was detached, and it
+                    // keeps its value.
+                    let v = self.value_stack[abs].clone();
+                    if let Some(slot) = self.global_vars.get_mut(g as usize) {
+                        *slot = v;
+                    }
+                }
                 let target = self.frame_stack.iter()
                     .rposition(|f| f.catch_ip != u32::MAX)
                     .filter(|&t| t >= floor);
@@ -2489,10 +2507,11 @@ impl<W: Write> VM<W> {
                         Value::Array(p) => p.clone(),
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
                     };
-                    let root = mem::replace(&mut self.value_stack[base + dst as usize], Value::Unit);
-                    match vm_deep_set(root, &path, val) {
-                        Ok(updated) => self.value_stack[base + dst as usize] = updated,
-                        Err(e) => raise!(e),
+                    // In place, and atomic: a failure leaves the register as it was.
+                    if let Err(e) = vm_deep_set_in(
+                        &mut self.value_stack[base + dst as usize], &path, val, path.len() == 1,
+                    ) {
+                        raise!(e);
                     }
                 }
                 &Instruction::IterPairs(dst, src) => {
@@ -2525,15 +2544,14 @@ impl<W: Write> VM<W> {
                         Value::Array(p) => p.clone(),
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
                     };
-                    let root = mem::replace(&mut self.value_stack[base + dst as usize], Value::Unit);
-                    if let Value::Tuple(_) = &root {
-                        self.value_stack[base + dst as usize] = root;
+                    if let Value::Tuple(_) = &self.value_stack[base + dst as usize] {
                         let name = self.string_rcs[name_idx as usize].as_str();
                         raise!(VmError::Generic(tuple_immutable_msg(name)));
                     }
-                    match vm_deep_set(root, &path, val) {
-                        Ok(updated) => self.value_stack[base + dst as usize] = updated,
-                        Err(e) => raise!(e),
+                    if let Err(e) = vm_deep_set_in(
+                        &mut self.value_stack[base + dst as usize], &path, val, path.len() == 1,
+                    ) {
+                        raise!(e);
                     }
                 }
                 &Instruction::ArraySet(arr_reg, idx_reg, val_reg) => {
@@ -2620,44 +2638,45 @@ impl<W: Write> VM<W> {
                         continue;
                     }
                     let idx = match self.as_int_for(idx_reg, "remove index") { Ok(v) => v, Err(e) => raise!(e) };
-                    let result = match std::mem::replace(&mut self.value_stack[base + arr_reg as usize], Value::Unit) {
-                        Value::Array(mut rc_arr) => {
-                            let arr = Rc::make_mut(&mut rc_arr);
-                            let i = if idx == 0 { raise!(VmError::IndexZero);
-                            } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
-                            if i < 0 || i as usize >= arr.len() {
-                                raise!(VmError::IndexMsg(format!("index out of bounds: index {} for array of length {}", idx, arr.len())));
-                            }
-                            arr.remove(i as usize);
-                            Value::Array(rc_arr)
-                        }
-                        Value::Tuple(rc_tup) => {
-                            let mut tup = rc_tup.as_ref().clone();
-                            let i = if idx == 0 { raise!(VmError::IndexZero);
-                            } else if idx < 0 { tup.len() as i64 + idx } else { idx - 1 };
-                            if i < 0 || i as usize >= tup.len() {
-                                raise!(VmError::IndexMsg(format!("index out of bounds: index {} for tuple of length {}", idx, tup.len())));
-                            }
-                            tup.remove(i as usize);
-                            Value::Tuple(Rc::new(tup))
-                        }
+                    // Validated against the value where it is, and touched only
+                    // once nothing can fail: a refused removal leaves the
+                    // register as it was. It used to take the value out first and
+                    // raise with it already dropped, harmless only while every
+                    // removal ran on a copy (ZYVM-013).
+                    let len = match &self.value_stack[base + arr_reg as usize] {
+                        Value::Array(a) => a.len(),
+                        Value::Tuple(t) => t.len(),
+                        Value::String(s) => s.chars().count(),
                         Value::NamedTuple(rc_fields) => {
                             let first = rc_fields.first().map(|(k, _)| k.clone());
                             raise!(VmError::TypeMsg(dict_not_positional("d$-[n]", first.as_deref())));
                         }
-                        Value::String(rc_s) => {
-                            let mut chars: Vec<char> = rc_s.chars().collect();
-                            let i = if idx == 0 { raise!(VmError::IndexZero);
-                            } else if idx < 0 { chars.len() as i64 + idx } else { idx - 1 };
-                            if i < 0 || i as usize >= chars.len() {
-                                raise!(VmError::IndexMsg(format!("index out of bounds: index {} for string of length {}", idx, chars.len())));
-                            }
-                            chars.remove(i as usize);
-                            Value::String(ZyStr::new(chars.iter().collect()))
-                        }
                         other => raise!(VmError::TypeMsg(format!("cannot remove from {} - only arrays, tuples, and strings support $-[i]", other.type_label()))),
                     };
-                    self.value_stack[base + arr_reg as usize] = result;
+                    if idx == 0 { raise!(VmError::IndexZero); }
+                    let i = if idx < 0 { len as i64 + idx } else { idx - 1 };
+                    if i < 0 || i as usize >= len {
+                        let msg = match &self.value_stack[base + arr_reg as usize] {
+                            Value::Array(_) => format!("index out of bounds: index {} for array of length {}", idx, len),
+                            Value::Tuple(_) => format!("index out of bounds: index {} for tuple of length {}", idx, len),
+                            _ => format!("index out of bounds: index {} for string of length {}", idx, len),
+                        };
+                        raise!(VmError::IndexMsg(msg));
+                    }
+                    let i = i as usize;
+                    match &mut self.value_stack[base + arr_reg as usize] {
+                        Value::Array(rc_arr) => { Rc::make_mut(rc_arr).remove(i); }
+                        Value::Tuple(rc_tup) => { Rc::make_mut(rc_tup).remove(i); }
+                        slot => {
+                            // A string, by the check above.
+                            let mut chars: Vec<char> = match &*slot {
+                                Value::String(st) => st.chars().collect(),
+                                _ => Vec::new(),
+                            };
+                            chars.remove(i);
+                            *slot = Value::String(ZyStr::new(chars.iter().collect()));
+                        }
+                    }
                 }
 
                 &Instruction::ArrayRemoveValue(arr_reg, val_reg) => {
@@ -4564,9 +4583,34 @@ impl<W: Write> VM<W> {
                     if !self.destroyed_globals.is_empty() {
                         self.destroyed_globals.remove(&gvar_idx);
                     }
+                    // The edit that detached this slot is done: what it wrote
+                    // is stored below, and there is nothing left to put back.
+                    self.detached_global = None;
                     let val = rreg!(src).clone();
                     if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
                         *slot = val;
+                    }
+                }
+
+                // The receiver of an edit of module state was loaded into `reg`
+                // (left to right: before its operands). If the slot still holds
+                // that same value, nothing wrote the state meanwhile: the slot
+                // lets go of it, the register is its only owner, and the edit
+                // that follows writes in place instead of copying the
+                // collection. If an operand did write the state, the slot holds
+                // something else: it is left alone, the edit runs on what was
+                // loaded, and `StoreGlobal` puts that over it.
+                &Instruction::DetachGlobal(gvar_idx, reg) => {
+                    let abs = base + reg as usize;
+                    let same = match (self.global_vars.get(gvar_idx as usize), &self.value_stack[abs]) {
+                        (Some(Value::Array(a)), Value::Array(b)) => Rc::ptr_eq(a, b),
+                        (Some(Value::Tuple(a)), Value::Tuple(b)) => Rc::ptr_eq(a, b),
+                        (Some(Value::NamedTuple(a)), Value::NamedTuple(b)) => Rc::ptr_eq(a, b),
+                        _ => false,
+                    };
+                    if same {
+                        self.global_vars[gvar_idx as usize] = Value::Unit;
+                        self.detached_global = Some((gvar_idx, abs));
                     }
                 }
 
@@ -5099,18 +5143,24 @@ fn missing_key_msg(key: &str, available: &[String]) -> String {
     }
 }
 
-fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmError> {
-    vm_deep_set_at(col, path, new_val, path.len() == 1)
-}
-
+/// Write `new_val` at `path` inside `col`, in place.
+///
+/// Every check happens on the way down, before the single write at the end of
+/// the path, so a failure leaves `col` exactly as it was. It used to take the
+/// collection by value and hand back a new one: a failure half way dropped it,
+/// which was harmless only because every caller wrote into a COPY — and that
+/// copy is why `t[i]$~ v` cost the whole collection, on a plain local too
+/// (ZYVM-013).
+///
 /// `single` is true only for a one-step write — `a[i]\u{24}~ v`. The tree-walker
 /// words that one after the collection (`array update index must be an
 /// integer`) and a longer path after the step (`a navigation step is a
 /// position (Int) or a dictionary key (String)`), and the two are not the same
 /// sentence (step 4.3).
-fn vm_deep_set_at(col: Value, path: &[Value], new_val: Value, single: bool) -> Result<Value, VmError> {
+fn vm_deep_set_in(col: &mut Value, path: &[Value], new_val: Value, single: bool) -> Result<(), VmError> {
     let Some((step, rest)) = path.split_first() else {
-        return Ok(new_val);
+        *col = new_val;
+        return Ok(());
     };
     fn resolve(idx: i64, len: usize, container: &'static str) -> Result<usize, VmError> {
         if idx == 0 {
@@ -5134,26 +5184,20 @@ fn vm_deep_set_at(col: Value, path: &[Value], new_val: Value, single: bool) -> R
         }
     }
     match col {
-        Value::Array(mut rc) => {
-            let arr = Rc::make_mut(&mut rc);
-            let i = resolve(int_step_of(step, single, "array")?, arr.len(), "array")?;
-            let sub = mem::replace(&mut arr[i], Value::Unit);
-            arr[i] = vm_deep_set_at(sub, rest, new_val, false)?;
-            Ok(Value::Array(rc))
+        Value::Array(rc) => {
+            let i = resolve(int_step_of(step, single, "array")?, rc.len(), "array")?;
+            vm_deep_set_in(&mut Rc::make_mut(rc)[i], rest, new_val, false)
         }
-        Value::Tuple(mut rc) => {
-            let tup = Rc::make_mut(&mut rc);
-            let i = resolve(int_step_of(step, single, "tuple")?, tup.len(), "tuple")?;
-            let sub = mem::replace(&mut tup[i], Value::Unit);
-            tup[i] = vm_deep_set_at(sub, rest, new_val, false)?;
-            Ok(Value::Tuple(rc))
+        Value::Tuple(rc) => {
+            let i = resolve(int_step_of(step, single, "tuple")?, rc.len(), "tuple")?;
+            vm_deep_set_in(&mut Rc::make_mut(rc)[i], rest, new_val, false)
         }
         // A string IS an array of characters, and is addressed like one
         // (decided 2026-09-22). Only a char or a string may be written, the
         // same rule `$+ on string requires char or string element` states.
         // It is a LEAF: there is nothing inside a character to descend into.
         Value::String(st) => {
-            let mut chars: Vec<char> = st.chars().collect();
+            let chars: Vec<char> = st.chars().collect();
             let i = resolve(int_step_of(step, single, "string")?, chars.len(), "string")?;
             if !rest.is_empty() {
                 // The step landed on a character, and there is nothing inside
@@ -5168,24 +5212,31 @@ fn vm_deep_set_at(col: Value, path: &[Value], new_val: Value, single: bool) -> R
                     "$~ on string requires char or string value, got {}", other.type_label()))),
             };
             let mut out = String::new();
-            for (n, c) in chars.drain(..).enumerate() {
+            for (n, c) in chars.into_iter().enumerate() {
                 if n == i { out.push_str(&piece); } else { out.push(c); }
             }
-            Ok(Value::String(ZyStr::new(out)))
+            *col = Value::String(ZyStr::new(out));
+            Ok(())
         }
-        Value::NamedTuple(mut rc) => {
-            let fields = Rc::make_mut(&mut rc);
-            let i = match step {
-                Value::String(name) => match fields.iter().position(|(k, _)| k == name.as_str()) {
-                    Some(i) => i,
+        Value::NamedTuple(rc) => {
+            match step {
+                Value::String(name) => match rc.iter().position(|(k, _)| k == name.as_str()) {
+                    Some(i) => vm_deep_set_in(&mut Rc::make_mut(rc)[i].1, rest, new_val, false),
                     // A key that is not there gets ADDED, as it does in Python.
                     // The array refuses the same move (decision 13) and the two
                     // are not inconsistent: an array is addressed by POSITION,
                     // so writing past the end leaves a hole; a dictionary is
                     // addressed by KEY and has no holes to leave.
+                    //
+                    // Added only once the rest of the path is known to hold:
+                    // the write is made into a scratch value first, so a path
+                    // that goes on past the new key fails with the dictionary
+                    // untouched.
                     None => {
-                        fields.push((name.as_str().to_string(), Value::Unit));
-                        fields.len() - 1
+                        let mut fresh = Value::Unit;
+                        vm_deep_set_in(&mut fresh, rest, new_val, false)?;
+                        Rc::make_mut(rc).push((name.as_str().to_string(), fresh));
+                        Ok(())
                     }
                 },
                 // A positional WRITE corrupts data rather than returning the
@@ -5197,24 +5248,19 @@ fn vm_deep_set_at(col: Value, path: &[Value], new_val: Value, single: bool) -> R
                 // step that is neither Int nor String the navigation-step
                 // sentence (step P4-3).
                 Value::Int(_) if !single => {
-                    let first = fields.first().map(|(k, _)| k.clone());
-                    return Err(VmError::TypeMsg(dict_not_positional(
-                        "d[n>…]$~ value", first.as_deref())));
+                    let first = rc.first().map(|(k, _)| k.clone());
+                    Err(VmError::TypeMsg(dict_not_positional(
+                        "d[n>…]$~ value", first.as_deref())))
                 }
-                other if !single => {
-                    return Err(VmError::TypeMsg(format!(
-                        "a navigation step is a position (Int) or a dictionary key (String), got {}",
-                        other.type_label())));
-                }
+                other if !single => Err(VmError::TypeMsg(format!(
+                    "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                    other.type_label()))),
                 _ => {
-                    let first = fields.first().map(|(k, _)| k.clone());
-                    return Err(VmError::TypeMsg(dict_not_positional(
-                        "d[n]$~ value", first.as_deref())));
+                    let first = rc.first().map(|(k, _)| k.clone());
+                    Err(VmError::TypeMsg(dict_not_positional(
+                        "d[n]$~ value", first.as_deref())))
                 }
-            };
-            let sub = mem::replace(&mut fields[i].1, Value::Unit);
-            fields[i].1 = vm_deep_set_at(sub, rest, new_val, false)?;
-            Ok(Value::NamedTuple(rc))
+            }
         }
         // A step that lands on something that is not a collection fails for the
         // same reason READING it does, so it says what the read says (GLB-045,
