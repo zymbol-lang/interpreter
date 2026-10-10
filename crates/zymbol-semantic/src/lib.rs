@@ -40,6 +40,9 @@ pub use def_use::{
     AmbiguousLifetime, AmbiguityReason,
 };
 pub use type_check::{TypeChecker, TypeEnv, ZymbolType};
-pub use last_use::{auto_free_exclusions, mentioned_names, names_written_through_output, region_schedule};
+pub use last_use::{
+    auto_free_exclusions, mentioned_names, names_written_through_output, operand_may_write,
+    region_schedule,
+};
 pub use loop_context::check_loop_context;
 pub use interpolation::interpolated_names;

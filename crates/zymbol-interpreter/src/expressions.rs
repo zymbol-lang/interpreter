@@ -199,30 +199,39 @@ impl<W: Write> Interpreter<W> {
         // Slow path: full eval
         let left = self.eval_expr(&binary.left)?;
         let right = self.eval_expr(&binary.right)?;
+        self.apply_binary(binary, &left, &right)
+    }
 
+    /// A binary operator applied to two values already in hand.
+    ///
+    /// Separate from `eval_binary` so that `x = x OP y`, which reads its
+    /// receiver where it lives, can evaluate `y` once and finish here — it used
+    /// to hand the whole expression back whenever its shortcut did not apply,
+    /// and `y` ran twice (ZYTW-011).
+    pub(crate) fn apply_binary(&self, binary: &BinaryExpr, left: &Value, right: &Value) -> Result<Value> {
         match binary.op {
             // Juxtaposition concatenation (implicit, no explicit operator)
-            BinaryOp::Concat => self.eval_concat(&left, &right, &binary.span),
+            BinaryOp::Concat => self.eval_concat(left, right, &binary.span),
 
             // Arithmetic operators
-            BinaryOp::Add => self.eval_add(&left, &right, &binary.span),
-            BinaryOp::Sub => self.eval_arithmetic(&left, &right, num::sub, |a, b| a - b, "-", &binary.span),
-            BinaryOp::Mul => self.eval_arithmetic(&left, &right, num::mul, |a, b| a * b, "*", &binary.span),
-            BinaryOp::Div => self.eval_div(&left, &right, &binary.span),
-            BinaryOp::Mod => self.eval_mod(&left, &right, &binary.span),
-            BinaryOp::Pow => self.eval_pow(&left, &right, &binary.span),
+            BinaryOp::Add => self.eval_add(left, right, &binary.span),
+            BinaryOp::Sub => self.eval_arithmetic(left, right, num::sub, |a, b| a - b, "-", &binary.span),
+            BinaryOp::Mul => self.eval_arithmetic(left, right, num::mul, |a, b| a * b, "*", &binary.span),
+            BinaryOp::Div => self.eval_div(left, right, &binary.span),
+            BinaryOp::Mod => self.eval_mod(left, right, &binary.span),
+            BinaryOp::Pow => self.eval_pow(left, right, &binary.span),
 
             // Comparison operators
-            BinaryOp::Eq => Ok(Value::Bool(self.values_equal(&left, &right))),
-            BinaryOp::Neq => Ok(Value::Bool(!self.values_equal(&left, &right))),
-            BinaryOp::Lt => self.compare_values(&left, &right, |a, b| a < b, |a, b| a < b, &binary.op),
-            BinaryOp::Gt => self.compare_values(&left, &right, |a, b| a > b, |a, b| a > b, &binary.op),
-            BinaryOp::Le => self.compare_values(&left, &right, |a, b| a <= b, |a, b| a <= b, &binary.op),
-            BinaryOp::Ge => self.compare_values(&left, &right, |a, b| a >= b, |a, b| a >= b, &binary.op),
+            BinaryOp::Eq => Ok(Value::Bool(self.values_equal(left, right))),
+            BinaryOp::Neq => Ok(Value::Bool(!self.values_equal(left, right))),
+            BinaryOp::Lt => self.compare_values(left, right, |a, b| a < b, |a, b| a < b, &binary.op),
+            BinaryOp::Gt => self.compare_values(left, right, |a, b| a > b, |a, b| a > b, &binary.op),
+            BinaryOp::Le => self.compare_values(left, right, |a, b| a <= b, |a, b| a <= b, &binary.op),
+            BinaryOp::Ge => self.compare_values(left, right, |a, b| a >= b, |a, b| a >= b, &binary.op),
 
             // Logical operators
             BinaryOp::And => {
-                let left_bool = match &left {
+                let left_bool = match left {
                     Value::Bool(b) => *b,
                     // A wrong TYPE is a `##Type` (D1; GLB-091).
                     _ => return Err(RuntimeError::kinded(
@@ -231,7 +240,7 @@ impl<W: Write> Interpreter<W> {
                         binary.span,
                     )),
                 };
-                let right_bool = match &right {
+                let right_bool = match right {
                     Value::Bool(b) => *b,
                     // A wrong TYPE is a `##Type` (D1; GLB-091).
                     _ => return Err(RuntimeError::kinded(
@@ -243,7 +252,7 @@ impl<W: Write> Interpreter<W> {
                 Ok(Value::Bool(left_bool && right_bool))
             }
             BinaryOp::Or => {
-                let left_bool = match &left {
+                let left_bool = match left {
                     Value::Bool(b) => *b,
                     // A wrong TYPE is a `##Type` (D1; GLB-091).
                     _ => return Err(RuntimeError::kinded(
@@ -252,7 +261,7 @@ impl<W: Write> Interpreter<W> {
                         binary.span,
                     )),
                 };
-                let right_bool = match &right {
+                let right_bool = match right {
                     Value::Bool(b) => *b,
                     // A wrong TYPE is a `##Type` (D1; GLB-091).
                     _ => return Err(RuntimeError::kinded(

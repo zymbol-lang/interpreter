@@ -72,6 +72,34 @@ fn hot_neutral_from_value(value: &Expr, name: &str) -> Value {
     }
 }
 
+/// Whether `e` is the bare name `name` — the receiver of a self-assignment.
+fn is_named(name: &str, e: &Expr) -> bool {
+    matches!(e.unwrap_group(), Expr::Identifier(id) if id.name == name)
+}
+
+/// An operand that only reads: the shapes `arr$+ x`, `arr[i + 1]$~ v` and
+/// `n = n + 1` have. Evaluating one cannot write a variable. Anything not
+/// listed is not "impure" — it is asked properly, by
+/// `zymbol_semantic::operand_may_write`.
+pub(crate) fn plain_operand(e: &Expr) -> bool {
+    match e {
+        Expr::Literal(_) | Expr::Identifier(_) => true,
+        Expr::Group(g) => plain_operand(&g.expr),
+        Expr::Unary(u) => plain_operand(&u.operand),
+        Expr::Binary(b) => plain_operand(&b.left) && plain_operand(&b.right),
+        Expr::Index(i) => plain_operand(&i.array) && plain_operand(&i.index),
+        Expr::MemberAccess(m) => plain_operand(&m.object),
+        Expr::DeepIndex(d) => {
+            plain_operand(&d.array)
+                && d.path.steps.iter().all(|s| {
+                    plain_operand(&s.index) && s.range_end.as_deref().is_none_or(plain_operand)
+                })
+        }
+        Expr::CollectionLength(l) => plain_operand(&l.collection),
+        _ => false,
+    }
+}
+
 impl<W: Write> Interpreter<W> {
     /// Execute assignment statement: name = expr
     pub(crate) fn execute_assignment(&mut self, assign: &Assignment) -> Result<()> {
@@ -116,156 +144,273 @@ impl<W: Write> Interpreter<W> {
             self.set_above_nearest_loop(&assign.name, neutral);
         }
 
-        // B3: fast path for self-assign collection mutation (e.g. arr = arr$+ elem)
-        // Mutates in-place instead of clone + replace → O(1) append instead of O(n)
-        match &assign.value {
-            // Fast path: x = arr[i] — clone only the element, not the whole array
-            // Avoids O(n) array clone when reading a single element by index.
-            Expr::Index(idx) => {
-                if let Expr::Identifier(arr_ident) = idx.array.unwrap_group() {
-                    let index_val = self.eval_expr(&idx.index)?;
-                    if let Value::Int(i) = &index_val {
-                        if *i > 0 {
-                            let idx_pos = (*i - 1) as usize;
-                            let elem = {
-                                match self.get_variable(&arr_ident.name) {
-                                    Some(Value::Array(arr)) if idx_pos < arr.len() => {
-                                        Some(arr[idx_pos].clone())
-                                    }
-                                    Some(Value::Tuple(tup)) if idx_pos < tup.len() => {
-                                        Some(tup[idx_pos].clone())
-                                    }
-                                    _ => None,
-                                }
-                            };
-                            if let Some(v) = elem {
-                                self.set_variable(&assign.name, v);
-                                return Ok(());
-                            }
-                        }
-                        // i <= 0 or out-of-bounds: fallthrough to eval_index for proper 1-based error handling
+        // ── `name = name <op> operands…`: the receiver, edited where it lives ──
+        //
+        // An assignment whose value starts from its own target — `arr$+ x`,
+        // `arr[i]$~ v`, `n = n + 1`, written as a statement or in full — does
+        // not build a second value and replace the first: it works on the
+        // variable itself. Three things hold on every path below:
+        //
+        //   * each operand is evaluated ONCE. These paths used to fall through
+        //     to the general evaluation whenever their shortcut did not apply,
+        //     and that evaluated the operand again: `n = n / f()`, `s = s f()`
+        //     and `t$-[f()]` past the end all called `f` twice (ZYTW-011);
+        //   * left to right. The receiver is read before its operands, so an
+        //     operand that writes it is overwritten by the assignment
+        //     (GLB-115). `receiver_read_first` keeps what was read — but only
+        //     when an operand could write it at all, which is rare;
+        //   * when nothing wrote it, the edit happens in place, with no copy.
+        //
+        // One method per shape. Each answers `true` when it has done the
+        // assignment and `false` — with nothing evaluated — when the shape is
+        // not its own, which leaves it to the general path below. They are
+        // separate so that each stays small: folded into this function, the
+        // variable lookups stopped being inlined and `s = s + i` paid for it.
+        let done = match &assign.value {
+            Expr::Index(idx) => self.assign_element_read(assign, idx)?,
+            Expr::CollectionAppend(op) => self.assign_append(assign, op)?,
+            Expr::CollectionRemoveAt(op) => self.assign_remove_at(assign, op)?,
+            Expr::CollectionUpdate(op) => self.assign_update(assign, op)?,
+            Expr::ConcatBuild(op) => self.assign_concat_build(assign, op)?,
+            Expr::Binary(bin) => self.assign_binary(assign, bin)?,
+            _ => false,
+        };
+        if done {
+            return Ok(());
+        }
+
+        let value = self.eval_expr(&assign.value)?;
+        self.set_variable(&assign.name, value);
+        Ok(())
+    }
+
+    /// `x = arr[i]`: one element, read straight from the variable. When the
+    /// index is one the shortcut does not take — negative, past the end, a key,
+    /// a position in a string — the read is finished with the index already in
+    /// hand; it used to be handed back and evaluated again (ZYTW-011).
+    #[inline(never)]
+    fn assign_element_read(&mut self, assign: &Assignment, idx: &zymbol_ast::IndexExpr) -> Result<bool> {
+        if let Expr::Identifier(arr_ident) = idx.array.unwrap_group() {
+            // An index that can write the collection: `eval_index` reads the
+            // collection first (ZYTW-014).
+            if self.operands_may_write(&arr_ident.name, &[&idx.index]) {
+                return Ok(false);
+            }
+            let index_val = self.eval_expr(&idx.index)?;
+            let element = match (self.get_variable(&arr_ident.name), &index_val) {
+                (Some(Value::Array(arr)), Value::Int(i)) if *i > 0 && (*i as usize) <= arr.len() => {
+                    Some(arr[(*i - 1) as usize].clone())
+                }
+                (Some(collection), _) => Some(Self::index_into(collection, &index_val, idx.span)?),
+                (None, _) => None,
+            };
+            let value = match element {
+                Some(v) => v,
+                // Not a variable in view: the name says what it is.
+                None => {
+                    let collection = self.eval_expr(&idx.array)?;
+                    Self::index_into(&collection, &index_val, idx.span)?
+                }
+            };
+            self.set_variable(&assign.name, value);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// `arr$+ x`, and `s$+ c` on a string: the element goes onto the collection
+    /// where it is.
+    #[inline(never)]
+    fn assign_append(&mut self, assign: &Assignment, op: &zymbol_ast::CollectionAppendExpr) -> Result<bool> {
+        let name = assign.name.as_str();
+        if let Expr::Identifier(ident) = op.collection.unwrap_group() {
+            if ident.name == assign.name {
+                let read = self.receiver_read_first(name, &[&op.element]);
+                let element = self.eval_expr(&op.element)?;
+                // Hot/pre_hot RHS: auto-init on first use.
+                // Char element → init to "" (String); anything else → init to [] (Array)
+                if (ident.hot || ident.pre_hot) && self.get_variable(&assign.name).is_none() {
+                    let neutral = if matches!(element, Value::Char(_)) {
+                        Value::String(String::new())
+                    } else {
+                        Value::array(Vec::new())
+                    };
+                    if ident.pre_hot {
+                        self.set_above_nearest_loop(&assign.name, neutral);
+                    } else {
+                        self.set_variable(&assign.name, neutral);
                     }
                 }
+                return self.edit_receiver_done(name, read, &op.collection, |c| {
+                    Self::append_in(c, element, op.span)
+                });
             }
-            Expr::CollectionAppend(op) => {
-                if let Expr::Identifier(ident) = op.collection.unwrap_group() {
-                    if ident.name == assign.name {
-                        let element = self.eval_expr(&op.element)?;
-                        // Hot/pre_hot RHS: auto-init on first use.
-                        // Char element → init to "" (String); anything else → init to [] (Array)
-                        if (ident.hot || ident.pre_hot) && self.get_variable(&assign.name).is_none() {
-                            let neutral = if matches!(element, Value::Char(_)) {
-                                Value::String(String::new())
-                            } else {
-                                Value::array(Vec::new())
-                            };
-                            if ident.pre_hot {
-                                self.set_above_nearest_loop(&assign.name, neutral);
-                            } else {
-                                self.set_variable(&assign.name, neutral);
-                            }
-                        }
-                        // Array $+ Value
-                        if let Some(Value::Array(arr)) = self.get_variable_mut(&assign.name) {
-                            Rc::make_mut(arr).push(element);
-                            return Ok(());
-                        }
-                        // String $+ Char
-                        if let Value::Char(c) = element {
-                            if let Some(Value::String(s)) = self.get_variable_mut(&assign.name) {
-                                s.push(c);
-                                return Ok(());
-                            }
-                        }
-                        // fallthrough: incompatible types — normal eval will produce the error
-                    }
+        }
+        Ok(false)
+    }
+
+    /// `arr$-[i]`, and `d$-["k"]` on a dictionary: removed where it is.
+    #[inline(never)]
+    fn assign_remove_at(&mut self, assign: &Assignment, op: &zymbol_ast::CollectionRemoveAtExpr) -> Result<bool> {
+        let name = assign.name.as_str();
+        if let Expr::Identifier(ident) = op.collection.unwrap_group() {
+            if ident.name == assign.name {
+                let read = self.receiver_read_first(name, &[&op.index]);
+                let index_val = self.eval_expr(&op.index)?;
+                return self.edit_receiver_done(name, read, &op.collection, |c| {
+                    Self::remove_at_in(c, index_val, op.span)
+                });
+            }
+        }
+        Ok(false)
+    }
+
+    /// `arr[i]$~ v`, `d["k"]$~ v` and `d.k$~ v`: one element written in place,
+    /// whatever the collection. The deep form, `m[i>j]$~ v`, takes the general
+    /// path — it evaluates each operand once too.
+    ///
+    /// A positional tuple reaches this only as `t = t[i]$~ v`, the functional
+    /// form bound back to its own name, which derives a tuple like
+    /// `u = t[i]$~ v` does; the statement `t[i]$~ v` was refused before any of
+    /// this ran. This path used to refuse both (ZYTW-012).
+    #[inline(never)]
+    fn assign_update(&mut self, assign: &Assignment, op: &zymbol_ast::CollectionUpdateExpr) -> Result<bool> {
+        let name = assign.name.as_str();
+        match op.target.unwrap_group() {
+            Expr::Index(idx) if is_named(name, &idx.array) => {
+                let read = self.receiver_read_first(name, &[&idx.index, &op.value]);
+                let index_val = self.eval_expr(&idx.index)?;
+                let new_value = self.eval_expr(&op.value)?;
+                self.edit_receiver_done(name, read, &idx.array, |c| {
+                    Self::update_in(c, index_val, new_value, op.span)
+                })
+            }
+            Expr::MemberAccess(ma) if !ma.is_module_access && is_named(name, &ma.object) => {
+                let read = self.receiver_read_first(name, &[&op.value]);
+                let new_value = self.eval_expr(&op.value)?;
+                let key = Value::String(ma.field.clone());
+                self.edit_receiver_done(name, read, &ma.object, |c| {
+                    Self::update_in(c, key, new_value, op.span)
+                })
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// `arr$++ a b` adds at the end, like `$+` does one at a time. It went
+    /// through the general path, which holds a second reference to the
+    /// collection while it pushes, so every one of them copied all of it
+    /// (GLB-118). Only a base that `$++` takes comes here: anything else is
+    /// refused before an item is evaluated, as it always was.
+    #[inline(never)]
+    fn assign_concat_build(&mut self, assign: &Assignment, op: &zymbol_ast::ConcatBuildExpr) -> Result<bool> {
+        let name = assign.name.as_str();
+        if !is_named(name, &op.base) {
+            return Ok(false);
+        }
+        let text = match self.get_variable(name) {
+            Some(Value::String(_)) => Some(true),
+            Some(Value::Array(_)) => Some(false),
+            _ => None,
+        };
+        if let Some(text) = text {
+            let operands: Vec<&Expr> = op.items.iter().collect();
+            let read = self.receiver_read_first(name, &operands);
+            // A string takes each item as text, in the numeral mode of
+            // the moment it is evaluated; an array takes the values.
+            let mut pieces = String::new();
+            let mut items = Vec::new();
+            for item in &op.items {
+                let v = self.eval_expr(item)?;
+                if text {
+                    pieces.push_str(&self.value_to_concat_str(&v));
+                } else {
+                    items.push(v);
                 }
             }
-            Expr::CollectionRemoveAt(op) => {
-                if let Expr::Identifier(ident) = op.collection.unwrap_group() {
-                    if ident.name == assign.name {
-                        let index_val = self.eval_expr(&op.index)?;
-                        if let Value::Int(i) = &index_val {
-                            if *i > 0 {
-                                if let Some(Value::Array(arr)) = self.get_variable_mut(&assign.name) {
-                                    let idx = (*i - 1) as usize;
-                                    if idx < arr.len() {
-                                        Rc::make_mut(arr).remove(idx);
-                                        return Ok(());
-                                    }
-                                }
-                            }
-                        }
-                        // i <= 0 or out-of-bounds: fallthrough so eval normal generates the error
-                    }
+            let span = op.span;
+            return self.edit_receiver_done(name, read, &op.base, |c| match c {
+                Value::String(s) => {
+                    s.push_str(&pieces);
+                    Ok(())
                 }
-            }
-            // Fast path: arr = arr[i]$~ v — update single element in-place, no array clone
-            // O(1) vs O(n) clone when the LHS variable matches the collection being updated.
-            Expr::CollectionUpdate(op) => {
-                if let Expr::Index(idx) = op.target.unwrap_group() {
-                    if let Expr::Identifier(ident) = idx.array.unwrap_group() {
-                        if ident.name == assign.name {
-                            // Positional tuples are immutable — an in-place
-                            // indexed write is forbidden. The NAMED tuple used
-                            // to be refused here too, and no longer is:
-                            // decisions 7-11 of Divergente_ES/forma/README.md
-                            // make it the dictionary, which is mutable, and
-                            // `d["k"]$~ v` as a statement is how you modify one
-                            // (DM-21). The VM never refused it, so this is the
-                            // tree-walker coming into line, not the reverse.
-                            if let Some(Value::Tuple(_)) = self.get_variable(&assign.name) {
-                                return Err(RuntimeError::Generic {
-                                    message: tuple_immutable_msg(&assign.name),
-                                    span: assign.span,
-                                });
-                            }
-                            let index_val = self.eval_expr(&idx.index)?;
-                            let new_value = self.eval_expr(&op.value)?;
-                            if let Value::Int(i) = &index_val {
-                                if *i > 0 {
-                                    if let Some(Value::Array(arr)) = self.get_variable_mut(&assign.name) {
-                                        let idx_pos = (*i - 1) as usize;
-                                        if idx_pos < arr.len() {
-                                            Rc::make_mut(arr)[idx_pos] = new_value;
-                                            return Ok(());
-                                        }
-                                    }
-                                }
-                            }
-                            // i <= 0 or out-of-bounds: fallthrough to normal eval for proper error
+                Value::Array(arr) => {
+                    Rc::make_mut(arr).extend(items);
+                    Ok(())
+                }
+                other => Err(RuntimeError::kinded(
+                    "Type",
+                    format!("$++ requires a string or array as base, got {}", other.type_label()),
+                    span,
+                )),
+            });
+        }
+        Ok(false)
+    }
+
+    /// B12: `x = x OP y`, on the variable itself.
+    ///
+    /// Not `&&` and `||`: they decide whether the right side runs at all, and
+    /// `eval_binary` is where that is decided — this path evaluated it first,
+    /// so `v = v && f()` called `f` with `v` false (DM-19 again). And not a hot
+    /// name on its first use: it is given its neutral by `eval_binary`, which
+    /// has to see the right-hand side to choose it.
+    #[inline(never)]
+    fn assign_binary(&mut self, assign: &Assignment, bin: &zymbol_ast::BinaryExpr) -> Result<bool> {
+        let name = assign.name.as_str();
+        if matches!(bin.op, BinaryOp::And | BinaryOp::Or) {
+            return Ok(false);
+        }
+        if let Expr::Identifier(lhs_ident) = bin.left.unwrap_group() {
+            let first_use = (lhs_ident.hot || lhs_ident.pre_hot)
+                && self.get_variable(name).is_none();
+            if lhs_ident.name == assign.name && !first_use {
+                let rhs_val = if plain_operand(&bin.right) {
+                    self.eval_expr(&bin.right)?
+                } else {
+                    let read = self.receiver_read_first(name, &[&bin.right]);
+                    let rhs_val = self.eval_expr(&bin.right)?;
+                    // The right side wrote the receiver: the operator takes
+                    // what was read, and the assignment overwrites the write.
+                    if let Some(read) = read {
+                        if !self.receiver_untouched(name, &read) {
+                            let value = self.apply_binary(bin, &read, &rhs_val)?;
+                            self.set_variable(name, value);
+                            return Ok(true);
                         }
                     }
-                }
-            }
-            // B12: fast path for x = x OP y (integer/float arithmetic self-assign).
-            // Avoids Value::clone() of LHS and full eval_expr dispatch for simple loops.
-            Expr::Binary(bin) => {
-                if let Expr::Identifier(lhs_ident) = bin.left.unwrap_group() {
-                    if lhs_ident.name == assign.name {
-                        let rhs_val = self.eval_expr(&bin.right)?;
-                        // Int fast path
-                        if let (Some(Value::Int(curr)), Value::Int(rhs)) =
-                            (self.get_variable_mut(&assign.name), &rhs_val)
-                        {
-                            // The i53 range is checked before the write. This
-                            // path existed to skip the dispatch and skipped the
-                            // range check with it, so `s = s + 1000000` in a
-                            // loop walked straight out of the range in silence —
-                            // the very "accumulator over a long loop" that
-                            // REFERENCE.md cites as the scenario the check is
-                            // for (DM-01, sonda A16).
+                    rhs_val
+                };
+                if bin.op == BinaryOp::Concat {
+                    // `s = s x`: the text accumulator. Onto the string
+                    // that is already there, when it is one.
+                    let piece = self.value_to_concat_str(&rhs_val);
+                    if let Some(Value::String(curr)) = self.get_variable_mut(name) {
+                        curr.push_str(&piece);
+                        return Ok(true);
+                    }
+                } else {
+                    match (self.get_variable_mut(name), &rhs_val) {
+                        (Some(Value::Int(curr)), Value::Int(rhs)) => {
+                            // The i53 range is checked before the write.
+                            // This path existed to skip the dispatch and
+                            // skipped the range check with it, so
+                            // `s = s + 1000000` in a loop walked straight
+                            // out of the range in silence — the very
+                            // "accumulator over a long loop" that
+                            // REFERENCE.md cites as the scenario the
+                            // check is for (DM-01, sonda A16).
                             let checked = match bin.op {
                                 BinaryOp::Add => Some((num::add(*curr, *rhs), "+")),
                                 BinaryOp::Sub => Some((num::sub(*curr, *rhs), "-")),
                                 BinaryOp::Mul => Some((num::mul(*curr, *rhs), "*")),
-                                // div/mod/pow: fallthrough (edge cases like div-by-zero)
+                                // div/mod/pow: the operator below (edge cases like div-by-zero)
                                 _ => None,
                             };
                             if let Some((result, op)) = checked {
                                 let (a, b) = (*curr, *rhs);
                                 match result {
-                                    Some(v) => { *curr = v; return Ok(()); }
+                                    Some(v) => { *curr = v; return Ok(true); }
                                     None => return Err(RuntimeError::Generic {
                                         message: num::overflow_msg(a, op, b),
                                         span: assign.span,
@@ -273,47 +418,128 @@ impl<W: Write> Interpreter<W> {
                                 }
                             }
                         }
-                        // Float fast path
-                        if let (Some(Value::Float(curr)), Value::Float(rhs)) =
-                            (self.get_variable_mut(&assign.name), &rhs_val)
-                        {
-                            match bin.op {
-                                BinaryOp::Add => { *curr += rhs; return Ok(()); }
-                                BinaryOp::Sub => { *curr -= rhs; return Ok(()); }
-                                BinaryOp::Mul => { *curr *= rhs; return Ok(()); }
-                                _ => {}
-                            }
-                        }
-                        // String concat self-assign: str = str + other_str → push_str O(1) amortized
-                        // Fixes O(n²) → O(n) for str = str + "a" loops (3k appends: ~5ms → ~1ms).
-                        // Only String+String; String+other falls through to eval_binary (auto-convert).
-                        if bin.op == BinaryOp::Add {
-                            if let Value::String(rhs_str) = &rhs_val {
-                                let rhs_owned = rhs_str.clone();
-                                if let Some(Value::String(curr)) = self.get_variable_mut(&assign.name) {
-                                    curr.push_str(&rhs_owned);
-                                    return Ok(());
-                                }
-                            }
-                            // String + Char: push single char (common in char iteration loops)
-                            if let Value::Char(c) = &rhs_val {
-                                let c_owned = *c;
-                                if let Some(Value::String(curr)) = self.get_variable_mut(&assign.name) {
-                                    curr.push(c_owned);
-                                    return Ok(());
-                                }
-                            }
-                        }
-                        // type mismatch or unsupported op: fallthrough to normal eval
+                        (Some(Value::Float(curr)), Value::Float(rhs)) => match bin.op {
+                            BinaryOp::Add => { *curr += rhs; return Ok(true); }
+                            BinaryOp::Sub => { *curr -= rhs; return Ok(true); }
+                            BinaryOp::Mul => { *curr *= rhs; return Ok(true); }
+                            _ => {}
+                        },
+                        _ => {}
                     }
                 }
+                // Anything else is the operator itself, on the two values
+                // in hand — the right side is not evaluated again.
+                //
+                // There was one more shortcut here: `s = s + t` on two
+                // strings pushed `t` onto `s`. `+` is arithmetic only —
+                // `u = s + t` is refused in this engine and all three
+                // refuse `s = s + t` everywhere else — so a program that
+                // joined text that way ran here and nowhere else
+                // (ZYTW-009).
+                let left = match self.get_variable(name) {
+                    Some(v) => v.clone(),
+                    // Not a variable in view: the name says so itself.
+                    None => self.eval_expr(&bin.left)?,
+                };
+                let value = self.apply_binary(bin, &left, &rhs_val)?;
+                self.set_variable(name, value);
+                return Ok(true);
             }
-            _ => {}
         }
+        Ok(false)
+    }
 
-        let value = self.eval_expr(&assign.value)?;
-        self.set_variable(&assign.name, value);
+    /// The receiver of `name = name <op> operands`, read before the operands —
+    /// when one of them could write it. `None` when none can, which is nearly
+    /// always, and then nothing is read ahead and nothing is shared.
+    ///
+    /// A local is written by an operand only through `f(name<~)`; module state
+    /// by anything that runs the module's code. See
+    /// `zymbol_semantic::operand_may_write`.
+    #[inline(always)]
+    fn receiver_read_first(&self, name: &str, operands: &[&Expr]) -> Option<Value> {
+        if self.operands_may_write(name, operands) {
+            self.get_variable(name).cloned()
+        } else {
+            None
+        }
+    }
+
+    /// Whether evaluating any of `operands` can write the variable `name`.
+    ///
+    /// Nearly every operand runs no code — a literal, a name, arithmetic, an
+    /// index — and this is on the path of every edit and every indexed read:
+    /// those are told apart without the general walk or a lookup.
+    #[inline(always)]
+    pub(crate) fn operands_may_write(&self, name: &str, operands: &[&Expr]) -> bool {
+        if operands.iter().all(|e| plain_operand(e)) {
+            return false;
+        }
+        let shared = self.frame_module_vars.contains_key(name);
+        operands.iter().any(|e| zymbol_semantic::operand_may_write(e, name, shared))
+    }
+
+    /// Whether the receiver still is what `receiver_read_first` read.
+    ///
+    /// A collection by identity: with the read alive there are two owners, so
+    /// a write either rebinds the variable or copies the collection, and the
+    /// pointer changes both ways. Anything else by value — writing back the
+    /// value it already had is not a change.
+    fn receiver_untouched(&self, name: &str, read: &Value) -> bool {
+        match (self.get_variable(name), read) {
+            (Some(Value::Array(now)), Value::Array(then)) => Rc::ptr_eq(now, then),
+            (Some(Value::Tuple(now)), Value::Tuple(then)) => Rc::ptr_eq(now, then),
+            (Some(Value::NamedTuple(now)), Value::NamedTuple(then)) => Rc::ptr_eq(now, then),
+            (Some(now), then) => now == then,
+            (None, _) => false,
+        }
+    }
+
+    /// Apply an edit to the receiver of `name = name <edit> …`, the operands
+    /// already evaluated and inside `edit`.
+    ///
+    /// If an operand wrote the receiver after it was read, the edit applies to
+    /// what was read and the result replaces what the operand wrote: that is
+    /// the assignment, left to right (GLB-115). Otherwise the edit runs on the
+    /// variable where it lives. `edit` validates before it writes, so a
+    /// refusal leaves the variable as it was — and whatever an operand wrote
+    /// stays written, because the assignment never happened.
+    #[inline(always)]
+    fn edit_receiver(
+        &mut self,
+        name: &str,
+        read: Option<Value>,
+        receiver: &Expr,
+        edit: impl FnOnce(&mut Value) -> Result<()>,
+    ) -> Result<()> {
+        if let Some(mut read) = read {
+            if !self.receiver_untouched(name, &read) {
+                edit(&mut read)?;
+                self.set_variable(name, read);
+                return Ok(());
+            }
+        }
+        if let Some(slot) = self.get_variable_mut(name) {
+            return edit(slot);
+        }
+        // Not a variable in view: the receiver says so in its own words.
+        let mut value = self.eval_expr(receiver)?;
+        edit(&mut value)?;
+        self.set_variable(name, value);
         Ok(())
+    }
+
+    /// `edit_receiver`, for a caller that answers "done".
+    #[inline(always)]
+    fn edit_receiver_done(
+        &mut self,
+        name: &str,
+        read: Option<Value>,
+        receiver: &Expr,
+        edit: impl FnOnce(&mut Value) -> Result<()>,
+    ) -> Result<bool> {
+        self.edit_receiver(name, read, receiver, edit)?;
+        Ok(true)
     }
 
     /// Execute constant declaration: name := expr
