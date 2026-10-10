@@ -2562,6 +2562,18 @@ arr = [10, 20, 30, 40, 50]
 The pattern `$[k..-k]` naturally expresses "drop k elements from each end". When the window
 collapses to nothing (e.g. `$[4..-4]` on a 5-element array), the result is an empty array.
 
+A bound is an arithmetic expression — in a slice and in a removal alike — and needs no
+parentheses: `..` and `:` separate the bounds, they are never part of one.
+
+```zymbol
+arr = [10, 20, 30, 40, 50]
+i = 3
+
+>> arr$[i - 1..i * 1 + 1] ¶   // → [20, 30, 40]
+>> arr$-[i - 1] ¶             // → [10, 30, 40, 50]
+>> arr$-[i - 1:2] ¶           // → [10, 40, 50]
+```
+
 > **Note**: All collection operators return a new collection. Assign back to the
 > same variable: `arr = arr$+ 4`. `$+` can be chained directly:
 > ```zymbol
