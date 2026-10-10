@@ -1637,8 +1637,23 @@ impl<W: Write> VM<W> {
                     .filter(|&t| t >= floor);
                 if let Some(target) = target {
                     while self.frame_stack.len() - 1 > target {
-                        let callee_base = self.frame_stack.last().unwrap().base as usize;
-                        self.frame_stack.pop();
+                        let callee = self.frame_stack.pop().unwrap();
+                        let callee_base = callee.base as usize;
+                        // What a frame was lent goes back to its caller as the
+                        // function left it: it worked on the caller's own
+                        // value, so what it wrote before failing is written
+                        // (S1). A frame further down gets it the same way when
+                        // its turn to be popped comes.
+                        if let Some(wb) = callee.writeback {
+                            let caller_base = self.frame_stack.last().unwrap().base as usize;
+                            for &(param_idx, caller_reg) in wb.iter() {
+                                let v = mem::replace(
+                                    &mut self.value_stack[callee_base + param_idx],
+                                    Value::Unit,
+                                );
+                                self.value_stack[caller_base + caller_reg as usize] = v;
+                            }
+                        }
                         truncate_regs(&mut self.value_stack, callee_base);
                     }
                     let catch = {
@@ -2228,6 +2243,16 @@ impl<W: Write> VM<W> {
 
                     self.forget_destroyed_from(new_base);
                     let wb = mem::take(&mut self.pending_output_writeback);
+                    // An output argument is LENT to its parameter (GLB-117):
+                    // the copy above made two owners of the collection for as
+                    // long as the call lasts, and the first edit inside the
+                    // function copied all of it. The caller's register lets go,
+                    // after every argument has been read — `g(d<~, d)` still
+                    // hands the second one what `d` held. It gets the value
+                    // back when the frame returns or is unwound.
+                    for &(_, caller_reg) in &wb {
+                        put_reg(&mut self.value_stack[base + caller_reg as usize], Value::Unit);
+                    }
                     self.frame_stack.push(FrameInfo {
                         base: new_base as u32,
                         ip: 0,
@@ -3567,6 +3592,16 @@ impl<W: Write> VM<W> {
 
                     self.forget_destroyed_from(new_base);
                     let wb = mem::take(&mut self.pending_output_writeback);
+                    // An output argument is LENT to its parameter (GLB-117):
+                    // the copy above made two owners of the collection for as
+                    // long as the call lasts, and the first edit inside the
+                    // function copied all of it. The caller's register lets go,
+                    // after every argument has been read — `g(d<~, d)` still
+                    // hands the second one what `d` held. It gets the value
+                    // back when the frame returns or is unwound.
+                    for &(_, caller_reg) in &wb {
+                        put_reg(&mut self.value_stack[base + caller_reg as usize], Value::Unit);
+                    }
                     self.frame_stack.push(FrameInfo {
                         base: new_base as u32,
                         ip: 0,

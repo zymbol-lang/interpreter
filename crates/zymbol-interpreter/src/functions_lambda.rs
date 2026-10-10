@@ -401,6 +401,52 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
+    /// Which arguments of a call are lent to their output parameter: the ones
+    /// that are a plain variable of the calling frame.
+    ///
+    /// Not module state (S3): every function of the module can see it, so the
+    /// callee could read the original while it was out. It is copied, as
+    /// before, and written back on return. Not a constant, and not a name the
+    /// frame does not hold — those are evaluated like any argument, which is
+    /// where their error is. And not a variable passed as output TWICE in the
+    /// same call: the analyser refuses that call (S2), and a program that got
+    /// here without it keeps the copies it always had.
+    fn lendable_arguments(
+        &self,
+        parameters: &[zymbol_ast::Parameter],
+        arguments: &[zymbol_ast::Expr],
+    ) -> Vec<usize> {
+        let mut lent: Vec<(usize, &str)> = Vec::new();
+        for (i, param) in parameters.iter().enumerate() {
+            if !matches!(param.kind, ParameterKind::Output) {
+                continue;
+            }
+            let Some(Expr::Identifier(ident)) = arguments.get(i).map(|a| a.unwrap_group()) else {
+                continue;
+            };
+            let name = ident.name.as_str();
+            if ident.hot
+                || ident.pre_hot
+                || self.frame_module_vars.contains_key(name)
+                || self.is_const(name)
+                || !self.scope_stack.iter().any(|scope| scope.contains_key(name))
+            {
+                continue;
+            }
+            lent.push((i, name));
+        }
+        let twice: Vec<&str> = lent
+            .iter()
+            .enumerate()
+            .filter(|(k, (_, name))| lent[..*k].iter().any(|(_, other)| other == name))
+            .map(|(_, (_, name))| *name)
+            .collect();
+        lent.into_iter()
+            .filter(|(_, name)| !twice.contains(name))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
     /// Publish the calling frame's module-state writes to the store (MM-12).
     ///
     /// Called on the way *into* a function of the module the caller is already
@@ -492,8 +538,37 @@ impl<W: Write> Interpreter<W> {
         if arg_values.capacity() < arguments.len() {
             arg_values.reserve(arguments.len() - arg_values.capacity());
         }
-        for arg in arguments {
-            arg_values.push(self.eval_expr(arg)?);
+        // An output argument that is a plain variable is LENT to its parameter,
+        // not copied into it (GLB-117, decided 2026-10-10). It used to be
+        // evaluated like any other — a second reference to the collection —
+        // and written back on return, so for as long as the call lasted the
+        // caller's variable and the parameter were two owners and the first
+        // edit inside the function copied all of it: one write through `<~`
+        // cost the size of the collection, every call.
+        //
+        // The value is moved out of the caller only after every other argument
+        // has been read: `g(d<~, d)` hands the second one what `d` held before
+        // the call. Nothing can look at the caller's variable while it is out —
+        // the caller is suspended, and a function does not see the variables of
+        // whoever called it (MEM-2).
+        let lent: Vec<usize> = if parameters.iter().any(|p| matches!(p.kind, ParameterKind::Output)) {
+            self.lendable_arguments(parameters, arguments)
+        } else {
+            Vec::new()
+        };
+        for (i, arg) in arguments.iter().enumerate() {
+            if lent.contains(&i) {
+                arg_values.push(Value::Unit);
+            } else {
+                arg_values.push(self.eval_expr(arg)?);
+            }
+        }
+        for &i in &lent {
+            if let Expr::Identifier(ident) = arguments[i].unwrap_group() {
+                if let Some(slot) = self.get_variable_mut(&ident.name) {
+                    arg_values[i] = std::mem::replace(slot, Value::Unit);
+                }
+            }
         }
 
         // A named function CAPTURES what its body reads from the file, exactly
@@ -730,6 +805,20 @@ impl<W: Write> Interpreter<W> {
         let call_line = self.cur_stmt_line;
         let return_value = 'tco: loop {
             if let Err(e) = self.execute_body_scheduled(body, auto_free) {
+                // What was lent goes back as the function left it: it worked on
+                // the caller's own value, so what it wrote before failing is
+                // written (S1). An output argument that was NOT lent — module
+                // state — was a copy, and the copy is dropped with the frame.
+                let returned: Vec<(String, Value)> = lent
+                    .iter()
+                    .filter_map(|&i| match arguments[i].unwrap_group() {
+                        Expr::Identifier(ident) => Some((
+                            ident.name.clone(),
+                            self.take_variable(&parameters[i].name).unwrap_or(Value::Unit),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
                 // L16 fix: the caller's scope_stack was swapped out by
                 // take_call_state — restore the full caller state before
                 // propagating, or every outer variable vanishes after the
@@ -737,6 +826,9 @@ impl<W: Write> Interpreter<W> {
                 self.current_function = prev_fn;
                 self.move_guard_names = prev_guard;
                 self.restore_call_state(saved);
+                for (name, value) in returned {
+                    self.set_variable(&name, value);
+                }
                 if let Some(caller_functions) = saved_functions {
                     self.functions = caller_functions;
                 }
@@ -831,7 +923,8 @@ impl<W: Write> Interpreter<W> {
             for (i, param) in parameters.iter().enumerate() {
                 if matches!(param.kind, ParameterKind::Output) {
                     if let Expr::Identifier(ident) = arguments[i].unwrap_group() {
-                        let value = self.get_variable(&param.name).cloned().unwrap_or(Value::Unit);
+                        // Moved, not cloned: this frame is over.
+                        let value = self.take_variable(&param.name).unwrap_or(Value::Unit);
                         updates.push((ident.name.clone(), value));
                     }
                 }
