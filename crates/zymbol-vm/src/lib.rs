@@ -2087,6 +2087,17 @@ impl<W: Write> VM<W> {
                 }
                 Instruction::ConcatBuild(dst, base_reg, item_regs) => {
                     let (dst, base_reg) = (*dst, *base_reg);
+                    // The edit, `a$++ x y`: destination and base are the
+                    // receiver's own register, and the items go onto the array
+                    // where it is. Building a new one every time made an
+                    // accumulation cost the square of its length (GLB-118).
+                    if dst == base_reg && matches!(rreg!(base_reg), Value::Array(_)) {
+                        let items: Vec<Value> = item_regs.iter().map(|&ir| rreg!(ir).clone()).collect();
+                        if let Value::Array(arr) = &mut self.value_stack[base + dst as usize] {
+                            Rc::make_mut(arr).extend(items);
+                        }
+                        continue;
+                    }
                     let base_val = rreg!(base_reg).clone();
                     let result = match base_val {
                         Value::Array(arr) => {
