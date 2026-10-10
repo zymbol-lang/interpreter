@@ -1075,6 +1075,31 @@ pub(crate) fn walk_sub_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
     }
 }
 
+/// The variables a statement can write through an output argument: every
+/// identifier passed as `x<~` in a call anywhere inside it.
+///
+/// Operands are evaluated left to right, so a variable read earlier in the
+/// statement must keep the value it had when it was read, whatever a later
+/// call writes back into it. An engine that reads a variable where it lives —
+/// the register VM — uses this to know which reads have to be pinned
+/// (ZYVM-015). It over-approximates on purpose: nested blocks and lambda
+/// bodies are included, and a read pinned needlessly costs one copy.
+pub fn names_written_through_output(stmt: &Statement) -> HashSet<String> {
+    fn go(e: &Expr, out: &mut HashSet<String>) {
+        if let Expr::FunctionCall(call) = e {
+            for &i in &call.out_args {
+                if let Some(Expr::Identifier(id)) = call.arguments.get(i).map(|a| a.unwrap_group()) {
+                    out.insert(id.name.clone());
+                }
+            }
+        }
+        walk_sub_exprs(e, &mut |sub| go(sub, out));
+    }
+    let mut out = HashSet::new();
+    walk_stmt_exprs(stmt, &mut |e| go(e, &mut out));
+    out
+}
+
 /// Visit every top-level expression of a statement (recursing through nested
 /// blocks but NOT into function declaration bodies).
 pub(crate) fn walk_stmt_exprs(stmt: &Statement, f: &mut dyn FnMut(&Expr)) {
