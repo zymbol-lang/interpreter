@@ -424,7 +424,7 @@ impl<W: Write> Interpreter<W> {
         let mut updates: Vec<(String, Value)> = Vec::new();
         for (key, injected) in &saved.frame_module_vars {
             if let Some(live) = lookup_in_scopes(&saved.scope_stack, key) {
-                if live != injected {
+                if !still_the_injected(live, injected) {
                     updates.push((key.clone(), live.clone()));
                 }
             }
@@ -602,10 +602,20 @@ impl<W: Write> Interpreter<W> {
             let mentions = self.module_body_mentions(&func_def, body);
             let want_functions = module_info.is_some();
             let prepared = self.loaded_modules.get(ctx_path).map(|module| {
+                // A name the body mentions because it is one of its PARAMETERS
+                // is not the module's variable, and is not injected. It was:
+                // the parameter then took its place in the scope, and the flush
+                // on the way into the next call of the module found a "module
+                // variable" whose value had changed — the argument — and
+                // published it. `d(datos) { <~ lee(datos) }` left the module's
+                // `datos` holding whatever `d` had been called with (ZYTW-008).
                 let vars: Vec<(String, Value)> = module
                     .all_variables
                     .iter()
-                    .filter(|(n, _)| mentions.contains(n.as_str()))
+                    .filter(|(n, _)| {
+                        mentions.contains(n.as_str())
+                            && !parameters.iter().any(|p| p.name == **n)
+                    })
                     .map(|(n, v)| (n.clone(), v.clone()))
                     .collect();
                 let const_names: Vec<String> = module.const_names.iter().cloned().collect();
@@ -619,7 +629,12 @@ impl<W: Write> Interpreter<W> {
             });
             if let Some((vars, const_names, import_aliases, all_functions)) = prepared {
                 for (name, value) in vars {
-                    let live = if same_module_caller {
+                    // The caller's copy only if the caller was GIVEN the
+                    // module's variable. A name it merely has in view — its own
+                    // parameter, called like the module's state — is not it.
+                    let live = if same_module_caller
+                        && saved.frame_module_vars.contains_key(&name)
+                    {
                         lookup_in_scopes(&saved.scope_stack, &name)
                             .cloned()
                             .unwrap_or(value)
@@ -708,7 +723,7 @@ impl<W: Write> Interpreter<W> {
         }
         // Hand the snapshot to the frame, so a nested intra-module call can
         // flush this frame's writes before it reads the store (MM-12).
-        self.frame_module_vars = injected_module_vars.clone();
+        self.frame_module_vars = injected_module_vars;
 
         // QW1: execute_block_no_scope — take_call_state already owns scope[0] (params).
         // QW17: TCO loop — if tco_pending is set after execution, rebind params and restart.
@@ -773,15 +788,28 @@ impl<W: Write> Interpreter<W> {
         // This implements private mutable module state: variables declared with
         // `=` at module level persist across calls but are never directly
         // accessible from outside the module.
+        //
+        // The snapshot diffed against is the FRAME's, `frame_module_vars`, not
+        // the copy taken when this frame was entered. They start out equal, and
+        // a nested call that writes the module's state moves the frame's along
+        // with it (MM-12). Diffing against the entry copy made a frame that
+        // wrote back the value it had started with look untouched — after a
+        // nested call had changed it:
+        //
+        //     deshacer() { mover()  n = 5 }      // n was 5; mover() makes it 99
+        //
+        // left the module's `n` at 99 (ZYTW-013). That is save, call, restore —
+        // how a search undoes a move.
         let mut module_state_updates: Vec<(String, Value)> = Vec::new();
         if let Some(ctx_path) = &module_ctx_path {
-            for (key, injected_val) in &injected_module_vars {
+            let frame_snapshot = std::mem::take(&mut self.frame_module_vars);
+            for (key, injected_val) in &frame_snapshot {
                 if parameters.iter().any(|p| p.name == *key) {
                     continue;
                 }
                 // Missing key: moved out by a `<~ key` return — reads don't mutate.
                 if let Some(current) = self.get_variable(key) {
-                    if current != injected_val {
+                    if !still_the_injected(current, injected_val) {
                         module_state_updates.push((key.clone(), current.clone()));
                     }
                 }
@@ -847,6 +875,26 @@ impl<W: Write> Interpreter<W> {
         // the call in the same statement names that statement (GLB-106).
         self.cur_stmt_line = call_line;
         Ok(return_value)
+    }
+}
+
+/// Whether a frame's module variable still is the value it was given.
+///
+/// Identity first. A frame that never wrote a collection still holds the very
+/// `Rc` it was handed, and that answers the question at once. Comparing the
+/// two element by element to find out made every call into a module cost the
+/// size of the state its body names — a function that READ one cell of a
+/// 16 000-cell table compared all 16 000 on its way out (ZYTW-010).
+///
+/// When the pointers differ the values are still compared: a frame that wrote
+/// back what was already there has not changed it, and saying it had would let
+/// its stale copy overwrite what a nested call stored (MM-2).
+fn still_the_injected(live: &Value, injected: &Value) -> bool {
+    match (live, injected) {
+        (Value::Array(a), Value::Array(b)) | (Value::Tuple(a), Value::Tuple(b))
+            if Rc::ptr_eq(a, b) => true,
+        (Value::NamedTuple(a), Value::NamedTuple(b)) if Rc::ptr_eq(a, b) => true,
+        _ => live == injected,
     }
 }
 
