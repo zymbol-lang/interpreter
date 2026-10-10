@@ -175,7 +175,7 @@ impl Parser {
         if matches!(self.peek().kind, TokenKind::DotDot) {
             self.advance(); // consume ..
             let end = if !matches!(self.peek().kind, TokenKind::RBracket) {
-                Some(Box::new(self.parse_postfix()?))
+                Some(Box::new(self.parse_slice_bound()?))
             } else {
                 None // $-[..] → remove all (empty collection)
             };
@@ -192,14 +192,18 @@ impl Parser {
             )));
         }
 
-        // Parse first expression (use parse_postfix to avoid consuming .. as range operator)
-        let first = self.parse_postfix()?;
+        // The first expression, read as a slice bound: a postfix expression with
+        // `+`/`-`, which stops before `..` and `:`. It used to be a bare postfix
+        // expression, so `a$-[i - 1]` was refused here while `a$[i - 1..i]`,
+        // `a$+[i - 1] v` and `a[i - 1]` were taken, and the browser engine took
+        // all four (GLB-116).
+        let first = self.parse_slice_bound()?;
 
         // Case: $-[start..end] or $-[start..] — range with explicit start
         if matches!(self.peek().kind, TokenKind::DotDot) {
             self.advance(); // consume ..
             let end = if !matches!(self.peek().kind, TokenKind::RBracket) {
-                Some(Box::new(self.parse_postfix()?))
+                Some(Box::new(self.parse_slice_bound()?))
             } else {
                 None // $-[start..] → remove from start to end
             };
@@ -219,7 +223,7 @@ impl Parser {
         // Case: $-[start:count] — count-based range (alternative syntax)
         if matches!(self.peek().kind, TokenKind::Colon) {
             self.advance(); // consume :
-            let count = self.parse_postfix()?;
+            let count = self.parse_slice_bound()?;
             let close = self.peek().clone();
             if !matches!(close.kind, TokenKind::RBracket) {
                 return Err(Diagnostic::error("expected ']' after count")
@@ -325,12 +329,17 @@ impl Parser {
         )))
     }
 
-    /// Parse collection slice: collection$[start..end]
-    /// Parse a slice bound: postfix expression with optional additive arithmetic (+/-).
-    /// Does NOT parse `..` or higher-precedence operators so the slice separator is safe.
-    /// Supports: p, p-1, p+1, arr$#-1, -1 (GAP-001 fix).
-    fn parse_slice_bound(&mut self) -> Result<Expr, Diagnostic> {
-        let mut left = self.parse_postfix()?;
+    /// Parse a bound of a ranged bracket — a slice's `$[a..b]`, a removal's
+    /// `$-[i]`, `$-[a..b]`, `$-[a:n]`: arithmetic over postfix expressions, with
+    /// the usual precedence, that never reads `..` or `:` — those separate the
+    /// bounds here. The general expression grammar cannot be used: there `..`
+    /// binds tighter than arithmetic, so `i - 1..i` would be `i - (1..i)`.
+    ///
+    /// It read `+` and `-` only (GAP-001), so `a$[i * 2..n]` was refused while
+    /// `a[i * 2]` and `a$+[i * 2] v` were taken, and the browser engine took
+    /// all of them (GLB-116).
+    pub(crate) fn parse_slice_bound(&mut self) -> Result<Expr, Diagnostic> {
+        let mut left = self.parse_slice_bound_term()?;
         while matches!(self.peek().kind, TokenKind::Plus | TokenKind::Minus) {
             let op_token = self.advance();
             let op = match op_token.kind {
@@ -338,9 +347,39 @@ impl Parser {
                 TokenKind::Minus => BinaryOp::Sub,
                 _ => unreachable!(),
             };
-            let right = self.parse_postfix()?;
+            let right = self.parse_slice_bound_term()?;
             let span = left.span().to(&right.span());
             left = Expr::Binary(BinaryExpr::new(op, Box::new(left), Box::new(right), span));
+        }
+        Ok(left)
+    }
+
+    /// `*`, `/`, `%` inside a bound.
+    fn parse_slice_bound_term(&mut self) -> Result<Expr, Diagnostic> {
+        let mut left = self.parse_slice_bound_power()?;
+        while matches!(self.peek().kind, TokenKind::Star | TokenKind::Slash | TokenKind::Percent) {
+            let op_token = self.advance();
+            let op = match op_token.kind {
+                TokenKind::Star    => BinaryOp::Mul,
+                TokenKind::Slash   => BinaryOp::Div,
+                TokenKind::Percent => BinaryOp::Mod,
+                _ => unreachable!(),
+            };
+            let right = self.parse_slice_bound_power()?;
+            let span = left.span().to(&right.span());
+            left = Expr::Binary(BinaryExpr::new(op, Box::new(left), Box::new(right), span));
+        }
+        Ok(left)
+    }
+
+    /// `^` inside a bound, right-associative as everywhere.
+    fn parse_slice_bound_power(&mut self) -> Result<Expr, Diagnostic> {
+        let left = self.parse_postfix()?;
+        if matches!(self.peek().kind, TokenKind::Caret) {
+            self.advance(); // consume ^
+            let right = self.parse_slice_bound_power()?;
+            let span = left.span().to(&right.span());
+            return Ok(Expr::Binary(BinaryExpr::new(BinaryOp::Pow, Box::new(left), Box::new(right), span)));
         }
         Ok(left)
     }
