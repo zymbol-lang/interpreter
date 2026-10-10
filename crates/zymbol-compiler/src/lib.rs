@@ -650,10 +650,25 @@ impl Compiler {
         // when the reads are emitted. Only in a script — a module's own state
         // already goes through `global_var_map`, and it is shared rather than
         // captured.
+        //
+        // And only the names a function body MENTIONS. A function reads a file
+        // variable in one way that the analyser allows — calling a lambda that
+        // lives in one — so nearly no variable needs a slot, and one that has
+        // it pays for it: the slot is a second owner of the value, written on
+        // every assignment. That made an edit in place copy the collection
+        // (ZYVM-013), and it would make an output parameter copy the one it was
+        // lent (GLB-117).
         if program.module_decl.is_none() {
+            let mut reachable: HashSet<String> = HashSet::new();
+            for stmt in &program.statements {
+                if let Statement::FunctionDecl(decl) = stmt {
+                    reachable.extend(zymbol_semantic::mentioned_names(&decl.body));
+                }
+            }
             for stmt in &program.statements {
                 if let Statement::Assignment(a) = stmt {
-                    if compiler.global_var_map.contains_key(&a.name)
+                    if !reachable.contains(&a.name)
+                        || compiler.global_var_map.contains_key(&a.name)
                         || compiler.file_var_map.contains_key(&a.name)
                     {
                         continue;
