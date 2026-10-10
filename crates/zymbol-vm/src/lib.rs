@@ -1188,6 +1188,24 @@ fn vm_error_kind(e: &VmError) -> &'static str {
     }
 }
 
+/// Write a register, dropping the value it held only if that value owns memory.
+///
+/// `*slot = v` runs `Value`'s drop glue — an out-of-line call — on whatever was
+/// there, and what was there is nearly always an Int, a Bool or `Unit`: the
+/// call was 10–20 % of the VM's time, in GO and Chaturanga as much as in a
+/// counting loop (ZYVM-010, measured 2026-10-10). Forgetting a scalar loses
+/// nothing, and `owns_memory` lists the scalars, so a variant added later is
+/// dropped until someone says not. No `unsafe`: `mem::forget` is safe.
+#[inline(always)]
+fn put_reg(slot: &mut Value, v: Value) {
+    let old = mem::replace(slot, v);
+    if old.owns_memory() {
+        drop(old);
+    } else {
+        mem::forget(old);
+    }
+}
+
 /// Shrink the register stack to `len`, dropping only the values that own memory.
 ///
 /// `Vec::truncate` runs `Value`'s drop glue — an out-of-line call — on every
@@ -1507,7 +1525,10 @@ impl<W: Write> VM<W> {
             ($r:expr) => { unsafe { self.value_stack.get_unchecked(base + $r as usize) } }
         }
         macro_rules! wreg {
-            ($r:expr, $v:expr) => { unsafe { *self.value_stack.get_unchecked_mut(base + $r as usize) = $v } }
+            ($r:expr, $v:expr) => {{
+                let __v = $v;
+                put_reg(unsafe { self.value_stack.get_unchecked_mut(base + $r as usize) }, __v)
+            }}
         }
         // ri!: read register as Int for a POSITION — an index, a count, a
         // repetition. Not for an arithmetic operand: those go through `ri2!`,
@@ -4798,7 +4819,7 @@ impl<W: Write> VM<W> {
     #[inline(always)]
     fn reg_set(&mut self, reg: Reg, val: Value) {
         let base = self.frame_stack.last().unwrap().base as usize;
-        self.value_stack[base + reg as usize] = val;
+        put_reg(&mut self.value_stack[base + reg as usize], val);
     }
 
     #[inline(always)]
