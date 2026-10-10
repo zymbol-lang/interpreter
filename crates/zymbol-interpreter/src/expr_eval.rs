@@ -226,9 +226,22 @@ impl<W: Write> Interpreter<W> {
         let mut chain: Vec<&IndexExpr> = Vec::new();
         if let Some(root) = Self::index_chain(idx, &mut chain) {
             self.check_variable_alive(&root.name, &root.span)?;
+            // Left to right: the collection is read, then its indices. Borrowing
+            // it after the indices have run is the same thing — unless one of
+            // them writes it, and then what was indexed was what the index had
+            // just put there: `d[f()]` with `f` replacing `d` answered from the
+            // new `d` (ZYTW-014). That case, which is rare, takes the general
+            // path below, where the collection is evaluated first.
+            let index_writes_root = chain
+                .iter()
+                .any(|link| !crate::variables::plain_operand(&link.index))
+                && {
+                    let indices: Vec<&Expr> = chain.iter().map(|link| &*link.index).collect();
+                    self.operands_may_write(&root.name, &indices)
+                };
             // A name the environment does not hold may still be a function used
             // as a value; that (and the error) belongs to the general path.
-            if self.get_variable(&root.name).is_some() {
+            if !index_writes_root && self.get_variable(&root.name).is_some() {
                 // The indices are evaluated before anything is borrowed, in the
                 // same order as the general path: innermost first.
                 let mut indices = Vec::with_capacity(chain.len());
@@ -414,7 +427,7 @@ impl<W: Write> Interpreter<W> {
     ///
     /// Everything `index_ref` can borrow is cloned from it; what is left is the
     /// String, whose element is built on the spot, and the error.
-    fn index_into(
+    pub(crate) fn index_into(
         collection: &Value,
         index_value: &Value,
         span: zymbol_span::Span,

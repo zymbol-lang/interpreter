@@ -1100,6 +1100,68 @@ pub fn names_written_through_output(stmt: &Statement) -> HashSet<String> {
     out
 }
 
+/// Whether evaluating `operand` can write the variable `name`.
+///
+/// An engine that edits a variable where it lives has to know this before it
+/// runs `name = name <op> operand`: operands are evaluated left to right, so
+/// the receiver is read first and an operand that writes it afterwards is
+/// overwritten by the assignment (GLB-115). When no operand can, the receiver
+/// need not be read ahead at all.
+///
+/// Two ways in, and only two:
+///
+/// - a call that takes `name` as an output argument (`f(name<~)`), which is
+///   written in the source;
+/// - when `name` is `shared` — module state, which every function of the
+///   module can write — anything that runs the program's code: a call, a pipe,
+///   an operator that takes a callable.
+///
+/// A `??` used as a value answers yes either way: its arms may be blocks, and
+/// a block runs in this scope. It over-approximates on purpose; a needless yes
+/// costs one reference to the receiver.
+pub fn operand_may_write(operand: &Expr, name: &str, shared: bool) -> bool {
+    fn go(e: &Expr, name: &str, shared: bool, found: &mut bool) {
+        if *found {
+            return;
+        }
+        match e {
+            Expr::FunctionCall(call) => {
+                let passed = call.out_args.iter().any(|&i| {
+                    matches!(
+                        call.arguments.get(i).map(|a| a.unwrap_group()),
+                        Some(Expr::Identifier(id)) if id.name == name
+                    )
+                });
+                if shared || passed {
+                    *found = true;
+                    return;
+                }
+            }
+            Expr::Match(_) => {
+                *found = true;
+                return;
+            }
+            Expr::Pipe(_)
+            | Expr::CollectionMap(_)
+            | Expr::CollectionFilter(_)
+            | Expr::CollectionReduce(_)
+            | Expr::CollectionSortAsc(_)
+            | Expr::CollectionSortDesc(_)
+            | Expr::CollectionSortCustom(_)
+                if shared =>
+            {
+                *found = true;
+                return;
+            }
+            _ => {}
+        }
+        walk_sub_exprs(e, &mut |sub| go(sub, name, shared, found));
+    }
+    let mut found = false;
+    go(operand, name, shared, &mut found);
+    found
+}
+
 /// Visit every top-level expression of a statement (recursing through nested
 /// blocks but NOT into function declaration bodies).
 pub(crate) fn walk_stmt_exprs(stmt: &Statement, f: &mut dyn FnMut(&Expr)) {
