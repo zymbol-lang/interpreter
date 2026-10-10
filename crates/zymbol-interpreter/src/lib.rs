@@ -365,6 +365,19 @@ pub enum Value {
     Unit,
 }
 
+/// Keep `Interpreter::file_vars` in step with a write to a file-level variable.
+///
+/// A callable is mirrored, so a named function can call it at any depth;
+/// anything else is not, and takes the name out if a callable was there before.
+#[inline]
+fn mirror_file_var(file_vars: &mut HashMap<String, Value>, name: &str, value: &Value) {
+    if matches!(value, Value::Function(_)) {
+        file_vars.insert(name.to_string(), value.clone());
+    } else if !file_vars.is_empty() {
+        file_vars.remove(name);
+    }
+}
+
 /// The module aliases visible at one point in the program (alias -> file path).
 ///
 /// Behind an `Rc` because every function value carries the set that was visible
@@ -867,6 +880,14 @@ pub struct Interpreter<W: Write> {
     /// Only writes that land in the file body itself are mirrored — a block's
     /// locals are not the file's, and a named function is written at file level
     /// so it cannot see them anyway.
+    ///
+    /// And only CALLABLES. Since MEM-2 a function body reaches a file variable
+    /// in one way the analyser allows: by calling a lambda that lives in one.
+    /// Mirroring everything made this map a second owner of every collection
+    /// the file body held — so the first edit after each assignment copied it,
+    /// and an output parameter could never be the only owner of what it was
+    /// lent (GLB-117) — and cost a key and an insert on every top-level
+    /// assignment. See `mirror_file_var`.
     file_vars: HashMap<String, Value>,
     /// The free names of each named function's body, computed once per
     /// definition instead of once per call.
@@ -1009,11 +1030,11 @@ impl<W: Write> Interpreter<W> {
             self.auto_dead_variables.remove(name);
         }
         let at_file_level = self.call_depth == 0 && self.scope_stack.len() == 1;
-        if let Some(scope) = self.scope_stack.last_mut() {
-            scope.insert(name.to_string(), value.clone());
-        }
         if at_file_level {
-            self.file_vars.insert(name.to_string(), value);
+            mirror_file_var(&mut self.file_vars, name, &value);
+        }
+        if let Some(scope) = self.scope_stack.last_mut() {
+            scope.insert(name.to_string(), value);
         }
     }
 
@@ -1048,19 +1069,19 @@ impl<W: Write> Interpreter<W> {
         let at_depth_zero = self.call_depth == 0;
         for (i, scope) in self.scope_stack.iter_mut().enumerate().rev() {
             if let Some(existing) = scope.get_mut(name) {
-                *existing = value.clone();
                 if at_depth_zero && i == 0 {
-                    self.file_vars.insert(name.to_string(), value);
+                    mirror_file_var(&mut self.file_vars, name, &value);
                 }
+                *existing = value;
                 return;
             }
         }
         let at_file_level = at_depth_zero && self.scope_stack.len() == 1;
-        if let Some(scope) = self.scope_stack.last_mut() {
-            scope.insert(name.to_string(), value.clone());
-        }
         if at_file_level {
-            self.file_vars.insert(name.to_string(), value);
+            mirror_file_var(&mut self.file_vars, name, &value);
+        }
+        if let Some(scope) = self.scope_stack.last_mut() {
+            scope.insert(name.to_string(), value);
         }
     }
 
