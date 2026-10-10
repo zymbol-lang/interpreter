@@ -2697,6 +2697,14 @@ impl<W: Write> VM<W> {
                             };
                             self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(result));
                         }
+                        // A dictionary, by value: the first entry that holds
+                        // it, as in an array (COLLECTIONS.md; ZYVM-017).
+                        Value::NamedTuple(mut rc_fields) => {
+                            if let Some(pos) = rc_fields.iter().position(|(_, v)| v.equals(&val)) {
+                                Rc::make_mut(&mut rc_fields).remove(pos);
+                            }
+                            self.value_stack[base + arr_reg as usize] = Value::NamedTuple(rc_fields);
+                        }
                         other => raise!(VmError::TypeMsg(format!("$- requires an array, tuple, or string, got {}", other.type_label()))),
                     }
                 }
@@ -2722,6 +2730,11 @@ impl<W: Write> VM<W> {
                                 _ => raise!(VmError::TypeMsg(format!("$-- on string requires char or string value, got {}", val.type_label()))),
                             };
                             self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(result));
+                        }
+                        Value::NamedTuple(rc_fields) => {
+                            let fields: Vec<(String, Value)> = rc_fields.iter()
+                                .filter(|(_, v)| !v.equals(&val)).cloned().collect();
+                            self.value_stack[base + arr_reg as usize] = Value::NamedTuple(Rc::new(fields));
                         }
                         other => raise!(VmError::TypeMsg(format!("$-- requires an array, tuple, or string, got {}", other.type_label()))),
                     }
