@@ -1840,6 +1840,37 @@ impl Compiler {
         Ok(())
     }
 
+    /// Where a form that gives a name its value WITHOUT an `=` writes it — a
+    /// loop's variable, a destructured name — and the module slot that write
+    /// has to reach.
+    ///
+    /// Inside a module, a name that is the module's state is that state
+    /// however it gets its value (GLB-119, decided 2026-10-10): `@ n:1..3`
+    /// and `[n, m] = …` write the module's `n` as `n = …` does. These forms
+    /// used to give the name a register of its own, so the state went
+    /// unwritten — and from then on reads came from the register and
+    /// assignments went to the slot: `[n, m] = [7, 8]  n = n + 1  <~ n + m`
+    /// answered 15. Such a name gets NO register: the value goes through a
+    /// temporary into the slot, and every later read loads it from there.
+    ///
+    /// A parameter of the same name is the function's own (ZYVM-018), and so
+    /// is a local that already has a register.
+    fn binding_target(
+        &mut self,
+        name: &str,
+        ctx: &mut FunctionCtx,
+    ) -> Result<(Reg, Option<u16>), CompileError> {
+        if let Ok(existing) = ctx.get_reg(name) {
+            return Ok((existing, None));
+        }
+        if !ctx.params.contains(name) {
+            if let Some(&slot) = self.global_var_map.get(name) {
+                return Ok((ctx.alloc_temp()?, Some(slot)));
+            }
+        }
+        Ok((ctx.alloc_reg(name)?, None))
+    }
+
     fn compile_destructure_assign(
         &mut self,
         d: &DestructureAssign,
@@ -1865,11 +1896,7 @@ impl Compiler {
                     let after_rest = rest_at.is_some_and(|p| pos > p);
                     match item {
                         DestructureItem::Bind(name) => {
-                            let dst = if let Ok(existing) = ctx.get_reg(name) {
-                                existing
-                            } else {
-                                ctx.alloc_reg(name)?
-                            };
+                            let (dst, slot) = self.binding_target(name, ctx)?;
                             if absorbs {
                                 ctx.emit(Instruction::DestructureAbsorb(dst, r_rhs, (idx + 1) as u32));
                             } else {
@@ -1894,17 +1921,19 @@ impl Compiler {
                                     ctx.emit(Instruction::ArrayGet(dst, r_rhs, r_idx));
                                 }
                             }
+                            if let Some(g) = slot {
+                                ctx.emit(Instruction::StoreGlobal(g, dst));
+                            }
                             idx += 1;
                         }
                         DestructureItem::Rest(name) => {
-                            let dst = if let Ok(existing) = ctx.get_reg(name) {
-                                existing
-                            } else {
-                                ctx.alloc_reg(name)?
-                            };
+                            let (dst, slot) = self.binding_target(name, ctx)?;
                             ctx.emit(Instruction::DestructureRest(
                                 dst, r_rhs, (idx + 1) as u32, trailing as u32,
                             ));
+                            if let Some(g) = slot {
+                                ctx.emit(Instruction::StoreGlobal(g, dst));
+                            }
                             idx += 1;
                         }
                         DestructureItem::Ignore => {
@@ -1920,12 +1949,11 @@ impl Compiler {
                 ctx.emit(Instruction::RequireDict(r_rhs));
                 for (field, var_name) in fields {
                     let field_idx = self.intern_string(field);
-                    let dst = if let Ok(existing) = ctx.get_reg(var_name) {
-                        existing
-                    } else {
-                        ctx.alloc_reg(var_name)?
-                    };
+                    let (dst, slot) = self.binding_target(var_name, ctx)?;
                     ctx.emit(Instruction::NamedTupleGet(dst, r_rhs, field_idx));
+                    if let Some(g) = slot {
+                        ctx.emit(Instruction::StoreGlobal(g, dst));
+                    }
                 }
             }
         }
@@ -2262,7 +2290,7 @@ impl Compiler {
         // the leftover value after the loop is the last executed one (never the
         // first out-of-range value), and body writes to the iterator variable
         // cannot alter the iteration.
-        let r_i = ctx.alloc_reg(iter_var)?;
+        let (r_i, i_slot) = self.binding_target(iter_var, ctx)?;
         let r_cnt = ctx.alloc_temp()?;
         let r_end = ctx.alloc_temp()?;
         let r_cmp = ctx.alloc_temp()?;
@@ -2333,6 +2361,9 @@ impl Compiler {
 
         // Publish the counter into the named iterator variable (L24)
         ctx.emit(Instruction::CopyReg(r_i, r_cnt));
+        if let Some(g) = i_slot {
+            ctx.emit(Instruction::StoreGlobal(g, r_i));
+        }
 
         self.compile_block(&lp.body, ctx)?;
 
@@ -4760,7 +4791,7 @@ impl Compiler {
 
         let r_len = ctx.alloc_temp()?;
         let r_idx = ctx.alloc_temp()?;
-        let r_item = ctx.alloc_reg(iter_var)?;
+        let (r_item, item_slot) = self.binding_target(iter_var, ctx)?;
         let r_cmp = ctx.alloc_temp()?;
 
         if coll_is_string {
@@ -4811,6 +4842,9 @@ impl Compiler {
             ctx.emit(Instruction::CmpGe(r_cmp, r_idx, r_len));
             let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
             ctx.emit(Instruction::StrCharAt(r_item, r_coll, r_idx));
+            if let Some(g) = item_slot {
+                ctx.emit(Instruction::StoreGlobal(g, r_item));
+            }
             self.compile_block(&lp.body, ctx)?;
             let inc_label = ctx.current_label();
             ctx.emit(Instruction::AddIntImm(r_idx, r_idx, 1));
@@ -4825,6 +4859,9 @@ impl Compiler {
             ctx.emit(Instruction::CmpGt(r_cmp, r_idx, r_len));
             let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
             ctx.emit(Instruction::ArrayGet(r_item, r_coll, r_idx));
+            if let Some(g) = item_slot {
+                ctx.emit(Instruction::StoreGlobal(g, r_item));
+            }
             self.compile_block(&lp.body, ctx)?;
             let inc_label = ctx.current_label();
             ctx.emit(Instruction::AddInt(r_idx, r_idx, r_one));
