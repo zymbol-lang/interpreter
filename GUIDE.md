@@ -2022,6 +2022,40 @@ swap(x<~, y<~)
 >> "x=" x " y=" y ¶    // → x=20 y=10
 ```
 
+#### The parameter *is* the caller's variable
+
+While the call lasts, an output parameter is the caller's own variable — lent to the
+function, not copied into it and copied back. Three things follow from that (v0.0.10):
+
+- **Writing one element costs what the element costs.** `put(t<~, i, v) { t[i]$~ v }` does
+  not copy `t`, however large it is.
+- **What the function wrote before it failed is written.** There is no copy to go back to.
+- **One variable cannot be two output arguments of one call.** `h(e<~, e<~)` is a semantic
+  error — `'e' is given to 'h' as an output argument twice`. Passing it once as output and
+  once by value is an ordinary call: the by-value argument holds what the variable held
+  before the call.
+
+```zymbol
+fill(a<~) {
+    a$+ 99
+    x = [1]
+    y = x[5]          // fails here: there is no fifth element
+    a$+ y
+}
+
+d = [1, 2, 3]
+!? {
+    fill(d<~)
+} :! {
+    >> "failed" ¶    // → failed
+}
+>> d ¶    // → [1, 2, 3, 99]
+```
+
+Module state is the one exception. Passed as `<~` to a function of its own module it is
+**copied**, because every function of that module can see the original while the call
+lasts. The copy is written back when the call returns, and dropped if it fails.
+
 #### Choosing between `<~` parameters and a tuple return
 
 Both get several values out of a function. They say different things:

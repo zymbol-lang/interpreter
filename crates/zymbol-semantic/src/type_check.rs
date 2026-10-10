@@ -696,6 +696,33 @@ impl TypeChecker {
             };
             self.errors.push(d.with_span(arg.span()));
         }
+        // The same variable as two output arguments (GLB-117, S2). An output
+        // parameter IS the caller's variable for as long as the call lasts, and
+        // one variable cannot be two parameters at once. It used to be copied
+        // into both, and the second write-back discarded the first in silence:
+        // `h(e<~, e<~)` kept only what the second parameter wrote.
+        let mut seen: Vec<&str> = Vec::new();
+        for &i in &call.out_args {
+            let Some(Expr::Identifier(id)) = call.arguments.get(i).map(|a| a.unwrap_group()) else {
+                continue;
+            };
+            if seen.contains(&id.name.as_str()) {
+                self.errors.push(
+                    Diagnostic::error(format!(
+                        "'{}' is given to '{}' as an output argument twice",
+                        id.name, name
+                    ))
+                    .with_span(call.arguments[i].span())
+                    .with_help(
+                        "an output parameter is the caller's own variable while the call lasts, \
+                         so one variable cannot be two of them — what one wrote would be lost to \
+                         the other; give each '<~' a variable of its own"
+                    )
+                );
+            } else {
+                seen.push(&id.name);
+            }
+        }
     }
 
     /// Create a new type checker

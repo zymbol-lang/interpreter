@@ -1240,6 +1240,53 @@ rule. All three now say **"an export block belongs inside a module block"**, wit
 `help: move this '#>' inside '# name { … }'`, and refuse it once rather than cascading
 (`reject/modules/export_block_at_file_level_m.zy`). Found 2026-08-31, decided 2026-09-04.
 
+
+### L49 — an output parameter is the caller's variable — **decided 2026-10-10**
+
+`<~` used to be **copied in and written back**. While the call lasted, the caller's variable
+and the parameter were two owners of one collection, so the first edit inside the function
+copied all of it: a function that wrote one element through `<~` cost the size of the
+collection on every call — 2 808 M instructions in the tree-walker for 2000 calls over
+16 000 elements, where the same writes in line are 33 M.
+
+```zymbol
+put(t<~, i, v) { t[i]$~ v }
+```
+
+The variable is now **lent**: its value moves into the parameter when the call starts and
+comes back when it ends, on every way out. Nothing can look at the caller's variable while
+it is out — the caller is suspended, and a function does not see the variables of whoever
+called it (MEM-2). 55 M in the tree-walker, 19 M in the VM.
+
+Three answers depended on the copy, and each was decided:
+
+| | before | now |
+|---|---|---|
+| the function writes its `<~` parameter and then fails, caught by the caller | the caller's variable untouched | **what it wrote is written** — there is no copy to go back to |
+| `h(e<~, e<~)` | `[0, 2]`: the second write-back discarded the first, in silence | **a semantic error**: `'e' is given to 'h' as an output argument twice` |
+| module state passed as `<~` to a function of its own module, which also reads it directly | two copies while the call lasts | **unchanged — still copied**, and the copy is dropped if the call fails |
+
+The third is the one case that is not lent: every function of the module can see the
+original while the call lasts, and lending it would make a read of the state inside the
+callee go and find it in the parameter.
+
+`g(d<~, d)` — once as output, once by value — is an ordinary call: the by-value argument is
+read before the variable is lent and holds what it held.
+
+**Where it lives.** Tree-walker: `lendable_arguments` in `functions_lambda.rs`, and the
+write-back on the error path next to the one on return. VM: the `Call` instruction lets go
+of the caller's register after copying the arguments, and the unwinding in `raise_kind!`
+hands a frame's output parameters back to its caller before discarding it. Browser engine:
+`giveBack` in `_callFuncBody`, on every exit; it lends in the same sense and still copies a
+collection on each edit (ZYJS-014). The refusal is in `check_out_marks` and `checkOutMarks`.
+
+The script-level mirror both Rust engines kept of every file variable had to go first: it
+was a second owner of whatever the file body held, so nothing lent from there could ever
+be the only owner. A named function reaches a file variable in one way the analyser allows —
+by calling a lambda that lives in one — so the tree-walker mirrors only callables and the VM
+gives a slot only to the names a function body mentions. A top-level assignment costs a
+quarter less in the tree-walker and a tenth less in the VM for it.
+
 ---
 
 ## 20b. Error Taxonomy
