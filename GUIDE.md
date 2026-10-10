@@ -3743,7 +3743,7 @@ r6 = 7 |> (x -> x * factor)
 | `##Div` | Division by zero |
 | `##Index` | Index out of bounds |
 | `##Key` | Key not in a dictionary |
-| `##Range` | Outside the safe integer range — or an Int that is no character, given to `##'` |
+| `##Range` | Outside the safe integer range — or a code that is no character, given to `##'` or read by `0x\|…\|` |
 | `##Type` | Type mismatch |
 | `##Parse` | Data parsing failure — also a text read as a number that it is not: compared with one (`"a" < 10`), rounded, truncated or converted by base |
 | `##IO` | File / system operations |

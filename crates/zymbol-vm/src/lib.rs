@@ -585,6 +585,9 @@ pub enum VmError {
     /// `##'` on an Int that is no character: past 0x10FFFF, or a surrogate.
     #[error("character out of range: ##' cannot represent this Int")]
     CharOutOfRange,
+    /// `0x|"…"|` and its siblings reading a code that is no character (GLB-113).
+    #[error("character out of range: {prefix}|…| cannot represent this code")]
+    CodeOutOfRange { prefix: &'static str },
     /// `container` is spelled as the tree-walker spells it — the read path there
     /// names the thing that was too short, and one message that always said
     /// "array" told a program indexing past the end of a STRING that its array
@@ -1171,7 +1174,7 @@ fn vm_error_kind(e: &VmError) -> &'static str {
         VmError::TypeError { .. } | VmError::TypeMsg(_) => "Type",
         VmError::DivisionByZero | VmError::ModuloByZero => "Div",
         VmError::IntOverflow { .. } | VmError::CastOverflow { .. }
-            | VmError::CharOutOfRange => "Range",
+            | VmError::CharOutOfRange | VmError::CodeOutOfRange { .. } => "Range",
         VmError::IndexOutOfBounds { .. } | VmError::IndexZero | VmError::IndexMsg(_) => "Index",
         VmError::ParseMsg(_) => "Parse",
         VmError::KeyMsg(_) => "Key",
@@ -4161,17 +4164,15 @@ impl<W: Write> VM<W> {
                                 _  => u32::from_str_radix(stripped, 16),
                             };
                             match code_res {
-                                Ok(code) if code <= 0x10FFFF => {
-                                    match char::from_u32(code) {
-                                        Some(ch) => Value::Char(ch),
-                                        None => raise!(VmError::Generic(format!(
-                                            "invalid Unicode character code: {}", code
-                                        ))),
-                                    }
-                                }
-                                Ok(code) => raise!(VmError::Generic(format!(
-                                    "character code must be in range 0..0x10FFFF, got {}", code
-                                ))),
+                                // A code with no character — past 0x10FFFF, or a
+                                // surrogate — is `##Range`, as `##'` raises it,
+                                // without the value (GLB-113).
+                                Ok(code) => match char::from_u32(code) {
+                                    Some(ch) => Value::Char(ch),
+                                    None => raise!(VmError::CodeOutOfRange {
+                                        prefix: match radix { 2 => "0b", 8 => "0o", 10 => "0d", _ => "0x" },
+                                    }),
+                                },
                                 // The base is NAMED, as the tree-walker and
                                 // zyjs name it. `base-16` is the radix this
                                 // engine happens to hold; `hexadecimal` is what

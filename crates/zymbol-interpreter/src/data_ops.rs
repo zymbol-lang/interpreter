@@ -396,20 +396,23 @@ impl<W: Write> Interpreter<W> {
                     op.span,
                 ))?;
 
-                if code > 0x10FFFF {
-                    return Err(RuntimeError::Generic {
-                        message: format!(
-                            "character code must be in range 0..0x10FFFF, got {}",
-                            code
-                        ),
-                        span: op.span,
-                    });
-                }
-
-                let ch = char::from_u32(code).ok_or_else(|| RuntimeError::Generic {
-                    message: format!("invalid Unicode character code: {}", code),
-                    span: op.span,
-                })?;
+                // A code with no character — past 0x10FFFF, or a surrogate — is
+                // the `##Range` that `##'` raises for the same Int, worded for
+                // this operator and without the value (GLB-113, decided
+                // 2026-10-09). It was `##_`, and quoted the code.
+                let ch = char::from_u32(code).ok_or_else(|| RuntimeError::kinded(
+                    "Range",
+                    format!(
+                        "character out of range: {}|…| cannot represent this code",
+                        match op.prefix {
+                            BasePrefix::Binary => "0b",
+                            BasePrefix::Octal => "0o",
+                            BasePrefix::Decimal => "0d",
+                            BasePrefix::Hex => "0x",
+                        }
+                    ),
+                    op.span,
+                ))?;
 
                 Ok(Value::Char(ch))
             }

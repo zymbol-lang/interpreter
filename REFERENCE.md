@@ -1469,6 +1469,7 @@ kept verbatim although `zyml` has since been retired:
 | An integer literal | `9223372036854775807` → `integer literal out of range` (lexical, not runtime) |
 | `###` / `##!` on a float | `###1.0e300` → `integer overflow: ### cannot represent this float` |
 | `##'` on an Int that is no character | `##'1114112`, `##'55296`, `##'-1` → `character out of range: ##' cannot represent this Int` |
+| `0x\|…\|` and its siblings reading a code that is no character | `0x\|"110000"\|`, `0d\|"55296"\|` → `character out of range: 0x\|…\| cannot represent this code` |
 
 Operations that **cannot** raise it: unary `-` (the range is symmetric), `/` and
 `%` on integers (a quotient or remainder of in-range operands is in range), and
