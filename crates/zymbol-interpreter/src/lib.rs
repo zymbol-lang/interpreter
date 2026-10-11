@@ -746,16 +746,29 @@ pub struct Interpreter<W: Write> {
     loading_modules: HashSet<PathBuf>,
     /// Import aliases (alias -> file_path)
     import_aliases: ModuleAliases,
-    /// The module variables injected into the CURRENT frame, as they were at
-    /// injection time.
+    /// Whether this frame runs against a module's state. Then `scope_stack[0]`
+    /// IS that module's variable table — moved out of `loaded_modules` for as
+    /// long as the frame runs and no longer — and the frame's own scopes start
+    /// at index 1.
     ///
-    /// Two things read it. The write-back when the frame returns diffs against
-    /// it, so a frame that never touched a key cannot clobber what a nested
-    /// call wrote (MM-2). And a call to another function of the same module
-    /// flushes the difference to the store on the way in, so the callee sees
-    /// what this frame has written rather than what the store last heard
-    /// (MM-12 — see `flush_module_frame`).
-    frame_module_vars: HashMap<String, Value>,
+    /// Until 2026-10-10 a module frame was handed a COPY of each variable its
+    /// body names, and on the way out compared every one with what it had been
+    /// given to decide what to write back. The store kept the original, so the
+    /// frame was never the only owner of a collection: the first write of every
+    /// call copied all of it, and the comparison walked it again — a call that
+    /// wrote one cell cost the size of the state (ZYTW-010). Three more things
+    /// existed only to keep the copies honest: the snapshot each frame diffed
+    /// against (MM-2), the flush on the way into a sibling (MM-12), and the
+    /// refresh of the caller on the way back; `ZYTW-008` and `ZYTW-013` were
+    /// bugs of that machinery, and a frame that failed dropped its copy, so
+    /// what it had written before failing was lost where the other two engines
+    /// keep it. The state lives in one place now, as it always did in them.
+    ///
+    /// The table is in the frame only while the frame is the one running:
+    /// `take_call_state` puts it back in the store before any call, and
+    /// `restore_call_state` takes it again. So whatever a call reaches — the
+    /// same module, directly or through three others — finds it there.
+    module_scope: bool,
     /// Current file path (for resolving relative imports)
     current_file: Option<PathBuf>,
     /// Line of the statement now executing — see `execute_statement`.
@@ -800,17 +813,6 @@ pub struct Interpreter<W: Write> {
     const_vec_pool: Vec<Vec<HashSet<String>>>,
     /// QW9: Recycled Vec pool for argument evaluation (avoids per-call heap alloc)
     arg_vec_pool: Vec<Vec<Value>>,
-    /// Which of a module's bindings each module function body actually names,
-    /// keyed by the address of its `Rc<FunctionDef>`.
-    ///
-    /// A module function frame is given a copy of the module's state on entry
-    /// and diffs it on the way out. The tree-walker's collections are not
-    /// reference-counted, so both halves are deep copies, and the cost was
-    /// proportional to the whole of the module's state rather than to the part
-    /// the function touches — a module holding a sixty-key table paid for it on
-    /// every call, including calls to functions that never name the table.
-    /// Computed once per function body and reused (REFERENCE.md L44).
-    module_var_mentions: HashMap<usize, std::rc::Rc<std::collections::HashSet<String>>>,
     /// MoveOrClone guard: depth of active try/catch blocks.
     /// When > 0, Return must clone (finally block may reference the variable after <~).
     /// When == 0, Return can move (take_variable) — O(1) for String/Array.
@@ -830,11 +832,8 @@ pub struct Interpreter<W: Write> {
     /// Names the MoveOrClone optimisation in `Statement::Return` must NOT move
     /// out of scope, because something after the return still needs to read them:
     ///   - output parameters (QW13), whose writeback copies the value to the caller;
-    ///   - module state variables (MM-2), whose write-back diffs the frame's final
-    ///     value against the injected snapshot. `<~ v` used to move `v` out, the
-    ///     write-back then found nothing, and the mutation was silently dropped —
-    ///     a module function that wrote state *and* returned a value lost the write
-    ///     in the tree-walker while the VM kept it.
+    /// A module's variables used to be here too; `take_variable` no longer
+    /// reaches them (see `module_scope`).
     pub(crate) move_guard_names: std::collections::HashSet<String>,
     /// Active output numeral system (block base codepoint).
     /// Default: 0x0030 (ASCII). Changed by #<d0><d9># statements.
@@ -964,7 +963,8 @@ impl<W: Write> Interpreter<W> {
         if let Some(&idx) = self.loop_scope_depths.last() {
             self.scope_stack[idx].insert(name.to_string(), value);
         } else {
-            self.scope_stack[0].insert(name.to_string(), value);
+            let base = self.frame_base();
+            self.scope_stack[base].insert(name.to_string(), value);
         }
     }
 
@@ -977,7 +977,8 @@ impl<W: Write> Interpreter<W> {
             self.scope_stack[idx].insert(name.to_string(), value);
         } else {
             // Single loop or no loop: anchor to global/function bottom scope
-            self.scope_stack[0].insert(name.to_string(), value);
+            let base = self.frame_base();
+            self.scope_stack[base].insert(name.to_string(), value);
         }
     }
 
@@ -1047,7 +1048,10 @@ impl<W: Write> Interpreter<W> {
         // A Unit sentinel would be written back to module.all_variables on write-back,
         // corrupting module constants returned via bare-identifier <~ CONST expressions.
         // After a Return statement the variable is unreachable anyway, so removal is safe.
-        for scope in self.scope_stack.iter_mut().rev() {
+        // Only the frame's own scopes: a module's variable outlives the frame,
+        // and `<~ tabla` hands out a reference to it, not the table itself.
+        let base = self.frame_base();
+        for scope in self.scope_stack[base..].iter_mut().rev() {
             if scope.contains_key(name) {
                 return scope.remove(name);
             }
@@ -1094,9 +1098,12 @@ impl<W: Write> Interpreter<W> {
         if self.current_module_path.is_none() && self.global_consts.contains_key(name) {
             return true;
         }
-        for const_set in self.const_vars_stack.iter().rev() {
+        for (i, const_set) in self.const_vars_stack.iter().enumerate().rev() {
             if const_set.contains(name) {
-                return true;
+                // The module's constants sit under the frame: a parameter or
+                // a local of the same name is not one of them (MM-9).
+                return !(i == 0 && self.module_scope)
+                    || !self.scope_stack[1..].iter().any(|scope| scope.contains_key(name));
             }
         }
         false
@@ -1135,7 +1142,10 @@ impl<W: Write> Interpreter<W> {
     /// the parameter must stay assignable inside the function body.
     pub(crate) fn unmark_const(&mut self, name: &str) {
         if !self.has_any_const { return; }
-        for const_set in self.const_vars_stack.iter_mut() {
+        // The frame's own marks only — `is_const` already reads a parameter
+        // past the module's set, which is not this frame's to edit.
+        let base = self.frame_base();
+        for const_set in self.const_vars_stack[base..].iter_mut() {
             const_set.remove(name);
         }
     }
@@ -1193,12 +1203,15 @@ impl<W: Write> Interpreter<W> {
     /// Used by both lambda calls and traditional function calls (B2).
     /// B10: reuses pooled Vecs/HashMaps. QW3: also pools mutable/const_vars Vecs.
     pub(crate) fn take_call_state(&mut self) -> SavedCallState {
+        // A module's table goes back to the store before anything is called:
+        // the callee, or something it calls, may be a function of this module.
+        self.check_in_module_scope();
         let saved = SavedCallState {
             scope_stack: std::mem::take(&mut self.scope_stack),
             mutable_vars_stack: std::mem::take(&mut self.mutable_vars_stack),
             const_vars_stack: std::mem::take(&mut self.const_vars_stack),
             import_aliases: std::mem::take(&mut self.import_aliases),
-            frame_module_vars: std::mem::take(&mut self.frame_module_vars),
+            module_scope: std::mem::take(&mut self.module_scope),
             has_any_const: self.has_any_const,
             // MM-1: loop anchors index into the caller's scope_stack — they must
             // not leak into the callee frame or x°/°x would write out of bounds.
@@ -1234,7 +1247,7 @@ impl<W: Write> Interpreter<W> {
         let mut fn_mut = std::mem::replace(&mut self.mutable_vars_stack, saved.mutable_vars_stack);
         let mut fn_const = std::mem::replace(&mut self.const_vars_stack, saved.const_vars_stack);
         self.import_aliases = saved.import_aliases;
-        self.frame_module_vars = saved.frame_module_vars;
+        self.module_scope = saved.module_scope;
         self.has_any_const = saved.has_any_const;
         self.loop_scope_depths = saved.loop_scope_depths;      // MM-1
         self.dead_variables = saved.dead_variables;            // MM-3
@@ -1262,6 +1275,52 @@ impl<W: Write> Interpreter<W> {
             if self.const_set_pool.len() < 128 { self.const_set_pool.push(s); }
         }
         if self.const_vec_pool.len() < 32 { self.const_vec_pool.push(fn_const); }
+
+        // Back in a module frame: its table is in the store, where the call
+        // that just ended left it. `current_module_path` is the caller's again.
+        self.check_out_module_scope();
+    }
+
+    /// Put the running frame's module table back in the store, leaving an
+    /// empty scope in its place. Nothing to do outside a module frame.
+    pub(crate) fn check_in_module_scope(&mut self) {
+        if !self.module_scope {
+            return;
+        }
+        if let (Some(path), Some(slot)) = (&self.current_module_path, self.scope_stack.first_mut()) {
+            if let Some(module) = self.loaded_modules.get_mut(path) {
+                module.all_variables = std::mem::take(slot);
+            }
+        }
+    }
+
+    /// Take the module's table out of the store and make it `scope_stack[0]`
+    /// of the running frame. Nothing to do outside a module frame.
+    pub(crate) fn check_out_module_scope(&mut self) {
+        if !self.module_scope {
+            return;
+        }
+        if let (Some(path), Some(slot)) = (&self.current_module_path, self.scope_stack.first_mut()) {
+            if let Some(module) = self.loaded_modules.get_mut(path) {
+                *slot = std::mem::take(&mut module.all_variables);
+            }
+        }
+    }
+
+    /// The index of the running frame's own first scope: 1 in a module frame,
+    /// where 0 is the module's table.
+    #[inline(always)]
+    pub(crate) fn frame_base(&self) -> usize {
+        self.module_scope as usize
+    }
+
+    /// Whether `name` is, in this frame, a variable of the module the frame
+    /// runs against — not a parameter or a local that hides one.
+    #[inline(always)]
+    pub(crate) fn is_module_state(&self, name: &str) -> bool {
+        self.module_scope
+            && self.scope_stack[0].contains_key(name)
+            && !self.scope_stack[1..].iter().any(|scope| scope.contains_key(name))
     }
 }
 
@@ -1271,7 +1330,7 @@ pub(crate) struct SavedCallState {
     mutable_vars_stack: Vec<HashSet<String>>,
     pub(crate) const_vars_stack: Vec<HashSet<String>>,
     pub(crate) import_aliases: ModuleAliases,
-    pub(crate) frame_module_vars: HashMap<String, Value>,
+    module_scope: bool,
     has_any_const: bool,
     loop_scope_depths: Vec<usize>,
     dead_variables: HashSet<String>,
@@ -1302,7 +1361,7 @@ impl Interpreter<std::io::Stdout> {
             loaded_modules: HashMap::new(),
             loading_modules: HashSet::new(),
             import_aliases: ModuleAliases::default(),
-            frame_module_vars: HashMap::new(),
+            module_scope: false,
             current_file: None,
             cur_stmt_line: 0,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -1320,7 +1379,6 @@ impl Interpreter<std::io::Stdout> {
             mut_vec_pool: Vec::new(),
             const_vec_pool: Vec::new(),
             arg_vec_pool: Vec::new(),
-            module_var_mentions: HashMap::new(),
             try_depth: 0,
             tui_depth: 0,
             headless: None,
@@ -1361,7 +1419,7 @@ impl<W: Write> Interpreter<W> {
             loaded_modules: HashMap::new(),
             loading_modules: HashSet::new(),
             import_aliases: ModuleAliases::default(),
-            frame_module_vars: HashMap::new(),
+            module_scope: false,
             current_file: None,
             cur_stmt_line: 0,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -1379,7 +1437,6 @@ impl<W: Write> Interpreter<W> {
             mut_vec_pool: Vec::new(),
             const_vec_pool: Vec::new(),
             arg_vec_pool: Vec::new(),
-            module_var_mentions: HashMap::new(),
             try_depth: 0,
             tui_depth: 0,
             headless: None,
@@ -1438,12 +1495,23 @@ impl<W: Write> Interpreter<W> {
             self.global_consts.remove(var_name);
         }
         // Remove from all scopes (search from innermost to outermost)
-        for scope in self.scope_stack.iter_mut().rev() {
+        let base = self.frame_base();
+        for scope in self.scope_stack[base..].iter_mut().rev() {
             if scope.remove(var_name).is_some() {
                 // Found and removed - mark as dead
                 self.dead_variables.insert(var_name.to_string());
                 return Ok(());
             }
+        }
+        // A module's variable is ended for THIS frame and stays in the module:
+        // what the frame used to destroy was its own copy, and the next call
+        // found the variable where it had always been. Kept as it was.
+        if base == 1
+            && self.scope_stack[0].contains_key(var_name)
+            && !self.dead_variables.contains(var_name)
+        {
+            self.dead_variables.insert(var_name.to_string());
+            return Ok(());
         }
         if self.dead_variables.contains(var_name) {
             return Err(RuntimeError::kinded(
@@ -1467,7 +1535,10 @@ impl<W: Write> Interpreter<W> {
         if self.is_const(name) {
             return;
         }
-        for scope in self.scope_stack.iter_mut().rev() {
+        // Never the module's table: a name that is dead for this body is not
+        // dead for the module.
+        let base = self.frame_base();
+        for scope in self.scope_stack[base..].iter_mut().rev() {
             if scope.remove(name).is_some() {
                 self.auto_dead_variables.insert(name.to_string());
                 return;
@@ -1537,7 +1608,7 @@ impl<W: Write> Interpreter<W> {
         self.functions.clear();
         self.dead_variables.clear();
         self.import_aliases = ModuleAliases::default();
-        self.frame_module_vars.clear();
+        self.module_scope = false;
         self.loading_modules.clear();
         self.loop_scope_depths.clear();
         self.has_any_const = false;
@@ -1910,8 +1981,8 @@ impl<W: Write> Interpreter<W> {
                     // MoveOrClone: if returning a bare identifier and not inside a try block
                     // (finally could reference the variable), move instead of clone — O(1).
                     // Names in move_guard_names are read again after the return —
-                    // output-param writeback and module-state write-back — so they
-                    // are cloned instead.
+                    // the output-param writeback — so they are cloned instead. A
+                    // module's variable is not in reach of `take_variable` at all.
                     if self.try_depth == 0 {
                         if let Expr::Identifier(ident) = expr.unwrap_group() {
                             if !self.move_guard_names.contains(&ident.name) {

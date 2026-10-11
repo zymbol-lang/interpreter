@@ -301,6 +301,12 @@ diff-based (only changed keys persist), same-module nested calls see the caller'
 values, and the caller's copies are refreshed on return (MEMORY_MODEL.md MM-2).
 Regression test: `zyquality/corpus/bugs/bug_mm2_module_state_helper.zy` (TW == VM).
 
+**Since v0.0.10 there is no write-back at all.** A module frame no longer gets copies: the
+module's variable table is the frame's outermost scope, moved out of the store while the
+frame runs and put back before it calls anything (ZYTW-010). What that changed for a
+program: a call that writes one cell of a large table costs the cell, not the table, and
+what a function wrote before it failed stays written, as in the other two engines.
+
 ### ~~L20 — `\ x` inside a function poisoned the caller's same-named variable~~ Fixed in v0.0.8
 
 The destroyed-names set was global, so `\ x` inside a callee made the caller's own `x`
