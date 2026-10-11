@@ -1543,6 +1543,19 @@ impl Compiler {
                         ctx.emit(Instruction::DestroyGlobal(gidx, nidx));
                     }
                 }
+                // A name that is module state is the module's, and so is its
+                // end (GLB-120, decided 2026-10-11): every function of the
+                // module finds it destroyed until one of them assigns it. It
+                // has no register — a parameter or a lambda's capture of that
+                // name does, and was ended above as the local it is — so this
+                // `\` used to emit nothing at all, and the next line read the
+                // value. The slot is marked at run time, like a file variable's.
+                if ctx.get_reg(name).is_err() && !ctx.params.contains(name) {
+                    if let Some(&gidx) = self.global_var_map.get(name) {
+                        let nidx = self.intern_string(name) as u16;
+                        ctx.emit(Instruction::DestroyGlobal(gidx, nidx));
+                    }
+                }
                 Ok(())
             }
             Statement::CliArgsCapture(cap) => {

@@ -769,6 +769,9 @@ pub struct Interpreter<W: Write> {
     /// `restore_call_state` takes it again. So whatever a call reaches — the
     /// same module, directly or through three others — finds it there.
     module_scope: bool,
+    /// The names of that module's state that are destroyed, moved in and out of
+    /// the store with its table (`LoadedModule::dead_variables`).
+    module_dead: HashSet<String>,
     /// Current file path (for resolving relative imports)
     current_file: Option<PathBuf>,
     /// Line of the statement now executing — see `execute_statement`.
@@ -1080,6 +1083,13 @@ impl<W: Write> Interpreter<W> {
                 return;
             }
         }
+        // Not in view anywhere. If it is a variable of the module that a `\`
+        // ended, assigning it gives it back to the MODULE — a local of that
+        // name would leave the module without its variable for good.
+        if !self.module_dead.is_empty() && self.module_dead.remove(name) {
+            self.scope_stack[0].insert(name.to_string(), value);
+            return;
+        }
         let at_file_level = at_depth_zero && self.scope_stack.len() == 1;
         if at_file_level {
             mirror_file_var(&mut self.file_vars, name, &value);
@@ -1290,6 +1300,7 @@ impl<W: Write> Interpreter<W> {
         if let (Some(path), Some(slot)) = (&self.current_module_path, self.scope_stack.first_mut()) {
             if let Some(module) = self.loaded_modules.get_mut(path) {
                 module.all_variables = std::mem::take(slot);
+                module.dead_variables = std::mem::take(&mut self.module_dead);
             }
         }
     }
@@ -1303,6 +1314,7 @@ impl<W: Write> Interpreter<W> {
         if let (Some(path), Some(slot)) = (&self.current_module_path, self.scope_stack.first_mut()) {
             if let Some(module) = self.loaded_modules.get_mut(path) {
                 *slot = std::mem::take(&mut module.all_variables);
+                self.module_dead = std::mem::take(&mut module.dead_variables);
             }
         }
     }
@@ -1312,6 +1324,15 @@ impl<W: Write> Interpreter<W> {
     #[inline(always)]
     pub(crate) fn frame_base(&self) -> usize {
         self.module_scope as usize
+    }
+
+    /// Whether `name` is a variable of the module that some `\` ended, with no
+    /// parameter or local of this frame in front of it.
+    #[inline(always)]
+    pub(crate) fn is_dead_module_state(&self, name: &str) -> bool {
+        !self.module_dead.is_empty()
+            && self.module_dead.contains(name)
+            && !self.scope_stack[1..].iter().any(|scope| scope.contains_key(name))
     }
 
     /// Whether `name` is, in this frame, a variable of the module the frame
@@ -1362,6 +1383,7 @@ impl Interpreter<std::io::Stdout> {
             loading_modules: HashSet::new(),
             import_aliases: ModuleAliases::default(),
             module_scope: false,
+            module_dead: HashSet::new(),
             current_file: None,
             cur_stmt_line: 0,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -1420,6 +1442,7 @@ impl<W: Write> Interpreter<W> {
             loading_modules: HashSet::new(),
             import_aliases: ModuleAliases::default(),
             module_scope: false,
+            module_dead: HashSet::new(),
             current_file: None,
             cur_stmt_line: 0,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -1503,15 +1526,25 @@ impl<W: Write> Interpreter<W> {
                 return Ok(());
             }
         }
-        // A module's variable is ended for THIS frame and stays in the module:
-        // what the frame used to destroy was its own copy, and the next call
-        // found the variable where it had always been. Kept as it was.
-        if base == 1
-            && self.scope_stack[0].contains_key(var_name)
-            && !self.dead_variables.contains(var_name)
-        {
-            self.dead_variables.insert(var_name.to_string());
-            return Ok(());
+        // A module's variable is ended for the MODULE (GLB-120, decided
+        // 2026-10-11): it leaves the table, and every function of the module
+        // finds it dead until one of them assigns it. A second `\` with no
+        // assignment in between is a use after the first.
+        if base == 1 {
+            if self.scope_stack[0].remove(var_name).is_some() {
+                self.module_dead.insert(var_name.to_string());
+                return Ok(());
+            }
+            if self.module_dead.contains(var_name) {
+                return Err(RuntimeError::kinded(
+                    "_",
+                    format!(
+                        "use after destruction: variable '{}' was destroyed after its last use",
+                        var_name
+                    ),
+                    *span,
+                ));
+            }
         }
         if self.dead_variables.contains(var_name) {
             return Err(RuntimeError::kinded(
@@ -1549,10 +1582,13 @@ impl<W: Write> Interpreter<W> {
     /// Check if a variable has been destroyed (use-after-free detection)
     fn check_variable_alive(&self, var_name: &str, span: &Span) -> Result<()> {
         // B8: short-circuit
-        if self.dead_variables.is_empty() && self.auto_dead_variables.is_empty() {
+        if self.dead_variables.is_empty()
+            && self.auto_dead_variables.is_empty()
+            && self.module_dead.is_empty()
+        {
             return Ok(());
         }
-        if self.dead_variables.contains(var_name) {
+        if self.dead_variables.contains(var_name) || self.is_dead_module_state(var_name) {
             return Err(RuntimeError::kinded(
                 "_",
                 format!(
@@ -1609,6 +1645,7 @@ impl<W: Write> Interpreter<W> {
         self.dead_variables.clear();
         self.import_aliases = ModuleAliases::default();
         self.module_scope = false;
+        self.module_dead.clear();
         self.loading_modules.clear();
         self.loop_scope_depths.clear();
         self.has_any_const = false;

@@ -1042,6 +1042,12 @@ as before.
 > program — if you ever see `internal: use after auto-destruction`, it is an
 > interpreter bug: please report it.
 
+> **A module's variable** follows the same rule, and it is the module's that
+> ends: after `\ c` in one function of a module, every function of that module
+> finds `c` destroyed, and assigning `c` — from any of them — gives it back to
+> the module. A function that reads state another one may destroy says what it
+> does about it: `mostrar() { !? { <~ c } :! { <~ "no hay c" } }` (v0.0.10).
+
 ### A Statement That Only Reads
 
 A statement that is nothing but a name reads the variable and throws the value
