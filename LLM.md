@@ -1,7 +1,10 @@
-# Zymbol for LLMs — v0.0.9
+# Zymbol for LLMs — v0.0.10
 
-Dense, executable-verified brief. Everything below was run through `zymbol 0.0.9` in
-both engines. Canonical sources: `GUIDE.md` (tutorial), `REFERENCE.md` (limits + full
+Dense, executable-verified brief. Every rule of § 1 and every bullet of § 12 stands
+behind a probe that runs in all three engines, and so do most sentences in between:
+`zyquality/docs/llm_verify.py` (`zyq suite --only llm`) runs them against the binary and
+fails when one stops holding, when a quoted sentence is edited away, or when a rule is
+added with nothing that runs. Last green against `zymbol 0.0.10`. Canonical sources: `GUIDE.md` (tutorial), `REFERENCE.md` (limits + full
 symbol table), `SYMBOLS.md` (why each mark has its shape), `AGENTIC.md` (what
 holds, and what does not, when the code is generated rather than written).
 
@@ -158,8 +161,9 @@ Both are checked statically: they need an enclosing loop, a label must resolve t
 
 Two warnings are normal here and neither is an error:
 
-- `ambiguous lifetime for 'i'` — emitted for **every** bare iterator name. Prefix it
-  (`@ _i:1..3`) when it is not needed after the loop; that silences it.
+- `ambiguous lifetime for 'i'` — emitted when the body **assigns to its own iterator**
+  (`@ i:1..3 { i = i + 1 }`): the loop and the body both write it, so a reader after the
+  loop cannot tell which value it sees. A bare iterator that is only read does not warn.
 - `range direction is decided at runtime` — emitted when a bound is not a literal
   (`1..MAX`): if the end turns out lower than the start the loop counts **down** instead
   of not running. Guard the empty case yourself.
@@ -199,6 +203,9 @@ the remainder**, taking the container's shape, or `##_` when nothing is left:
 #(name: n, age: y) = person // dictionary destructuring
 ```
 
+The mark is part of the pattern as it is of the literal: a bare `(name: n) = person` is
+refused, and `(a, b) = t` takes a tuple apart by position.
+
 Strings share the `$` operators, plus: `s$~~["l":"L"]` replace all, `s$~~["l":"L":1]` first N,
 `s$/ ','` split (char or substring), `s$* 3` repeat, `"x=" $++ n " y=" m` build.
 
@@ -212,6 +219,7 @@ double = x -> x * 2                 // lambda; captures scope BY VALUE at creati
 sum2   = (a, b) -> a + b
 thunk  = () -> 42
 block  = x -> { ? x > 0 { <~ "pos" }  <~ "neg" }
+effect = x -> { >> x ¶ }            // a block that ends without `<~` gives ##_, as a function does
 
 work(p~)  { p = p * 2 }             // '~'  working copy — caller untouched
 bump(b<~) { b = b + 100 }           // '<~' output parameter — writes back
@@ -315,8 +323,8 @@ before returning.
 ## 12. Safeguards for generated code
 
 Properties you can rely on when writing Zymbol you will not run yourself — each
-verified in all three engines. Full treatment, with the probes and the ten known
-gaps: `AGENTIC.md`.
+verified in all three engines. Full treatment, with the probes and the gaps that
+are still open: `AGENTIC.md`.
 
 - **Importing executes nothing.** A module body admits only imports, `#>`,
   literal-initialised bindings and function definitions; anything that computes
@@ -346,6 +354,11 @@ gaps: `AGENTIC.md`.
 - **Loud where models go wrong**: no coercion in `==`, no silent overflow, arity
   checked statically, an unmatched `??` aborts, an unread variable warns,
   `m[i][j]` is refused by name.
+- **A condition is a Bool and nothing else.** There is no truthiness anywhere:
+  `? x { }` with `x` an Int, a String or a collection is refused before running
+  when its type is known, and through a parameter it is a catchable `##Type` at run time —
+  before either block runs. The same holds for the loop specifier, `&&` `||` `!`,
+  a `$|` predicate and a `$^` comparator. Ask what is meant: `? xs$# > 0 { }`.
 
 Not guaranteed — do not assume these:
 
@@ -355,10 +368,6 @@ Not guaranteed — do not assume these:
   outside kills them.
 - **`check` does not catch everything it looks like it should**: use after `\`
   and a non-exhaustive `??` are runtime-only.
-- **`?` with a non-Bool condition is not specified and the three engines
-  disagree** (`? [1,2] {}` runs the block in `zyvm`/`zyjs`, skips it in `zytw`;
-  warning only, exit 0). Write an explicit comparison — the no-truthiness rule of
-  §6 is enforced for loop specifiers, not for `?`.
 
 ---
 
