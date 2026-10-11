@@ -4,10 +4,22 @@
 > `zymbol run` (tree-walker) and `zymbol run --vm` (register VM).
 > If a construct is not documented here, it may not be implemented.
 
-**Interpreter version**: v0.0.9
+**Interpreter version**: v0.0.10
 **Test coverage**: every annotated example below is executed by `zyquality/docs/guide_verify.py`.
 The language itself is graded on the corpus by `zyq suite`, where `zyquality/corpus.toml` — not a
 marker inside the file — says which engine may be judged on which file, and why not.
+
+**New in v0.0.10**: `##Kind("…")` builds an error value and `##Kind(m) =>` reads its message
+back ([§7](#error-patterns--kindm), [§16](#16-error-handling)); `##'expr` turns an Int code point
+into its Char ([§2](#2-data-types)); a subscript takes its own arguments, and `zymbol run --keys`
+tests a full-screen program without a terminal ([§3b](#testing-a-full-screen-program--zymbol-run---keys));
+a named function sees only its parameters ([§9](#function-scope)); an output parameter is the
+caller's variable, lent ([§9](#output-parameters-)); a condition is a Bool and nothing else
+([§6](#a-condition-is-a-bool)); a block lambda that ends without `<~` gives `##_`
+([§10](#block-lambda-explicit-return)); the dictionary pattern is written `#(…)` on both sides of
+`=` and in a loop head ([§11b](#dictionary-destructuring)); a named function can be a `??` pattern and a module
+alias is never a value ([§7](#ident-patterns)); `zymbol run --count` says what a program
+cost in exact units ([§1](#1-running-programs)); and `$^` is a stable sort.
 
 **New in v0.0.9**: `##_`, the Unit literal ([§5](#the-unit-value)); the dictionary gets a
 notation of its own, `#(…)`, and `#?` tells the four collections apart — `##]` `##)` `##(` `##[`
