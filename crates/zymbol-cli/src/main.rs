@@ -67,6 +67,15 @@ enum Commands {
         #[arg(long, value_name = "FILE")]
         keys: Option<PathBuf>,
 
+        /// After the program ends, print what it cost on stderr, in units that
+        /// do not depend on the machine: `count  steps=…  calls=…  allocs=…
+        /// bytes=…  copied=…`. Steps and calls are the engine's own work and
+        /// differ between `--vm` and the tree-walker; allocs and bytes are the
+        /// whole run, reading and compiling the program included; copied is the
+        /// elements duplicated because a collection being written was shared.
+        #[arg(long)]
+        count: bool,
+
         /// Arguments to pass to the script
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -151,11 +160,45 @@ enum Commands {
     },
 }
 
+/// Set by `zymbol run --count`.
+static COUNT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The system allocator, counting what it is asked for (`zymbol run --count`).
+///
+/// Two thread-local increments per request and nothing else: the counters have
+/// constant initializers and no destructors, so reading them here cannot
+/// allocate and cannot recurse.
+struct CountingAllocator;
+
+unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        zymbol_common::count::alloc(layout.size());
+        unsafe { std::alloc::System.alloc(layout) }
+    }
+    unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
+        zymbol_common::count::alloc(layout.size());
+        unsafe { std::alloc::System.alloc_zeroed(layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
+        // A growth is a request for the new size: that is what a `Vec` that
+        // doubles costs, whether or not the block could be extended in place.
+        zymbol_common::count::alloc(new_size);
+        unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { file, vm, tw, script, keep_temp, keys, args } => {
+        Commands::Run { file, vm, tw, script, keep_temp, keys, count, args } => {
+            COUNT.store(count, std::sync::atomic::Ordering::Relaxed);
             on_program_stack(move || run_file(file, args, vm, tw, script, keep_temp, keys))
         }
         Commands::Build { file, output, release } => build_file(file, output, release),
@@ -357,7 +400,14 @@ fn prepend_self_to_path() {
 /// that used to `exit(1)` now returns `Ok(1)` instead, so a caller holding a `TempDir` (or any
 /// other RAII guard) gets to run its `Drop` before the process actually exits.
 fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
-    run_program(path, opts, std::io::stdout(), &mut Report::terminal())
+    let before = zymbol_common::count::now();
+    let result = run_program(path, opts, std::io::stdout(), &mut Report::terminal());
+    // `--count`: on every way out, a failed run included — what a program cost
+    // before it failed is as much a fact as what it cost to finish.
+    if COUNT.load(std::sync::atomic::Ordering::Relaxed) {
+        eprintln!("{}", zymbol_common::count::now().since(&before).line());
+    }
+    result
 }
 
 /// The whole of `zymbol run`: read, analyse, run. `out` receives what the

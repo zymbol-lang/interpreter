@@ -1812,6 +1812,8 @@ impl<W: Write> VM<W> {
             self.cur_chunk = chunk_idx as u32;
             // Advance IP before executing (branches will override this)
             ip += 1;
+            // One instruction dispatched: the VM's unit of work (`--count`).
+            zymbol_common::count::step();
 
             // Use & patterns to copy Copy fields without cloning the instruction
             match instr {
@@ -2109,7 +2111,7 @@ impl<W: Write> VM<W> {
                     if dst == base_reg && matches!(rreg!(base_reg), Value::Array(_)) {
                         let items: Vec<Value> = item_regs.iter().map(|&ir| rreg!(ir).clone()).collect();
                         if let Value::Array(arr) = &mut self.value_stack[base + dst as usize] {
-                            Rc::make_mut(arr).extend(items);
+                            zymbol_common::count::make_mut(arr).extend(items);
                         }
                         continue;
                     }
@@ -2263,6 +2265,7 @@ impl<W: Write> VM<W> {
                     for &(_, caller_reg) in &wb {
                         put_reg(&mut self.value_stack[base + caller_reg as usize], Value::Unit);
                     }
+                    zymbol_common::count::call();
                     self.frame_stack.push(FrameInfo {
                         base: new_base as u32,
                         ip: 0,
@@ -2431,8 +2434,8 @@ impl<W: Write> VM<W> {
                 &Instruction::ArrayPush(arr_reg, val_reg) => {
                     let val = unsafe { self.value_stack.get_unchecked(base + val_reg as usize).clone() };
                     match unsafe { self.value_stack.get_unchecked_mut(base + arr_reg as usize) } {
-                        Value::Array(rc_arr) => Rc::make_mut(rc_arr).push(val),
-                        Value::Tuple(rc_tup) => Rc::make_mut(rc_tup).push(val),
+                        Value::Array(rc_arr) => zymbol_common::count::make_mut(rc_arr).push(val),
+                        Value::Tuple(rc_tup) => zymbol_common::count::make_mut(rc_tup).push(val),
                         Value::String(s) => {
                             // $+ on string: d $+ s → string concatenation
                             let mut buf = s.clone().try_into_string();
@@ -2609,7 +2612,7 @@ impl<W: Write> VM<W> {
                                 Value::Int(n) => n,
                                 other => raise!(VmError::TypeMsg(format!("array update index must be an integer, got {}", other.type_label()))),
                             };
-                            let arr = Rc::make_mut(rc_arr);
+                            let arr = zymbol_common::count::make_mut(rc_arr);
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
@@ -2618,7 +2621,7 @@ impl<W: Write> VM<W> {
                             arr[i as usize] = val;
                         }
                         Value::NamedTuple(rc_fields) => {
-                            let fields = Rc::make_mut(rc_fields);
+                            let fields = zymbol_common::count::make_mut(rc_fields);
                             match idx_val {
                                 // A positional WRITE corrupts data rather than
                                 // returning the wrong value: strictly worse than
@@ -2711,8 +2714,8 @@ impl<W: Write> VM<W> {
                     }
                     let i = i as usize;
                     match &mut self.value_stack[base + arr_reg as usize] {
-                        Value::Array(rc_arr) => { Rc::make_mut(rc_arr).remove(i); }
-                        Value::Tuple(rc_tup) => { Rc::make_mut(rc_tup).remove(i); }
+                        Value::Array(rc_arr) => { zymbol_common::count::make_mut(rc_arr).remove(i); }
+                        Value::Tuple(rc_tup) => { zymbol_common::count::make_mut(rc_tup).remove(i); }
                         slot => {
                             // A string, by the check above.
                             let mut chars: Vec<char> = match &*slot {
@@ -2766,7 +2769,7 @@ impl<W: Write> VM<W> {
                         // it, as in an array (COLLECTIONS.md; ZYVM-017).
                         Value::NamedTuple(mut rc_fields) => {
                             if let Some(pos) = rc_fields.iter().position(|(_, v)| v.equals(&val)) {
-                                Rc::make_mut(&mut rc_fields).remove(pos);
+                                zymbol_common::count::make_mut(&mut rc_fields).remove(pos);
                             }
                             self.value_stack[base + arr_reg as usize] = Value::NamedTuple(rc_fields);
                         }
@@ -3612,6 +3615,7 @@ impl<W: Write> VM<W> {
                     for &(_, caller_reg) in &wb {
                         put_reg(&mut self.value_stack[base + caller_reg as usize], Value::Unit);
                     }
+                    zymbol_common::count::call();
                     self.frame_stack.push(FrameInfo {
                         base: new_base as u32,
                         ip: 0,
@@ -5006,7 +5010,8 @@ impl<W: Write> VM<W> {
             }
         }
         self.forget_destroyed_from(new_base);
-        self.frame_stack.push(FrameInfo {
+        zymbol_common::count::call();
+                    self.frame_stack.push(FrameInfo {
             base: new_base as u32,
             ip: 0,
             chunk_idx: func_idx,
@@ -5242,11 +5247,11 @@ fn vm_deep_set_in(col: &mut Value, path: &[Value], new_val: Value, single: bool)
     match col {
         Value::Array(rc) => {
             let i = resolve(int_step_of(step, single, "array")?, rc.len(), "array")?;
-            vm_deep_set_in(&mut Rc::make_mut(rc)[i], rest, new_val, false)
+            vm_deep_set_in(&mut zymbol_common::count::make_mut(rc)[i], rest, new_val, false)
         }
         Value::Tuple(rc) => {
             let i = resolve(int_step_of(step, single, "tuple")?, rc.len(), "tuple")?;
-            vm_deep_set_in(&mut Rc::make_mut(rc)[i], rest, new_val, false)
+            vm_deep_set_in(&mut zymbol_common::count::make_mut(rc)[i], rest, new_val, false)
         }
         // A string IS an array of characters, and is addressed like one
         // (decided 2026-09-22). Only a char or a string may be written, the
@@ -5277,7 +5282,7 @@ fn vm_deep_set_in(col: &mut Value, path: &[Value], new_val: Value, single: bool)
         Value::NamedTuple(rc) => {
             match step {
                 Value::String(name) => match rc.iter().position(|(k, _)| k == name.as_str()) {
-                    Some(i) => vm_deep_set_in(&mut Rc::make_mut(rc)[i].1, rest, new_val, false),
+                    Some(i) => vm_deep_set_in(&mut zymbol_common::count::make_mut(rc)[i].1, rest, new_val, false),
                     // A key that is not there gets ADDED, as it does in Python.
                     // The array refuses the same move (decision 13) and the two
                     // are not inconsistent: an array is addressed by POSITION,
@@ -5291,7 +5296,7 @@ fn vm_deep_set_in(col: &mut Value, path: &[Value], new_val: Value, single: bool)
                     None => {
                         let mut fresh = Value::Unit;
                         vm_deep_set_in(&mut fresh, rest, new_val, false)?;
-                        Rc::make_mut(rc).push((name.as_str().to_string(), fresh));
+                        zymbol_common::count::make_mut(rc).push((name.as_str().to_string(), fresh));
                         Ok(())
                     }
                 },

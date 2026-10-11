@@ -10,6 +10,7 @@
 //! - Locating the POSIX shell that `<\ \>` runs through (`shell`)
 //! - Which `##` family an error belongs to, read from its message (`errkind`)
 
+pub mod count;
 pub mod errkind;
 pub mod num;
 pub mod shell;
