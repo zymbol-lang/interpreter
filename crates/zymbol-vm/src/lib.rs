@@ -2216,6 +2216,16 @@ impl<W: Write> VM<W> {
                 &Instruction::Jump(label)          => { ip = label as usize; }
                 &Instruction::JumpIf(cond, label)    => { if  rreg!(cond).is_truthy() { ip = label as usize; } }
                 &Instruction::JumpIfNot(cond, label) => { if !rreg!(cond).is_truthy() { ip = label as usize; } }
+                // `?` and `_?`: a Bool and nothing else (GLB-121). A wrong
+                // TYPE is a `##Type` (D1).
+                &Instruction::JumpIfNotCond(cond, label) => {
+                    match rreg!(cond) {
+                        Value::Bool(true)  => {}
+                        Value::Bool(false) => { ip = label as usize; }
+                        other => raise!(VmError::TypeMsg(format!(
+                            "a condition must be a Bool, got {}", other.type_name()))),
+                    }
+                }
 
                 // ── Functions ───────────────────────────────────────────────
                 Instruction::Call(dst, func_idx, arg_regs) => {

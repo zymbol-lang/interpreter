@@ -1601,10 +1601,14 @@ impl TypeChecker {
 
             Statement::If(if_stmt) => {
                 let cond_type = self.infer_expr(&if_stmt.condition);
+                // A condition is a Bool and nothing else (GLB-121). It was a
+                // warning while the three engines each took their own branch
+                // under it; where the type is known the program is refused,
+                // and where it is not the engines raise a `##Type`.
                 if !matches!(cond_type, ZymbolType::Bool | ZymbolType::Any | ZymbolType::Unknown) {
-                    self.warnings.push(
-                        Diagnostic::warning(format!(
-                            "if condition should be Bool, got {}",
+                    self.errors.push(
+                        Diagnostic::error(format!(
+                            "a condition must be a Bool, got {}",
                             cond_type.name()
                         ))
                         .with_span(if_stmt.condition.span())
@@ -1628,9 +1632,9 @@ impl TypeChecker {
                 for branch in &if_stmt.else_if_branches {
                     let branch_cond_type = self.infer_expr(&branch.condition);
                     if !matches!(branch_cond_type, ZymbolType::Bool | ZymbolType::Any | ZymbolType::Unknown) {
-                        self.warnings.push(
-                            Diagnostic::warning(format!(
-                                "else-if condition should be Bool, got {}",
+                        self.errors.push(
+                            Diagnostic::error(format!(
+                                "a condition must be a Bool, got {}",
                                 branch_cond_type.name()
                             ))
                             .with_span(branch.condition.span())

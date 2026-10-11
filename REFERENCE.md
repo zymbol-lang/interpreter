@@ -1335,6 +1335,33 @@ body of the module, and `LoadGlobal` / `StoreGlobal` already checked and revived
 engine: `Env.set` on the module's scope, and `isModuleState`. Held by
 `lifetime/destroy-module-state` and `corpus/modules_scope/destruir_estado.zy`.
 
+### L51 — a condition is a Bool and nothing else — **decided 2026-10-11**
+
+`? x { … }` with `x` not a Bool was a warning, and under that one warning the three
+engines each took their own branch (GLB-121). Nine of thirteen kinds of value diverged,
+all three exiting 0:
+
+| `x` | tree-walker | register VM | browser |
+|---|---|---|---|
+| `5`, `"a"` | then | then | then |
+| `0`, `##_` | else | else | else |
+| `[1,2]`, `[]`, `1.5`, `'c'`, `(1,2)`, `#()`, `#(a: 1)` | else | **then** | **then** |
+| `0.0`, `""` | else | **then** | else |
+
+There is no truthiness, and no table was chosen. It is the rule already enforced for the
+loop specifier (v0.0.9), for `&&` `||` `!`, for a `$|` predicate and for a `$^`
+comparator; `?` was the surface nobody had closed.
+
+| | |
+|---|---|
+| the type is known to the analyser | refused before running: `a condition must be a Bool, got [Int]` |
+| the value arrives through a parameter | a run-time error of kind `##Type`, at the line of the statement, before either block runs |
+| a `_?` | the same rule, and it is asked only when it is reached |
+
+```zymbol
+? xs$# > 0 { … }       // ask what is meant
+```
+
 ---
 
 ## 20b. Error Taxonomy

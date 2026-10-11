@@ -5,6 +5,10 @@
 > `zyvm`, `zyjs` — unless a line says otherwise. It describes what the engines
 > do; it does not decide anything.
 >
+> **Not re-measured as a whole against `zymbol 0.0.10`.** Two rows of § 12 were
+> probed on 2026-10-11: G4 still stands as written, and G10 was closed that day.
+> The other five open rows (G1, G2, G3, G5, G8) carry their 2026-09 measurement.
+>
 > **The rules it reports live in `zymbol-design/PREMISES.md`**, by id, and each
 > section below names the ones it is measuring. Where this document and a
 > premise disagree, this document is what is wrong. It was written the other way
@@ -294,9 +298,21 @@ indistinguishable from one nobody can justify.
 | ~~G7~~ | ~~Module state is shared mutable global memory.~~ **Withdrawn 2026-09-12** — measured, not a gap: it is the intended design (a module owns its environment), and it is fenced. A module's mutable bindings cannot be exported (`E005`), so the state is reachable only through that module's own functions. Identity by file path means one environment per module, which is what "self-contained" requires. The number is not reused. | withdrawn |
 | G8 | **No reproducibility.** `std/random` seeds from the system clock into a thread-local cell, with no seed object exposed to Zymbol. Applications that need a reproducible run (zy-GO's benchmark) implement their own LCG threaded through a `<~` parameter. | open |
 | ~~G9~~ | **Superseded 2026-09-12 by `MEM-2`**, decided and held by 13 cells, four of them red then; implemented 2026-09-13, and all of them green since. Original text: a named function reads the file's top-level names it does not declare — by value, at call time, and only names declared lexically before it. `check` says nothing. Harmless as a mutation channel (the copy is one-way), but it makes a function non-relocatable: the same body stops compiling once moved into a module, which is what a refactor does. | closed 2026-09-13 |
-| G10 | **`?` with a non-Bool condition diverges across all three engines**, with only a warning — and in `zyjs` an array condition warns not at all. Not covered by the corpus. See below. | open |
+| ~~G10~~ | **Closed 2026-10-11 by `GLB-121`** — decided by the author and implemented the same day: a condition is a Bool and nothing else, refused statically where the type is known and a `##Type` at run time where it is not. Held by `axes/condition.toml` (73 cells). Original text: `?` with a non-Bool condition diverges across all three engines, with only a warning. The measurement stays below, widened to thirteen kinds of value. | closed |
 
-### G10 in detail
+### G10 in detail — closed 2026-10-11
+
+> **This section is history.** The gap stood for a month with no finding and no
+> cell — `zyddt findings` reported nothing open the whole time — and was decided
+> on 2026-10-11 (`GLB-121`): there is no truthiness, in `?` as everywhere else.
+> All three engines now refuse every row of the table below that is not a Bool.
+> Re-measured that day over thirteen kinds of value before the fix: nine
+> diverged, not four of seven.
+>
+> One more turn of the mechanism this section describes: the v0.0.10 release
+> plan, drafted that same day, probed `x = 5`, saw the three engines agree, and
+> recorded that the divergence no longer existed. The sweep of types undid it
+> an hour later. That is `DM-05` again, exactly.
 
 `? x { … } _ { … }` with `x` not a Bool. The loop specifier rule ("no
 truthiness") is enforced; the `?` condition is not, and the three engines

@@ -1397,6 +1397,43 @@ x = 7
 
 `{ }` braces are **required** even for single-statement bodies.
 
+### A condition is a Bool
+
+The condition of `?` and of each `_?` is a Bool, and nothing else is read as one.
+There is no truthiness in Zymbol: an Int is not true for being different from 0,
+a String is not true for having characters, a collection is not true for having
+elements. It is the rule the loop specifier, `&&` `||` `!`, a `$|` predicate and a
+`$^` comparator already followed.
+
+```zymbol
+xs = [1, 2]
+
+? xs$# > 0 { >> "has elements" ¶ }     // → has elements
+
+vacio(v) {
+    ? v { <~ "si" }
+    <~ "no"
+}
+
+>> vacio(#1) ¶                         // → si
+
+!? {
+    >> vacio(xs) ¶
+} :! ##Type {
+    >> "not a Bool" ¶                  // → not a Bool
+}
+```
+
+Where the type is known the program is refused before it runs — `? xs { … }`
+written directly is `error: a condition must be a Bool, got [Int]`. Where it is
+not, as through the parameter above, it is a `##Type` error at run time, raised
+before either block runs.
+
+> Until v0.0.10 this was a warning and each engine then chose a branch by rules
+> of its own: with `xs = [1, 2]` the tree-walker ran the `_` block and the VM and
+> the browser engine ran the `?` block, all three exiting 0. Nine of the thirteen
+> kinds of value diverged that way.
+
 ### Code that cannot run
 
 Three shapes are warned about in every engine, on `run` and on `check`, because they

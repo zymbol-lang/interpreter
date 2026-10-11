@@ -120,6 +120,11 @@ pub enum Instruction {
     Jump(Label),
     JumpIf(Reg, Label),
     JumpIfNot(Reg, Label),
+    /// The jump of `?` and `_?`: taken on `#0`, fallen through on `#1`, and a
+    /// `##Type` error on anything else. There is no truthiness (GLB-121):
+    /// `JumpIfNot` read an Array as true where the tree-walker read it as
+    /// false, and neither is an answer the language gives.
+    JumpIfNotCond(Reg, Label),
 
     // ── Functions ─────────────────────────────────────────────────────────
     Call(Reg, FuncIdx, Vec<Reg>),
@@ -276,8 +281,8 @@ pub enum Instruction {
     ///
     /// ZYVM-001: the short-circuit reads the left operand through truthiness,
     /// so `0 && #1` answered `#0` and never reached `And` to be refused. The
-    /// jump cannot do the checking itself — `? 7 { … }` compiles to the same
-    /// JumpIfNot and is a warning, not an error.
+    /// jump cannot do the checking itself — it is the one loops and `??` share.
+    /// (`? 7 { … }` has had a jump of its own, `JumpIfNotCond`, since GLB-121.)
     RequireBool(Reg, bool),
 
     // ── Pattern match ─────────────────────────────────────────────────────
