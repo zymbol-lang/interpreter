@@ -475,7 +475,7 @@ impl<W: Write> Interpreter<W> {
         if operands.iter().all(|e| plain_operand(e)) {
             return false;
         }
-        let shared = self.frame_module_vars.contains_key(name);
+        let shared = self.is_module_state(name);
         operands.iter().any(|e| zymbol_semantic::operand_may_write(e, name, shared))
     }
 
