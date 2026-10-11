@@ -1377,6 +1377,28 @@ xs$> (x -> { >> x ¶ })         // a callback called for what it does
 The alternative — an error everywhere — would have made a lambda stricter than a named
 function and every callback end in `<~ ##_`.
 
+### L53 — the dictionary pattern is written `#(…)` — **decided 2026-10-11**
+
+The literal `(a: 1)` has been refused since v0.0.9. The **pattern** on the other side
+of `=` was not migrated: `(name: n, age: y) = person` ran in all three engines for a
+release (GLB-122). It is refused, with the literal's reason — two spellings of one thing
+is what the mark was introduced to end.
+
+```zymbol
+#(name: n, age: y) = person          // the pattern
+@ #(k: a, v: b):filas { … }          // and in a loop head
+(a, b) = t                           // a tuple, by position
+```
+
+The loop head needed more than a refusal. The Rust parser accepted the **bare** pattern
+there and not the marked one, and the browser engine accepted neither, so refusing the
+bare one alone would have left the form with no spelling. The marked one is accepted in
+all three.
+
+And the mark needs its pairs (GLB-123): `#(a, b) = (1, 2)` — a positional pattern under the
+dictionary's mark — ran in the two Rust engines and was refused by the browser engine. It is
+refused in all three: `a dictionary pattern takes` `key: name` `pairs`.
+
 ---
 
 ## 20b. Error Taxonomy

@@ -99,7 +99,12 @@ impl Parser {
         // `@ (` is already taken: `@ (n + 1) { }` is a valid count loop. The
         // disambiguator is the `:` after the `)`, which is the same kind of scan
         // `is_tuple_destructure` already does at statement level.
-        if matches!(self.peek().kind, TokenKind::LParen | TokenKind::LBracket)
+        //
+        // `@ #(k: a, v: b):filas` is the dictionary pattern, written as it is
+        // on the left of `=`. Until GLB-122 the bare `(k: a, v: b)` was what
+        // this head accepted and `#(` was not: refusing the one without
+        // admitting the other would have removed the form, not relocated it.
+        if matches!(self.peek().kind, TokenKind::LParen | TokenKind::LBracket | TokenKind::HashLParen)
             && self.is_loop_pattern()
         {
             let pattern = if matches!(self.peek().kind, TokenKind::LBracket) {
