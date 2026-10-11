@@ -1362,6 +1362,21 @@ comparator; `?` was the surface nobody had closed.
 ? xs$# > 0 { … }       // ask what is meant
 ```
 
+### L52 — a block lambda that ends without `<~` gives `##_` — **decided 2026-10-11**
+
+The tree-walker refused it (`block lambda must use <~ to return value`) where the
+register VM and the browser engine gave `##_` (ZYTW-015). It gives `##_` in all three, as
+a named function that ends without `<~` always has:
+
+```zymbol
+avisa = x -> { >> "visto " x ¶ }
+avisa(1)                       // the effect, and the program goes on
+xs$> (x -> { >> x ¶ })         // a callback called for what it does
+```
+
+The alternative — an error everywhere — would have made a lambda stricter than a named
+function and every callback end in `<~ ##_`.
+
 ---
 
 ## 20b. Error Taxonomy
