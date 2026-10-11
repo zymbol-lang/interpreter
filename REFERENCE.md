@@ -1293,6 +1293,48 @@ by calling a lambda that lives in one — so the tree-walker mirrors only callab
 gives a slot only to the names a function body mentions. A top-level assignment costs a
 quarter less in the tree-walker and a tenth less in the VM for it.
 
+### L50 — `\ name` on a module's variable ends it for the module — **decided 2026-10-11**
+
+A module's variable is shared by the module's functions and outlives every call, so `\`
+written in one of them had three answers, one per engine: the tree-walker ended the name
+for the one frame that ran the `\`, the register VM did nothing at all — the next line
+read the value — and the browser engine ended it for the module and never gave it back,
+because the next assignment defined a local.
+
+```zymbol
+# caja {
+    #> { vaciar, llenar, mostrar }
+    c = "inicio"
+
+    vaciar() { \ c }
+    llenar(x) { c = x }
+    mostrar() {
+        !? { <~ c } :! { <~ "no hay c" }
+    }
+}
+```
+
+It is MEM-8, applied to the one place no engine applied it whole (GLB-120):
+
+| | |
+|---|---|
+| after `vaciar()`, any function of the module reads `c` | a run-time error, `use after destruction`, of kind `##_` — a `!?` catches it |
+| however it is read | alone, in `"{c}"`, `c$#`, `c[1]`, as an argument, `c += 1`, an edit in place, a loop over it |
+| any function of the module assigns `c` | the **module** has it again — not a local of that function |
+| a second `\ c` with no assignment in between | the same error |
+| a `\ c` in a branch that did not run | ended nothing |
+| a parameter, or a lambda's copy, called `c` | its own: ending it does not touch the module's |
+
+Nothing in the language makes a reader handle the error: a function that reads state
+another one may destroy either catches it, as `mostrar` does, or stops the program.
+
+**Where it lives.** Tree-walker: `LoadedModule::dead_variables`, moved with the module's
+table into the frame (`module_dead`); `destroy_variable`, `check_variable_alive` and the
+last branch of `set_variable`. VM: `DestroyGlobal` is emitted for module state from any
+body of the module, and `LoadGlobal` / `StoreGlobal` already checked and revived. Browser
+engine: `Env.set` on the module's scope, and `isModuleState`. Held by
+`lifetime/destroy-module-state` and `corpus/modules_scope/destruir_estado.zy`.
+
 ---
 
 ## 20b. Error Taxonomy

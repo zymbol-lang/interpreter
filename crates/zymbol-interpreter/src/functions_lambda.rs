@@ -573,12 +573,14 @@ impl<W: Write> Interpreter<W> {
                     // names: it is this frame's outermost scope until the frame
                     // ends or calls something (see `Interpreter::module_scope`).
                     std::mem::take(&mut module.all_variables),
+                    std::mem::take(&mut module.dead_variables),
                     module.const_names.clone(),
                     module.import_aliases.clone(),
                     want_functions.then(|| module.all_functions.clone()),
                 )
             });
-            if let Some((vars, const_names, import_aliases, all_functions)) = prepared {
+            if let Some((vars, dead, const_names, import_aliases, all_functions)) = prepared {
+                self.module_dead = dead;
                 // [the module's table, the frame's own scope]. Parameters and
                 // locals go in the second, so a parameter called like one of
                 // the module's variables hides it and is never mistaken for it
