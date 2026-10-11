@@ -143,6 +143,9 @@ enum Receiver {
     State(u16),
 }
 
+/// What `ZYMBOL_POISON_TEMPS` leaves in a temporary whose statement ended.
+const POISON: i64 = 5_333_666_999;
+
 struct FunctionCtx {
     /// Variable name → register index
     register_map: HashMap<String, Reg>,
@@ -150,6 +153,23 @@ struct FunctionCtx {
     reg_types: Vec<StaticType>,
     /// Next free register index
     next_reg: u16,
+    /// Temporaries handed out to the statements being compiled and not yet
+    /// given back, outermost statement first. A statement owns the ones from
+    /// its own mark on (`compile_stmt`), and returns them when it ends.
+    live_temps: Vec<Reg>,
+    /// Temporaries whose statement has ended: `alloc_temp` hands these out
+    /// before it takes a new register. Until 2026-10-10 it only ever advanced
+    /// `next_reg`, so a frame held a register for every temporary its body had
+    /// ever asked for, and each call prepared and tore down all of them — a
+    /// function with 64 statements in a branch that never ran cost 2.8 times
+    /// the same function with one (ZYVM-010).
+    free_temps: Vec<Reg>,
+    /// `ZYMBOL_POISON_TEMPS` is set: a temporary is overwritten with a value
+    /// no program computes when its statement ends. Reusing a register is
+    /// only sound if nothing reads it after that point and nothing counts on
+    /// finding Unit in one it did not write; both show as this value in the
+    /// output, where the same mistake without it shows as a plausible answer.
+    poison_temps: bool,
     /// Emitted instructions
     instructions: Vec<Instruction>,
     /// Stack of loop contexts (innermost last)
@@ -203,6 +223,9 @@ impl FunctionCtx {
             destroyable: HashSet::new(),
             reg_types: Vec::new(),
             next_reg: 0,
+            live_temps: Vec::new(),
+            free_temps: Vec::new(),
+            poison_temps: std::env::var_os("ZYMBOL_POISON_TEMPS").is_some(),
             instructions: Vec::new(),
             src: Vec::new(),
             cur_src: SrcPos::default(),
@@ -240,13 +263,54 @@ impl FunctionCtx {
     }
 
     /// Allocate an anonymous temporary register (not bound to any variable).
+    ///
+    /// It belongs to the statement being compiled and is reused once that
+    /// statement ends, so it holds whatever its last user left: a temporary is
+    /// written before it is read, always. One that has to outlive its statement
+    /// is not a temporary — bind it with `alloc_reg`.
     fn alloc_temp(&mut self) -> Result<Reg, CompileError> {
+        let r = match self.free_temps.pop() {
+            // What the previous user was known to hold says nothing about the
+            // next one: a stale `String` here chose `StrLen` for an array.
+            Some(r) => { self.set_reg_type(r, StaticType::Unknown); r }
+            None => self.fresh_reg()?,
+        };
+        self.live_temps.push(r);
+        Ok(r)
+    }
+
+    /// Two temporaries at `r` and `r + 1`, for the instructions that take one
+    /// register and read the next (`ArraySlice`, `NavRangeCheck`…). Never from
+    /// the pool: two registers given back separately are not neighbours.
+    fn alloc_temp_pair(&mut self) -> Result<(Reg, Reg), CompileError> {
+        let (lo, hi) = (self.fresh_reg()?, self.fresh_reg()?);
+        self.live_temps.extend([lo, hi]);
+        Ok((lo, hi))
+    }
+
+    fn fresh_reg(&mut self) -> Result<Reg, CompileError> {
         let r = self.next_reg;
         if r == u16::MAX {
             return Err(CompileError::TooManyRegisters(self.name.clone()));
         }
         self.next_reg += 1;
         Ok(r)
+    }
+
+    /// The statement that began when `live_temps` was `mark` long has ended:
+    /// its temporaries can be handed out again. A register some name is bound
+    /// to is skipped — it is a variable now, whatever allocated it.
+    fn release_temps(&mut self, mark: usize) {
+        let named: HashSet<Reg> = self.register_map.values().copied().collect();
+        for r in self.live_temps.split_off(mark) {
+            if named.contains(&r) {
+                continue;
+            }
+            if self.poison_temps {
+                self.emit(Instruction::LoadInt(r, POISON));
+            }
+            self.free_temps.push(r);
+        }
     }
 
     /// Look up which register holds a variable.
@@ -1264,9 +1328,11 @@ impl Compiler {
         let written = zymbol_semantic::names_written_through_output(stmt);
         let saved = std::mem::replace(&mut ctx.pinned, written);
         let saved_temps = std::mem::take(&mut ctx.state_temps);
+        let mark = ctx.live_temps.len();
         let out = self.compile_stmt_inner(stmt, ctx);
         ctx.pinned = saved;
         ctx.state_temps = saved_temps;
+        ctx.release_temps(mark);
         out
     }
 
@@ -1284,7 +1350,14 @@ impl Compiler {
         match stmt {
             Statement::Assignment(a) => {
                 // Hot/pre_hot assignment (x° or °x): pre-initialize to neutral element if variable is new
-                if (a.hot || a.pre_hot) && ctx.get_reg(&a.name).is_err() {
+                // A name that is module state stays module state, hot mark or
+                // not (GLB-119): `n° = n + i` gave the module's `n` a register
+                // of its own, initialised to the neutral element, and the
+                // module's `n` was then overwritten with what that one summed
+                // — 3 where the other two engines answer 16 (ZYVM-020).
+                let module_state = self.global_var_map.contains_key(&a.name)
+                    && !ctx.params.contains(&a.name);
+                if (a.hot || a.pre_hot) && ctx.get_reg(&a.name).is_err() && !module_state {
                     let neutral_reg = ctx.alloc_reg(&a.name)?;
                     let neutral = hot_neutral_instr(&a.value, &a.name, neutral_reg);
                     ctx.emit(neutral);
@@ -1384,9 +1457,7 @@ impl Compiler {
                 let dst = if let Ok(r) = ctx.get_reg(&input.variable) {
                     r
                 } else {
-                    let r = ctx.alloc_temp()?;
-                    ctx.register_map.insert(input.variable.clone(), r);
-                    r
+                    ctx.alloc_reg(&input.variable)?
                 };
 
                 let prompt_reg = match &input.prompt {
@@ -1496,9 +1567,7 @@ impl Compiler {
                 let dst = if let Ok(r) = ctx.get_reg(&ki.variable) {
                     r
                 } else {
-                    let r = ctx.alloc_temp()?;
-                    ctx.register_map.insert(ki.variable.clone(), r);
-                    r
+                    ctx.alloc_reg(&ki.variable)?
                 };
                 ctx.emit(Instruction::ReadKey(dst, ki.blocking));
                 Ok(())
@@ -2892,8 +2961,8 @@ impl Compiler {
                 let r_start_tmp = self.compile_expr(&range_step.index, ctx)?;
                 let r_end_tmp   = self.compile_expr(range_step.range_end.as_ref().unwrap(), ctx)?;
 
-                let r_i    = ctx.alloc_temp()?;
-                let r_end  = ctx.alloc_temp()?;
+                // `NavRangeCheck(r_i)` reads `r_i + 1` for the end.
+                let (r_i, r_end) = ctx.alloc_temp_pair()?;
                 let r_cmp  = ctx.alloc_temp()?;
                 let r_step = ctx.alloc_temp()?;
                 let r_zero = ctx.alloc_temp()?;
@@ -4397,8 +4466,7 @@ impl Compiler {
         let r_coll = self.compile_expr(&cs.collection, ctx)?;
         // Pre-allocate both bounds consecutively BEFORE any compile_expr calls, so
         // r_hi == r_lo + 1 is always guaranteed (VM reads lo_reg and lo_reg+1).
-        let r_lo = ctx.alloc_temp()?;
-        let r_hi = ctx.alloc_temp()?; // = r_lo + 1 guaranteed
+        let (r_lo, r_hi) = ctx.alloc_temp_pair()?; // r_hi == r_lo + 1
 
         // Fill r_lo with start value
         if let Some(start) = &cs.start {
@@ -4483,8 +4551,7 @@ impl Compiler {
         let r_coll = self.compile_expr(&cr.collection, ctx)?;
         // Pre-allocate both bounds consecutively BEFORE any compile_expr calls, so
         // r_hi == r_lo + 1 is always guaranteed (VM reads lo_reg and lo_reg+1).
-        let r_lo = ctx.alloc_temp()?;
-        let r_hi = ctx.alloc_temp()?; // = r_lo + 1 guaranteed
+        let (r_lo, r_hi) = ctx.alloc_temp_pair()?; // r_hi == r_lo + 1
 
         // Fill r_lo with start value
         if let Some(start) = &cr.start {
@@ -4608,7 +4675,37 @@ impl Compiler {
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
         // Collect free variables (variables used in the body that come from the enclosing scope)
-        let free_vars = collect_free_vars(&lam.body, &lam.params, ctx);
+        // A name that is module state has no register to be found by (GLB-119),
+        // so it was never a free variable: the body loaded it from the module's
+        // slot when it RAN. `f = k -> t[k]  t[1]$~ 500  <~ f(1)` answered 500
+        // where the same lines over a local answer 5, and where the other two
+        // engines answer 5 (ZYVM-021, decided 2026-10-10: a lambda captures the
+        // module's state as it captures anything else). They are given a
+        // register for the length of the search, and the ones the body names
+        // are captured by value below.
+        let state_names: Vec<String> = self.global_var_map.keys()
+            .filter(|n| !ctx.params.contains(*n)
+                && !ctx.register_map.contains_key(*n)
+                && !lam.params.contains(*n))
+            .cloned()
+            .collect();
+        for name in &state_names {
+            ctx.register_map.insert(name.clone(), Reg::MAX);
+        }
+        let mut free_vars = collect_free_vars(&lam.body, &lam.params, ctx);
+        for name in &state_names {
+            ctx.register_map.remove(name);
+        }
+        // One the body assigns before it reads is not free, and is the
+        // lambda's own all the same: a lambda writes only the names it declares.
+        if let LambdaBody::Block(block) = &lam.body {
+            let mentioned = zymbol_semantic::mentioned_names(block);
+            for name in &state_names {
+                if mentioned.contains(name) && !free_vars.contains(name) {
+                    free_vars.push(name.clone());
+                }
+            }
+        }
 
         let lambda_name = format!("<lambda#{}>", self.functions.len());
         let func_idx = self.functions.len() as FuncIdx;
@@ -4628,6 +4725,11 @@ impl Compiler {
         // Upvalues occupy registers [num_params..num_params+k) in the lambda's chunk
         for fv in &free_vars {
             lambda_ctx.alloc_reg(fv)?;
+            // Inside the lambda the captured value is the lambda's own, like a
+            // parameter: reads and writes go to its register, not to the slot.
+            if state_names.contains(fv) {
+                lambda_ctx.params.insert(fv.clone());
+            }
         }
 
         match &lam.body {
@@ -4651,9 +4753,17 @@ impl Compiler {
             ctx.emit(Instruction::MakeLambda(dst, func_idx));
         } else {
             // Capture the registers from the caller's frame
-            let captured: Vec<Reg> = free_vars.iter()
-                .map(|v| ctx.get_reg(v))
-                .collect::<Result<Vec<_>, _>>()?;
+            let mut captured: Vec<Reg> = Vec::with_capacity(free_vars.len());
+            for v in &free_vars {
+                captured.push(match self.global_var_map.get(v).copied() {
+                    Some(slot) if state_names.contains(v) => {
+                        let r = ctx.alloc_temp()?;
+                        ctx.emit(Instruction::LoadGlobal(r, slot));
+                        r
+                    }
+                    _ => ctx.get_reg(v)?,
+                });
+            }
             ctx.emit(Instruction::MakeClosure(dst, func_idx, captured));
         }
         Ok(dst)
