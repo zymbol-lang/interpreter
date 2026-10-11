@@ -342,11 +342,17 @@ impl FunctionCtx {
         self.emit(Instruction::JumpIfNot(cond, 0))
     }
 
+    /// The jump of a `?` / `_?` condition, which refuses what is not a Bool.
+    fn emit_jump_cond_placeholder(&mut self, cond: Reg) -> usize {
+        self.emit(Instruction::JumpIfNotCond(cond, 0))
+    }
+
     fn patch_jump(&mut self, pos: usize, target: Label) {
         match &mut self.instructions[pos] {
             Instruction::Jump(lbl) => *lbl = target,
             Instruction::JumpIf(_, lbl) => *lbl = target,
             Instruction::JumpIfNot(_, lbl) => *lbl = target,
+            Instruction::JumpIfNotCond(_, lbl) => *lbl = target,
             Instruction::MatchStr(_, _, lbl) => *lbl = target,
             Instruction::MatchInt(_, _, lbl) => *lbl = target,
             Instruction::MatchBool(_, _, lbl) => *lbl = target,
@@ -2071,7 +2077,7 @@ impl Compiler {
 
         // ── Primary branch ──
         let cond_reg = self.compile_expr(&if_stmt.condition, ctx)?;
-        let skip_then = ctx.emit_jump_if_not_placeholder(cond_reg);
+        let skip_then = ctx.emit_jump_cond_placeholder(cond_reg);
         let saved = ctx.save_scope();
         self.compile_block(&if_stmt.then_block, ctx)?;
         ctx.zero_new_vars(&saved);
@@ -2083,7 +2089,7 @@ impl Compiler {
         // ── Else-if branches ──
         for elif in &if_stmt.else_if_branches {
             let cond_reg = self.compile_expr(&elif.condition, ctx)?;
-            let skip = ctx.emit_jump_if_not_placeholder(cond_reg);
+            let skip = ctx.emit_jump_cond_placeholder(cond_reg);
             let saved = ctx.save_scope();
             self.compile_block(&elif.block, ctx)?;
             ctx.zero_new_vars(&saved);
@@ -5738,7 +5744,8 @@ fn eliminate_dead_code(
                 worklist.push(*target as usize);
             }
             // Conditional jumps: fall-through AND target
-            Instruction::JumpIf(_, target) | Instruction::JumpIfNot(_, target) => {
+            Instruction::JumpIf(_, target) | Instruction::JumpIfNot(_, target)
+            | Instruction::JumpIfNotCond(_, target) => {
                 worklist.push(*target as usize);
                 worklist.push(ip + 1);
             }
@@ -5787,6 +5794,7 @@ fn eliminate_dead_code(
             Instruction::Jump(t)               => Instruction::Jump(remap(t)),
             Instruction::JumpIf(r, t)          => Instruction::JumpIf(r, remap(t)),
             Instruction::JumpIfNot(r, t)       => Instruction::JumpIfNot(r, remap(t)),
+            Instruction::JumpIfNotCond(r, t)   => Instruction::JumpIfNotCond(r, remap(t)),
             Instruction::MatchInt(r, v, t)     => Instruction::MatchInt(r, v, remap(t)),
             Instruction::MatchRange(r, lo, hi, t) => Instruction::MatchRange(r, lo, hi, remap(t)),
             Instruction::MatchStr(r, s, t)     => Instruction::MatchStr(r, s, remap(t)),
@@ -5942,7 +5950,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             | Instruction::AsLoopCond(d, s) => { upd(*d); upd(*s); }
             Instruction::And(d, a, b) | Instruction::Or(d, a, b) => { upd(*d); upd(*a); upd(*b); }
             Instruction::Return(r) | Instruction::Print(r)
-            | Instruction::JumpIf(r, _) | Instruction::JumpIfNot(r, _) => upd(*r),
+            | Instruction::JumpIf(r, _) | Instruction::JumpIfNot(r, _)
+            | Instruction::JumpIfNotCond(r, _) => upd(*r),
             Instruction::MatchInt(r, _, _) | Instruction::MatchRange(r, _, _, _)
             | Instruction::MatchStr(r, _, _) | Instruction::MatchBool(r, _, _) => upd(*r),
             Instruction::Call(d, _, args) => { upd(*d); for &a in args { upd(a); } }
