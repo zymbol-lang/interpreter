@@ -171,7 +171,6 @@ impl<W: Write> Interpreter<W> {
         // scope_stack was swapped out by take_call_state, so every exit path
         // (including errors) must run restore_call_state or the caller's
         // variables vanish after a caught error.
-        let is_named = func.is_named_fn;
         let call_line = self.cur_stmt_line;
         let result: Result<Value> = match &func.body {
             // A `<~` in a `??` arm of the body unwinds out of it, and the
@@ -196,16 +195,10 @@ impl<W: Write> Interpreter<W> {
                         self.has_control_flow = false;
                         Ok(val.unwrap_or(Value::Unit))
                     }
-                    _ => {
-                        if is_named {
-                            Ok(Value::Unit)
-                        } else {
-                            Err(RuntimeError::Generic {
-                                message: "block lambda must use <~ to return value".to_string(),
-                                span: *span,
-                            })
-                        }
-                    }
+                    // A body that ends without `<~` gives `##_`, named or not
+                    // (ZYTW-015): a block lambda called for its effect is a
+                    // callback, and the VM and zyjs never refused one.
+                    _ => Ok(Value::Unit),
                 },
             },
         };

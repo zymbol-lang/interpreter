@@ -2326,6 +2326,20 @@ describe = x -> {
 >> describe(0) ¶     // → zero
 ```
 
+A block that ends without reaching a `<~` gives `##_`, exactly as a named function
+does — so a block lambda can be a callback called for what it does:
+
+```zymbol
+avisa = x -> { >> "visto " x ¶ }
+
+avisa(1)                 // → visto 1
+v = avisa(2)             // → visto 2
+>> (v == ##_) ¶          // → #1
+```
+
+> Until v0.0.10 the tree-walker refused this — `block lambda must use <~ to
+> return value` — where the VM and the browser engine went on.
+
 ### Zero-Parameter Lambda — a thunk
 
 A lambda may take no parameters at all. Both bodies work:
