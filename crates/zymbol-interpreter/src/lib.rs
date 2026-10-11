@@ -1213,6 +1213,8 @@ impl<W: Write> Interpreter<W> {
     /// Used by both lambda calls and traditional function calls (B2).
     /// B10: reuses pooled Vecs/HashMaps. QW3: also pools mutable/const_vars Vecs.
     pub(crate) fn take_call_state(&mut self) -> SavedCallState {
+        // Every call, of a named function or a lambda, starts here (`--count`).
+        zymbol_common::count::call();
         // A module's table goes back to the store before anything is called:
         // the callee, or something it calls, may be a function of this module.
         self.check_in_module_scope();
@@ -1947,6 +1949,7 @@ impl<W: Write> Interpreter<W> {
 
     /// Execute a single statement
     fn execute_statement(&mut self, statement: &Statement) -> Result<()> {
+        zymbol_common::count::step();
         let holder = self.cur_stmt_line;
         // A `<~`, `@!` or `@>` that left an expression of this statement is the
         // statement's own exit: the signal is in `control_flow` (GLB-107).
@@ -2224,6 +2227,9 @@ impl<W: Write> Interpreter<W> {
 
     /// Evaluate an expression
     fn eval_expr(&mut self, expr: &Expr) -> Result<Value> {
+        // An expression evaluated: with a statement executed, the
+        // tree-walker's unit of work (`--count`).
+        zymbol_common::count::step();
         match expr {
             // Grouping parens are transparent
             Expr::Group(group) => self.eval_expr(&group.expr),

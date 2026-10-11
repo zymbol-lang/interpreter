@@ -86,11 +86,11 @@ impl<W: Write> Interpreter<W> {
     pub(crate) fn append_in(collection: &mut Value, element: Value, span: zymbol_span::Span) -> Result<()> {
         match collection {
             Value::Array(arr) => {
-                Rc::make_mut(arr).push(element);
+                zymbol_common::count::make_mut(arr).push(element);
                 Ok(())
             }
             Value::Tuple(tup) => {
-                Rc::make_mut(tup).push(element);
+                zymbol_common::count::make_mut(tup).push(element);
                 Ok(())
             }
             Value::NamedTuple(_) => Err(RuntimeError::kinded(
@@ -141,7 +141,7 @@ impl<W: Write> Interpreter<W> {
             (&mut *collection, &index_value)
         {
             match fields.iter().position(|(k, _)| k == key) {
-                Some(i) => { Rc::make_mut(fields).remove(i); }
+                Some(i) => { zymbol_common::count::make_mut(fields).remove(i); }
                 None => {
                     let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
                     return Err(RuntimeError::kinded(
@@ -193,7 +193,7 @@ impl<W: Write> Interpreter<W> {
                         span: span,
                     });
                 }
-                Rc::make_mut(arr).remove(i as usize);
+                zymbol_common::count::make_mut(arr).remove(i as usize);
                 Ok(())
             }
             Value::Tuple(tup) => {
@@ -214,7 +214,7 @@ impl<W: Write> Interpreter<W> {
                         span: span,
                     });
                 }
-                Rc::make_mut(tup).remove(i as usize);
+                zymbol_common::count::make_mut(tup).remove(i as usize);
                 Ok(())
             }
             Value::NamedTuple(fields) => {
@@ -235,7 +235,7 @@ impl<W: Write> Interpreter<W> {
                         span: span,
                     });
                 }
-                Rc::make_mut(fields).remove(i as usize);
+                zymbol_common::count::make_mut(fields).remove(i as usize);
                 Ok(())
             }
             Value::String(s) => {
@@ -452,7 +452,7 @@ impl<W: Write> Interpreter<W> {
                 };
                 let len = arr.len();
                 let i = resolve_int(index, len, span, "array")?;
-                Rc::make_mut(arr)[i] = new_value;
+                zymbol_common::count::make_mut(arr)[i] = new_value;
                 Ok(())
             }
             Value::Tuple(tup) => {
@@ -490,7 +490,7 @@ impl<W: Write> Interpreter<W> {
                     i
                 };
                 // Create a new tuple with the value updated (immutability)
-                Rc::make_mut(tup)[i] = new_value;
+                zymbol_common::count::make_mut(tup)[i] = new_value;
                 Ok(())
             }
             // A string IS an array of characters, and is addressed like one
@@ -545,7 +545,7 @@ impl<W: Write> Interpreter<W> {
                         span,
                     )),
                     Value::String(name) => {
-                        for (field_name, field_value) in std::rc::Rc::make_mut(fields).iter_mut() {
+                        for (field_name, field_value) in zymbol_common::count::make_mut(fields).iter_mut() {
                             if *field_name == name {
                                 *field_value = new_value;
                                 return Ok(());
@@ -564,7 +564,7 @@ impl<W: Write> Interpreter<W> {
                         //
                         // Without this, a JSON built piece by piece — the normal
                         // case — could not be built at all.
-                        Rc::make_mut(fields).push((name.clone(), new_value));
+                        zymbol_common::count::make_mut(fields).push((name.clone(), new_value));
                         Ok(())
                     }
                     // Any other kind of index is the same mistake, told in the
@@ -1046,11 +1046,11 @@ impl<W: Write> Interpreter<W> {
                     items = Rc::new(src);
                 } else {
                     // Natural order
-                    Rc::make_mut(&mut items).sort_by(|a, b| {
+                    zymbol_common::count::make_mut(&mut items).sort_by(|a, b| {
                         natural_cmp(a, b).unwrap_or(std::cmp::Ordering::Equal)
                     });
                     if !op.ascending {
-                        Rc::make_mut(&mut items).reverse();
+                        zymbol_common::count::make_mut(&mut items).reverse();
                     }
                 }
 
@@ -1094,7 +1094,7 @@ impl<W: Write> Interpreter<W> {
                         span: op.span,
                     });
                 }
-                Rc::make_mut(&mut arr).insert(i, element);
+                zymbol_common::count::make_mut(&mut arr).insert(i, element);
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
@@ -1104,7 +1104,7 @@ impl<W: Write> Interpreter<W> {
                         span: op.span,
                     });
                 }
-                Rc::make_mut(&mut tup).insert(i, element);
+                zymbol_common::count::make_mut(&mut tup).insert(i, element);
                 Ok(Value::Tuple(tup))
             }
             Value::NamedTuple(_) => Err(RuntimeError::kinded(
@@ -1153,19 +1153,19 @@ impl<W: Write> Interpreter<W> {
         match collection {
             Value::Array(mut arr) => {
                 if let Some(pos) = arr.iter().position(|item| self.values_equal(item, &value)) {
-                    Rc::make_mut(&mut arr).remove(pos);
+                    zymbol_common::count::make_mut(&mut arr).remove(pos);
                 }
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
                 if let Some(pos) = tup.iter().position(|item| self.values_equal(item, &value)) {
-                    Rc::make_mut(&mut tup).remove(pos);
+                    zymbol_common::count::make_mut(&mut tup).remove(pos);
                 }
                 Ok(Value::Tuple(tup))
             }
             Value::NamedTuple(mut fields) => {
                 if let Some(pos) = fields.iter().position(|(_, v)| self.values_equal(v, &value)) {
-                    Rc::make_mut(&mut fields).remove(pos);
+                    zymbol_common::count::make_mut(&mut fields).remove(pos);
                 }
                 Ok(Value::NamedTuple(fields))
             }
@@ -1364,8 +1364,8 @@ impl<W: Write> Interpreter<W> {
         }
 
         match collection {
-            Value::Array(mut arr) => { Rc::make_mut(&mut arr).drain(start..end); Ok(Value::Array(arr)) }
-            Value::Tuple(mut tup) => { Rc::make_mut(&mut tup).drain(start..end); Ok(Value::Tuple(tup)) }
+            Value::Array(mut arr) => { zymbol_common::count::make_mut(&mut arr).drain(start..end); Ok(Value::Array(arr)) }
+            Value::Tuple(mut tup) => { zymbol_common::count::make_mut(&mut tup).drain(start..end); Ok(Value::Tuple(tup)) }
             // Removing a RUN of keys by position: same family, same refusal.
             Value::NamedTuple(fields) => Err(RuntimeError::kinded(
                 "Type",
@@ -1540,9 +1540,9 @@ fn get_at_step(col: &Value, step: &Value, span: zymbol_span::Span) -> Result<Val
 /// there, exactly as the single-level `d["k"]$~ v` does.
 fn set_at_step(col: Value, step: &Value, new_val: Value, span: zymbol_span::Span) -> Result<Value> {
     if let (Value::NamedTuple(mut fields), Value::String(key)) = (col.clone(), step) {
-        match Rc::make_mut(&mut fields).iter_mut().find(|(k, _)| k == key) {
+        match zymbol_common::count::make_mut(&mut fields).iter_mut().find(|(k, _)| k == key) {
             Some(f) => f.1 = new_val,
-            None => Rc::make_mut(&mut fields).push((key.clone(), new_val)),
+            None => zymbol_common::count::make_mut(&mut fields).push((key.clone(), new_val)),
         }
         return Ok(Value::NamedTuple(fields));
     }
@@ -1600,19 +1600,19 @@ fn set_at_idx(col: Value, index: i64, new_val: Value, span: zymbol_span::Span) -
         Value::Array(mut arr) => {
             let len = arr.len();
             let i = resolve_idx(index, len, span, "array")?;
-            Rc::make_mut(&mut arr)[i] = new_val;
+            zymbol_common::count::make_mut(&mut arr)[i] = new_val;
             Ok(Value::Array(arr))
         }
         Value::Tuple(mut tup) => {
             let len = tup.len();
             let i = resolve_idx(index, len, span, "tuple")?;
-            Rc::make_mut(&mut tup)[i] = new_val;
+            zymbol_common::count::make_mut(&mut tup)[i] = new_val;
             Ok(Value::Tuple(tup))
         }
         Value::NamedTuple(mut fields) => {
             let len = fields.len();
             let i = resolve_idx(index, len, span, "named tuple")?;
-            Rc::make_mut(&mut fields)[i].1 = new_val;
+            zymbol_common::count::make_mut(&mut fields)[i].1 = new_val;
             Ok(Value::NamedTuple(fields))
         }
         // The write half of the same rule. Only a char or a string goes in,

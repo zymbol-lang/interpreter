@@ -335,7 +335,7 @@ impl<W: Write> Interpreter<W> {
                     Ok(())
                 }
                 Value::Array(arr) => {
-                    Rc::make_mut(arr).extend(items);
+                    zymbol_common::count::make_mut(arr).extend(items);
                     Ok(())
                 }
                 other => Err(RuntimeError::kinded(

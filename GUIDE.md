@@ -164,6 +164,28 @@ Both modes produce **identical output** on the full parity suite
 wraps; of 666 corpus files 660 agree and **0 diverge** as of 2026-09-04, the remaining 6 excused
 for every engine by a reason in `corpus.toml`).
 
+**What a program cost — `zymbol run --count`.** After the program ends, one line on
+stderr says what it cost, in units that do not depend on the machine:
+
+```text
+$ zymbol run --vm --count programa.zy
+count  steps=124026  calls=4000  allocs=20624  bytes=3006621  copied=0
+```
+
+| | |
+|---|---|
+| `steps` | the engine's own unit of work: a bytecode instruction in the VM, a statement executed or an expression evaluated in the tree-walker. **Not comparable between the two** |
+| `calls` | calls of a function or a lambda |
+| `allocs`, `bytes` | requests to the allocator and their total size, for the whole run — reading and compiling the program included |
+| `copied` | elements duplicated because a collection being written had another owner |
+
+The same program gives the same five numbers on every run, which a clock does not: time
+moves by tens of percent on a program that lasts 20 ms. So the way to ask whether
+something is linear is to run it at two sizes and divide — ×4 the input and ×4.00 the
+steps is linear, ×16 is quadratic. `steps` alone would miss the commonest cause:
+writing into a shared collection is one step at any size, and it is `copied` and `bytes`
+that grow. `zyquality/cost/` asserts these ratios for the cases it holds.
+
 **Diagnostic tiers.** The same analyzers back every entry point, with one
 deliberate difference in coverage:
 
