@@ -4044,8 +4044,8 @@ impl Compiler {
                     ctx.emit(instr);
                     skips.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                 }
-                Pattern::Ident(name, _) => {
-                    let r_cmp = self.compile_ident_pattern_test(name, r_sub, ctx)?;
+                Pattern::Ident(name, span) => {
+                    let r_cmp = self.compile_ident_pattern_test(name, *span, r_sub, ctx)?;
                     skips.push(ctx.emit_jump_if_not_placeholder(r_cmp));
                 }
                 Pattern::List(patterns, _) => {
@@ -4112,12 +4112,12 @@ impl Compiler {
                             // An identifier is a value to compare, and the whole
                             // point of DM-26 is that it used to fall through the
                             // catch-all below and match silently.
-                            Pattern::Ident(name, _) => {
+                            Pattern::Ident(name, span) => {
                                 let r_idx = ctx.alloc_temp()?;
                                 ctx.emit(Instruction::LoadInt(r_idx, (i + 1) as i64));
                                 let r_elem = ctx.alloc_temp()?;
                                 ctx.emit(Instruction::ArrayGet(r_elem, r_sub, r_idx));
-                                match self.compile_ident_pattern_test(name, r_elem, ctx) {
+                                match self.compile_ident_pattern_test(name, *span, r_elem, ctx) {
                                     Ok(r_cmp) => {
                                         struct_skip_patches
                                             .push(ctx.emit_jump_if_not_placeholder(r_cmp));
@@ -4308,6 +4308,7 @@ impl Compiler {
     fn compile_ident_pattern_test(
         &mut self,
         name: &str,
+        span: zymbol_span::Span,
         r_sub: Reg,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
@@ -4321,7 +4322,15 @@ impl Compiler {
             ctx.emit(Instruction::LoadGlobal(r, gvar_idx));
             r
         } else {
-            return Err(CompileError::UndefinedVariable(name.to_string()));
+            // Whatever else the name is as an EXPRESSION, it is here too
+            // (GLB-125). A named function is a value everywhere — `h = f`,
+            // `h == f` — and `?? h { f => … }` asks whether `h` is that
+            // function; this table of three places did not hold functions, so
+            // the pattern was `undefined variable 'f'` for a name in plain view.
+            self.compile_expr(
+                &Expr::Identifier(zymbol_ast::IdentifierExpr::new(name.to_string(), span)),
+                ctx,
+            ).map_err(|_| CompileError::UndefinedVariable(name.to_string()))?
         };
         // Runtime dispatch: array variable → containment check, scalar → equality
         let r_is_arr = ctx.alloc_temp()?;
