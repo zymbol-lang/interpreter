@@ -2987,6 +2987,18 @@ person = #(name: "Ana", age: 25, city: "Madrid")
 #(name: who, city: where) = person   // who="Ana"  where="Madrid"
 ```
 
+The mark is part of the pattern as it is of the literal. A bare
+`(name: n, age: a) = person` is refused — *a dictionary pattern is written*
+`#(…)` — and `(a, b) = t` takes a tuple apart, by position. The same pattern
+goes in a loop head:
+
+```zymbol
+filas = [#(k: 1, v: 2), #(k: 3, v: 4)]
+
+@ #(k: a, v: b):filas { >> a "-" b " " }
+>> ¶                                   // → 1-2 3-4
+```
+
 ### Semantics on Existing Variables
 
 Destructuring **overwrites** any variable that already exists in the current scope — it does not shadow and does not produce an error:

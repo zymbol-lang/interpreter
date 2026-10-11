@@ -424,13 +424,39 @@ impl Parser {
     }
 
     pub(crate) fn parse_tuple_destructure_pattern(&mut self) -> Result<DestructurePattern, Diagnostic> {
-        self.advance(); // consume `(` or `#(`
+        let opener = self.advance(); // consume `(` or `#(`
 
         // Determine named vs positional: if first content is `ident :` → named
         let is_named = matches!(
             (self.peek().kind.clone(), self.peek_ahead(1).map(|t| t.kind.clone())),
             (TokenKind::Ident(_), Some(TokenKind::Colon))
         );
+
+        // A dictionary pattern is written `#(…)`, as the literal is (GLB-122).
+        // The bare `(name: n) = d` kept running after the literal `(a: 1)` was
+        // refused in v0.0.9 — the second spelling the mark was introduced to
+        // end, on the one side of `=` nobody had looked at.
+        if is_named && matches!(opener.kind, TokenKind::LParen) {
+            return Err(Diagnostic::error("a dictionary pattern is written `#(…)`")
+                .with_span(opener.span)
+                .with_help(
+                    "write `#(` here: `#(name: n) = d`. A bare `(…)` takes a \
+                     tuple apart, by position",
+                ));
+        }
+
+        // And the other half (GLB-123): `#(` says "dictionary", so what is
+        // inside is `key: name` pairs. `#(a, b) = (1, 2)` took a TUPLE apart
+        // by position under the dictionary's mark, in the two Rust engines
+        // only — a second spelling of `(a, b)`, on the same side of `=`.
+        if !is_named && matches!(opener.kind, TokenKind::HashLParen) {
+            return Err(Diagnostic::error("a dictionary pattern takes `key: name` pairs")
+                .with_span(opener.span)
+                .with_help(
+                    "`#(name: n) = d` unpacks a dictionary; write `(a, b) = t` \
+                     to take a tuple apart, by position",
+                ));
+        }
 
         let mut named_pairs: Vec<(String, String)> = Vec::new();
         let mut positional_items: Vec<DestructureItem> = Vec::new();
