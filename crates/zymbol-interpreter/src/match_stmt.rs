@@ -201,6 +201,18 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             Pattern::Ident(name, span) => {
+                // A named function is a value like any other, and a pattern
+                // that names one compares by identity, as `==` does (GLB-125).
+                // Only the variables were looked up here, so `f =>` failed for
+                // a function in plain view while `h = f` … `h =>` matched.
+                let named_function = match self.get_variable(name) {
+                    Some(_) => None,
+                    None => self.functions.get(name)
+                        .map(|def| Value::Function(self.func_def_to_value(def))),
+                };
+                if let Some(function) = named_function {
+                    return Ok(if self.values_equal(value, &function) { Some(true) } else { None });
+                }
                 match self.get_variable(name) {
                     Some(var_val) => {
                         let var_val = var_val.clone();

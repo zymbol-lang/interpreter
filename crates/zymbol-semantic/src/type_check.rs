@@ -1245,6 +1245,19 @@ impl TypeChecker {
     /// `ERROR-ZYB-002`'s incoherence was between one named function reached two
     /// ways — directly and as a value — which is a different question from
     /// whether a lambda may capture.
+    /// `u` in `u.CONST` / `u::f()`: an alias no variable or function hides.
+    /// The one place a module alias may stand without being a value.
+    fn is_bare_module_alias(&self, expr: &Expr) -> bool {
+        match expr.unwrap_group() {
+            Expr::Identifier(id) => {
+                self.module_aliases.contains(&id.name)
+                    && self.env.lookup_var(&id.name).is_none()
+                    && self.env.lookup_function(&id.name).is_none()
+            }
+            _ => false,
+        }
+    }
+
     fn check_reach_out_of_scope(&mut self, name: &str, span: zymbol_span::Span) {
         if !self.crosses_strong_boundary(name) {
             return;
@@ -2837,8 +2850,16 @@ impl TypeChecker {
                 let _ = self.infer_expr(expr);
             }
 
-            Pattern::Ident(_, _) => {
-                // Identifier patterns are resolved at runtime — accept any scrutinee type
+            Pattern::Ident(name, span) => {
+                // An identifier pattern accepts any scrutinee type — but it is
+                // a READ of that name, and it was the one read this pass never
+                // looked at (GLB-124): a name that does not exist, or a file
+                // variable named from inside a function (MEM-2), passed
+                // `check` and then met three answers — the tree-walker failed
+                // half way through the output, the VM refused to compile, and
+                // zyjs read the variable it must not see.
+                let _ = self.infer_expr(&Expr::Identifier(
+                    zymbol_ast::IdentifierExpr::new(name.clone(), *span)));
             }
 
             Pattern::Or(alternatives, _) => {
@@ -2986,9 +3007,21 @@ impl TypeChecker {
                     // It's a function reference, return Function type
                     ZymbolType::Any
                 } else if self.module_aliases.contains(&ident.name) {
-                    // It's a module alias (e.g. `u` from `<# ./utils <= u`)
-                    // Valid as the object of a member access (u.CONST) — not an undefined variable
-                    ZymbolType::Any
+                    // A module alias standing alone. It is not a value (GUIDE
+                    // § 2, non-value types): `u.CONST` and `u::f()` reach INTO a
+                    // module and are checked where they are parsed, never here.
+                    // This arm used to answer `Any` for the alias wherever it
+                    // appeared, so `x = u`, `u == u` and a `??` pattern `u =>`
+                    // all passed `check` — and then the tree-walker failed at
+                    // run time, the VM refused to compile and zyjs ran them
+                    // (GLB-125).
+                    self.errors.push(
+                        Diagnostic::error(format!("'{}' is a module, not a value", ident.name))
+                            .with_span(ident.span)
+                            .with_help(format!(
+                                "a module is reached through its members: {0}::name(…) calls a \
+                                 function, {0}.NAME reads a constant", ident.name)));
+                    ZymbolType::Unknown
                 } else if ident.hot {
                     // Hot identifier: auto-initializes at runtime — not an undefined variable error
                     ZymbolType::Any
@@ -3292,7 +3325,11 @@ impl TypeChecker {
                         }
                     }
                 }
-                let obj_type = self.infer_expr(&member.object);
+                let obj_type = if self.is_bare_module_alias(&member.object) {
+                    ZymbolType::Any
+                } else {
+                    self.infer_expr(&member.object)
+                };
                 match obj_type {
                     ZymbolType::NamedTuple(fields) => {
                         fields.iter()

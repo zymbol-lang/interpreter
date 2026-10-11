@@ -1540,6 +1540,33 @@ r2 = ?? day {
 >> r2 ¶    // → weekday
 ```
 
+The pattern **reads** the name, like any other use of it: the name has to exist, and
+inside a named function it cannot be a variable of the file — pass it as a parameter.
+
+A named function is a value, so it can be the pattern too, and it is compared by
+identity, as `==` compares functions:
+
+```zymbol
+double(x) { <~ x * 2 }
+triple(x) { <~ x * 3 }
+
+which(f) {
+    <~ ?? f {
+        double => "doubles"
+        triple => "triples"
+        _      => "something else"
+    }
+}
+
+>> which(double) ¶     // → doubles
+>> which(triple) ¶     // → triples
+>> which(5) ¶          // → something else
+```
+
+A module alias is **not** a value: `M =>`, like `x = M` or `M == M`, is refused before
+the program runs — `'M' is a module, not a value`. A module is reached through its
+members, `M::name(…)` and `M.NAME`.
+
 ### List Patterns
 
 `[...]` patterns have **dual semantics** based on the scrutinee's type at runtime:

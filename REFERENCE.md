@@ -1399,6 +1399,32 @@ And the mark needs its pairs (GLB-123): `#(a, b) = (1, 2)` — a positional patt
 dictionary's mark — ran in the two Rust engines and was refused by the browser engine. It is
 refused in all three: `a dictionary pattern takes` `key: name` `pairs`.
 
+### L54 — an identifier in a `??` pattern is a read — **fixed 2026-10-11**
+
+`?? s { tope => … }` compares the scrutinee with what `tope` holds. The type checker did
+not look at the name (GLB-124), so a pattern naming a file variable from inside a named
+function — which MEM-2 forbids — or naming nothing at all passed `zymbol check`, and
+then: the tree-walker failed half way through the output, the register VM refused to
+compile, and the browser engine read the variable. It is refused before running, with
+the words any other read gets: `'tope' is read from outside this function`, or
+`undefined variable 'nadie'`.
+
+### L55 — a function is a value and a module is not — **decided 2026-10-11**
+
+`?? h { f => … }` with `f` a named function passed `zymbol check` and then: the
+tree-walker failed when the `??` ran, the register VM refused to compile, and the browser
+engine compared (GLB-125). Two cases, decided apart.
+
+**A function is compared by identity.** The same pattern through a variable — `g = f`,
+then `g =>` — already matched in all three engines, so refusing the declared name would
+have made one comparison legal or not by how the value was reached. The two Rust engines
+looked the name up among the variables and not among the functions; they look in both.
+
+**A module alias is not a value, anywhere.** Measuring the pattern showed the hole was
+wider than the pattern: `x = M`, `M == M` and `f(M)` passed `check` the same way, each
+engine answering on its own. A bare alias is `'M' is a module, not a value`, before the
+program runs. `M::name(…)` and `M.NAME` reach *into* a module and are untouched.
+
 ---
 
 ## 20b. Error Taxonomy
