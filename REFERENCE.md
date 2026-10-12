@@ -1596,6 +1596,35 @@ carried, and several are built with a default one.
 
 ---
 
+### What a kind says, and building one (v0.0.10)
+
+The kind says **what** is wrong, not where (decision D1, 2026-09-15): a wrong **type** is
+`##Type`; a wrong **value** of the right type — 0, a negative, out of bounds — is `##Index`;
+a number that does not fit is `##Range`, a division by zero `##Div`, a missing dictionary
+key `##Key`. All three engines declare the kind where they raise it.
+
+A program can **build** the same value the standard modules return:
+
+```zymbol
+leer_regla(t) {
+    ? t$# == 0 { <~ ##Parse("regla vacía") }
+    <~ t
+}
+r = leer_regla("")
+>> r ¶       // → ##Parse(regla vacía)
+>> r$! ¶     // → #1
+```
+
+- It is a **value**, not a raise: `$!` sees it and `$!!` propagates it; a `:!` does not,
+  because nothing was thrown — the same as a soft error from `std/io`.
+- The kind is any name, in any script (`##Regla`, `##Κανόνας`); the message is a String.
+- `##Kind(m) =>` in a `??` reads the message back, and is the only pattern that creates a
+  name (GUIDE § 7, *Error Patterns*).
+- A command whose exit status is not 0 is a soft `##IO` that carries it:
+  `##IO(exit 2: …)`.
+
+---
+
 ### Numeric limits
 
 | Type | Range | Leaving it |
