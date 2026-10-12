@@ -10,7 +10,7 @@
 > and removed it. See `IMPL_V0010.md`.
 > Validation (measured 2026-10-11): **683 corpus files, 677 agreeing, 0 diverging** across
 > all three engines; **1065 unit tests**, 0 failed; **1 704 ZyDDT cells**, all agreeing;
-> **227 findings closed, 1 open** (ZYVM-022, a memory debt declared below); `zyq suite`
+> **227 findings closed, 3 open** (ZYVM-022, a memory debt declared below; GLB-127, `>> +a`; GLB-128, the CI's environment); `zyq suite`
 > reports **all gates pass**. **0.0.9 is the latest published release**; every figure on
 > this page is measured on the `v0.0.10` branch.
 >
@@ -134,7 +134,7 @@
 The whole question at once: `cd ../zyquality && ./zyq suite` — **all gates pass** as of
 2026-10-11. Three layers that did not exist at v0.0.9 are in it: ZyDDT's matrix (46 axes,
 1 704 cells, 171 checked against an implementation that is not ours), the 88 probes behind
-`LLM.md`, and the cost gate (14 cases, 60 of its assertions counted with `--count`).
+`LLM.md`, and the cost gate (15 cases, 60 of its assertions counted with `--count`).
 
 ---
 
