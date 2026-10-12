@@ -32,6 +32,25 @@ impl Lexer {
     /// the closing `"` opened a new string that never ended. `js::decode("{…}")`
     /// printed a cascade of three errors here and one in the browser engine
     /// (DM-10). Only the first of the three was about anything the program did.
+    /// Is there a closing quote left in this file at all?
+    ///
+    /// Asked before recovering from a bad interpolation, so the reader is told
+    /// about BOTH things that are open when both are — the quote first, because
+    /// it opened first, and then the brace (GLB-038, decided 2026-09-24).
+    fn has_closing_quote_ahead(&self) -> bool {
+        self.source[self.current..].contains(&'"')
+    }
+
+    /// Does this interpolation close at all before the file ends?
+    ///
+    /// Tells `{b ` apart from `{b+c}`: the first never closes, so what is wrong
+    /// with it is that it is open; the second closes and what is wrong is the
+    /// character inside it. Both engines have to make the same cut, or the
+    /// second of the two errors differs.
+    fn has_closing_brace_ahead(&self) -> bool {
+        self.source[self.current..].contains(&'}')
+    }
+
     fn skip_rest_of_string(&mut self) {
         while !self.is_at_end() && self.current_char() != '"' {
             if self.current_char() == '\\' {
@@ -100,6 +119,16 @@ impl Lexer {
                                 .with_span(span)
                                 .with_help("close the interpolation with }"),
                         );
+                        // Take the `"` that stopped us: it is the one that ENDS
+                        // this string. Leaving it behind made the next token
+                        // start a SECOND string there, and that one ran to end
+                        // of file — "unterminated string literal", a second
+                        // error about the first one's leftovers, and the reader
+                        // was told to add a closing quote that is already
+                        // written (GLB-028).
+                        if !self.is_at_end() {
+                            self.advance();
+                        }
                         return Token::new(TokenKind::Error("unterminated interpolation".to_string()), span);
                     }
                     if self.current_char() == '}' {
@@ -124,11 +153,35 @@ impl Lexer {
                         self.advance();
                     } else {
                         let span = self.span(start);
-                        self.diagnostics.push(
-                            Diagnostic::error("invalid character in string interpolation")
-                                .with_span(span)
-                                .with_help("interpolation must be {identifier} — use \\{ for a literal brace"),
-                        );
+                        // Both are open when both are open, and the quote comes
+                        // first because it opened first. `>> "a{b ¶` used to
+                        // name only the character the interpolation tripped on,
+                        // which is the symptom of reading past a quote that was
+                        // never closed.
+                        let quote_open = !self.has_closing_quote_ahead();
+                        if quote_open {
+                            self.diagnostics.push(
+                                Diagnostic::error("unterminated string literal")
+                                    .with_span(span)
+                                    .with_help("add closing \" to end the string"),
+                            );
+                        }
+                        if quote_open && !self.has_closing_brace_ahead() {
+                            // Nothing closes this interpolation either, so what
+                            // is wrong with it is that it is open — not the
+                            // character the scan happened to stop on.
+                            self.diagnostics.push(
+                                Diagnostic::error("unterminated string interpolation")
+                                    .with_span(span)
+                                    .with_help("close the interpolation with }"),
+                            );
+                        } else {
+                            self.diagnostics.push(
+                                Diagnostic::error("invalid character in string interpolation")
+                                    .with_span(span)
+                                    .with_help("interpolation must be {identifier} — use \\{ for a literal brace"),
+                            );
+                        }
                         self.skip_rest_of_string();
                         return Token::new(TokenKind::Error("invalid interpolation".to_string()), span);
                     }
@@ -156,13 +209,43 @@ impl Lexer {
                 // escape was refused. Two spellings of the same JSON, one
                 // accepted and one not, with nothing to say why.
                 let span = self.span(start);
-                self.diagnostics.push(
-                    Diagnostic::error("unmatched '}' in string")
-                        .with_span(span)
-                        .with_help("the escape is symmetric — write \\} for a literal brace, as \\{ is for the opening one"),
-                );
+                let brace_line = self.position().line;
+                if brace_line == start.line {
+                    // Same line as the opening quote: the string is closed and
+                    // the brace really is what is wrong — `"a}b"`, or the
+                    // half-escaped `"\\{\\"n\\":1}"`.
+                    self.diagnostics.push(
+                        Diagnostic::error("unmatched '}' in string")
+                            .with_span(span)
+                            .with_help("the escape is symmetric — write \\} for a literal brace, as \\{ is for the opening one"),
+                    );
+                } else {
+                    // A later line: the quote never closed and the string ran on
+                    // and swallowed a `}` that was closing a BLOCK. Naming the
+                    // brace described what the lexer saw; what the reader needs
+                    // is that the quote on this line was never closed — nobody
+                    // writes a bare brace inside a text without escaping it
+                    // (GLB-038, decided 2026-09-23). The line break cannot be
+                    // the boundary: a string may legitimately span lines.
+                    self.diagnostics.push(
+                        Diagnostic::error("unterminated string literal")
+                            .with_span(span)
+                            // ONE complete template, and no literal brace in
+                            // it. The inventory harvests the literal as typed:
+                            // `format!` needs `}}` for one brace, which pairs
+                            // with no other engine's `}`, and splitting the
+                            // sentence to dodge that leaves two fragments that
+                            // pair with nothing at all. Saying "closing brace"
+                            // in words costs the reader nothing and keeps one
+                            // sentence in every engine.
+                            .with_help(format!(
+                                "the string opened here ran on and swallowed the closing brace on line {} — add the closing quote, or escape the brace to keep it inside the text",
+                                brace_line
+                            )),
+                    );
+                }
                 self.skip_rest_of_string();
-                return Token::new(TokenKind::Error("unmatched close brace".to_string()), span);
+                return Token::new(TokenKind::Error("unterminated string".to_string()), span);
             } else {
                 current_text.push(ch);
                 self.advance();

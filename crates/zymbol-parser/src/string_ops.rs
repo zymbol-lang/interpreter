@@ -56,6 +56,10 @@ impl Parser {
             }
         }
 
+        // `s$++[1:"x"]` — no item, then a bracket: not an insertion (GLB-076).
+        if items.is_empty() {
+            self.refuse_after_operandless(TokenKind::DollarPlusPlus, op_token.span.start.line)?;
+        }
         let span = start_span.to(&last_span);
         Ok(Expr::ConcatBuild(ConcatBuildExpr::new(Box::new(base), items, span)))
     }

@@ -11,113 +11,48 @@ use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
 
 impl<W: Write> Interpreter<W> {
-    /// Evaluate an iterable expression (range, array, or string)
-    /// Used primarily for for-each loops
+    /// Evaluate an iterable expression: an array, string, tuple or dictionary.
+    ///
+    /// A range never reaches here. `run_loop` walks `@ var:a..b` in place on its
+    /// own fast path, and `@ (patrón):a..b` has been a static error since D4, so
+    /// the `Expr::Range` arm this function used to carry became unreachable —
+    /// and with it the only two sites that said `range start/end must be an
+    /// integer`. What a non-integer bound actually reports is `loops.rs`'s
+    /// `range bounds must be integers`, which names both bounds in one message.
     pub(crate) fn eval_iterable(&mut self, expr: &Expr) -> Result<Vec<Value>> {
-        match expr {
-            Expr::Range(range_expr) => {
-                // Evaluate start and end
-                let start_value = self.eval_expr(&range_expr.start)?;
-                let end_value = self.eval_expr(&range_expr.end)?;
-
-                // Extract integers
-                let start = match start_value {
-                    Value::Int(n) => n,
-                    _ => {
-                        return Err(RuntimeError::Generic {
-                            message: format!("range start must be an integer, got {:?}", start_value),
-                            span: range_expr.start.span(),
-                        })
-                    }
-                };
-
-                let end = match end_value {
-                    Value::Int(n) => n,
-                    _ => {
-                        return Err(RuntimeError::Generic {
-                            message: format!("range end must be an integer, got {:?}", end_value),
-                            span: range_expr.end.span(),
-                        })
-                    }
-                };
-
-                // Evaluate optional step (default: 1)
-                let step = if let Some(step_expr) = &range_expr.step {
-                    let step_value = self.eval_expr(step_expr)?;
-                    match step_value {
-                        Value::Int(n) if n > 0 => n,
-                        Value::Int(n) if n <= 0 => {
-                            return Err(RuntimeError::Generic {
-                                message: format!("step must be positive, got {}", n),
-                                span: step_expr.span(),
-                            })
-                        }
-                        _ => {
-                            return Err(RuntimeError::Generic {
-                                message: format!("step must be an integer, got {:?}", step_value),
-                                span: step_expr.span(),
-                            })
-                        }
-                    }
-                } else {
-                    1  // Default step
-                };
-
-                // Create range vector (inclusive) with step
-                // Support both forward (1..10:2) and reverse (10..1:2) ranges
-                let values: Vec<Value> = if start <= end {
-                    // Forward range: 1..10:2 → [1, 3, 5, 7, 9]
-                    (0..)
-                        .map(|i| start + i * step)
-                        .take_while(|&x| x <= end)
-                        .map(Value::Int)
-                        .collect()
-                } else {
-                    // Reverse range: 10..1:2 → [10, 8, 6, 4, 2]
-                    (0..)
-                        .map(|i| start - i * step)
-                        .take_while(|&x| x >= end)
-                        .map(Value::Int)
-                        .collect()
-                };
-
-                Ok(values)
+        // Try to evaluate as expression - might be an array, string, or identifier
+        let value = self.eval_expr(expr)?;
+        match value {
+            Value::Array(elements) => Ok(crate::own_elements(elements)),
+            Value::String(s) => {
+                // Convert string to array of chars for iteration
+                Ok(s.chars().map(Value::Char).collect())
             }
-            _ => {
-                // Try to evaluate as expression - might be an array, string, or identifier
-                let value = self.eval_expr(expr)?;
-                match value {
-                    Value::Array(elements) => Ok(crate::own_elements(elements)),
-                    Value::String(s) => {
-                        // Convert string to array of chars for iteration
-                        Ok(s.chars().map(Value::Char).collect())
-                    }
-                    // A dictionary yields its KEYS, in insertion order — `for k
-                    // in d` as Python spells it. With `d[k]` available the key
-                    // is enough to reach the value, so no destructuring pattern
-                    // has to be introduced into `@` (decision 8).
-                    //
-                    // A dictionary whose keys cannot be enumerated only serves
-                    // when the program already knows what it holds, which is the
-                    // definition of a record — the thing decision 7 stopped it
-                    // from being.
-                    Value::NamedTuple(fields) => Ok(fields
-                        .iter()
-                        .map(|(k, _)| Value::String(k.clone()))
-                        .collect()),
-                    // A positional tuple is walked too (decision 21): the type
-                    // system is dynamic and `#?` validates each element, so
-                    // walking a mixed collection is not walking blind.
-                    Value::Tuple(items) => Ok(items.to_vec()),
-                    _ => Err(RuntimeError::Generic {
-                        message: format!(
-                            "can only iterate over ranges, arrays, strings, tuples and dictionaries, got {:?}",
-                            value
-                        ),
-                        span: expr.span(),
-                    }),
-                }
-            }
+            // A dictionary yields its KEYS, in insertion order — `for k
+            // in d` as Python spells it. With `d[k]` available the key
+            // is enough to reach the value, so no destructuring pattern
+            // has to be introduced into `@` (decision 8).
+            //
+            // A dictionary whose keys cannot be enumerated only serves
+            // when the program already knows what it holds, which is the
+            // definition of a record — the thing decision 7 stopped it
+            // from being.
+            Value::NamedTuple(fields) => Ok(fields
+                .iter()
+                .map(|(k, _)| Value::String(k.clone()))
+                .collect()),
+            // A positional tuple is walked too (decision 21): the type
+            // system is dynamic and `#?` validates each element, so
+            // walking a mixed collection is not walking blind.
+            Value::Tuple(items) => Ok(items.to_vec()),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
+                    "can only iterate over ranges, arrays, strings, tuples and dictionaries, got {}",
+                    value.type_label()
+                ),
+                expr.span(),
+            )),
         }
     }
 
@@ -148,8 +83,10 @@ impl<W: Write> Interpreter<W> {
     /// Handles both module constants (module.CONSTANT) and named tuple fields (tuple.field)
     pub(crate) fn eval_member_access(&mut self, member: &zymbol_ast::MemberAccessExpr) -> Result<Value> {
         // Check if the object is a module alias (for module.CONSTANT access)
+        // A variable of the running function with the alias's name hides it:
+        // `.` reads the variable (GLB-070, decided 2026-09-26).
         if let Expr::Identifier(id) = member.object.unwrap_group() {
-            if let Some(module_path) = self.import_aliases.get(&id.name) {
+            if let Some(module_path) = self.import_aliases.get(&id.name).filter(|_| !self.variable_hides_alias(&id.name)) {
                 // This is a module constant access
                 let module = self.loaded_modules.get(module_path).ok_or_else(|| {
                     RuntimeError::Generic {
@@ -196,16 +133,17 @@ impl<W: Write> Interpreter<W> {
                     return Ok(v.clone());
                 }
                 let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
-                return Err(RuntimeError::Generic {
-                    message: crate::variables::missing_key_msg(&member.field, &available),
-                    span: member.span,
-                });
+                return Err(RuntimeError::kinded(
+                    "Key",
+                    crate::variables::missing_key_msg(&member.field, &available),
+                    member.span,
+                ));
             }
         }
 
         // Not a module access, evaluate as regular member access (for named tuples)
         let object = self.eval_expr(&member.object)?;
-        let got = crate::base_type_symbol(&object);
+        let got = object.type_label();
 
         match object {
             Value::NamedTuple(fields) => {
@@ -219,28 +157,34 @@ impl<W: Write> Interpreter<W> {
                 let available_fields: Vec<String> = fields.iter()
                     .map(|(name, _)| name.clone())
                     .collect();
-                Err(RuntimeError::Generic {
-                    message: crate::variables::missing_key_msg(&member.field, &available_fields),
-                    span: member.span,
-                })
+                Err(RuntimeError::kinded(
+                    "Key",
+                    crate::variables::missing_key_msg(&member.field, &available_fields),
+                    member.span,
+                ))
             }
+            // The receiver is the wrong type for a name: a `##Type` (D1), declared
+            // here because the message carries the name, and the words of the
+            // name chose the family — `t.index` was an `##Index` (GLB-099).
             Value::Tuple(_) => {
-                Err(RuntimeError::Generic {
-                    message: format!(
+                Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
                         "a positional tuple is addressed by position, not by name: '{}'\nhelp: use t[1] — names live in a dictionary, #(key: value)",
                         member.field
                     ),
-                    span: member.span,
-                })
+                    member.span,
+                ))
             }
             _ => {
-                Err(RuntimeError::Generic {
-                    message: format!(
+                Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
                         "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
                         got, member.field
                     ),
-                    span: member.span,
-                })
+                    member.span,
+                ))
             }
         }
     }
@@ -282,9 +226,22 @@ impl<W: Write> Interpreter<W> {
         let mut chain: Vec<&IndexExpr> = Vec::new();
         if let Some(root) = Self::index_chain(idx, &mut chain) {
             self.check_variable_alive(&root.name, &root.span)?;
+            // Left to right: the collection is read, then its indices. Borrowing
+            // it after the indices have run is the same thing — unless one of
+            // them writes it, and then what was indexed was what the index had
+            // just put there: `d[f()]` with `f` replacing `d` answered from the
+            // new `d` (ZYTW-014). That case, which is rare, takes the general
+            // path below, where the collection is evaluated first.
+            let index_writes_root = chain
+                .iter()
+                .any(|link| !crate::variables::plain_operand(&link.index))
+                && {
+                    let indices: Vec<&Expr> = chain.iter().map(|link| &*link.index).collect();
+                    self.operands_may_write(&root.name, &indices)
+                };
             // A name the environment does not hold may still be a function used
             // as a value; that (and the error) belongs to the general path.
-            if self.get_variable(&root.name).is_some() {
+            if !index_writes_root && self.get_variable(&root.name).is_some() {
                 // The indices are evaluated before anything is borrowed, in the
                 // same order as the general path: innermost first.
                 let mut indices = Vec::with_capacity(chain.len());
@@ -364,10 +321,11 @@ impl<W: Write> Interpreter<W> {
                 return Ok(Some(v));
             }
             let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
-            return Err(RuntimeError::Generic {
-                message: crate::variables::missing_key_msg(key, &available),
+            return Err(RuntimeError::kinded(
+                "Key",
+                crate::variables::missing_key_msg(key, &available),
                 span,
-            });
+            ));
         }
 
         // Decision 11: a dictionary is addressed by KEY, never by position.
@@ -379,23 +337,40 @@ impl<W: Write> Interpreter<W> {
         // address there is, and the size is fixed.
         if let (Value::NamedTuple(fields), Value::Int(_)) = (collection, index_value) {
             let first = fields.first().map(|(k, _)| k.clone()).unwrap_or_else(|| "clave".into());
-            return Err(RuntimeError::Generic {
-                message: format!(
+            return Err(RuntimeError::kinded(
+                "Type",
+                format!(
                     "a dictionary is addressed by key, not by position\nhelp: use d[\"{}\"] — adding a key changes what sits at each position",
                     first
                 ),
                 span,
-            });
+            ));
         }
 
         // Extract index
         let index = match index_value {
             Value::Int(n) => *n,
-            _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!("index must be an integer, got {:?}", index_value),
+            // A String reaches a dictionary KEY, so on anything else it says so
+            // — the same failure the navigation form reports, and since 3.5b
+            // (decided 2026-09-16) the same words: the register VM compiles
+            // `v["k"]` and `v[1>"k"]` to one instruction and cannot tell them
+            // apart, and two texts for one failure were two texts too many.
+            Value::String(_) => {
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "a String addresses a dictionary key, and this is {}",
+                        collection.type_label()
+                    ),
                     span,
-                })
+                ))
+            }
+            _ => {
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("index must be an integer, got {}", index_value.type_label()),
+                    span,
+                ))
             }
         };
 
@@ -452,7 +427,7 @@ impl<W: Write> Interpreter<W> {
     ///
     /// Everything `index_ref` can borrow is cloned from it; what is left is the
     /// String, whose element is built on the spot, and the error.
-    fn index_into(
+    pub(crate) fn index_into(
         collection: &Value,
         index_value: &Value,
         span: zymbol_span::Span,
@@ -479,10 +454,13 @@ impl<W: Write> Interpreter<W> {
                     }),
                 }
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("cannot index {:?} - only arrays, tuples, and strings are indexable", collection),
+            // One text for one failure, whether the index came through
+            // `v[1]` or `v[1>1]` (step 3.5b, decided 2026-09-16).
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("cannot index into {} — expected array, tuple, or string", collection.type_label()),
                 span,
-            }),
+            )),
         }
     }
 

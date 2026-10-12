@@ -48,25 +48,6 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Capture only the variables in `names` from the current scope stack.
-    /// The module bindings a function body names, computed once per body.
-    ///
-    /// Keyed by the address of the `Rc<FunctionDef>`, which is stable for as
-    /// long as the module is loaded and is what every call to that function
-    /// shares. See `module_var_mentions`.
-    fn module_body_mentions(
-        &mut self,
-        func_def: &std::rc::Rc<FunctionDef>,
-        body: &zymbol_ast::Block,
-    ) -> std::rc::Rc<std::collections::HashSet<String>> {
-        let key = std::rc::Rc::as_ptr(func_def) as usize;
-        if let Some(cached) = self.module_var_mentions.get(&key) {
-            return cached.clone();
-        }
-        let set = std::rc::Rc::new(zymbol_semantic::mentioned_names(body));
-        self.module_var_mentions.insert(key, set.clone());
-        set
-    }
-
     fn capture_only(&self, names: &HashSet<String>) -> HashMap<String, Value> {
         if names.is_empty() {
             return HashMap::new();
@@ -127,6 +108,7 @@ impl<W: Write> Interpreter<W> {
                 };
                 // Pop the scope on the error path too, or the lambda's params
                 // leak into the caller's scope view (L16 family).
+                let call_line = self.cur_stmt_line;
                 let mut result = self.eval_expr(expr);
                 // A `$!!` in the body raised an early return. This path skips
                 // take_call_state, so nothing else clears it, and the pending
@@ -134,8 +116,10 @@ impl<W: Write> Interpreter<W> {
                 // top level ignored a stray Return, and not harmless once a
                 // top-level Return became the program's exit status
                 // (GAP-ZYB-006): `h = (x -> x$!!)` ended the program mid-file.
+                // A `<~` in a `??` arm of the body unwinds out of it: the
+                // lambda returns that value (GLB-107).
                 if let ControlFlow::Return(value) = &self.control_flow {
-                    if result.is_ok() {
+                    if result.is_ok() || matches!(result, Err(RuntimeError::Unwind)) {
                         result = Ok(value.clone().unwrap_or(Value::Unit));
                     }
                     self.clear_control_flow();
@@ -144,6 +128,10 @@ impl<W: Write> Interpreter<W> {
                     self.import_aliases = saved;
                 }
                 self.pop_scope();
+                // Returned: the line is the caller's again (GLB-106).
+                if result.is_ok() {
+                    self.cur_stmt_line = call_line;
+                }
                 return result;
             }
         }
@@ -183,9 +171,23 @@ impl<W: Write> Interpreter<W> {
         // scope_stack was swapped out by take_call_state, so every exit path
         // (including errors) must run restore_call_state or the caller's
         // variables vanish after a caught error.
-        let is_named = func.is_named_fn;
+        let call_line = self.cur_stmt_line;
         let result: Result<Value> = match &func.body {
-            zymbol_ast::LambdaBody::Expr(expr) => self.eval_expr(expr),
+            // A `<~` in a `??` arm of the body unwinds out of it, and the
+            // lambda returns that value (GLB-107).
+            zymbol_ast::LambdaBody::Expr(expr) => match self.eval_expr(expr) {
+                Err(RuntimeError::Unwind) => match std::mem::replace(&mut self.control_flow, ControlFlow::None) {
+                    ControlFlow::Return(val) => {
+                        self.has_control_flow = false;
+                        Ok(val.unwrap_or(Value::Unit))
+                    }
+                    other => {
+                        self.control_flow = other;
+                        Err(RuntimeError::Unwind)
+                    }
+                },
+                other => other,
+            },
             zymbol_ast::LambdaBody::Block(block) => match self.execute_block_no_scope(block) {
                 Err(e) => Err(e),
                 Ok(()) => match std::mem::replace(&mut self.control_flow, ControlFlow::None) {
@@ -193,21 +195,19 @@ impl<W: Write> Interpreter<W> {
                         self.has_control_flow = false;
                         Ok(val.unwrap_or(Value::Unit))
                     }
-                    _ => {
-                        if is_named {
-                            Ok(Value::Unit)
-                        } else {
-                            Err(RuntimeError::Generic {
-                                message: "block lambda must use <~ to return value".to_string(),
-                                span: *span,
-                            })
-                        }
-                    }
+                    // A body that ends without `<~` gives `##_`, named or not
+                    // (ZYTW-015): a block lambda called for its effect is a
+                    // callback, and the VM and zyjs never refused one.
+                    _ => Ok(Value::Unit),
                 },
             },
         };
 
         self.restore_call_state(saved);
+        // Returned: the line is the caller's again (GLB-106).
+        if result.is_ok() {
+            self.cur_stmt_line = call_line;
+        }
         result
     }
 
@@ -226,20 +226,54 @@ impl<W: Write> Interpreter<W> {
                     return self.eval_lambda_call(func, arg_values, &call.span);
                 }
 
+                // A lambda variable ended with `\` is not a missing function:
+                // say what happened, as the VM and zyjs do (ZYTW-007, step P4.7).
+                if !self.functions.contains_key(&ident.name) {
+                    self.check_variable_alive(&ident.name, &call.span)?;
+                }
+
                 // Not a lambda variable - look up as traditional function
                 let func_def = self.functions.get(&ident.name).cloned().ok_or_else(|| {
-                    RuntimeError::Generic {
-                        message: format!("undefined function: '{}'", ident.name),
-                        span: call.span,
+                    // A name that EXISTS and holds something else is not a
+                    // missing function, and saying so sent the reader looking
+                    // for one that was never absent (GLB-034, decided
+                    // 2026-09-22). A name that is genuinely undefined never
+                    // reaches here — the analyzer refuses it statically — but
+                    // the distinction is made anyway, because a diagnostic that
+                    // depends on another pass running first is one bug away
+                    // from lying.
+                    if self.get_variable(&ident.name).is_some() {
+                        RuntimeError::kinded(
+                            "Type",
+                            format!("'{}' is not a function", ident.name),
+                            call.span,
+                        )
+                    } else {
+                        RuntimeError::Generic {
+                            message: format!("undefined function: '{}'", ident.name),
+                            span: call.span,
+                        }
                     }
                 })?;
 
                 self.eval_traditional_function_call(func_def, &call.arguments, &call.span, None, Some(&ident.name))
             }
 
-            // Member access: could be module::function or object.method (only module supported)
+            // Member access: a module's function when the object is an import
+            // alias; otherwise the dot reads a value — a dictionary key — which
+            // is then called, as in the VM and zyjs (step P4-3). Every `x.f(…)`
+            // used to be taken for a module call: `d.f(1)` on a dictionary
+            // holding a lambda said "undefined module alias: 'd'", and `.f(2)`
+            // on an Int said "member function calls not supported".
             Expr::MemberAccess(member) => {
-                // Check if it's a module function call: module.function
+                // A variable of the running function with the alias's name hides it
+                // behind a `.`, never behind `::` (GLB-070, decided 2026-09-26).
+                let is_module = matches!(member.object.unwrap_group(),
+                    Expr::Identifier(id) if self.import_aliases.contains_key(&id.name)
+                        && (member.is_module_access || !self.variable_hides_alias(&id.name)));
+                if !is_module {
+                    return self.call_evaluated(call);
+                }
                 if let Expr::Identifier(module_ident) = member.object.unwrap_group() {
                     let module_alias = &module_ident.name;
                     let func_name = &member.field;
@@ -258,43 +292,47 @@ impl<W: Write> Interpreter<W> {
                         }
                     })?;
 
+                    // A Generic, so it is located (`--> file:line`) and caught
+                    // with the sentence it prints — the VM's and zyjs's. The
+                    // dedicated variant printed one sentence and put another,
+                    // `function 'f' not exported from module 'm'`, into `_err`
+                    // (step P4.7).
                     let func_def = module.functions.get(func_name).cloned().ok_or_else(|| {
-                        RuntimeError::FunctionNotExported {
-                            module: module_alias.clone(),
-                            function: func_name.clone(),
+                        RuntimeError::Generic {
+                            message: format!("module '{}' does not export function '{}'",
+                                             module_alias, func_name),
+                            span: call.span,
                         }
                     })?;
 
                     return self.eval_traditional_function_call(func_def, &call.arguments, &call.span, Some((module_alias.clone(), module_path.clone())), None);
                 }
 
-                // Not a module function - error
-                Err(RuntimeError::Generic {
-                    message: "member function calls not supported".to_string(),
-                    span: call.span,
-                })
+                self.call_evaluated(call)
             }
 
             // Any other expression: evaluate it and expect a Value::Function
-            _ => {
-                let callable_value = self.eval_expr(&call.callable)?;
+            _ => self.call_evaluated(call),
+        }
+    }
 
-                match callable_value {
-                    Value::Function(func) => {
-                        let mut arg_values = Vec::with_capacity(call.arguments.len());
-                        for arg in &call.arguments {
-                            arg_values.push(self.eval_expr(arg)?);
-                        }
-                        self.eval_lambda_call(func, arg_values, &call.span)
-                    }
-                    _ => {
-                        Err(RuntimeError::Generic {
-                            message: "expression is not callable".to_string(),
-                            span: call.span,
-                        })
-                    }
+    /// Evaluate the callee as a value and call it: what a call is when it is
+    /// neither a named function nor a module's.
+    fn call_evaluated(&mut self, call: &zymbol_ast::FunctionCallExpr) -> Result<Value> {
+        let callable_value = self.eval_expr(&call.callable)?;
+        match callable_value {
+            Value::Function(func) => {
+                let mut arg_values = Vec::with_capacity(call.arguments.len());
+                for arg in &call.arguments {
+                    arg_values.push(self.eval_expr(arg)?);
                 }
+                self.eval_lambda_call(func, arg_values, &call.span)
             }
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                "expression is not callable".to_string(),
+                call.span,
+            )),
         }
     }
 
@@ -337,42 +375,50 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
-    /// Publish the calling frame's module-state writes to the store (MM-12).
+    /// Which arguments of a call are lent to their output parameter: the ones
+    /// that are a plain variable of the calling frame.
     ///
-    /// Called on the way *into* a function of the module the caller is already
-    /// in. Without it a write is visible only to the frame that made it and to
-    /// whatever that frame calls directly; one function in between — one that
-    /// does not name the variable, so nothing of it is injected — and the call
-    /// after that reads the store, which has not heard about the write yet.
-    ///
-    /// Only keys that actually changed are published, diffed against the
-    /// snapshot the caller was given. That is the same rule the write-back on
-    /// return uses, and for the same reason: a frame holding an untouched copy
-    /// must not overwrite what a nested call has since stored (MM-2).
-    ///
-    /// Costs one comparison per module variable the *caller* had injected —
-    /// the names it mentions, not the module's whole table — and nothing at all
-    /// for a caller that had none, which is every call from outside the module.
-    fn flush_module_frame(&mut self, saved: &crate::SavedCallState, ctx_path: &std::path::Path) {
-        if saved.frame_module_vars.is_empty() {
-            return;
-        }
-        let mut updates: Vec<(String, Value)> = Vec::new();
-        for (key, injected) in &saved.frame_module_vars {
-            if let Some(live) = lookup_in_scopes(&saved.scope_stack, key) {
-                if live != injected {
-                    updates.push((key.clone(), live.clone()));
-                }
+    /// Not module state (S3): every function of the module can see it, so the
+    /// callee could read the original while it was out. It is copied, as
+    /// before, and written back on return. Not a constant, and not a name the
+    /// frame does not hold — those are evaluated like any argument, which is
+    /// where their error is. And not a variable passed as output TWICE in the
+    /// same call: the analyser refuses that call (S2), and a program that got
+    /// here without it keeps the copies it always had.
+    fn lendable_arguments(
+        &self,
+        parameters: &[zymbol_ast::Parameter],
+        arguments: &[zymbol_ast::Expr],
+    ) -> Vec<usize> {
+        let mut lent: Vec<(usize, &str)> = Vec::new();
+        for (i, param) in parameters.iter().enumerate() {
+            if !matches!(param.kind, ParameterKind::Output) {
+                continue;
             }
-        }
-        if updates.is_empty() {
-            return;
-        }
-        if let Some(module) = self.loaded_modules.get_mut(ctx_path) {
-            for (key, val) in updates {
-                module.all_variables.insert(key, val);
+            let Some(Expr::Identifier(ident)) = arguments.get(i).map(|a| a.unwrap_group()) else {
+                continue;
+            };
+            let name = ident.name.as_str();
+            if ident.hot
+                || ident.pre_hot
+                || self.is_module_state(name)
+                || self.is_const(name)
+                || !self.scope_stack.iter().any(|scope| scope.contains_key(name))
+            {
+                continue;
             }
+            lent.push((i, name));
         }
+        let twice: Vec<&str> = lent
+            .iter()
+            .enumerate()
+            .filter(|(k, (_, name))| lent[..*k].iter().any(|(_, other)| other == name))
+            .map(|(_, (_, name))| *name)
+            .collect();
+        lent.into_iter()
+            .filter(|(_, name)| !twice.contains(name))
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// Helper to evaluate traditional (non-lambda) function calls
@@ -428,9 +474,59 @@ impl<W: Write> Interpreter<W> {
         if arg_values.capacity() < arguments.len() {
             arg_values.reserve(arguments.len() - arg_values.capacity());
         }
-        for arg in arguments {
-            arg_values.push(self.eval_expr(arg)?);
+        // An output argument that is a plain variable is LENT to its parameter,
+        // not copied into it (GLB-117, decided 2026-10-10). It used to be
+        // evaluated like any other — a second reference to the collection —
+        // and written back on return, so for as long as the call lasted the
+        // caller's variable and the parameter were two owners and the first
+        // edit inside the function copied all of it: one write through `<~`
+        // cost the size of the collection, every call.
+        //
+        // The value is moved out of the caller only after every other argument
+        // has been read: `g(d<~, d)` hands the second one what `d` held before
+        // the call. Nothing can look at the caller's variable while it is out —
+        // the caller is suspended, and a function does not see the variables of
+        // whoever called it (MEM-2).
+        let lent: Vec<usize> = if parameters.iter().any(|p| matches!(p.kind, ParameterKind::Output)) {
+            self.lendable_arguments(parameters, arguments)
+        } else {
+            Vec::new()
+        };
+        for (i, arg) in arguments.iter().enumerate() {
+            if lent.contains(&i) {
+                arg_values.push(Value::Unit);
+            } else {
+                arg_values.push(self.eval_expr(arg)?);
+            }
         }
+        for &i in &lent {
+            if let Expr::Identifier(ident) = arguments[i].unwrap_group() {
+                if let Some(slot) = self.get_variable_mut(&ident.name) {
+                    arg_values[i] = std::mem::replace(slot, Value::Unit);
+                }
+            }
+        }
+
+        // Determine the module whose state this frame executes against (MM-2):
+        // - alias:: calls carry module_info (re-export adapters redirect via
+        //   origin_module_path — BUG-001);
+        // - bare-name intra-module calls (private helpers, exported siblings)
+        //   carry only origin_module_path.
+        // Main-script functions have origin_module_path = Some(main.zy), which is
+        // NOT in loaded_modules, so they resolve to None (script path below).
+        // The file this body's line numbers belong to. `origin_module_path` is
+        // set for every Zymbol function — a module's, and the main script's too
+        // — which is exactly the question an error needs answered.
+        let body_file: Option<std::path::PathBuf> = origin_module_path.clone();
+
+        let module_ctx_path: Option<std::path::PathBuf> = if let Some((_, module_path)) = &module_info {
+            Some(origin_module_path.as_ref().unwrap_or(module_path).clone())
+        } else {
+            origin_module_path
+                .as_ref()
+                .filter(|p| self.loaded_modules.contains_key(p.as_path()))
+                .cloned()
+        };
 
         // A named function CAPTURES what its body reads from the file, exactly
         // as a lambda does (ERROR-ZYB-002). Computed BEFORE `take_call_state`,
@@ -457,113 +553,47 @@ impl<W: Write> Interpreter<W> {
         // B2: zero-copy save + fresh isolated scope (see take_call_state)
         let saved = self.take_call_state();
 
-        // B4: pre-alloc scope capacity to avoid rehashing on parameter binding
-        if let Some(scope) = self.scope_stack.last_mut() {
-            scope.reserve(parameters.len() + captured.len());
-        }
-
-        // Captures go in BEFORE the parameters, so a parameter of the same name
-        // shadows one — the order `func_def_to_value`'s path already uses.
-        for (name, value) in captured {
-            self.set_variable_new(&name, value);
-        }
-
-        // Determine the module whose state this frame executes against (MM-2):
-        // - alias:: calls carry module_info (re-export adapters redirect via
-        //   origin_module_path — BUG-001);
-        // - bare-name intra-module calls (private helpers, exported siblings)
-        //   carry only origin_module_path.
-        // Main-script functions have origin_module_path = Some(main.zy), which is
-        // NOT in loaded_modules, so they resolve to None (script path below).
-        let module_ctx_path: Option<std::path::PathBuf> = if let Some((_, module_path)) = &module_info {
-            Some(origin_module_path.as_ref().unwrap_or(module_path).clone())
-        } else {
-            origin_module_path
-                .as_ref()
-                .filter(|p| self.loaded_modules.contains_key(p.as_path()))
-                .cloned()
-        };
-
-        // Snapshot of the module values injected into this frame. The write-back
-        // below diffs against it, so keys this frame never modified cannot
-        // clobber changes written back by nested calls (MM-2). It lives on the
-        // interpreter rather than in this function so an intra-module call can
-        // flush it on the way in — see `flush_module_frame` (MM-12).
-        let mut injected_module_vars: HashMap<String, Value> = HashMap::new();
-
         // If this is a module function call, restore the module's execution context.
         // BUG-01: alias:: calls also swap self.functions with the module's full
         // function table so intra-module calls resolve correctly inside the body.
         // G17 fix: script-level functions inherit the caller's import_aliases so
         // module calls (ollama::fn, ui::fn, etc.) resolve correctly.
         let saved_functions = if let Some(ctx_path) = &module_ctx_path {
-            // MM-2: on a same-module nested call the caller's frame holds
-            // fresher values than the store (its own write-back has not run
-            // yet) — inject the caller's live copies instead of stale ones.
-            let same_module_caller =
-                saved.current_module_path.as_deref() == Some(ctx_path.as_path());
-            // MM-12: publish what the CALLER has written before reading the
-            // store. A frame's writes only reached the store when that frame
-            // returned, so anything it called meanwhile read a stale value —
-            // unless it happened to be called directly, because then the
-            // `same_module_caller` lookup below found the live copy in the
-            // caller's own scope. One level of indirection lost it:
-            //
-            //     correr()  { v = "nuevo"  _lee()  _medio() }
-            //     _medio()  { _lee() }          // does not name `v`
-            //     _lee()    { >> v ¶ }          // "nuevo", then "viejo"
-            //
-            // `_medio` has no `v` of its own to be found, so `_lee` fell back
-            // to the store, which still held what was there before `correr`
-            // ran. The register VM and the browser engine keep module state in
-            // one place and never had the question.
-            self.flush_module_frame(&saved, ctx_path);
-            // Only the bindings this body actually names are injected, and
-            // nothing else is copied out of the module at all.
-            //
-            // This used to be `self.loaded_modules.get(path).cloned()` — a deep
-            // copy of the whole `LoadedModule`, every value in it, on every
-            // call — followed by a second deep copy of each variable into the
-            // frame. The tree-walker's collections are plain `Vec`s, so a module
-            // holding a sixty-key table paid for that table on every call to any
-            // of its functions, including ones that never name it. The mention
-            // set is an over-approximation, computed once per body; a name that
-            // is never written is also never diffed on the way out, which is the
-            // other half of the same copy. See REFERENCE.md L44.
-            let mentions = self.module_body_mentions(&func_def, body);
             let want_functions = module_info.is_some();
-            let prepared = self.loaded_modules.get(ctx_path).map(|module| {
-                let vars: Vec<(String, Value)> = module
-                    .all_variables
-                    .iter()
-                    .filter(|(n, _)| mentions.contains(n.as_str()))
-                    .map(|(n, v)| (n.clone(), v.clone()))
-                    .collect();
-                let const_names: Vec<String> = module.const_names.iter().cloned().collect();
-                let import_aliases = module.import_aliases.clone();
-                let all_functions = if want_functions {
-                    Some(module.all_functions.clone())
-                } else {
-                    None
-                };
-                (vars, const_names, import_aliases, all_functions)
+            let prepared = self.loaded_modules.get_mut(ctx_path).map(|module| {
+                (
+                    // The module's table itself, not a copy of what the body
+                    // names: it is this frame's outermost scope until the frame
+                    // ends or calls something (see `Interpreter::module_scope`).
+                    std::mem::take(&mut module.all_variables),
+                    std::mem::take(&mut module.dead_variables),
+                    module.const_names.clone(),
+                    module.import_aliases.clone(),
+                    want_functions.then(|| module.all_functions.clone()),
+                )
             });
-            if let Some((vars, const_names, import_aliases, all_functions)) = prepared {
-                for (name, value) in vars {
-                    let live = if same_module_caller {
-                        lookup_in_scopes(&saved.scope_stack, &name)
-                            .cloned()
-                            .unwrap_or(value)
-                    } else {
-                        value
-                    };
-                    injected_module_vars.insert(name.clone(), live.clone());
-                    self.set_variable(&name, live);
-                }
-                // MM-4 runtime guard: module constants stay immutable inside
-                // module function bodies even when static analysis was skipped.
-                for const_name in const_names {
-                    self.mark_const(const_name);
+            if let Some((vars, dead, const_names, import_aliases, all_functions)) = prepared {
+                self.module_dead = dead;
+                // [the module's table, the frame's own scope]. Parameters and
+                // locals go in the second, so a parameter called like one of
+                // the module's variables hides it and is never mistaken for it
+                // (ZYTW-008); MM-4: the module's constants stay immutable in
+                // its functions even when static analysis was skipped.
+                let frame_scope = std::mem::replace(&mut self.scope_stack[0], vars);
+                self.scope_stack.push(frame_scope);
+                self.has_any_const |= !const_names.is_empty();
+                let frame_consts = std::mem::replace(&mut self.const_vars_stack[0], const_names);
+                self.const_vars_stack.push(frame_consts);
+                self.mutable_vars_stack.push(HashSet::new());
+                self.module_scope = true;
+                // A name the module has is the module's, whatever the file
+                // that imported it calls its own variables: the module's value
+                // used to be written over the capture, and would now sit
+                // under it.
+                for (name, value) in captured {
+                    if !self.scope_stack[0].contains_key(&name) {
+                        self.set_variable_new(&name, value);
+                    }
                 }
                 self.import_aliases = import_aliases;
                 self.current_module_path = Some(ctx_path.clone());
@@ -575,6 +605,15 @@ impl<W: Write> Interpreter<W> {
             }
         } else {
             // Script-level function call (no module context).
+            // B4: pre-alloc scope capacity to avoid rehashing on parameter binding
+            if let Some(scope) = self.scope_stack.last_mut() {
+                scope.reserve(parameters.len() + captured.len());
+            }
+            // Captures go in BEFORE the parameters, so a parameter of the same
+            // name shadows one — the order `func_def_to_value`'s path already uses.
+            for (name, value) in captured {
+                self.set_variable_new(&name, value);
+            }
             // Inherit caller's import aliases so module calls (alias::fn()) resolve correctly.
             self.import_aliases = saved.import_aliases.clone();
             // Forward constants (:=) visible in the caller's frame into the fresh
@@ -624,38 +663,58 @@ impl<W: Write> Interpreter<W> {
         self.current_function = func_name.map(|s| s.to_string());
 
         // MoveOrClone guard: names that must survive the return statement because
-        // something after it still reads them from this frame's scope.
-        //   - output params (QW13): the writeback loop below copies them out;
-        //   - module state (MM-2): the write-back below diffs them against the
-        //     injected snapshot, and a moved-out key looks like "never touched".
+        // something after it still reads them from this frame's scope — output
+        // params (QW13): the writeback loop below copies them out.
         let prev_guard = std::mem::take(&mut self.move_guard_names);
         for param in parameters {
             if matches!(param.kind, ParameterKind::Output) {
                 self.move_guard_names.insert(param.name.clone());
             }
         }
-        for name in injected_module_vars.keys() {
-            self.move_guard_names.insert(name.clone());
-        }
-        // Hand the snapshot to the frame, so a nested intra-module call can
-        // flush this frame's writes before it reads the store (MM-12).
-        self.frame_module_vars = injected_module_vars.clone();
 
         // QW1: execute_block_no_scope — take_call_state already owns scope[0] (params).
         // QW17: TCO loop — if tco_pending is set after execution, rebind params and restart.
+        let call_line = self.cur_stmt_line;
         let return_value = 'tco: loop {
             if let Err(e) = self.execute_body_scheduled(body, auto_free) {
+                // What was lent goes back as the function left it: it worked on
+                // the caller's own value, so what it wrote before failing is
+                // written (S1). So is the module's state: the frame worked
+                // on the module's own table, which goes back as it is.
+                let returned: Vec<(String, Value)> = lent
+                    .iter()
+                    .filter_map(|&i| match arguments[i].unwrap_group() {
+                        Expr::Identifier(ident) => Some((
+                            ident.name.clone(),
+                            self.take_variable(&parameters[i].name).unwrap_or(Value::Unit),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
                 // L16 fix: the caller's scope_stack was swapped out by
                 // take_call_state — restore the full caller state before
                 // propagating, or every outer variable vanishes after the
                 // error is caught by an enclosing `!?`.
                 self.current_function = prev_fn;
                 self.move_guard_names = prev_guard;
+                self.check_in_module_scope();
                 self.restore_call_state(saved);
+                for (name, value) in returned {
+                    self.set_variable(&name, value);
+                }
                 if let Some(caller_functions) = saved_functions {
                     self.functions = caller_functions;
                 }
-                return Err(e);
+                // The innermost frame that knows the file names it. A module
+                // function's body lines are lines of the module, not of the
+                // script that called it, and `locate` leaves an already-located
+                // error alone — so the file reported is the one the error was
+                // raised in, however deep the call chain.
+                let where_from = body_file.as_deref().or(self.current_file.as_deref());
+                return Err(match where_from {
+                    Some(f) => e.locate(f, self.cur_stmt_line),
+                    None => e,
+                });
             }
 
             if self.tco_pending {
@@ -684,37 +743,10 @@ impl<W: Write> Interpreter<W> {
         self.current_function = prev_fn;
         self.move_guard_names = prev_guard;
 
-        // MODULE STATE WRITE-BACK (MM-2): persist module-level mutations back to the
-        // LoadedModule store. Runs for every module frame — alias:: calls and
-        // bare-name intra-module calls alike. Only keys whose value actually
-        // changed relative to the injected snapshot are written, so an outer
-        // frame that never touched a key cannot clobber a nested call's
-        // write-back with its stale copy. Parameters are excluded: a parameter
-        // named like a module variable shadows it and must not corrupt state.
-        // This implements private mutable module state: variables declared with
-        // `=` at module level persist across calls but are never directly
-        // accessible from outside the module.
-        let mut module_state_updates: Vec<(String, Value)> = Vec::new();
-        if let Some(ctx_path) = &module_ctx_path {
-            for (key, injected_val) in &injected_module_vars {
-                if parameters.iter().any(|p| p.name == *key) {
-                    continue;
-                }
-                // Missing key: moved out by a `<~ key` return — reads don't mutate.
-                if let Some(current) = self.get_variable(key) {
-                    if current != injected_val {
-                        module_state_updates.push((key.clone(), current.clone()));
-                    }
-                }
-            }
-            if !module_state_updates.is_empty() {
-                if let Some(module) = self.loaded_modules.get_mut(ctx_path) {
-                    for (key, val) in &module_state_updates {
-                        module.all_variables.insert(key.clone(), val.clone());
-                    }
-                }
-            }
-        }
+        // The module's table goes back to the store before this frame's scopes
+        // are recycled. It was the only copy, so there is nothing to compare
+        // and nothing to write back.
+        self.check_in_module_scope();
 
         // QW2: lazy output-param collection — only allocate if function has output params.
         // Eliminates HashMap::new() on every call (most functions have no output params).
@@ -724,7 +756,8 @@ impl<W: Write> Interpreter<W> {
             for (i, param) in parameters.iter().enumerate() {
                 if matches!(param.kind, ParameterKind::Output) {
                     if let Expr::Identifier(ident) = arguments[i].unwrap_group() {
-                        let value = self.get_variable(&param.name).cloned().unwrap_or(Value::Unit);
+                        // Moved, not cloned: this frame is over.
+                        let value = self.take_variable(&param.name).unwrap_or(Value::Unit);
                         updates.push((ident.name.clone(), value));
                     }
                 }
@@ -737,40 +770,16 @@ impl<W: Write> Interpreter<W> {
             self.restore_call_state(saved);
         }
 
-        // MM-2: a same-module caller still holds the pre-call copies of the keys
-        // this frame just wrote back — refresh them so subsequent reads in the
-        // caller observe the new module state.
-        if !module_state_updates.is_empty()
-            && self.current_module_path.as_deref() == module_ctx_path.as_deref()
-        {
-            for (key, val) in module_state_updates {
-                // MM-12: the caller's SNAPSHOT moves with its frame, or the two
-                // disagree about what "unchanged" means. The flush on the way
-                // into the next call diffs the live value against this snapshot
-                // — leave it behind and a caller that writes the value the
-                // snapshot happens to hold looks untouched, so its write is
-                // never published and the store keeps answering with what this
-                // frame just put there. That is the second half of BUG-ZYB-008:
-                // the aviso was painted, cleared by the caller, and painted
-                // again on the next turn from a store that never heard about
-                // the clearing.
-                self.frame_module_vars.insert(key.clone(), val.clone());
-                self.set_variable(&key, val);
-            }
-        }
-
         // BUG-01: restore caller's function table after module function execution
         if let Some(caller_functions) = saved_functions {
             self.functions = caller_functions;
         }
 
+        // Returned: the line is the caller's again, so an error raised after
+        // the call in the same statement names that statement (GLB-106).
+        self.cur_stmt_line = call_line;
         Ok(return_value)
     }
-}
-
-/// Look up a name in a saved scope stack, innermost scope first.
-fn lookup_in_scopes<'a>(scopes: &'a [HashMap<String, Value>], name: &str) -> Option<&'a Value> {
-    scopes.iter().rev().find_map(|scope| scope.get(name))
 }
 
 // ── Free-variable collection for efficient closure capture ────────────────────
@@ -928,6 +937,7 @@ fn collect_refs_in_expr(
             }
         }
         Expr::ErrorCheck(op)     => collect_refs_in_expr(&op.expr, locals, refs),
+        Expr::ErrorConstruct(e)  => collect_refs_in_expr(&e.message, locals, refs),
         Expr::ErrorPropagate(op) => collect_refs_in_expr(&op.expr, locals, refs),
         Expr::Pipe(pipe) => {
             collect_refs_in_expr(&pipe.left, locals, refs);
@@ -987,7 +997,19 @@ fn collect_refs_in_expr(
             }
         }
         // Literals and shell exprs have no capturable sub-expressions
-        Expr::Literal(_) | Expr::Execute(_) | Expr::BashExec(_) | Expr::TerminalSize(_) => {}
+        // A name read inside a string is a reference like any other. Leaving
+        // it out meant `"{log}{s}"` in a lambda never captured `log`, and the
+        // interpolation kept `{log}` as text (ZYTW-005).
+        Expr::Literal(lit) => {
+            if let zymbol_common::Literal::InterpolatedString(s) = &lit.value {
+                for name in zymbol_semantic::interpolated_names(s) {
+                    if !locals.contains(name.as_str()) {
+                        refs.insert(name);
+                    }
+                }
+            }
+        }
+        Expr::Execute(_) | Expr::BashExec(_) | Expr::TerminalSize(_) => {}
     }
 }
 

@@ -24,6 +24,17 @@ impl fmt::Display for Severity {
     }
 }
 
+impl Severity {
+    /// The word without colour.
+    pub fn plain(&self) -> &'static str {
+        match self {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+            Severity::Note => "note",
+        }
+    }
+}
+
 /// A diagnostic message (error, warning, or note)
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
@@ -72,48 +83,60 @@ impl Diagnostic {
 
     /// Print the diagnostic to stderr with colors and source context
     pub fn emit(&self, source_map: &SourceMap) {
-        eprintln!("{}: {}", self.severity, self.message);
+        eprint!("{}", self.render(source_map, true));
+    }
+
+    /// The block `emit` prints, as text: the headline, where, the source line
+    /// with its carets, the notes, the help, and a blank line.
+    ///
+    /// Without colour it is what a subscript's failure carries (GLB-017 I,
+    /// decided 2026-09-26): the failure written as `zymbol run` writes it,
+    /// and not the terminal's escape codes inside `_err`.
+    pub fn render(&self, source_map: &SourceMap, color: bool) -> String {
+        use std::fmt::Write as _;
+        let paint = |text: &str, f: fn(&str) -> String| if color { f(text) } else { text.to_string() };
+        let blue_bold = |t: &str| t.blue().bold().to_string();
+        let blue = |t: &str| t.blue().to_string();
+        let red_bold = |t: &str| t.red().bold().to_string();
+        let green_bold = |t: &str| t.green().bold().to_string();
+        let severity = if color { self.severity.to_string() } else { self.severity.plain().to_string() };
+
+        let mut out = String::new();
+        let _ = writeln!(out, "{}: {}", severity, self.message);
 
         if let Some(span) = &self.span {
             if let Some(file) = source_map.get(span.file_id) {
                 let line_num = span.start.line;
-
-                // Print file location
-                eprintln!(
+                let _ = writeln!(
+                    out,
                     "  {} {}:{}:{}",
-                    "-->".blue().bold(),
+                    paint("-->", blue_bold),
                     file.name,
                     line_num,
                     span.start.column
                 );
-
-                // Print source line if available
                 if let Some(line) = file.line(line_num) {
                     let line_str = format!("{:4}", line_num);
-                    eprintln!("{} {}", line_str.blue().bold(), "|".blue());
-                    eprintln!("{} {} {}", line_str.blue().bold(), "|".blue(), line);
-
-                    // Print caret indicator
+                    let _ = writeln!(out, "{} {}", paint(&line_str, blue_bold), paint("|", blue));
+                    let _ = writeln!(out, "{} {} {}", paint(&line_str, blue_bold), paint("|", blue), line);
                     // Column is 1-indexed, so subtract 1 for correct positioning
                     let indent = " ".repeat((span.start.column - 1) as usize);
                     let caret_len = span.end.column.saturating_sub(span.start.column).max(1);
                     let carets = "^".repeat(caret_len as usize);
-                    eprintln!(
+                    let _ = writeln!(
+                        out,
                         "{} {}",
-                        "     |".blue(),
-                        format!("{}{}", indent, carets).red().bold()
+                        paint("     |", blue),
+                        paint(&format!("{}{}", indent, carets), red_bold)
                     );
                 }
             }
         }
 
-        // Print notes
         for note in &self.notes {
-            eprintln!("  {} {}", "=".blue().bold(), note);
+            let _ = writeln!(out, "  {} {}", paint("=", blue_bold), note);
         }
 
-        // Print help
-        //
         // `= help:`, not a bare `help:`. rustc reserves the bare form for a
         // SPANNED suggestion that brings its own snippet, and uses `= help:`
         // for a trailing line of guidance — which is the only kind Zymbol has.
@@ -126,10 +149,11 @@ impl Diagnostic {
         // drops a diagnostic block by its `  =` lines, so a help line without
         // the `=` leaks into the compared output of 75 goldens.
         if let Some(help) = &self.help {
-            eprintln!("  {} {}", "= help:".green().bold(), help);
+            let _ = writeln!(out, "  {} {}", paint("= help:", green_bold), help);
         }
 
-        eprintln!();
+        out.push('\n');
+        out
     }
 }
 
@@ -168,6 +192,10 @@ impl DiagnosticBag {
 
     pub fn len(&self) -> usize {
         self.diagnostics.len()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Diagnostic> {
+        self.diagnostics.iter()
     }
 
     pub fn is_empty(&self) -> bool {

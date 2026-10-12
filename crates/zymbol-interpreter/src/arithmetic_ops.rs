@@ -58,10 +58,21 @@ impl<W: Write> Interpreter<W> {
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + *b as f64)),
 
-            _ => Err(RuntimeError::Generic {
-                message: "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\"".to_string(),
-                span: *span,
-            }),
+            // A wrong TYPE is a `##Type` (D1; GLB-088). The guidance about
+            // juxtaposition is for the mistake it was written for — text on
+            // either side; with no text in sight `+` speaks like every other
+            // arithmetic operator and names the types (GLB-059, decided
+            // 2026-10-05). `x + 1` with `x` empty used to talk about strings.
+            _ if matches!(left, Value::String(_)) || matches!(right, Value::String(_)) => Err(RuntimeError::kinded(
+                "Type",
+                "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\"",
+                *span,
+            )),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("arithmetic requires numeric operands: {}, {}", left.type_ident(), right.type_ident()),
+                *span,
+            )),
         }
     }
 
@@ -119,10 +130,12 @@ impl<W: Write> Interpreter<W> {
             // Type promotion: Int op Float → Float
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(float_op(*a as f64, *b))),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(float_op(*a, *b as f64))),
-            _ => Err(RuntimeError::Generic {
-                message: format!("arithmetic requires numeric operands: {}, {}", left.type_ident(), right.type_ident()),
-                span: *span,
-            }),
+            // A wrong TYPE is a `##Type` (D1; GLB-088).
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("arithmetic requires numeric operands: {}, {}", left.type_ident(), right.type_ident()),
+                *span,
+            )),
         }
     }
 
@@ -196,10 +209,20 @@ impl<W: Write> Interpreter<W> {
                     Ok(Value::Float(a / *b as f64))
                 }
             }
-            _ => Err(RuntimeError::Generic {
-                message: "/ requires numeric operands — use $/ to split strings".to_string(),
-                span: *span,
-            }),
+            // A wrong TYPE is a `##Type` (D1; GLB-088). The guidance about `$/`
+            // is for text on either side; with none in sight `/` names the
+            // types like the rest of its family (GLB-090, decided 2026-10-05 —
+            // the rule `+` follows since GLB-059).
+            _ if matches!(left, Value::String(_)) || matches!(right, Value::String(_)) => Err(RuntimeError::kinded(
+                "Type",
+                "/ requires numeric operands — use $/ to split strings",
+                *span,
+            )),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("arithmetic requires numeric operands: {}, {}", left.type_ident(), right.type_ident()),
+                *span,
+            )),
         }
     }
 
@@ -225,10 +248,12 @@ impl<W: Write> Interpreter<W> {
             // Type promotion: Int ^ Float → Float
             (Value::Int(base), Value::Float(exp)) => Ok(Value::Float((*base as f64).powf(*exp))),
             (Value::Float(base), Value::Int(exp)) => Ok(Value::Float(base.powf(*exp as f64))),
-            _ => Err(RuntimeError::Generic {
-                message: format!("power operator requires numeric operands: {}, {}", left.type_ident(), right.type_ident()),
-                span: *span,
-            }),
+            // A wrong TYPE is a `##Type` (D1; GLB-088).
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("power operator requires numeric operands: {}, {}", left.type_ident(), right.type_ident()),
+                *span,
+            )),
         }
     }
 
@@ -347,24 +372,30 @@ impl<W: Write> Interpreter<W> {
                     )))
                 }
             }
-            // String against a number: the string has to be a number too (in any script)
+            // String against a number: the string has to be a number too (in any
+            // script). When it is not, reading it as one is what failed: a
+            // `##Parse` (GLB-094, decided 2026-10-06). Declared here and not left
+            // to the words of the message, because the message carries the text,
+            // and the words of the text decided the family: `"index" < 10` was an
+            // `##Index`, and `"overflow" < 10` a `##Range`.
             (Value::String(s), Value::Int(i)) => {
                 if let Some(s_int) = str_as_int(s) {
                     Ok(Value::Bool(int_compare(s_int, *i)))
                 } else if let Some(s_f) = str_as_float(s) {
                     Ok(Value::Bool(float_compare(s_f, *i as f64)))
                 } else {
-                    Err(RuntimeError::Generic {
-                        message: format!(
-                            "cannot compare string '{}' with integer {} using operator '{:?}'",
+                    Err(RuntimeError::kinded(
+                        "Parse",
+                        format!(
+                            "cannot compare string '{}' with integer {} using operator '{}'",
                             s, i, op
                         ),
-                        span: Span::new(
+                        Span::new(
                             zymbol_span::Position::start(),
                             zymbol_span::Position::start(),
                             zymbol_span::FileId(0),
                         ),
-                    })
+                    ))
                 }
             }
             (Value::Int(i), Value::String(s)) => {
@@ -373,69 +404,75 @@ impl<W: Write> Interpreter<W> {
                 } else if let Some(s_f) = str_as_float(s) {
                     Ok(Value::Bool(float_compare(*i as f64, s_f)))
                 } else {
-                    Err(RuntimeError::Generic {
-                        message: format!(
-                            "cannot compare integer {} with string '{}' using operator '{:?}'",
+                    Err(RuntimeError::kinded(
+                        "Parse",
+                        format!(
+                            "cannot compare integer {} with string '{}' using operator '{}'",
                             i, s, op
                         ),
-                        span: Span::new(
+                        Span::new(
                             zymbol_span::Position::start(),
                             zymbol_span::Position::start(),
                             zymbol_span::FileId(0),
                         ),
-                    })
+                    ))
                 }
             }
             (Value::String(s), Value::Float(f)) => {
                 if let Some(s_f) = str_as_float(s) {
                     Ok(Value::Bool(float_compare(s_f, *f)))
                 } else {
-                    Err(RuntimeError::Generic {
-                        message: format!(
-                            "cannot compare string '{}' with float {} using operator '{:?}'",
+                    Err(RuntimeError::kinded(
+                        "Parse",
+                        format!(
+                            "cannot compare string '{}' with float {} using operator '{}'",
                             s, f, op
                         ),
-                        span: Span::new(
+                        Span::new(
                             zymbol_span::Position::start(),
                             zymbol_span::Position::start(),
                             zymbol_span::FileId(0),
                         ),
-                    })
+                    ))
                 }
             }
             (Value::Float(f), Value::String(s)) => {
                 if let Some(s_f) = str_as_float(s) {
                     Ok(Value::Bool(float_compare(*f, s_f)))
                 } else {
-                    Err(RuntimeError::Generic {
-                        message: format!(
-                            "cannot compare float {} with string '{}' using operator '{:?}'",
+                    Err(RuntimeError::kinded(
+                        "Parse",
+                        format!(
+                            "cannot compare float {} with string '{}' using operator '{}'",
                             f, s, op
                         ),
-                        span: Span::new(
+                        Span::new(
                             zymbol_span::Position::start(),
                             zymbol_span::Position::start(),
                             zymbol_span::FileId(0),
                         ),
-                    })
+                    ))
                 }
             }
-            _ => Err(RuntimeError::Generic {
-                // GLOBAL-001: this used to interpolate the VALUES —
-                // `String("ab") and Char('c')` — where the VM had only the type
-                // names to hand and zyjs wrote a third form. One refusal, three
-                // wordings, and the documentation could only quote one. The
-                // family names types now, in all three engines.
-                message: format!(
-                    "cannot compare values with operator '{:?}': {} and {}",
+            // GLOBAL-001: this used to interpolate the VALUES —
+            // `String("ab") and Char('c')` — where the VM had only the type
+            // names to hand and zyjs wrote a third form. One refusal, three
+            // wordings, and the documentation could only quote one. The family
+            // names types now, in all three engines. Two types that never
+            // compare are a wrong TYPE: a `##Type` (D1; GLB-091). A string
+            // against a number, above, is decided by the text's VALUE.
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
+                    "cannot compare values with operator '{}': {} and {}",
                     op, left.type_ident(), right.type_ident()
                 ),
-                span: Span::new(
+                Span::new(
                     zymbol_span::Position::start(),
                     zymbol_span::Position::start(),
                     zymbol_span::FileId(0),
                 ),
-            }),
+            )),
         }
     }
 }

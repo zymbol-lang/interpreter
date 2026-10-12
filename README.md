@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.0.9-informational?style=flat-square"/>
+  <img src="https://img.shields.io/badge/version-v0.0.10-informational?style=flat-square"/>
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square"/>
   <img src="https://img.shields.io/badge/status-active-brightgreen?style=flat-square"/>
@@ -85,7 +85,7 @@ across v0.0.5–v0.0.9 it coined exactly **one** new base mark (`°`, the hot-de
 diacritic) and derived everything else from marks already in the inventory.
 
 Stating it this way makes it falsifiable, which is the point: for any operator you either can
-segment and gloss it, or you cannot. [SYMBOLS.md](./SYMBOLS.md) does that count for the whole
+segment and gloss it, or you cannot. `zymbol-design/SYMBOLS.md` does that count for the whole
 inventory — transparent forms (the majority), semi-transparent (6, where the whole means more
 than the parts), and **opaque** (10, which must simply be learned: `¶`, `><`, `#1`/`#0`, the
 base prefixes, `###`, `°`). It also names the six declared homographs, the exact
@@ -102,7 +102,7 @@ kind is a memorisation cost, so the design keeps counting it instead of assuming
   "no keywords": *keyword* is a tokenizer's term for a reserved token, and by that
   reading the language server files `?` and `@` under `KEYWORD` because LSP has no
   other slot. The checkable claim is that **no construct of the grammar is a word**
-  ([`SYMBOLS.md`](SYMBOLS.md) §1.2)
+  (`zymbol-design/SYMBOLS.md` §1.2)
 - **Dual execution** — tree-walker interpreter and register-based VM (`--vm`)
 - **Full Unicode** — identifiers, strings, and numerals support any Unicode script
 - **First-class functions** — named functions as values, HOF arguments, and closures
@@ -512,7 +512,7 @@ Korean, Hebrew, or Mandarin without any changes to the original:
 >> μαθ.ΠΙ ¶                   // → 3.14159
 ```
 
-See [I18N.md](./I18N.md) for the full three-layer pattern.
+See `zymbol-design/I18N.md` for the full three-layer pattern.
 
 ---
 
@@ -615,23 +615,30 @@ Or ask the whole question at once, from the zyquality checkout:
 ./zyq suite     # selftest + audit + reject + goldens + consensus, one verdict
 ```
 
-Current status (v0.0.9 branch — 0.0.8 is the latest published release).
-**Re-measured 2026-09-07**, every figure below on the same tree, with `./zyq suite`
+Current status (v0.0.10 branch — 0.0.9 is the latest published release).
+**Re-measured 2026-10-11**, every figure below on the same tree, with `./zyq suite`
 reporting **all gates pass**. Re-derive a count in a fresh clone before quoting it in
 release notes — that is the rule that came out of the 544/536 correction:
 
-- **1026 `#[test]` functions** across the 19 crates via `cargo test` — 0 failed, 4 ignored.
-- Corpus: **666 `.zy`**, 664 with a golden, 6 excused for every engine by a written reason
+- **1065 tests** across the 19 crates via `cargo test --workspace` — 0 failed, 4 ignored.
+- Corpus: **683 `.zy`**, 677 with a golden, 6 excused for every engine by a written reason
   in `corpus.toml`. `zyq audit` reports no hygiene problems.
-- Tree-walker vs VM: **660 agree, 0 diverge**.
-- All three engines: **660 agree, 0 diverge**. Against the browser engine alone,
-  **636 agree, 0 diverge** — the 30 in the difference are excused for `zyjs` in
-  `corpus.toml` (`std/db` is ODBC, `<\ cmd \>` entropy, TUI needs a real TTY).
-- Goldens: **635 of 639 match via `run`, 0 stale**, 4 unchecked; **25 of 25 via `check`**.
-- `zyq reject`: **41 forms refused in every engine**, 0 accepted anywhere.
-- Formatter properties: **710 PASS / 0 FAIL** over 764 files, 55 skipped — P1–P4 all zero.
+- Tree-walker vs VM: **677 agree, 0 diverge**.
+- All three engines: **677 agree, 0 diverge**. Against the browser engine alone,
+  **664 agree, 0 diverge** — the 19 in the difference are excused in `corpus.toml`
+  (`std/db` is ODBC, `<\ cmd \>` has no browser equivalent, TUI needs a real TTY, and the
+  6 excused for every engine).
+- Goldens: **647 of 647 match via `run`, 0 stale**; **30 of 30 via `check`**.
+- `zyq reject`: **55 forms refused in every engine**, 0 accepted anywhere.
+- Formatter properties: **733 PASS / 0 FAIL** over 781 files, 48 skipped — P1–P4 all zero.
 - Benchmarks: **16/16 within tolerance** of the recorded baseline, no regressions.
-- LSP against `zymbol check`: 666 files, 16 disagreements, **0 outside the baseline**.
+- LSP against `zymbol check`: 683 files, 14 disagreements, **0 outside the baseline**.
+- ZyDDT: **46 axes, 1 704 cells, all agree** — 171 of them checked against an
+  implementation that is not ours — and **3 findings open** (GLB-127, ZYVM-022, GLB-128 — each named, none a regression), 227 closed. The 29 premises
+  of `zymbol-design/PREMISES.md` each have a cell or are declared checked by review.
+- `LLM.md` behind **88 probes**, each quoting the sentence it stands behind; `GUIDE.md`
+  **130 of 130** executable examples; `zyquality/cost/` **15 cases**, every ratio within
+  its declared limit.
 
 `ZYMBOL_BIN=/usr/bin/zymbol` still points the suite at an installed package
 rather than the build tree. `VM_COMPARE_EXCLUDE` is gone — exclusions are
@@ -672,7 +679,7 @@ the language has not been asked to serve before. The application is the test and
 is the unit under test**: it is written *as if the language already supported it*, and every
 place it cannot say what it means — or says it and returns a silently wrong answer — is a
 finding against the interpreter, not a defect in the program. Closing one means changing the
-language: an operator derived under the [SYMBOLS.md](./SYMBOLS.md) rules, a semantic fix, a
+language: an operator derived under the `zymbol-design/SYMBOLS.md` rules, a semantic fix, a
 TW/VM divergence, or a `std/` module.
 
 This is validation, not verification, and the difference is the whole point. `cargo test`, the
@@ -684,8 +691,8 @@ cannot be rerun, so a project earns its keep as a discovery mechanism first. Eve
 distilled into a minimal `.zy` case, a golden and a unit test, and it is that cheap layer that
 names what broke when something does.
 
-The application is not retired afterwards. Seven of the eight are registered in
-`zyquality/project/apps.toml` and run as a gate (`gate = true`, ~40 goldens through both
+The application is not retired afterwards. Nine of the ten are registered in
+`zyquality/project/apps.toml` and run as a gate (`gate = true`, ~60 goldens through both
 engines); `ZyFmtCheck` runs over the LDV applications **by default**, because a formatter's
 damage shows up in hand-aligned tables, five writing systems and modules importing each other,
 and not in a corpus of short files — which is how it found five formatter defects the token
@@ -700,10 +707,10 @@ all fixed in v0.0.8, each with its own regression test. चतुरङ्गम
 recorded at the foot of its entry. ZyBank's thirty-three closed against that same release, which
 is what an LDV log looks like once the cycle completes: closing one is a language change or a
 reasoned rejection, and neither is the application author's call. The method, its decalogue, and
-the index of the eight logs are in **[LDV.md](./LDV.md)**.
+the index of the ten logs are in **`zymbol-design/LDV.md`**.
 
-The projects carry a second load at the same time. They are written across six natural
-languages — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese, Sanskrit — which is what
+The projects carry a second load at the same time. They are written across seven natural
+languages — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese, Sanskrit, Greek — which is what
 turns "a wordless grammar means language-neutral" from a claim into a result: no flags, no special
 modes, no translation layer at the syntax level. Sanskrit adds the case the earlier six could
 not make: Devanagari is the first script where a single identifier needs combining marks to be
@@ -723,6 +730,8 @@ once.
 | [囲碁 (Igo)](https://github.com/zymbol-lang/zy-GO) | **v0.0.8** | 日本語 (Japanese) | Recursive flood fill at depth, state threading across modules, double-width glyph grid, application-level i18n in 5 languages, `std/term` |
 | [चतुरङ्गम् (Chaturanga)](https://github.com/zymbol-lang/zyChaturanga) | **v0.0.9** | संस्कृतम् (Sanskrit) | Devanagari identifiers with conjuncts and visarga, alpha-beta search over make/unmake, mixed-script module names, numeral script as an i18n axis |
 | [ZyBank](https://github.com/zymbol-lang/ZyBank) | **v0.0.9** | Español | `std/db` in an application, money as integers with a per-currency exponent, dictionaries, configuration precedence, functions across module boundaries, keyboard input and typed fields in raw mode |
+| [GoL (Ζωή)](https://github.com/zymbol-lang/ZyGoL) | **v0.0.9** | Ελληνικά (Greek) | Conway's Game of Life with B/S rules, an application whose tests *and* their runner are Zymbol, the first suite graded on all three engines, four locales incl. Devanagari digits |
+| [ZyBF](https://github.com/zymbol-lang/ZyBF) | **v0.0.10** | Español | A mini LDV: a Brainf*** interpreter whose `.` needed an Int → Char conversion the language did not have — now `##'` — against an independent Python oracle, graded on all three engines |
 
 ---
 
@@ -840,7 +849,7 @@ lookup tables, no per-string branching at every callsite.
 <# ./bach => bach    // projectiles
 <# ./HUD  => HUD     // display
 
-[AN, AL] = >>?                              // query real terminal size
+(AN, AL) = >>?                              // query real terminal size
 // seed from three independent BashExec entropy sources
 mIS = (nS1 + nS2 * 1009 + nS3 * 6271) % 2147483647
 
@@ -851,12 +860,12 @@ mIS = (nS1 + nS2 * 1009 + nS3 * 6271) % 2147483647
 
     @:bucle {
         retardo = HUD::menu_HeH(AN, AL, idioma)
-        [ghom, mIS] = flota::chen_ghom(AN, AL, 1, mIS)
+        (ghom, mIS) = flota::chen_ghom(AN, AL, 1, mIS)
         @:oleada {
             <<|? tecla
-            [ghom, jaHDu, mIS, hubo_drift] =
+            (ghom, jaHDu, mIS, hubo_drift) =
                 flota::Suy_mIw(ghom, jaHDu, AN, AL, HoS, mIS)
-            [jagh_bachDu, mIS] =
+            (jagh_bachDu, mIS) =
                 bach::jagh_tagh(jagh_bachDu, ghom, jaHDu, mIS, HoS)
             HUD::chou_bID(...)              // delta render — only changed cells
             @~ retardo
@@ -949,7 +958,7 @@ two terminal columns — the structural fix for the alignment class of bug found
 The UI ships in **five languages** (日本語 / 한국어 / 中文 / English / Español) with four
 entry points that preselect one. This is application-level i18n — locale as module state,
 measured layout, and a completeness gate — and it is the reference implementation behind
-[USERAPPI18N.md](./USERAPPI18N.md).
+`zymbol-design/USERAPPI18N.md`.
 
 Building it drove a substantial part of v0.0.8. Findings that became interpreter changes:
 
@@ -1027,8 +1036,8 @@ Three capabilities were under test for the first time:
 - **The numeral mode as an i18n axis.** `#d0d9#` turns out to be process-global, not
   per-file, so a locale dispatcher can switch the digit script along with the language. The
   same line of drawing code yields `e४`, `e۴` and `e4`, and nothing below it knows which.
-  This is a third i18n mechanism beyond the two in [I18N.md](./I18N.md), now written up in
-  [USERAPPI18N.md](./USERAPPI18N.md) §14.
+  This is a third i18n mechanism beyond the two in `zymbol-design/I18N.md`, now written up in
+  `zymbol-design/USERAPPI18N.md` §14.
 
 Its log held five entries, **all closed against v0.0.9**:
 
@@ -1055,7 +1064,7 @@ Its log held five entries, **all closed against v0.0.9**:
 - **GUIDE.md said the numeral mode persists "in the same file".** It is global to the
   process — which is the useful behaviour, and the one the game depends on. The guide says
   so now, and the technique is written up as a third i18n mechanism in
-  [USERAPPI18N.md](./USERAPPI18N.md) §14, traps included.
+  `zymbol-design/USERAPPI18N.md` §14, traps included.
 - **The VM is 14–17× the tree-walker on this workload**, not the ~4× that had been quoted
   for years. A search is recursion with output parameters and array indexing in the
   innermost loop, which is where the tree-walker pays per frame. Every performance figure
@@ -1157,13 +1166,13 @@ Four capabilities were under test for the first time:
   Spanish. The configuration file may itself be written in the user's language —
   `{"言語": "hi", "通貨": "KWD"}` configures it — through `json::decode_map`, and the CLI verbs
   are accepted in all four languages at once (`zybank 口座` = `zybank cuentas`).
-- **A fourth i18n axis.** [USERAPPI18N.md](./USERAPPI18N.md) documents three mechanisms;
+- **A fourth i18n axis.** `zymbol-design/USERAPPI18N.md` documents three mechanisms;
   money needs one more, because the *format* of a number is independent of the language of the
   text, of the digit script and of the currency. Hindi with Kuwaiti dinars gives `-२५.९९० د.ك`,
   and that is correct: the language someone reads does not say which currency their money is in.
 
 Its log holds **thirty-three** findings — 12 BUG, 13 GAP, 6 ERROR, 2 IDEA — and it is the first
-written against the canonical form of [LDV.md](./LDV.md) § 5.2 entire, `HALLAZGOS.md` included.
+written against the canonical form of `zymbol-design/LDV.md` § 5.2 entire, `HALLAZGOS.md` included.
 All thirty-three are closed against v0.0.9: 22 fixed, 5 withdrawn, and the rest resolved with the
 decision recorded at the foot of the entry. **Three were engine divergences**, in a language whose
 gate reports zero over 666 corpus files.
@@ -1235,6 +1244,30 @@ one judges the **balances** rather than the bytes and reports BUG-ZYB-008 instea
 it — the same division `zyquality` makes between goldens and consensus. The browser engine does
 not take part: `std/db` does not exist there, and it has neither a terminal nor a filesystem.
 
+### ZyBF — v0.0.10 · Español · a mini LDV
+
+A Brainf*** interpreter in 96 lines, written on 2026-10-01: a language of symbols interpreted by
+another one. It is the cycle at the smallest size that still runs it — one short program in one
+domain, its log in the canonical form, its suite in the gate — and the domain asked for one thing
+none of the larger projects had: **the character whose code is a value that exists only at run
+time.** Brainf***'s `.` prints the cell as a character, and Zymbol had a literal for a code
+(`0d65` is `'A'`) and a way back (`##!'A'` is `65`), but nothing from a computed Int to its Char.
+The interpreter carried a table of 256 literals indexed at run time.
+
+Its three findings changed v0.0.10: **`##'expr`**, the cast that was missing (GLB-109), with the
+form of its siblings — a code with no character is `##Range`, any other type `##Type`; the
+documents that called a base literal an `Int` when the engines and the design said `Char`
+(GLB-110); and an error that says when a name was read into the expression before it, for two
+statements on one line (GLB-111). Then the program used what it asked for:
+
+```zymbol
+== '.' => { salida = salida ##'cinta[p] }
+```
+
+— 75 lines without the table, the same 13 tests against an independent Python oracle, alike in
+the three engines. That the line needs no intermediate variable came from the same day: a prefix
+operator now opens a juxtaposed operand in an assignment too (GLB-114).
+
 ---
 
 ## Project Layout
@@ -1259,14 +1292,14 @@ interpreter/
 - [LLM.md](./LLM.md) — The whole language on one page, written for a model to read in one pass: the rules that break code silently, then every construct in compressed form
 - [GUIDE.md](./GUIDE.md) — Full language guide with verified examples (all constructs)
 - [REFERENCE.md](./REFERENCE.md) — Known limitations, error taxonomy, complete symbol table
-- [COLLECTIONS.md](./COLLECTIONS.md) — The three collections as one piece: the rule of the result, why `=` never writes into a collection, the array and its declared mix, the tuple, the dictionary, and the reasoning behind each rule
+- `zymbol-design/COLLECTIONS.md` — The three collections as one piece: the rule of the result, why `=` never writes into a collection, the array and its declared mix, the tuple, the dictionary, and the reasoning behind each rule
 - [IMPLEMENTATION.md](./IMPLEMENTATION.md) — EBNF grammar, coverage table, TW/VM internals
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — Interpreter architecture and performance benchmarks
-- [I18N.md](./I18N.md) — Internationalization: multilingual code via re-export layers, and runtime text via dispatcher modules
-- [USERAPPI18N.md](./USERAPPI18N.md) — Building a multilingual application: measured layout, runtime language switching, per-language entry points, and the completeness gate
-- [MEMORY_MODEL.md](./MEMORY_MODEL.md) — Memory and scoping model: design vs implementation audit (findings MM-1 … MM-11)
-- [SYMBOLS.md](./SYMBOLS.md) — Semiotic and morphological reference: the grapheme inventory, how marks agglutinate into operators, the declared homographs and opaque signs, and the rules a new operator must satisfy
-- [LDV.md](./LDV.md) — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the eight gap logs
+- `zymbol-design/I18N.md` — Internationalization: multilingual code via re-export layers, and runtime text via dispatcher modules
+- `zymbol-design/USERAPPI18N.md` — Building a multilingual application: measured layout, runtime language switching, per-language entry points, and the completeness gate
+- `zymbol-design/MEMORY_MODEL.md` — Memory and scoping model: design vs implementation audit (findings MM-1 … MM-11)
+- `zymbol-design/SYMBOLS.md` — Semiotic and morphological reference: the grapheme inventory, how marks agglutinate into operators, the declared homographs and opaque signs, and the rules a new operator must satisfy
+- `zymbol-design/LDV.md` — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the ten gap logs
 - [ROADMAP.md](./ROADMAP.md) — What's done, known gaps, and planned work
 - [CHANGELOG.md](./CHANGELOG.md) — Version history
 

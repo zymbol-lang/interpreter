@@ -76,3 +76,44 @@ fn bincode_roundtrip_is_stable() {
     assert_eq!(decoded.functions.len(), compiled.functions.len());
     assert_eq!(decoded.string_pool, compiled.string_pool);
 }
+
+/// A frame holds what a function needs at once, not every temporary its body
+/// ever asked for (ZYVM-010): the same statement written once and sixty-four
+/// times needs the same registers, because each one's temporaries are handed
+/// back when it ends.
+#[test]
+fn a_statement_hands_its_temporaries_back() {
+    let body = |n: usize| {
+        let stmts = "    >> ((x + a) * (b + 1) - (a * 2 + b)) % 97 ¶\n".repeat(n);
+        format!("paso(x, a, b) {{\n{stmts}    <~ x + a\n}}\n>> paso(1, 2, 3) ¶")
+    };
+    let (one, many) = (compile(&body(1)), compile(&body(64)));
+    assert_eq!(
+        one.functions[0].num_registers,
+        many.functions[0].num_registers,
+        "64 statements in a row must fit in the frame of one"
+    );
+}
+
+/// The instructions that take a register and read the next one keep their
+/// pair adjacent even when single temporaries are being reused around them.
+#[test]
+fn a_slice_keeps_its_bounds_adjacent_among_reused_temporaries() {
+    use zymbol_bytecode::Instruction;
+    let compiled = compile(
+        "f(a, i, j) {\n    >> (i + j) * (i - j) ¶\n    >> (i * 2 + j) % 7 ¶\n    <~ a$[(i + 1)..(j - 1)]\n}\n>> f([1, 2, 3, 4, 5], 1, 5) ¶",
+    );
+    let ins = &compiled.functions[0].instructions;
+    let lo = ins
+        .iter()
+        .find_map(|i| match i {
+            Instruction::ArraySlice(_, _, lo) => Some(*lo),
+            _ => None,
+        })
+        .expect("the slice compiles to ArraySlice");
+    let writes = |r| {
+        ins.iter()
+            .any(|i| matches!(i, Instruction::CopyReg(d, _) if *d == r))
+    };
+    assert!(writes(lo) && writes(lo + 1), "both bounds are written, at lo and lo + 1");
+}

@@ -183,6 +183,17 @@ impl fmt::Display for Value {
 }
 
 impl Value {
+    /// Whether dropping this value frees anything. The scalars are listed, not
+    /// the owners, so a variant added later is dropped until someone says not.
+    #[inline]
+    fn owns_memory(&self) -> bool {
+        !matches!(
+            self,
+            Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Char(_)
+                | Value::Unit | Value::Function(..)
+        )
+    }
+
     /// Readable type name for diagnostics. Mirrors `zymbol-interpreter`'s
     /// `type_word` and (until it was retired) zyml's `type_name`, so a message naming a type reads the
     /// same whichever engine produced it.
@@ -288,6 +299,30 @@ impl Value {
         }
     }
 
+    /// The type as a diagnostic names it, the way the analyzer does: `Int`,
+    /// `[Int]`, `(Int, String)`, `#(k: Int)`, `Function`
+    /// (`zymbol_common::typeword`, decided 2026-09-16). The tree-walker's
+    /// `Value::type_label`, over this engine's values: a message says what kind
+    /// of value arrived, and both engines name it with one table.
+    pub fn type_label(&self) -> String {
+        use zymbol_common::typeword as tw;
+        match self {
+            Value::Int(_) => tw::INT.to_string(),
+            Value::Float(_) => tw::FLOAT.to_string(),
+            Value::String(_) => tw::STRING.to_string(),
+            Value::Char(_) => tw::CHAR.to_string(),
+            Value::Bool(_) => tw::BOOL.to_string(),
+            Value::Unit => tw::UNIT.to_string(),
+            Value::Error(_) => tw::ERROR.to_string(),
+            Value::Function(_, _) | Value::Closure(_, _, _) => tw::FUNCTION.to_string(),
+            Value::Array(items) => tw::array(items.iter().map(Value::type_label)),
+            Value::Tuple(items) => tw::tuple(items.iter().map(Value::type_label)),
+            Value::NamedTuple(fields) => {
+                tw::dict(fields.iter().map(|(k, v)| (k.as_str(), v.type_label())))
+            }
+        }
+    }
+
     /// Returns the Zymbol symbolic type name used in stdlib error messages.
     pub fn zymbol_type_name(&self) -> &'static str {
         match self {
@@ -362,8 +397,9 @@ impl Value {
             Value::Error(s) => {
                 let t = s.as_ref();
                 match (t.find('('), t.strip_suffix(')')) {
-                    (Some(i), Some(no_paren)) => no_paren[i + 1..].len() as i64,
-                    _ => t.len() as i64,
+                    // Code points, like `$#` and like `#?` on a String.
+                    (Some(i), Some(no_paren)) => no_paren[i + 1..].chars().count() as i64,
+                    _ => t.chars().count() as i64,
                 }
             }
             _ => 0,
@@ -478,11 +514,26 @@ impl Value {
 // Sprint 5E: slim FrameInfo — heap-allocate rare fields to reduce sizeof
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// Error state for a frame with an active try/catch — heap-allocated on demand.
+/// An error that reached a handler and has not been dealt with yet (GLB-010).
+///
+/// It stays pending through the clauses of its `!?` until one handles it, and
+/// through the `:>` after them; whatever is still pending when the `!?` ends is
+/// raised again. The original error is kept, not its printed form, so it leaves
+/// with its own kind and — through `origin_*` — from the line that raised it.
+struct Pending {
+    /// The register of the `!?` that caught it (`TryLand`), which is also how
+    /// `TryHandled` and `TryRethrow` recognise it as theirs.
+    tag: Reg,
+    err: VmError,
+    kind: &'static str,
+    origin_ip: u32,
+    origin_chunk: u32,
+}
+
+/// Error state of a frame — allocated the first time an error lands in it.
+#[derive(Default)]
 struct FrameError {
-    error_val: Option<Value>,
-    /// Error kind string: "IO", "Index", "Type", "Div", "_"
-    error_kind: String,
+    pending: Vec<Pending>,
 }
 
 /// Frame metadata — registers live in value_stack[base..next_base]
@@ -496,11 +547,11 @@ struct FrameInfo {
     chunk_idx: u32,
     /// Register in the caller frame where the return value should be written
     return_reg: u16,
-    /// Try/catch: instruction index to jump to on error (u32::MAX = no active catch)
+    /// The armed handler: where an error raised in this frame goes
+    /// (u32::MAX = none). The one it replaced lives in a register of the `!?`
+    /// that armed it (`TryBegin`), so nesting costs no allocation.
     catch_ip: u32,
-    /// Nesting depth of try blocks in this frame
-    try_depth: u8,
-    /// Error state — allocated only when a try block is active (None for normal calls)
+    /// Pending errors — allocated only when an error lands in this frame
     error: Option<Box<FrameError>>,
     /// Output param writeback — None for most functions (saves 24 bytes)
     // Box is intentional: keeps `Option` at 8 bytes (vs 24 for a bare Vec) in the
@@ -520,8 +571,6 @@ pub enum VmError {
     // what the program did wrong.
     #[error("this needs {expected} and got {got}")]
     TypeError { expected: &'static str, got: String },
-    #[error("{op} requires a numeric value, got {got}")]
-    CastError { op: &'static str, got: String },
     #[error("division by zero")]
     DivisionByZero,
     #[error("modulo by zero")]
@@ -533,6 +582,12 @@ pub enum VmError {
     /// `###`/`##!` on a float with no integer form in range.
     #[error("integer overflow: {op} cannot represent this float")]
     CastOverflow { op: &'static str },
+    /// `##'` on an Int that is no character: past 0x10FFFF, or a surrogate.
+    #[error("character out of range: ##' cannot represent this Int")]
+    CharOutOfRange,
+    /// `0x|"…"|` and its siblings reading a code that is no character (GLB-113).
+    #[error("character out of range: {prefix}|…| cannot represent this code")]
+    CodeOutOfRange { prefix: &'static str },
     /// `container` is spelled as the tree-walker spells it — the read path there
     /// names the thing that was too short, and one message that always said
     /// "array" told a program indexing past the end of a STRING that its array
@@ -549,6 +604,63 @@ pub enum VmError {
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Generic(String),
+    /// A type mistake worded as the tree-walker words that operation —
+    /// `map requires array, got Int` — and still of the `##Type` family, which
+    /// `TypeError`'s generic `this needs X and got Y` was (step 3.5b, decided
+    /// 2026-09-16). The type is named with `Value::type_label`.
+    #[error("{0}")]
+    TypeMsg(String),
+
+    /// A message whose family is `##Index`: the type is right and the VALUE is
+    /// not — a count that came out negative, an index below 1. D1 puts those in
+    /// `##Index`, and `TypeMsg` was the only message-carrying variant there
+    /// was, so they were answering `##Type`.
+    #[error("{0}")]
+    IndexMsg(String),
+
+    /// A message whose family is `##Parse`: a text that had to be read as a
+    /// number and is not one — `"a" < 10` (GLB-094). The message carries the
+    /// text, so its words could not be left to decide the family: `"index" < 10`
+    /// was an `##Index`.
+    #[error("{0}")]
+    ParseMsg(String),
+
+    /// A message whose family is `##Key`: a key that is not in the dictionary.
+    /// The message carries the key and the keys there are, so their words could
+    /// not be left to decide the family: a key called `overflow` was a
+    /// `##Range` (GLB-097).
+    #[error("{0}")]
+    KeyMsg(String),
+
+    /// A message whose family is `##IO`: a subscript that is not there, or that
+    /// cannot be run. The message carries the path, and its words chose the
+    /// family — `</ index_type.zy />` was an `##Index` (GLB-099).
+    #[error("{0}")]
+    IoMsg(String),
+
+    /// A message whose family is `##_`, declared rather than read: a name used
+    /// after `\`. The message carries the name, and its words chose the family —
+    /// a variable called `index` was an `##Index` (GLB-099).
+    #[error("{0}")]
+    PlainMsg(String),
+
+    /// A runtime error that knows where it happened. Built once, at the edge of
+    /// `run`, from the instruction pointer the VM was on — so the hot loop pays
+    /// two stores per instruction and nothing more. `Display` is the message
+    /// alone, so `!?` catches the same text it always did.
+    #[error("{message}")]
+    Located { message: String, file: String, line: u32, column: u32 },
+}
+
+impl VmError {
+    /// Where the error happened, if it knows. Line only — see
+    /// `RuntimeError::location` for why there is no column.
+    pub fn location(&self) -> Option<(&str, u32)> {
+        match self {
+            VmError::Located { file, line, .. } => Some((file, *line)),
+            _ => None,
+        }
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -562,6 +674,34 @@ pub enum VmError {
 /// a script runs in. A spawn failure names the program, which the previous
 /// `failed to execute bash command: program not found` did not — it named a shell
 /// the code was not even running.
+/// Whether a value is, or holds anywhere inside it, a function or a lambda.
+/// A function has no text a shell could take; the tree-walker refuses it at any
+/// depth of the collection it is joined from (GLB-017 A).
+fn holds_function(v: &Value) -> bool {
+    match v {
+        Value::Function(..) | Value::Closure(..) => true,
+        Value::Array(items) | Value::Tuple(items) => items.iter().any(holds_function),
+        Value::NamedTuple(fields) => fields.iter().any(|(_, v)| holds_function(v)),
+        _ => false,
+    }
+}
+
+/// The text a value becomes inside `<\ … \>`: a collection is its elements
+/// joined with spaces, at any depth — shell words, the tree-walker's
+/// `value_to_bash_str`. Its display form (`[1, 2]`, `(3, x)`, `#(…)`) is shell
+/// syntax or a comment to `sh` (GLB-017 G).
+fn shell_text(v: &Value) -> String {
+    match v {
+        Value::Array(items) | Value::Tuple(items) => {
+            items.iter().map(shell_text).collect::<Vec<_>>().join(" ")
+        }
+        Value::NamedTuple(fields) => {
+            fields.iter().map(|(_, v)| shell_text(v)).collect::<Vec<_>>().join(" ")
+        }
+        other => other.to_string_repr(),
+    }
+}
+
 fn run_in_shell(cmd: &str) -> Result<std::process::Output, VmError> {
     let mut shell =
         zymbol_common::shell::shell_command(cmd).map_err(|e| VmError::Generic(e.to_string()))?;
@@ -592,14 +732,10 @@ fn fmt_comma_int(n: i64) -> String {
 fn vm_precision_from(v: &Value) -> Result<u32, VmError> {
     match v {
         Value::Int(n) if *n >= 0 => Ok(*n as u32),
-        Value::Int(n) => Err(VmError::TypeError {
-            expected: "a decimal count that is not negative",
-            got: n.to_string(),
-        }),
-        other => Err(VmError::TypeError {
-            expected: "a whole number as the decimal count",
-            got: other.type_name().to_string(),
-        }),
+        // Worded as the tree-walker words them (step 3.5b).
+        Value::Int(n) => Err(VmError::IndexMsg(format!("decimal count must not be negative, got {}", n))),
+        other => Err(VmError::TypeMsg(format!(
+            "decimal count must be a whole number, got {}", other.type_label()))),
     }
 }
 
@@ -766,38 +902,23 @@ fn cmp_order(va: &Value, vb: &Value) -> Option<i32> {
     }
 }
 
-/// `rb2!` for the call-frame interpreter loop, which has no `raise!` macro and
-/// propagates with `?`.
-fn bools_or_err(va: &Value, vb: &Value, op: &str) -> Result<(bool, bool), VmError> {
+/// The tree-walker's refusal for an ordering comparison it will not make, so
+/// both engines fail with the same text — and the same kind: two types that
+/// never compare are a `##Type` (D1; GLB-091). A string against a number is
+/// decided by the text's VALUE (`"5" < 10` compares); when the text is not a
+/// number, reading it as one is what failed, and that is a `##Parse` (GLB-094).
+fn cmp_order_error(va: &Value, vb: &Value, op: &str) -> VmError {
     match (va, vb) {
-        (Value::Bool(x), Value::Bool(y)) => Ok((*x, *y)),
-        _ => Err(VmError::Generic(logical_type_error(
-            op,
-            if matches!(va, Value::Bool(_)) { vb } else { va },
-        ))),
-    }
-}
-
-/// `cmp_order` for the call-frame interpreter loop, which has no `raise!` macro
-/// and propagates with `?`.
-fn ord_slow(va: &Value, vb: &Value, op: &str) -> Result<i32, VmError> {
-    cmp_order(va, vb).ok_or_else(|| VmError::Generic(cmp_order_error(va, vb, op)))
-}
-
-/// The tree-walker's message for an ordering comparison it refuses to make, so
-/// both engines fail with the same text.
-fn cmp_order_error(va: &Value, vb: &Value, op: &str) -> String {
-    match (va, vb) {
-        (Value::String(s), Value::Int(i)) =>
-            format!("cannot compare string '{}' with integer {} using operator '{}'", s.as_ref(), i, op),
-        (Value::Int(i), Value::String(s)) =>
-            format!("cannot compare integer {} with string '{}' using operator '{}'", i, s.as_ref(), op),
-        (Value::String(s), Value::Float(f)) =>
-            format!("cannot compare string '{}' with float {} using operator '{}'", s.as_ref(), f, op),
-        (Value::Float(f), Value::String(s)) =>
-            format!("cannot compare float {} with string '{}' using operator '{}'", f, s.as_ref(), op),
-        (a, b) =>
-            format!("cannot compare values with operator '{}': {} and {}", op, a.type_name(), b.type_name()),
+        (Value::String(s), Value::Int(i)) => VmError::ParseMsg(
+            format!("cannot compare string '{}' with integer {} using operator '{}'", s.as_ref(), i, op)),
+        (Value::Int(i), Value::String(s)) => VmError::ParseMsg(
+            format!("cannot compare integer {} with string '{}' using operator '{}'", i, s.as_ref(), op)),
+        (Value::String(s), Value::Float(f)) => VmError::ParseMsg(
+            format!("cannot compare string '{}' with float {} using operator '{}'", s.as_ref(), f, op)),
+        (Value::Float(f), Value::String(s)) => VmError::ParseMsg(
+            format!("cannot compare float {} with string '{}' using operator '{}'", f, s.as_ref(), op)),
+        (a, b) => VmError::TypeMsg(
+            format!("cannot compare values with operator '{}': {} and {}", op, a.type_name(), b.type_name())),
     }
 }
 
@@ -810,10 +931,16 @@ fn cmp_order_error(va: &Value, vb: &Value, op: &str) -> String {
 /// — where that guidance is exactly right — got the generic "this needs a
 /// number" instead, because it took a different path. The message was tied to
 /// the code route, not to the operator; now it is tied to the operator.
+///
+/// The guidance for `+` and for `/` is for text on either side; with no text in
+/// sight they name the types like every other operator (GLB-059, GLB-090,
+/// decided 2026-10-05).
+/// The kind is `##Type` at every raise site (`VmError::TypeMsg`, GLB-088).
 fn arith_type_error(op: &str, a: &Value, b: &Value) -> String {
+    let text = matches!(a, Value::String(_)) || matches!(b, Value::String(_));
     match op {
-        "+" => "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\"".to_string(),
-        "/" => "/ requires numeric operands — use $/ to split strings".to_string(),
+        "+" if text => "+ is arithmetic only — use juxtaposition to concatenate strings: \"a\" b \"c\"".to_string(),
+        "/" if text => "/ requires numeric operands — use $/ to split strings".to_string(),
         "^" => format!("power operator requires numeric operands: {}, {}", a.type_name(), b.type_name()),
         _   => format!("arithmetic requires numeric operands: {}, {}", a.type_name(), b.type_name()),
     }
@@ -1036,6 +1163,73 @@ fn ascii_digits(s: &str) -> std::borrow::Cow<'_, str> {
 use zymbol_lexer::digit_blocks::ascii_number as normalize_unicode_digits;
 
 #[inline(always)]
+/// The `##` family of a VM error.
+///
+/// A variant that says what went wrong decides it; everything else is read from
+/// the message by the rule the tree-walker uses (`zymbol_common::errkind`), so a
+/// native's `incompatible argument type(s)` is a ##Type in both engines — it was
+/// a ##_ here, and `:! ##Type` could not meet it (GLB-010).
+fn vm_error_kind(e: &VmError) -> &'static str {
+    match e {
+        VmError::TypeError { .. } | VmError::TypeMsg(_) => "Type",
+        VmError::DivisionByZero | VmError::ModuloByZero => "Div",
+        VmError::IntOverflow { .. } | VmError::CastOverflow { .. }
+            | VmError::CharOutOfRange | VmError::CodeOutOfRange { .. } => "Range",
+        VmError::IndexOutOfBounds { .. } | VmError::IndexZero | VmError::IndexMsg(_) => "Index",
+        VmError::ParseMsg(_) => "Parse",
+        VmError::KeyMsg(_) => "Key",
+        VmError::IoMsg(_) => "IO",
+        VmError::PlainMsg(_) => "_",
+        VmError::Io(_) => "IO",
+        VmError::Generic(m) | VmError::Located { message: m, .. } => {
+            zymbol_common::errkind::error_kind_of_message(m)
+        }
+        _ => "_",
+    }
+}
+
+/// Write a register, dropping the value it held only if that value owns memory.
+///
+/// `*slot = v` runs `Value`'s drop glue — an out-of-line call — on whatever was
+/// there, and what was there is nearly always an Int, a Bool or `Unit`: the
+/// call was 10–20 % of the VM's time, in GO and Chaturanga as much as in a
+/// counting loop (ZYVM-010, measured 2026-10-10). Forgetting a scalar loses
+/// nothing, and `owns_memory` lists the scalars, so a variant added later is
+/// dropped until someone says not. No `unsafe`: `mem::forget` is safe.
+#[inline(always)]
+fn put_reg(slot: &mut Value, v: Value) {
+    let old = mem::replace(slot, v);
+    if old.owns_memory() {
+        drop(old);
+    } else {
+        mem::forget(old);
+    }
+}
+
+/// Shrink the register stack to `len`, dropping only the values that own memory.
+///
+/// `Vec::truncate` runs `Value`'s drop glue — an out-of-line call — on every
+/// register of the frame being left, and when a function returns most of them
+/// hold an Int, a Bool or `Unit`, which own nothing: in `fib` every one of them
+/// does (ZYVM-010, measured by ZyBench as IDEA-BEN-002).
+#[inline]
+fn truncate_regs(stack: &mut Vec<Value>, len: usize) {
+    if len >= stack.len() {
+        return;
+    }
+    for v in &mut stack[len..] {
+        if v.owns_memory() {
+            *v = Value::Unit; // the old value is dropped here, safely
+        }
+    }
+    // SAFETY: `len` is below the current length, so every element in `0..len`
+    // stays initialised. What is forgotten past `len` owns nothing — the loop
+    // replaced each value that did — so nothing leaks; and were `owns_memory`
+    // ever wrong, the cost would be a leak, never undefined behaviour.
+    unsafe { stack.set_len(len) };
+}
+
+#[inline]
 fn get_chunk(program: &CompiledProgram, chunk_idx: usize) -> &Chunk {
     // chunk_idx == usize::MAX OR u32::MAX as usize both indicate the main chunk
     if chunk_idx >= program.functions.len() {
@@ -1063,6 +1257,10 @@ impl Drop for TuiGuard {
 // VM — Sprint 5C: flat register stack
 // ──────────────────────────────────────────────────────────────────────────────
 
+/// What runs a subscript: the resolved path in, what the program printed out,
+/// or the failure as `zymbol run` writes it.
+pub type SubscriptRunner = std::rc::Rc<dyn Fn(&std::path::Path, &[String]) -> Result<(String, i32), String>>;
+
 pub struct VM<W: Write> {
     /// Flat register stack: all registers of all frames concatenated.
     /// value_stack[base..] are the registers of the current (top) frame.
@@ -1079,14 +1277,59 @@ pub struct VM<W: Write> {
     numeral_mode: u32,
     /// Module-level global variables (mutable, shared across all calls)
     global_vars: Vec<Value>,
+    /// Globals ended by `\`, and the name each one had, so a later read can say
+    /// what happened instead of «'x' is undefined» (GLB-008). A map and not a
+    /// set because the message needs the name and `LoadGlobal` only carries an
+    /// index. Assigning the name again revives it, which `StoreGlobal` does.
+    destroyed_globals: std::collections::HashMap<u16, String>,
+    /// Module state taken out of its slot for an edit in place: the slot index
+    /// and the absolute register that holds the value meanwhile. Set by
+    /// `DetachGlobal`, cleared by the `StoreGlobal` that follows the edit; if
+    /// the edit fails instead, the value goes back to the slot (ZYVM-003).
+    detached_global: Option<(u16, usize)>,
+    /// Absolute value-stack slots of function locals ended with `\` that have
+    /// not been assigned since (ZYVM-005). Empty unless a program destroys one.
+    destroyed_slots: std::collections::HashSet<usize>,
     /// CLI arguments passed after the script path (argv[1..], skipping --vm flags)
     cli_args: Vec<String>,
+    /// Runs a subscript `</ file />` as `zymbol run --vm` runs a program
+    /// (GLB-017 I). The CLI installs it; a program built into a standalone
+    /// executable has none, and its subscripts are refused.
+    subscript_runner: Option<SubscriptRunner>,
     /// The code a top-level `<~ n` asked the program to end with (GAP-ZYB-006).
     exit_code: Option<i64>,
+    /// The instruction the dispatch loop is on, and which chunk it belongs to
+    /// (`u32::MAX` = the main chunk). Written once per instruction so that an
+    /// error leaving the loop can be told where it came from — the loop's own
+    /// `ip` is a local, and by the time `?` has carried the error out of `run`
+    /// there is nothing left to ask.
+    cur_ip: u32,
+    cur_chunk: u32,
+    /// The error `raise!` is carrying to a handler, between the jump and the
+    /// `TryLand` that receives it.
+    in_flight: Option<Pending>,
+    /// Terminal guards: dropping one restores the terminal, so they live as long
+    /// as the TUI they opened — across every nested run of the loop.
+    tui_stack: Vec<TuiGuard>,
+    /// `zymbol run --keys` (D11): the virtual screen and the key script, and
+    /// how many `>>|` blocks are open on it. `None` is the ordinary run.
+    headless: Option<zymbol_common::vscreen::Headless>,
+    headless_tui: u32,
     output: W,
 }
 
 impl<W: Write> VM<W> {
+    /// A new frame starts at `base`, and every slot from there up belongs to
+    /// it: a mark left by a frame that already returned is not its business.
+    /// The marks are absolute, so without this a function that destroyed its
+    /// parameter failed the NEXT time it was called — `>> p` read the previous
+    /// call's mark (GLB-055, found on 2026-09-25 by calling it twice).
+    fn forget_destroyed_from(&mut self, base: usize) {
+        if !self.destroyed_slots.is_empty() {
+            self.destroyed_slots.retain(|&slot| slot < base);
+        }
+    }
+
     pub fn new(output: W) -> Self {
         Self {
             value_stack: Vec::with_capacity(4096),  // ~160KB, covers deep recursion
@@ -1096,15 +1339,35 @@ impl<W: Write> VM<W> {
             string_rcs: Vec::new(),
             numeral_mode: 0x0030, // ASCII_BASE default
             global_vars: Vec::new(),
+            destroyed_globals: std::collections::HashMap::new(),
+            detached_global: None,
+            destroyed_slots: std::collections::HashSet::new(),
             cli_args: Vec::new(),
+            subscript_runner: None,
             exit_code: None,
+            cur_ip: 0,
+            cur_chunk: u32::MAX,
+            in_flight: None,
+            tui_stack: Vec::new(),
+            headless: None,
+            headless_tui: 0,
             output,
         }
     }
 
     /// Set CLI arguments before running (argv after the script path, minus VM flags).
+    /// Install the runner for `</ file />` (GLB-017 I).
+    pub fn set_subscript_runner(&mut self, runner: SubscriptRunner) {
+        self.subscript_runner = Some(runner);
+    }
+
     pub fn set_cli_args(&mut self, args: Vec<String>) {
         self.cli_args = args;
+    }
+
+    /// `zymbol run --keys FILE` (D11): see the tree-walker's `set_keys`.
+    pub fn set_keys(&mut self, keys: zymbol_common::vscreen::KeyScript) {
+        self.headless = Some(zymbol_common::vscreen::Headless::new(keys));
     }
 
     /// The exit status a top-level `<~ n` asked for, if the program asked
@@ -1127,6 +1390,83 @@ impl<W: Write> VM<W> {
     }
 
     pub fn run(&mut self, program: &CompiledProgram) -> Result<(), VmError> {
+        match self.run_inner(program) {
+            Ok(()) => Ok(()),
+            // The one place a VM error learns where it came from: `cur_ip` and
+            // `cur_chunk` still hold the instruction that raised, and the chunk
+            // knows which line of which file it was compiled from.
+            Err(e) => Err(self.locate(e, program)),
+        }
+    }
+
+    /// Attach the failing instruction's source position, when the program was
+    /// compiled with one. A chunk with no `src` (an older bundle, or one built
+    /// before positions existed) reports nothing rather than line 0.
+    /// The source line of the instruction at `ip` of a chunk (`u32::MAX` is
+    /// the main one), or 0 when it has none.
+    fn line_at(program: &CompiledProgram, chunk: u32, ip: u32) -> u32 {
+        let c = if chunk == u32::MAX {
+            &program.main
+        } else {
+            match program.functions.get(chunk as usize) {
+                Some(c) => c,
+                None => return 0,
+            }
+        };
+        c.src.get(ip as usize).map(|p| p.line).unwrap_or(0)
+    }
+
+    fn locate(&self, err: VmError, program: &CompiledProgram) -> VmError {
+        // Already located — an inner frame that knew better wins.
+        if matches!(err, VmError::Located { .. }) {
+            return err;
+        }
+        let chunk = if self.cur_chunk == u32::MAX {
+            &program.main
+        } else {
+            match program.functions.get(self.cur_chunk as usize) {
+                Some(c) => c,
+                None => return err,
+            }
+        };
+        let mut pos = match chunk.src.get(self.cur_ip as usize) {
+            Some(p) => *p,
+            None => return err,
+        };
+        // A lambda whose body is an expression has no statement, so its
+        // instructions carry no line: the error is at the statement running,
+        // the one that called it — the call instruction just before the return
+        // address the caller's frame saved. Where the tree-walker and zyjs
+        // name that statement, the VM said nothing (ZYVM-012).
+        if pos.line == 0 {
+            for f in self.frame_stack.iter().rev().skip(1) {
+                if f.ip == 0 {
+                    continue;
+                }
+                let line = Self::line_at(program, f.chunk_idx, f.ip - 1);
+                if line > 0 {
+                    let c = if f.chunk_idx == u32::MAX { &program.main } else { &program.functions[f.chunk_idx as usize] };
+                    pos = c.src[(f.ip - 1) as usize];
+                    break;
+                }
+            }
+        }
+        if pos.line == 0 {
+            return err;
+        }
+        let Some(file) = program.files.get(pos.file as usize) else { return err };
+        if file.is_empty() {
+            return err;
+        }
+        VmError::Located {
+            message: err.to_string(),
+            file: file.clone(),
+            line: pos.line,
+            column: pos.column,
+        }
+    }
+
+    fn run_inner(&mut self, program: &CompiledProgram) -> Result<(), VmError> {
         // Reset flat stack for this execution
         self.value_stack.clear();
         self.frame_stack.clear();
@@ -1147,24 +1487,43 @@ impl<W: Write> VM<W> {
 
         // Push initial frame for main chunk
         let num_regs = program.main.num_registers as usize;
-        self.value_stack.resize(num_regs, Value::Unit);
+        self.value_stack.resize_with(num_regs, || Value::Unit);
         let main_frame = FrameInfo {
             base: 0,
             ip: 0,
             chunk_idx: u32::MAX,
             return_reg: 0,
             catch_ip: u32::MAX,
-            try_depth: 0,
             error: None,
             writeback: None,
         };
         self.frame_stack.push(main_frame);
 
+        let result = self.exec(program, 0).map(|_| ());
+        // The terminal is given back on every way out, error included.
+        self.tui_stack.clear();
+        self.in_flight = None;
+        result
+    }
+
+    /// The dispatch loop: run from the frame on top of the stack until the frame
+    /// at index `floor` returns, and hand back what it returned.
+    ///
+    /// `run` enters it once, at the main frame. A higher-order operator enters it
+    /// again for each call it makes, after pushing the callee's frame — so the
+    /// function `$>` calls runs on the same loop as everything else. It used to
+    /// run on a second, smaller loop that knew 96 of the instructions and skipped
+    /// the rest in silence: `["a,b"]$> (s -> s$/ ',')` answered `[()]` (ZYVM-004).
+    ///
+    /// An error with no handler at or above `floor` unwinds to `floor` and
+    /// returns, and the operator raises it in the loop outside — where the
+    /// `!?` around the `$>` can meet it.
+    fn exec(&mut self, program: &CompiledProgram, floor: usize) -> Result<Value, VmError> {
         // Local variables — avoid frame_stack.last() overhead on every instruction
-        let mut ip: usize = 0;
-        let mut chunk_idx: usize = usize::MAX;
-        // base: offset in value_stack where current frame's registers start
-        let mut base: usize = 0;
+        let (mut ip, mut chunk_idx, mut base): (usize, usize, usize) = {
+            let top = self.frame_stack.last().unwrap();
+            (top.ip as usize, top.chunk_idx as usize, top.base as usize)
+        };
 
         // ── Hot-path register access macros ──────────────────────────────────
         // SAFETY: base + reg < value_stack.len() by compiler construction.
@@ -1172,7 +1531,10 @@ impl<W: Write> VM<W> {
             ($r:expr) => { unsafe { self.value_stack.get_unchecked(base + $r as usize) } }
         }
         macro_rules! wreg {
-            ($r:expr, $v:expr) => { unsafe { *self.value_stack.get_unchecked_mut(base + $r as usize) = $v } }
+            ($r:expr, $v:expr) => {{
+                let __v = $v;
+                put_reg(unsafe { self.value_stack.get_unchecked_mut(base + $r as usize) }, __v)
+            }}
         }
         // ri!: read register as Int for a POSITION — an index, a count, a
         // repetition. Not for an arithmetic operand: those go through `ri2!`,
@@ -1214,7 +1576,7 @@ impl<W: Write> VM<W> {
                     (Value::Int(x), Value::Int(y)) => Ok((*x, *y)),
                     (va, vb) => Err(arith_type_error($op, va, vb)),
                 };
-                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::TypeMsg(msg)) }
             }}
         }
         macro_rules! rf2 {
@@ -1226,7 +1588,7 @@ impl<W: Write> VM<W> {
                     (Value::Int(x), Value::Int(y))     => Ok((*x as f64, *y as f64)),
                     (va, vb) => Err(arith_type_error($op, va, vb)),
                 };
-                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::TypeMsg(msg)) }
             }}
         }
         // The immediate forms: the other operand is the literal the compiler
@@ -1237,53 +1599,96 @@ impl<W: Write> VM<W> {
                     Value::Int(x) => Ok(*x),
                     va => Err(arith_type_error($op, va, &Value::Int($imm as i64))),
                 };
-                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::TypeMsg(msg)) }
             }}
         }
 
-        macro_rules! raise {
-            ($e:expr) => {{
-                let _err = $e;
-                // L16 fix: an error raised inside a called function must reach a
-                // catch armed in ANY ancestor frame, not just the top one. Walk
-                // the frame stack for the nearest active catch, pop the frames
-                // above it (releasing their registers), and resume at the catch.
-                let target = self.frame_stack.iter().rposition(|f| f.catch_ip != u32::MAX);
+        // raise_kind!: carry an error to the nearest armed handler at or above
+        // `floor`, with its kind already decided. A rethrow uses this directly,
+        // so the error leaves with the kind it arrived with.
+        //
+        // L16 fix: an error raised inside a called function must reach a catch
+        // armed in ANY ancestor frame, not just the top one. Walk the frame stack
+        // for the nearest active catch, pop the frames above it (releasing their
+        // registers), and resume at the catch — whose `TryLand` receives the
+        // error from `in_flight`.
+        //
+        // Never write one inside a `for`/`while`/`loop` of an instruction: the
+        // `continue` below would continue THAT loop, and a label cannot reach
+        // into a macro. Break out with the error and raise after the loop.
+        macro_rules! raise_kind {
+            ($e:expr, $kind:expr) => {{
+                let _err: VmError = $e;
+                let _kind: &'static str = $kind;
+                // An edit of module state that failed: the value it was
+                // editing goes back to its slot, untouched — the edit
+                // instructions validate before they write.
+                if let Some((g, abs)) = self.detached_global.take() {
+                    // A clone, not a move: the register may be a script
+                    // variable's own, whose mirror slot was detached, and it
+                    // keeps its value.
+                    let v = self.value_stack[abs].clone();
+                    if let Some(slot) = self.global_vars.get_mut(g as usize) {
+                        *slot = v;
+                    }
+                }
+                let target = self.frame_stack.iter()
+                    .rposition(|f| f.catch_ip != u32::MAX)
+                    .filter(|&t| t >= floor);
                 if let Some(target) = target {
                     while self.frame_stack.len() - 1 > target {
-                        let callee_base = self.frame_stack.last().unwrap().base as usize;
-                        self.frame_stack.pop();
-                        self.value_stack.truncate(callee_base);
+                        let callee = self.frame_stack.pop().unwrap();
+                        let callee_base = callee.base as usize;
+                        // What a frame was lent goes back to its caller as the
+                        // function left it: it worked on the caller's own
+                        // value, so what it wrote before failing is written
+                        // (S1). A frame further down gets it the same way when
+                        // its turn to be popped comes.
+                        if let Some(wb) = callee.writeback {
+                            let caller_base = self.frame_stack.last().unwrap().base as usize;
+                            for &(param_idx, caller_reg) in wb.iter() {
+                                let v = mem::replace(
+                                    &mut self.value_stack[callee_base + param_idx],
+                                    Value::Unit,
+                                );
+                                self.value_stack[caller_base + caller_reg as usize] = v;
+                            }
+                        }
+                        truncate_regs(&mut self.value_stack, callee_base);
                     }
-                    {
-                        let frame = self.frame_stack.last().unwrap();
+                    let catch = {
+                        let frame = self.frame_stack.last_mut().unwrap();
                         base = frame.base as usize;
                         chunk_idx = frame.chunk_idx as usize;
-                    }
-                    let frame = self.frame_stack.last_mut().unwrap();
-                    let catch = frame.catch_ip;
-                    frame.catch_ip = u32::MAX;
-                    let kind = match &_err {
-                        VmError::TypeError { .. } | VmError::CastError { .. } => "Type",
-                        VmError::DivisionByZero | VmError::ModuloByZero => "Div",
-                        VmError::IntOverflow { .. } | VmError::CastOverflow { .. } => "Range",
-                        VmError::IndexOutOfBounds { .. } | VmError::IndexZero => "Index",
-                        VmError::Io(_) => "IO",
-                        // A dictionary key that is not there is a ##Key, even
-                        // though the reader arrived through the index syntax
-                        // `d["k"]` (decision 10). The tree-walker classifies the
-                        // same way, from the same wording.
-                        VmError::Generic(m) if m.starts_with("no key '") => "Key",
-                        _ => "_",
+                        // Disarmed until `TryLand` re-arms the one outside it: an
+                        // error raised before then must not come back here.
+                        std::mem::replace(&mut frame.catch_ip, u32::MAX)
                     };
-                    frame.try_depth = 0;
-                    let err_data = frame.error.get_or_insert_with(|| Box::new(FrameError { error_val: None, error_kind: String::new() }));
-                    err_data.error_kind = kind.to_string();
-                    err_data.error_val = Some(Value::Error(ZyStr::new(format!("##{}({})", kind, _err))));
+                    self.in_flight = Some(Pending {
+                        tag: 0,
+                        err: _err,
+                        kind: _kind,
+                        origin_ip: self.cur_ip,
+                        origin_chunk: self.cur_chunk,
+                    });
                     ip = catch as usize;
                     continue;
                 }
+                // Nothing here meets it. A nested run gives back the frames it
+                // pushed, so the operator that started it sees the stack it had.
+                if floor > 0 && self.frame_stack.len() > floor {
+                    let floor_base = self.frame_stack[floor].base as usize;
+                    self.frame_stack.truncate(floor);
+                    truncate_regs(&mut self.value_stack, floor_base);
+                }
                 return Err(_err);
+            }};
+        }
+        macro_rules! raise {
+            ($e:expr) => {{
+                let _err: VmError = $e;
+                let _kind = vm_error_kind(&_err);
+                raise_kind!(_err, _kind)
             }};
         }
 
@@ -1310,7 +1715,8 @@ impl<W: Write> VM<W> {
                     (Value::Bool(x), Value::Bool(y)) => Ok((*x, *y)),
                     (va, vb) => Err(logical_type_error($op, if matches!(va, Value::Bool(_)) { vb } else { va })),
                 };
-                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+                // A wrong TYPE is a `##Type` (D1; GLB-091).
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::TypeMsg(msg)) }
             }}
         }
         // rn!: the operand of unary `-`. Its refusal used to come out of `ri!`
@@ -1322,16 +1728,14 @@ impl<W: Write> VM<W> {
                     Value::Int(n)   => Ok(*n),
                     va => Err(format!("negation requires numeric operand, got {}", va.type_name())),
                 };
-                match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) }
+                match read { Ok(v) => v, Err(msg) => raise!(VmError::TypeMsg(msg)) }
             }}
         }
         macro_rules! ord_or_raise {
             ($a:expr, $b:expr, $op:expr) => {
                 match cmp_order(rreg!($a), rreg!($b)) {
                     Some(r) => r,
-                    None => raise!(VmError::Generic(
-                        cmp_order_error(rreg!($a), rreg!($b), $op)
-                    )),
+                    None => raise!(cmp_order_error(rreg!($a), rreg!($b), $op)),
                 }
             };
         }
@@ -1347,15 +1751,12 @@ impl<W: Write> VM<W> {
                             Some(r) => Ok(r),
                             None => Err(cmp_order_error(rreg!($r), &rhs, $op)),
                         };
-                        match read { Ok(r) => r, Err(msg) => raise!(VmError::Generic(msg)) }
+                        match read { Ok(r) => r, Err(e) => raise!(e) }
                     }
                 }
             }};
         }
 
-        // TUI cleanup guards — dropped on any return path (Ok, Err, or panic).
-        // Popped explicitly by ExitTui on the normal path.
-        let mut tui_stack: Vec<TuiGuard> = Vec::new();
 
         loop {
             // chunk borrows only from `program` — no conflict with `self.value_stack`
@@ -1363,7 +1764,13 @@ impl<W: Write> VM<W> {
             if ip >= chunk.instructions.len() {
                 // Fell off end of chunk — implicit return Unit
                 if self.frame_stack.len() == 1 {
-                    return Ok(());
+                    return Ok(Value::Unit);
+                }
+                // The frame a higher-order operator pushed ran off its end.
+                if self.frame_stack.len() - 1 == floor {
+                    self.frame_stack.pop();
+                    truncate_regs(&mut self.value_stack, base);
+                    return Ok(Value::Unit);
                 }
                 let (return_reg, wb) = {
                     let frame = self.frame_stack.last().unwrap();
@@ -1380,7 +1787,7 @@ impl<W: Write> VM<W> {
                 };
                 self.frame_stack.pop();
                 // Truncate: remove callee's registers from flat stack
-                self.value_stack.truncate(base);
+                truncate_regs(&mut self.value_stack, base);
                 // Restore caller's base
                 base = self.frame_stack.last().unwrap().base as usize;
                 // Write Unit as return value
@@ -1398,8 +1805,15 @@ impl<W: Write> VM<W> {
 
             // Reference (no clone!) — safe because chunk borrows from program, not self
             let instr = &chunk.instructions[ip];
+            // Where we are, for whoever has to report an error. Two stores of a
+            // register-resident u32; the alternative was threading a position
+            // through every `?` in the match below.
+            self.cur_ip = ip as u32;
+            self.cur_chunk = chunk_idx as u32;
             // Advance IP before executing (branches will override this)
             ip += 1;
+            // One instruction dispatched: the VM's unit of work (`--count`).
+            zymbol_common::count::step();
 
             // Use & patterns to copy Copy fields without cloning the instruction
             match instr {
@@ -1529,13 +1943,13 @@ impl<W: Write> VM<W> {
                 // the same ordering rule the general form uses. They used to
                 // read the register through `ri!`, so `'a' < 7` was refused
                 // here as "this needs a number and got Char" and there as
-                // "cannot compare values with operator 'Lt': Char and Int":
+                // "cannot compare values with operator '<': Char and Int":
                 // one comparison, two refusals, decided by whether the
                 // right-hand side happened to be a literal small enough to fold.
-                &Instruction::CmpLtImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Lt"); wreg!(dst, Value::Bool(ord_lt(r))); }
-                &Instruction::CmpLeImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Le"); wreg!(dst, Value::Bool(ord_le(r))); }
-                &Instruction::CmpGtImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Gt"); wreg!(dst, Value::Bool(ord_gt(r))); }
-                &Instruction::CmpGeImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "Ge"); wreg!(dst, Value::Bool(ord_ge(r))); }
+                &Instruction::CmpLtImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "<"); wreg!(dst, Value::Bool(ord_lt(r))); }
+                &Instruction::CmpLeImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, "<="); wreg!(dst, Value::Bool(ord_le(r))); }
+                &Instruction::CmpGtImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, ">"); wreg!(dst, Value::Bool(ord_gt(r))); }
+                &Instruction::CmpGeImm(dst, src, imm) => { let r = ord_imm_or_raise!(src, imm, ">="); wreg!(dst, Value::Bool(ord_ge(r))); }
 
                 // ── Float arithmetic ────────────────────────────────────────
                 &Instruction::AddFloat(dst, a, b) => { let (va, vb) = rf2!(a, b, "+"); wreg!(dst, Value::Float(va + vb)); }
@@ -1553,7 +1967,7 @@ impl<W: Write> VM<W> {
                         Value::Int(n)   => Ok(*n as f64),
                         va => Err(format!("negation requires numeric operand, got {}", va.type_name())),
                     };
-                    let v = match read { Ok(v) => v, Err(msg) => raise!(VmError::Generic(msg)) };
+                    let v = match read { Ok(v) => v, Err(msg) => raise!(VmError::TypeMsg(msg)) };
                     wreg!(dst, Value::Float(-v));
                 }
 
@@ -1562,7 +1976,8 @@ impl<W: Write> VM<W> {
                     let v = match rreg!(src) {
                         Value::Int(n)   => *n as f64,
                         Value::Float(f) => *f,
-                        other => raise!(VmError::CastError { op: "##.", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!(
+                            "##. requires a numeric value, got {}", other.type_name()))),
                     };
                     wreg!(dst, Value::Float(v));
                 }
@@ -1573,7 +1988,8 @@ impl<W: Write> VM<W> {
                             None => raise!(VmError::CastOverflow { op: "###" }),
                         },
                         Value::Int(n)   => *n,
-                        other => raise!(VmError::CastError { op: "###", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!(
+                            "### requires a numeric value, got {}", other.type_name()))),
                     };
                     wreg!(dst, Value::Int(v));
                 }
@@ -1586,9 +2002,27 @@ impl<W: Write> VM<W> {
                         Value::Int(n)   => *n,
                         // Char → its Unicode code point (matches the tree-walker).
                         Value::Char(c)  => *c as u32 as i64,
-                        other => raise!(VmError::CastError { op: "##!", got: other.type_name().to_string() }),
+                        // `##!` takes a Char (it answers its code point), so
+                        // its sentence says so. `##.` and `###` do not, and
+                        // keep the shorter one.
+                        other => raise!(VmError::TypeMsg(format!(
+                            "##! requires a numeric value or Char, got {}", other.type_name()))),
                     };
                     wreg!(dst, Value::Int(v));
+                }
+                // `##'`, the pair of `##!` on a Char (GLB-109): only an Int is a
+                // code, and one with no character is `##Range`.
+                &Instruction::IntToChar(dst, src) => {
+                    let c = match rreg!(src) {
+                        Value::Char(c) => *c,
+                        Value::Int(n) => match u32::try_from(*n).ok().and_then(char::from_u32) {
+                            Some(c) => c,
+                            None => raise!(VmError::CharOutOfRange),
+                        },
+                        other => raise!(VmError::TypeMsg(format!(
+                            "##' requires an Int or Char, got {}", other.type_name()))),
+                    };
+                    wreg!(dst, Value::Char(c));
                 }
 
                 // ── String ops ──────────────────────────────────────────────
@@ -1670,6 +2104,17 @@ impl<W: Write> VM<W> {
                 }
                 Instruction::ConcatBuild(dst, base_reg, item_regs) => {
                     let (dst, base_reg) = (*dst, *base_reg);
+                    // The edit, `a$++ x y`: destination and base are the
+                    // receiver's own register, and the items go onto the array
+                    // where it is. Building a new one every time made an
+                    // accumulation cost the square of its length (GLB-118).
+                    if dst == base_reg && matches!(rreg!(base_reg), Value::Array(_)) {
+                        let items: Vec<Value> = item_regs.iter().map(|&ir| rreg!(ir).clone()).collect();
+                        if let Value::Array(arr) = &mut self.value_stack[base + dst as usize] {
+                            zymbol_common::count::make_mut(arr).extend(items);
+                        }
+                        continue;
+                    }
                     let base_val = rreg!(base_reg).clone();
                     let result = match base_val {
                         Value::Array(arr) => {
@@ -1679,14 +2124,22 @@ impl<W: Write> VM<W> {
                             }
                             Value::Array(Rc::new(new_arr))
                         }
-                        other => {
-                            let mut s = self.numeral_repr(&other);
+                        Value::String(_) => {
+                            let mut s = self.numeral_repr(&base_val);
                             for &ir in item_regs {
                                 let part = self.numeral_repr(rreg!(ir));
                                 s.push_str(&part);
                             }
                             Value::String(ZyStr::new(s))
                         }
+                        // Strict (D2 revoked, 2026-09-20): `$++` builds onto a
+                        // string or an array. Anything else was turned into its
+                        // display form and built onto, so `5 $++ "a"` answered
+                        // `5a` where the tree-walker refuses.
+                        other => raise!(VmError::TypeMsg(format!(
+                            "$++ requires a string or array as base, got {}",
+                            other.type_label()
+                        ))),
                     };
                     wreg!(dst, result);
                 }
@@ -1694,7 +2147,7 @@ impl<W: Write> VM<W> {
                     let n = match rreg!(src) {
                         Value::String(s)      => if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 },
                         Value::Array(arr)     => arr.len() as i64,
-                        other => raise!(VmError::TypeError { expected: "String or Array", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("cannot get length of {} - only arrays, tuples, and strings have length", other.type_label()))),
                     };
                     wreg!(dst, Value::Int(n));
                 }
@@ -1704,11 +2157,16 @@ impl<W: Write> VM<W> {
                         let s = match &self.value_stack[base + str_reg as usize] {
                             Value::String(s) => s.as_str().to_owned(),
                             Value::Char(c)   => c.to_string(),
-                            other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$* requires a string, got {}", other.type_label()))),
                         };
                         let n = match &self.value_stack[base + n_reg as usize] {
                             Value::Int(n) if *n >= 0 => *n as usize,
-                            other => raise!(VmError::TypeError { expected: "non-negative Int", got: other.type_name().to_string() }),
+                            // A count that IS an Int and is negative is the
+                            // other message, as in the tree-walker.
+                            Value::Int(n) => raise!(VmError::IndexMsg(format!(
+                                "$* repetition count must be non-negative, got {}", n))),
+                            other => raise!(VmError::TypeMsg(format!(
+                                "$* repetition count must be an integer, got {}", other.type_label()))),
                         };
                         s.repeat(n)
                     };
@@ -1718,10 +2176,10 @@ impl<W: Write> VM<W> {
                 // ── Comparison ──────────────────────────────────────────────
                 &Instruction::CmpEq(dst, a, b) => { let r = cmp_direct(rreg!(a), rreg!(b)); wreg!(dst, Value::Bool(r == 0)); }
                 &Instruction::CmpNe(dst, a, b) => { let r = cmp_direct(rreg!(a), rreg!(b)); wreg!(dst, Value::Bool(r != 0)); }
-                &Instruction::CmpLt(dst, a, b) => { let r = ord_or_raise!(a, b, "Lt"); wreg!(dst, Value::Bool(ord_lt(r))); }
-                &Instruction::CmpLe(dst, a, b) => { let r = ord_or_raise!(a, b, "Le"); wreg!(dst, Value::Bool(ord_le(r))); }
-                &Instruction::CmpGt(dst, a, b) => { let r = ord_or_raise!(a, b, "Gt"); wreg!(dst, Value::Bool(ord_gt(r))); }
-                &Instruction::CmpGe(dst, a, b) => { let r = ord_or_raise!(a, b, "Ge"); wreg!(dst, Value::Bool(ord_ge(r))); }
+                &Instruction::CmpLt(dst, a, b) => { let r = ord_or_raise!(a, b, "<"); wreg!(dst, Value::Bool(ord_lt(r))); }
+                &Instruction::CmpLe(dst, a, b) => { let r = ord_or_raise!(a, b, "<="); wreg!(dst, Value::Bool(ord_le(r))); }
+                &Instruction::CmpGt(dst, a, b) => { let r = ord_or_raise!(a, b, ">"); wreg!(dst, Value::Bool(ord_gt(r))); }
+                &Instruction::CmpGe(dst, a, b) => { let r = ord_or_raise!(a, b, ">="); wreg!(dst, Value::Bool(ord_ge(r))); }
 
                 // ── Logical ─────────────────────────────────────────────────
                 // ZYVM-001: these read both operands through `is_truthy()`, so
@@ -1732,7 +2190,17 @@ impl<W: Write> VM<W> {
                 // operand is refused, with the tree-walker's words.
                 &Instruction::And(dst, a, b) => { let (va, vb) = rb2!(a, b, "AND"); wreg!(dst, Value::Bool(va && vb)); }
                 &Instruction::Or (dst, a, b) => { let (va, vb) = rb2!(a, b, "OR");  wreg!(dst, Value::Bool(va || vb)); }
-                &Instruction::Not(dst, src)  => { let v = rreg!(src).is_truthy(); wreg!(dst, Value::Bool(!v)); }
+                // `!` takes a Bool and nothing else: `!7` is refused, not
+                // coerced — there is no truthiness (GUIDE § Logical, GLB-019 A).
+                &Instruction::Not(dst, src)  => {
+                    let v = match rreg!(src) {
+                        Value::Bool(b) => *b,
+                        // A wrong TYPE is a `##Type` (D1; GLB-091).
+                        other => raise!(VmError::TypeMsg(format!(
+                            "logical NOT requires boolean operand, got {}", other.type_name()))),
+                    };
+                    wreg!(dst, Value::Bool(!v));
+                }
                 &Instruction::IsInt(dst, src) => { let v = matches!(rreg!(src), Value::Int(_)); wreg!(dst, Value::Bool(v)); }
                 &Instruction::AsLoopCond(dst, src) => {
                     match rreg!(src) {
@@ -1750,6 +2218,16 @@ impl<W: Write> VM<W> {
                 &Instruction::Jump(label)          => { ip = label as usize; }
                 &Instruction::JumpIf(cond, label)    => { if  rreg!(cond).is_truthy() { ip = label as usize; } }
                 &Instruction::JumpIfNot(cond, label) => { if !rreg!(cond).is_truthy() { ip = label as usize; } }
+                // `?` and `_?`: a Bool and nothing else (GLB-121). A wrong
+                // TYPE is a `##Type` (D1).
+                &Instruction::JumpIfNotCond(cond, label) => {
+                    match rreg!(cond) {
+                        Value::Bool(true)  => {}
+                        Value::Bool(false) => { ip = label as usize; }
+                        other => raise!(VmError::TypeMsg(format!(
+                            "a condition must be a Bool, got {}", other.type_name()))),
+                    }
+                }
 
                 // ── Functions ───────────────────────────────────────────────
                 Instruction::Call(dst, func_idx, arg_regs) => {
@@ -1767,7 +2245,7 @@ impl<W: Write> VM<W> {
                     // Extend flat stack with Unit (single vectorizable loop), then
                     // overwrite the arg slots with the actual arg values via unsafe
                     // indexed write (no bounds check, no double capacity check).
-                    self.value_stack.resize(new_base + num_regs, Value::Unit);
+                    self.value_stack.resize_with(new_base + num_regs, || Value::Unit);
 
                     // Copy args from caller into callee arg registers
                     for (i, &reg) in arg_regs.iter().enumerate() {
@@ -1775,14 +2253,25 @@ impl<W: Write> VM<W> {
                         unsafe { *self.value_stack.get_unchecked_mut(new_base + i) = val; }
                     }
 
+                    self.forget_destroyed_from(new_base);
                     let wb = mem::take(&mut self.pending_output_writeback);
+                    // An output argument is LENT to its parameter (GLB-117):
+                    // the copy above made two owners of the collection for as
+                    // long as the call lasts, and the first edit inside the
+                    // function copied all of it. The caller's register lets go,
+                    // after every argument has been read — `g(d<~, d)` still
+                    // hands the second one what `d` held. It gets the value
+                    // back when the frame returns or is unwound.
+                    for &(_, caller_reg) in &wb {
+                        put_reg(&mut self.value_stack[base + caller_reg as usize], Value::Unit);
+                    }
+                    zymbol_common::count::call();
                     self.frame_stack.push(FrameInfo {
                         base: new_base as u32,
                         ip: 0,
                         chunk_idx: func_idx,
                         return_reg: dst,
                         catch_ip: u32::MAX,
-                        try_depth: 0,
                         error: None,
                         writeback: if wb.is_empty() { None } else { Some(Box::new(wb)) },
                     });
@@ -1813,7 +2302,7 @@ impl<W: Write> VM<W> {
                     // Extend value_stack if callee needs more registers than we have
                     let current_size = self.value_stack.len() - base;
                     if num_regs > current_size {
-                        self.value_stack.resize(base + num_regs, Value::Unit);
+                        self.value_stack.resize_with(base + num_regs, || Value::Unit);
                     }
 
                     // Zero all registers [base..base+num_regs]
@@ -1826,9 +2315,12 @@ impl<W: Write> VM<W> {
                         self.value_stack[base + i] = v;
                     }
 
-                    // Update frame metadata (same base, new chunk)
+                    // Update frame metadata (same base, new chunk). The compiler
+                    // never emits a tail call inside a `!?`, so there is no
+                    // handler here to keep.
                     let frame = self.frame_stack.last_mut().unwrap();
                     frame.chunk_idx = func_idx;
+                    frame.catch_ip = u32::MAX;
 
                     ip = 0;
                     chunk_idx = func_idx as usize;
@@ -1856,6 +2348,14 @@ impl<W: Write> VM<W> {
                     );
 
                     if self.frame_stack.is_empty() {
+                        // A `$!!` that carries an error out of the top level ends
+                        // the program saying which error it was, as a runtime
+                        // error — `run` locates it at this Return, compiled from
+                        // the `$!!` statement's line (ZYJS-027, decided
+                        // 2026-09-16). It used to end with status 1 and nothing.
+                        if let Value::Error(e) = &result {
+                            return Err(VmError::Generic(e.as_ref().to_string()));
+                        }
                         // GAP-ZYB-006: a `<~` that reaches the top level ends
                         // the program, and its value is the exit status. The
                         // stop was already here — only the value was being
@@ -1868,11 +2368,17 @@ impl<W: Write> VM<W> {
                             // wrong" beats inventing a number.
                             _ => 1,
                         });
-                        return Ok(());
+                        return Ok(Value::Unit);
+                    }
+
+                    // The frame a higher-order operator pushed has returned.
+                    if self.frame_stack.len() == floor {
+                        truncate_regs(&mut self.value_stack, base);
+                        return Ok(result);
                     }
 
                     // Truncate value_stack: remove callee's registers
-                    self.value_stack.truncate(base);
+                    truncate_regs(&mut self.value_stack, base);
 
                     // Restore caller context — single last() access
                     let caller = self.frame_stack.last().unwrap();
@@ -1892,6 +2398,11 @@ impl<W: Write> VM<W> {
                 }
 
                 // ── I/O ─────────────────────────────────────────────────────
+                &Instruction::Print(reg) if self.headless_tui > 0 => {
+                    // Inside `>>|` under --keys: onto the virtual screen (D11).
+                    let s = self.numeral_repr(&self.value_stack[base + reg as usize]);
+                    if let Some(h) = self.headless.as_mut() { h.screen.write(&s); }
+                }
                 &Instruction::Print(reg) => {
                     let mode = self.numeral_mode;
                     match &self.value_stack[base + reg as usize] {
@@ -1905,6 +2416,9 @@ impl<W: Write> VM<W> {
                         // script too (Display would hand back ASCII digits).
                         other             => write!(self.output, "{}", other.to_display_in(mode))?,
                     }
+                }
+                Instruction::PrintNewline if self.headless_tui > 0 => {
+                    if let Some(h) = self.headless.as_mut() { h.screen.write("\n"); }
                 }
                 Instruction::PrintNewline => {
                     writeln!(self.output)?;
@@ -1920,20 +2434,34 @@ impl<W: Write> VM<W> {
                 &Instruction::ArrayPush(arr_reg, val_reg) => {
                     let val = unsafe { self.value_stack.get_unchecked(base + val_reg as usize).clone() };
                     match unsafe { self.value_stack.get_unchecked_mut(base + arr_reg as usize) } {
-                        Value::Array(rc_arr) => Rc::make_mut(rc_arr).push(val),
-                        Value::Tuple(rc_tup) => Rc::make_mut(rc_tup).push(val),
+                        Value::Array(rc_arr) => zymbol_common::count::make_mut(rc_arr).push(val),
+                        Value::Tuple(rc_tup) => zymbol_common::count::make_mut(rc_tup).push(val),
                         Value::String(s) => {
                             // $+ on string: d $+ s → string concatenation
-                            use std::fmt::Write as _;
                             let mut buf = s.clone().try_into_string();
                             match val {
                                 Value::String(r) => buf.push_str(r.as_str()),
                                 Value::Char(c) => buf.push(c),
-                                other => { let _ = write!(buf, "{}", other); }
+                                // Strict (D2 revoked, 2026-09-20): a string is
+                                // made of characters, so `$+` takes a Char or a
+                                // String and nothing else. Writing whatever
+                                // `Display` produced turned `"ab"$+ 5` into
+                                // `ab5` — the juxtaposition of the language
+                                // smuggled in through an append, which the
+                                // tree-walker has always refused.
+                                other => raise!(VmError::TypeMsg(format!(
+                                    "$+ on string requires char or string element, got {}",
+                                    other.type_label()
+                                ))),
                             }
                             *s = ZyStr::new(buf);
                         }
-                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                        // A dictionary is addressed by key, so an append has no
+                        // name to give what it adds. Worded as the tree-walker
+                        // words it rather than as a generic "unsupported".
+                        Value::NamedTuple(_) => raise!(VmError::TypeMsg(
+                            "$+ is not supported on named tuples — no field name available".to_string())),
+                        other => raise!(VmError::TypeMsg(format!("cannot append to {} - only arrays, tuples, and strings support $+", other.type_label()))),
                     }
                 }
                 &Instruction::ArrayGet(dst, arr_reg, idx_reg) => {
@@ -1950,7 +2478,7 @@ impl<W: Write> VM<W> {
                             None => {
                                 let available: Vec<String> =
                                     fields.iter().map(|(k, _)| k.clone()).collect();
-                                raise!(VmError::Generic(missing_key_msg(&key, &available)));
+                                raise!(VmError::KeyMsg(missing_key_msg(&key, &available)));
                             }
                         }
                         continue;
@@ -1963,14 +2491,23 @@ impl<W: Write> VM<W> {
                     {
                         let first = fields.first().map(|(k, _)| k.clone())
                             .unwrap_or_else(|| "clave".to_string());
-                        raise!(VmError::Generic(format!(
+                        raise!(VmError::TypeMsg(format!(
                             "a dictionary is addressed by key, not by position\nhelp: use d[\"{}\"] — adding a key changes what sits at each position",
                             first
                         )));
                     }
-                    let idx = match self.as_int(idx_reg) {
-                        Ok(n) => n,
-                        Err(e) => raise!(e),
+                    // The words of the tree-walker for each of the two ways
+                    // this can fail (step 3.5b): a String reaches a dictionary
+                    // key, and anything else that is not an Int is not an index.
+                    let idx = match self.reg_get(idx_reg) {
+                        Value::Int(n) => *n,
+                        Value::String(_) => {
+                            let label = self.value_stack[base + arr_reg as usize].type_label();
+                            raise!(VmError::TypeMsg(format!(
+                                "a String addresses a dictionary key, and this is {}", label)))
+                        }
+                        other => raise!(VmError::TypeMsg(format!(
+                            "index must be an integer, got {}", other.type_label()))),
                     };
                     let val = match &self.value_stack[base + arr_reg as usize] {
                         Value::Array(arr) => {
@@ -2008,7 +2545,8 @@ impl<W: Write> VM<W> {
                             let ch = s.chars().nth(i as usize).unwrap();
                             Value::Char(ch)
                         }
-                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!(
+                            "cannot index into {} — expected array, tuple, or string", other.type_label()))),
                     };
                     self.reg_set(dst, val);
                 }
@@ -2018,10 +2556,11 @@ impl<W: Write> VM<W> {
                         Value::Array(p) => p.clone(),
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
                     };
-                    let root = mem::replace(&mut self.value_stack[base + dst as usize], Value::Unit);
-                    match vm_deep_set(root, &path, val) {
-                        Ok(updated) => self.value_stack[base + dst as usize] = updated,
-                        Err(e) => raise!(e),
+                    // In place, and atomic: a failure leaves the register as it was.
+                    if let Err(e) = vm_deep_set_in(
+                        &mut self.value_stack[base + dst as usize], &path, val, path.len() == 1,
+                    ) {
+                        raise!(e);
                     }
                 }
                 &Instruction::IterPairs(dst, src) => {
@@ -2038,10 +2577,7 @@ impl<W: Write> VM<W> {
                         )),
                         Value::Array(arr) => Value::Array(arr.clone()),
                         Value::Tuple(t) => Value::Tuple(t.clone()),
-                        other => raise!(VmError::TypeError {
-                            expected: "String, Array or dictionary",
-                            got: other.type_name().to_string(),
-                        }),
+                        other => raise!(VmError::TypeMsg(format!("can only iterate over ranges, arrays, strings, tuples and dictionaries, got {}", other.type_label()))),
                     };
                     self.reg_set(dst, val);
                 }
@@ -2057,15 +2593,14 @@ impl<W: Write> VM<W> {
                         Value::Array(p) => p.clone(),
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
                     };
-                    let root = mem::replace(&mut self.value_stack[base + dst as usize], Value::Unit);
-                    if let Value::Tuple(_) = &root {
-                        self.value_stack[base + dst as usize] = root;
+                    if let Value::Tuple(_) = &self.value_stack[base + dst as usize] {
                         let name = self.string_rcs[name_idx as usize].as_str();
                         raise!(VmError::Generic(tuple_immutable_msg(name)));
                     }
-                    match vm_deep_set(root, &path, val) {
-                        Ok(updated) => self.value_stack[base + dst as usize] = updated,
-                        Err(e) => raise!(e),
+                    if let Err(e) = vm_deep_set_in(
+                        &mut self.value_stack[base + dst as usize], &path, val, path.len() == 1,
+                    ) {
+                        raise!(e);
                     }
                 }
                 &Instruction::ArraySet(arr_reg, idx_reg, val_reg) => {
@@ -2075,9 +2610,9 @@ impl<W: Write> VM<W> {
                         Value::Array(rc_arr) => {
                             let idx = match idx_val {
                                 Value::Int(n) => n,
-                                other => raise!(VmError::TypeError { expected: "Int", got: other.type_name().to_string() }),
+                                other => raise!(VmError::TypeMsg(format!("array update index must be an integer, got {}", other.type_label()))),
                             };
-                            let arr = Rc::make_mut(rc_arr);
+                            let arr = zymbol_common::count::make_mut(rc_arr);
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= arr.len() {
@@ -2086,14 +2621,14 @@ impl<W: Write> VM<W> {
                             arr[i as usize] = val;
                         }
                         Value::NamedTuple(rc_fields) => {
-                            let fields = Rc::make_mut(rc_fields);
+                            let fields = zymbol_common::count::make_mut(rc_fields);
                             match idx_val {
                                 // A positional WRITE corrupts data rather than
                                 // returning the wrong value: strictly worse than
                                 // the positional read decision 11 withdrew.
                                 Value::Int(_) => {
                                     let first = fields.first().map(|(k, _)| k.clone());
-                                    raise!(VmError::Generic(dict_not_positional(
+                                    raise!(VmError::TypeMsg(dict_not_positional(
                                         "d[n]$~ value", first.as_deref())));
                                 }
                                 #[allow(unreachable_patterns)]
@@ -2113,7 +2648,7 @@ impl<W: Write> VM<W> {
                                         fields.push((name.as_str().to_string(), val));
                                     }
                                 }
-                                other => raise!(VmError::TypeError { expected: "Int or String", got: other.type_name().to_string() }),
+                                other => raise!(VmError::TypeMsg(format!("named tuple update index must be an integer or field name (string), got {}", other.type_label()))),
                             }
                         }
                         other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
@@ -2125,7 +2660,7 @@ impl<W: Write> VM<W> {
                         Value::String(s) => if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 },
                         Value::Tuple(items) => items.len() as i64,
                         Value::NamedTuple(fields) => fields.len() as i64,
-                        other => raise!(VmError::TypeError { expected: "Array or String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("cannot get length of {} - only arrays, tuples, and strings have length", other.type_label()))),
                     };
                     self.reg_set(dst, Value::Int(n));
                 }
@@ -2144,52 +2679,53 @@ impl<W: Write> VM<W> {
                             None => {
                                 let available: Vec<String> =
                                     fields.iter().map(|(k, _)| k.clone()).collect();
-                                raise!(VmError::Generic(missing_key_msg(&key, &available)));
+                                raise!(VmError::KeyMsg(missing_key_msg(&key, &available)));
                             }
                         }
                         self.value_stack[base + arr_reg as usize] =
                             Value::NamedTuple(Rc::new(out));
                         continue;
                     }
-                    let idx = self.as_int(idx_reg)?;
-                    let result = match std::mem::replace(&mut self.value_stack[base + arr_reg as usize], Value::Unit) {
-                        Value::Array(mut rc_arr) => {
-                            let arr = Rc::make_mut(&mut rc_arr);
-                            let i = if idx == 0 { raise!(VmError::IndexZero);
-                            } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
-                            if i < 0 || i as usize >= arr.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
-                            }
-                            arr.remove(i as usize);
-                            Value::Array(rc_arr)
-                        }
-                        Value::Tuple(rc_tup) => {
-                            let mut tup = rc_tup.as_ref().clone();
-                            let i = if idx == 0 { raise!(VmError::IndexZero);
-                            } else if idx < 0 { tup.len() as i64 + idx } else { idx - 1 };
-                            if i < 0 || i as usize >= tup.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() , container: "tuple" });
-                            }
-                            tup.remove(i as usize);
-                            Value::Tuple(Rc::new(tup))
-                        }
+                    let idx = match self.as_int_for(idx_reg, "remove index") { Ok(v) => v, Err(e) => raise!(e) };
+                    // Validated against the value where it is, and touched only
+                    // once nothing can fail: a refused removal leaves the
+                    // register as it was. It used to take the value out first and
+                    // raise with it already dropped, harmless only while every
+                    // removal ran on a copy (ZYVM-013).
+                    let len = match &self.value_stack[base + arr_reg as usize] {
+                        Value::Array(a) => a.len(),
+                        Value::Tuple(t) => t.len(),
+                        Value::String(s) => s.chars().count(),
                         Value::NamedTuple(rc_fields) => {
                             let first = rc_fields.first().map(|(k, _)| k.clone());
-                            raise!(VmError::Generic(dict_not_positional("d$-[n]", first.as_deref())));
+                            raise!(VmError::TypeMsg(dict_not_positional("d$-[n]", first.as_deref())));
                         }
-                        Value::String(rc_s) => {
-                            let mut chars: Vec<char> = rc_s.chars().collect();
-                            let i = if idx == 0 { raise!(VmError::IndexZero);
-                            } else if idx < 0 { chars.len() as i64 + idx } else { idx - 1 };
-                            if i < 0 || i as usize >= chars.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() , container: "string" });
-                            }
-                            chars.remove(i as usize);
-                            Value::String(ZyStr::new(chars.iter().collect()))
-                        }
-                        other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("cannot remove from {} - only arrays, tuples, and strings support $-[i]", other.type_label()))),
                     };
-                    self.value_stack[base + arr_reg as usize] = result;
+                    if idx == 0 { raise!(VmError::IndexZero); }
+                    let i = if idx < 0 { len as i64 + idx } else { idx - 1 };
+                    if i < 0 || i as usize >= len {
+                        let msg = match &self.value_stack[base + arr_reg as usize] {
+                            Value::Array(_) => format!("index out of bounds: index {} for array of length {}", idx, len),
+                            Value::Tuple(_) => format!("index out of bounds: index {} for tuple of length {}", idx, len),
+                            _ => format!("index out of bounds: index {} for string of length {}", idx, len),
+                        };
+                        raise!(VmError::IndexMsg(msg));
+                    }
+                    let i = i as usize;
+                    match &mut self.value_stack[base + arr_reg as usize] {
+                        Value::Array(rc_arr) => { zymbol_common::count::make_mut(rc_arr).remove(i); }
+                        Value::Tuple(rc_tup) => { zymbol_common::count::make_mut(rc_tup).remove(i); }
+                        slot => {
+                            // A string, by the check above.
+                            let mut chars: Vec<char> = match &*slot {
+                                Value::String(st) => st.chars().collect(),
+                                _ => Vec::new(),
+                            };
+                            chars.remove(i);
+                            *slot = Value::String(ZyStr::new(chars.iter().collect()));
+                        }
+                    }
                 }
 
                 &Instruction::ArrayRemoveValue(arr_reg, val_reg) => {
@@ -2225,11 +2761,19 @@ impl<W: Write> VM<W> {
                                         let _ = found; out.iter().collect()
                                     }
                                 }
-                                _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
+                                _ => raise!(VmError::TypeMsg(format!("$- on string requires char or string value, got {}", val.type_label()))),
                             };
                             self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(result));
                         }
-                        other => raise!(VmError::TypeError { expected: "Array or String", got: other.type_name().to_string() }),
+                        // A dictionary, by value: the first entry that holds
+                        // it, as in an array (COLLECTIONS.md; ZYVM-017).
+                        Value::NamedTuple(mut rc_fields) => {
+                            if let Some(pos) = rc_fields.iter().position(|(_, v)| v.equals(&val)) {
+                                zymbol_common::count::make_mut(&mut rc_fields).remove(pos);
+                            }
+                            self.value_stack[base + arr_reg as usize] = Value::NamedTuple(rc_fields);
+                        }
+                        other => raise!(VmError::TypeMsg(format!("$- requires an array, tuple, or string, got {}", other.type_label()))),
                     }
                 }
 
@@ -2251,22 +2795,37 @@ impl<W: Write> VM<W> {
                                     if p.is_empty() { rc_s.to_string() }
                                     else { rc_s.replace(p.as_str(), "") }
                                 }
-                                _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
+                                _ => raise!(VmError::TypeMsg(format!("$-- on string requires char or string value, got {}", val.type_label()))),
                             };
                             self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(result));
                         }
-                        other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
+                        Value::NamedTuple(rc_fields) => {
+                            let fields: Vec<(String, Value)> = rc_fields.iter()
+                                .filter(|(_, v)| !v.equals(&val)).cloned().collect();
+                            self.value_stack[base + arr_reg as usize] = Value::NamedTuple(Rc::new(fields));
+                        }
+                        other => raise!(VmError::TypeMsg(format!("$-- requires an array, tuple, or string, got {}", other.type_label()))),
                     }
                 }
 
                 &Instruction::ArrayInsert(arr_reg, idx_reg, val_reg) => {
-                    let idx = self.as_int(idx_reg)?;
+                    let idx = match self.reg_get(idx_reg) {
+                        Value::Int(n) => *n,
+                        other => raise!(VmError::TypeMsg(format!(
+                            "$+[i] index must be an integer, got {}", other.type_label()))),
+                    };
+                    // The tree-walker's words for a position below 1 (P4-3 E4,
+                    // decided 2026-09-26); the bounds check below keeps the end.
+                    if idx <= 0 {
+                        raise!(VmError::IndexMsg(format!(
+                            "$+[i] index must be positive (1-based, use 1 to insert at the beginning), got {}", idx)));
+                    }
                     let val = self.reg_get(val_reg).clone();
                     match self.value_stack[base + arr_reg as usize].clone() {
                         Value::Array(rc_arr) => {
                             let mut arr = rc_arr.as_ref().clone();
                             if idx <= 0 || (idx - 1) as usize > arr.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
+                                raise!(VmError::IndexMsg(format!("$+[{}] index out of bounds for array of length {}", idx, arr.len())));
                             }
                             arr.insert((idx - 1) as usize, val);
                             self.value_stack[base + arr_reg as usize] = Value::Array(Rc::new(arr));
@@ -2274,7 +2833,7 @@ impl<W: Write> VM<W> {
                         Value::Tuple(rc_tup) => {
                             let mut tup = rc_tup.as_ref().clone();
                             if idx <= 0 || (idx - 1) as usize > tup.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: tup.len() , container: "tuple" });
+                                raise!(VmError::IndexMsg(format!("$+[{}] index out of bounds for tuple of length {}", idx, tup.len())));
                             }
                             tup.insert((idx - 1) as usize, val);
                             self.value_stack[base + arr_reg as usize] = Value::Tuple(Rc::new(tup));
@@ -2282,7 +2841,7 @@ impl<W: Write> VM<W> {
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
                             if idx <= 0 || (idx - 1) as usize > chars.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: chars.len() , container: "string" });
+                                raise!(VmError::IndexMsg(format!("$+[{}] index out of bounds for string of length {}", idx, chars.len())));
                             }
                             let i = (idx - 1) as usize;
                             match val {
@@ -2290,22 +2849,53 @@ impl<W: Write> VM<W> {
                                 Value::String(ref ins) => {
                                     for (j, c) in ins.chars().enumerate() { chars.insert(i + j, c); }
                                 }
-                                _ => raise!(VmError::TypeError { expected: "Char or String", got: val.type_name().to_string() }),
+                                _ => raise!(VmError::TypeMsg(format!("$+[i] on string requires char or string element, got {}", val.type_label()))),
                             }
                             self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(chars.iter().collect()));
                         }
-                        other => raise!(VmError::TypeError { expected: "Array, Tuple, or String", got: other.type_name().to_string() }),
+                        // Same reason as `$+`: a dictionary has no field name
+                        // to give what is inserted.
+                        Value::NamedTuple(_) => raise!(VmError::TypeMsg(
+                            "$+[i] is not supported on named tuples — no field name available".to_string())),
+                        other => raise!(VmError::TypeMsg(format!("$+[i] requires an array, tuple, or string, got {}", other.type_label()))),
                     }
                 }
 
                 &Instruction::ArrayRemoveRange(arr_reg, lo_reg) => {
                     // hi_reg = lo_reg + 1 by compiler convention
-                    let lo_raw = self.as_int(lo_reg)?;
-                    let hi_raw = self.as_int(lo_reg + 1)?;
-                    // lo: 0=default start (1-based 1 = internal 0), positive=1-based (subtract 1), negative=not supported
-                    let lo = (if lo_raw == 0 { 0i64 } else { lo_raw - 1 }).max(0) as usize;
-                    // hi: positive=1-based inclusive (stays same as 0-based exclusive)
-                    let hi = hi_raw.max(0) as usize;
+                    let lo_raw = match self.as_int_for(lo_reg, "$-[..] start") { Ok(v) => v, Err(e) => raise!(e) };
+                    let hi_raw = match self.as_int_for(lo_reg + 1, "$-[..] end") { Ok(v) => v, Err(e) => raise!(e) };
+                    // Strict (D2 revoked, 2026-09-20): the bounds are checked
+                    // against the collection instead of being clamped and then
+                    // silently skipped. `[1, 2]$-[1..9]` left the array
+                    // untouched and said nothing, and `$-[0..2]` emptied it,
+                    // because a 0 came through `.max(0)` as a valid start.
+                    // Refused here in the tree-walker's words.
+                    if lo_raw <= 0 && lo_raw != 0 {
+                        raise!(VmError::IndexMsg(format!(
+                            "$-[start..] start must be positive (1-based), got {}", lo_raw)));
+                    }
+                    if lo_raw == 0 {
+                        raise!(VmError::IndexMsg(
+                            "$-[start..] start must be positive (1-based), got 0".to_string()));
+                    }
+                    if hi_raw <= 0 {
+                        raise!(VmError::IndexMsg(format!(
+                            "$-[..end] end must be positive (1-based), got {}", hi_raw)));
+                    }
+                    let len_of = match &self.value_stack[base + arr_reg as usize] {
+                        Value::Array(a) => Some(a.len()),
+                        Value::Tuple(t) => Some(t.len()),
+                        Value::String(st) => Some(st.chars().count()),
+                        _ => None,
+                    };
+                    let (lo, hi) = match len_of {
+                        Some(n) => match range_bounds(lo_raw, hi_raw, n, RangeUse::Remove) {
+                            Ok(v) => v,
+                            Err(e) => raise!(e),
+                        },
+                        None => (0usize, 0usize),
+                    };
                     match self.value_stack[base + arr_reg as usize].clone() {
                         Value::Array(rc_arr) => {
                             let mut arr = rc_arr.as_ref().clone();
@@ -2325,7 +2915,7 @@ impl<W: Write> VM<W> {
                             let fields = rc_nt.as_ref().clone();
                             let _ = (lo, hi);
                             let first = fields.first().map(|(k, _)| k.clone());
-                            raise!(VmError::Generic(dict_not_positional("d$-[a..b]", first.as_deref())));
+                            raise!(VmError::TypeMsg(dict_not_positional("d$-[a..b]", first.as_deref())));
                         }
                         Value::String(rc_s) => {
                             let mut chars: Vec<char> = rc_s.chars().collect();
@@ -2334,17 +2924,79 @@ impl<W: Write> VM<W> {
                             }
                             self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(chars.iter().collect()));
                         }
-                        other => raise!(VmError::TypeError { expected: "Array, Tuple, NamedTuple, or String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("$-[..] requires an array, tuple, or string, got {}", other.type_label()))),
+                    }
+                }
+                &Instruction::ArrayRemoveCount(arr_reg, lo_reg) => {
+                    // count_reg = lo_reg + 1 by compiler convention. The count
+                    // arrives as a count: folding it into an end lost it, so
+                    // `$-[1:-1]` was reported as an end of -1 and `$-[1:0]` was
+                    // refused where it asks to remove nothing. The tree-walker's
+                    // words, on the tree-walker's boundaries.
+                    let lo_raw = match self.as_int_for(lo_reg, "$-[..] start") { Ok(v) => v, Err(e) => raise!(e) };
+                    let n = match self.as_int_for(lo_reg + 1, "$-[..] count") { Ok(v) => v, Err(e) => raise!(e) };
+                    if lo_raw <= 0 {
+                        raise!(VmError::IndexMsg(format!(
+                            "$-[start..] start must be positive (1-based), got {}", lo_raw)));
+                    }
+                    if n < 0 {
+                        raise!(VmError::IndexMsg(format!(
+                            "$-[..] count must be non-negative, got {}", n)));
+                    }
+                    let len_of = match &self.value_stack[base + arr_reg as usize] {
+                        Value::Array(a) => Some(a.len()),
+                        Value::Tuple(t) => Some(t.len()),
+                        Value::String(st) => Some(st.chars().count()),
+                        _ => None,
+                    };
+                    let (lo, hi) = match len_of {
+                        Some(len) => {
+                            let start = lo_raw - 1;
+                            let end = start + n;
+                            if start > len as i64 || end > len as i64 {
+                                raise!(VmError::IndexMsg(format!(
+                                    "$-[{}:{}] out of bounds for collection of length {}", lo_raw, n, len)));
+                            }
+                            (start as usize, end as usize)
+                        }
+                        None => (0usize, 0usize),
+                    };
+                    match self.value_stack[base + arr_reg as usize].clone() {
+                        Value::Array(rc_arr) => {
+                            let mut arr = rc_arr.as_ref().clone();
+                            arr.drain(lo..hi);
+                            self.value_stack[base + arr_reg as usize] = Value::Array(Rc::new(arr));
+                        }
+                        Value::Tuple(rc_tup) => {
+                            let mut tup = rc_tup.as_ref().clone();
+                            tup.drain(lo..hi);
+                            self.value_stack[base + arr_reg as usize] = Value::Tuple(Rc::new(tup));
+                        }
+                        Value::NamedTuple(rc_nt) => {
+                            let first = rc_nt.as_ref().first().map(|(k, _)| k.clone());
+                            raise!(VmError::TypeMsg(dict_not_positional("d$-[a..b]", first.as_deref())));
+                        }
+                        Value::String(rc_s) => {
+                            let mut chars: Vec<char> = rc_s.chars().collect();
+                            chars.drain(lo..hi);
+                            self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(chars.iter().collect()));
+                        }
+                        other => raise!(VmError::TypeMsg(format!("$-[..] requires an array, tuple, or string, got {}", other.type_label()))),
                     }
                 }
 
                 // ── Pattern match ────────────────────────────────────────────
                 &Instruction::MatchInt(reg, val, label) => {
-                    let v = self.as_int(reg)?;
+                    let v = match self.as_int(reg) { Ok(v) => v, Err(e) => raise!(e) };
                     if v == val { ip = label as usize; }
                 }
                 &Instruction::MatchRange(reg, lo, hi, label) => {
-                    let v = self.as_int(reg)?;
+                    // A range pattern matches numbers; anything else is the
+                    // tree-walker's `range pattern type mismatch` (step 3.5b).
+                    let v = match self.reg_get(reg) {
+                        Value::Int(n) => *n,
+                        _ => raise!(VmError::TypeMsg("range pattern type mismatch".to_string())),
+                    };
                     if v >= lo && v <= hi { ip = label as usize; }
                 }
                 &Instruction::MatchStr(reg, idx, label) => {
@@ -2391,12 +3043,14 @@ impl<W: Write> VM<W> {
                                 let c = *c;
                                 s.split(c).map(|p| Value::String(ZyStr::from_str_ref(p))).collect()
                             }
+                            // An empty delimiter is refused (GLB-079, decided 2026-10-03).
+                            (Value::String(_), Value::String(sep)) if sep.is_empty() => raise!(VmError::IndexMsg("$/ delimiter must not be empty".to_string())),
                             (Value::String(s), Value::String(sep)) => {
                                 let sep = sep.clone();
                                 s.split(sep.as_str()).map(|p| Value::String(ZyStr::from_str_ref(p))).collect()
                             }
-                            (Value::String(_), other) => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
-                            (other, _) => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            (Value::String(_), other) => raise!(VmError::TypeMsg(format!("$/ delimiter must be a char or string, got {}", other.type_label()))),
+                            (other, _) => raise!(VmError::TypeMsg(format!("$/ requires a string on the left, got {}", other.type_label()))),
                         }
                     };
                     self.reg_set(dst, Value::Array(Rc::new(parts)));
@@ -2408,9 +3062,11 @@ impl<W: Write> VM<W> {
                         let sep_v = &self.value_stack[base + sep_reg as usize];
                         match (s_v, sep_v) {
                             (Value::String(s), Value::Char(c))   => intrinsics::split::count(s.as_str(), *c),
+                            // An empty delimiter is refused (GLB-079, decided 2026-10-03).
+                            (Value::String(_), Value::String(sep)) if sep.is_empty() => raise!(VmError::IndexMsg("$/ delimiter must not be empty".to_string())),
                             (Value::String(s), Value::String(sep)) => intrinsics::split::count_str(s.as_str(), sep.as_str()),
-                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                            (Value::String(_), o) => raise!(VmError::TypeMsg(format!("$/ delimiter must be a char or string, got {}", o.type_label()))),
+                            (o, _) => raise!(VmError::TypeMsg(format!("$/ requires a string on the left, got {}", o.type_label()))),
                         }
                     };
                     self.reg_set(dst, Value::Int(count));
@@ -2422,29 +3078,34 @@ impl<W: Write> VM<W> {
                         let sep_v = &self.value_stack[base + sep_reg as usize];
                         match (s_v, sep_v) {
                             (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            // An empty delimiter is refused (GLB-079, decided 2026-10-03).
+                            (Value::String(_), Value::String(sep)) if sep.is_empty() => raise!(VmError::IndexMsg("$/ delimiter must not be empty".to_string())),
                             (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
-                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                            (Value::String(_), o) => raise!(VmError::TypeMsg(format!("$/ delimiter must be a char or string, got {}", o.type_label()))),
+                            (o, _) => raise!(VmError::TypeMsg(format!("$/ requires a string on the left, got {}", o.type_label()))),
                         }
                     };
-                    let mut results = Vec::new();
-                    match &sep_owned {
-                        Value::Char(c) => {
-                            let c = *c;
-                            for part in s_owned.split(c) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                results.push(self.call_callable(callable.clone(), vec![v], program, ip, chunk_idx)?);
-                            }
-                        }
-                        Value::String(sep_s) => {
-                            let sep_str = sep_s.to_string();
-                            for part in s_owned.split(sep_str.as_str()) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                results.push(self.call_callable(callable.clone(), vec![v], program, ip, chunk_idx)?);
-                            }
-                        }
+                    let parts: Vec<String> = match &sep_owned {
+                        Value::Char(c) => s_owned.split(*c).map(str::to_string).collect(),
+                        Value::String(sep_s) => s_owned.split(sep_s.as_str()).map(str::to_string).collect(),
                         _ => unreachable!(),
+                    };
+                    // The split first, then the function — the tree-walker's order.
+                    if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
+                        raise!(VmError::TypeMsg("map requires lambda function".to_string()));
                     }
+                    let mut results = Vec::with_capacity(parts.len());
+                    let outcome: Result<(), VmError> = 'calls: {
+                        for part in parts {
+                            let v = Value::String(ZyStr::new(part));
+                            match self.call_callable(callable.clone(), [v], program) {
+                                Ok(r) => results.push(r),
+                                Err(e) => break 'calls Err(e),
+                            }
+                        }
+                        Ok(())
+                    };
+                    if let Err(e) = outcome { raise!(e); }
                     self.reg_set(dst, Value::Array(Rc::new(results)));
                 }
                 &Instruction::StrSplitFilter(dst, str_reg, sep_reg, func_reg) => {
@@ -2454,31 +3115,39 @@ impl<W: Write> VM<W> {
                         let sep_v = &self.value_stack[base + sep_reg as usize];
                         match (s_v, sep_v) {
                             (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            // An empty delimiter is refused (GLB-079, decided 2026-10-03).
+                            (Value::String(_), Value::String(sep)) if sep.is_empty() => raise!(VmError::IndexMsg("$/ delimiter must not be empty".to_string())),
                             (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
-                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                            (Value::String(_), o) => raise!(VmError::TypeMsg(format!("$/ delimiter must be a char or string, got {}", o.type_label()))),
+                            (o, _) => raise!(VmError::TypeMsg(format!("$/ requires a string on the left, got {}", o.type_label()))),
                         }
                     };
-                    let mut results = Vec::new();
-                    match &sep_owned {
-                        Value::Char(c) => {
-                            let c = *c;
-                            for part in s_owned.split(c) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, ip, chunk_idx)?;
-                                if keep.is_truthy() { results.push(v); }
-                            }
-                        }
-                        Value::String(sep_s) => {
-                            let sep_str = sep_s.to_string();
-                            for part in s_owned.split(sep_str.as_str()) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, ip, chunk_idx)?;
-                                if keep.is_truthy() { results.push(v); }
-                            }
-                        }
+                    let parts: Vec<String> = match &sep_owned {
+                        Value::Char(c) => s_owned.split(*c).map(str::to_string).collect(),
+                        Value::String(sep_s) => s_owned.split(sep_s.as_str()).map(str::to_string).collect(),
                         _ => unreachable!(),
+                    };
+                    // The split first, then the function — the tree-walker's order.
+                    if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
+                        raise!(VmError::TypeMsg("filter requires lambda function".to_string()));
                     }
+                    let mut results = Vec::new();
+                    let outcome: Result<(), VmError> = 'calls: {
+                        for part in parts {
+                            let v = Value::String(ZyStr::new(part));
+                            match self.call_callable(callable.clone(), [v.clone()], program) {
+                                // A predicate answers a Bool, and no truthiness stands
+                                // in for one (GLB-080, as the sort comparator, GLB-024).
+                                Ok(Value::Bool(true)) => results.push(v),
+                                Ok(Value::Bool(false)) => {}
+                                Ok(other) => break 'calls Err(VmError::TypeMsg(format!(
+                                    "filter lambda must return boolean, got {}", other.type_label()))),
+                                Err(e) => break 'calls Err(e),
+                            }
+                        }
+                        Ok(())
+                    };
+                    if let Err(e) = outcome { raise!(e); }
                     self.reg_set(dst, Value::Array(Rc::new(results)));
                 }
                 &Instruction::StrSplitReduce(dst, str_reg, sep_reg, init_reg, func_reg) => {
@@ -2489,28 +3158,33 @@ impl<W: Write> VM<W> {
                         let sep_v = &self.value_stack[base + sep_reg as usize];
                         match (s_v, sep_v) {
                             (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
+                            // An empty delimiter is refused (GLB-079, decided 2026-10-03).
+                            (Value::String(_), Value::String(sep)) if sep.is_empty() => raise!(VmError::IndexMsg("$/ delimiter must not be empty".to_string())),
                             (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
-                            (Value::String(_), o) => raise!(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => raise!(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
+                            (Value::String(_), o) => raise!(VmError::TypeMsg(format!("$/ delimiter must be a char or string, got {}", o.type_label()))),
+                            (o, _) => raise!(VmError::TypeMsg(format!("$/ requires a string on the left, got {}", o.type_label()))),
                         }
                     };
-                    match &sep_owned {
-                        Value::Char(c) => {
-                            let c = *c;
-                            for part in s_owned.split(c) {
-                                let elem = Value::String(ZyStr::from_str_ref(part));
-                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, ip, chunk_idx)?;
-                            }
-                        }
-                        Value::String(sep_s) => {
-                            let sep_str = sep_s.to_string();
-                            for part in s_owned.split(sep_str.as_str()) {
-                                let elem = Value::String(ZyStr::from_str_ref(part));
-                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, ip, chunk_idx)?;
-                            }
-                        }
+                    let parts: Vec<String> = match &sep_owned {
+                        Value::Char(c) => s_owned.split(*c).map(str::to_string).collect(),
+                        Value::String(sep_s) => s_owned.split(sep_s.as_str()).map(str::to_string).collect(),
                         _ => unreachable!(),
+                    };
+                    // The split first, then the function — the tree-walker's order.
+                    if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
+                        raise!(VmError::TypeMsg("reduce requires lambda function".to_string()));
                     }
+                    let outcome: Result<(), VmError> = 'calls: {
+                        for part in parts {
+                            let elem = Value::String(ZyStr::new(part));
+                            match self.call_callable(callable.clone(), [mem::replace(&mut acc, Value::Unit), elem], program) {
+                                Ok(r) => acc = r,
+                                Err(e) => break 'calls Err(e),
+                            }
+                        }
+                        Ok(())
+                    };
+                    if let Err(e) = outcome { raise!(e); }
                     self.reg_set(dst, acc);
                 }
                 &Instruction::StrContains(dst, str_reg, elem_reg) => {
@@ -2520,40 +3194,78 @@ impl<W: Write> VM<W> {
                         match (s_val, e_val) {
                             (Value::String(s), Value::Char(c))    => s.contains(*c),
                             (Value::String(s), Value::String(sub)) => s.contains(sub.as_str()),
-                            (Value::String(_), _) => false,
-                            (other, _) => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            // Strict (D2 revoked, 2026-09-20): answering `false`
+                            // to `"ab"$? 5` reads as "the 5 is not there", and
+                            // the question was never well written — a string
+                            // holds characters. The tree-walker refuses it.
+                            (Value::String(_), other) => raise!(VmError::TypeMsg(format!(
+                                "string contains only supports char or string search, got {}",
+                                other.type_label()
+                            ))),
+                            (other, _) => raise!(VmError::TypeMsg(format!("cannot search {} - only arrays, tuples, and strings support contains", other.type_label()))),
                         }
                     };
                     wreg!(dst, Value::Bool(result));
                 }
                 &Instruction::StrSlice(dst, str_reg, lo_reg) => {
-                    let lo_val = self.as_int(lo_reg)?;
-                    let hi_val = self.as_int(lo_reg + 1)?;
+                    let lo_val = match self.as_int_for(lo_reg, "slice start") { Ok(v) => v, Err(e) => raise!(e) };
+                    let hi_val = match self.as_int_for(lo_reg + 1, "slice end") { Ok(v) => v, Err(e) => raise!(e) };
+                    // Strict, and direction-aware (steps 4.3 and 4.4): this used
+                    // to clamp with `.max(0).min(len).max(lo)` and had a byte
+                    // fast path that could not reverse.
                     let result = match &self.value_stack[base + str_reg as usize] {
                         Value::String(s) => {
-                            if s.is_ascii() {
-                                // Fast path: byte indices == char indices
-                                let len = s.len() as i64;
-                                let lo = (if lo_val == 0 { 0i64 } else if lo_val < 0 { len + lo_val } else { lo_val - 1 }).max(0).min(len) as usize;
-                                let hi = (if hi_val < 0 { len + hi_val + 1 } else { hi_val }).max(0).min(len) as usize;
-                                let hi = hi.max(lo);
-                                s[lo..hi].to_string()
-                            } else {
-                                // Unicode: single-pass via char_indices to find byte offsets
-                                let char_len = s.chars().count() as i64;
-                                let lo = (if lo_val == 0 { 0i64 } else if lo_val < 0 { char_len + lo_val } else { lo_val - 1 }).max(0).min(char_len) as usize;
-                                let hi = (if hi_val < 0 { char_len + hi_val + 1 } else { hi_val }).max(0).min(char_len) as usize;
-                                let hi = hi.max(lo);
-                                let mut byte_lo = s.len();
-                                let mut byte_hi = s.len();
-                                for (ci, (bi, _)) in s.char_indices().enumerate() {
-                                    if ci == lo { byte_lo = bi; }
-                                    if ci == hi { byte_hi = bi; break; }
-                                }
-                                s[byte_lo..byte_hi].to_string()
+                            let chars: Vec<char> = s.chars().collect();
+                            match slice_span(lo_val, hi_val, chars.len()) {
+                                Ok(SliceSpan::Up(a, b)) => chars[a..b].iter().collect::<String>(),
+                                Ok(SliceSpan::Down(a, b)) =>
+                                    (b..=a).rev().map(|p| chars[(p - 1) as usize]).collect::<String>(),
+                                Err(e) => raise!(e),
                             }
                         }
-                        other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("cannot slice {} - only arrays, tuples, named tuples, and strings support slice", other.type_label()))),
+                    };
+                    self.reg_set(dst, Value::String(ZyStr::new(result)));
+                }
+                &Instruction::ArraySliceCount(dst, arr_reg, lo_reg) => {
+                    let lo = match self.as_int_for(lo_reg, "slice start") { Ok(v) => v, Err(e) => raise!(e) };
+                    let n  = match self.as_int_for(lo_reg + 1, "slice count") { Ok(v) => v, Err(e) => raise!(e) };
+                    let result = match self.reg_get(arr_reg) {
+                        Value::Array(a) => {
+                            let a = a.as_ref();
+                            match count_span(lo, n, a.len()) { Ok((x, y)) => Value::Array(Rc::new(a[x..y].to_vec())), Err(e) => raise!(e) }
+                        }
+                        Value::Tuple(t) => {
+                            let t = t.as_ref();
+                            match count_span(lo, n, t.len()) { Ok((x, y)) => Value::Tuple(Rc::new(t[x..y].to_vec())), Err(e) => raise!(e) }
+                        }
+                        Value::NamedTuple(f) => {
+                            let first = f.first().map(|(k, _)| k.clone());
+                            raise!(VmError::TypeMsg(dict_not_positional("d$[a..b]", first.as_deref())));
+                        }
+                        Value::String(st) => {
+                            let chars: Vec<char> = st.chars().collect();
+                            match count_span(lo, n, chars.len()) {
+                                Ok((x, y)) => Value::String(ZyStr::new(chars[x..y].iter().collect::<String>())),
+                                Err(e) => raise!(e),
+                            }
+                        }
+                        other => raise!(VmError::TypeMsg(format!("cannot slice {} - only arrays, tuples, named tuples, and strings support slice", other.type_label()))),
+                    };
+                    self.reg_set(dst, result);
+                }
+                &Instruction::StrSliceCount(dst, str_reg, lo_reg) => {
+                    let lo = match self.as_int_for(lo_reg, "slice start") { Ok(v) => v, Err(e) => raise!(e) };
+                    let n  = match self.as_int_for(lo_reg + 1, "slice count") { Ok(v) => v, Err(e) => raise!(e) };
+                    let result = match &self.value_stack[base + str_reg as usize] {
+                        Value::String(s) => {
+                            let chars: Vec<char> = s.chars().collect();
+                            match count_span(lo, n, chars.len()) {
+                                Ok((x, y)) => chars[x..y].iter().collect::<String>(),
+                                Err(e) => raise!(e),
+                            }
+                        }
+                        other => raise!(VmError::TypeMsg(format!("cannot slice {} - only arrays, tuples, named tuples, and strings support slice", other.type_label()))),
                     };
                     self.reg_set(dst, Value::String(ZyStr::new(result)));
                 }
@@ -2579,10 +3291,7 @@ impl<W: Write> VM<W> {
                         Value::NamedTuple(nt) => Value::Array(Rc::new(
                             nt.iter().map(|(k, _)| Value::String(ZyStr::new(k.clone()))).collect::<Vec<_>>(),
                         )),
-                        other => raise!(VmError::TypeError {
-                            expected: "String or Array",
-                            got: other.type_name().to_string(),
-                        }),
+                        other => raise!(VmError::TypeMsg(format!("can only iterate over ranges, arrays, strings, tuples and dictionaries, got {}", other.type_label()))),
                     };
                     wreg!(dst, val);
                 }
@@ -2621,26 +3330,36 @@ impl<W: Write> VM<W> {
                                         .map(|(i, _)| Value::Int((i + 1) as i64))
                                         .collect()
                                 } else {
-                                    s.char_indices()
+                                    // The position of each match, not its ordinal:
+                                    // `.filter().enumerate()` numbered the matches,
+                                    // and `"ñaña"$?? 'a'` gave [1, 2] (GLB-083).
+                                    s.chars().enumerate()
                                         .filter(|(_, ch)| *ch == c)
-                                        .enumerate()
                                         .map(|(ci, _)| Value::Int((ci + 1) as i64))
                                         .collect()
                                 }
                             }
+                            // An empty pattern is refused (GLB-078, decided 2026-10-03).
+                            (Value::String(_), Value::String(pat)) if pat.is_empty() => {
+                                raise!(VmError::IndexMsg("$?? pattern must not be empty".to_string()))
+                            }
                             (Value::String(s), Value::String(pat)) => {
-                                let pat = pat.clone();
-                                if s.is_ascii() {
+                                // Every position the pattern starts at, overlapping —
+                                // the tree-walker's answer (GLB-081, decided
+                                // 2026-10-03). `match_indices` skipped the overlaps,
+                                // so `"aaa"$?? "aa"` gave [1].
+                                if s.is_ascii() && pat.is_ascii() {
                                     // ASCII fast path: byte_offset == char_offset
-                                    s.match_indices(pat.as_str())
-                                        .map(|(bi, _)| Value::Int((bi + 1) as i64))
+                                    s.as_bytes().windows(pat.len()).enumerate()
+                                        .filter(|(_, w)| *w == pat.as_bytes())
+                                        .map(|(i, _)| Value::Int((i + 1) as i64))
                                         .collect()
                                 } else {
-                                    // Unicode: build char-index map: byte_offset → char_index
-                                    let char_idx: std::collections::HashMap<usize, usize> =
-                                        s.char_indices().enumerate().map(|(ci, (bi, _))| (bi, ci)).collect();
-                                    s.match_indices(pat.as_str())
-                                        .filter_map(|(bi, _)| char_idx.get(&bi).map(|&ci| Value::Int((ci + 1) as i64)))
+                                    let chars: Vec<char> = s.chars().collect();
+                                    let pat: Vec<char> = pat.chars().collect();
+                                    chars.windows(pat.len()).enumerate()
+                                        .filter(|(_, w)| *w == pat.as_slice())
+                                        .map(|(ci, _)| Value::Int((ci + 1) as i64))
                                         .collect()
                                 }
                             }
@@ -2658,8 +3377,8 @@ impl<W: Write> VM<W> {
                                     .map(|(i, _)| Value::Int((i + 1) as i64))
                                     .collect()
                             }
-                            (Value::String(_), other) => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
-                            (other, _) => raise!(VmError::TypeError { expected: "String, Array, or Tuple", got: other.type_name().to_string() }),
+                            (Value::String(_), other) => raise!(VmError::TypeMsg(format!("$?? on string requires char or string value, got {}", other.type_label()))),
+                            (other, _) => raise!(VmError::TypeMsg(format!("$?? requires an array, tuple, or string, got {}", other.type_label()))),
                         }
                     };
                     wreg!(dst, Value::Array(Rc::new(positions)));
@@ -2740,16 +3459,18 @@ impl<W: Write> VM<W> {
                     let result = {
                         let s = match &self.value_stack[base + str_reg as usize] {
                             Value::String(s) => s.clone(),
-                            other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$~~ requires a string, got {}", other.type_label()))),
                         };
                         let rep = match &self.value_stack[base + rep_reg as usize] {
                             Value::String(r) => r.clone(),
-                            other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$~~ replacement must be a string, got {}", other.type_label()))),
                         };
                         match &self.value_stack[base + pat_reg as usize] {
+                            // An empty pattern is refused (GLB-078/079, decided 2026-10-03).
+                            Value::String(pat) if pat.is_empty() => raise!(VmError::IndexMsg("$~~ pattern must not be empty".to_string())),
                             Value::String(pat) => s.replace(pat.as_str(), rep.as_str()),
                             Value::Char(c) => s.replace(*c, rep.as_str()),
-                            other => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$~~ pattern must be a string or char, got {}", other.type_label()))),
                         }
                     };
                     wreg!(dst, Value::String(ZyStr::new(result)));
@@ -2758,20 +3479,32 @@ impl<W: Write> VM<W> {
                     let result = {
                         let s = match &self.value_stack[base + str_reg as usize] {
                             Value::String(s) => s.clone(),
-                            other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$~~ requires a string, got {}", other.type_label()))),
                         };
                         let rep = match &self.value_stack[base + rep_reg as usize] {
                             Value::String(r) => r.clone(),
-                            other => raise!(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$~~ replacement must be a string, got {}", other.type_label()))),
                         };
-                        let max = ri!(n_reg).max(0) as usize;
+                        // Strict (D2 revoked, 2026-09-20): a negative count was
+                        // clamped to 0, and 0 means "all" in the branch below —
+                        // so `"aa"$~~["a":"b":-1]` replaced the WHOLE string.
+                        let n_raw = match self.as_int_for(n_reg, "$~~ count") {
+                            Ok(v) => v,
+                            Err(e) => raise!(e),
+                        };
+                        if n_raw < 0 {
+                            raise!(VmError::IndexMsg(format!(
+                                "replacement count must be non-negative, got {}", n_raw)));
+                        }
+                        let max = n_raw as usize;
                         // Avoid heap-allocating a String for char patterns: use char directly.
                         #[derive(Copy, Clone)]
                         enum Pat<'a> { Ch(char), Str(&'a str) }
                         let pat = match &self.value_stack[base + pat_reg as usize] {
+                            Value::String(p) if p.is_empty() => raise!(VmError::IndexMsg("$~~ pattern must not be empty".to_string())),
                             Value::String(p) => Pat::Str(p.as_str()),
                             Value::Char(c) => Pat::Ch(*c),
-                            other => raise!(VmError::TypeError { expected: "Char or String", got: other.type_name().to_string() }),
+                            other => raise!(VmError::TypeMsg(format!("$~~ pattern must be a string or char, got {}", other.type_label()))),
                         };
                         if max == 0 {
                             match pat {
@@ -2840,11 +3573,21 @@ impl<W: Write> VM<W> {
                     let num_params = callee_chunk.num_params as usize;
                     let num_regs = callee_chunk.num_registers as usize;
 
+                    // A callable value called with the wrong number of
+                    // arguments is refused, as the tree-walker refuses it. It
+                    // ran: a missing argument arrived as Unit and failed later,
+                    // somewhere else, and an extra one was copied over the
+                    // callee's captured registers (step P4.6).
+                    if arg_regs.len() != num_params {
+                        raise!(VmError::Generic(format!(
+                            "lambda expects {} arguments, got {}", num_params, arg_regs.len())));
+                    }
+
                     // Save caller IP
                     self.frame_stack.last_mut().unwrap().ip = ip as u32;
 
                     let new_base = self.value_stack.len();
-                    self.value_stack.resize(new_base + num_regs, Value::Unit);
+                    self.value_stack.resize_with(new_base + num_regs, || Value::Unit);
 
                     // Copy explicit args into [0..num_args)
                     for (i, &reg) in arg_regs.iter().enumerate() {
@@ -2860,14 +3603,25 @@ impl<W: Write> VM<W> {
                         }
                     }
 
+                    self.forget_destroyed_from(new_base);
                     let wb = mem::take(&mut self.pending_output_writeback);
+                    // An output argument is LENT to its parameter (GLB-117):
+                    // the copy above made two owners of the collection for as
+                    // long as the call lasts, and the first edit inside the
+                    // function copied all of it. The caller's register lets go,
+                    // after every argument has been read — `g(d<~, d)` still
+                    // hands the second one what `d` held. It gets the value
+                    // back when the frame returns or is unwound.
+                    for &(_, caller_reg) in &wb {
+                        put_reg(&mut self.value_stack[base + caller_reg as usize], Value::Unit);
+                    }
+                    zymbol_common::count::call();
                     self.frame_stack.push(FrameInfo {
                         base: new_base as u32,
                         ip: 0,
                         chunk_idx: func_idx,
                         return_reg: dst,
                         catch_ip: u32::MAX,
-                        try_depth: 0,
                         error: None,
                         writeback: if wb.is_empty() { None } else { Some(Box::new(wb)) },
                     });
@@ -2916,40 +3670,35 @@ impl<W: Write> VM<W> {
                             Value::String(key) => {
                                 fields.iter().any(|(k, _)| k.as_str() == key.as_str())
                             }
-                            other => raise!(VmError::TypeError {
-                                expected: "String",
-                                got: other.type_name().to_string(),
-                            }),
+                            other => raise!(VmError::TypeMsg(format!("a dictionary is asked about a key, so `$?` needs a String, got {}", other.type_label()))),
                         },
                         Value::Tuple(t) => t.as_ref().iter().any(|v| v.equals(&elem)),
-                        other => raise!(VmError::TypeError { expected: "Array or String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("cannot search {} - only arrays, tuples, and strings support contains", other.type_label()))),
                     };
                     self.reg_set(dst, Value::Bool(result));
                 }
                 &Instruction::ArraySlice(dst, arr_reg, lo_reg) => {
                     // hi_reg = lo_reg + 1 by compiler convention
-                    let lo = self.as_int(lo_reg)?;
-                    let hi = self.as_int(lo_reg + 1)?;
+                    let lo = match self.as_int_for(lo_reg, "slice start") { Ok(v) => v, Err(e) => raise!(e) };
+                    let hi = match self.as_int_for(lo_reg + 1, "slice end") { Ok(v) => v, Err(e) => raise!(e) };
                     let result = match self.reg_get(arr_reg) {
                         Value::Array(arr) => {
                             let arr = arr.as_ref();
-                            let len = arr.len() as i64;
-                            // lo: 0=default start (internal 0), positive=1-based (subtract 1), negative=from end
-                            let lo_norm = (if lo == 0 { 0i64 } else if lo < 0 { len + lo } else { lo - 1 }).max(0).min(len) as usize;
-                            // hi: positive=1-based inclusive = 0-based exclusive (no change); negative=len+hi+1
-                            let hi_norm = (if hi < 0 { len + hi + 1 } else { hi }).max(0).min(len) as usize;
-                            let lo_norm = lo_norm.min(arr.len());
-                            let hi_norm = hi_norm.min(arr.len()).max(lo_norm);
-                            Value::Array(Rc::new(arr[lo_norm..hi_norm].to_vec()))
+                            match slice_span(lo, hi, arr.len()) {
+                                Ok(SliceSpan::Up(a, b)) => Value::Array(Rc::new(arr[a..b].to_vec())),
+                                Ok(SliceSpan::Down(a, b)) => Value::Array(Rc::new(
+                                    (b..=a).rev().map(|p| arr[(p - 1) as usize].clone()).collect::<Vec<_>>())),
+                                Err(e) => raise!(e),
+                            }
                         }
                         Value::Tuple(tup) => {
                             let tup = tup.as_ref();
-                            let len = tup.len() as i64;
-                            let lo_norm = (if lo == 0 { 0i64 } else if lo < 0 { len + lo } else { lo - 1 }).max(0).min(len) as usize;
-                            let hi_norm = (if hi < 0 { len + hi + 1 } else { hi }).max(0).min(len) as usize;
-                            let lo_norm = lo_norm.min(tup.len());
-                            let hi_norm = hi_norm.min(tup.len()).max(lo_norm);
-                            Value::Tuple(Rc::new(tup[lo_norm..hi_norm].to_vec()))
+                            match slice_span(lo, hi, tup.len()) {
+                                Ok(SliceSpan::Up(a, b)) => Value::Tuple(Rc::new(tup[a..b].to_vec())),
+                                Ok(SliceSpan::Down(a, b)) => Value::Tuple(Rc::new(
+                                    (b..=a).rev().map(|p| tup[(p - 1) as usize].clone()).collect::<Vec<_>>())),
+                                Err(e) => raise!(e),
+                            }
                         }
                         Value::NamedTuple(fields) => {
                             let fields = fields.as_ref();
@@ -2961,7 +3710,7 @@ impl<W: Write> VM<W> {
                             // "the first two keys" is not a question a dictionary
                             // should answer — Python's `dict` has no slicing.
                             let first = fields.first().map(|(k, _)| k.clone());
-                            raise!(VmError::Generic(dict_not_positional("d$[a..b]", first.as_deref())));
+                            raise!(VmError::TypeMsg(dict_not_positional("d$[a..b]", first.as_deref())));
                         }
                         // Strings slice too. The tree-walker has always allowed
                         // `s$[3..]`; the VM only reached this instruction when
@@ -2976,54 +3725,109 @@ impl<W: Write> VM<W> {
                             let hi_norm = hi_norm.max(lo_norm);
                             Value::String(ZyStr::new(chars[lo_norm..hi_norm].iter().collect()))
                         }
-                        other => raise!(VmError::TypeError { expected: "Array, Tuple, NamedTuple, or String", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("cannot slice {} - only arrays, tuples, named tuples, and strings support slice", other.type_label()))),
                     };
                     self.reg_set(dst, result);
                 }
                 &Instruction::ArrayMap(dst, arr_reg, func_reg) => {
                     let callable = self.reg_get(func_reg).clone();
-                    let arr = match self.reg_get(arr_reg).clone() {
-                        Value::Array(a) => a.as_ref().clone(),
-                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    // The function before the array, as the tree-walker checks
+                    // them — so an empty array with no function is refused too;
+                    // it used to answer `[]` (step 3.5b).
+                    if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
+                        raise!(VmError::TypeMsg("map requires lambda function".to_string()));
+                    }
+                    let original = self.reg_get(arr_reg).clone();
+                    let arr = match hof_items(&original) {
+                        Some(v) => v,
+                        None => raise!(VmError::TypeMsg(format!(
+                            "map requires array, tuple, string or dictionary, got {}",
+                            original.type_label()))),
                     };
                     let mut results = Vec::with_capacity(arr.len());
-                    for elem in arr {
-                        let result = self.call_callable(callable.clone(), vec![elem], program, ip, chunk_idx)?;
-                        results.push(result);
-                    }
-                    self.reg_set(dst, Value::Array(Rc::new(results)));
+                    let outcome: Result<(), VmError> = 'calls: {
+                        for elem in arr {
+                            match self.call_callable(callable.clone(), [elem], program) {
+                                Ok(r) => results.push(r),
+                                Err(e) => break 'calls Err(e),
+                            }
+                        }
+                        Ok(())
+                    };
+                    if let Err(e) = outcome { raise!(e); }
+                    self.reg_set(dst, hof_rebuild(&original, results));
                 }
                 &Instruction::ArrayFilter(dst, arr_reg, func_reg) => {
                     let callable = self.reg_get(func_reg).clone();
-                    let arr = match self.reg_get(arr_reg).clone() {
-                        Value::Array(a) => a.as_ref().clone(),
-                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    // The function before the array, as the tree-walker checks
+                    // them — so an empty array with no function is refused too;
+                    // it used to answer `[]` (step 3.5b).
+                    if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
+                        raise!(VmError::TypeMsg("filter requires lambda function".to_string()));
+                    }
+                    let original = self.reg_get(arr_reg).clone();
+                    let arr = match hof_items(&original) {
+                        Some(v) => v,
+                        None => raise!(VmError::TypeMsg(format!(
+                            "filter requires array, tuple, string or dictionary, got {}",
+                            original.type_label()))),
                     };
                     let mut results = Vec::new();
-                    for elem in arr {
-                        let keep = self.call_callable(callable.clone(), vec![elem.clone()], program, ip, chunk_idx)?;
-                        if keep.is_truthy() {
-                            results.push(elem);
+                    let outcome: Result<(), VmError> = 'calls: {
+                        for elem in arr {
+                            match self.call_callable(callable.clone(), [elem.clone()], program) {
+                                // A predicate answers a Bool, and no truthiness stands
+                                // in for one (GLB-080, as the sort comparator, GLB-024).
+                                Ok(Value::Bool(true)) => results.push(elem),
+                                Ok(Value::Bool(false)) => {}
+                                Ok(other) => break 'calls Err(VmError::TypeMsg(format!(
+                                    "filter lambda must return boolean, got {}", other.type_label()))),
+                                Err(e) => break 'calls Err(e),
+                            }
                         }
-                    }
-                    self.reg_set(dst, Value::Array(Rc::new(results)));
+                        Ok(())
+                    };
+                    if let Err(e) = outcome { raise!(e); }
+                    self.reg_set(dst, hof_rebuild(&original, results));
                 }
                 &Instruction::ArrayReduce(dst, arr_reg, init_reg, func_reg) => {
                     let callable = self.reg_get(func_reg).clone();
-                    let arr = match self.reg_get(arr_reg).clone() {
-                        Value::Array(a) => a.as_ref().clone(),
-                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                    if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
+                        raise!(VmError::TypeMsg("reduce requires lambda function".to_string()));
+                    }
+                    // Before the array, as the tree-walker checks it: a one-
+                    // parameter lambda is a mistake, not a fold, and calling it
+                    // anyway answered the initial value (GLB-015 A).
+                    if let Value::Function(_, n) | Value::Closure(_, n, _) = &callable {
+                        if *n != 2 {
+                            raise!(VmError::Generic(format!(
+                                "reduce lambda requires 2 parameters (accumulator, element), got {n}")));
+                        }
+                    }
+                    let original = self.reg_get(arr_reg).clone();
+                    let arr = match hof_items(&original) {
+                        Some(v) => v,
+                        None => raise!(VmError::TypeMsg(format!(
+                            "reduce requires array, tuple, string or dictionary, got {}",
+                            original.type_label()))),
                     };
                     let mut acc = self.reg_get(init_reg).clone();
-                    for elem in arr {
-                        acc = self.call_callable(callable.clone(), vec![acc, elem], program, ip, chunk_idx)?;
-                    }
+                    let outcome: Result<(), VmError> = 'calls: {
+                        for elem in arr {
+                            match self.call_callable(callable.clone(), [mem::replace(&mut acc, Value::Unit), elem], program) {
+                                Ok(r) => acc = r,
+                                Err(e) => break 'calls Err(e),
+                            }
+                        }
+                        Ok(())
+                    };
+                    if let Err(e) = outcome { raise!(e); }
                     self.reg_set(dst, acc);
                 }
                 &Instruction::ArraySort(dst, arr_reg, ascending, func_reg) => {
                     let arr = match self.reg_get(arr_reg).clone() {
                         Value::Array(a) => a.as_ref().clone(),
-                        other => raise!(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("sort requires an array, got {}", other.type_label()))),
                     };
                     let mut items = arr;
                     if func_reg == u16::MAX {
@@ -3033,21 +3837,62 @@ impl<W: Write> VM<W> {
                             items.reverse();
                         }
                     } else {
-                        // Custom comparator: bubble sort to avoid unsafe borrow
+                        // Custom comparator: bottom-up merge sort, the tree-walker's
+                        // call for call (GLB-108, decided 2026-10-09) — runs of width
+                        // 1, 2, 4, …, merged left to right; it was a bubble sort that
+                        // visited every pair. Stable by rule B (GLB-073): the left
+                        // element is taken unless it does NOT go before the right one
+                        // AND the right one goes before it.
                         let callable = self.reg_get(func_reg).clone();
                         let n = items.len();
-                        for i in 0..n {
-                            for j in 0..n.saturating_sub(i + 1) {
-                                let keep = self.call_callable(
-                                    callable.clone(),
-                                    vec![items[j].clone(), items[j + 1].clone()],
-                                    program, ip, chunk_idx,
-                                )?;
-                                if !keep.is_truthy() {
-                                    items.swap(j, j + 1);
+                        let outcome: Result<(), VmError> = 'calls: {
+                            let mut src = std::mem::take(&mut items);
+                            let mut merged: Vec<Value> = Vec::with_capacity(n);
+                            let mut width = 1;
+                            while width < n {
+                                merged.clear();
+                                let mut lo = 0;
+                                while lo < n {
+                                    let mid = (lo + width).min(n);
+                                    let hi = (lo + 2 * width).min(n);
+                                    let (mut i, mut j) = (lo, mid);
+                                    while i < mid && j < hi {
+                                        let mut says = [false; 2];
+                                        for (k, (x, y)) in [(i, j), (j, i)].into_iter().enumerate() {
+                                            says[k] = match self.call_callable(
+                                                callable.clone(),
+                                                [src[x].clone(), src[y].clone()],
+                                                program,
+                                            ) {
+                                                // A comparator answers a Bool, and no
+                                                // truthiness stands in for one (GLB-024).
+                                                Ok(Value::Bool(b)) => b,
+                                                Ok(other) => break 'calls Err(VmError::TypeMsg(format!(
+                                                    "sort comparator must return a Bool, got {}", other.type_name()))),
+                                                Err(e) => break 'calls Err(e),
+                                            };
+                                            // The left goes first: no second question.
+                                            if k == 0 && says[0] { break; }
+                                        }
+                                        if says[0] || !says[1] {
+                                            merged.push(src[i].clone());
+                                            i += 1;
+                                        } else {
+                                            merged.push(src[j].clone());
+                                            j += 1;
+                                        }
+                                    }
+                                    merged.extend_from_slice(&src[i..mid]);
+                                    merged.extend_from_slice(&src[j..hi]);
+                                    lo = hi;
                                 }
+                                std::mem::swap(&mut src, &mut merged);
+                                width *= 2;
                             }
-                        }
+                            items = src;
+                            Ok(())
+                        };
+                        if let Err(e) = outcome { raise!(e); }
                     }
                     self.reg_set(dst, Value::Array(Rc::new(items)));
                 }
@@ -3061,12 +3906,132 @@ impl<W: Write> VM<W> {
                         matches!(v, Value::Array(_))
                     };
                     if !ok {
-                        let got = v.tw_type_name_owned();
+                        let got = v.type_label();
                         raise!(VmError::Generic(if wants_tuple {
                             format!("tuple pattern '( … )' requires a tuple, got {got}")
                         } else {
                             format!("array pattern '[ … ]' requires an array, got {got}")
                         }));
+                    }
+                }
+                &Instruction::CallableCheck(reg, pipe) => {
+                    if !matches!(self.reg_get(reg), Value::Function(..) | Value::Closure(..)) {
+                        raise!(VmError::TypeMsg(if pipe {
+                            "pipe operator requires a callable function or lambda"
+                        } else {
+                            "expression is not callable"
+                        }.to_string()));
+                    }
+                }
+                &Instruction::CallableCheckNamed(reg, idx) => {
+                    if !matches!(self.reg_get(reg), Value::Function(..) | Value::Closure(..)) {
+                        // The name, not the type it happens to hold: in a line
+                        // with several calls the name is what finds the one
+                        // that failed (GLB-034).
+                        raise!(VmError::TypeMsg(format!(
+                            "'{}' is not a function", program.string_pool[idx as usize])));
+                    }
+                }
+                &Instruction::NavStepCheck(coll, idx) => {
+                    // A step of a navigation read: its own words, which `ArrayGet`
+                    // (the plain index) cannot know it owes (step P4-3).
+                    match (self.reg_get(coll), self.reg_get(idx)) {
+                        (Value::NamedTuple(fields), Value::Int(_)) => {
+                            let first = fields.first().map(|(k, _)| k.clone());
+                            raise!(VmError::TypeMsg(dict_not_positional("d[n>…]", first.as_deref())));
+                        }
+                        (_, Value::Int(_)) | (_, Value::String(_)) => {}
+                        (_, other) => raise!(VmError::TypeMsg(format!(
+                            "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                            other.type_label()))),
+                    }
+                }
+                &Instruction::NavRangeCheck(reg) => {
+                    // `index`, not `nav range start`: a bound of a navigation
+                    // range says what a plain index says, which is what the
+                    // other two engines say and what step 3.5b decided. The
+                    // label this helper takes IS the message.
+                    let a = match self.as_int_for(reg, "index") { Ok(v) => v, Err(e) => raise!(e) };
+                    let b = match self.as_int_for(reg + 1, "index") { Ok(v) => v, Err(e) => raise!(e) };
+                    // The tree-walker's order: a negative bound is its own
+                    // failure, and only then is a zero one. Reversing them made
+                    // `v[1>-1..2]` report an index 0 that is not in the program.
+                    if a < 0 || b < 0 {
+                        raise!(VmError::IndexMsg(
+                            "range indices in nav path must be positive integers".to_string()));
+                    }
+                    if a < 1 || b < 1 {
+                        raise!(VmError::IndexMsg(format!(
+                            "invalid nav range {}..{} — indices are 1-based", a, b)));
+                    }
+                }
+                &Instruction::LoopStepCheck(step) => {
+                    let n = match self.reg_get(step) {
+                        Value::Int(n) => *n,
+                        other => raise!(VmError::TypeMsg(format!("step must be an integer, got {}", other.type_label()))),
+                    };
+                    if n <= 0 {
+                        raise!(VmError::Generic(format!("step must be positive, got {n}")));
+                    }
+                }
+                &Instruction::LoopBoundsCheck(start, end) => {
+                    // No `for` here: raise! continues the dispatch loop, and
+                    // inside an inner loop it would continue that one instead.
+                    let bad = match (self.reg_get(start), self.reg_get(end)) {
+                        (Value::Int(_), Value::Int(_)) => false,
+                        _ => true,
+                    };
+                    if bad {
+                        // Both bounds named, as the tree-walker names them.
+                        raise!(VmError::TypeMsg(format!(
+                            "range bounds must be integers, got {} and {}",
+                            self.reg_get(start).type_label(), self.reg_get(end).type_label()
+                        )));
+                    }
+                }
+                &Instruction::DestroyLocal(reg, name_idx) => {
+                    let abs = self.frame_stack.last().unwrap().base as usize + reg as usize;
+                    // A second `\` that runs is a use after the first (MEM-8,
+                    // GLB-055): the same error a read gives.
+                    if !self.destroyed_slots.insert(abs) {
+                        let name = program.string_pool[name_idx as usize].clone();
+                        raise!(VmError::PlainMsg(format!(
+                            "use after destruction: variable '{}' was destroyed after its last use", name)));
+                    }
+                    self.reg_set(reg, Value::Unit);
+                }
+                &Instruction::CheckAlive(reg, name_idx) => {
+                    let dead = !self.destroyed_slots.is_empty()
+                        && self.destroyed_slots.contains(&(self.frame_stack.last().unwrap().base as usize + reg as usize));
+                    if dead {
+                        let name = program.string_pool[name_idx as usize].clone();
+                        raise!(VmError::PlainMsg(format!(
+                            "use after destruction: variable '{}' was destroyed after its last use", name)));
+                    }
+                }
+                &Instruction::Revive(reg) => {
+                    if !self.destroyed_slots.is_empty() {
+                        let abs = self.frame_stack.last().unwrap().base as usize + reg as usize;
+                        self.destroyed_slots.remove(&abs);
+                    }
+                }
+                &Instruction::Pos(dst, src) => {
+                    let v = match rreg!(src) {
+                        v @ (Value::Int(_) | Value::Float(_)) => v.clone(),
+                        other => raise!(VmError::TypeMsg(format!(
+                            "unary plus requires numeric operand, got {}", other.type_name()))),
+                    };
+                    wreg!(dst, v);
+                }
+                &Instruction::OutputSlotCheck(slot, admits_tuple) => {
+                    let bad = match self.reg_get(slot) {
+                        Value::Int(_) => None,
+                        Value::Tuple(_) if admits_tuple => None,
+                        // Named by its type, and a `##Type` (GLB-033, D1; GLB-042).
+                        other => Some(other.type_name()),
+                    };
+                    if let Some(got) = bad {
+                        raise!(VmError::TypeMsg(format!(">>~ slot expects Int, got {got}")));
                     }
                 }
                 &Instruction::DestructureRest(dst, src, from, trailing) => {
@@ -3155,13 +4120,14 @@ impl<W: Write> VM<W> {
                     let v = self.reg_get(src);
                     if !matches!(v, Value::Bool(_)) {
                         let msg = logical_type_error(if is_and { "AND" } else { "OR" }, v);
-                        raise!(VmError::Generic(msg));
+                        // A wrong TYPE is a `##Type` (D1; GLB-091).
+                        raise!(VmError::TypeMsg(msg));
                     }
                 }
                 &Instruction::RequireDict(src) => {
                     let v = self.reg_get(src);
                     if !matches!(v, Value::NamedTuple(_)) {
-                        let got = v.tw_type_name_owned();
+                        let got = v.type_label();
                         raise!(VmError::Generic(format!(
                             "the pattern #(…) requires a dictionary, got {}\nhelp: #(key: name) = d unpacks a dictionary; use (a, b) for a tuple, [a, b] for an array",
                             got
@@ -3177,7 +4143,7 @@ impl<W: Write> VM<W> {
                                 Some(v) => v,
                                 None => {
                                     let available: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
-                                    raise!(VmError::Generic(missing_key_msg(&field_name, &available)));
+                                    raise!(VmError::KeyMsg(missing_key_msg(&field_name, &available)));
                                 }
                             }
                         }
@@ -3190,23 +4156,26 @@ impl<W: Write> VM<W> {
                                 arr.get(i).cloned().unwrap_or(Value::Unit)
                             } else {
                                 let field_name = field_name.clone();
-                                raise!(VmError::Generic(format!(
+                                let got = Value::Array(arr.clone()).type_label();
+                                raise!(VmError::TypeMsg(format!(
                                     "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
-                                    zymbol_common::typesym::ARRAY, field_name
+                                    got, field_name
                                 )));
                             }
                         }
                         Value::Tuple(_) => {
                             let field_name = field_name.clone();
-                            raise!(VmError::Generic(format!(
+                            // A `##Type` (D1), declared: the words of the
+                            // name chose the family (GLB-099).
+                            raise!(VmError::TypeMsg(format!(
                                 "a positional tuple is addressed by position, not by name: '{}'\nhelp: use t[1] — names live in a dictionary, #(key: value)",
                                 field_name
                             )));
                         }
                         other => {
-                            let got = other.tw_type_name_owned();
+                            let got = other.type_label();
                             let field_name = field_name.clone();
-                            raise!(VmError::Generic(format!(
+                            raise!(VmError::TypeMsg(format!(
                                 "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
                                 got, field_name
                             )));
@@ -3308,60 +4277,124 @@ impl<W: Write> VM<W> {
                                 _  => u32::from_str_radix(stripped, 16),
                             };
                             match code_res {
-                                Ok(code) if code <= 0x10FFFF => {
-                                    match char::from_u32(code) {
-                                        Some(ch) => Value::Char(ch),
-                                        None => raise!(VmError::Generic(format!(
-                                            "invalid Unicode character code: {}", code
-                                        ))),
-                                    }
-                                }
-                                Ok(code) => raise!(VmError::Generic(format!(
-                                    "character code must be in range 0..0x10FFFF, got {}", code
-                                ))),
-                                Err(_) => raise!(VmError::Generic(format!(
-                                    "failed to parse '{}' as base-{} number", stripped, radix
-                                ))),
+                                // A code with no character — past 0x10FFFF, or a
+                                // surrogate — is `##Range`, as `##'` raises it,
+                                // without the value (GLB-113).
+                                Ok(code) => match char::from_u32(code) {
+                                    Some(ch) => Value::Char(ch),
+                                    None => raise!(VmError::CodeOutOfRange {
+                                        prefix: match radix { 2 => "0b", 8 => "0o", 10 => "0d", _ => "0x" },
+                                    }),
+                                },
+                                // The base is NAMED, as the tree-walker and
+                                // zyjs name it. `base-16` is the radix this
+                                // engine happens to hold; `hexadecimal` is what
+                                // the reader wrote. One complete literal per
+                                // base, never a template with a hole.
+                                // A `##Parse`, declared: the words of the text
+                                // chose the family (GLB-097).
+                                Err(_) => raise!(VmError::ParseMsg(match radix {
+                                    2 => format!("failed to parse '{}' as binary number", stripped),
+                                    8 => format!("failed to parse '{}' as octal number", stripped),
+                                    16 => format!("failed to parse '{}' as hexadecimal number", stripped),
+                                    _ => format!("failed to parse '{}' as decimal number", stripped),
+                                })),
                             }
                         }
-                        other => raise!(VmError::TypeError {
-                            expected: "Char, Int, or String",
-                            got: other.type_name().to_string(),
-                        }),
+                        other => raise!(VmError::TypeMsg(format!("base conversion expressions work with char, int, or string, got {}", other.type_label()))),
                     };
                     self.reg_set(dst, result);
                 }
 
-                // ── Try/catch ─────────────────────────────────────────────────
-                &Instruction::TryBegin(catch_label) => {
-                    let frame = self.frame_stack.last_mut().unwrap();
-                    frame.catch_ip = catch_label;
-                    frame.try_depth += 1;
+                // ── Try/catch (GLB-010) ───────────────────────────────────────
+                // The handler this `!?` replaces is saved in its own register,
+                // packed as `pending_len << 32 | catch_ip`: re-armed on the way
+                // out, and the pending errors truncated back to what they were,
+                // which discards any that belonged to a `!?` inside this one.
+                &Instruction::TryBegin(catch_label, save) => {
+                    let packed = {
+                        let frame = self.frame_stack.last_mut().unwrap();
+                        let pending = frame.error.as_ref().map_or(0, |e| e.pending.len());
+                        let outer = std::mem::replace(&mut frame.catch_ip, catch_label);
+                        ((pending as i64) << 32) | outer as i64
+                    };
+                    wreg!(save, Value::Int(packed));
                 }
-                Instruction::TryEnd(_) => {
-                    let frame = self.frame_stack.last_mut().unwrap();
-                    if frame.try_depth > 0 { frame.try_depth -= 1; }
-                    if frame.try_depth == 0 { frame.catch_ip = u32::MAX; }
+                &Instruction::TryEnd(save) => {
+                    let outer = match rreg!(save) { Value::Int(n) => (*n & 0xFFFF_FFFF) as u32, _ => u32::MAX };
+                    self.frame_stack.last_mut().unwrap().catch_ip = outer;
                 }
-                &Instruction::TryCatch(err_reg) => {
-                    let err = self.frame_stack.last_mut().unwrap()
-                        .error.as_mut()
-                        .and_then(|e| e.error_val.take())
-                        .unwrap_or_else(|| Value::String(ZyStr::new("unknown error".to_string())));
-                    unsafe { *self.value_stack.get_unchecked_mut(base + err_reg as usize) = err; }
+                &Instruction::TryLand(save, err_reg) => {
+                    let (outer, keep) = match rreg!(save) {
+                        Value::Int(n) => ((*n & 0xFFFF_FFFF) as u32, (*n >> 32) as usize),
+                        _ => (u32::MAX, 0),
+                    };
+                    let mut pending = self.in_flight.take().unwrap_or_else(|| Pending {
+                        tag: 0,
+                        err: VmError::Generic("unknown error".to_string()),
+                        kind: "_",
+                        origin_ip: self.cur_ip,
+                        origin_chunk: self.cur_chunk,
+                    });
+                    pending.tag = save;
+                    let value = Value::Error(ZyStr::new(format!("##{}({})", pending.kind, pending.err)));
+                    {
+                        let frame = self.frame_stack.last_mut().unwrap();
+                        frame.catch_ip = outer;
+                        let errors = frame.error.get_or_insert_with(Default::default);
+                        errors.pending.truncate(keep);
+                        errors.pending.push(pending);
+                    }
+                    wreg!(err_reg, value);
+                }
+                &Instruction::TryHandled(tag) => {
+                    if let Some(errors) = self.frame_stack.last_mut().unwrap().error.as_mut() {
+                        if errors.pending.last().is_some_and(|p| p.tag == tag) {
+                            errors.pending.pop();
+                        }
+                    }
+                }
+                &Instruction::TryRethrow(tag) => {
+                    let pending = match self.frame_stack.last_mut().unwrap().error.as_mut() {
+                        Some(errors) if errors.pending.last().is_some_and(|p| p.tag == tag) => errors.pending.pop(),
+                        _ => None,
+                    };
+                    if let Some(p) = pending {
+                        // From where it was first raised: an uncaught rethrow is
+                        // located at that instruction, not at the end of the `!?`.
+                        self.cur_ip = p.origin_ip;
+                        self.cur_chunk = p.origin_chunk;
+                        raise_kind!(p.err, p.kind);
+                    }
                 }
 
                 // ── Shell execution ───────────────────────────────────────────
                 Instruction::BashExec(dst, parts) => {
                     let dst = *dst;
+                    let passes_function = parts.iter().any(|part| {
+                        matches!(part, BuildPart::Reg(r) if holds_function(self.reg_get(*r)))
+                    });
+                    if passes_function {
+                        raise!(VmError::Generic(
+                            "cannot use function in bash command interpolation".to_string()
+                        ));
+                    }
                     let mut cmd = String::new();
                     for part in parts {
                         match part {
                             BuildPart::Lit(idx) => cmd.push_str(&program.string_pool[*idx as usize]),
-                            BuildPart::Reg(r) => cmd.push_str(&self.reg_get(*r).to_string_repr()),
+                            BuildPart::Reg(r) => cmd.push_str(&shell_text(self.reg_get(*r))),
                         }
                     }
-                    let out = run_in_shell(&cmd)?;
+                    let out = match run_in_shell(&cmd) { Ok(o) => o, Err(e) => raise!(e.into()) };
+                    // A status other than 0 is a soft ##IO error (GAP-GOL-011, D2).
+                    if !out.status.success() {
+                        let said = zymbol_common::shell::failure_text(&out);
+                        self.reg_set(dst, Value::Error(ZyStr::new(format!(
+                            "##IO({})",
+                            zymbol_common::shell::exit_failure_message(out.status.code(), &said)))));
+                        continue;
+                    }
                     // Capture both stdout and stderr (mirrors tree-walker behavior)
                     let mut result = String::from_utf8_lossy(&out.stdout).into_owned();
                     if !out.stderr.is_empty() {
@@ -3380,24 +4413,37 @@ impl<W: Write> VM<W> {
                 // ── Execute expression </ path /> ─────────────────────────────
                 Instruction::Execute(dst, parts) => {
                     let dst = *dst;
-                    let mut cmd = String::new();
-                    for part in parts {
-                        match part {
-                            BuildPart::Lit(idx) => cmd.push_str(&program.string_pool[*idx as usize]),
-                            BuildPart::Reg(r) => cmd.push_str(&self.reg_get(*r).to_string_repr()),
-                        }
+                    // The first part is the path, each one after it an argument
+                    // (D10); without any the subscript inherits the caller's.
+                    let text = |part: &BuildPart| match part {
+                        BuildPart::Lit(idx) => program.string_pool[*idx as usize].to_string(),
+                        BuildPart::Reg(r) => self.reg_get(*r).to_string_repr(),
+                    };
+                    let cmd = parts.first().map(&text).unwrap_or_default();
+                    let sub_args: Vec<String> = parts.iter().skip(1).map(&text).collect();
+                    // GLB-017 I, decided 2026-09-26: in this process, down
+                    // the road `zymbol run --vm` takes, through the runner the
+                    // CLI installs. The same refusal as the tree-walker when
+                    // there is no such file.
+                    let path = std::path::PathBuf::from(&cmd);
+                    if !path.exists() {
+                        raise!(VmError::IoMsg(format!("file not found: {}", path.display())));
                     }
-                    let out = run_in_shell(&cmd)?;
-                    if !out.status.success() {
-                        let mut msg = String::from_utf8_lossy(&out.stderr).into_owned();
-                        if msg.is_empty() {
-                            msg = String::from_utf8_lossy(&out.stdout).into_owned();
-                        }
-                        let msg = msg.trim_end().to_string();
-                        return Err(VmError::Generic(msg));
+                    let Some(runner) = self.subscript_runner.clone() else {
+                        raise!(VmError::IoMsg(format!(
+                            "cannot run '{}': a subscript needs the zymbol command, and this program runs without it",
+                            path.display()
+                        )));
+                    };
+                    // D2 and D8: a status the subscript GIVES is a soft ##IO
+                    // error; a failure is still raised (GLB-017 I).
+                    match runner(&path, &sub_args) {
+                        Ok((printed, 0)) => self.reg_set(dst, Value::String(ZyStr::new(printed))),
+                        Ok((printed, code)) => self.reg_set(dst, Value::Error(ZyStr::new(format!(
+                            "##IO({})",
+                            zymbol_common::shell::exit_failure_message(Some(code), &printed))))),
+                        Err(failure) => raise!(VmError::Generic(failure)),
                     }
-                    let result = String::from_utf8_lossy(&out.stdout).into_owned();
-                    self.reg_set(dst, Value::String(ZyStr::new(result)));
                 }
 
                 // ── Format ops ────────────────────────────────────────────────
@@ -3460,9 +4506,7 @@ impl<W: Write> VM<W> {
                             Ok(f) => f,
                             // The tree-walker rejects a non-number here; returning
                             // 0.0 silently made the two engines disagree.
-                            Err(_) => raise!(VmError::TypeError {
-                                expected: "number", got: other.type_name().to_string()
-                            }),
+                            Err(_) => raise!(VmError::TypeMsg(format!("format expressions only work with numbers, got {}", other.type_label()))),
                         },
                     };
                     let s = map_numeral_number(vm_fmt_thousands(f, prec_kind, prec_n), self.numeral_mode);
@@ -3474,9 +4518,7 @@ impl<W: Write> VM<W> {
                         Value::Float(f) => *f,
                         other => match ascii_digits(other.to_string().trim()).parse::<f64>() {
                             Ok(f) => f,
-                            Err(_) => raise!(VmError::TypeError {
-                                expected: "number", got: other.type_name().to_string()
-                            }),
+                            Err(_) => raise!(VmError::TypeMsg(format!("format expressions only work with numbers, got {}", other.type_label()))),
                         },
                     };
                     let s = map_numeral_number(vm_fmt_scientific(f, prec_kind, prec_n), self.numeral_mode);
@@ -3494,11 +4536,11 @@ impl<W: Write> VM<W> {
                         // it used to become 0.0 without a word.
                         Value::String(s) => match ascii_digits(s.as_ref().trim()).parse::<f64>() {
                             Ok(f) => f,
-                            Err(_) => raise!(VmError::Generic(format!(
+                            Err(_) => raise!(VmError::ParseMsg(format!(
                                 "cannot convert string '{}' to number for rounding", s.as_ref()
                             ))),
                         },
-                        other => raise!(VmError::TypeError { expected: "number", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("round expressions only work with numbers or numeric strings, got {}", other.type_label()))),
                     };
                     let m = 10_f64.powi(precision as i32);
                     self.reg_set(dst, Value::Float((f * m).round() / m));
@@ -3509,11 +4551,11 @@ impl<W: Write> VM<W> {
                         Value::Float(f) => *f,
                         Value::String(s) => match ascii_digits(s.as_ref().trim()).parse::<f64>() {
                             Ok(f) => f,
-                            Err(_) => raise!(VmError::Generic(format!(
+                            Err(_) => raise!(VmError::ParseMsg(format!(
                                 "cannot convert string '{}' to number for truncation", s.as_ref()
                             ))),
                         },
-                        other => raise!(VmError::TypeError { expected: "number", got: other.type_name().to_string() }),
+                        other => raise!(VmError::TypeMsg(format!("truncate expressions only work with numbers or numeric strings, got {}", other.type_label()))),
                     };
                     let m = 10_f64.powi(precision as i32);
                     self.reg_set(dst, Value::Float((f * m).trunc() / m));
@@ -3524,10 +4566,47 @@ impl<W: Write> VM<W> {
                     let is_err = matches!(self.reg_get(src), Value::Error(_));
                     self.reg_set(dst, Value::Bool(is_err));
                 }
+                // ##Kind("message") — the same form a soft error from std/*
+                // prints as, and the one `#?` and `:!` read the kind back from.
+                // `##Kind` as a pattern: the value is an error, and of that kind.
+                // An error is held as its display, "##Kind(message)".
+                &Instruction::ErrorKindIs(dst, src, kind_idx) => {
+                    let is = match self.reg_get(src) {
+                        Value::Error(s) => s.as_ref()
+                            .strip_prefix("##")
+                            .and_then(|t| t.strip_prefix(program.string_pool[kind_idx as usize].as_str()))
+                            .is_some_and(|t| t.starts_with('(')),
+                        _ => false,
+                    };
+                    self.reg_set(dst, Value::Bool(is));
+                }
+                &Instruction::ErrorMessage(dst, src) => {
+                    let msg = match self.reg_get(src) {
+                        Value::Error(s) => {
+                            let t = s.as_ref();
+                            match (t.find('('), t.strip_suffix(')')) {
+                                (Some(i), Some(body)) => body[i + 1..].to_string(),
+                                _ => String::new(),
+                            }
+                        }
+                        _ => String::new(),
+                    };
+                    self.reg_set(dst, Value::String(ZyStr::new(msg)));
+                }
+                &Instruction::MakeError(dst, kind_idx, msg) => {
+                    let v = match self.reg_get(msg) {
+                        Value::String(m) => Value::Error(ZyStr::new(format!(
+                            "##{}({})", program.string_pool[kind_idx as usize], m.as_ref()))),
+                        other => raise!(VmError::TypeMsg(format!(
+                            "an error's message is a String, got {}", other.type_label()))),
+                    };
+                    self.reg_set(dst, v);
+                }
                 &Instruction::LoadErrorKind(dst) => {
                     let kind = self.frame_stack.last()
                         .and_then(|f| f.error.as_ref())
-                        .map(|e| e.error_kind.clone())
+                        .and_then(|e| e.pending.last())
+                        .map(|p| p.kind.to_string())
                         .unwrap_or_default();
                     unsafe { *self.value_stack.get_unchecked_mut(base + dst as usize) = Value::String(ZyStr::new(kind)); }
                 }
@@ -3545,6 +4624,11 @@ impl<W: Write> VM<W> {
                 }
 
                 &Instruction::LoadGlobal(dst, gvar_idx) => {
+                    if let Some(name) = self.destroyed_globals.get(&gvar_idx) {
+                        raise!(VmError::PlainMsg(format!(
+                            "use after destruction: variable '{}' was destroyed \
+                             after its last use", name)));
+                    }
                     let val = self.global_vars
                         .get(gvar_idx as usize)
                         .cloned()
@@ -3553,9 +4637,53 @@ impl<W: Write> VM<W> {
                 }
 
                 &Instruction::StoreGlobal(gvar_idx, src) => {
+                    // Assigning revives a destroyed name: `\` ends a life, it
+                    // does not burn the name. Almost no program destroys a
+                    // global, so the map is nearly always empty: skip the hash.
+                    if !self.destroyed_globals.is_empty() {
+                        self.destroyed_globals.remove(&gvar_idx);
+                    }
+                    // The edit that detached this slot is done: what it wrote
+                    // is stored below, and there is nothing left to put back.
+                    self.detached_global = None;
                     let val = rreg!(src).clone();
                     if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
                         *slot = val;
+                    }
+                }
+
+                // The receiver of an edit of module state was loaded into `reg`
+                // (left to right: before its operands). If the slot still holds
+                // that same value, nothing wrote the state meanwhile: the slot
+                // lets go of it, the register is its only owner, and the edit
+                // that follows writes in place instead of copying the
+                // collection. If an operand did write the state, the slot holds
+                // something else: it is left alone, the edit runs on what was
+                // loaded, and `StoreGlobal` puts that over it.
+                &Instruction::DetachGlobal(gvar_idx, reg) => {
+                    let abs = base + reg as usize;
+                    let same = match (self.global_vars.get(gvar_idx as usize), &self.value_stack[abs]) {
+                        (Some(Value::Array(a)), Value::Array(b)) => Rc::ptr_eq(a, b),
+                        (Some(Value::Tuple(a)), Value::Tuple(b)) => Rc::ptr_eq(a, b),
+                        (Some(Value::NamedTuple(a)), Value::NamedTuple(b)) => Rc::ptr_eq(a, b),
+                        _ => false,
+                    };
+                    if same {
+                        self.global_vars[gvar_idx as usize] = Value::Unit;
+                        self.detached_global = Some((gvar_idx, abs));
+                    }
+                }
+
+                &Instruction::DestroyGlobal(gvar_idx, name_idx) => {
+                    let name = self.string_rcs[name_idx as usize].to_string();
+                    if self.destroyed_globals.contains_key(&gvar_idx) {
+                        raise!(VmError::PlainMsg(format!(
+                            "use after destruction: variable '{}' was destroyed \
+                             after its last use", name)));
+                    }
+                    self.destroyed_globals.insert(gvar_idx, name);
+                    if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
+                        *slot = Value::Unit;
                     }
                 }
 
@@ -3564,13 +4692,18 @@ impl<W: Write> VM<W> {
                     let ms = match rreg!(reg) {
                         Value::Int(n) if *n >= 0 => *n as u64,
                         Value::Int(n) => raise!(VmError::Generic(format!(
-                            "@~ requires non-negative ms, got {}", n))),
-                        other => raise!(VmError::TypeError {
-                            expected: "Int", got: other.type_name().to_string() }),
+                            "@~ requires non-negative duration, got {}", n))),
+                        other => raise!(VmError::TypeMsg(format!("@~ requires integer milliseconds, got {}", other.type_label()))),
                     };
-                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                    // Under --keys the script's WAIT counts polls, not time (D11).
+                    if self.headless.is_none() {
+                        std::thread::sleep(std::time::Duration::from_millis(ms));
+                    }
                 }
 
+                Instruction::ClearScreen if self.headless.is_some() => {
+                    if let Some(h) = self.headless.as_mut() { h.screen.clear(); }
+                }
                 Instruction::ClearScreen => {
                     crossterm::execute!(std::io::stdout(),
                         crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
@@ -3578,10 +4711,31 @@ impl<W: Write> VM<W> {
                 }
 
                 &Instruction::QueryTerminalSize(dst) => {
-                    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+                    let (cols, rows) = if self.headless.is_some() {
+                        (zymbol_common::vscreen::COLS as u16, zymbol_common::vscreen::ROWS as u16)
+                    } else {
+                        crossterm::terminal::size().unwrap_or((80, 24))
+                    };
                     wreg!(dst, Value::Tuple(std::rc::Rc::new(vec![Value::Int(rows as i64), Value::Int(cols as i64)])));
                 }
 
+                &Instruction::ReadKey(dst, blocking) if self.headless.is_some() => {
+                    let h = self.headless.as_mut().expect("guarded");
+                    let (ch, frames) = if blocking {
+                        h.read_blocking()
+                    } else {
+                        let (k, f) = h.read_poll();
+                        (Some(k), f)
+                    };
+                    for frame in frames {
+                        writeln!(self.output, "{}", frame)?;
+                    }
+                    let ch = match ch {
+                        Some(c) => c,
+                        None => raise!(VmError::Generic(zymbol_common::vscreen::OUT_OF_KEYS.to_string())),
+                    };
+                    wreg!(dst, Value::Char(ch));
+                }
                 &Instruction::ReadKey(dst, blocking) => {
                     use crossterm::event::{self, Event};
                     let ch = if blocking {
@@ -3617,11 +4771,15 @@ impl<W: Write> VM<W> {
 
                 Instruction::ReadLine(dst, prompt_reg, kind) => {
                     use std::io::{BufRead, Write};
-                    let in_tui = !tui_stack.is_empty();
+                    let in_tui = !self.tui_stack.is_empty();
                     // Read / validate / re-prompt loop (mirrors the tree-walker). An empty
                     // raw line means EOF (a typed blank line is "\n"); EOF aborts so a failed
                     // constraint cannot spin forever on a closed pipe.
-                    let value = loop {
+                    // The loop breaks with a Result and the error is raised after
+                        // it: a `raise!` in here would `continue` THIS loop, which
+                        // read end-of-input again with the handler already spent,
+                        // so `!? { << n } :! { }` never caught it.
+                    let value: Result<Value, VmError> = loop {
                         if let Some(pr) = prompt_reg {
                             print!("{}", self.numeral_repr(rreg!(*pr)));
                             std::io::stdout().flush().ok();
@@ -3635,25 +4793,39 @@ impl<W: Write> VM<W> {
                         if in_tui {
                             crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide).ok();
                             if let Err(e) = crossterm::terminal::enable_raw_mode() {
-                                raise!(VmError::Generic(format!("input: failed to restore raw mode: {}", e)));
+                                break Err(VmError::Generic(format!("input: failed to restore raw mode: {}", e)));
                             }
                         }
                         if line.is_empty() {
-                            raise!(VmError::Generic(format!(
+                            break Err(VmError::Generic(format!(
                                 "end of input while waiting for {}", vm_describe_input_kind(kind)
                             )));
                         }
                         match vm_validate_input(line.trim(), kind) {
-                            Ok(v) => break v,
+                            Ok(v) => break Ok(v),
                             Err(hint) => {
                                 println!("  ({})", hint);
                                 std::io::stdout().flush().ok();
                             }
                         }
                     };
+                    let value = match value { Ok(v) => v, Err(e) => raise!(e) };
                     wreg!(*dst, value);
                 }
 
+                Instruction::PrintAt(r_pos, item_regs) if self.headless.is_some() => {
+                    // Position and text on the virtual screen; no styles (D11).
+                    let pos_val = rreg!(*r_pos).clone();
+                    let (fila, col, _bks, _fg, _bg) = vm_extract_pos(pos_val);
+                    let text: String = item_regs.iter()
+                        .map(|&r| self.numeral_repr(rreg!(r)))
+                        .collect();
+                    let h = self.headless.as_mut().expect("guarded");
+                    if let (Some(r), Some(c)) = (fila, col) {
+                        h.screen.move_to(r as i64, c as i64);
+                    }
+                    h.screen.write(&text);
+                }
                 Instruction::PrintAt(r_pos, item_regs) => {
                     let pos_val = rreg!(*r_pos).clone();
                     let (fila, col, bks, fg, bg) = vm_extract_pos(pos_val);
@@ -3688,7 +4860,26 @@ impl<W: Write> VM<W> {
                     std::io::stdout().flush().ok();
                 }
 
+                Instruction::EnterTui if self.headless.is_some() => {
+                    // --keys: no terminal is taken over (D11).
+                    if let Some(h) = self.headless.as_mut() { h.screen.clear(); }
+                    self.headless_tui += 1;
+                }
+                Instruction::ExitTui if self.headless_tui > 0 => {
+                    self.headless_tui -= 1;
+                    let frame = self.headless.as_ref().map(|h| h.screen.frame()).unwrap_or_default();
+                    writeln!(self.output, "{}", frame)?;
+                    self.output.flush()?;
+                }
                 Instruction::EnterTui => {
+                    // The language's words when there is no terminal, as in the
+                    // tree-walker and zyjs (P4-3 E5, 2026-09-26).
+                    {
+                        use std::io::IsTerminal;
+                        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+                            raise!(VmError::Generic("failed to enable raw mode: not a terminal".to_string()));
+                        }
+                    }
                     if let Err(e) = crossterm::terminal::enable_raw_mode() {
                         raise!(VmError::Generic(format!("failed to enable raw mode: {}", e)));
                     }
@@ -3700,14 +4891,14 @@ impl<W: Write> VM<W> {
                         let _ = crossterm::terminal::disable_raw_mode();
                         raise!(VmError::Generic(format!("failed to enter alternate screen: {}", e)));
                     }
-                    tui_stack.push(TuiGuard);
+                    self.tui_stack.push(TuiGuard);
                 }
 
                 Instruction::ExitTui => {
                     // Pop the guard — its Drop performs cleanup.
                     // If ExitTui is skipped (@:label! / error), the guard is dropped
-                    // when tui_stack goes out of scope at the end of run().
-                    tui_stack.pop();
+                    // when `run` clears the stack on its way out.
+                    self.tui_stack.pop();
                 }
 
                 &Instruction::HotInit(dst, neutral) => {
@@ -3729,7 +4920,7 @@ impl<W: Write> VM<W> {
                     wreg!(dst, Value::Array(Rc::new(arr)));
                 }
 
-                Instruction::Halt => return Ok(()),
+                Instruction::Halt => return Ok(Value::Unit),
             }
         }
     }
@@ -3745,10 +4936,21 @@ impl<W: Write> VM<W> {
     #[inline(always)]
     fn reg_set(&mut self, reg: Reg, val: Value) {
         let base = self.frame_stack.last().unwrap().base as usize;
-        self.value_stack[base + reg as usize] = val;
+        put_reg(&mut self.value_stack[base + reg as usize], val);
     }
 
     #[inline(always)]
+    /// The same read, but naming the operation that asked — which is how the
+    /// tree-walker words it: `slice start must be an integer, got String`
+    /// rather than a bare `this needs Int and got String` (step 4.3).
+    fn as_int_for(&self, reg: Reg, what: &str) -> Result<i64, VmError> {
+        match self.reg_get(reg) {
+            Value::Int(n) => Ok(*n),
+            other => Err(VmError::TypeMsg(format!(
+                "{} must be an integer, got {}", what, other.type_label()))),
+        }
+    }
+
     fn as_int(&self, reg: Reg) -> Result<i64, VmError> {
         match self.reg_get(reg) {
             Value::Int(n) => Ok(*n),
@@ -3759,1049 +4961,93 @@ impl<W: Write> VM<W> {
         }
     }
 
-    /// Dispatch a call to either a Function or a Closure value.
-    /// Used by HOF opcodes (ArrayMap, ArrayFilter, ArrayReduce).
-    fn call_callable(
+    /// Call a Function or Closure value from inside an instruction — the calls
+    /// `$>`, `$|`, `$<`, `$^` and their string-splitting forms make.
+    ///
+    /// Pushes the callee's frame exactly as `CallDynamic` does and runs the same
+    /// dispatch loop down to it (`exec`). It used to hand the call to a second
+    /// interpreter loop that knew 96 of the instructions and skipped the other
+    /// 49, so a split, a slice, a format, a `??` over a range, a `$!` or a `!?`
+    /// inside the callee all answered `##_` without an error (ZYVM-004). There
+    /// is one loop now; an instruction added to it is added everywhere.
+    ///
+    /// The arguments come as an array, not a `Vec`: every operator passes one or
+    /// two, and a `Vec` was a heap allocation per element of the collection.
+    fn call_callable<const N: usize>(
         &mut self,
         callable: Value,
-        args: Vec<Value>,
+        args: [Value; N],
         program: &CompiledProgram,
-        caller_ip: usize,
-        caller_chunk: usize,
     ) -> Result<Value, VmError> {
-        match callable {
-            Value::Function(idx, _) => self.call_function(idx, args, &[], program, caller_ip, caller_chunk),
-            Value::Closure(idx, _, upvalues) => self.call_function(idx, args, upvalues.as_ref(), program, caller_ip, caller_chunk),
-            other => Err(VmError::TypeError { expected: "Function", got: other.type_name().to_string() }),
-        }
-    }
-
-    fn call_function(
-        &mut self,
-        func_idx: FuncIdx,
-        args: Vec<Value>,
-        upvalues: &[Value],
-        program: &CompiledProgram,
-        _caller_ip: usize,
-        _caller_chunk: usize,
-    ) -> Result<Value, VmError> {
-        if func_idx as usize >= program.functions.len() {
+        let (func_idx, upvalues) = match callable {
+            Value::Function(idx, _) => (idx, None),
+            Value::Closure(idx, _, upvalues) => (idx, Some(upvalues)),
+            other => return Err(VmError::TypeError { expected: "Function", got: other.type_name().to_string() }),
+        };
+        let Some(chunk) = program.functions.get(func_idx as usize) else {
             return Err(VmError::UndefinedFunction(func_idx));
-        }
-        let chunk = &program.functions[func_idx as usize];
+        };
         let num_params = chunk.num_params as usize;
         let num_regs = chunk.num_registers as usize;
+        // The count check CallDynamic makes (GLB-063), on the calls `$>`, `$|`,
+        // `$<` and `$^` make: a named function of two parameters handed to `$>`
+        // ran with Unit in the second and failed later, somewhere else.
+        if args.len() != num_params {
+            return Err(VmError::Generic(format!(
+                "lambda expects {} arguments, got {}", num_params, args.len())));
+        }
 
-        // Extend the flat stack for this function's registers
-        let base = self.value_stack.len();
-        self.value_stack.resize(base + num_regs, Value::Unit);
-
-        // Write args
+        let floor = self.frame_stack.len();
+        let new_base = self.value_stack.len();
+        self.value_stack.resize_with(new_base + num_regs, || Value::Unit);
         for (i, v) in args.into_iter().enumerate() {
-            if i < num_regs { self.value_stack[base + i] = v; }
+            if i < num_regs { self.value_stack[new_base + i] = v; }
         }
-        // Load upvalues into [num_params..num_params+k)
-        for (i, uv) in upvalues.iter().enumerate() {
-            let slot = num_params + i;
-            if slot < num_regs { self.value_stack[base + slot] = uv.clone(); }
-        }
-
-        let mut ip = 0usize;
-        let chunk_idx = func_idx as usize;
-        loop {
-            let chunk = &program.functions[chunk_idx];
-            if ip >= chunk.instructions.len() { break; }
-            let instr = &chunk.instructions[ip];
-            ip += 1;
-            macro_rules! r { ($r:expr) => { &self.value_stack[base + $r as usize] } }
-            macro_rules! w { ($r:expr, $v:expr) => { self.value_stack[base + $r as usize] = $v } }
-            // As in the main loop, but this one returns rather than raising:
-            // errors here propagate to the caller, which owns the catch.
-            macro_rules! iop {
-                ($v:expr, $a:expr, $op:expr, $b:expr) => {
-                    match $v {
-                        Some(n) => n,
-                        None => return Err(VmError::IntOverflow { a: $a, op: $op, b: $b }),
-                    }
-                };
+        if let Some(upvalues) = upvalues {
+            for (i, uv) in upvalues.iter().enumerate() {
+                let slot = num_params + i;
+                if slot < num_regs { self.value_stack[new_base + slot] = uv.clone(); }
             }
-            match instr {
-                &Instruction::Return(src) => {
-                    let result = mem::replace(&mut self.value_stack[base + src as usize], Value::Unit);
-                    self.value_stack.truncate(base);
-                    return Ok(result);
-                }
-                &Instruction::Halt => break,
-                &Instruction::LoadInt(dst, n) => w!(dst, Value::Int(n)),
-                &Instruction::LoadFloat(dst, n) => w!(dst, Value::Float(n)),
-                &Instruction::LoadBool(dst, b) => w!(dst, Value::Bool(b)),
-                &Instruction::LoadStr(dst, idx) => w!(dst, Value::String(self.string_rcs[idx as usize].clone())),
-                &Instruction::LoadChar(dst, c) => w!(dst, Value::Char(c)),
-                &Instruction::LoadUnit(dst) => w!(dst, Value::Unit),
-                &Instruction::CopyReg(dst, src) => { let v = r!(src).clone(); w!(dst, v); }
-                &Instruction::MoveReg(dst, src) => {
-                    let v = mem::replace(&mut self.value_stack[base + src as usize], Value::Unit);
-                    w!(dst, v);
-                }
-                &Instruction::AddInt(dst, a, b) => {
-                    let is_fl = matches!(r!(a), Value::Float(_)) || matches!(r!(b), Value::Float(_));
-                    if is_fl {
-                        let fa = match r!(a) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        w!(dst, Value::Float(fa + fb));
-                    } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        let res = iop!(num::add(*va, *vb), *va, "+", *vb); w!(dst, Value::Int(res));
-                    }
-                }
-                &Instruction::SubInt(dst, a, b) => {
-                    let is_fl = matches!(r!(a), Value::Float(_)) || matches!(r!(b), Value::Float(_));
-                    if is_fl {
-                        let fa = match r!(a) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        w!(dst, Value::Float(fa - fb));
-                    } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        let res = iop!(num::sub(*va, *vb), *va, "-", *vb); w!(dst, Value::Int(res));
-                    }
-                }
-                &Instruction::MulInt(dst, a, b) => {
-                    let is_fl = matches!(r!(a), Value::Float(_)) || matches!(r!(b), Value::Float(_));
-                    if is_fl {
-                        let fa = match r!(a) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        w!(dst, Value::Float(fa * fb));
-                    } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        let res = iop!(num::mul(*va, *vb), *va, "*", *vb); w!(dst, Value::Int(res));
-                    }
-                }
-                &Instruction::ModInt(dst, a, b) => {
-                    let is_fl = matches!(r!(a), Value::Float(_)) || matches!(r!(b), Value::Float(_));
-                    if is_fl {
-                        let fa = match r!(a) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        let fb = match r!(b) { Value::Float(f) => *f, Value::Int(n) => *n as f64, _ => continue };
-                        if fb == 0.0 { return Err(VmError::ModuloByZero); }
-                        w!(dst, Value::Float(fa % fb));
-                    } else if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        if *vb == 0 { return Err(VmError::ModuloByZero); }
-                        w!(dst, Value::Int(va % vb));
-                    }
-                }
-                &Instruction::AddIntImm(dst, src, imm) => {
-                    if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v + imm as f64)); }
-                    else if let Value::Int(v) = r!(src) { let (a, b) = (*v, imm as i64); w!(dst, Value::Int(iop!(num::add(a, b), a, "+", b))); }
-                }
-                &Instruction::SubIntImm(dst, src, imm) => {
-                    if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v - imm as f64)); }
-                    else if let Value::Int(v) = r!(src) { let (a, b) = (*v, imm as i64); w!(dst, Value::Int(iop!(num::sub(a, b), a, "-", b))); }
-                }
-                &Instruction::MulIntImm(dst, src, imm) => {
-                    if let Value::Float(v) = r!(src) { w!(dst, Value::Float(v * imm as f64)); }
-                    else if let Value::Int(v) = r!(src) { let (a, b) = (*v, imm as i64); w!(dst, Value::Int(iop!(num::mul(a, b), a, "*", b))); }
-                }
-                &Instruction::CmpEqImm(dst, src, imm) => {
-                    let res = num_eq_imm(r!(src), imm as i64).unwrap_or(false);
-                    w!(dst, Value::Bool(res));
-                }
-                &Instruction::CmpNeImm(dst, src, imm) => {
-                    let res = !num_eq_imm(r!(src), imm as i64).unwrap_or(false);
-                    w!(dst, Value::Bool(res));
-                }
-                &Instruction::CmpLtImm(dst, src, imm) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Bool(*v < imm as i64)); }
-                }
-                &Instruction::CmpLeImm(dst, src, imm) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Bool(*v <= imm as i64)); }
-                }
-                &Instruction::CmpGtImm(dst, src, imm) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Bool(*v > imm as i64)); }
-                }
-                &Instruction::CmpGeImm(dst, src, imm) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Bool(*v >= imm as i64)); }
-                }
-                &Instruction::CmpEq(dst, a, b) => {
-                    let res = r!(a).equals(r!(b)); w!(dst, Value::Bool(res));
-                }
-                &Instruction::CmpNe(dst, a, b) => {
-                    let res = !r!(a).equals(r!(b)); w!(dst, Value::Bool(res));
-                }
-                &Instruction::CmpGt(dst, a, b) => {
-                    let res = ord_gt(ord_slow(r!(a), r!(b), "Gt")?);
-                    w!(dst, Value::Bool(res));
-                }
-                &Instruction::Not(dst, src) => {
-                    let v = r!(src).is_truthy(); w!(dst, Value::Bool(!v));
-                }
-                &Instruction::IsInt(dst, src) => {
-                    let v = matches!(r!(src), Value::Int(_)); w!(dst, Value::Bool(v));
-                }
-                &Instruction::AsLoopCond(dst, src) => {
-                    match r!(src) {
-                        &Value::Bool(b) => w!(dst, Value::Bool(b)),
-                        other => {
-                            let got = other.type_word();
-                            return Err(VmError::Generic(format!(
-                                "loop expects a count or a condition, got {got}"
-                            )));
-                        }
-                    }
-                }
-                &Instruction::Jump(label) => { ip = label as usize; }
-                &Instruction::JumpIf(cond, label) if r!(cond).is_truthy() => { ip = label as usize; }
-                &Instruction::JumpIfNot(cond, label) if !r!(cond).is_truthy() => { ip = label as usize; }
-                &Instruction::ConcatStr(dst, a, b) => {
-                    let result = if dst == a && a != b {
-                        let left = std::mem::replace(
-                            &mut self.value_stack[base + a as usize],
-                            Value::Unit,
-                        );
-                        match (left, &self.value_stack[base + b as usize]) {
-                            (Value::String(l), Value::String(r)) => {
-                                let r_str = r.as_str().to_string();
-                                let mut s = l.try_into_string();
-                                s.push_str(&r_str);
-                                s
-                            }
-                            (l, r) => {
-                                let ls = self.numeral_repr(&l);
-                                let rs = self.numeral_repr(r);
-                                let mut s = String::with_capacity(ls.len() + rs.len());
-                                s.push_str(&ls);
-                                s.push_str(&rs);
-                                s
-                            }
-                        }
-                    } else {
-                        match (r!(a), r!(b)) {
-                            (Value::String(l), Value::String(r)) => {
-                                let mut s = String::with_capacity(l.len() + r.len());
-                                s.push_str(l.as_ref());
-                                s.push_str(r.as_ref());
-                                s
-                            }
-                            (l, r) => {
-                                let ls = self.numeral_repr(l);
-                                let rs = self.numeral_repr(r);
-                                let mut s = String::with_capacity(ls.len() + rs.len());
-                                s.push_str(&ls);
-                                s.push_str(&rs);
-                                s
-                            }
-                        }
-                    };
-                    w!(dst, Value::String(ZyStr::new(result)));
-                }
-                Instruction::ConcatBuild(dst, base_reg, item_regs) => {
-                    let (dst, base_reg) = (*dst, *base_reg);
-                    let base_val = r!(base_reg).clone();
-                    let result = match base_val {
-                        Value::Array(arr) => {
-                            let mut new_arr = arr.as_ref().clone();
-                            for &ir in item_regs {
-                                new_arr.push(r!(ir).clone());
-                            }
-                            Value::Array(Rc::new(new_arr))
-                        }
-                        other => {
-                            let mut s = self.numeral_repr(&other);
-                            for &ir in item_regs {
-                                let part = self.numeral_repr(r!(ir));
-                                s.push_str(&part);
-                            }
-                            Value::String(ZyStr::new(s))
-                        }
-                    };
-                    w!(dst, result);
-                }
-                &Instruction::MakeFunc(dst, func_idx) => {
-                    let arity = program.functions.get(func_idx as usize)
-                        .map(|c| c.num_params as u8).unwrap_or(0);
-                    w!(dst, Value::Function(func_idx, arity));
-                }
-                &Instruction::MakeLambda(dst, func_idx) => {
-                    let arity = program.functions.get(func_idx as usize)
-                        .map(|c| c.num_params as u8).unwrap_or(0);
-                    w!(dst, Value::Closure(func_idx, arity, Rc::new(vec![])));
-                }
-                Instruction::MakeClosure(dst, func_idx, captured_regs) => {
-                    let (dst, func_idx) = (*dst, *func_idx);
-                    let arity = program.functions.get(func_idx as usize)
-                        .map(|c| c.num_params as u8).unwrap_or(0);
-                    let upvalues: Vec<Value> = captured_regs.iter()
-                        .map(|&cr| self.value_stack[base + cr as usize].clone())
-                        .collect();
-                    self.value_stack[base + dst as usize] = Value::Closure(func_idx, arity, Rc::new(upvalues));
-                }
-                Instruction::Call(dst, func_idx, arg_regs) => {
-                    let (dst, func_idx) = (*dst, *func_idx);
-                    let args: Vec<Value> = arg_regs.iter()
-                        .map(|&r| self.value_stack[base + r as usize].clone())
-                        .collect();
-                    let result = self.call_function(func_idx, args, &[], program, 0, chunk_idx)?;
-                    self.value_stack[base + dst as usize] = result;
-                }
-                Instruction::TailCall(func_idx, arg_regs) => {
-                    let func_idx = *func_idx;
-                    let args: Vec<Value> = arg_regs.iter()
-                        .map(|&r| self.value_stack[base + r as usize].clone())
-                        .collect();
-                    let result = self.call_function(func_idx, args, &[], program, 0, chunk_idx)?;
-                    self.value_stack.truncate(base);
-                    return Ok(result);
-                }
-                Instruction::CallDynamic(dst, callee_reg, arg_regs) => {
-                    let (dst, callee_reg) = (*dst, *callee_reg);
-                    let callable = self.value_stack[base + callee_reg as usize].clone();
-                    let args: Vec<Value> = arg_regs.iter()
-                        .map(|&r| self.value_stack[base + r as usize].clone())
-                        .collect();
-                    let result = self.call_callable(callable, args, program, 0, chunk_idx)?;
-                    self.value_stack[base + dst as usize] = result;
-                }
-                Instruction::CallBuiltin(dst, builtin_id, arg_regs) => {
-                    let args: Vec<Value> = arg_regs.iter()
-                        .map(|&r| self.value_stack[base + r as usize].clone())
-                        .collect();
-                    let result = crate::stdlib_builtins::call(*builtin_id, args)
-                        .map_err(VmError::Generic)?;
-                    self.value_stack[base + *dst as usize] = result;
-                }
-                &Instruction::CmpLt(dst, a, b) => {
-                    let res = ord_lt(ord_slow(r!(a), r!(b), "Lt")?);
-                    w!(dst, Value::Bool(res));
-                }
-                &Instruction::CmpLe(dst, a, b) => {
-                    let res = ord_le(ord_slow(r!(a), r!(b), "Le")?);
-                    w!(dst, Value::Bool(res));
-                }
-                &Instruction::CmpGe(dst, a, b) => {
-                    let res = ord_ge(ord_slow(r!(a), r!(b), "Ge")?);
-                    w!(dst, Value::Bool(res));
-                }
-                &Instruction::RequireBool(src, is_and) => {
-                    let v = &self.value_stack[base + src as usize];
-                    if !matches!(v, Value::Bool(_)) {
-                        return Err(VmError::Generic(
-                            logical_type_error(if is_and { "AND" } else { "OR" }, v),
-                        ));
-                    }
-                }
-                &Instruction::RequireDict(src) => {
-                    let v = &self.value_stack[base + src as usize];
-                    if !matches!(v, Value::NamedTuple(_)) {
-                        let got = v.tw_type_name_owned();
-                        return Err(VmError::Generic(format!(
-                            "the pattern #(…) requires a dictionary, got {}\nhelp: #(key: name) = d unpacks a dictionary; use (a, b) for a tuple, [a, b] for an array",
-                            got
-                        )));
-                    }
-                }
-                &Instruction::NamedTupleGet(dst, tuple_reg, field_idx) => {
-                    // The dictionary rules, same as the main dispatch loop above.
-                    // This loop runs a CALLED function's body, which is where a
-                    // lambda handed to `$>`/`$|`/`$<` lives — and it answered a
-                    // missing key with Unit and carried on, so
-                    // `ds$> (d -> d.zzz)` returned `[(), ()]` and exited 0 where
-                    // both other engines raised `##Key`. That is the silent
-                    // undefined decision 10 exists to refuse.
-                    let field_name = &program.string_pool[field_idx as usize];
-                    let result = match &self.value_stack[base + tuple_reg as usize] {
-                        Value::NamedTuple(fields) => {
-                            let field_name = field_name.clone();
-                            match fields.iter().find(|(n, _)| *n == field_name).map(|(_, v)| v.clone()) {
-                                Some(v) => v,
-                                None => {
-                                    let available: Vec<String> =
-                                        fields.iter().map(|(n, _)| n.clone()).collect();
-                                    return Err(VmError::Generic(missing_key_msg(&field_name, &available)));
-                                }
-                            }
-                        }
-                        Value::Tuple(_) => {
-                            let field_name = field_name.clone();
-                            return Err(VmError::Generic(format!(
-                                "a positional tuple is addressed by position, not by name: '{}'\nhelp: use t[1] — names live in a dictionary, #(key: value)",
-                                field_name
-                            )));
-                        }
-                        other => {
-                            let got = other.tw_type_name_owned();
-                            let field_name = field_name.clone();
-                            return Err(VmError::Generic(format!(
-                                "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
-                                got, field_name
-                            )));
-                        }
-                    };
-                    self.value_stack[base + dst as usize] = result;
-                }
+        }
+        self.forget_destroyed_from(new_base);
+        zymbol_common::count::call();
+                    self.frame_stack.push(FrameInfo {
+            base: new_base as u32,
+            ip: 0,
+            chunk_idx: func_idx,
+            return_reg: 0,
+            catch_ip: u32::MAX,
+            error: None,
+            writeback: None,
+        });
 
-                // ── Array/Tuple indexing ──────────────────────────────────────
-                &Instruction::ArrayGet(dst, arr_reg, idx_reg) => {
-                    // The dictionary rules, same as the main dispatch loop above.
-                    // This second loop is the one a LOOP BODY runs through, which
-                    // is exactly where `@ k:d { >> d[k] ¶ }` lives — patching
-                    // only the first one left the commonest use of a computed key
-                    // failing with "expected Int, got String".
-                    if let Value::NamedTuple(fields) = r!(arr_reg) {
-                        match r!(idx_reg) {
-                            Value::String(key) => {
-                                let key = key.as_str().to_string();
-                                let fields = fields.clone();
-                                match fields.iter().find(|(k, _)| *k == key) {
-                                    Some((_, v)) => { let v = v.clone(); w!(dst, v); }
-                                    None => {
-                                        let available: Vec<String> =
-                                            fields.iter().map(|(k, _)| k.clone()).collect();
-                                        return Err(VmError::Generic(
-                                            missing_key_msg(&key, &available)));
-                                    }
-                                }
-                                continue;  // `ip` was advanced before the match
-                            }
-                            // Decision 11: addressed by key, never by position.
-                            Value::Int(_) => {
-                                let first = fields.first().map(|(k, _)| k.clone())
-                                    .unwrap_or_else(|| "clave".to_string());
-                                return Err(VmError::Generic(format!(
-                                    "a dictionary is addressed by key, not by position\nhelp: use d[\"{}\"] — adding a key changes what sits at each position",
-                                    first
-                                )));
-                            }
-                            _ => {}
-                        }
-                    }
-                    let idx = match r!(idx_reg) { Value::Int(n) => *n, _ => 0 };
-                    let val = match r!(arr_reg).clone() {
-                        Value::Array(arr) => {
-                            let i = if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
-                            if i >= 0 && (i as usize) < arr.len() { arr[i as usize].clone() } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
-                            }
-                        }
-                        Value::Tuple(items) => {
-                            let i = if idx < 0 { items.len() as i64 + idx } else { idx - 1 };
-                            if i >= 0 && (i as usize) < items.len() { items[i as usize].clone() } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: items.len() , container: "tuple" });
-                            }
-                        }
-                        Value::NamedTuple(fields) => {
-                            let i = if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
-                            if i >= 0 && (i as usize) < fields.len() { fields[i as usize].1.clone() } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: fields.len() , container: "named tuple" });
-                            }
-                        }
-                        Value::String(s) => {
-                            let char_count = s.chars().count();
-                            let i = if idx < 0 { char_count as i64 + idx } else { idx - 1 };
-                            if i >= 0 && (i as usize) < char_count {
-                                Value::Char(s.chars().nth(i as usize).unwrap())
-                            } else {
-                                return Err(VmError::IndexOutOfBounds { index: idx, length: char_count , container: "string" });
-                            }
-                        }
-                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
-                    };
-                    w!(dst, val);
+        // The instruction that called: an error the operator raises after this
+        // call has to be reported where the operator is, not inside the callee.
+        let (caller_ip, caller_chunk) = (self.cur_ip, self.cur_chunk);
+        let result = self.exec(program, floor);
+        match &result {
+            Ok(_) => {
+                self.cur_ip = caller_ip;
+                self.cur_chunk = caller_chunk;
+            }
+            // `exec` gives back its frames when it raises; one that left
+            // through `?` may not have, and the operator must see its own stack.
+            Err(_) => {
+                // Raised where no line is — a lambda whose body is an
+                // expression — the error is at the operator that called it,
+                // as it would be for a call written in place (ZYVM-012).
+                if Self::line_at(program, self.cur_chunk, self.cur_ip) == 0 {
+                    self.cur_ip = caller_ip;
+                    self.cur_chunk = caller_chunk;
                 }
-                &Instruction::ArrayLen(dst, src) => {
-                    let n = match r!(src) {
-                        Value::Array(arr) => arr.len() as i64,
-                        Value::String(s)  => if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 },
-                        _ => 0,
-                    };
-                    w!(dst, Value::Int(n));
-                }
-                &Instruction::NewArray(dst) => { w!(dst, Value::Array(Rc::new(Vec::new()))); }
-                &Instruction::ArrayPush(arr_reg, val_reg) => {
-                    let val = r!(val_reg).clone();
-                    match &mut self.value_stack[base + arr_reg as usize] {
-                        Value::Array(rc) => Rc::make_mut(rc).push(val),
-                        Value::Tuple(rc) => Rc::make_mut(rc).push(val),
-                        Value::String(s) => {
-                            use std::fmt::Write as _;
-                            let mut buf = s.clone().try_into_string();
-                            match val {
-                                Value::String(r) => buf.push_str(r.as_str()),
-                                Value::Char(c) => buf.push(c),
-                                other => { let _ = write!(buf, "{}", other); }
-                            }
-                            *s = ZyStr::new(buf);
-                        }
-                        _ => {}
-                    }
-                }
-                &Instruction::ArrayContains(dst, arr_reg, elem_reg) => {
-                    let elem = r!(elem_reg).clone();
-                    let found = match r!(arr_reg) {
-                        Value::Array(arr) => arr.iter().any(|v| v.equals(&elem)),
-                        // On a dictionary the question is about the KEY.
-                        Value::NamedTuple(fields) => match &elem {
-                            Value::String(key) => {
-                                fields.iter().any(|(k, _)| k.as_str() == key.as_str())
-                            }
-                            _ => false,
-                        },
-                        Value::Tuple(t) => t.iter().any(|v| v.equals(&elem)),
-                        _ => false,
-                    };
-                    w!(dst, Value::Bool(found));
-                }
-
-                // ── Integer arithmetic (missing from secondary loop) ──────────
-                &Instruction::DivInt(dst, a, b) => {
-                    if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        if *vb == 0 { return Err(VmError::DivisionByZero); }
-                        w!(dst, Value::Int(va / vb));
-                    }
-                }
-                &Instruction::PowInt(dst, a, b) => {
-                    if let (Value::Int(va), Value::Int(vb)) = (r!(a), r!(b)) {
-                        let (va, vb) = (*va, *vb);
-                        if vb < 0 {
-                            w!(dst, Value::Float((va as f64).powf(vb as f64)));
-                        } else {
-                            let e = u32::try_from(vb).unwrap_or(u32::MAX);
-                            w!(dst, Value::Int(iop!(num::pow(va, e), va, "^", vb)));
-                        }
-                    }
-                }
-                &Instruction::NegInt(dst, src) => {
-                    if let Value::Int(v) = r!(src) { w!(dst, Value::Int(-v)); }
-                }
-
-                // ── Float arithmetic ─────────────────────────────────────────
-                &Instruction::AddFloat(dst, a, b) => {
-                    let (va, vb) = match (r!(a), r!(b)) {
-                        (Value::Float(x), Value::Float(y)) => (*x, *y),
-                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
-                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
-                        _ => return Ok(Value::Unit),
-                    };
-                    w!(dst, Value::Float(va + vb));
-                }
-                &Instruction::SubFloat(dst, a, b) => {
-                    let (va, vb) = match (r!(a), r!(b)) {
-                        (Value::Float(x), Value::Float(y)) => (*x, *y),
-                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
-                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
-                        _ => return Ok(Value::Unit),
-                    };
-                    w!(dst, Value::Float(va - vb));
-                }
-                &Instruction::MulFloat(dst, a, b) => {
-                    let (va, vb) = match (r!(a), r!(b)) {
-                        (Value::Float(x), Value::Float(y)) => (*x, *y),
-                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
-                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
-                        _ => return Ok(Value::Unit),
-                    };
-                    w!(dst, Value::Float(va * vb));
-                }
-                &Instruction::DivFloat(dst, a, b) => {
-                    let (va, vb) = match (r!(a), r!(b)) {
-                        (Value::Float(x), Value::Float(y)) => (*x, *y),
-                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
-                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
-                        _ => return Ok(Value::Unit),
-                    };
-                    if vb == 0.0 { return Err(VmError::DivisionByZero); }
-                    w!(dst, Value::Float(va / vb));
-                }
-                &Instruction::PowFloat(dst, a, b) => {
-                    let (va, vb) = match (r!(a), r!(b)) {
-                        (Value::Float(x), Value::Float(y)) => (*x, *y),
-                        (Value::Int(x), Value::Float(y))   => (*x as f64, *y),
-                        (Value::Float(x), Value::Int(y))   => (*x, *y as f64),
-                        _ => return Ok(Value::Unit),
-                    };
-                    w!(dst, Value::Float(va.powf(vb)));
-                }
-                &Instruction::NegFloat(dst, src) => {
-                    match r!(src) {
-                        Value::Float(f) => { let v = -f; w!(dst, Value::Float(v)); }
-                        Value::Int(n)   => { let v = *n as f64; w!(dst, Value::Float(-v)); }
-                        _ => {}
-                    }
-                }
-                &Instruction::IntToFloat(dst, src) => {
-                    match r!(src) {
-                        Value::Int(n)   => { let v = *n as f64; w!(dst, Value::Float(v)); }
-                        Value::Float(f) => { let v = *f; w!(dst, Value::Float(v)); }
-                        _ => {}
-                    }
-                }
-                &Instruction::FloatToIntRound(dst, src) => {
-                    match r!(src) {
-                        Value::Float(f) => match num::from_f64(f.round()) {
-                            Some(v) => w!(dst, Value::Int(v)),
-                            None => return Err(VmError::CastOverflow { op: "###" }),
-                        },
-                        Value::Int(n)   => { let v = *n; w!(dst, Value::Int(v)); }
-                        _ => {}
-                    }
-                }
-                &Instruction::FloatToIntTrunc(dst, src) => {
-                    match r!(src) {
-                        Value::Float(f) => match num::from_f64(f.trunc()) {
-                            Some(v) => w!(dst, Value::Int(v)),
-                            None => return Err(VmError::CastOverflow { op: "##!" }),
-                        },
-                        Value::Int(n)   => { let v = *n; w!(dst, Value::Int(v)); }
-                        Value::Char(c)  => { let v = *c as u32 as i64; w!(dst, Value::Int(v)); }
-                        _ => {}
-                    }
-                }
-
-                // ── Logical ──────────────────────────────────────────────────
-                // ZYVM-001, in the call-frame loop as in the main one: a
-                // logical operand is a Bool or it is refused.
-                &Instruction::And(dst, a, b) => {
-                    let (x, y) = bools_or_err(r!(a), r!(b), "AND")?;
-                    w!(dst, Value::Bool(x && y));
-                }
-                &Instruction::Or(dst, a, b) => {
-                    let (x, y) = bools_or_err(r!(a), r!(b), "OR")?;
-                    w!(dst, Value::Bool(x || y));
-                }
-
-                // ── Destructuring ────────────────────────────────────────────
-                &Instruction::DestructureCheck(src, wants_tuple) => {
-                    let v = &self.value_stack[base + src as usize];
-                    let ok = if wants_tuple {
-                        matches!(v, Value::Tuple(_))
-                    } else {
-                        matches!(v, Value::Array(_))
-                    };
-                    if !ok {
-                        let got = v.tw_type_name_owned();
-                        return Err(VmError::Generic(if wants_tuple {
-                            format!("tuple pattern '( … )' requires a tuple, got {got}")
-                        } else {
-                            format!("array pattern '[ … ]' requires an array, got {got}")
-                        }));
-                    }
-                }
-                &Instruction::DestructureAbsorb(dst, src, from) => {
-                    let value = match &self.value_stack[base + src as usize] {
-                        Value::Array(arr) => {
-                            let rest = &arr.as_ref()[(from as usize - 1).min(arr.len())..];
-                            match rest.len() {
-                                0 => Value::Unit,
-                                1 => rest[0].clone(),
-                                _ => Value::Array(Rc::new(rest.to_vec())),
-                            }
-                        }
-                        Value::Tuple(tup) => {
-                            let rest = &tup.as_ref()[(from as usize - 1).min(tup.len())..];
-                            match rest.len() {
-                                0 => Value::Unit,
-                                1 => rest[0].clone(),
-                                _ => Value::Tuple(Rc::new(rest.to_vec())),
-                            }
-                        }
-                        _ => Value::Unit,
-                    };
-                    w!(dst, value);
-                }
-
-                // ── Tuples ───────────────────────────────────────────────────
-                Instruction::MakeTuple(dst, regs) => {
-                    let dst = *dst;
-                    let items: Vec<Value> = regs.iter().map(|&r| self.value_stack[base + r as usize].clone()).collect();
-                    w!(dst, Value::Tuple(Rc::new(items)));
-                }
-                Instruction::MakeNamedTuple(dst, field_names, field_regs) => {
-                    let dst = *dst;
-                    let fields: Vec<(String, Value)> = field_names.iter().zip(field_regs.iter())
-                        .map(|(&ni, &ri)| (program.string_pool[ni as usize].clone(), self.value_stack[base + ri as usize].clone()))
-                        .collect();
-                    w!(dst, Value::NamedTuple(Rc::new(fields)));
-                }
-
-                // ── String ops ───────────────────────────────────────────────
-                &Instruction::StrLen(dst, src) => {
-                    let n = match r!(src) {
-                        Value::String(s) => if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 },
-                        Value::Array(a)  => a.len() as i64,
-                        _ => 0,
-                    };
-                    w!(dst, Value::Int(n));
-                }
-                &Instruction::StrRepeat(dst, str_reg, n_reg) => {
-                    let result = {
-                        let s = match r!(str_reg) {
-                            Value::String(s) => s.as_str().to_owned(),
-                            Value::Char(c)   => c.to_string(),
-                            other => return Err(VmError::TypeError { expected: "String", got: other.type_name().to_string() }),
-                        };
-                        let n = match r!(n_reg) {
-                            Value::Int(n) if *n >= 0 => *n as usize,
-                            other => return Err(VmError::TypeError { expected: "non-negative Int", got: other.type_name().to_string() }),
-                        };
-                        s.repeat(n)
-                    };
-                    w!(dst, Value::String(ZyStr::new(result)));
-                }
-                &Instruction::StrCharAt(dst, str_reg, idx_reg) => {
-                    let ch = match (r!(str_reg), r!(idx_reg)) {
-                        (Value::String(s), Value::Int(i)) => {
-                            let i = *i as usize;
-                            if s.is_ascii() {
-                                s.as_bytes().get(i).map(|&b| b as char).unwrap_or('\0')
-                            } else {
-                                s.chars().nth(i).unwrap_or('\0')
-                            }
-                        }
-                        _ => return Err(VmError::TypeError {
-                            expected: "String",
-                            got: "non-String".to_string(),
-                        }),
-                    };
-                    w!(dst, Value::Char(ch));
-                }
-                &Instruction::StrContains(dst, str_reg, elem_reg) => {
-                    let found = match (r!(str_reg), r!(elem_reg)) {
-                        (Value::String(s), Value::String(p)) => s.contains(p.as_ref()),
-                        (Value::String(s), Value::Char(c))   => s.contains(*c),
-                        _ => false,
-                    };
-                    w!(dst, Value::Bool(found));
-                }
-                Instruction::BuildStr(dst, parts) => {
-                    let dst = *dst;
-                    let cap: usize = parts.iter().map(|p| match p {
-                        zymbol_bytecode::BuildPart::Lit(idx) => program.string_pool[*idx as usize].len(),
-                        zymbol_bytecode::BuildPart::Reg(_) => 4,
-                    }).sum();
-                    let mut result = String::with_capacity(cap);
-                    for part in parts {
-                        match part {
-                            zymbol_bytecode::BuildPart::Lit(idx) => result.push_str(&program.string_pool[*idx as usize]),
-                            zymbol_bytecode::BuildPart::Reg(reg) => {
-                                let part = self.numeral_repr(&self.value_stack[base + *reg as usize]);
-                                result.push_str(&part);
-                            }
-                        }
-                    }
-                    w!(dst, Value::String(ZyStr::new(result)));
-                }
-
-                // ── Output ───────────────────────────────────────────────────
-                &Instruction::Print(src) => {
-                    let mode = self.numeral_mode;
-                    match r!(src) {
-                        Value::String(s)  => { let _ = write!(self.output, "{}", s); }
-                        Value::Int(n)     => { let _ = write!(self.output, "{}", numeral_int(*n, mode)); }
-                        Value::Float(f)   => { let _ = write!(self.output, "{}", numeral_float(*f, mode)); }
-                        Value::Bool(b)    => { let _ = write!(self.output, "{}", numeral_bool(*b, mode)); }
-                        Value::Char(c)    => { let _ = write!(self.output, "{}", c); }
-                        Value::Unit       => {}
-                        other             => { let _ = write!(self.output, "{}", other.to_display_in(mode)); }
-                    }
-                }
-                &Instruction::PrintNewline => { let _ = writeln!(self.output); }
-
-                // ── HOF (nested) ──────────────────────────────────────────────
-                &Instruction::ArrayMap(dst, arr_reg, func_reg) => {
-                    let callable = self.value_stack[base + func_reg as usize].clone();
-                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
-                        Value::Array(a) => a.as_ref().clone(),
-                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
-                    };
-                    let mut results = Vec::with_capacity(arr.len());
-                    for elem in arr {
-                        let result = self.call_callable(callable.clone(), vec![elem], program, 0, chunk_idx)?;
-                        results.push(result);
-                    }
-                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
-                }
-                &Instruction::ArrayFilter(dst, arr_reg, func_reg) => {
-                    let callable = self.value_stack[base + func_reg as usize].clone();
-                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
-                        Value::Array(a) => a.as_ref().clone(),
-                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
-                    };
-                    let mut results = Vec::new();
-                    for elem in arr {
-                        let keep = self.call_callable(callable.clone(), vec![elem.clone()], program, 0, chunk_idx)?;
-                        if keep.is_truthy() { results.push(elem); }
-                    }
-                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
-                }
-                &Instruction::ArrayReduce(dst, arr_reg, init_reg, func_reg) => {
-                    let callable = self.value_stack[base + func_reg as usize].clone();
-                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
-                        Value::Array(a) => a.as_ref().clone(),
-                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
-                    };
-                    let mut acc = self.value_stack[base + init_reg as usize].clone();
-                    for elem in arr {
-                        acc = self.call_callable(callable.clone(), vec![acc, elem], program, 0, chunk_idx)?;
-                    }
-                    self.value_stack[base + dst as usize] = acc;
-                }
-                &Instruction::StrSplitCount(dst, str_reg, sep_reg) => {
-                    let count = {
-                        let s_v   = &self.value_stack[base + str_reg  as usize];
-                        let sep_v = &self.value_stack[base + sep_reg as usize];
-                        match (s_v, sep_v) {
-                            (Value::String(s), Value::Char(c))   => intrinsics::split::count(s.as_str(), *c),
-                            (Value::String(s), Value::String(sep)) => intrinsics::split::count_str(s.as_str(), sep.as_str()),
-                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
-                        }
-                    };
-                    self.value_stack[base + dst as usize] = Value::Int(count);
-                }
-                &Instruction::StrSplitMap(dst, str_reg, sep_reg, func_reg) => {
-                    let callable = self.value_stack[base + func_reg as usize].clone();
-                    let (s_owned, sep_owned) = {
-                        let s_v   = &self.value_stack[base + str_reg as usize];
-                        let sep_v = &self.value_stack[base + sep_reg as usize];
-                        match (s_v, sep_v) {
-                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
-                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
-                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
-                        }
-                    };
-                    let mut results = Vec::new();
-                    match &sep_owned {
-                        Value::Char(c) => {
-                            let c = *c;
-                            for part in s_owned.split(c) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                results.push(self.call_callable(callable.clone(), vec![v], program, 0, chunk_idx)?);
-                            }
-                        }
-                        Value::String(sep_s) => {
-                            let sep_str = sep_s.to_string();
-                            for part in s_owned.split(sep_str.as_str()) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                results.push(self.call_callable(callable.clone(), vec![v], program, 0, chunk_idx)?);
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
-                }
-                &Instruction::StrSplitFilter(dst, str_reg, sep_reg, func_reg) => {
-                    let callable = self.value_stack[base + func_reg as usize].clone();
-                    let (s_owned, sep_owned) = {
-                        let s_v   = &self.value_stack[base + str_reg as usize];
-                        let sep_v = &self.value_stack[base + sep_reg as usize];
-                        match (s_v, sep_v) {
-                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
-                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
-                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
-                        }
-                    };
-                    let mut results = Vec::new();
-                    match &sep_owned {
-                        Value::Char(c) => {
-                            let c = *c;
-                            for part in s_owned.split(c) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, 0, chunk_idx)?;
-                                if keep.is_truthy() { results.push(v); }
-                            }
-                        }
-                        Value::String(sep_s) => {
-                            let sep_str = sep_s.to_string();
-                            for part in s_owned.split(sep_str.as_str()) {
-                                let v = Value::String(ZyStr::from_str_ref(part));
-                                let keep = self.call_callable(callable.clone(), vec![v.clone()], program, 0, chunk_idx)?;
-                                if keep.is_truthy() { results.push(v); }
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(results));
-                }
-                &Instruction::StrSplitReduce(dst, str_reg, sep_reg, init_reg, func_reg) => {
-                    let callable = self.value_stack[base + func_reg as usize].clone();
-                    let mut acc = self.value_stack[base + init_reg as usize].clone();
-                    let (s_owned, sep_owned) = {
-                        let s_v   = &self.value_stack[base + str_reg as usize];
-                        let sep_v = &self.value_stack[base + sep_reg as usize];
-                        match (s_v, sep_v) {
-                            (Value::String(s), Value::Char(_))   => (s.clone(), sep_v.clone()),
-                            (Value::String(s), Value::String(_)) => (s.clone(), sep_v.clone()),
-                            (Value::String(_), o) => return Err(VmError::TypeError { expected: "Char or String", got: o.type_name().to_string() }),
-                            (o, _) => return Err(VmError::TypeError { expected: "String", got: o.type_name().to_string() }),
-                        }
-                    };
-                    match &sep_owned {
-                        Value::Char(c) => {
-                            let c = *c;
-                            for part in s_owned.split(c) {
-                                let elem = Value::String(ZyStr::from_str_ref(part));
-                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, 0, chunk_idx)?;
-                            }
-                        }
-                        Value::String(sep_s) => {
-                            let sep_str = sep_s.to_string();
-                            for part in s_owned.split(sep_str.as_str()) {
-                                let elem = Value::String(ZyStr::from_str_ref(part));
-                                acc = self.call_callable(callable.clone(), vec![acc, elem], program, 0, chunk_idx)?;
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-                    self.value_stack[base + dst as usize] = acc;
-                }
-                &Instruction::ArraySort(dst, arr_reg, ascending, func_reg) => {
-                    let arr = match self.value_stack[base + arr_reg as usize].clone() {
-                        Value::Array(a) => a.as_ref().clone(),
-                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
-                    };
-                    let mut items = arr;
-                    if func_reg == u16::MAX {
-                        items.sort_by(vm_natural_cmp);
-                        if !ascending { items.reverse(); }
-                    } else {
-                        let callable = self.value_stack[base + func_reg as usize].clone();
-                        let n = items.len();
-                        for i in 0..n {
-                            for j in 0..n.saturating_sub(i + 1) {
-                                let keep = self.call_callable(callable.clone(), vec![items[j].clone(), items[j+1].clone()], program, 0, chunk_idx)?;
-                                if !keep.is_truthy() { items.swap(j, j+1); }
-                            }
-                        }
-                    }
-                    self.value_stack[base + dst as usize] = Value::Array(Rc::new(items));
-                }
-
-                // ── Data ops ────────────────────────────────────────────────
-                &Instruction::NumericEval(dst, src) => {
-                    let result = match r!(src) {
-                        Value::String(s) => {
-                            let s_rc = s.clone();
-                            let trimmed = s_rc.as_ref().trim();
-                            match num::parse(trimmed) {
-                                num::Num::Int(i) => Value::Int(i),
-                                num::Num::Float(f) => Value::Float(f),
-                                num::Num::None => match normalize_unicode_digits(trimmed).map(|n| num::parse(&n)) {
-                                    Some(num::Num::Int(i)) => Value::Int(i),
-                                    Some(num::Num::Float(f)) => Value::Float(f),
-                                    _ => Value::String(s_rc),
-                                },
-                            }
-                        }
-                        Value::Int(n) => Value::Int(*n),
-                        Value::Float(f) => Value::Float(*f),
-                        // GAP-ZYB-012: a Char reads like the one-character
-                        // string it is — `#|'७'|` is 7, as `#|"७"|` already
-                        // was. A Char that is not a digit comes back untouched.
-                        Value::Char(c) => vm_char_as_number(*c),
-                        other => other.clone(),
-                    };
-                    w!(dst, result);
-                }
-                &Instruction::IsArray(dst, src) => {
-                    let is_arr = matches!(r!(src), Value::Array(_));
-                    w!(dst, Value::Bool(is_arr));
-                }
-                &Instruction::TypeOf(dst, src) => {
-                    let val = r!(src).clone();
-                    // `(symbol, count, value)`, in that order. This loop runs a CALLED
-                    // function's body — where a lambda handed to `$>`/`$|`/`$<` lives —
-                    // and it built `(value, symbol, count)`, so `x#?` answered a
-                    // scrambled tuple to every program that asked inside one. Same
-                    // shape as the main dispatch loop above, and the error case reads
-                    // its kind and length from the shared helpers rather than a copy.
-                    let result = if matches!(&val, Value::Error(_)) {
-                        Value::Tuple(Rc::new(vec![
-                            Value::String(ZyStr::new(val.tw_type_name_owned())),
-                            Value::Int(val.error_message_len()),
-                            val.clone(),
-                        ]))
-                    } else {
-                        let (type_sym, len) = val.type_metadata();
-                        Value::Tuple(Rc::new(vec![
-                            Value::String(ZyStr::new(type_sym.to_string())),
-                            Value::Int(len),
-                            val.clone(),
-                        ]))
-                    };
-                    w!(dst, result);
-                }
-
-                // ── Precision ops ────────────────────────────────────────────
-                &Instruction::RoundFloat(dst, src, prec) => {
-                    match r!(src) {
-                        Value::Float(f) => {
-                            let factor = 10f64.powi(prec as i32);
-                            w!(dst, Value::Float((f * factor).round() / factor));
-                        }
-                        Value::Int(n) => { w!(dst, Value::Int(*n)); }
-                        _ => {}
-                    }
-                }
-                &Instruction::TruncFloat(dst, src, prec) => {
-                    match r!(src) {
-                        Value::Float(f) => {
-                            let factor = 10f64.powi(prec as i32);
-                            w!(dst, Value::Float((f * factor).trunc() / factor));
-                        }
-                        Value::Int(n) => { w!(dst, Value::Int(*n)); }
-                        _ => {}
-                    }
-                }
-
-                &Instruction::LoadGlobal(dst, gvar_idx) => {
-                    let val = self.global_vars
-                        .get(gvar_idx as usize)
-                        .cloned()
-                        .unwrap_or(Value::Unit);
-                    w!(dst, val);
-                }
-
-                &Instruction::StoreGlobal(gvar_idx, src) => {
-                    let val = r!(src).clone();
-                    if let Some(slot) = self.global_vars.get_mut(gvar_idx as usize) {
-                        *slot = val;
-                    }
-                }
-
-                &Instruction::DeepSet(dst, path_reg, val_reg) => {
-                    let val = r!(val_reg).clone();
-                    let path = match r!(path_reg) {
-                        Value::Array(p) => p.clone(),
-                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
-                    };
-                    let root = mem::replace(&mut self.value_stack[base + dst as usize], Value::Unit);
-                    let updated = vm_deep_set(root, &path, val)?;
-                    self.value_stack[base + dst as usize] = updated;
-                }
-                &Instruction::AssertMutable(reg, name_idx) => {
-                    if let Value::Tuple(_) = r!(reg) {
-                        let name = self.string_rcs[name_idx as usize].as_str();
-                        return Err(VmError::Generic(tuple_immutable_msg(name)));
-                    }
-                }
-                &Instruction::DeepSetInPlace(dst, path_reg, val_reg, name_idx) => {
-                    let val = r!(val_reg).clone();
-                    let path = match r!(path_reg) {
-                        Value::Array(p) => p.clone(),
-                        other => return Err(VmError::TypeError { expected: "Array", got: other.type_name().to_string() }),
-                    };
-                    let root = mem::replace(&mut self.value_stack[base + dst as usize], Value::Unit);
-                    if let Value::Tuple(_) = &root {
-                        let name = self.string_rcs[name_idx as usize].as_str();
-                        return Err(VmError::Generic(tuple_immutable_msg(name)));
-                    }
-                    let updated = vm_deep_set(root, &path, val)?;
-                    self.value_stack[base + dst as usize] = updated;
-                }
-
-                _ => {
-                    // For unsupported instructions in HOF mini-VM, skip
+                if self.frame_stack.len() > floor {
+                    let floor_base = self.frame_stack[floor].base as usize;
+                    self.frame_stack.truncate(floor);
+                    truncate_regs(&mut self.value_stack, floor_base);
                 }
             }
         }
-        self.value_stack.truncate(base);
-        Ok(Value::Unit)
+        result
     }
 }
 
@@ -4833,6 +5079,115 @@ fn tuple_immutable_msg(name: &str) -> String {
 /// mutable dictionary a position is not a stable address. A positional WRITE is
 /// strictly worse than a positional read, since it corrupts data rather than
 /// returning the wrong value.
+/// Which of the two range operators is asking, so the refusal is worded the way
+/// the tree-walker words that operation.
+#[derive(Clone, Copy)]
+enum RangeUse { Slice, Remove }
+
+/// Normalize a written `lo..hi` into the 0-based half-open pair, refusing what
+/// the tree-walker refuses.
+///
+/// Strict (D2 revoked by the author, 2026-09-20). The VM clamped with
+/// `.max(0).min(len)` and `.max(lo)`, so `[1, 2]$[1..9]` answered `[1, 2]` and
+/// `[1, 2, 3]$[3..1]` answered `[]` — a bound the program computed wrong came
+/// back as a plausible collection, and nothing said so. The numbers in the
+/// message are the ones the reader WROTE, not these offsets (GLB-047).
+/// A slice, once its written bounds have been read: ascending gives the 0-based
+/// half-open pair, descending gives the 1-based inclusive pair to walk backwards.
+///
+/// D3 (step 4.4): `a$[3..1]` BUILDS, by reversing — it is the only reversal the
+/// language has, since `$^-` sorts. Only the direction is read this way; a bound
+/// outside the collection is still refused, and a COUNT never reverses, which is
+/// why `$[i:n]` has its own instruction.
+enum SliceSpan { Up(usize, usize), Down(i64, i64) }
+
+/// `coll$[start:count]` — a count is a quantity, never a direction.
+/// What a higher-order operator walks, and how the result is put back.
+///
+/// The loop's rule: what `@ e:v` hands over is what `v$> (e -> …)` transforms.
+/// A DICTIONARY therefore yields its KEYS, exactly as `@ k:d` does (decision 8).
+/// Mirrors `hof_items` in the tree-walker.
+fn hof_items(collection: &Value) -> Option<Vec<Value>> {
+    match collection {
+        Value::Array(a) => Some(a.as_ref().clone()),
+        Value::Tuple(t) => Some(t.as_ref().clone()),
+        Value::String(s) => Some(s.chars().map(Value::Char).collect()),
+        Value::NamedTuple(f) => Some(f.iter().map(|(k, _)| Value::String(ZyStr::new(k.clone()))).collect()),
+        _ => None,
+    }
+}
+
+/// Rebuild the shape the elements came from. Keys walked out of a dictionary
+/// are a list once they are out, so that case answers an array.
+fn hof_rebuild(original: &Value, items: Vec<Value>) -> Value {
+    match original {
+        Value::Tuple(_) => Value::Tuple(Rc::new(items)),
+        Value::String(_) => {
+            if items.iter().all(|v| matches!(v, Value::Char(_) | Value::String(_))) {
+                let mut out = String::new();
+                for v in &items {
+                    match v {
+                        Value::Char(c) => out.push(*c),
+                        Value::String(s) => out.push_str(s.as_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                Value::String(ZyStr::new(out))
+            } else {
+                Value::Array(Rc::new(items))
+            }
+        }
+        _ => Value::Array(Rc::new(items)),
+    }
+}
+
+fn count_span(lo: i64, n: i64, len: usize) -> Result<(usize, usize), VmError> {
+    let l = len as i64;
+    let start = if lo == 0 { 0 } else if lo < 0 { l + lo } else { lo - 1 };
+    if n < 0 {
+        return Err(VmError::IndexMsg(format!("slice count must be non-negative, got {}", n)));
+    }
+    let end = start + n;
+    if start < 0 || start > l || end > l {
+        return Err(VmError::IndexMsg(format!(
+            "slice indices out of bounds: [{}:{}] for collection of length {}", lo, n, len)));
+    }
+    Ok((start as usize, end as usize))
+}
+
+fn slice_span(lo: i64, hi: i64, len: usize) -> Result<SliceSpan, VmError> {
+    let l = len as i64;
+    let lo_pos = if lo == 0 { 1 } else if lo < 0 { l + lo + 1 } else { lo };
+    let hi_pos = if hi < 0 { l + hi + 1 } else { hi };
+    if lo_pos > hi_pos && hi_pos >= 1 && lo_pos <= l {
+        return Ok(SliceSpan::Down(lo_pos, hi_pos));
+    }
+    let (a, b) = range_bounds(lo, hi, len, RangeUse::Slice)?;
+    Ok(SliceSpan::Up(a, b))
+}
+
+fn range_bounds(lo: i64, hi: i64, len: usize, use_: RangeUse) -> Result<(usize, usize), VmError> {
+    let l = len as i64;
+    let lo_n = if lo == 0 { 0 } else if lo < 0 { l + lo } else { lo - 1 };
+    let hi_n = if hi < 0 { l + hi + 1 } else { hi };
+    if lo_n < 0 || hi_n < 0 || lo_n > l || hi_n > l {
+        return Err(VmError::IndexMsg(match use_ {
+            RangeUse::Slice => format!(
+                "slice indices out of bounds: [{}..{}] for collection of length {}", lo, hi, len),
+            RangeUse::Remove => format!(
+                "$-[{}..{}] out of bounds for collection of length {}", lo, hi, len),
+        }));
+    }
+    if lo_n > hi_n {
+        return Err(VmError::IndexMsg(match use_ {
+            RangeUse::Slice => format!("slice start ({}) cannot be greater than end ({})", lo, hi),
+            RangeUse::Remove => format!(
+                "$-[start..end]: start ({}) cannot be greater than end ({})", lo, hi),
+        }));
+    }
+    Ok((lo_n as usize, hi_n as usize))
+}
+
 fn dict_not_positional(op: &str, first_key: Option<&str>) -> String {
     let k = first_key.unwrap_or("clave");
     format!(
@@ -4849,9 +5204,24 @@ fn missing_key_msg(key: &str, available: &[String]) -> String {
     }
 }
 
-fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmError> {
+/// Write `new_val` at `path` inside `col`, in place.
+///
+/// Every check happens on the way down, before the single write at the end of
+/// the path, so a failure leaves `col` exactly as it was. It used to take the
+/// collection by value and hand back a new one: a failure half way dropped it,
+/// which was harmless only because every caller wrote into a COPY — and that
+/// copy is why `t[i]$~ v` cost the whole collection, on a plain local too
+/// (ZYVM-013).
+///
+/// `single` is true only for a one-step write — `a[i]\u{24}~ v`. The tree-walker
+/// words that one after the collection (`array update index must be an
+/// integer`) and a longer path after the step (`a navigation step is a
+/// position (Int) or a dictionary key (String)`), and the two are not the same
+/// sentence (step 4.3).
+fn vm_deep_set_in(col: &mut Value, path: &[Value], new_val: Value, single: bool) -> Result<(), VmError> {
     let Some((step, rest)) = path.split_first() else {
-        return Ok(new_val);
+        *col = new_val;
+        return Ok(());
     };
     fn resolve(idx: i64, len: usize, container: &'static str) -> Result<usize, VmError> {
         if idx == 0 {
@@ -4863,58 +5233,107 @@ fn vm_deep_set(col: Value, path: &[Value], new_val: Value) -> Result<Value, VmEr
         }
         Ok(i as usize)
     }
-    fn int_step(step: &Value) -> Result<i64, VmError> {
+    fn int_step_of(step: &Value, single: bool, container: &str) -> Result<i64, VmError> {
         match step {
             Value::Int(n) => Ok(*n),
-            other => Err(VmError::TypeError { expected: "Int", got: other.type_name().to_string() }),
+            other if single => Err(VmError::TypeMsg(format!(
+                "{} update index must be an integer, got {}", container, other.type_label()))),
+            // The tree-walker's words for a step that is neither (step 3.5b).
+            other => Err(VmError::TypeMsg(format!(
+                "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                other.type_label()))),
         }
     }
     match col {
-        Value::Array(mut rc) => {
-            let arr = Rc::make_mut(&mut rc);
-            let i = resolve(int_step(step)?, arr.len(), "array")?;
-            let sub = mem::replace(&mut arr[i], Value::Unit);
-            arr[i] = vm_deep_set(sub, rest, new_val)?;
-            Ok(Value::Array(rc))
+        Value::Array(rc) => {
+            let i = resolve(int_step_of(step, single, "array")?, rc.len(), "array")?;
+            vm_deep_set_in(&mut zymbol_common::count::make_mut(rc)[i], rest, new_val, false)
         }
-        Value::Tuple(mut rc) => {
-            let tup = Rc::make_mut(&mut rc);
-            let i = resolve(int_step(step)?, tup.len(), "tuple")?;
-            let sub = mem::replace(&mut tup[i], Value::Unit);
-            tup[i] = vm_deep_set(sub, rest, new_val)?;
-            Ok(Value::Tuple(rc))
+        Value::Tuple(rc) => {
+            let i = resolve(int_step_of(step, single, "tuple")?, rc.len(), "tuple")?;
+            vm_deep_set_in(&mut zymbol_common::count::make_mut(rc)[i], rest, new_val, false)
         }
-        Value::NamedTuple(mut rc) => {
-            let fields = Rc::make_mut(&mut rc);
-            let i = match step {
-                Value::String(name) => match fields.iter().position(|(k, _)| k == name.as_str()) {
-                    Some(i) => i,
+        // A string IS an array of characters, and is addressed like one
+        // (decided 2026-09-22). Only a char or a string may be written, the
+        // same rule `$+ on string requires char or string element` states.
+        // It is a LEAF: there is nothing inside a character to descend into.
+        Value::String(st) => {
+            let chars: Vec<char> = st.chars().collect();
+            let i = resolve(int_step_of(step, single, "string")?, chars.len(), "string")?;
+            if !rest.is_empty() {
+                // The step landed on a character, and there is nothing inside
+                // one to descend into — the read path's sentence.
+                return Err(VmError::TypeMsg(
+                    "cannot index into Char — expected array, tuple, or string".to_string()));
+            }
+            let piece = match &new_val {
+                Value::Char(c) => c.to_string(),
+                Value::String(s2) => s2.as_ref().to_string(),
+                other => return Err(VmError::TypeMsg(format!(
+                    "$~ on string requires char or string value, got {}", other.type_label()))),
+            };
+            let mut out = String::new();
+            for (n, c) in chars.into_iter().enumerate() {
+                if n == i { out.push_str(&piece); } else { out.push(c); }
+            }
+            *col = Value::String(ZyStr::new(out));
+            Ok(())
+        }
+        Value::NamedTuple(rc) => {
+            match step {
+                Value::String(name) => match rc.iter().position(|(k, _)| k == name.as_str()) {
+                    Some(i) => vm_deep_set_in(&mut zymbol_common::count::make_mut(rc)[i].1, rest, new_val, false),
                     // A key that is not there gets ADDED, as it does in Python.
                     // The array refuses the same move (decision 13) and the two
                     // are not inconsistent: an array is addressed by POSITION,
                     // so writing past the end leaves a hole; a dictionary is
                     // addressed by KEY and has no holes to leave.
+                    //
+                    // Added only once the rest of the path is known to hold:
+                    // the write is made into a scratch value first, so a path
+                    // that goes on past the new key fails with the dictionary
+                    // untouched.
                     None => {
-                        fields.push((name.as_str().to_string(), Value::Unit));
-                        fields.len() - 1
+                        let mut fresh = Value::Unit;
+                        vm_deep_set_in(&mut fresh, rest, new_val, false)?;
+                        zymbol_common::count::make_mut(rc).push((name.as_str().to_string(), fresh));
+                        Ok(())
                     }
                 },
                 // A positional WRITE corrupts data rather than returning the
                 // wrong value: strictly worse than the positional read that
                 // decision 11 withdrew.
-                _ => {
-                    let first = fields.first().map(|(k, _)| k.clone());
-                    return Err(VmError::Generic(dict_not_positional(
-                        "d[n]$~ value", first.as_deref())));
+                //
+                // Inside a navigation the words are the navigation's, as the
+                // tree-walker and zyjs give them: `d[n>…]$~ value`, and for a
+                // step that is neither Int nor String the navigation-step
+                // sentence (step P4-3).
+                Value::Int(_) if !single => {
+                    let first = rc.first().map(|(k, _)| k.clone());
+                    Err(VmError::TypeMsg(dict_not_positional(
+                        "d[n>…]$~ value", first.as_deref())))
                 }
-            };
-            let sub = mem::replace(&mut fields[i].1, Value::Unit);
-            fields[i].1 = vm_deep_set(sub, rest, new_val)?;
-            Ok(Value::NamedTuple(rc))
+                other if !single => Err(VmError::TypeMsg(format!(
+                    "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                    other.type_label()))),
+                _ => {
+                    let first = rc.first().map(|(k, _)| k.clone());
+                    Err(VmError::TypeMsg(dict_not_positional(
+                        "d[n]$~ value", first.as_deref())))
+                }
+            }
         }
-        other => Err(VmError::Generic(format!(
+        // A step that lands on something that is not a collection fails for the
+        // same reason READING it does, so it says what the read says (GLB-045,
+        // decided 2026-09-22). `single` keeps the other case apart: there the
+        // receiver itself is not a collection, and naming `$~` is what helps.
+        other if !single => Err(VmError::TypeMsg(format!(
+            "cannot index into {} — expected array, tuple, or string",
+            other.type_label()
+        ))),
+        other => Err(VmError::TypeMsg(format!(
             "$~ writes into a collection, and this is {}\nhelp: use a[1]$~ v on an array or tuple, d[\"key\"]$~ v on a #(…)",
-            other.tw_type_name_owned()
+            other.type_label()
         ))),
     }
 }

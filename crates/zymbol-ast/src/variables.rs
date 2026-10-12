@@ -25,10 +25,10 @@ pub enum AssignSugar {
     Increment,
     /// `name--`
     Decrement,
-    /// Indexed assignment `name[i] = expr` (desugared to CollectionUpdate)
-    IndexedAssign,
-    /// Indexed compound assignment `name[i] op= expr`
-    IndexedCompound(BinaryOp),
+    // `name[i] = expr` and `name[i] op= expr` had their own markers here. The
+    // forms were withdrawn (decision 6) and the parser refuses them, so nothing
+    // built the markers any more; they went with their readers (GLB-037). A
+    // part of a collection is changed with `$~`, which is `InPlaceEdit` below.
     /// A bare `$` edit statement: `arr$+ 3`, `arr[2]$~ 99`, `arr$-[1]`, `d["k"]$~ v`.
     ///
     /// The parser desugars these into `name = <the same $ expression>`, which is

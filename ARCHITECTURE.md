@@ -8,9 +8,10 @@ by compilation phase, execution mode, and tooling.
 
 The interpreter supports two independent execution strategies:
 
-- **Tree-walker** (default): walks the AST directly, scope-stack based
-- **Register VM** (experimental, `--vm` flag): compiles AST to bytecode and runs it on a
-  register-based virtual machine
+- **Tree-walker** (the default of a loose `.zy`): walks the AST directly, scope-stack based
+- **Register VM** (`--vm`; the default of a `.zyp`): compiles AST to bytecode and runs it on a
+  register-based virtual machine. At parity with the tree-walker since v0.0.8, and the default
+  engine from v0.0.11 (decided 2026-10-11)
 
 ---
 
@@ -31,7 +32,7 @@ The interpreter supports two independent execution strategies:
 interpreter/
 ├── Cargo.toml                  # Workspace manifest (19 members)
 ├── Cargo.lock
-├── zymbol-lang.ebnf            # Formal grammar (EBNF) — v3.1.0, generated 2026-06-12
+├── zymbol-lang.ebnf            # Formal grammar (EBNF) — v3.4.0
 ├── install-zymbol.sh           # Install script
 ├── crates/
 │   ├── zymbol-span/            # Source position tracking
@@ -53,7 +54,7 @@ interpreter/
 │   ├── zymbol-package/         # .zyp source archives (manifest, closure, ZIP I/O)
 │   ├── zymbol-cli/             # Main CLI entry point
 │   └── zymbol-standalone/      # Standalone executable builder
-├── tests/                      # End-to-end test suite
+├── tests/                      # Wrappers over ../zyquality/, where the corpus and the gate live
 └── docs/                       # Extended documentation
 ```
 
@@ -88,6 +89,23 @@ reads it, and both `zymbol check` and the LSP call that one function, so they ag
 `crates/zymbol-cli/tests/stdlib_parity.rs` fails if the table and the two engines
 disagree on a name or an arity: adding a stdlib function means touching the engine,
 the compiler's builtin table, and this list.
+
+It also holds what every engine has to say the same way, which is why it is a crate of
+its own and not a copy in each engine:
+
+- `num` — the numeric model: the safe integer ±(2⁵³ − 1), checked in every engine;
+- `errkind` — which `##` family a runtime error belongs to, read from its message, so
+  that `:! ##Div` catches the same failures in the tree-walker, the VM and the browser
+  engine;
+- `typesym`, `typeword` — a type's symbol (`##.`), which a program asks with, and its
+  name in words (`Float`), which a diagnostic uses;
+- `shell` — locating the shell that `<\ \>` and `</ />` run through (Windows has no `sh`);
+- `vscreen` — a 24×80 screen with no terminal behind it, and the key script that drives it,
+  for `zymbol run --keys`;
+- `count` — the five counters behind `zymbol run --count` (`steps`, `calls`, `allocs`,
+  `bytes`, `copied`): thread-local cells with constant initializers, always compiled, and
+  `make_mut`, the one function every write to a shared collection goes through — the one
+  that counts `copied`.
 
 **Dependencies**: none
 
@@ -167,9 +185,9 @@ Walks the AST directly and evaluates it. This is the default execution mode.
 enum Value {
     Int(i64), Float(f64), Char(char), Bool(bool),
     String(String),
-    Array(Vec<Value>),
-    Tuple(Vec<Value>),
-    NamedTuple(Vec<(String, Value)>),
+    Array(Rc<Vec<Value>>),                  // shared; copied when written
+    Tuple(Rc<Vec<Value>>),
+    NamedTuple(Rc<Vec<(String, Value)>>),
     Function(FunctionValue),  // params, body, captures: Rc<HashMap>
     Error(ErrorValue),
     Unit,
@@ -208,6 +226,13 @@ struct Interpreter {
   use, not at scope end. Schedules come from `zymbol_semantic::last_use` and are stored per
   body in `FunctionDef::Zymbol::auto_free`, applied by `execute_body_scheduled`. Unobservable
   by design — it only lowers peak memory
+- Copy on write (v0.0.9, HLZ-012/014): `Array`, `Tuple` and `NamedTuple` sit behind an `Rc`
+  and are copied when *written*, through `zymbol_common::count::make_mut`, which also counts
+  what it copies. Reading one element, or handing a collection to a function, copies nothing
+- Output parameters (`<~`) are the caller's variable, *lent* for the call and given back when
+  it ends, not copied in and out (v0.0.10, GLB-117)
+- A module's state lives in one place: in a module frame `scope_stack[0]` *is* the module's
+  table, moved in and out and never copied (v0.0.10, ZYTW-010)
 - Bash execution: `<\ command \>` captures stdout + stderr via `Command::output()`
 - Error handling: try/catch/finally with typed catch (`:! ##IO`, `:! ##Parse`, etc.)
 
@@ -219,7 +244,8 @@ struct Interpreter {
 ### Register VM Execution
 
 #### `zymbol-bytecode`
-Instruction set definition. ~60 instruction types organized by category:
+Instruction set definition: 167 instruction variants (counted 2026-10-11); the table names the
+ones a reader meets first.
 
 | Category | Instructions |
 |----------|-------------|
@@ -229,7 +255,7 @@ Instruction set definition. ~60 instruction types organized by category:
 | Strings | `ConcatStr`, `StrLen`, `StrSplit`, `StrContains`, `StrSlice`, `BuildStr` |
 | Arrays | `NewArray`, `ArrayPush`, `ArrayGet`, `ArraySet`, `ArrayLen`, `ArraySlice` |
 | Tuples | `MakeTuple`, `MakeNamedTuple`, `NamedTupleGet` |
-| Control | `Jump`, `JumpIf`, `JumpIfNot`, `Call`, `TailCall`, `CallDynamic`, `Return` |
+| Control | `Jump`, `JumpIf`, `JumpIfNot`, `JumpIfNotCond` (the jump of a `?` condition, which refuses what is not a Bool), `Call`, `TailCall`, `CallDynamic`, `Return` |
 | Closures | `MakeClosure`, `CallDynamic` |
 | Data ops | `NumericEval`, `TypeOf`, `BaseConversion`, `RoundFloat`, `Format` |
 | I/O | `Print`, `PrintNewline` |
@@ -270,27 +296,61 @@ enum Value {
 **Frame model** (Sprint 5C — flat register stack):
 ```rust
 struct FrameInfo {
-    base: usize,          // start of this frame's registers in value_stack
-    next_base: usize,     // start of next frame
-    catch_ip: Label,      // Label::MAX = no active catch
-    error_info: Option<Box<FrameError>>,  // lazy allocation
-    // ...return bookkeeping
+    base: u32,            // start of this frame's registers in value_stack
+    ip: u32,              // the caller's saved IP
+    chunk_idx: u32,       // u32::MAX = the main chunk, else an index into program.functions
+    return_reg: u16,      // the caller's register that receives the return value
+    catch_ip: u32,        // the armed handler of this frame (u32::MAX = none)
+    error: Option<Box<FrameError>>,             // allocated only when an error lands here
+    writeback: Option<Box<Vec<(usize, Reg)>>>,  // output parameters to hand back
 }
 
-struct VM {
+struct VM<W: Write> {
     value_stack: Vec<Value>,    // all frames share one Vec
     frame_stack: Vec<FrameInfo>,
-    ip: usize,
-    program: CompiledProgram,
+    global_vars: Vec<Value>,    // a module's state, by slot
+    in_flight: Option<Pending>, // an error that reached a handler and is not handled yet
+    // … exit code, CLI args, the subscript runner, the virtual screen of `--keys`
 }
 ```
+
+**One dispatch loop** (GLB-010, ZYVM-004). `run` enters `exec(program, floor)` once, at the
+main frame. A higher-order operator (`$>`, `$|`, `$<`, `$^`, and the splitting forms) pushes
+the callee's frame and enters the *same* loop down to it (`call_callable`), so an instruction
+added to the loop is added everywhere. It used to hand the call to a second, smaller loop
+that knew 96 instructions and skipped 49 in silence: `["a,b"]$> (s -> s$/ ',')` answered
+`[()]`. The CLI runs a program on a 64 MiB thread because of it — recursion depth through
+`$>` went from 593 to 4 764.
+
+**An error is state, not control flow.** `TryBegin` arms a handler in the frame (`catch_ip`)
+and saves the one it replaced in a register of the `!?`, so nesting costs no allocation. A
+landed error is `Pending` until a clause consumes it, goes on through the `:>` after them,
+and is raised again if nothing did. An error with no handler at or above `floor` unwinds to
+`floor`, and the operator raises it in the loop outside, where a `!?` around the `$>` can
+meet it.
+
+**Two instructions that exist for a rule.** `JumpIfNotCond` is the jump of a `?` condition:
+it refuses what is not a Bool with a `##Type` where `JumpIfNot` read an Array as true
+(GLB-121), and it costs no extra dispatch. An output argument (`<~`) is *lent*: the caller's
+register lets go of the value once every argument has been read and gets it back when the
+frame returns or is unwound, so the first edit inside the callee is the sole owner's and
+writes in place (GLB-117).
 
 **Key optimizations**:
 - Flat value_stack: O(1) register access via `value_stack[base + reg]`
 - String pool: `LoadStr` = O(1) `Rc::clone`
 - Immediate operands: `AddIntImm`, `CmpLeImm`, etc.
 - Lazy `Box<FrameError>`: no allocation unless a catch is hit
-- Sentinel `catch_ip = Label::MAX` avoids per-instruction branch
+- Sentinel `catch_ip = u32::MAX` avoids a per-instruction branch
+- A register write drops the old value only if it owns memory, and a frame holds what the
+  function needs at once, not every temporary its body ever asked for (ZYVM-010)
+- Edits are atomic and validate before they take the value, so a write to a module's state
+  has one owner and costs one element, not the collection (ZYVM-003, ZYVM-013)
+
+**What is not optimized, and is written down**: a temporary register keeps whatever its last
+user left until something reuses it, so the value a call returns and the caller uses once is
+alive while the next call builds its own (ZYVM-022; see the auto-free note under *Feature
+Parity*).
 
 **Stdlib builtins**: `stdlib_builtins.rs` dispatches `std/*` module calls by numeric
 builtin id resolved at compile time (math 0–, random 100–, json 200–, io 300–,
@@ -460,6 +520,8 @@ zymbol-cli       (all of the above) ──────────────�
 |---------|-------------|
 | `zymbol run FILE` | Execute with tree-walker (default) |
 | `zymbol run --vm FILE` | Execute with register VM |
+| `zymbol run --keys KEYS FILE` | Run a full-screen program with no terminal: `>>\|` draws on a virtual 24×80 screen, `<<\|` reads its keys from `KEYS`, and each block's last frame goes to the output as text. Tree-walker and VM |
+| `zymbol run --count FILE` | After the program ends, one line on stderr — `steps`, `calls`, `allocs`, `bytes`, `copied` — exact, the same on every run. Tree-walker and VM (not the browser engine) |
 | `zymbol run FILE [ARGS]` | Pass CLI arguments to program (`><` capture) |
 | `zymbol run PKG.zyp [--script NAME] [--tw\|--vm] [--keep-temp]` | Run a `.zyp` package. Extracts to an ephemeral temp dir and runs from there — never `chdir`s. Defaults to `--vm` (loose `.zy` files still default to the tree-walker); precedence is `--tw` > `--vm` > manifest `mode` > VM |
 | `zymbol package DIR [-o OUT.zyp] [--script NAME]... [--dry-run]` | Package source (+ its transitive dependency closure) into a portable `.zyp`. `--dry-run` prints the closure and warnings without writing the archive |
@@ -501,48 +563,62 @@ embeds the interpreter, `package` produces a `.zyp` archive of source that still
 | Pipe operator (`\|>`) | ✓ | ✓ |
 | Native stdlib (`std/*`, incl. `std/term`) | ✓ | ✓ |
 | Auto-free (destruction at last use) | ✓ | ✓ (see note) |
+| Error values (`##Kind("…")`, `##Kind(m) =>`) | ✓ | ✓ |
+| Int → Char cast (`##'expr`) | ✓ | ✓ |
+| Virtual screen (`--keys`) and counters (`--count`) | ✓ | ✓ |
 
-Measured 2026-09-07 on v0.0.9: `zyq consensus --engines zytw,zyvm` (what
-`tests/scripts/vm_compare.sh` now delegates to) reports **660 of 666 corpus files agreeing
+Measured 2026-10-11 on v0.0.10: `zyq consensus --engines zytw,zyvm` (what
+`tests/scripts/vm_compare.sh` now delegates to) reports **677 of 683 corpus files agreeing
 and 0 diverging**, the other 6 excused for every engine by a reason declared in
 `zyquality/corpus.toml`. Adding `zyjs` does not change the agreement count — all three
-engines reach the same 660. Against the browser engine alone the pair agrees on 636, the
-30 in the difference being the files `corpus.toml` excuses for `zyjs` (`std/db` is ODBC,
-`<\ cmd \>` entropy, TUI needs a real TTY) — excused, not divergent. The three rows that used to read "partial"/"—" (module system,
-CLI args, format expressions) were verified and are at parity; the last known divergences
-were closed by HLZ-008/009/010 and MM-10/MM-11.
+engines reach the same 677. Against the browser engine alone the pair agrees on 664, the
+19 in the difference being the files `corpus.toml` excuses (`std/db` is ODBC, `<\ cmd \>`
+has no browser equivalent, TUI needs a real TTY, and the 6 excused for every engine) —
+excused, not divergent. Agreement on a corpus is not the whole question: ZyDDT's matrix
+asks the engines 1 704 declared cells and every one agrees.
 
 **No corpus file carries an in-file skip marker.** `@vm-skip` was one of five incompatible
 exclusion mechanisms that `zyquality/corpus.toml` replaced; nothing reads it any more.
 Every exclusion is declared there, naming the engine, a tag and a required reason — an
 exclusion nobody justified cannot be told from a bug somebody hid.
 
-**Auto-free note**: both engines implement it, but the VM's peak-memory win is currently
-smaller. `emit_auto_free` clears the *named* variable's register, while a temporary holding
-the same large value lives until its register is reused. Closing that gap is a register
-allocator change, not an analysis change.
+**Auto-free note**: both engines implement it, and for a named variable they agree (two arrays
+used in sequence cost 1.00 of one, in both). The VM's relative win is smaller for one shape:
+`emit_auto_free` clears the *named* variable's register, but the value a call returns and the
+caller uses once stays in a temporary register until something reuses it, so two such calls
+in sequence cost 1.79× one in the VM against 1.00 in the tree-walker (ZYVM-022, re-measured
+2026-10-11 after ZYVM-010 — which made temporaries reusable and did not clear them). The VM
+still uses about six times less memory per array. Closing the gap is a register-allocator
+change, not an analysis change, and it is the author's to decide; the cost case
+`autofree/call-result` in `zyquality/cost` holds it.
 
 ---
 
 ## Performance Notes
 
-The microbenchmarks are `zyquality/bench/`, and `zyquality/bench/baseline.txt`
-is their recorded median — machine-specific, so the numbers below are one host's,
-re-measured for v0.0.9 (release build, best of 3, process startup subtracted:
-~5 ms tree-walker, ~3 ms VM):
+The microbenchmarks are `zyquality/bench/`. Their wall times move by tens of percent
+between two runs on one day — different rows each time — so the figures below are **CPU
+instructions in user mode** (`perf stat -e instructions:u`, release build, median of seven
+runs, measured 2026-10-11 on v0.0.10), which is what a gate can hold; `zymbol run --count`
+is the same idea built into the engines. Instructions say how much work was done, not how
+long it took, and the two ratios need not match:
 
-| Benchmark | Tree-walker | VM | VM speedup |
-|-----------|:-----------:|:--:|:----------:|
-| Strings | 76 ms | 51 ms | 1.4× |
-| Collections | 71 ms | 37 ms | 1.9× |
-| Stress loop | 236 ms | 78 ms | 3.0× |
-| Match | 171 ms | 54 ms | 3.1× |
-| Recursion (`fib`) | 1566 ms | 253 ms | 6.1× |
+| Benchmark | Tree-walker | VM | Tree-walker ÷ VM |
+|-----------|:-----------:|:--:|:----------------:|
+| Collections | 122 M | 49 M | 2.5× |
+| Index read | 977 M | 321 M | 3.0× |
+| Strings | 276 M | 78 M | 3.5× |
+| Stress loop | 1 983 M | 416 M | 4.8× |
+| Match | 1 610 M | 276 M | 5.8× |
+| Recursion (`fib`) | 16 747 M | 1 777 M | **9.4×** |
 
-**There is no single speedup factor, and the widely-quoted "~4×" is the low end
-of the range, not its middle.** The microbenchmarks span 1.4×–6.1×; real
-programs sit far above them, because the tree-walker's cost is per call frame
-and per scope, and the microbenchmarks are shallow:
+**There is no single speedup factor, and the widely-quoted "~4×" is not its middle.** The
+microbenchmarks span 2.5×–9.4× in instructions (on v0.0.9 the same programs read 1.4×–6.1×
+in milliseconds); real programs sit far above them in time, because the tree-walker's cost
+is per call frame and per scope, and the microbenchmarks are shallow.
+
+**Not re-measured for v0.0.10.** The table below was taken on 2026-09-07, on v0.0.9, in
+seconds, on programs that have changed since; read it as the order of magnitude it was.
 
 | Real workload (Chaturanga) | Tree-walker | VM | VM speedup |
 |---------------|:-----------:|:--:|:----------:|
@@ -576,3 +652,8 @@ Key VM optimizations implemented:
 - **Sprint 5D**: `sizeof(Value)` reduced from 40 to 16 bytes via `Rc<T>` payloads
 - **Sprint 5D+**: string pool pre-interning, slim `FrameInfo` (~40 bytes), lazy error boxing
 - **Immediate operands**: `AddIntImm`, `CmpLeImm` — eliminates register loads for constants
+- **Sprint v0.0.10**: one dispatch loop (the callbacks of `$>` no longer run on a second one);
+  `<~` lends the caller's collection instead of copying it in (2 000 calls over 16 000
+  elements: 1 204 M instructions → 19 M); a module's state is edited where it lives
+  (ZYVM-003); a register write drops the old value only if it owns memory, and a frame holds
+  what the function needs at once (ZYVM-010)

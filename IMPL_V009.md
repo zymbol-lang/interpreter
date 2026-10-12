@@ -31,7 +31,7 @@ nothing at all in the other half, silently.
 None of those were bugs anybody had filed. They were **decisions nobody had made**, and
 what makes them one release rather than a scattering of fixes is that they all come from
 the same act: writing down what the collection model actually is
-([COLLECTIONS.md](COLLECTIONS.md), new in this release) and then measuring every engine
+(`zymbol-design/COLLECTIONS.md`, new in this release) and then measuring every engine
 against it.
 
 Three sources of evidence set the scope, in the same way v0.0.8's two did:
@@ -67,7 +67,7 @@ Historical mentions of it stay in the documents deliberately — `corpus/arity/`
 `corpus/loops/labels/` exist because of that engine, and a rule whose reason has been
 deleted is indistinguishable from one nobody can justify.
 
-**The method got a name and a document.** [LDV.md](LDV.md) — Language-Driven Validation —
+**The method got a name and a document.** `zymbol-design/LDV.md` — Language-Driven Validation —
 states what an LDV project is, what counts as a failure, and indexes the eight gap logs
 (~5,800 lines of recorded findings). Two things in it are corrections of earlier practice
 rather than restatements: the applications are **not** retired after their release (seven
@@ -118,7 +118,7 @@ needing an empty one.
 
 # Part I — Shipped
 
-## 1. The collections decided — [COLLECTIONS.md](COLLECTIONS.md)
+## 1. The collections decided — `zymbol-design/COLLECTIONS.md`
 
 The point of record for the three collections, and the document the rest of Part I
 depends on. Three rules it states that had not been stated anywhere:
