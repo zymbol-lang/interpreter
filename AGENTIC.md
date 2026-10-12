@@ -5,9 +5,12 @@
 > `zyvm`, `zyjs` — unless a line says otherwise. It describes what the engines
 > do; it does not decide anything.
 >
-> **Not re-measured as a whole against `zymbol 0.0.10`.** Two rows of § 12 were
-> probed on 2026-10-11: G4 still stands as written, and G10 was closed that day.
-> The other five open rows (G1, G2, G3, G5, G8) carry their 2026-09 measurement.
+> **§ 12 is re-measured against `zymbol 0.0.10` (2026-10-11); §§ 1–11 are not.**
+> Every open row was probed again, over kinds of value and not one representative:
+> G1, G2, G4, G5 and G8 stand, G10 was closed that day, and **G3 was wrong as
+> written** — the browser engine has a budget, and the Rust engines do not run an
+> infinite recursion "until a timeout" but abort the process. The measurement, row
+> by row, is in § 12. The sections above it carry their 2026-09 measurement.
 >
 > **The rules it reports live in `zymbol-design/PREMISES.md`**, by id, and each
 > section below names the ones it is measuring. Where this document and a
@@ -278,8 +281,8 @@ real working directory.
 
 ## 12. What the language does not guarantee
 
-Seven gaps **open** as of 2026-09-12, one withdrawn and two superseded by
-premises. `G1`, `G2` and `G3` are not implementation gaps at all — they are
+Six gaps **open** as of 2026-10-11 (`G1`–`G5` and `G8`), one closed (`G10`), one
+withdrawn and two superseded by premises. `G1`, `G2` and `G3` are not implementation gaps at all — they are
 design decisions nobody has taken, and they are the reason `AGT-4` claims
 auditability and not enforceability: none is decided, and none should be
 read as accepted. Each is a decision — implement, deprecate, or dismiss with a
@@ -289,14 +292,14 @@ indistinguishable from one nobody can justify.
 
 | # | Gap | Status |
 |---|---|---|
-| G1 | **No capability control.** `std/net`, `std/io`, `std/db` and `<\ \>` are unrestricted. `zymbol run` offers no `--deny-net`/`--deny-io`, and `zyp.toml` does not declare required effects. §4 makes the surface *auditable*; nothing makes it *enforceable*. | open |
-| G2 | **Shell injection.** `<\ "{cmd}" \>` interpolates without quoting or escaping: a string built at runtime becomes a command. | open |
-| G3 | **No termination bound.** Infinite recursion runs until an external timeout (no depth limit, no step budget, no wall-clock cap); `@ { }` likewise. A generated program that does not terminate hangs whatever runs it. | open |
+| G1 | **No capability control.** `std/net`, `std/io`, `std/db` and `<\ \>` are unrestricted. `zymbol run` offers no `--deny-net`/`--deny-io`, and `zyp.toml` does not declare required effects. §4 makes the surface *auditable*; nothing makes it *enforceable*. *Re-measured 2026-10-11 on 0.0.10, all three engines:* `io::write`, `io::read`, `io::delete`, `<\ "echo …" \>` and `net::head` all run unrestricted; `zymbol run --help` has no capability flag; a `zyp.toml` has `name`, `version`, `engine`, `mode`, `desc` and its `[[script]]` entries, and no effects. | open |
+| G2 | **Shell injection.** `<\ "{cmd}" \>` interpolates without quoting or escaping: a string built at runtime becomes a command. *Re-measured 2026-10-11 over eight kinds of value* interpolated into `<\ "echo [{v}]" \>` (`zytw` and `zyvm` agree on all; `zyjs` refuses every shell command): a `String` holding `$(echo PWNED)` is executed, and a `Char` `;` splits the command (`##IO(exit 127: …)`); an `Int`, a `Float`, a Bool (`#1`) and a `String` with a space are inert; an Array, a Tuple and a Dictionary reach the shell as `[1, 2]`, `(1, 2)` and `#(a: 1)` — a glob or a syntax error. New since 0.0.9: a failing command is a soft `##IO` that carries its exit status, so the *breakage* is loud; the *injection* is not. | open |
+| G3 | **No termination bound** — in the Rust engines. An infinite loop (`@ { }`) and a tail recursion (`f(n) { <~ f(n + 1) }`) run until an external timeout. A non-tail recursion (`<~ 1 + f(n + 1)`) does not: `zytw` aborts the process when its 64 MiB stack is gone (`fatal runtime error: stack overflow`, 0.4 s) and `zyvm` grows its value stack until an allocation fails (5.5 s under the 3 GB limit the probe imposed; without one it goes on to the host's memory) — a process crash, not an error a `!?` can catch. A generated program that does not terminate hangs, or kills, whatever runs it. **The browser engine does have a budget, and this row said it did not:** as the playground runs it, `@ { }` stops after 100 000 iterations and a recursion after 2 000 000 steps, each with a `Runtime error`; `web/tests/run_one.mjs` lifts both limits so that `zyq` grades it on the same programs as the Rust engines, which is why a probe taken through it saw none. *Re-measured 2026-10-11.* | open |
 | G4 | **Use-after-destruction is runtime-only.** `zymbol check` reports "No errors or warnings" on a program that `\`-destroys a variable and then reads it, at file level and inside a function alike. | open |
-| G5 | **Non-exhaustive `??` is runtime-only.** No static check that the arms cover the subject. | open |
+| G5 | **Non-exhaustive `??` is runtime-only.** No static check that the arms cover the subject. *Re-measured 2026-10-11 over six kinds of subject* (Int, Float, String, Char, Bool, Array) with arms that do not cover it: `zymbol check` says *No errors or warnings* for every one, and all three engines stop at run time with the same `Runtime error: no pattern matched in match expression`, at the line of the statement. An arm of another kind than the subject (a Tuple or a Dictionary against an Int arm) is a type error `check` does refuse — `zyjs` only at run time. An exhaustive Bool (`#0` and `#1`) runs. | open |
 | ~~G6~~ | **Superseded 2026-09-12 by `MEM-7`.** Two of the four forms I listed were the model working, not defects: a block assignment reaching its container's name is *one* name and no shadowing (`MEM-6`), and a parameter reusing a file-level name is two different strong environments. The two that remain — `f(a, a)`, which answers 2/1/2 depending on the engine, and a silent redefinition — are declared debt with four red cells. | superseded |
 | ~~G7~~ | ~~Module state is shared mutable global memory.~~ **Withdrawn 2026-09-12** — measured, not a gap: it is the intended design (a module owns its environment), and it is fenced. A module's mutable bindings cannot be exported (`E005`), so the state is reachable only through that module's own functions. Identity by file path means one environment per module, which is what "self-contained" requires. The number is not reused. | withdrawn |
-| G8 | **No reproducibility.** `std/random` seeds from the system clock into a thread-local cell, with no seed object exposed to Zymbol. Applications that need a reproducible run (zy-GO's benchmark) implement their own LCG threaded through a `<~` parameter. | open |
+| G8 | **No reproducibility.** `std/random` seeds from the system clock into a thread-local cell, with no seed object exposed to Zymbol. Applications that need a reproducible run (zy-GO's benchmark) implement their own LCG threaded through a `<~` parameter. *Re-measured 2026-10-11:* three draws of `random::entero(1, 1000000)` differ between two runs of the same program in every engine and between engines; `std/random` exports `entero`, `rango` and `peso_f64`, and no seed; no engine reads an environment variable that fixes one. | open |
 | ~~G9~~ | **Superseded 2026-09-12 by `MEM-2`**, decided and held by 13 cells, four of them red then; implemented 2026-09-13, and all of them green since. Original text: a named function reads the file's top-level names it does not declare — by value, at call time, and only names declared lexically before it. `check` says nothing. Harmless as a mutation channel (the copy is one-way), but it makes a function non-relocatable: the same body stops compiling once moved into a module, which is what a refactor does. | closed 2026-09-13 |
 | ~~G10~~ | **Closed 2026-10-11 by `GLB-121`** — decided by the author and implemented the same day: a condition is a Bool and nothing else, refused statically where the type is known and a `##Type` at run time where it is not. Held by `axes/condition.toml` (73 cells). Original text: `?` with a non-Bool condition diverges across all three engines, with only a warning. The measurement stays below, widened to thirteen kinds of value. | closed |
 
