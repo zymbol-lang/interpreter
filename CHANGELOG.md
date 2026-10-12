@@ -7,7 +7,7 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
-## [0.0.10] — unreleased
+## [0.0.10] — 2026-10-12
 
 A **measurement** release. On 2026-09-12 the documents that say what the language
 *must* do moved to a repository of their own, `zymbol-design/`, under one new file:
@@ -29,6 +29,18 @@ one file per engine and each one a `## <id> — …` heading: `GLB-…` is in
 `MEM-…` and `AGT-…` are premises (`zymbol-design/PREMISES.md`); `D1`…`D5` are the
 decisions of 2026-09-15, described in [IMPL_V0010.md § 4](IMPL_V0010.md); `GAP-GOL-…`,
 `ERROR-ZYB-…` and `HLZ-…` are in the findings logs of the applications they came from.
+
+### Known issues
+
+- **`>> +a ¶`** — a unary plus at the start of an output item — is refused by `zytw` and
+  `zyvm` (`expected expression, found '+'`) and accepted by `zyjs`. `b = +a` and `(+a)` work
+  in all three. GLB-127; the fix is one token in the parser.
+- **A value a call returns and the caller uses once stays in its register** until something
+  reuses it, so two such calls in a row cost twice the memory in the VM (1.8×; the tree-walker
+  1.0×). The VM still uses about six times less memory per array. ZYVM-022, held by a cost case.
+- **The GitHub Gate shows two "no verdict"** that belong to its environment, not to the
+  language: a private repository it cannot clone, and a runner faster than the machine its
+  timed cost cases were calibrated on. GLB-128. The local gate and a fresh clone are green.
 
 ### Changed — rules a program can break on
 

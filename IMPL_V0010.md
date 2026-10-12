@@ -1,6 +1,7 @@
 # Implementation Plan — v0.0.10: the premises as source, a matrix with no red cell, and edits that happen in place
 
-> **Status: in development on branch `v0.0.10`, feature-complete, release not started.**
+> **Status: released as v0.0.10 on 2026-10-12.** Part I is what landed, Part II what had to close before
+> the tag and how each row closed, and Part III what the launch itself found.
 > `Cargo.toml` reads `0.0.10` and the installed binary answers `zymbol 0.0.10`. Part I is
 > what has landed, Part II is what remains before the tag.
 >
@@ -108,7 +109,7 @@ header that contradicts its ficha (`STALE SUMMARY`; seven did on 2026-10-10).
 turns that cell red until the declaration is removed — so a fix cannot land without the
 record noticing.
 
-**The gate measures cost.** `zyquality/cost/` holds 14 cases whose limit is a *ratio*
+**The gate measures cost.** `zyquality/cost/` holds 15 cases whose limit is a *ratio*
 declared in `cost.toml` — growth when the input quadruples, a call against the same code
 inline — and no baseline in milliseconds. It exists because the microbenchmarks in
 `bench/` run fixed programs that never touch module state or copy an aggregate, which is
@@ -522,23 +523,23 @@ LLM, a normative grammar wrong in both directions).
 
 | Item | State |
 |------|-------|
-| `CHANGELOG.md` | ✅ `[0.0.10] — unreleased` written 2026-10-11: 226 lines, every entry naming its finding. It is written at the grain of this plan, not of v0.0.9's 922 lines — § E.5 says why that is a limit and not a choice. Needs a date when the tag is cut |
+| `CHANGELOG.md` | ✅ `[0.0.10] — 2026-10-12`: 267 lines, every entry naming its finding, with the map from an id to its ficha (decided by the author, 2026-10-12: links, not expanded entries) and a *Known issues* section. § E.5 says why it is shorter than v0.0.9's |
 | `LLM.md` | ✅ titled v0.0.10 and **verified by a suite** (`zyq suite --only llm`, 88 probes, § 13). One false claim corrected, four rules added |
-| `GUIDE.md` | ✅ header and *New in v0.0.10* written; three sections added (a condition is a Bool, a block lambda without `<~`, the dictionary pattern in a loop head). `guide_verify` executes its annotated examples. The body outside those sections was not re-read |
-| `REFERENCE.md` | ✅ header at v0.0.10; L51–L54 added; the `ambiguous lifetime` row corrected. The error taxonomy and the symbol table were **not** checked for `##Kind(…)`, `##'expr` and the D1 families |
+| `GUIDE.md` | ✅ header and *New in v0.0.10*; three sections added; and on 2026-10-12 **every `zymbol` block was run** (237, not only the 130 annotated ones, whose claims `guide_verify` holds): 308 output comments aligned with real output and none wrong, and one form shown as valid that the language refuses (`config["a"]["b"]`), fixed. `>> +a` is GLB-127 |
+| `REFERENCE.md` | ✅ header at v0.0.10; L51–L55; the `ambiguous lifetime` row corrected; and the error taxonomy now says what a kind says (D1) and how a program builds an error (`##Kind("…")`). The §21 table has no row for it: `test_symbols` requires a card in the playground's dictionary for each, and there is none yet |
 | `IMPLEMENTATION.md` + `zymbol-lang.ebnf` | ✅ grammar at **3.4.0**: `##'expr`, `##Kind("…")`, the `##Kind(m)` pattern, subscript arguments and the negative literal pattern written in, each probed in all three engines; `loop_pattern` finally true. The copy in IMPLEMENTATION.md is byte-identical again. A targeted pass, as the header says — not a second rule-by-rule verification |
-| `AGENTIC.md` | G10 closed with its history. **Not re-measured as a whole**: G4 was probed and stands; G1, G2, G3, G5 and G8 carry their 2026-09 measurement, and the header now says so |
-| `README.md` | Badge at v0.0.10. *"Current status (v0.0.9 branch — 0.0.8 is the latest published release)"* and the figures under it are still v0.0.9's — to be rewritten from the Verification table below, in a fresh clone |
-| `ROADMAP.md` | Status header says *v0.0.9 (in development)*. Not touched |
-| `ARCHITECTURE.md` | Parity and benchmark paragraphs are dated 2026-09-07. The VM section predates the single dispatch loop (§ 5), the lending of `<~` (§ 12) and `JumpIfNotCond` (§ 13). Not touched |
+| `AGENTIC.md` | ✅ G1, G2, G3, G5 and G8 re-measured on 0.0.10 over kinds of value (G4 and G10 on 2026-10-11). **G3 was wrong as written**: the browser engine has a budget (100 000 iterations, 2 000 000 steps), and the Rust engines abort a non-tail recursion instead of running until a timeout. The probe had gone through `run_one.mjs`, which lifts both limits |
+| `README.md` | ✅ Badge at v0.0.10 and *Current status* rewritten from the figures of this table, re-derived in a fresh clone of the published branches on 2026-10-12 (same figures) |
+| `ROADMAP.md` | ✅ Header at v0.0.10, coverage table, version history, and the auto-free debt **re-measured — and still open** (ZYVM-022): ZYVM-010 did not close it |
+| `ARCHITECTURE.md` | ✅ The VM section as the code is (one dispatch loop, `<~` lent, `JumpIfNotCond`, `zymbol_common::count`, 167 instruction variants); parity from the 2026-10-11 gate; performance in CPU instructions. The table of real workloads is labelled *not re-measured for v0.0.10* |
 | `zymbol-design/` | On `v0.0.10`, clean, pushed. `MEMORY_MODEL.md` and MEM-5 were updated on 2026-10-10/11 for ZYTW-010 and `<~` |
 | `web/` | On `v0.0.10`, 166 commits since the tag, suites green in the gate. **The install pages and their Markdown twins still say v0.0.9, correctly** — the download links are not touched until the release exists. `web_release.md` and `web_manual_update.md` are the procedures |
-| VS Code extension | `0.1.6`, six commits since the tag (the grammar knows `##'` as a cast and an error kind in any script). Needs a version and `bash build-extension.sh`. The `tmgrammar` surface in ZyDDT reports nothing unmarked |
+| VS Code extension | ✅ `0.1.7`, built with `bash build-extension.sh` (21 files, 290 KB) |
 | Git | **21 repositories**: 20 on `v0.0.10` and ZyBF on `main`. The work of 2026-10-11 is committed in `interpreter/`, `web/`, `zyquality/` and `ZyDDT/`, one commit per finding and per repository as the branch has gone so far; a file that held pieces of several findings was committed piece by piece, and every intermediate state of `interpreter/` was compiled before it was committed. Pushing, tagging and merging are the release itself and are not done. `.github/` and `packaging/` are identical between `main` and `v0.0.10`, so the workflow definitions the release event reads are already the right ones — the order in `agents/release_merge.md` (merge **before** publishing) is still the order |
-| Installers | `agents/release_installers.md`. The `.deb` gate mounts ZyQuality in the container; it has not been run against this branch |
+| Installers | ✅ `packaging/verify/run-local.sh --scope full` on 2026-10-12: **41/41**, with the corpus run against the *installed* binary — 677 of 683 identical under both engines. The `.rpm`, `.pkg.tar.zst`, musl and aarch64 packages are still published unverified (`release_installers.md`, "What is still not verified") |
 | Windows `.msi` | Signing is manual in the SignPath portal; the Windows job fails by design until it is done |
-| The cost of `--count` | ✅ **Measured 2026-10-11** in CPU instructions (`perf stat -e instructions:u`, three binaries: `d736ae6`, today's tree with the counters turned into no-ops, and today's tree). **The counters themselves: +0.4 % to +1.6 % in the VM, +0.4 % to +1.1 % in the tree-walker** — inside the 1–2 % that was set as the limit, so they stay compiled in. **`JumpIfNotCond` costs nothing**: the VM is −1.9 % to +0.4 % against the baseline before counting. **The tree-walker, whole, is +2.0 % on `bench_recursion`, +1.6 % on `stress`, +1.4 % on `bench_match`** against `d736ae6`, and most of that is not the step counter: it survives in the no-op build, where the only things left are the allocator wrapper and the ownership check in `make_mut` — and the tree-walker asks the allocator about 15 times per call where the VM asks about 5. One real cost was found and removed on the way: `?` computed the source position of its condition on every run and now only on the way out (−0.7 points). Whether +2 % on the tree-walker's worst case is acceptable, or the allocator goes behind a cargo feature, is the author's call |
-| zyjs and `--count` | Not built. The browser engine has a step counter of its own (`this.steps`, its runaway-loop limit) and cannot count allocations; whether `run_one.mjs` should print half a line is undecided |
+| The cost of `--count` | ✅ **Re-measured 2026-10-12**, in CPU instructions, on four builds of one HEAD (`d736ae6`, HEAD, HEAD without the counting allocator, HEAD with the counters as no-ops), median of seven: tree-walker **+2.01 %** (`bench_recursion`), +1.57 % (`stress`), +1.31 % (`bench_match`) against `d736ae6`, about 70 % of it the counting allocator, which follows the allocations — **4.2 per call in the tree-walker, 0.0 in the VM**; VM −1.1 % to +1.7 %, where only the step counter pays. The first measurement's "~15 per call" was wrong, and its no-op comparator predated the `?` fix. **Decided by the author: it stays compiled in.** `JumpIfNotCond` costs nothing |
+| zyjs and `--count` | ✅ **Decided 2026-10-12: nothing.** Its steps read ×4.00 on the program whose time is already ×6 (the copy), so a half line would not see what the harness exists to see; the clock asks it in 9 of the 15 cost cases and caught ZYJS-014 |
 | Toolchain | Still no `rust-toolchain.toml`: `cargo fmt --check` and `clippy -D warnings` are red by version, not by debt. Do not run `cargo fmt` to "fix" it before the tag |
 
 ## B. Inherited debt — auto-free, a third time
@@ -555,8 +556,9 @@ The deadline IMPL_V008 set itself has now passed three times.
 
 ## C. Decisions that are open
 
-**The VM as the default engine.** Confirmed by the author on 2026-10-10; **the version is
-not set**. Measured that day with the VM standing in as the default: every golden via
+**The VM as the default engine.** Confirmed by the author on 2026-10-10; **decided on 2026-10-12
+for v0.0.11** — its second commit, after the version bump and after the five zones below are
+probed. v0.0.10 ships with the tree-walker as the default of a loose `.zy`. Measured that day with the VM standing in as the default: every golden via
 `run` and via `check` matches under `zyvm`, the strict two-engine consensus diverges on
 nothing including the words, `guide_verify` passes with `--vm` forced, and start-up is
 2.5 ms against 2.4 ms. What the change itself needs and has not had: the default of
@@ -611,7 +613,7 @@ cd ../zyquality && make && ./zyq suite            # all gates pass
 | `fmt` | 781 files: 733 PASS, **0 FAIL**, 48 SKIP · P1–P4 all zero |
 | `fmtcheck` | 9 LDV applications formatted, **suite unchanged** in every one · 5 pins hold |
 | `tui` | 3 cases × 2 engines: 3 agree, 0 diverge |
-| `guide` | 243 blocks, 130 tested: **130 PASS**, 0 FAIL |
+| `guide` | 242 blocks, 130 tested: **130 PASS**, 0 FAIL |
 | `llm` | **88 probes PASS**, 0 FAIL · 27 of 27 rules and bullets of `LLM.md` covered — new in this pass |
 | `lsp` | 683 files · 14 disagreements, **0 outside the baseline** |
 | `project` | 9 LDV applications: **every golden holds**, 0 diverge |
@@ -619,9 +621,9 @@ cd ../zyquality && make && ./zyq suite            # all gates pass
 | `messages` | Rust 925 · zyjs 555 · nothing new on the shared surface (baseline 212 of 438) |
 | `reach` | 685 diagnostics defined in the gated layers: 517 provoked, 168 not — nothing new unprovoked |
 | `bench` | 16 PASS, 0 FAIL, 0 NEW |
-| `zyddt` | 46 axes, **1 704 cells: 1 704 agree**, 171 of them checked against an oracle that is not ours · 0 diverging, 0 known · 12 pins, all agree · findings: **0 open**, 226 closed, 2 re-routed |
+| `zyddt` | 46 axes, **1 705 cells: 1 704 agree, 1 known** (`>> +a`, GLB-127), 171 of them checked against an oracle that is not ours · 0 diverging · 12 pins, all agree · findings: **3 open** (GLB-127, ZYVM-022, GLB-128 — each named; the first two held by a cell), 227 closed, 2 re-routed |
 | `zyddt premises` | 29 declared · 0 with no cell · 7 by review · 1 held elsewhere |
-| `cost` | 14 cases: **every ratio within its declared limit** — the timed ones, and 60 counted with `--count` (steps ×4.00, 0 elements copied) |
+| `cost` | 15 cases: **every ratio within its declared limit** (one KNOWN: ZYVM-022) — the timed ones, and 60 counted with `--count` (steps ×4.00, 0 elements copied) |
 | `course` | the course imports the playground's highlighter; no copy |
 | `web` | 15 suites pass · example pool 332 files: 216 agree, **0 diverge** |
 
@@ -712,11 +714,49 @@ dimension is the type, so that the next reading of it cannot be a single value.
 
 ### E.5 — The CHANGELOG is written from the plan, and that is thinner than v0.0.9's
 
-Still true, and now a property of a file that exists. `[0.0.10]` is 226 lines where
+Still true, and now a property of a file that exists. `[0.0.10]` is 267 lines where
 `[0.0.9]` is 922, for a release that is larger: 164 commits in `interpreter/`, 260 in
 `ZyDDT/`, 166 in `web/`, 112 in `zyquality/`, 28 in `zymbol-design/`. Each entry names its
 finding, and the finding — not the entry — holds the measurement, the alternatives and
 the decision. That is a deliberate trade and it has a cost: `ZyDDT/HALLAZGOS/` is written
 in Spanish and lives in another repository, so a reader of the CHANGELOG alone gets the
 *what* and has to go elsewhere for the *why* that v0.0.9's entries carried inline.
-Whether to expand the entries before the tag is the author's call.
+Decided on 2026-10-12: not expanded. The CHANGELOG now carries the map from an id to its ficha, at the
+`v0.0.10` tag, which is why ZyDDT is tagged before the release is published.
+
+---
+
+# Part III — What the launch found (2026-10-11 to 2026-10-12)
+
+The release plan of Part II was executed by steps, each with its measurement, and the author took
+four decisions on the way (all four the recommended option). Everything below was found by *running
+the thing that was already believed*, not by reading it.
+
+| Decision | Taken |
+|---|---|
+| The VM as the default engine | **v0.0.11**, second commit, after probing loops and hot variables, `??`, error flow, strings and formatting, modules. It is not a flag: the REPL is wired to the tree-walker's `Interpreter` |
+| The cost of `--count` in the tree-walker | **Stays compiled in.** On the VM, the engine that becomes the default, the allocator is not what pays |
+| The CHANGELOG | **Links to the fichas**, at the `v0.0.10` tag of ZyDDT; entries not expanded |
+| `--count` in the browser engine | **Nothing** |
+
+| Found | What | State |
+|---|---|---|
+| **GLB-126** | The Gate of GitHub had not run the quality layer since 2026-10-02: `zyq` used `In_channel` (OCaml 4.14) and the runner installs 4.13.1. 100 consecutive red runs on `v0.0.10`; the last green on any branch was 2026-09-10 | closed — `Toml.read_channel`, reproduced with the runner's compiler under podman |
+| **GLB-127** | `>> +a` is refused by `zytw` and `zyvm`, accepted by `zyjs`, and shown as valid by GUIDE. `parse_output_item_term` knows `Not` and `Minus` only | **open**, held by a cell; one token |
+| **GLB-128** | The Gate gives two "no verdict" that belong to its environment: a private repository (`divergente`) it cannot clone, and a runner 2.1–2.4× faster than the machine the timed cost cases were calibrated on | **open**, a decision of the author's for v0.0.11 |
+| **ZYVM-022** | The auto-free debt of v0.0.8, re-measured: ZYVM-010 did not close it. 1.79× one array in the VM against 1.00 in the tree-walker, for the value a call returns and the caller uses once | **open**, held by `autofree/call-result` |
+| `ml` oracle | `engines.toml` still declared an OCaml oracle that nothing used. The author: OCaml is not a valid engine in Zymbol | retired, with its reason, in "Retired engines" |
+| G3 | AGENTIC said the browser engine has no budget; it has one, and the probe had lifted it | corrected |
+
+Two lessons that are the same as § E.4, found again:
+
+- **A green figure measured through a harness is a figure about the harness.** `run_one.mjs` lifts the
+  browser engine's limits so `zyq` can grade it on the same programs; a probe through it saw none.
+- **"Not run" is the honest answer and it is red.** Every red of the GitHub Gate after GLB-126 was exit 2:
+  a check that could not be made. None was a regression, and none could have been told from one without
+  reading the log — which is why the Gate went unread for nine days.
+
+What is not done in this release, so that it is said and not implied: the `.rpm`, `.pkg.tar.zst`, musl
+and aarch64 packages, and macOS and Windows, are published unverified (`release_installers.md`); the
+real-workload table of ARCHITECTURE.md is not re-measured; and GLB-128 means the Gate of GitHub is red
+for a documented reason.

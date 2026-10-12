@@ -634,10 +634,10 @@ release notes — that is the rule that came out of the 544/536 correction:
 - Benchmarks: **16/16 within tolerance** of the recorded baseline, no regressions.
 - LSP against `zymbol check`: 683 files, 14 disagreements, **0 outside the baseline**.
 - ZyDDT: **46 axes, 1 704 cells, all agree** — 171 of them checked against an
-  implementation that is not ours — and **0 findings open**, 227 closed. The 29 premises
+  implementation that is not ours — and **3 findings open** (GLB-127, ZYVM-022, GLB-128 — each named, none a regression), 227 closed. The 29 premises
   of `zymbol-design/PREMISES.md` each have a cell or are declared checked by review.
 - `LLM.md` behind **88 probes**, each quoting the sentence it stands behind; `GUIDE.md`
-  **130 of 130** executable examples; `zyquality/cost/` **14 cases**, every ratio within
+  **130 of 130** executable examples; `zyquality/cost/` **15 cases**, every ratio within
   its declared limit.
 
 `ZYMBOL_BIN=/usr/bin/zymbol` still points the suite at an installed package
