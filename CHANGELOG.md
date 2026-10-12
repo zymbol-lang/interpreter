@@ -20,6 +20,16 @@ Each entry names the finding it comes from. The finding — in `ZyDDT/HALLAZGOS/
 where the measurement, the alternatives and the author's decision are written; this
 file says what changed. [IMPL_V0010.md](IMPL_V0010.md) is the account of the release.
 
+The findings are written in **Spanish**, in [ZyDDT](https://github.com/zymbol-lang/ZyDDT/tree/v0.0.10/HALLAZGOS),
+one file per engine and each one a `## <id> — …` heading: `GLB-…` is in
+[`GLOBAL.md`](https://github.com/zymbol-lang/ZyDDT/blob/v0.0.10/HALLAZGOS/GLOBAL.md),
+`ZYTW-…` in [`zytw.md`](https://github.com/zymbol-lang/ZyDDT/blob/v0.0.10/HALLAZGOS/zytw.md),
+`ZYVM-…` in [`zyvm.md`](https://github.com/zymbol-lang/ZyDDT/blob/v0.0.10/HALLAZGOS/zyvm.md) and
+`ZYJS-…` in [`zyjs.md`](https://github.com/zymbol-lang/ZyDDT/blob/v0.0.10/HALLAZGOS/zyjs.md).
+`MEM-…` and `AGT-…` are premises (`zymbol-design/PREMISES.md`); `D1`…`D5` are the
+decisions of 2026-09-15, described in [IMPL_V0010.md § 4](IMPL_V0010.md); `GAP-GOL-…`,
+`ERROR-ZYB-…` and `HLZ-…` are in the findings logs of the applications they came from.
+
 ### Changed — rules a program can break on
 
 **A named function sees only its parameters (MEM-2)**
