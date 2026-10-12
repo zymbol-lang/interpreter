@@ -3541,7 +3541,7 @@ config = #(
 )
 
 >> config.servidor.host ¶
->> config["servidor"]["puerto"] ¶
+>> config["servidor">"puerto"] ¶   // 8080: one path, not two brackets
 
 // A navigation path reaches down and modifies. A step is an ordinary
 // expression, and its VALUE says how to address: an Int is a position, a
