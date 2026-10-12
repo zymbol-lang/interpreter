@@ -615,23 +615,30 @@ Or ask the whole question at once, from the zyquality checkout:
 ./zyq suite     # selftest + audit + reject + goldens + consensus, one verdict
 ```
 
-Current status (v0.0.9 branch — 0.0.8 is the latest published release).
-**Re-measured 2026-09-07**, every figure below on the same tree, with `./zyq suite`
+Current status (v0.0.10 branch — 0.0.9 is the latest published release).
+**Re-measured 2026-10-11**, every figure below on the same tree, with `./zyq suite`
 reporting **all gates pass**. Re-derive a count in a fresh clone before quoting it in
 release notes — that is the rule that came out of the 544/536 correction:
 
-- **1026 `#[test]` functions** across the 19 crates via `cargo test` — 0 failed, 4 ignored.
-- Corpus: **666 `.zy`**, 664 with a golden, 6 excused for every engine by a written reason
+- **1065 tests** across the 19 crates via `cargo test --workspace` — 0 failed, 4 ignored.
+- Corpus: **683 `.zy`**, 677 with a golden, 6 excused for every engine by a written reason
   in `corpus.toml`. `zyq audit` reports no hygiene problems.
-- Tree-walker vs VM: **660 agree, 0 diverge**.
-- All three engines: **660 agree, 0 diverge**. Against the browser engine alone,
-  **636 agree, 0 diverge** — the 30 in the difference are excused for `zyjs` in
-  `corpus.toml` (`std/db` is ODBC, `<\ cmd \>` entropy, TUI needs a real TTY).
-- Goldens: **635 of 639 match via `run`, 0 stale**, 4 unchecked; **25 of 25 via `check`**.
-- `zyq reject`: **41 forms refused in every engine**, 0 accepted anywhere.
-- Formatter properties: **710 PASS / 0 FAIL** over 764 files, 55 skipped — P1–P4 all zero.
+- Tree-walker vs VM: **677 agree, 0 diverge**.
+- All three engines: **677 agree, 0 diverge**. Against the browser engine alone,
+  **664 agree, 0 diverge** — the 19 in the difference are excused in `corpus.toml`
+  (`std/db` is ODBC, `<\ cmd \>` has no browser equivalent, TUI needs a real TTY, and the
+  6 excused for every engine).
+- Goldens: **647 of 647 match via `run`, 0 stale**; **30 of 30 via `check`**.
+- `zyq reject`: **55 forms refused in every engine**, 0 accepted anywhere.
+- Formatter properties: **733 PASS / 0 FAIL** over 781 files, 48 skipped — P1–P4 all zero.
 - Benchmarks: **16/16 within tolerance** of the recorded baseline, no regressions.
-- LSP against `zymbol check`: 666 files, 16 disagreements, **0 outside the baseline**.
+- LSP against `zymbol check`: 683 files, 14 disagreements, **0 outside the baseline**.
+- ZyDDT: **46 axes, 1 704 cells, all agree** — 171 of them checked against an
+  implementation that is not ours — and **0 findings open**, 227 closed. The 29 premises
+  of `zymbol-design/PREMISES.md` each have a cell or are declared checked by review.
+- `LLM.md` behind **88 probes**, each quoting the sentence it stands behind; `GUIDE.md`
+  **130 of 130** executable examples; `zyquality/cost/` **14 cases**, every ratio within
+  its declared limit.
 
 `ZYMBOL_BIN=/usr/bin/zymbol` still points the suite at an installed package
 rather than the build tree. `VM_COMPARE_EXCLUDE` is gone — exclusions are
