@@ -27,16 +27,8 @@ fn literal_to_value(lit: &Literal) -> Value {
 impl<W: Write> Interpreter<W> {
     /// Execute match statement: ?? expr { cases } (discards return value)
     pub(crate) fn execute_match_statement(&mut self, match_expr: &MatchExpr) -> Result<()> {
-        // Check if match returns values (warn if unused)
-        let has_values = match_expr.cases.iter().any(|case| case.value.is_some());
-
-        if has_values {
-            // Warning: match returns values but they're being discarded
-            eprintln!("warning: match expression returns values but result is unused");
-            eprintln!("  --> consider assigning to a variable: `result = ?? expr {{ ... }}`");
-            eprintln!("  --> or use execution-only form: `?? expr {{ pattern => {{ block }} }}`");
-        }
-
+        // A match whose arms give values, used as a statement, is warned about
+        // by the semantic analyzer, before anything runs (GLB-016).
         // Execute match as statement (discard return value)
         self.eval_match(match_expr)?;
         Ok(())
@@ -52,20 +44,20 @@ impl<W: Write> Interpreter<W> {
             // Check if pattern matches
             if let Some(matched) = self.pattern_matches(&case.pattern, &scrutinee_value)? {
                 if matched {
-                    // Pattern matched
-                    // Determine return value: either from value expr or Unit
-                    let result = if let Some(ref value_expr) = case.value {
-                        self.eval_expr(value_expr)?
-                    } else {
-                        Value::Unit
-                    };
-
-                    // Execute optional block (for side effects)
-                    if let Some(ref block) = case.block {
-                        self.execute_block(block)?;
+                    // `##Kind(m) =>` puts the error's message in `m` as `m = …`
+                    // would: a visible `m` is assigned (no shadowing, MEM-7),
+                    // and a new one lives in the arm's scope, which closes on
+                    // every way out.
+                    let bound = case.pattern.bound_name();
+                    if let (Some(name), Value::Error(e)) = (bound, &scrutinee_value) {
+                        self.push_scope();
+                        self.set_variable(name, Value::String(e.message.clone()));
                     }
-
-                    return Ok(result);
+                    let outcome = self.eval_match_arm(case);
+                    if bound.is_some() {
+                        self.pop_scope();
+                    }
+                    return outcome;
                 }
             }
         }
@@ -77,6 +69,24 @@ impl<W: Write> Interpreter<W> {
         })
     }
 
+    /// The arm's value, or Unit, after its optional block has run.
+    fn eval_match_arm(&mut self, case: &zymbol_ast::MatchCase) -> Result<Value> {
+        let result = if let Some(ref value_expr) = case.value {
+            self.eval_expr(value_expr)?
+        } else {
+            Value::Unit
+        };
+        if let Some(ref block) = case.block {
+            self.execute_block(block)?;
+            // A `<~`, `@!` or `@>` in the block leaves the expression the `??`
+            // is part of, as it leaves the `??` written as a statement (GLB-107).
+            if self.is_control_flow_pending() {
+                return Err(RuntimeError::Unwind);
+            }
+        }
+        Ok(result)
+    }
+
     /// Check if a pattern matches a value
     /// Returns Some(true) if matched, Some(false) if not matched (but guard failed), None if pattern doesn't match
     pub(crate) fn pattern_matches(&mut self, pattern: &Pattern, value: &Value) -> Result<Option<bool>> {
@@ -85,6 +95,11 @@ impl<W: Write> Interpreter<W> {
                 // Wildcard matches everything
                 Ok(Some(true))
             }
+            // An error of this kind; any other value, or another kind, does not.
+            Pattern::ErrorKind(kind, _, _) => match value {
+                Value::Error(e) if e.error_type == *kind => Ok(Some(true)),
+                _ => Ok(None),
+            },
             Pattern::Literal(lit, _) => {
                 // Check if literal equals value
                 let pattern_value = match lit {
@@ -186,6 +201,18 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             Pattern::Ident(name, span) => {
+                // A named function is a value like any other, and a pattern
+                // that names one compares by identity, as `==` does (GLB-125).
+                // Only the variables were looked up here, so `f =>` failed for
+                // a function in plain view while `h = f` … `h =>` matched.
+                let named_function = match self.get_variable(name) {
+                    Some(_) => None,
+                    None => self.functions.get(name)
+                        .map(|def| Value::Function(self.func_def_to_value(def))),
+                };
+                if let Some(function) = named_function {
+                    return Ok(if self.values_equal(value, &function) { Some(true) } else { None });
+                }
                 match self.get_variable(name) {
                     Some(var_val) => {
                         let var_val = var_val.clone();

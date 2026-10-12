@@ -335,6 +335,102 @@ pub enum TokenKind {
     Error(String),
 }
 
+impl TokenKind {
+    /// The token as a diagnostic quotes it: `'='`, `'}'`, `'5'`, `"texto"`,
+    /// `end of file`.
+    ///
+    /// Decided 2026-09-25 (GLB-028): a refusal names what the program HAS
+    /// WRITTEN, the way `expected ')' after expression` already did. It used to
+    /// print the variant — `found Assign`, `unexpected token: Integer(5)` —
+    /// which is this lexer's inside, in Rust's `Debug` spelling. A char or a
+    /// string literal brings its own quotes and is not wrapped again. `zyjs`
+    /// spells tokens with the same table (`Parser.tokenSpelling`).
+    pub fn quoted(&self) -> String {
+        match self {
+            TokenKind::Eof => "end of file".to_string(),
+            TokenKind::Error(msg) => msg.clone(),
+            TokenKind::LineComment(_) | TokenKind::BlockComment(_) => "a comment".to_string(),
+            TokenKind::Char(_) | TokenKind::String(_) | TokenKind::StringInterpolated(_) => self.spelling(),
+            _ => format!("'{}'", self.spelling()),
+        }
+    }
+
+    /// How the token is written in source — its canonical spelling, so an
+    /// alternative digit script reads as ASCII here.
+    pub fn spelling(&self) -> String {
+        use TokenKind::*;
+        let fixed = match self {
+            Output => ">>", OutputClear => ">>!", OutputQuery => ">>?", OutputGate => ">>|",
+            OutputPos => ">>~", Input => "<<", KeyBlock => "<<|", KeyNonBlock => "<<|?",
+            Assign => "=", FatArrow => "=>", ConstAssign => ":=", Comma => ",", Colon => ":",
+            Semicolon => ";", Plus => "+", Minus => "-", Star => "*", Slash => "/",
+            Percent => "%", Caret => "^",
+            DollarHash => "$#", DollarPlus => "$+", DollarMinus => "$-", DollarQuestion => "$?",
+            DollarTilde => "$~", DollarLBracket => "$[", DollarGt => "$>", DollarPipe => "$|",
+            DollarLt => "$<", DollarPlusLBracket => "$+[", DollarMinusLBracket => "$-[",
+            DollarCaretPlus => "$^+", DollarCaretMinus => "$^-", DollarCaret => "$^",
+            DollarQuestionQuestion => "$??", DollarPlusPlus => "$++", DollarMinusMinus => "$--",
+            DollarTildeTilde => "$~~", DollarSlash => "$/", DollarStar => "$*",
+            DollarExclaim => "$!", DollarExclaimExclaim => "$!!",
+            PlusAssign => "+=", MinusAssign => "-=", StarAssign => "*=", SlashAssign => "/=",
+            PercentAssign => "%=", CaretAssign => "^=", PlusPlus => "++", MinusMinus => "--",
+            Gt => ">", Lt => "<", Ge => ">=", Le => "<=", Eq => "==", Neq => "<>",
+            And => "&&", Or => "||", Not => "!",
+            Question => "?", DoubleQuestion => "??", Underscore => "_", ElseIf => "_?",
+            TryBlock => "!?", CatchBlock => ":!", FinallyBlock => ":>",
+            At => "@", AtBreak => "@!", AtContinue => "@>", AtTilde => "@~",
+            Dot => ".", DotDot => "..", Newline => "¶", Backslash2 => "\\\\", Backslash => "\\",
+            HashComma => "#,", HashCaret => "#^", BaseBinary => "0b", BaseOctal => "0o",
+            BaseDecimal => "0d", BaseHex => "0x", Pipe => "|", PipeOp => "|>",
+            HashPipe => "#|", HashQuestion => "#?", HashLParen => "#(", HashDot => "#.",
+            HashExclaim => "#!", HashHashUnderscore => "##_", HashHashDot => "##.",
+            HashHashHash => "###", HashHashBang => "##!", HashHashQuote => "##\"",
+            HashHashApos => "##'",
+            LBrace => "{", RBrace => "}", LBracket => "[", RBracket => "]",
+            LParen => "(", RParen => ")", Return => "<~", Tilde => "~", Arrow => "->",
+            Hash => "#", ExportBlock => "#>", ModuleImport => "<#", ScopeResolution => "::",
+            CliArgsCapture => "><", BashOpen => "<\\", BashClose => "\\>",
+            _ => "",
+        };
+        if !fixed.is_empty() {
+            return fixed.to_string();
+        }
+        match self {
+            String(s) => format!("\"{}\"", s),
+            StringInterpolated(parts) => {
+                let body: std::string::String = parts.iter().map(|p| match p {
+                    StringPart::Text(t) => t.clone(),
+                    StringPart::Variable(v) => format!("{{{}}}", v),
+                }).collect();
+                format!("\"{}\"", body)
+            }
+            Integer(n) => n.to_string(),
+            Float(f) => f.to_string(),
+            Char(c) => format!("'{}'", c),
+            Boolean(b) => if *b { "#1".to_string() } else { "#0".to_string() },
+            SetNumeralMode(cp) => {
+                let zero = char::from_u32(*cp).unwrap_or('0');
+                let nine = char::from_u32(*cp + 9).unwrap_or('9');
+                format!("#{}{}#", zero, nine)
+            }
+            Ident(name) => name.clone(),
+            HotIdent(name) => format!("{}°", name),
+            PreHotIdent(name) => format!("°{}", name),
+            AtLabel(l) => format!("@{}", l),
+            AtColonLabel(l) => format!("@:{}", l),
+            AtColonLabelBreak(l) => format!("@:{}!", l),
+            AtColonLabelContinue(l) => format!("@:{}>", l),
+            ExecuteCommand(path) => format!("</ {} />", path),
+            LineComment(_) | BlockComment(_) => "//".to_string(),
+            Eof => std::string::String::new(),
+            Error(msg) => msg.clone(),
+            // Every fixed token is spelled in the table above.
+            _ => std::string::String::new(),
+        }
+    }
+}
+
+
 /// A token with its kind and source location
 #[derive(Debug, Clone)]
 pub struct Token {
@@ -381,10 +477,15 @@ impl Lexer {
             offset += ch.len_utf8() as u32;
         }
         byte_offsets.push(offset);
+        // A byte order mark at the very start is how some editors save UTF-8,
+        // and it is not part of the program. It used to glue itself to the
+        // first name, so such a file could not run (GLB-026 A). Anywhere else
+        // it is an invisible character like any other.
+        let current = usize::from(chars.first() == Some(&'\u{FEFF}'));
         Self {
             source: chars,
             byte_offsets,
-            current: 0,
+            current,
             line: 1,
             column: 1,
             file_id,
@@ -425,6 +526,13 @@ impl Lexer {
             return true;
         }
 
+        // The backtick and invisible characters are never part of a name, and
+        // ZWJ/ZWNJ may continue one but not begin it (GLB-026 B, decided
+        // 2026-09-15). A name that looks the same as another must be the same.
+        if ch == '`' || Self::is_invisible_char(ch) {
+            return false;
+        }
+
         // Allow any Unicode letter (covers all languages: English, Chinese, Arabic, Hindi, etc.)
         if ch.is_alphabetic() {
             return true;
@@ -442,6 +550,14 @@ impl Lexer {
     ///
     /// Public for the same reason as `is_ident_start`.
     pub fn is_ident_continue(ch: char) -> bool {
+        // ZWJ and ZWNJ spell words in Sinhala, Devanagari, Persian, Kannada and
+        // Telugu, so a name may contain them (GLB-026 B).
+        if ch == '\u{200C}' || ch == '\u{200D}' {
+            return true;
+        }
+        if ch == '`' || Self::is_invisible_char(ch) {
+            return false;
+        }
         // Allow alphanumeric and underscore
         if ch.is_alphanumeric() || ch == '_' {
             return true;
@@ -449,6 +565,22 @@ impl Lexer {
 
         // Allow any non-whitespace, non-operator Unicode character
         !ch.is_whitespace() && !Self::is_operator_char(ch)
+    }
+
+    /// A character that renders as nothing: a control character, or a Unicode
+    /// format character (general category Cf). The table is explicit, and the
+    /// browser engine carries the same one, so both read a name the same way
+    /// whatever Unicode version their platform knows.
+    pub fn is_invisible_char(ch: char) -> bool {
+        if ch.is_control() {
+            return true;
+        }
+        matches!(ch as u32,
+            0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891
+            | 0x08E2 | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064
+            | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD
+            | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001
+            | 0xE0020..=0xE007F)
     }
 
     /// Check if a character is a Zymbol operator
@@ -940,6 +1072,27 @@ impl Lexer {
                 }
                 _ => unreachable!(),
             };
+            // A prefix `°` anchors the name ABOVE the loop, so the value outlives
+            // the loop; `_` keeps the name inside the block it was declared in.
+            // Together they ask for a value that goes on existing where nothing
+            // can ever read it. The SUFFIX is the form that means something:
+            // `_k°` lives through every iteration and dies with the loop, and the
+            // `_` keeps it from the loop's inner blocks (GLB-039, decided
+            // 2026-09-25 — the day before, both spellings had been refused).
+            if name.starts_with('_') {
+                let span = self.span(start);
+                self.diagnostics.push(
+                    Diagnostic::error(format!(
+                        "'°{}' anchors the name above the loop, where '_' makes it unreadable",
+                        name
+                    ))
+                    .with_span(span)
+                    .with_help(format!(
+                        "write '{}°' for a private value that lives through every iteration of the loop",
+                        name
+                    )),
+                );
+            }
             return Token::new(TokenKind::PreHotIdent(name), self.span(start));
         }
 
@@ -948,14 +1101,20 @@ impl Lexer {
             return self.lex_identifier(start);
         }
 
-        // Unknown character
+        // Unknown character. An invisible one is named by its code point —
+        // quoting it would show the reader nothing.
         self.advance();
         let span = self.span(start);
+        let shown = if Self::is_invisible_char(ch) {
+            format!("U+{:04X}", ch as u32)
+        } else {
+            format!("'{}'", ch)
+        };
         self.diagnostics.push(
-            Diagnostic::error(format!("unexpected character: '{}'", ch))
+            Diagnostic::error(format!("unexpected character: {}", shown))
                 .with_span(span),
         );
-        Token::new(TokenKind::Error(format!("unexpected character: '{}'", ch)), span)
+        Token::new(TokenKind::Error(format!("unexpected character: {}", shown)), span)
     }
 
 

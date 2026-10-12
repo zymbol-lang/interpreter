@@ -106,30 +106,27 @@ impl ScopeTree {
                     "'{}' was declared at {}:{}",
                     name, decl_span.start.line, decl_span.start.column
                 ))
+                // One line: a `\n` here printed its second half flush left,
+                // after the `= help:` block, where it read as a stray line.
                 .with_help(format!(
-                    "underscore variables are strictly local to their declaration block\n\
+                    "underscore variables are strictly local to their declaration block: \
                      '{}' was declared in an outer scope and cannot be accessed from nested blocks",
                     name
                 )));
             }
 
-            // Check if it's in a child scope (accessing from outer scope)
-            if self.is_ancestor(self.current, decl_scope_id) {
-                return Err(Diagnostic::error(format!(
-                    "cannot access underscore variable '{}' from outer scope",
-                    name
-                ))
-                .with_span(*usage_span)
-                .with_note(format!(
-                    "'{}' was declared at {}:{}",
-                    name, decl_span.start.line, decl_span.start.column
-                ))
-                .with_help(format!(
-                    "underscore variables are strictly local to their declaration block\n\
-                     '{}' was declared in an inner scope and is not accessible here",
-                    name
-                )));
-            }
+            // Reading from OUTSIDE a name declared in an inner block used to say
+            // "cannot access underscore variable '_t' from outer scope", and then
+            // the ordinary check said "undefined variable '_t'" as well — one
+            // sentence that the name exists and is hidden, one that it does not
+            // exist. The second is the true one: a name declared inside a block
+            // is never visible outside it, underscore or not, and the same
+            // program without the `_` fails the same way. So the underscore
+            // was not the cause, and a reader who removed it was still stuck.
+            //
+            // The one shape that made the name really exist outside — `°_t`,
+            // anchored above the loop — is refused by the lexer now, which left
+            // this message no case of its own (GLB-039, decided 2026-09-24).
 
             // If neither ancestor relationship exists, it's in a sibling/unrelated scope
             // This is OK - sibling scopes can have independent _variables with same names
@@ -248,6 +245,10 @@ pub struct VariableAnalyzer {
     retired: Vec<VariableInfo>,
     /// Set of variable names currently in scope (for shadowing detection)
     current_scope_vars: Vec<HashSet<String>>,
+    /// Names written hot from above a loop (`°s = …`, `s = °s …`). Such a
+    /// variable lives in the scope that holds the loop, not in the loop's body,
+    /// so a later write outside the body still reaches it (GLB-105).
+    persisting: HashSet<String>,
     /// Collected diagnostics
     diagnostics: Vec<VariableDiagnostic>,
     /// Scope tree for tracking block-local _variables
@@ -263,6 +264,7 @@ impl VariableAnalyzer {
             variables: HashMap::new(),
             retired: Vec::new(),
             current_scope_vars: vec![HashSet::new()],
+            persisting: HashSet::new(),
             diagnostics: Vec::new(),
             scope_tree: ScopeTree::new(),
             semantic_errors: Vec::new(),
@@ -280,6 +282,7 @@ impl VariableAnalyzer {
         self.variables.clear();
         self.scope_depth = 0;
         self.current_scope_vars = vec![HashSet::new()];
+        self.persisting.clear();
         self.scope_tree = ScopeTree::new();
         self.semantic_errors.clear();
 
@@ -384,15 +387,54 @@ impl VariableAnalyzer {
         }
     }
 
+    /// Whether a write to `name` reaches a variable that already exists, and so
+    /// assigns it rather than declaring a new one: one in view, or one written
+    /// hot, which lives above its loop.
+    ///
+    /// `variables` keeps every name the file ever declared, and the write used
+    /// to ask only that: `x` assigned in two sibling blocks — two variables, each
+    /// its own scope, `>> x` after either is undefined — came out as one
+    /// variable written twice, `assigned but never read` at the first site and
+    /// nothing at the second (GLB-105, decided 2026-10-07; the iterator's
+    /// version of it was GLB-003, `bind_iterator` below). A `_name` keeps the
+    /// old rule: its scope is the scope tree's business.
+    fn reaches_existing(&self, name: &str) -> bool {
+        if !self.variables.contains_key(name) {
+            return false;
+        }
+        name.starts_with('_')
+            || self.persisting.contains(name)
+            || self.current_scope_vars.iter().any(|scope| scope.contains(name))
+    }
+
+    /// A loop iterator binds the way `m = …` binds a visible name: a name in
+    /// view is assigned, and any other is declared inside the loop (MEM-7 —
+    /// one name, one thing; ERROR-GOL-017).
+    ///
+    /// In view, not merely known: `variables` keeps every name the file ever
+    /// declared, so two sibling loops over `i` would make the second assign the
+    /// first loop's `i`, which is gone — and the two unused iterators, one
+    /// warning per site since GLB-003, would come out as one.
+    fn bind_iterator(&mut self, name: &str, span: Span) {
+        if self.current_scope_vars.iter().any(|scope| scope.contains(name)) {
+            self.assign_variable(name, span);
+        } else {
+            self.declare_variable(name.to_string(), span, false);
+        }
+    }
+
     /// Analyze a statement
     fn analyze_statement(&mut self, stmt: &Statement) {
         match stmt {
             Statement::Assignment(assignment) => {
                 // First analyze the value expression (to track variable usage)
                 self.analyze_expr(&assignment.value);
+                if assignment.pre_hot {
+                    self.persisting.insert(assignment.name.clone());
+                }
 
                 // Then record the assignment
-                if !self.variables.contains_key(&assignment.name) {
+                if !self.reaches_existing(&assignment.name) {
                     // First assignment - declaration
                     self.declare_variable(
                         assignment.name.clone(),
@@ -409,12 +451,23 @@ impl VariableAnalyzer {
                 // Analyze value expression first
                 self.analyze_expr(&const_decl.value);
 
-                // Then record constant declaration
-                self.declare_variable(
-                    const_decl.name.clone(),
-                    const_decl.span,
-                    true,
-                );
+                // A second `C := …` does not displace the first: the type
+                // checker refuses that program (D5), so the declaration never
+                // takes effect. Recording it retired the first one, and a
+                // retired declaration nothing used is reported unused — so
+                // `C := 1  C := 2  >> C ¶` warned that C was never used while
+                // printing it two lines down.
+                let already_const = self
+                    .variables
+                    .get(&const_decl.name)
+                    .is_some_and(|v| v.is_const);
+                if !already_const {
+                    self.declare_variable(
+                        const_decl.name.clone(),
+                        const_decl.span,
+                        true,
+                    );
+                }
             }
 
             Statement::Output(output) => {
@@ -425,15 +478,24 @@ impl VariableAnalyzer {
             }
 
             Statement::Input(input) => {
+                // The prompt is printed before the line is read, so the names it
+                // interpolates are read first. It is not an Expr, and skipping it
+                // reported a variable used only there as unused (GLB-023).
+                if let Some(zymbol_ast::InputPrompt::Interpolated(parts)) = &input.prompt {
+                    for part in parts {
+                        if let zymbol_lexer::StringPart::Variable(name) = part {
+                            self.use_variable(name, input.span);
+                        }
+                    }
+                }
                 // Input creates a variable if it doesn't exist
-                if !self.variables.contains_key(&input.variable) {
+                if !self.reaches_existing(&input.variable) {
                     self.declare_variable(
                         input.variable.clone(),
                         input.span,
                         false,
                     );
                 }
-                // InputPrompt is not an Expr, so we skip analyzing it
             }
 
             Statement::If(if_stmt) => {
@@ -469,19 +531,32 @@ impl VariableAnalyzer {
                 // Enter loop body scope first
                 self.enter_scope();
 
-                // If it's a for-each loop, the iterator variable is declared INSIDE the loop scope
+                // The iterator binds like `m = …`: a new name is declared
+                // inside the loop scope, and a name already visible is
+                // ASSIGNED — the block has no namespace of its own (MEM-7), and
+                // every engine writes the outer `m`. Declaring it here as well
+                // retired the outer variable and reported it unused while the
+                // program read it after the loop (ERROR-GOL-017).
+                //
+                // A constant is neither: the type checker refuses that loop
+                // (D5), so the iterator never exists, and declaring it anyway
+                // retired the constant and reported it unused while the program
+                // read it (GLB-056, step P4.7) — the same reason `ConstDecl`
+                // skips a second declaration below.
                 if let Some(iterator_var) = &loop_stmt.iterator_var {
-                    self.declare_variable(
-                        iterator_var.clone(),
-                        loop_stmt.span,
-                        false,
-                    );
+                    let is_const = self
+                        .variables
+                        .get(iterator_var)
+                        .is_some_and(|v| v.is_const);
+                    if !is_const {
+                        self.bind_iterator(iterator_var, loop_stmt.span);
+                    }
                 }
-                // `@ (k, v):pares` declares every name its pattern binds, the
-                // same way a single iterator name is declared.
+                // `@ (k, v):pares` binds every name its pattern names, the
+                // same way a single iterator name is bound.
                 if let Some(pattern) = &loop_stmt.iterator_pattern {
                     for name in pattern.bound_names() {
-                        self.declare_variable(name, loop_stmt.span, false);
+                        self.bind_iterator(&name, loop_stmt.span);
                     }
                 }
 
@@ -531,12 +606,29 @@ impl VariableAnalyzer {
                 for case in &match_stmt.cases {
                     self.analyze_pattern(&case.pattern);
 
+                    // `##Kind(m) =>` is a birth like `m = …`: a name already
+                    // visible is assigned (MEM-7 — one name, one thing), and a
+                    // new one lives in the arm and no further.
+                    let bound = case.pattern.bound_name();
+                    if let Some(name) = bound {
+                        self.enter_scope();
+                        if self.reaches_existing(name) {
+                            self.assign_variable(name, case.pattern.span());
+                        } else {
+                            self.declare_variable(name.to_string(), case.pattern.span(), false);
+                        }
+                    }
+
                     if let Some(value) = &case.value {
                         self.analyze_expr(value);
                     }
 
                     if let Some(block) = &case.block {
                         self.analyze_block(block);
+                    }
+
+                    if bound.is_some() {
+                        self.exit_scope();
                     }
                 }
             }
@@ -551,7 +643,7 @@ impl VariableAnalyzer {
 
             Statement::CliArgsCapture(capture) => {
                 // CLI args capture creates a variable
-                if !self.variables.contains_key(&capture.variable_name) {
+                if !self.reaches_existing(&capture.variable_name) {
                     self.declare_variable(
                         capture.variable_name.clone(),
                         capture.span,
@@ -576,7 +668,7 @@ impl VariableAnalyzer {
                     }
                 };
                 for (name, span) in names {
-                    if !self.variables.contains_key(&name) {
+                    if !self.reaches_existing(&name) {
                         self.declare_variable(name, span, false);
                     } else {
                         self.assign_variable(&name, span);
@@ -618,7 +710,7 @@ impl VariableAnalyzer {
             Statement::ClearScreen(_) => {}
 
             Statement::KeyInput(ki) => {
-                if !self.variables.contains_key(&ki.variable) {
+                if !self.reaches_existing(&ki.variable) {
                     self.declare_variable(ki.variable.clone(), ki.span, false);
                 } else {
                     self.assign_variable(&ki.variable, ki.span);
@@ -660,6 +752,8 @@ impl VariableAnalyzer {
             Pattern::Or(alternatives, _) => {
                 for alt in alternatives { self.analyze_pattern(alt); }
             }
+            // Binds a name; the arm's scope declares it (see the match arms).
+            Pattern::ErrorKind(..) => {}
         }
     }
 
@@ -682,6 +776,10 @@ impl VariableAnalyzer {
             Expr::Identifier(ident) => {
                 // This is a variable usage
                 self.use_variable(&ident.name, ident.span);
+                // `s = °s …` anchors `s` above the loop (see `persisting`).
+                if ident.pre_hot {
+                    self.persisting.insert(ident.name.clone());
+                }
             }
 
             Expr::Binary(binary) => {
@@ -703,6 +801,17 @@ impl VariableAnalyzer {
             Expr::Lambda(lambda) => {
                 self.enter_scope();
 
+                // A parameter shadows an outer name for the body only. Declarations
+                // are indexed by name, so lift the outer entry out and put it back
+                // afterwards — otherwise a read after the lambda (`f(base, 2)`)
+                // lands on the parameter's entry and the outer `base` is reported
+                // unused (GLB-074, the shape of GLB-003).
+                let shadowed: Vec<(String, Option<VariableInfo>)> = lambda
+                    .params
+                    .iter()
+                    .map(|p| (p.clone(), self.variables.remove(p)))
+                    .collect();
+
                 // Lambda parameters are considered used
                 for param in &lambda.params {
                     self.declare_variable(param.clone(), lambda.span, false);
@@ -719,6 +828,13 @@ impl VariableAnalyzer {
                     }
                 }
 
+                for (name, previous) in shadowed {
+                    self.variables.remove(&name);
+                    if let Some(info) = previous {
+                        self.variables.insert(name, info);
+                    }
+                }
+
                 self.exit_scope();
             }
 
@@ -730,12 +846,29 @@ impl VariableAnalyzer {
                 for case in &match_expr.cases {
                     self.analyze_pattern(&case.pattern);
 
+                    // `##Kind(m) =>` is a birth like `m = …`: a name already
+                    // visible is assigned (MEM-7 — one name, one thing), and a
+                    // new one lives in the arm and no further.
+                    let bound = case.pattern.bound_name();
+                    if let Some(name) = bound {
+                        self.enter_scope();
+                        if self.reaches_existing(name) {
+                            self.assign_variable(name, case.pattern.span());
+                        } else {
+                            self.declare_variable(name.to_string(), case.pattern.span(), false);
+                        }
+                    }
+
                     if let Some(value) = &case.value {
                         self.analyze_expr(value);
                     }
 
                     if let Some(block) = &case.block {
                         self.analyze_block(block);
+                    }
+
+                    if bound.is_some() {
+                        self.exit_scope();
                     }
                 }
             }
@@ -943,34 +1076,8 @@ impl VariableAnalyzer {
                 // for {varname} would produce false positives (e.g. "\{foo\}" stores
                 // "{foo}" as a plain string but never resolves 'foo').
                 if let Literal::InterpolatedString(s) = &lit.value {
-                    let mut in_var = false;
-                    let mut var_name = String::new();
-                    for ch in s.chars() {
-                        if ch == '{' && !in_var {
-                            in_var = true;
-                            var_name.clear();
-                        } else if ch == '}' && in_var {
-                            in_var = false;
-                            if !var_name.is_empty() {
-                                self.use_variable(&var_name, lit.span);
-                            }
-                        } else if in_var {
-                            // Same identifier rule as the lexer. A narrower one
-                            // here reported "unused variable" for names the
-                            // interpolation does resolve — pIqaD and emoji
-                            // identifiers, which are not is_alphanumeric.
-                            let ok = if var_name.is_empty() {
-                                zymbol_lexer::Lexer::is_ident_start(ch)
-                            } else {
-                                zymbol_lexer::Lexer::is_ident_continue(ch)
-                            };
-                            if ok {
-                                var_name.push(ch);
-                            } else {
-                                // Non-identifier char inside {…} — not a variable reference
-                                in_var = false;
-                            }
-                        }
+                    for name in crate::interpolation::interpolated_names(s) {
+                        self.use_variable(&name, lit.span);
                     }
                 }
             }
@@ -1000,6 +1107,10 @@ impl VariableAnalyzer {
             // Error handling expressions
             Expr::ErrorCheck(check) => {
                 self.analyze_expr(&check.expr);
+            }
+
+            Expr::ErrorConstruct(e) => {
+                self.analyze_expr(&e.message);
             }
 
             Expr::ErrorPropagate(prop) => {
@@ -1063,7 +1174,17 @@ impl VariableAnalyzer {
                 continue;
             }
 
-            if var_info.is_unused() {
+            // A constant nobody reads is named as what it is (GLB-061, decided
+            // 2026-09-25). An assignment to it is refused by the type checker,
+            // so "assigned but never read" does not apply either.
+            if var_info.is_const && (var_info.is_unused() || var_info.is_write_only()) {
+                self.diagnostics.push(VariableDiagnostic {
+                    severity: Severity::Warning,
+                    message: format!("unused constant '{}'", var_info.name),
+                    span: var_info.declaration_span,
+                    help: Some("consider removing this constant".to_string()),
+                });
+            } else if var_info.is_unused() {
                 self.diagnostics.push(VariableDiagnostic {
                     severity: Severity::Warning,
                     message: format!("unused variable '{}'", var_info.name),

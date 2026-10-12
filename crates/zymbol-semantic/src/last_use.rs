@@ -117,6 +117,8 @@ fn scan_pattern(p: &Pattern, m: &mut Mentions) {
                 scan_pattern(alt, m);
             }
         }
+        // `##Kind(m)` binds a name for its arm; it reads nothing.
+        Pattern::ErrorKind(..) => {}
     }
 }
 
@@ -454,6 +456,7 @@ fn scan_expr(expr: &Expr, m: &mut Mentions) {
         }
         Expr::NumericCast(op) => scan_expr(&op.expr, m),
         Expr::ErrorCheck(op) => scan_expr(&op.expr, m),
+        Expr::ErrorConstruct(e) => scan_expr(&e.message, m),
         Expr::ErrorPropagate(op) => scan_expr(&op.expr, m),
         Expr::DeepIndex(di) => {
             scan_expr(&di.array, m);
@@ -1034,6 +1037,7 @@ pub(crate) fn walk_sub_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
         }
         Expr::NumericCast(op) => f(&op.expr),
         Expr::ErrorCheck(op) => f(&op.expr),
+        Expr::ErrorConstruct(e) => f(&e.message),
         Expr::ErrorPropagate(op) => f(&op.expr),
         Expr::DeepIndex(di) => {
             f(&di.array);
@@ -1069,6 +1073,93 @@ pub(crate) fn walk_sub_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
             }
         }
     }
+}
+
+/// The variables a statement can write through an output argument: every
+/// identifier passed as `x<~` in a call anywhere inside it.
+///
+/// Operands are evaluated left to right, so a variable read earlier in the
+/// statement must keep the value it had when it was read, whatever a later
+/// call writes back into it. An engine that reads a variable where it lives —
+/// the register VM — uses this to know which reads have to be pinned
+/// (ZYVM-015). It over-approximates on purpose: nested blocks and lambda
+/// bodies are included, and a read pinned needlessly costs one copy.
+pub fn names_written_through_output(stmt: &Statement) -> HashSet<String> {
+    fn go(e: &Expr, out: &mut HashSet<String>) {
+        if let Expr::FunctionCall(call) = e {
+            for &i in &call.out_args {
+                if let Some(Expr::Identifier(id)) = call.arguments.get(i).map(|a| a.unwrap_group()) {
+                    out.insert(id.name.clone());
+                }
+            }
+        }
+        walk_sub_exprs(e, &mut |sub| go(sub, out));
+    }
+    let mut out = HashSet::new();
+    walk_stmt_exprs(stmt, &mut |e| go(e, &mut out));
+    out
+}
+
+/// Whether evaluating `operand` can write the variable `name`.
+///
+/// An engine that edits a variable where it lives has to know this before it
+/// runs `name = name <op> operand`: operands are evaluated left to right, so
+/// the receiver is read first and an operand that writes it afterwards is
+/// overwritten by the assignment (GLB-115). When no operand can, the receiver
+/// need not be read ahead at all.
+///
+/// Two ways in, and only two:
+///
+/// - a call that takes `name` as an output argument (`f(name<~)`), which is
+///   written in the source;
+/// - when `name` is `shared` — module state, which every function of the
+///   module can write — anything that runs the program's code: a call, a pipe,
+///   an operator that takes a callable.
+///
+/// A `??` used as a value answers yes either way: its arms may be blocks, and
+/// a block runs in this scope. It over-approximates on purpose; a needless yes
+/// costs one reference to the receiver.
+pub fn operand_may_write(operand: &Expr, name: &str, shared: bool) -> bool {
+    fn go(e: &Expr, name: &str, shared: bool, found: &mut bool) {
+        if *found {
+            return;
+        }
+        match e {
+            Expr::FunctionCall(call) => {
+                let passed = call.out_args.iter().any(|&i| {
+                    matches!(
+                        call.arguments.get(i).map(|a| a.unwrap_group()),
+                        Some(Expr::Identifier(id)) if id.name == name
+                    )
+                });
+                if shared || passed {
+                    *found = true;
+                    return;
+                }
+            }
+            Expr::Match(_) => {
+                *found = true;
+                return;
+            }
+            Expr::Pipe(_)
+            | Expr::CollectionMap(_)
+            | Expr::CollectionFilter(_)
+            | Expr::CollectionReduce(_)
+            | Expr::CollectionSortAsc(_)
+            | Expr::CollectionSortDesc(_)
+            | Expr::CollectionSortCustom(_)
+                if shared =>
+            {
+                *found = true;
+                return;
+            }
+            _ => {}
+        }
+        walk_sub_exprs(e, &mut |sub| go(sub, name, shared, found));
+    }
+    let mut found = false;
+    go(operand, name, shared, &mut found);
+    found
 }
 
 /// Visit every top-level expression of a statement (recursing through nested

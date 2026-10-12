@@ -7,6 +7,273 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
+## [0.0.10] — 2026-10-12
+
+A **measurement** release. On 2026-09-12 the documents that say what the language
+*must* do moved to a repository of their own, `zymbol-design/`, under one new file:
+`PREMISES.md`, twenty-nine premises with an id each, whose rank is **source**. ZyDDT
+then asked every engine the same question some 1 700 times and reported who disagreed:
+**200 findings** since the v0.0.9 tag (`GLB-008…125`, `ZYTW-002…015`, `ZYVM-003…021`,
+`ZYJS-014…062`), none of them open. Almost nothing below was planned as a feature.
+
+Each entry names the finding it comes from. The finding — in `ZyDDT/HALLAZGOS/` — is
+where the measurement, the alternatives and the author's decision are written; this
+file says what changed. [IMPL_V0010.md](IMPL_V0010.md) is the account of the release.
+
+The findings are written in **Spanish**, in [ZyDDT](https://github.com/zymbol-lang/ZyDDT/tree/v0.0.10/HALLAZGOS),
+one file per engine and each one a `## <id> — …` heading: `GLB-…` is in
+[`GLOBAL.md`](https://github.com/zymbol-lang/ZyDDT/blob/v0.0.10/HALLAZGOS/GLOBAL.md),
+`ZYTW-…` in [`zytw.md`](https://github.com/zymbol-lang/ZyDDT/blob/v0.0.10/HALLAZGOS/zytw.md),
+`ZYVM-…` in [`zyvm.md`](https://github.com/zymbol-lang/ZyDDT/blob/v0.0.10/HALLAZGOS/zyvm.md) and
+`ZYJS-…` in [`zyjs.md`](https://github.com/zymbol-lang/ZyDDT/blob/v0.0.10/HALLAZGOS/zyjs.md).
+`MEM-…` and `AGT-…` are premises (`zymbol-design/PREMISES.md`); `D1`…`D5` are the
+decisions of 2026-09-15, described in [IMPL_V0010.md § 4](IMPL_V0010.md); `GAP-GOL-…`,
+`ERROR-ZYB-…` and `HLZ-…` are in the findings logs of the applications they came from.
+
+### Known issues
+
+- **`>> +a ¶`** — a unary plus at the start of an output item — is refused by `zytw` and
+  `zyvm` (`expected expression, found '+'`) and accepted by `zyjs`. `b = +a` and `(+a)` work
+  in all three. GLB-127; the fix is one token in the parser.
+- **A value a call returns and the caller uses once stays in its register** until something
+  reuses it, so two such calls in a row cost twice the memory in the VM (1.8×; the tree-walker
+  1.0×). The VM still uses about six times less memory per array. ZYVM-022, held by a cost case.
+- **The GitHub Gate shows two "no verdict"** that belong to its environment, not to the
+  language: a private repository it cannot clone, and a runner faster than the machine its
+  timed cost cases were calibrated on. GLB-128. The local gate and a fresh clone are green.
+
+### Changed — rules a program can break on
+
+**A named function sees only its parameters (MEM-2)**
+
+```zymbol
+x = 1
+f() { <~ x }        // error: 'x' is read from outside this function
+```
+
+v0.0.9 shipped the opposite — *a named function captures the file's variables* — and
+this takes it back. The isolation had been retired on 2026-08-24 to resolve
+ERROR-ZYB-002; MEM-2 restores it, so a body behaves the same whether it is called or
+taken as a value. Measured first: across 1 251 files, four sites read a file variable
+from a named function, all four in corpus files testing that rule and none in the
+nine applications. Constants (`:=`) are global by definition and still cross.
+
+A **lambda** inherits rather than being excepted (MEM-6): it opens no boundary of its
+own and reads what its enclosing scope holds — the file at file level, the function's
+parameters and locals inside a function.
+
+**A condition is a Bool and nothing else (GLB-121)**
+
+```zymbol
+xs = [1, 2]
+? xs { … }          // error: a condition must be a Bool, got [Int]
+? xs$# > 0 { … }    // ask what is meant
+```
+
+It was a warning, and under that one warning each engine took a branch by rules of
+its own: nine of thirteen kinds of value diverged, all three exiting 0. Refused before
+running where the type is known; a `##Type` at run time where it arrives through a
+parameter, before either block runs. The same for `_?`. There is no truthiness
+anywhere now — this was the last surface.
+
+**Collections are strict (D2, revoked and reversed)**
+
+The VM accepted 13 of the 40 malformed `$` forms the tree-walker refuses; it accepts 2
+now, and zyjs was made strict in the same step. What the VM had been doing: `"ab"$+ 5` answered `ab5`;
+`[1,2]$[1..9]` clamped to `[1, 2]`; `$-[0..2]` emptied the array; and a replacement
+count of −1 was clamped to 0, which means *all*, so `"aa"$~~["a":"b":-1]` replaced
+the whole string.
+
+**The error family says what is wrong (D1)** — a wrong *type* is `##Type`, a wrong
+*value* of the right type (0, negative, out of bounds) is `##Index`, in all three
+engines and declared where the error is raised (GLB-088, GLB-091, GLB-094, GLB-097,
+GLB-099).
+
+**A constant twice, a loose range, a read into a constant: static errors (D4, D5)** —
+`K := 1  K := 2`, a bare `v..3`, `@ (a,b):1..3`, `<< K` and `@ K:xs` are refused by the
+shared analyser, same text in every engine.
+
+**The dictionary pattern is written `#(…)` (GLB-122)** — the bare
+`(name: n, age: y) = person` kept running a release after the bare literal was
+refused. It is refused too, and `@ #(k: a, v: b):rows` is accepted in a loop head,
+where the Rust parser had taken only the bare form and zyjs neither. The mark needs its
+pairs as well: `#(a, b) = t`, a positional pattern under it, ran in the two Rust engines
+and is refused (GLB-123).
+
+**`\ name` is refused on what is not alive (GLB-055)** — on a name that is not
+visible, on a constant, a function or a module alias, statically; from a function on
+an outer name, `'x' is destroyed from outside this function`. On a module's variable
+it ends it **for the module** (GLB-120, REFERENCE L50).
+
+**`_` means private, not reserved** — outside its block a read is undefined and an
+assignment declares a new one. `_k°` is a private accumulator; only the prefix `°_k`
+is refused.
+
+**A module alias is not a value (GLB-125)** — `x = M`, `M == M`, `f(M)` and a `??`
+pattern `M =>` passed `check`, and then the tree-walker failed at run time, the VM
+refused to compile and zyjs ran them. A bare alias is refused before running: `'M' is a
+module, not a value`. `M::name(…)` and `M.NAME` are untouched.
+
+**One name, one thing (MEM-7)** — a file variable may not take the name of an import
+alias (GLB-070); `x.f(…)` is a module call only when `x` is a module (GLB-066); a
+dictionary is never addressed by position, nested or not (GLB-065); a variable cannot
+be exported (GLB-069); a module member that is not exported is refused before running
+(ZYVM-008).
+
+**An unmatched `??` aborts** in the VM as in the tree-walker, instead of yielding `##_`
+(GLB-016); a range loop refuses a step that is not positive and bounds that are not
+Int (GLB-014); `@! name` and `@> name` are refused — the label goes inside, `@:name!`.
+
+### Added
+
+**`##Kind("message")` builds an error, and `##Kind(m) =>` reads it back** (GoL,
+GAP-GOL-003/016) — a soft error *value*: the spelling an error prints as and the kind
+a `:!` matches, in any script. The pattern is the first that creates a name; the
+binding is a birth like `m = …`, never a shadow.
+
+**A command's exit status is a soft `##IO` that carries it** (GAP-GOL-011) — `exit N`,
+then what the command said.
+
+**A subscript takes its own arguments** — `</ app.zy -L es --list />`. The words are
+literal, like the path, so the reachable program is still knowable without running it
+(AGT-3). And a subscript now runs **in this process**, in the caller's engine: the VM
+had shelled out to the first `zymbol` on the `PATH`, always the tree-walker
+(GLB-017).
+
+**`zymbol run app.zy --keys app.keys`** — a full-screen program tested without a
+terminal: `>>|` draws on a virtual 24×80 screen, `<<|` reads a key script, each block's
+last frame goes to the output as text (GAP-GOL-009).
+
+**`zymbol run --count`** — what a program cost, in units that do not depend on the
+machine: `count  steps=…  calls=…  allocs=…  bytes=…  copied=…` on stderr. Exact — the
+same program gives the same numbers on every run — where the clock moves by tens of
+percent on a 20 ms program. `copied` is the elements duplicated because a collection being
+written had another owner, the shape behind every quadratic cost this release fixed;
+`zyquality/cost/` now asserts 60 counted ratios beside its timed ones.
+
+**A named function as a `??` pattern (GLB-125)** — `?? h { f => … }` asks whether `h` is
+the function `f`, by identity, as `==` does. It already worked through a variable; the
+declared name failed in the two Rust engines.
+
+**`##'expr`** — an Int code point to its Char, a sibling of `###` and `##.` (ZyBF,
+GLB-109). A base-prefixed literal is a Char in any range (GLB-110).
+
+**A slice written high-to-low builds backwards (D3)** — `a$[3..1]` → `[30, 20, 10]`,
+and in navigation. The only reversal the language has; `$^-` sorts.
+
+**Four warnings**: an import nobody uses (HLZ-015); code that cannot run (HLZ-016); a
+bare expression statement that does nothing (ZYJS-035); an unused constant, called a
+constant (GLB-061). `zymbol run` keeps the type phase's warnings when it refuses.
+
+**Arithmetic in the bounds of `$-[…]` and `$[…]`** (GLB-116); **`-1 =>` as a pattern**
+(GLB-062); **a string is an array of characters**, so `$~` writes into one; `$>` `$|`
+`$<` walk whatever `@` walks.
+
+### Fixed — the register VM
+
+**One dispatch loop, a handler stack, and errors that stay pending (GLB-010)** — a
+`!?` could not nest; a `:!` filter that did not match swallowed the error; a `:>`
+without a catch had nothing to rethrow; `@!`, `@>` and `<~` crossed a `!?` without
+disarming it or running its `:>`.
+
+**A callback of `$>` `$|` `$<` `$^` ran on a second loop that knew 96 instructions
+and skipped 49 in silence (ZYVM-004)** — `["a,b"]$> (s -> s$/ ',')` answered `[()]`.
+The loop is deleted; the one that remains is reentrant.
+
+Also: `\` did nothing at all for a file variable (GLB-008); a module's state left
+through the VM (GLB-009); a function never reaches the shell (GLB-017); float and
+big-integer literal patterns (ZYVM-007); an arm with a value and a block runs the
+block (ZYVM-009); `d$- v` removes by value from a dictionary (ZYVM-017); juxtaposition
+with an Int literal no longer panics (GLB-085); non-ASCII character positions in
+`$??` (GLB-083).
+
+### Fixed — the tree-walker
+
+**A block lambda that ends without `<~` gives `##_` (ZYTW-015)** — it aborted with
+`block lambda must use <~ to return value` where the VM and zyjs went on, on the
+natural shape of a callback.
+
+Also: the analyser did not enter a lambda's block body at all (ZYTW-001); a failing
+`:!` skipped `:>` (ZYTW-002); a lambda captures a name it reads only inside a string
+(ZYTW-005); a panic on a long `$??` pattern (GLB-082) and a first-N replace that
+rescanned its own output (GLB-084); a `<~` in a `??` used as a value leaves the
+expression (GLB-107).
+
+### Fixed — the `$` family
+
+**`$^` is stable, and with a comparator it is a merge sort (GLB-073, GLB-108)** — it
+was quadratic in all three engines: at n = 4 000 the VM went from 1 102 ms to 21 ms.
+**`$??` overlaps**, and an **empty pattern is `##Index`** for `$??`, `$/` and `$~~`
+(GLB-078, GLB-079, GLB-081). A `$|` predicate and a `$^` comparator must answer a Bool
+(GLB-080, GLB-024).
+
+### Fixed — the analyser
+
+The type checker enters four places it never entered — a lambda's block body, the
+arguments of `<\ … \>`, the operand of a cast, and **an identifier used as a `??`
+pattern** (ZYTW-001, GLB-075, GLB-112, GLB-124). The last one passed `zymbol check` and then met
+three answers: the tree-walker failed half way through the output, the VM refused to
+compile, and zyjs read a variable MEM-2 says it cannot see.
+
+Inference, twelve corrections (GLB-092…105): an assignment gives its type to the name
+where it was born; an empty array reassigned with elements is not a type change;
+`##_` never changes a variable's type (GLB-043); a constraint reaches a parameter only
+when every path requires it; the right side of `&&` and `||` does not bind one; one
+name in two scopes is two variables.
+
+### Changed — diagnostics
+
+A message names the type, not the value's `Debug`, and never with a symbol; a
+dictionary is written `#(k: Int)`. A refusal quotes the token as written (`found '='`,
+`'<'` not `'Lt'`). One refusal, one message: the parser's cascade is cut. An
+unterminated string says so and stops blaming a brace. An error after a nested block,
+in an expression lambda, or from a `??` no arm matches is at its statement's line
+(GLB-106, ZYVM-011, ZYVM-012). The arity help shows the signature as the caller
+writes it: `expected signature: g(a, b<~)`.
+
+### Performance — an edit happens in place
+
+One shape, found four times: **a collection with two owners is copied by its first
+edit.**
+
+- **An output parameter is the caller's variable, lent** (GLB-117, REFERENCE L49).
+  2 000 calls of `put(t<~, i, v) { t[i]$~ v }` over 16 000 elements: 2 808 M
+  instructions → 55 M in the tree-walker, 1 204 M → 19 M in the VM. What the function
+  wrote before failing stays written; one variable cannot be two output arguments of
+  one call.
+- **Module state in the VM is edited where it lives** (ZYVM-003, ZYVM-013).
+- **A module's state lives in one place in the tree-walker** (ZYTW-010): 12 000 calls
+  writing one cell of a 12 000-cell table, 1 930 ms → 27 ms. A frame that failed also
+  stops losing what it had written.
+- **A file variable is mirrored only where a function can reach it.**
+- **A call frame holds what the function needs at once** (ZYVM-010) — `drop_glue` was
+  10–20 % of the VM's time.
+- **`name = name <op> …` is one evaluation, left to right, in place** (GLB-115).
+
+### Tooling
+
+- `zyquality/cost/` — a gate on *ratios*: growth when the input quadruples, a call
+  against the same code inline.
+- `zyquality/docs/llm_verify.py` — `LLM.md` behind probes that run in all three
+  engines. Its first run found one false claim in the document and two divergences
+  (ZYJS-061, GLB-124). In zyjs, `nums$> (double)` ran where the Rust parser refuses it,
+  and a hot name was accepted as a `??` pattern (ZYJS-062).
+- `axes/condition.toml` — 13 kinds of value × 5 places a condition is written.
+- The suites of `web/` that need only `node` run inside `zyq suite`.
+- `zyddt findings` computes what is open from each finding's own state line; a header
+  that contradicts its finding is red.
+
+### Documentation
+
+`PREMISES.md`, `COLLECTIONS.md`, `SYMBOLS.md`, `MEMORY_MODEL.md`, `FORMATTER_RULES.md`,
+`I18N.md`, `USERAPPI18N.md`, `LDV.md` and `DESIGN_STD_DB.md` live in `zymbol-design/`.
+`AGENTIC.md` is new and derived: it measures the premises and names their ids.
+`zymbol-lang.ebnf` is at 3.4.0 with the forms this release added, each probed in all
+three engines. GoL (the ninth LDV application, the first escalated to one) and ZyBF
+(the first mini LDV) are in the README.
+
+---
+
 ## [0.0.9] — 2026-09-09
 
 The Windows work that began as `v0.0.8_HotFix01` belongs here. Eleven findings is not
@@ -741,7 +1008,7 @@ the moment a user tried to run it. Full record in [WINDOWS_V009.md](WINDOWS_V009
 ### Changed — the collections
 
 The three collections were redesigned as one piece rather than three, and the
-whole of it is set down in [COLLECTIONS.md](COLLECTIONS.md), which is the point
+whole of it is set down in `zymbol-design/COLLECTIONS.md`, which is the point
 of record. What follows is the summary; the reasoning, the measurements and the
 rejected alternatives are there.
 
@@ -919,7 +1186,7 @@ check applies to one and not the other — rather than write something untrue.
 
 ### Documentation
 
-[COLLECTIONS.md](COLLECTIONS.md) is new: one document for the three collections,
+`zymbol-design/COLLECTIONS.md` is new: one document for the three collections,
 the rules that govern them, and why each was decided the way it was.
 
 The grammar and the spec had drifted from the implementation. `zymbol-lang.ebnf` was
@@ -933,7 +1200,7 @@ GUIDE, ARCHITECTURE and CLAUDE.md were re-measured rather than carried forward.
 ## [0.0.8] — 2026-08-02
 
 Memory-model debt release: every divergence found by the design-vs-implementation
-audit in [MEMORY_MODEL.md](MEMORY_MODEL.md) is resolved — findings MM-1 … MM-9 plus
+audit in `zymbol-design/MEMORY_MODEL.md` is resolved — findings MM-1 … MM-9 plus
 the two VM parity bugs (MM-10, MM-11) discovered while verifying the fixes. Three
 validation projects written in Zymbol (zy-GO, zy-Serpiente, zyKlingonGalaxy) contributed
 the rest: HLZ-001 … HLZ-011, HLZ-SRP-001 and HLZ-KL-001 are findings from writing real
@@ -1189,7 +1456,7 @@ on disk.
 **Findings from the zy-Serpiente and zyKlingonGalaxy i18n rework (HLZ-SRP-001, HLZ-KL-001)**
 
 Rewriting the internationalization of the two older TUI games against
-[USERAPPI18N.md](USERAPPI18N.md) surfaced two divergences. Both were found by
+`zymbol-design/USERAPPI18N.md` surfaced two divergences. Both were found by
 writing ordinary application code, and both were silent in one engine and
 correct in the other or correct nowhere.
 
@@ -1618,7 +1885,7 @@ well as the tree-walker.
 introduced `=>` ([0.0.6], `feat(syntax)!`) updated the other reference documents
 but touched only one line of this one. It is preserved as
 [I18N_DEPRECATED.md](I18N_DEPRECATED.md) with a banner naming the cause; the new
-[I18N.md](I18N.md) covers both internationalization mechanisms — re-export layers
+`zymbol-design/I18N.md` covers both internationalization mechanisms — re-export layers
 for code (now including how to wrap `std/*` modules) and dispatcher modules for
 runtime text, which the old document never documented at all. Every code block in
 it is extracted to a clean tree and executed in both engines before publication.

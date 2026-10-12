@@ -2,7 +2,7 @@
 
 Complete lookup reference: known limitations, error taxonomy, and symbol table.
 
-**Interpreter version**: v0.0.9
+**Interpreter version**: v0.0.10
 
 See also: [GUIDE.md](GUIDE.md) — full language guide with examples  
 See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar and internals
@@ -301,6 +301,12 @@ diff-based (only changed keys persist), same-module nested calls see the caller'
 values, and the caller's copies are refreshed on return (MEMORY_MODEL.md MM-2).
 Regression test: `zyquality/corpus/bugs/bug_mm2_module_state_helper.zy` (TW == VM).
 
+**Since v0.0.10 there is no write-back at all.** A module frame no longer gets copies: the
+module's variable table is the frame's outermost scope, moved out of the store while the
+frame runs and put back before it calls anything (ZYTW-010). What that changed for a
+program: a call that writes one cell of a large table costs the cell, not the table, and
+what a function wrote before it failed stays written, as in the other two engines.
+
 ### ~~L20 — `\ x` inside a function poisoned the caller's same-named variable~~ Fixed in v0.0.8
 
 The destroyed-names set was global, so `\ x` inside a callee made the caller's own `x`
@@ -521,6 +527,30 @@ received `>>?` — documented in their own comments as *"returns (rows, cols) as
 tuple"* — with `[H, W]`. All four now say `(H, W)`. Regression tests:
 `corpus/errors/runtime/destructure_pattern_type.zy` (both directions, caught with `!?` so the
 message can be compared across engines).
+
+**And a warning before it runs, where the shape is known** (2026-09-10). Refusing the program
+was rejected: the failure is catchable with `!?` — the corpus file above catches it on
+purpose — and a rule that can decide only some of the cases is not one a program can be
+refused on. `zymbol check` says
+
+```text
+warning: array '[ … ]' pattern requires an array, got ##)
+  --> file.zy:12
+  = help: unpack ##) with ( … ) — the pattern is typed, and this one fails at run time
+```
+
+for a value whose shape is **certain**: a literal in place, a variable whose last assignment
+was one, an element of an array literal, and the return of a function declared in the same
+file. The browser engine decides the first two — its analyser reads the shape of a literal
+and of a name, not of an element or of a return — and says nothing about the other two; neither engine refuses the program, so all three still run every program
+identically. What no engine decides statically is a **parameter** and an element of a
+collection built with `$+`, which is where the 38 sites found in `klingon_galaxy` on
+2026-09-10 lived: closing those needs inference across function and module boundaries.
+
+Until then, the check that does find them reads the source rather than the types: cross what
+each function returns and what each collection is grown with against how each is unpacked.
+That is how both rounds of the klingon_galaxy fix were found — 24 by the return path on
+2026-09-09, 38 by the element and parameter paths the day after.
 
 ### ~~L33 — The last name of a pattern does not absorb the remainder~~ Fixed in v0.0.9
 
@@ -1064,7 +1094,7 @@ including arithmetic works; comparison and the logical operators do not:
 The refusal says so, in all three engines since v0.0.9:
 
 ```text
-error: expected expression, found Eq
+error: expected expression, found '=='
   --> x.zy:3:6
   = help: '>>' takes arithmetic; parenthesise a comparison  →  >> (a == b) ¶
 ```
@@ -1216,6 +1246,185 @@ rule. All three now say **"an export block belongs inside a module block"**, wit
 `help: move this '#>' inside '# name { … }'`, and refuse it once rather than cascading
 (`reject/modules/export_block_at_file_level_m.zy`). Found 2026-08-31, decided 2026-09-04.
 
+
+### L49 — an output parameter is the caller's variable — **decided 2026-10-10**
+
+`<~` used to be **copied in and written back**. While the call lasted, the caller's variable
+and the parameter were two owners of one collection, so the first edit inside the function
+copied all of it: a function that wrote one element through `<~` cost the size of the
+collection on every call — 2 808 M instructions in the tree-walker for 2000 calls over
+16 000 elements, where the same writes in line are 33 M.
+
+```zymbol
+put(t<~, i, v) { t[i]$~ v }
+```
+
+The variable is now **lent**: its value moves into the parameter when the call starts and
+comes back when it ends, on every way out. Nothing can look at the caller's variable while
+it is out — the caller is suspended, and a function does not see the variables of whoever
+called it (MEM-2). 55 M in the tree-walker, 19 M in the VM.
+
+Three answers depended on the copy, and each was decided:
+
+| | before | now |
+|---|---|---|
+| the function writes its `<~` parameter and then fails, caught by the caller | the caller's variable untouched | **what it wrote is written** — there is no copy to go back to |
+| `h(e<~, e<~)` | `[0, 2]`: the second write-back discarded the first, in silence | **a semantic error**: `'e' is given to 'h' as an output argument twice` |
+| module state passed as `<~` to a function of its own module, which also reads it directly | two copies while the call lasts | **unchanged — still copied**, and the copy is dropped if the call fails |
+
+The third is the one case that is not lent: every function of the module can see the
+original while the call lasts, and lending it would make a read of the state inside the
+callee go and find it in the parameter.
+
+`g(d<~, d)` — once as output, once by value — is an ordinary call: the by-value argument is
+read before the variable is lent and holds what it held.
+
+**Where it lives.** Tree-walker: `lendable_arguments` in `functions_lambda.rs`, and the
+write-back on the error path next to the one on return. VM: the `Call` instruction lets go
+of the caller's register after copying the arguments, and the unwinding in `raise_kind!`
+hands a frame's output parameters back to its caller before discarding it. Browser engine:
+`giveBack` in `_callFuncBody`, on every exit; it lends in the same sense and still copies a
+collection on each edit (ZYJS-014). The refusal is in `check_out_marks` and `checkOutMarks`.
+
+The script-level mirror both Rust engines kept of every file variable had to go first: it
+was a second owner of whatever the file body held, so nothing lent from there could ever
+be the only owner. A named function reaches a file variable in one way the analyser allows —
+by calling a lambda that lives in one — so the tree-walker mirrors only callables and the VM
+gives a slot only to the names a function body mentions. A top-level assignment costs a
+quarter less in the tree-walker and a tenth less in the VM for it.
+
+### L50 — `\ name` on a module's variable ends it for the module — **decided 2026-10-11**
+
+A module's variable is shared by the module's functions and outlives every call, so `\`
+written in one of them had three answers, one per engine: the tree-walker ended the name
+for the one frame that ran the `\`, the register VM did nothing at all — the next line
+read the value — and the browser engine ended it for the module and never gave it back,
+because the next assignment defined a local.
+
+```zymbol
+# caja {
+    #> { vaciar, llenar, mostrar }
+    c = "inicio"
+
+    vaciar() { \ c }
+    llenar(x) { c = x }
+    mostrar() {
+        !? { <~ c } :! { <~ "no hay c" }
+    }
+}
+```
+
+It is MEM-8, applied to the one place no engine applied it whole (GLB-120):
+
+| | |
+|---|---|
+| after `vaciar()`, any function of the module reads `c` | a run-time error, `use after destruction`, of kind `##_` — a `!?` catches it |
+| however it is read | alone, in `"{c}"`, `c$#`, `c[1]`, as an argument, `c += 1`, an edit in place, a loop over it |
+| any function of the module assigns `c` | the **module** has it again — not a local of that function |
+| a second `\ c` with no assignment in between | the same error |
+| a `\ c` in a branch that did not run | ended nothing |
+| a parameter, or a lambda's copy, called `c` | its own: ending it does not touch the module's |
+
+Nothing in the language makes a reader handle the error: a function that reads state
+another one may destroy either catches it, as `mostrar` does, or stops the program.
+
+**Where it lives.** Tree-walker: `LoadedModule::dead_variables`, moved with the module's
+table into the frame (`module_dead`); `destroy_variable`, `check_variable_alive` and the
+last branch of `set_variable`. VM: `DestroyGlobal` is emitted for module state from any
+body of the module, and `LoadGlobal` / `StoreGlobal` already checked and revived. Browser
+engine: `Env.set` on the module's scope, and `isModuleState`. Held by
+`lifetime/destroy-module-state` and `corpus/modules_scope/destruir_estado.zy`.
+
+### L51 — a condition is a Bool and nothing else — **decided 2026-10-11**
+
+`? x { … }` with `x` not a Bool was a warning, and under that one warning the three
+engines each took their own branch (GLB-121). Nine of thirteen kinds of value diverged,
+all three exiting 0:
+
+| `x` | tree-walker | register VM | browser |
+|---|---|---|---|
+| `5`, `"a"` | then | then | then |
+| `0`, `##_` | else | else | else |
+| `[1,2]`, `[]`, `1.5`, `'c'`, `(1,2)`, `#()`, `#(a: 1)` | else | **then** | **then** |
+| `0.0`, `""` | else | **then** | else |
+
+There is no truthiness, and no table was chosen. It is the rule already enforced for the
+loop specifier (v0.0.9), for `&&` `||` `!`, for a `$|` predicate and for a `$^`
+comparator; `?` was the surface nobody had closed.
+
+| | |
+|---|---|
+| the type is known to the analyser | refused before running: `a condition must be a Bool, got [Int]` |
+| the value arrives through a parameter | a run-time error of kind `##Type`, at the line of the statement, before either block runs |
+| a `_?` | the same rule, and it is asked only when it is reached |
+
+```zymbol
+? xs$# > 0 { … }       // ask what is meant
+```
+
+### L52 — a block lambda that ends without `<~` gives `##_` — **decided 2026-10-11**
+
+The tree-walker refused it (`block lambda must use <~ to return value`) where the
+register VM and the browser engine gave `##_` (ZYTW-015). It gives `##_` in all three, as
+a named function that ends without `<~` always has:
+
+```zymbol
+avisa = x -> { >> "visto " x ¶ }
+avisa(1)                       // the effect, and the program goes on
+xs$> (x -> { >> x ¶ })         // a callback called for what it does
+```
+
+The alternative — an error everywhere — would have made a lambda stricter than a named
+function and every callback end in `<~ ##_`.
+
+### L53 — the dictionary pattern is written `#(…)` — **decided 2026-10-11**
+
+The literal `(a: 1)` has been refused since v0.0.9. The **pattern** on the other side
+of `=` was not migrated: `(name: n, age: y) = person` ran in all three engines for a
+release (GLB-122). It is refused, with the literal's reason — two spellings of one thing
+is what the mark was introduced to end.
+
+```zymbol
+#(name: n, age: y) = person          // the pattern
+@ #(k: a, v: b):filas { … }          // and in a loop head
+(a, b) = t                           // a tuple, by position
+```
+
+The loop head needed more than a refusal. The Rust parser accepted the **bare** pattern
+there and not the marked one, and the browser engine accepted neither, so refusing the
+bare one alone would have left the form with no spelling. The marked one is accepted in
+all three.
+
+And the mark needs its pairs (GLB-123): `#(a, b) = (1, 2)` — a positional pattern under the
+dictionary's mark — ran in the two Rust engines and was refused by the browser engine. It is
+refused in all three: `a dictionary pattern takes` `key: name` `pairs`.
+
+### L54 — an identifier in a `??` pattern is a read — **fixed 2026-10-11**
+
+`?? s { tope => … }` compares the scrutinee with what `tope` holds. The type checker did
+not look at the name (GLB-124), so a pattern naming a file variable from inside a named
+function — which MEM-2 forbids — or naming nothing at all passed `zymbol check`, and
+then: the tree-walker failed half way through the output, the register VM refused to
+compile, and the browser engine read the variable. It is refused before running, with
+the words any other read gets: `'tope' is read from outside this function`, or
+`undefined variable 'nadie'`.
+
+### L55 — a function is a value and a module is not — **decided 2026-10-11**
+
+`?? h { f => … }` with `f` a named function passed `zymbol check` and then: the
+tree-walker failed when the `??` ran, the register VM refused to compile, and the browser
+engine compared (GLB-125). Two cases, decided apart.
+
+**A function is compared by identity.** The same pattern through a variable — `g = f`,
+then `g =>` — already matched in all three engines, so refusing the declared name would
+have made one comparison legal or not by how the value was reached. The two Rust engines
+looked the name up among the variables and not among the functions; they look in both.
+
+**A module alias is not a value, anywhere.** Measuring the pattern showed the hole was
+wider than the pattern: `x = M`, `M == M` and `f(M)` passed `check` the same way, each
+engine answering on its own. A bare alias is `'M' is a module, not a value`, before the
+program runs. `M::name(…)` and `M.NAME` reach *into* a module and are untouched.
+
 ---
 
 ## 20b. Error Taxonomy
@@ -1366,6 +1575,54 @@ Runtime errors carry a **kind** (e.g., `##Index`, `##Div`, `##Type`, `##Range`, 
 }
 ```
 
+**An uncaught one says where it happened** (2026-09-10), on a second line, in every engine:
+
+```text
+Runtime error: array index out of bounds: index 99 for array of length 3
+  --> juego/tablero.zy:41
+```
+
+The file is the one the failing statement is **written in** — a module reports itself, not the
+script that called it — spelled relative to the working directory when it lies under it. The
+line is the statement that failed, which is why there is no column: a statement's span starts
+at its indentation, and the browser engine's tokens carry no column at all, so `file:line:col`
+would have been a three-engine divergence by construction.
+
+It is the second line of the message and never part of it, so `!?` catches exactly the text it
+always did. `zyq`'s golden filter drops every `  -->` line, the same as for a warning, so no
+golden records a path — the engines are compared on it by ZyDDT instead, which is what found
+the tree-walker reporting line 1 for a failure on line 4: it was using the span the error
+carried, and several are built with a default one.
+
+---
+
+### What a kind says, and building one (v0.0.10)
+
+The kind says **what** is wrong, not where (decision D1, 2026-09-15): a wrong **type** is
+`##Type`; a wrong **value** of the right type — 0, a negative, out of bounds — is `##Index`;
+a number that does not fit is `##Range`, a division by zero `##Div`, a missing dictionary
+key `##Key`. All three engines declare the kind where they raise it.
+
+A program can **build** the same value the standard modules return:
+
+```zymbol
+leer_regla(t) {
+    ? t$# == 0 { <~ ##Parse("regla vacía") }
+    <~ t
+}
+r = leer_regla("")
+>> r ¶       // → ##Parse(regla vacía)
+>> r$! ¶     // → #1
+```
+
+- It is a **value**, not a raise: `$!` sees it and `$!!` propagates it; a `:!` does not,
+  because nothing was thrown — the same as a soft error from `std/io`.
+- The kind is any name, in any script (`##Regla`, `##Κανόνας`); the message is a String.
+- `##Kind(m) =>` in a `??` reads the message back, and is the only pattern that creates a
+  name (GUIDE § 7, *Error Patterns*).
+- A command whose exit status is not 0 is a soft `##IO` that carries it:
+  `##IO(exit 2: …)`.
+
 ---
 
 ### Numeric limits
@@ -1425,6 +1682,8 @@ kept verbatim although `zyml` has since been retired:
 | `+`, `-`, `*`, `^` | `9007199254740991 + 1` → `integer overflow: 9007199254740991 + 1` |
 | An integer literal | `9223372036854775807` → `integer literal out of range` (lexical, not runtime) |
 | `###` / `##!` on a float | `###1.0e300` → `integer overflow: ### cannot represent this float` |
+| `##'` on an Int that is no character | `##'1114112`, `##'55296`, `##'-1` → `character out of range: ##' cannot represent this Int` |
+| `0x\|…\|` and its siblings reading a code that is no character | `0x\|"110000"\|`, `0d\|"55296"\|` → `character out of range: 0x\|…\| cannot represent this code` |
 
 Operations that **cannot** raise it: unary `-` (the range is symmetric), `/` and
 `%` on integers (a quotient or remainder of in-range operands is in range), and
@@ -1449,7 +1708,8 @@ on digits past it returns the string unchanged rather than a rounded number.
   program is malformed; execution aborts as usual.
 - **Soft `Error` value** — recoverable environmental failures (file not found, network
   timeout, malformed JSON, SQL error). The function **returns** an error value instead of
-  aborting; test it with `$!`, propagate it with `$!!`, or catch it with `!? … :! ##Kind`.
+  aborting; test it with `$!` and propagate it with `$!!`. It is a value, not a thrown
+  error, so a `:!` never sees it — not even one around the call (GLB-032).
 
 | Kind | Returned by |
 |------|-------------|
@@ -1565,7 +1825,7 @@ them will hunt for a bug that is not there (verified 2026-08-17, both engines).
 
 | Warning | When | How to silence it |
 |---------|------|-------------------|
-| `ambiguous lifetime for 'i'` · *variable is modified inside a loop* | Every **named iterator** of a `@` loop with a binder — `@ i:1..3`, `@ f:arr`, `@ c:"hola"`. A `while` header and an outer variable written inside the body do **not** trigger it. | Prefix the iterator: `@ _i:1..3`. Use a bare name only when the value is genuinely needed after the loop. |
+| `ambiguous lifetime for 'i'` · *variable is modified inside a loop* | A `@` loop whose body **assigns to its own iterator** — `@ i:1..3 { i = i + 1 }`. The loop and the body both write it, so a reader after the loop cannot tell which value it sees. An iterator that is only read does **not** trigger it (it did until ERROR-ZYB-003; re-measured 2026-10-11), nor does a `while` header or an outer variable written inside the body. | Do not write the iterator: keep the running value in a name of its own. |
 | `range direction is decided at runtime` | A range bound that is not a literal — `@ i:1..MAX`. If the end turns out lower than the start, the loop counts **down** rather than not running. | Nothing to silence: guard the empty case, or accept the descending walk. |
 | `unused variable 'x'` | A variable that is never read. Reads inside string interpolation (`"{x}"`) and inside `<\ … \>` **do** count as uses (L9). | Prefix `_` when the variable is deliberate: `_unused = 42`. |
 | `loop expects a count or a condition, got [Int]` | The analyzer can tell statically that a `@` specifier is neither. It warns rather than errors because the inference is approximate — the engines refuse the form at run time regardless. | Use `@ x:items` to walk a collection, `@ items$#` to count it. |
@@ -1661,6 +1921,7 @@ them will hunt for a bug that is not there (verified 2026-08-17, both engines).
 | `##.expr` | Cast to Float | `##.42` → `42` (Float) |
 | `###expr` | Cast to Int (rounding) | `###3.7` → `4` |
 | `##!expr` | Cast to Int (truncating); `Char` → code point | `##!3.7` → `3`, `##!'A'` → `65` |
+| `##'expr` | Cast to Char: an Int code point → its character; a `Char` stays itself | `##'65` → `'A'`, `##'(##!'a' + 1)` → `'b'` |
 | `#,\|x\|` | Comma format | `#,\|1234567\|` |
 | `#^\|x\|` | Scientific notation | `#^\|12345.0\|` |
 | `0x`, `0b`, `0o`, `0d` | Base literals | `0x41` → `'A'` |

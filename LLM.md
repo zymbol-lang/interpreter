@@ -1,8 +1,12 @@
-# Zymbol for LLMs — v0.0.9
+# Zymbol for LLMs — v0.0.10
 
-Dense, executable-verified brief. Everything below was run through `zymbol 0.0.9` in
-both engines. Canonical sources: `GUIDE.md` (tutorial), `REFERENCE.md` (limits + full
-symbol table), `SYMBOLS.md` (why each mark has its shape).
+Dense, executable-verified brief. Every rule of § 1 and every bullet of § 12 stands
+behind a probe that runs in all three engines, and so do most sentences in between:
+`zyquality/docs/llm_verify.py` (`zyq suite --only llm`) runs them against the binary and
+fails when one stops holding, when a quoted sentence is edited away, or when a rule is
+added with nothing that runs. Last green against `zymbol 0.0.10`. Canonical sources: `GUIDE.md` (tutorial), `REFERENCE.md` (limits + full
+symbol table), `SYMBOLS.md` (why each mark has its shape), `AGENTIC.md` (what
+holds, and what does not, when the code is generated rather than written).
 
 **Zymbol has no keywords in any human language.** Every construct is a mark: `?` if,
 `@` loop, `<~` return, `>>` output, `#1` true. Identifiers may be in any script
@@ -26,7 +30,7 @@ retired on 2026-08-17; it appears in this document only as history.
 2. **`>>` never adds a newline.** End with `¶` (or `\\`). `>> ¶` = blank line.
 3. **Juxtaposition concatenates in `>>`; `+` does not.** `>> "n=" n ¶`. `"a" + b` is a type error.
 4. **Unary minus loses to juxtaposition:** `>> "x=" -n ¶` parses as subtraction → error. Write `(-n)`.
-5. **A function sees the file's variables, never another frame's locals.** A named function reads a file-level name at **call** time, by value, and a write inside stays inside the call. A lambda captures the same names at **creation**. Neither sees the caller's locals — pass those as parameters.
+5. **A named function sees only its parameters.** Reading a file-level name inside it is a static error (`'x' is read from outside this function`); pass it in. Constants (`:=`) are global by definition. A lambda reads the scope it is written in and writes only the names it declares.
 6. **`??` is pattern matching, never a boolean chain.** An arm is *operator + value* (`< 0 =>`, `90..100 =>`), subject implicit. Booleans go through `?` / `_?` / `_`.
 7. **Booleans are `#1` / `#0`. There is no null.** Absence is `##_` (Unit).
 8. **`==` never coerces; ordering does.** `"5" == 5` → `#0`, but `"5" > 4` → `#1` (numeric text in any of 69 digit scripts).
@@ -44,10 +48,10 @@ retired on 2026-08-17; it appears in this document only as history.
 
 | Type | Literal | `#?` symbol | Notes |
 | --- | --- | --- | --- |
-| Int | `42`, `0x41`, `0b1010`, `0o17`, `0d99` | `###` | safe integer ±(2⁵³−1); `/` on two Ints is integer division |
+| Int | `42` | `###` | safe integer ±(2⁵³−1); `/` on two Ints is integer division |
 | Float | `3.14`, `1.0e10` | `##.` | IEEE-754 double; overflow → `inf` (a value, not an error); `==` exact; NaN false in every direction; prints as digits, never exponent |
 | String | `"hi"`, `"Hi {name}"` | `##"` | interpolation works everywhere; `\{`/`\}` escape braces |
-| Char | `'A'`, `'↑'` | `##'` | |
+| Char | `'A'`, `'↑'`, `0x41`, `0b1010`, `0o17`, `0d99` | `##'` | a base-prefixed literal is a character code, in any range: `0x41` is `'A'`, `0xFF` is `'ÿ'`; its Int is `##!0x41` |
 | Bool | `#1` / `#0` | `##?` | `#0 < #1` |
 | Array | `[1,2,3]` | `##]` | homogeneous by design |
 | List | `#[1,"dos"]` | `##[` | an array holding >1 type. NOT a second type — `#?` reads it from the contents, so `json::decode` answers `##[` with no mark written |
@@ -60,7 +64,8 @@ retired on 2026-08-17; it appears in this document only as history.
 Not values: ranges (`1..5`, loop headers only) and module aliases.
 `x#?` → `(type_symbol, count, display)`. `#|"४२"|` → `42` (69 digit scripts, fail-safe:
 returns the input unchanged on failure). Casts: `##.x` Float, `###x` Int (round),
-`##!x` Int (truncate; `Char`→code point). Format: `#.2|x|` round, `#!2|x|` truncate,
+`##!x` Int (truncate; `Char`→code point), `##'x` Char (an Int code point → its character;
+a Float or a code with no character is an error). Format: `#.2|x|` round, `#!2|x|` truncate,
 `#,|x|` commas, `#^|x|` scientific.
 
 ---
@@ -118,7 +123,7 @@ Sub-script: `out = </ ./sub.zy />`.
 ? x > 100 { … } _? x > 0 { … } _ { … }      // braces always required
 ```
 
-`??` match — six pattern kinds, first match wins, `||` joins alternatives of any kinds:
+`??` match — seven pattern kinds, first match wins, `||` joins alternatives of any kinds:
 
 ```zymbol
 g = ?? score {
@@ -131,7 +136,9 @@ g = ?? score {
 }
 ```
 
-No binding patterns (`n => n * 2` is not implemented).
+No binding patterns (`n => n * 2` is not implemented) — with one exception: an error
+pattern, `##Parse(msg) => …`, matches an error of that kind and puts its message in
+`msg`. It stands alone in its arm (not inside `||` or a list).
 
 ---
 
@@ -154,8 +161,9 @@ Both are checked statically: they need an enclosing loop, a label must resolve t
 
 Two warnings are normal here and neither is an error:
 
-- `ambiguous lifetime for 'i'` — emitted for **every** bare iterator name. Prefix it
-  (`@ _i:1..3`) when it is not needed after the loop; that silences it.
+- `ambiguous lifetime for 'i'` — emitted when the body **assigns to its own iterator**
+  (`@ i:1..3 { i = i + 1 }`): the loop and the body both write it, so a reader after the
+  loop cannot tell which value it sees. A bare iterator that is only read does not warn.
 - `range direction is decided at runtime` — emitted when a bound is not a literal
   (`1..MAX`): if the end turns out lower than the start the loop counts **down** instead
   of not running. Guard the empty case yourself.
@@ -195,6 +203,9 @@ the remainder**, taking the container's shape, or `##_` when nothing is left:
 #(name: n, age: y) = person // dictionary destructuring
 ```
 
+The mark is part of the pattern as it is of the literal: a bare `(name: n) = person` is
+refused, and `(a, b) = t` takes a tuple apart by position.
+
 Strings share the `$` operators, plus: `s$~~["l":"L"]` replace all, `s$~~["l":"L":1]` first N,
 `s$/ ','` split (char or substring), `s$* 3` repeat, `"x=" $++ n " y=" m` build.
 
@@ -208,6 +219,7 @@ double = x -> x * 2                 // lambda; captures scope BY VALUE at creati
 sum2   = (a, b) -> a + b
 thunk  = () -> 42
 block  = x -> { ? x > 0 { <~ "pos" }  <~ "neg" }
+effect = x -> { >> x ¶ }            // a block that ends without `<~` gives ##_, as a function does
 
 work(p~)  { p = p * 2 }             // '~'  working copy — caller untouched
 bump(b<~) { b = b + 100 }           // '<~' output parameter — writes back
@@ -215,8 +227,8 @@ bump(y<~)                           // mark required at the call site too (also 
 ```
 
 Use a tuple return when the values are new (`(v, next) = step(3)`); use `<~` parameters
-when the caller already owns the variables. A named function used as a value captures the
-scope at the point of assignment.
+when the caller already owns the variables. A named function used as a value captures
+nothing: it sees only its parameters, however it is reached.
 
 ```zymbol
 nums$> (x -> x * 2)          // map      | named fn: nums$> double  (NO parentheses)
@@ -238,8 +250,8 @@ nums$< (0, (acc,x) -> acc+x) // reduce (initial, lambda)
 `!?` try · `:!` catch (bare or typed) · `:>` finally · `_err` holds the caught error ·
 `v$!` is-error · `v$!!` propagate to caller.
 
-Kinds: `##Div` `##Index` `##Type` `##Range` (numeric limits) `##Parse` `##IO` `##Network`
-`##DB` `##_`. Std-library environmental failures come back as **soft error values** to test
+Kinds: `##Div` `##Index` `##Key` `##Range` (numeric limits) `##Type` `##Parse` `##IO`
+`##Network` `##DB` `##Time` `##_`. Std-library environmental failures come back as **soft error values** to test
 with `$!`, not as raised errors; type/arity mistakes raise.
 
 ---
@@ -308,7 +320,58 @@ before returning.
 
 ---
 
-## 12. Reference program
+## 12. Safeguards for generated code
+
+Properties you can rely on when writing Zymbol you will not run yourself — each
+verified in all three engines. Full treatment, with the probes and the gaps that
+are still open: `AGENTIC.md`.
+
+- **Importing executes nothing.** A module body admits only imports, `#>`,
+  literal-initialised bindings and function definitions; anything that computes
+  is **E013**, before a statement runs. Omitting `#>` is **E014** — nothing is
+  exported by accident.
+- **The reachable program is static.** No dynamic import (a `<#` path is a
+  literal and must precede every statement), `</ p />` takes the path literally,
+  and there is **no `eval`**. Read the entry file, follow `<#`, and you have read
+  everything that can run.
+- **The effect surface is a closed lexical list**: `std/io` `std/net` `std/db`
+  `std/time` `std/random`, `<\ \>`, `</ />`, `<<`, `><`. Nothing else reaches
+  outside the process.
+- **Mutation is declared twice.** `<~` at the signature *and* at every call site,
+  each an error without the other — so a call says what it changes without
+  opening the function. `~` is a working copy; unmarked is by value.
+- **Writes do not escape a call.** No references, no aliasing (`Rc` + copy-on-write
+  is invisible). No read-side door either: a named function sees only its
+  parameters, and a file-level name read inside it is refused statically —
+  constants (`:=`) are the one exception, global by definition.
+- **A module owns its environment.** Its mutable bindings cannot be exported
+  (`E005`); only constants and functions leave, so module state is reachable
+  only through that module's own functions. Identity is the file path: every
+  alias and importer shares that one environment.
+- **Lifetime is explicit or invisible**: `_x` is strictly block-local (error from
+  inner *and* outer), `\ x` destroys and a later use aborts, `:=` cannot be
+  reassigned, auto-free is required to be unobservable.
+- **Loud where models go wrong**: no coercion in `==`, no silent overflow, arity
+  checked statically, an unmatched `??` aborts, an unread variable warns,
+  `m[i][j]` is refused by name.
+- **A condition is a Bool and nothing else.** There is no truthiness anywhere:
+  `? x { }` with `x` an Int, a String or a collection is refused before running
+  when its type is known, and through a parameter it is a catchable `##Type` at run time —
+  before either block runs. The same holds for the loop specifier, `&&` `||` `!`,
+  a `$|` predicate and a `$^` comparator. Ask what is meant: `? xs$# > 0 { }`.
+
+Not guaranteed — do not assume these:
+
+- **No capability enforcement and no shell quoting.** `<\ "{cmd}" \>`
+  interpolates a runtime string straight into `sh -c`.
+- **No termination bound.** Infinite recursion and `@ { }` run until something
+  outside kills them.
+- **`check` does not catch everything it looks like it should**: use after `\`
+  and a non-exhaustive `??` are runtime-only.
+
+---
+
+## 13. Reference program
 
 ```zymbol
 <# std/math => M

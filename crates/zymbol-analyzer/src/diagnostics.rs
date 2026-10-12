@@ -180,6 +180,10 @@ impl DiagnosticPipeline {
                     &program.imports,
                     base_dir,
                 ));
+                type_checker.set_module_exports(zymbol_semantic::module_exports(
+                    &program.imports,
+                    base_dir,
+                ));
             }
             let type_diagnostics = type_checker.check(program);
 
@@ -227,6 +231,19 @@ impl DiagnosticPipeline {
                 lsp_diagnostics.push(to_lsp_diagnostic(&diag));
             }
 
+            // An import whose alias the file never names again (HLZ-015) — the
+            // same function `zymbol check` and `run` call.
+            for diag in
+                zymbol_semantic::check_unused_imports(document.token_list(), &program.imports)
+            {
+                lsp_diagnostics.push(to_lsp_diagnostic(&diag));
+            }
+
+            // Code that cannot run (HLZ-016) — the same pass as the CLI.
+            for diag in zymbol_semantic::check_unreachable(program) {
+                lsp_diagnostics.push(to_lsp_diagnostic(&diag));
+            }
+
             // Def-use analysis for ambiguous lifetimes
             let cfg = zymbol_semantic::ControlFlowGraph::build_sequential(&program.statements);
             let mut def_use_analyzer = zymbol_semantic::DefUseAnalyzer::new();
@@ -264,6 +281,10 @@ impl DiagnosticPipeline {
                 }
             }
         }
+
+        // Editor-only hints: a name character that looks like a symbol. Never
+        // part of `zymbol check` (decided 2026-09-25) — see `confusables`.
+        lsp_diagnostics.extend(crate::confusables::collect(document));
 
         lsp_diagnostics
     }

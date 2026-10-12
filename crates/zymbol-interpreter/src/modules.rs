@@ -39,6 +39,10 @@ pub(crate) struct LoadedModule {
     /// Marked const inside module function frames so constants stay immutable
     /// at runtime even if static analysis was bypassed.
     pub(crate) const_names: HashSet<String>,
+    /// Variables of the module some `\` ended and nothing has assigned since.
+    /// A module's state is the module's, so its end is too: every function of
+    /// the module finds the name dead, until one of them assigns it (GLB-120).
+    pub(crate) dead_variables: HashSet<String>,
 }
 
 impl<W: Write> Interpreter<W> {
@@ -224,6 +228,7 @@ impl<W: Write> Interpreter<W> {
             import_aliases: module_import_aliases,
             loaded_modules_refs: module_loaded_refs,
             const_names: module_const_names,
+            dead_variables: HashSet::new(),
         };
 
         // If there's an export block, only export listed items

@@ -550,39 +550,6 @@ impl<'a> FormatVisitor<'a> {
                 }
                 // Shape mismatch — fall through to plain printing
             }
-            AssignSugar::IndexedAssign => {
-                // name[i] = rhs   (value is CollectionUpdate{target: Index, value: rhs})
-                if let Expr::CollectionUpdate(cu) = &assign.value {
-                    if let Expr::Index(idx) = cu.target.as_ref() {
-                        self.output.write("[");
-                        self.format_expr(&idx.index);
-                        self.output.write("] = ");
-                        self.format_expr(&cu.value);
-                        return;
-                    }
-                }
-            }
-            AssignSugar::IndexedCompound(op) => {
-                // name[i] op= rhs (value is CollectionUpdate{target: Index,
-                //                  value: Binary{op, left: Index, right: rhs}})
-                if let Expr::CollectionUpdate(cu) = &assign.value {
-                    if let (Expr::Index(idx), Expr::Binary(bin)) =
-                        (cu.target.as_ref(), cu.value.as_ref())
-                    {
-                        if bin.op == op {
-                            if let Some(op_str) = compound_op_str(op) {
-                                self.output.write("[");
-                                self.format_expr(&idx.index);
-                                self.output.write("] ");
-                                self.output.write(op_str);
-                                self.output.write(" ");
-                                self.format_expr(&bin.right);
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
             AssignSugar::InPlaceEdit => unreachable!("handled above"),
             AssignSugar::None => {}
         }
@@ -1041,6 +1008,7 @@ impl<'a> FormatVisitor<'a> {
                     zymbol_ast::CastKind::ToFloat    => "##.",
                     zymbol_ast::CastKind::ToIntRound => "###",
                     zymbol_ast::CastKind::ToIntTrunc => "##!",
+                    zymbol_ast::CastKind::ToChar     => "##'",
                 };
                 self.output.write(prefix);
                 let needs_parens = matches!(op.expr.as_ref(), Expr::Binary(_));
@@ -1065,6 +1033,11 @@ impl<'a> FormatVisitor<'a> {
             Expr::Round(round) => self.format_round(round),
             Expr::Trunc(trunc) => self.format_trunc(trunc),
             Expr::ErrorCheck(check) => self.format_error_check(check),
+            Expr::ErrorConstruct(e) => {
+                self.output.write(&format!("##{}(", e.kind));
+                self.format_expr(&e.message);
+                self.output.write(")");
+            }
             Expr::ErrorPropagate(prop) => self.format_error_propagate(prop),
             Expr::DeepIndex(di) => self.format_deep_index(di),
             Expr::FlatExtract(fe) => self.format_flat_extract(fe),
@@ -1750,6 +1723,17 @@ impl<'a> FormatVisitor<'a> {
                     self.format_pattern(alt);
                 }
             }
+            // `##Kind`, `##Kind(_)`, `##Kind(m)` — written back as written.
+            Pattern::ErrorKind(kind, binding, span) => {
+                self.output.write(&format!("##{kind}"));
+                match binding {
+                    Some(name) => self.output.write(&format!("({name})")),
+                    None if span.end.byte_offset - span.start.byte_offset > kind.len() as u32 + 2 => {
+                        self.output.write("(_)")
+                    }
+                    None => {}
+                }
+            }
         }
     }
 
@@ -2046,6 +2030,14 @@ impl<'a> FormatVisitor<'a> {
             self.output.write("\"");
         } else {
             self.output.write(&exec.path);
+        }
+        for arg in &exec.args {
+            self.output.write(" ");
+            if arg.is_empty() || arg.chars().any(char::is_whitespace) {
+                self.output.write(&format!("\"{arg}\""));
+            } else {
+                self.output.write(arg);
+            }
         }
         self.output.write("/>");
     }

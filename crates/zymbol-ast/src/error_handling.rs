@@ -71,6 +71,22 @@ pub struct FinallyClause {
 ///     >> "Operation failed" ¶
 /// }
 /// ```
+/// Error construction: `##Kind("message")` — a soft error value.
+///
+/// The same spelling an error prints as, and the same `##Kind` a `:!` clause
+/// matches. It is a value, not a raise: `$!` answers `#1`, `$!!` propagates it,
+/// and no `:!` sees it, exactly like the soft errors `std/io`, `std/net`,
+/// `std/db` and `std/time` return. Before it, a program could handle an error
+/// value and not make one (GAP-GOL-003).
+#[derive(Debug, Clone)]
+pub struct ErrorConstructExpr {
+    /// The kind, without `##`: "Parse", "IO", or any name a program chooses —
+    /// `:!` already accepts any name after `##`.
+    pub kind: String,
+    pub message: Box<Expr>,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone)]
 pub struct ErrorCheckExpr {
     pub expr: Box<Expr>,

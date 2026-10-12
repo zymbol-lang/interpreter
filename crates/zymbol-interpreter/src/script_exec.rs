@@ -26,19 +26,45 @@ impl<W: Write> Interpreter<W> {
         let file_path = if Path::new(&execute.path).is_absolute() {
             PathBuf::from(&execute.path)
         } else {
-            let current_dir = self.current_file
+            // The file the `</` is written in: inside a module's function that
+            // is the module, not the program that called it (GLB-017 I,
+            // decided 2026-09-26).
+            let current_dir = self.current_module_path
                 .as_ref()
+                .or(self.current_file.as_ref())
                 .and_then(|p| p.parent())
                 .unwrap_or(&self.base_dir);
             current_dir.join(&execute.path)
         };
 
         // Check if file exists
+        // An `##IO`, declared: a file that is not there, and the path's words
+        // chose the family — `</ index_type.zy />` was an `##Index` (GLB-099).
         if !file_path.exists() {
-            return Err(RuntimeError::Generic {
-                message: format!("file not found: {}", file_path.display()),
-                span: execute.span,
-            });
+            return Err(RuntimeError::kinded(
+                "IO",
+                format!("file not found: {}", file_path.display()),
+                execute.span,
+            ));
+        }
+
+        // GLB-017 I, decided 2026-09-26: the subscript runs in this process,
+        // down the same road `zymbol run` takes — analysed, run by the engine
+        // that runs the caller, and a failure carries what the CLI would have
+        // written, without the warnings.
+        if let Some(runner) = self.subscript_runner.clone() {
+            // A status the subscript GIVES (`<~ 3`) is a soft ##IO error, and a
+            // subscript that fails is still raised (D2 and D8, 2026-09-30):
+            // reporting a failure and crashing are two things, and GLB-017 I
+            // decided the second.
+            return match runner(&file_path, &execute.args) {
+                Ok((printed, 0)) => Ok(Value::String(printed)),
+                Ok((printed, code)) => Ok(Value::Error(crate::ErrorValue::new(
+                    "IO",
+                    zymbol_common::shell::exit_failure_message(Some(code), &printed),
+                ))),
+                Err(failure) => Err(RuntimeError::Generic { message: failure, span: execute.span }),
+            };
         }
 
         // Read the file
@@ -50,8 +76,29 @@ impl<W: Write> Interpreter<W> {
         let (tokens, lex_diagnostics) = lexer.tokenize();
 
         if !lex_diagnostics.is_empty() {
+            // The same sentence `load_module` gives, with the same detail: one
+            // engine had two spellings for one failure — `1 lexer errors in
+            // ./sub/lexico.zy` here and `1 lexer error(s) in 'm/lexico.zy'`
+            // plus the offending line there — and neither told the reader WHERE
+            // in the file. Running a script and importing a module are two
+            // doors into the same lexer.
+            let detail: Vec<String> = lex_diagnostics.iter().map(|d| {
+                let loc = d.span
+                    .map(|sp| format!("{}:{}:{}", file_path.display(), sp.start.line, sp.start.column))
+                    .unwrap_or_else(|| file_path.display().to_string());
+                let mut msg = format!("  {}: {}", loc, d.message);
+                if let Some(help) = &d.help {
+                    msg.push_str(&format!("\n    help: {}", help));
+                }
+                msg
+            }).collect();
             return Err(RuntimeError::Generic {
-                message: format!("{} lexer errors in {}", lex_diagnostics.len(), file_path.display()),
+                message: format!(
+                    "{} lexer error(s) in '{}'\n{}",
+                    lex_diagnostics.len(),
+                    file_path.display(),
+                    detail.join("\n")
+                ),
                 span: execute.span,
             });
         }
@@ -71,8 +118,10 @@ impl<W: Write> Interpreter<W> {
         // Set the current file for the sub-interpreter
         script_interp.set_current_file(&file_path);
 
-        // Pass CLI args to the sub-interpreter (if we have any)
-        if let Some(ref cli_args) = self.cli_args {
+        // The subscript's own arguments (D10), else the caller's.
+        if !execute.args.is_empty() {
+            script_interp.set_cli_args(execute.args.clone());
+        } else if let Some(ref cli_args) = self.cli_args {
             // Convert Value array to String array for set_cli_args
             let args_strings: Vec<String> = cli_args.iter()
                 .filter_map(|v| match v {
@@ -83,11 +132,19 @@ impl<W: Write> Interpreter<W> {
             script_interp.set_cli_args(args_strings);
         }
 
-        // Execute the program
+        // Execute the program. A failure is reported the way the CLI reports
+        // it — the message, then where — which is exactly the text the VM passes
+        // on, since the VM runs the subscript as a process and its message is
+        // that process's stderr. This engine used to print Rust's `Debug` of the
+        // error instead: `Located { message: "division by zero", file: …,
+        // line: 1, column: 0 }` (GLB-017 B).
         script_interp.execute(&program)
-            .map_err(|e| RuntimeError::Generic {
-                message: format!("error executing {}: {:?}", file_path.display(), e),
-                span: execute.span,
+            .map_err(|e| {
+                let mut message = format!("Runtime error: {}", e);
+                if let Some((file, line)) = e.location() {
+                    message.push_str(&format!("\n  --> {}:{}", file, line));
+                }
+                RuntimeError::Generic { message, span: execute.span }
             })?;
 
         // Convert captured output to string
@@ -125,6 +182,17 @@ impl<W: Write> Interpreter<W> {
             ),
             span: bash.span,
         })?;
+
+        // A status other than 0 is a soft ##IO error that carries it (GAP-GOL-011,
+        // D2): a failed command and one that printed nothing used to be the same
+        // empty string, and nothing could tell them apart.
+        if !output.status.success() {
+            let said = zymbol_common::shell::failure_text(&output);
+            return Ok(Value::Error(crate::ErrorValue::new(
+                "IO",
+                zymbol_common::shell::exit_failure_message(output.status.code(), &said),
+            )));
+        }
 
         // Capture both stdout and stderr
         let mut result = String::from_utf8_lossy(&output.stdout).to_string();

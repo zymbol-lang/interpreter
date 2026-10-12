@@ -10,7 +10,6 @@
 use zymbol_ast::{ConcatBuildExpr, StringRepeatExpr, StringReplaceExpr, StringSplitExpr};
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
-use std::rc::Rc;
 
 impl<W: Write> Interpreter<W> {
     /// Evaluate string repeat operator: string$* n → string repeated n times
@@ -21,20 +20,22 @@ impl<W: Write> Interpreter<W> {
             Value::String(s) => s.clone(),
             Value::Char(c)   => c.to_string(),
             _ => return Err(RuntimeError::Generic {
-                message: format!("$* requires a string, got {}", self.value_type_name(&string_val)),
+                message: format!("$* requires a string, got {}", string_val.type_label()),
                 span: op.span,
             }),
         };
         let n = match count_val {
             Value::Int(n) if n >= 0 => n as usize,
-            Value::Int(n) => return Err(RuntimeError::Generic {
-                message: format!("$* repetition count must be non-negative, got {}", n),
-                span: op.span,
-            }),
-            other => return Err(RuntimeError::Generic {
-                message: format!("$* repetition count must be an integer, got {}", self.value_type_name(&other)),
-                span: op.span,
-            }),
+            Value::Int(n) => return Err(RuntimeError::kinded(
+                "Index",
+                format!("$* repetition count must be non-negative, got {}", n),
+                op.span,
+            )),
+            other => return Err(RuntimeError::kinded(
+                "Type",
+                format!("$* repetition count must be an integer, got {}", other.type_label()),
+                op.span,
+            )),
         };
         Ok(Value::String(s.repeat(n)))
     }
@@ -53,7 +54,7 @@ impl<W: Write> Interpreter<W> {
             Value::String(ref s) => s.clone(),
             _ => {
                 return Err(RuntimeError::Generic {
-                    message: format!("$~~ requires a string, got {:?}", string_value),
+                    message: format!("$~~ requires a string, got {}", string_value.type_label()),
                     span: op.span,
                 })
             }
@@ -63,10 +64,11 @@ impl<W: Write> Interpreter<W> {
         let replacement = match replacement_value {
             Value::String(ref s) => s.clone(),
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!("$~~ replacement must be a string, got {:?}", replacement_value),
-                    span: op.span,
-                })
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("$~~ replacement must be a string, got {}", replacement_value.type_label()),
+                    op.span,
+                ))
             }
         };
 
@@ -75,18 +77,20 @@ impl<W: Write> Interpreter<W> {
             let count_value = self.eval_expr(count_expr)?;
             match count_value {
                 Value::Int(n) if n < 0 => {
-                    return Err(RuntimeError::Generic {
-                        message: format!("replacement count must be non-negative, got {}", n),
-                        span: op.span,
-                    });
+                    return Err(RuntimeError::kinded(
+                        "Index",
+                        format!("replacement count must be non-negative, got {}", n),
+                        op.span,
+                    ));
                 }
                 Value::Int(0) => None, // 0 means replace all
                 Value::Int(n) => Some(n as usize),
                 _ => {
-                    return Err(RuntimeError::Generic {
-                        message: format!("$~~ count must be an integer, got {:?}", count_value),
-                        span: op.span,
-                    })
+                    return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("$~~ count must be an integer, got {}", count_value.type_label()),
+                        op.span,
+                    ))
                 }
             }
         } else {
@@ -94,66 +98,33 @@ impl<W: Write> Interpreter<W> {
         };
 
         // Pattern can be String or Char
-        let result = match pattern_value {
-            Value::String(ref pattern) => {
-                if pattern.is_empty() {
-                    // Empty pattern - return original string
-                    return Ok(Value::String(string));
-                }
-
-                // Perform replacement
-                if let Some(max) = max_replacements {
-                    // Replace first N occurrences
-                    let mut result = string.clone();
-                    let mut count = 0;
-                    while count < max {
-                        if let Some(pos) = result.find(pattern) {
-                            // Replace this occurrence
-                            let before = &result[0..pos];
-                            let after = &result[pos + pattern.len()..];
-                            result = format!("{}{}{}", before, replacement, after);
-                            count += 1;
-                        } else {
-                            break; // No more occurrences
-                        }
-                    }
-                    result
-                } else {
-                    // Replace all occurrences
-                    string.replace(pattern, &replacement)
-                }
+        let pattern = match pattern_value {
+            // An empty pattern is refused (GLB-078/079, decided 2026-10-03):
+            // where it "occurs" is a choice each host library makes differently.
+            Value::String(ref p) if p.is_empty() => {
+                return Err(RuntimeError::kinded(
+                    "Index",
+                    "$~~ pattern must not be empty",
+                    op.span,
+                ));
             }
-            Value::Char(ch) => {
-                // Convert char to string and replace
-                let pattern_str = ch.to_string();
-
-                if let Some(max) = max_replacements {
-                    // Replace first N occurrences
-                    let mut result = string.clone();
-                    let mut count = 0;
-                    while count < max {
-                        if let Some(pos) = result.find(&pattern_str) {
-                            // Replace this occurrence
-                            let before = &result[0..pos];
-                            let after = &result[pos + pattern_str.len()..];
-                            result = format!("{}{}{}", before, replacement, after);
-                            count += 1;
-                        } else {
-                            break; // No more occurrences
-                        }
-                    }
-                    result
-                } else {
-                    // Replace all occurrences
-                    string.replace(&pattern_str, &replacement)
-                }
-            }
+            Value::String(ref p) => p.clone(),
+            Value::Char(ch) => ch.to_string(),
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!("$~~ pattern must be a string or char, got {:?}", pattern_value),
-                    span: op.span,
-                })
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("$~~ pattern must be a string or char, got {}", pattern_value.type_label()),
+                    op.span,
+                ))
             }
+        };
+
+        // Left to right, never looking again at text already replaced: the
+        // first-N form searched from the start each time, so `"hello"$~~["l":"Ll":2]`
+        // found the `l` it had just written and gave `heLLllo` (GLB-084).
+        let result = match max_replacements {
+            Some(max) => string.replacen(pattern.as_str(), &replacement, max),
+            None => string.replace(pattern.as_str(), &replacement),
         };
 
         Ok(Value::String(result))
@@ -176,14 +147,15 @@ impl<W: Write> Interpreter<W> {
             Value::Array(mut arr) => {
                 for item in &op.items {
                     let v = self.eval_expr(item)?;
-                    Rc::make_mut(&mut arr).push(v);
+                    zymbol_common::count::make_mut(&mut arr).push(v);
                 }
                 Ok(Value::Array(arr))
             }
-            other => Err(RuntimeError::Generic {
-                message: format!("$++ requires a string or array as base, got {:?}", other),
-                span: op.span,
-            }),
+            other => Err(RuntimeError::kinded(
+                "Type",
+                format!("$++ requires a string or array as base, got {}", other.type_label()),
+                op.span,
+            )),
         }
     }
 
@@ -194,19 +166,26 @@ impl<W: Write> Interpreter<W> {
 
         let string = match string_value {
             Value::String(s) => s,
-            _ => return Err(RuntimeError::Generic {
-                message: format!("$/ requires a string on the left, got {:?}", string_value),
-                span: op.span,
-            }),
+            _ => return Err(RuntimeError::kinded(
+                "Type",
+                format!("$/ requires a string on the left, got {}", string_value.type_label()),
+                op.span,
+            )),
         };
 
         let parts: Vec<Value> = match delimiter_value {
             Value::Char(c) => string.split(c).map(|p| Value::String(p.to_string())).collect(),
+            Value::String(ref s) if s.is_empty() => return Err(RuntimeError::kinded(
+                "Index",
+                "$/ delimiter must not be empty",
+                op.span,
+            )),
             Value::String(ref s) => string.split(s.as_str()).map(|p| Value::String(p.to_string())).collect(),
-            _ => return Err(RuntimeError::Generic {
-                message: format!("$/ delimiter must be a char or string, got {:?}", delimiter_value),
-                span: op.span,
-            }),
+            _ => return Err(RuntimeError::kinded(
+                "Type",
+                format!("$/ delimiter must be a char or string, got {}", delimiter_value.type_label()),
+                op.span,
+            )),
         };
 
         Ok(Value::array(parts))

@@ -120,24 +120,30 @@ impl<W: Write> Interpreter<W> {
     /// ##.  → Float (lossless from Int, identity from Float)
     /// ###  → Int rounding  (Float 3.7 → 4, Int identity)
     /// ##!  → Int truncating (Float 3.7 → 3, Int identity)
+    /// ##'  → Char (Int code point → its character, Char identity)
     pub(crate) fn eval_numeric_cast(&mut self, op: &NumericCastExpr) -> Result<Value> {
         let value = self.eval_expr(&op.expr)?;
         match op.kind {
             CastKind::ToFloat => match value {
                 Value::Float(_) => Ok(value),
                 Value::Int(n) => Ok(Value::Float(n as f64)),
-                other => Err(RuntimeError::Generic {
-                    message: format!("##. requires a numeric value, got {}", value_type(other)),
-                    span: op.span,
-                }),
+                // Kinded, like every other cast: without it the word-based
+                // classifier found no "type" in the sentence and answered
+                // `##_`, so `!?` sorted `##.` one way and `###` another.
+                other => Err(RuntimeError::kinded(
+                    "Type",
+                    format!("##. requires a numeric value, got {}", value_type(other)),
+                    op.span,
+                )),
             },
             CastKind::ToIntRound => match value {
                 Value::Int(_) => Ok(value),
                 Value::Float(f) => cast_to_int(f.round(), "###", op.span),
-                other => Err(RuntimeError::Generic {
-                    message: format!("### requires a numeric value, got {}", value_type(other)),
-                    span: op.span,
-                }),
+                other => Err(RuntimeError::kinded(
+                    "Type",
+                    format!("### requires a numeric value, got {}", value_type(other)),
+                    op.span,
+                )),
             },
             CastKind::ToIntTrunc => match value {
                 Value::Int(_) => Ok(value),
@@ -147,10 +153,31 @@ impl<W: Write> Interpreter<W> {
                 // literal and stripping its prefix), and it makes characters
                 // classifiable by range.
                 Value::Char(c) => Ok(Value::Int(c as u32 as i64)),
-                other => Err(RuntimeError::Generic {
-                    message: format!("##! requires a numeric value or Char, got {}", value_type(other)),
-                    span: op.span,
-                }),
+                other => Err(RuntimeError::kinded(
+                    "Type",
+                    format!("##! requires a numeric value or Char, got {}", value_type(other)),
+                    op.span,
+                )),
+            },
+            // The pair of `##!` on a Char (GLB-109). Only an Int is a code: a
+            // Float is not one even when it is whole — `##'###f` writes the
+            // rounding — and a code with no character (past 0x10FFFF, or a
+            // surrogate) is `##Range`, like a float no Int can hold.
+            CastKind::ToChar => match value {
+                Value::Char(_) => Ok(value),
+                Value::Int(n) => match u32::try_from(n).ok().and_then(char::from_u32) {
+                    Some(c) => Ok(Value::Char(c)),
+                    None => Err(RuntimeError::kinded(
+                        "Range",
+                        "character out of range: ##' cannot represent this Int".to_string(),
+                        op.span,
+                    )),
+                },
+                other => Err(RuntimeError::kinded(
+                    "Type",
+                    format!("##' requires an Int or Char, got {}", value_type(other)),
+                    op.span,
+                )),
             },
         }
     }
@@ -184,13 +211,16 @@ impl<W: Write> Interpreter<W> {
         let count: i64 = match &value {
             Value::Int(n) => n.to_string().len() as i64,
             Value::Float(f) => f.to_string().len() as i64,
-            Value::String(s) => s.len() as i64,
+            // Code points, as `$#` counts them and as the VM and the browser
+            // engine answer `#?`. It was bytes: `"vacía"#?` said 6 here and 5
+            // in the other two engines (found by BUG-GOL-015).
+            Value::String(s) => s.chars().count() as i64,
             Value::Char(_) | Value::Bool(_) => 1,
             Value::Array(arr) => arr.len() as i64,
             Value::Tuple(tup) => tup.len() as i64,
             Value::NamedTuple(fields) => fields.len() as i64,
             Value::Function(func) => func.params.len() as i64,
-            Value::Error(err) => err.message.len() as i64,
+            Value::Error(err) => err.message.chars().count() as i64,
             Value::Unit => 0,
         };
 
@@ -209,17 +239,19 @@ impl<W: Write> Interpreter<W> {
             zymbol_ast::Precision::Literal(n) => Ok(*n),
             zymbol_ast::Precision::Dynamic(expr) => match self.eval_expr(expr)? {
                 Value::Int(n) if n >= 0 => Ok(n as u32),
-                Value::Int(n) => Err(RuntimeError::Generic {
-                    message: format!("decimal count must not be negative, got {}", n),
+                Value::Int(n) => Err(RuntimeError::kinded(
+                    "Index",
+                    format!("decimal count must not be negative, got {}", n),
                     span,
-                }),
-                other => Err(RuntimeError::Generic {
-                    message: format!(
+                )),
+                other => Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
                         "decimal count must be a whole number, got {}",
-                        other.type_name()
+                        other.type_label()
                     ),
                     span,
-                }),
+                )),
             },
         }
     }
@@ -249,14 +281,26 @@ impl<W: Write> Interpreter<W> {
         let f: f64 = match value {
             Value::Int(n) => n as f64,
             Value::Float(f) => f,
+            // A string that reads as a number is formatted, as `#.` and `#!`
+            // already take one and the VM always did (GLB-029, decided
+            // 2026-09-15). Digits in any script, as there.
+            Value::String(ref s) if {
+                let normalized = ascii_digits(s.trim());
+                normalized.parse::<i64>().is_ok() || normalized.parse::<f64>().is_ok()
+            } => {
+                let normalized = ascii_digits(s.trim());
+                normalized.parse::<i64>().map(|n| n as f64)
+                    .unwrap_or_else(|_| normalized.parse::<f64>().unwrap_or(0.0))
+            }
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!(
-                        "format expressions only work with numbers, got {:?}",
-                        value
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "format expressions only work with numbers, got {}",
+                        value.type_label()
                     ),
-                    span: op.span,
-                });
+                    op.span,
+                ));
             }
         };
 
@@ -335,8 +379,11 @@ impl<W: Write> Interpreter<W> {
                     BasePrefix::Decimal => s.parse::<u32>(),
                     BasePrefix::Hex => u32::from_str_radix(s, 16),
                 }
-                .map_err(|_| RuntimeError::Generic {
-                    message: format!(
+                // A `##Parse`, declared: the message carries the text, and its
+                // words chose the family — `0d|"type"|` was a `##Type` (GLB-097).
+                .map_err(|_| RuntimeError::kinded(
+                    "Parse",
+                    format!(
                         "failed to parse '{}' as {} number",
                         s,
                         match op.prefix {
@@ -346,34 +393,38 @@ impl<W: Write> Interpreter<W> {
                             BasePrefix::Hex => "hexadecimal",
                         }
                     ),
-                    span: op.span,
-                })?;
+                    op.span,
+                ))?;
 
-                if code > 0x10FFFF {
-                    return Err(RuntimeError::Generic {
-                        message: format!(
-                            "character code must be in range 0..0x10FFFF, got {}",
-                            code
-                        ),
-                        span: op.span,
-                    });
-                }
-
-                let ch = char::from_u32(code).ok_or_else(|| RuntimeError::Generic {
-                    message: format!("invalid Unicode character code: {}", code),
-                    span: op.span,
-                })?;
+                // A code with no character — past 0x10FFFF, or a surrogate — is
+                // the `##Range` that `##'` raises for the same Int, worded for
+                // this operator and without the value (GLB-113, decided
+                // 2026-10-09). It was `##_`, and quoted the code.
+                let ch = char::from_u32(code).ok_or_else(|| RuntimeError::kinded(
+                    "Range",
+                    format!(
+                        "character out of range: {}|…| cannot represent this code",
+                        match op.prefix {
+                            BasePrefix::Binary => "0b",
+                            BasePrefix::Octal => "0o",
+                            BasePrefix::Decimal => "0d",
+                            BasePrefix::Hex => "0x",
+                        }
+                    ),
+                    op.span,
+                ))?;
 
                 Ok(Value::Char(ch))
             }
 
-            _ => Err(RuntimeError::Generic {
-                message: format!(
-                    "base conversion expressions work with char, int, or string, got {:?}",
-                    value
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
+                    "base conversion expressions work with char, int, or string, got {}",
+                    value.type_label()
                 ),
-                span: op.span,
-            }),
+                op.span,
+            )),
         }
     }
 
@@ -402,23 +453,29 @@ impl<W: Write> Interpreter<W> {
                 } else if let Ok(f) = normalized.parse::<f64>() {
                     f
                 } else {
-                    return Err(RuntimeError::Generic {
-                        message: format!(
+                    // Reading the text as a number is what failed: a `##Parse`,
+                    // as in `0d|…|` and `"a" < 10` (GLB-097, decided 2026-10-06).
+                    // It was a `##_`, and the words of the text could make it
+                    // an `##Index` or a `##Range`.
+                    return Err(RuntimeError::kinded(
+                        "Parse",
+                        format!(
                             "cannot convert string '{}' to number for rounding",
                             s
                         ),
-                        span: op.span,
-                    });
+                        op.span,
+                    ));
                 }
             }
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!(
-                        "round expressions only work with numbers or numeric strings, got {:?}",
-                        value
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "round expressions only work with numbers or numeric strings, got {}",
+                        value.type_label()
                     ),
-                    span: op.span,
-                });
+                    op.span,
+                ));
             }
         };
 
@@ -452,23 +509,29 @@ impl<W: Write> Interpreter<W> {
                 } else if let Ok(f) = normalized.parse::<f64>() {
                     f
                 } else {
-                    return Err(RuntimeError::Generic {
-                        message: format!(
+                    // Reading the text as a number is what failed: a `##Parse`,
+                    // as in `0d|…|` and `"a" < 10` (GLB-097, decided 2026-10-06).
+                    // It was a `##_`, and the words of the text could make it
+                    // an `##Index` or a `##Range`.
+                    return Err(RuntimeError::kinded(
+                        "Parse",
+                        format!(
                             "cannot convert string '{}' to number for truncation",
                             s
                         ),
-                        span: op.span,
-                    });
+                        op.span,
+                    ));
                 }
             }
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!(
-                        "truncate expressions only work with numbers or numeric strings, got {:?}",
-                        value
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "truncate expressions only work with numbers or numeric strings, got {}",
+                        value.type_label()
                     ),
-                    span: op.span,
-                });
+                    op.span,
+                ));
             }
         };
 

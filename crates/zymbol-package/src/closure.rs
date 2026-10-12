@@ -397,7 +397,8 @@ fn walk_entry(
         for tok in &tokens {
             match &tok.kind {
                 TokenKind::ExecuteCommand(raw) => {
-                    let raw_path = strip_quotes(raw);
+                    // The first word is the file; the rest are its arguments (D10).
+                    let (raw_path, _, _) = zymbol_common::shell::split_execute(raw);
                     if raw_path.is_empty() {
                         continue;
                     }
@@ -483,16 +484,6 @@ fn handle_execute(
     queue.push_back((target, target_script_base));
 }
 
-
-fn strip_quotes(raw: &str) -> String {
-    // Mirrors zymbol-parser's parse_execute_expr: </ "path.zy" /> is written with quotes
-    // for the formatter's benefit, but the path itself is unquoted.
-    if raw.starts_with('"') && raw.ends_with('"') && raw.len() > 1 {
-        raw[1..raw.len() - 1].to_string()
-    } else {
-        raw.to_string()
-    }
-}
 
 /// Makes `p` absolute *lexically* — joining with the cwd and resolving `.`/`..` components
 /// without touching the filesystem or resolving symlinks. Deliberately not

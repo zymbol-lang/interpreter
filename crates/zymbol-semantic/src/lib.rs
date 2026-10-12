@@ -12,8 +12,11 @@
 
 
 mod call_arity;
+mod interpolation;
 mod modules;
 mod stdlib_access;
+mod unused_imports;
+mod unreachable;
 mod variable_analysis;
 mod cfg;
 mod def_use;
@@ -22,11 +25,14 @@ mod loop_context;
 mod type_check;
 
 pub use call_arity::{
-    arities_of_module_file, module_arities, module_out_slots, resolved_import_path, AliasArities,
-    AliasOutSlots, ModuleArities, ModuleOutSlots,
+    arities_of_module_file, exports_of_module_file, module_arities, module_exports,
+    module_out_slots, resolved_import_path, AliasArities, AliasExports, AliasOutSlots,
+    ModuleArities, ModuleExports, ModuleOutSlots,
 };
 pub use modules::{SemanticError, ExportedItem, ExportTable, ModuleAnalyzer};
 pub use stdlib_access::check_stdlib_access;
+pub use unused_imports::check_unused_imports;
+pub use unreachable::check_unreachable;
 pub use variable_analysis::{VariableAnalyzer, VariableInfo, VariableDiagnostic, Severity};
 pub use cfg::{ControlFlowGraph, CfgNode, CfgEdge, EdgeCondition, NodeId};
 pub use def_use::{
@@ -34,5 +40,9 @@ pub use def_use::{
     AmbiguousLifetime, AmbiguityReason,
 };
 pub use type_check::{TypeChecker, TypeEnv, ZymbolType};
-pub use last_use::{auto_free_exclusions, mentioned_names, region_schedule};
+pub use last_use::{
+    auto_free_exclusions, mentioned_names, names_written_through_output, operand_may_write,
+    region_schedule,
+};
 pub use loop_context::check_loop_context;
+pub use interpolation::interpolated_names;

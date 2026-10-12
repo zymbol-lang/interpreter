@@ -27,13 +27,14 @@ impl<W: Write> Interpreter<W> {
             }
             let idx = match step_val {
                 Value::Int(n) => n,
-                other => return Err(RuntimeError::Generic {
-                    message: format!(
-                        "a navigation step is a position (Int) or a dictionary key (String), got {:?}",
-                        other
+                other => return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                        other.type_label()
                     ),
-                    span: step.index.span(),
-                }),
+                    step.index.span(),
+                )),
             };
             current = descend(current, idx, step.index.span(), di.span)?;
         }
@@ -121,26 +122,39 @@ impl<W: Write> Interpreter<W> {
 
             let (start, end) = match (start_idx, end_idx) {
                 (i, j) if i < 0 || j < 0 => {
-                    return Err(RuntimeError::Generic {
-                        message: "range indices in nav path must be positive integers".to_string(),
+                    return Err(RuntimeError::kinded(
+                        "Index",
+                        "range indices in nav path must be positive integers".to_string(),
                         span,
-                    })
+                    ))
                 }
                 (i, j) => (i, j),
             };
 
-            if start < 1 || end < start {
-                return Err(RuntimeError::Generic {
-                    message: format!(
-                        "invalid nav range {}..{} — indices are 1-based and start must be ≤ end",
-                        start, end
-                    ),
+            if start < 1 || end < 1 {
+                return Err(RuntimeError::kinded(
+                    "Index",
+                    format!("invalid nav range {}..{} — indices are 1-based", start, end),
                     span,
-                });
+                ));
             }
 
+            // D3: a nav range written from a higher position to a lower one
+            // BUILDS, by reversing — `v[1>3..1]` walks positions 3, 2 and 1 in
+            // that order, the same way `a$[3..1]` reads. It is the only way the
+            // language has to reverse; `$^-` SORTS descending, which is a
+            // different question.
+            //
+            // Only the direction is read this way. A position outside the
+            // collection is still refused, by `descend` just below.
+            let positions: Vec<i64> = if start <= end {
+                (start..=end).collect()
+            } else {
+                (end..=start).rev().collect()
+            };
+
             let mut collected = Vec::new();
-            for i in start..=end {
+            for i in positions {
                 let elem = descend(current.clone(), i, step.index.span(), span)?;
                 if rest.is_empty() {
                     collected.push(elem);
@@ -168,13 +182,14 @@ impl<W: Write> Interpreter<W> {
             }
             let idx = match step_val {
                 Value::Int(n) => n,
-                other => return Err(RuntimeError::Generic {
-                    message: format!(
-                        "a navigation step is a position (Int) or a dictionary key (String), got {:?}",
-                        other
+                other => return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                        other.type_label()
                     ),
-                    span: step.index.span(),
-                }),
+                    step.index.span(),
+                )),
             };
             let next = descend(current, idx, step.index.span(), span)?;
             self.walk_steps(next, rest, span)
@@ -190,13 +205,15 @@ impl<W: Write> Interpreter<W> {
         let val = self.eval_expr(expr)?;
         match val {
             Value::Int(n) => Ok(n),
-            other => Err(RuntimeError::Generic {
-                message: format!(
-                    "navigation index must be an integer, got {:?}",
-                    other
+            other => Err(RuntimeError::kinded(
+                "Type",
+                format!(
+                    // The same words as a plain index: one failure, one text.
+                    "index must be an integer, got {}",
+                    other.type_label()
                 ),
-                span: expr.span(),
-            }),
+                expr.span(),
+            )),
         }
     }
 }
@@ -208,19 +225,21 @@ fn descend_key(collection: Value, key: &str, op_span: zymbol_span::Span) -> Resu
             Some((_, v)) => Ok(v.clone()),
             None => {
                 let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
-                Err(RuntimeError::Generic {
-                    message: crate::variables::missing_key_msg(key, &available),
-                    span: op_span,
-                })
+                Err(RuntimeError::kinded(
+                    "Key",
+                    crate::variables::missing_key_msg(key, &available),
+                    op_span,
+                ))
             }
         },
-        other => Err(RuntimeError::Generic {
-            message: format!(
-                "a String navigation step addresses a dictionary key, and this is {}",
-                other.type_name()
+        other => Err(RuntimeError::kinded(
+            "Type",
+            format!(
+                "a String addresses a dictionary key, and this is {}",
+                other.type_label()
             ),
-            span: op_span,
-        }),
+            op_span,
+        )),
     }
 }
 
@@ -253,24 +272,29 @@ fn descend(
             let i = resolve_index(index, len, op_span, "tuple")?;
             Ok(elems[i].clone())
         }
-        Value::NamedTuple(fields) => {
-            let len = fields.len();
-            let i = resolve_index(index, len, op_span, "named tuple")?;
-            Ok(fields[i].1.clone())
-        }
+        // A dictionary is addressed by key, never by position (decision 11):
+        // this read `v[1>1]` of `[#(a: 1)]` as the first value, while the flat
+        // `d[1]` and both other engines refuse it (step P4-3).
+        Value::NamedTuple(fields) => Err(RuntimeError::kinded(
+            "Type",
+            crate::collection_ops::dict_not_positional(
+                "d[n>…]", fields.first().map(|(k, _)| k.as_str())),
+            op_span,
+        )),
         Value::String(s) => {
             let chars: Vec<char> = s.chars().collect();
             let len = chars.len();
             let i = resolve_index(index, len, op_span, "string")?;
             Ok(Value::String(chars[i].to_string()))
         }
-        other => Err(RuntimeError::Generic {
-            message: format!(
-                "cannot index into {:?} — expected array, tuple, or string",
-                other
+        other => Err(RuntimeError::kinded(
+            "Type",
+            format!(
+                "cannot index into {} — expected array, tuple, or string",
+                other.type_label()
             ),
-            span: op_span,
-        }),
+            op_span,
+        )),
     }
 }
 

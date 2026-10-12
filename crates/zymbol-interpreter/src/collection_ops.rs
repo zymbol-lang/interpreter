@@ -59,107 +59,128 @@ impl<W: Write> Interpreter<W> {
             Value::Tuple(ref tup) => Ok(Value::Int(tup.len() as i64)),
             Value::NamedTuple(ref fields) => Ok(Value::Int(fields.len() as i64)),
             Value::String(ref s) => Ok(Value::Int(if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 })),
-            _ => Err(RuntimeError::Generic {
-                message: format!(
-                    "cannot get length of {:?} - only arrays, tuples, and strings have length",
-                    collection
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
+                    "cannot get length of {} - only arrays, tuples, and strings have length",
+                    collection.type_label()
                 ),
-                span: op.span,
-            }),
+                op.span,
+            )),
         }
     }
 
     /// Evaluate collection append operator: collection$+ element
     pub(crate) fn eval_collection_append(&mut self, op: &CollectionAppendExpr) -> Result<Value> {
-        let collection = self.eval_expr(&op.collection)?;
+        let mut collection = self.eval_expr(&op.collection)?;
         let element = self.eval_expr(&op.element)?;
+        Self::append_in(&mut collection, element, op.span)?;
+        Ok(collection)
+    }
 
+    /// `$+` on a collection where it is. The operands are values already: an
+    /// assignment that edits its own receiver evaluates them once and comes
+    /// here, instead of handing the expression back to be evaluated again
+    /// (ZYTW-011). Nothing is written unless the append is valid.
+    #[inline]
+    pub(crate) fn append_in(collection: &mut Value, element: Value, span: zymbol_span::Span) -> Result<()> {
         match collection {
-            Value::Array(mut arr) => {
-                Rc::make_mut(&mut arr).push(element);
-                Ok(Value::Array(arr))
+            Value::Array(arr) => {
+                zymbol_common::count::make_mut(arr).push(element);
+                Ok(())
             }
-            Value::Tuple(mut tup) => {
-                Rc::make_mut(&mut tup).push(element);
-                Ok(Value::Tuple(tup))
+            Value::Tuple(tup) => {
+                zymbol_common::count::make_mut(tup).push(element);
+                Ok(())
             }
-            Value::NamedTuple(_) => Err(RuntimeError::Generic {
-                message: "$+ is not supported on named tuples — no field name available".to_string(),
-                span: op.span,
-            }),
+            Value::NamedTuple(_) => Err(RuntimeError::kinded(
+                "Type",
+                "$+ is not supported on named tuples — no field name available".to_string(),
+                span,
+            )),
             Value::String(s) => {
-                let result = match element {
-                    Value::Char(c) => { let mut out = s; out.push(c); out }
-                    Value::String(ref suffix) => { let mut out = s; out.push_str(suffix); out }
-                    _ => return Err(RuntimeError::Generic {
-                        message: format!("$+ on string requires char or string element, got {:?}", element),
-                        span: op.span,
-                    }),
-                };
-                Ok(Value::String(result))
+                match element {
+                    Value::Char(c) => s.push(c),
+                    Value::String(ref suffix) => s.push_str(suffix),
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("$+ on string requires char or string element, got {}", element.type_label()),
+                        span,
+                    )),
+                }
+                Ok(())
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!(
-                    "cannot append to {:?} - only arrays, tuples, and strings support $+",
-                    collection
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
+                    "cannot append to {} - only arrays, tuples, and strings support $+",
+                    collection.type_label()
                 ),
-                span: op.span,
-            }),
+                span,
+            )),
         }
     }
 
     /// Evaluate collection remove at operator: collection$-[index]
     pub(crate) fn eval_collection_remove(&mut self, op: &CollectionRemoveAtExpr) -> Result<Value> {
-        let collection = self.eval_expr(&op.collection)?;
+        let mut collection = self.eval_expr(&op.collection)?;
         let index_value = self.eval_expr(&op.index)?;
+        Self::remove_at_in(&mut collection, index_value, op.span)?;
+        Ok(collection)
+    }
 
+    /// `$-[i]` on a collection where it is — see `append_in`. Every check
+    /// comes before the removal.
+    #[inline]
+    pub(crate) fn remove_at_in(collection: &mut Value, index_value: Value, span: zymbol_span::Span) -> Result<()> {
         // In a dictionary the ADDRESS is the key, so `$-[…]` — which already
         // means "remove by address" for the array (`arr$-[1]`, by position) — is
         // the same operator with the same sense (decision 9). That leaves
         // `$- value` free to keep meaning "by value" in both collections.
         if let (Value::NamedTuple(fields), Value::String(key)) =
-            (&collection, &index_value)
+            (&mut *collection, &index_value)
         {
-            let key = key.clone();
-            let mut out: Vec<(String, Value)> = fields.to_vec();
-            match out.iter().position(|(k, _)| *k == key) {
-                Some(i) => { out.remove(i); }
+            match fields.iter().position(|(k, _)| k == key) {
+                Some(i) => { zymbol_common::count::make_mut(fields).remove(i); }
                 None => {
                     let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
-                    return Err(RuntimeError::Generic {
-                        message: crate::variables::missing_key_msg(&key, &available),
-                        span: op.span,
-                    });
+                    return Err(RuntimeError::kinded(
+                        "Key",
+                        crate::variables::missing_key_msg(key, &available),
+                        span,
+                    ));
                 }
             }
-            return Ok(Value::named_tuple(out));
+            return Ok(());
         }
 
-        if let (Value::NamedTuple(fields), Value::Int(_)) = (&collection, &index_value) {
-            return Err(RuntimeError::Generic {
-                message: dict_not_positional("d$-[n]", fields.first().map(|(k, _)| k.as_str())),
-                span: op.span,
-            });
+        if let (Value::NamedTuple(fields), Value::Int(_)) = (&*collection, &index_value) {
+            return Err(RuntimeError::kinded(
+                "Type",
+                dict_not_positional("d$-[n]", fields.first().map(|(k, _)| k.as_str())),
+                span,
+            ));
         }
 
         // Extract index as integer
         let index = match index_value {
             Value::Int(n) => n,
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!("remove index must be an integer, got {:?}", index_value),
-                    span: op.span,
-                })
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("remove index must be an integer, got {}", index_value.type_label()),
+                    span,
+                ))
             }
         };
 
         match collection {
-            Value::Array(mut arr) => {
+            Value::Array(arr) => {
                 let len = arr.len();
                 let i = if index == 0 {
                     return Err(RuntimeError::Generic {
                         message: "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)".to_string(),
-                        span: op.span,
+                        span: span,
                     });
                 } else if index < 0 {
                     len as i64 + index
@@ -169,18 +190,18 @@ impl<W: Write> Interpreter<W> {
                 if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!("index out of bounds: index {} for array of length {}", index, len),
-                        span: op.span,
+                        span: span,
                     });
                 }
-                Rc::make_mut(&mut arr).remove(i as usize);
-                Ok(Value::Array(arr))
+                zymbol_common::count::make_mut(arr).remove(i as usize);
+                Ok(())
             }
-            Value::Tuple(mut tup) => {
+            Value::Tuple(tup) => {
                 let len = tup.len();
                 let i = if index == 0 {
                     return Err(RuntimeError::Generic {
                         message: "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)".to_string(),
-                        span: op.span,
+                        span: span,
                     });
                 } else if index < 0 {
                     len as i64 + index
@@ -190,18 +211,18 @@ impl<W: Write> Interpreter<W> {
                 if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!("index out of bounds: index {} for tuple of length {}", index, len),
-                        span: op.span,
+                        span: span,
                     });
                 }
-                Rc::make_mut(&mut tup).remove(i as usize);
-                Ok(Value::Tuple(tup))
+                zymbol_common::count::make_mut(tup).remove(i as usize);
+                Ok(())
             }
-            Value::NamedTuple(mut fields) => {
+            Value::NamedTuple(fields) => {
                 let len = fields.len();
                 let i = if index == 0 {
                     return Err(RuntimeError::Generic {
                         message: "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)".to_string(),
-                        span: op.span,
+                        span: span,
                     });
                 } else if index < 0 {
                     len as i64 + index
@@ -211,11 +232,11 @@ impl<W: Write> Interpreter<W> {
                 if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!("index out of bounds: index {} for named tuple of length {}", index, len),
-                        span: op.span,
+                        span: span,
                     });
                 }
-                Rc::make_mut(&mut fields).remove(i as usize);
-                Ok(Value::NamedTuple(fields))
+                zymbol_common::count::make_mut(fields).remove(i as usize);
+                Ok(())
             }
             Value::String(s) => {
                 let mut chars: Vec<char> = s.chars().collect();
@@ -223,7 +244,7 @@ impl<W: Write> Interpreter<W> {
                 let i = if index == 0 {
                     return Err(RuntimeError::Generic {
                         message: "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)".to_string(),
-                        span: op.span,
+                        span: span,
                     });
                 } else if index < 0 {
                     len as i64 + index
@@ -233,19 +254,21 @@ impl<W: Write> Interpreter<W> {
                 if i < 0 || i as usize >= len {
                     return Err(RuntimeError::Generic {
                         message: format!("index out of bounds: index {} for string of length {}", index, len),
-                        span: op.span,
+                        span: span,
                     });
                 }
                 chars.remove(i as usize);
-                Ok(Value::String(chars.iter().collect()))
+                *s = chars.iter().collect();
+                Ok(())
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!(
-                    "cannot remove from {:?} - only arrays, tuples, and strings support $-[i]",
-                    collection
+            other => Err(RuntimeError::kinded(
+                "Type",
+                format!(
+                    "cannot remove from {} - only arrays, tuples, and strings support $-[i]",
+                    other.type_label()
                 ),
-                span: op.span,
-            }),
+                span,
+            )),
         }
     }
 
@@ -274,13 +297,14 @@ impl<W: Write> Interpreter<W> {
             Value::NamedTuple(ref fields) => {
                 let key = match &element {
                     Value::String(s) => s.clone(),
-                    other => return Err(RuntimeError::Generic {
-                        message: format!(
-                            "a dictionary is asked about a key, so `$?` needs a String, got {:?}",
-                            other
+                    other => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!(
+                            "a dictionary is asked about a key, so `$?` needs a String, got {}",
+                            other.type_label()
                         ),
-                        span: op.span,
-                    }),
+                        op.span,
+                    )),
                 };
                 Ok(Value::Bool(fields.iter().any(|(k, _)| *k == key)))
             }
@@ -297,22 +321,24 @@ impl<W: Write> Interpreter<W> {
                         let found = s.contains(substring.as_str());
                         Ok(Value::Bool(found))
                     }
-                    _ => Err(RuntimeError::Generic {
-                        message: format!(
-                            "string contains only supports char or string search, got {:?}",
-                            element
+                    _ => Err(RuntimeError::kinded(
+                        "Type",
+                        format!(
+                            "string contains only supports char or string search, got {}",
+                            element.type_label()
                         ),
-                        span: op.span,
-                    }),
+                        op.span,
+                    )),
                 }
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!(
-                    "cannot search {:?} - only arrays, tuples, and strings support contains",
-                    collection
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
+                    "cannot search {} - only arrays, tuples, and strings support contains",
+                    collection.type_label()
                 ),
-                span: op.span,
-            }),
+                op.span,
+            )),
         }
     }
 
@@ -320,30 +346,34 @@ impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_collection_update(&mut self, op: &CollectionUpdateExpr) -> Result<Value> {
         // Deep update path: arr[i>j>k]$~ val
         if let Expr::DeepIndex(di) = op.target.unwrap_group() {
-            // Evaluate all step indices (ranges not supported for update)
+            if di.path.steps.iter().any(|step| step.range_end.is_some()) {
+                return Err(RuntimeError::Generic {
+                    message: "deep update ($~) does not support ranges in the path".to_string(),
+                    span: op.span,
+                });
+            }
+            // Left to right: the root, then the steps, then the value — the
+            // order `arr[i]$~ v` has below. The root was read after the steps,
+            // so a step that wrote it had its write edited instead of
+            // overwritten (GLB-115).
+            let root = self.eval_expr(&di.array)?;
             // A step is an ordinary expression, and its VALUE says how to
             // address: Int → position, String → dictionary key. Same rule as
             // `d[clave]`, one level down.
             let mut indices: Vec<Value> = Vec::with_capacity(di.path.steps.len());
             for step in &di.path.steps {
-                if step.range_end.is_some() {
-                    return Err(RuntimeError::Generic {
-                        message: "deep update ($~) does not support ranges in the path".to_string(),
-                        span: op.span,
-                    });
-                }
                 match self.eval_expr(&step.index)? {
                     v @ (Value::Int(_) | Value::String(_)) => indices.push(v),
-                    other => return Err(RuntimeError::Generic {
-                        message: format!(
-                            "a navigation step is a position (Int) or a dictionary key (String), got {:?}",
-                            other
+                    other => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!(
+                            "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                            other.type_label()
                         ),
-                        span: op.span,
-                    }),
+                        op.span,
+                    )),
                 }
             }
-            let root = self.eval_expr(&di.array)?;
             let new_val = self.eval_expr(&op.value)?;
             return deep_update_value(root, &indices, new_val, op.span);
         }
@@ -374,7 +404,20 @@ impl<W: Write> Interpreter<W> {
             }
         };
         let new_value = self.eval_expr(&op.value)?;
+        let mut collection = collection;
+        Self::update_in(&mut collection, index_value, new_value, op.span)?;
+        Ok(collection)
+    }
 
+    /// `[i]$~ v` on a collection where it is — see `append_in`. The index and
+    /// the value are checked before anything is written.
+    #[inline]
+    pub(crate) fn update_in(
+        collection: &mut Value,
+        index_value: Value,
+        new_value: Value,
+        span: zymbol_span::Span,
+    ) -> Result<()> {
         // Resolve 1-based or negative integer index to a 0-based usize.
         // `container` names the thing that was too short, and the index-0 text
         // carries the same parenthetical every other site carries: this local
@@ -398,39 +441,41 @@ impl<W: Write> Interpreter<W> {
         };
 
         match collection {
-            Value::Array(mut arr) => {
+            Value::Array(arr) => {
                 let index = match index_value {
                     Value::Int(n) => n,
-                    _ => return Err(RuntimeError::Generic {
-                        message: format!("array update index must be an integer, got {:?}", index_value),
-                        span: op.span,
-                    }),
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("array update index must be an integer, got {}", index_value.type_label()),
+                        span,
+                    )),
                 };
                 let len = arr.len();
-                let i = resolve_int(index, len, op.span, "array")?;
-                Rc::make_mut(&mut arr)[i] = new_value;
-                Ok(Value::Array(arr))
+                let i = resolve_int(index, len, span, "array")?;
+                zymbol_common::count::make_mut(arr)[i] = new_value;
+                Ok(())
             }
-            Value::Tuple(mut tup) => {
+            Value::Tuple(tup) => {
                 let index = match index_value {
                     Value::Int(n) => n,
-                    _ => return Err(RuntimeError::Generic {
-                        message: format!("tuple update index must be an integer, got {:?}", index_value),
-                        span: op.span,
-                    }),
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("tuple update index must be an integer, got {}", index_value.type_label()),
+                        span,
+                    )),
                 };
                 let len = tup.len();
                 let i = if index == 0 {
                     return Err(RuntimeError::Generic {
                         message: "index 0 is invalid — Zymbol uses 1-based indexing".to_string(),
-                        span: op.span,
+                        span: span,
                     });
                 } else if index < 0 {
                     let i = len as i64 + index;
                     if i < 0 || i as usize >= len {
                         return Err(RuntimeError::Generic {
                             message: format!("index out of bounds: index {} for tuple of length {}", index, len),
-                            span: op.span,
+                            span: span,
                         });
                     }
                     i as usize
@@ -439,34 +484,71 @@ impl<W: Write> Interpreter<W> {
                     if i >= len {
                         return Err(RuntimeError::Generic {
                             message: format!("index out of bounds: index {} for tuple of length {}", index, len),
-                            span: op.span,
+                            span: span,
                         });
                     }
                     i
                 };
                 // Create a new tuple with the value updated (immutability)
-                Rc::make_mut(&mut tup)[i] = new_value;
-                Ok(Value::Tuple(tup))
+                zymbol_common::count::make_mut(tup)[i] = new_value;
+                Ok(())
             }
-            Value::NamedTuple(mut fields) => {
+            // A string IS an array of characters, and is addressed like one
+            // (decided 2026-09-22): `s[1]$~ "z"` writes at position 1, exactly
+            // as it does on an array. Only a char or a string may be written —
+            // the same rule `$+ on string requires char or string element`
+            // already states, and the reason collections are STRICT (GLB-046).
+            Value::String(st) => {
+                let index = match index_value {
+                    Value::Int(n) => n,
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("string update index must be an integer, got {}", index_value.type_label()),
+                        span,
+                    )),
+                };
+                let piece = match &new_value {
+                    Value::Char(c) => c.to_string(),
+                    Value::String(s2) => s2.to_string(),
+                    other => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("$~ on string requires char or string value, got {}", other.type_label()),
+                        span,
+                    )),
+                };
+                let mut chars: Vec<char> = st.chars().collect();
+                let len = chars.len();
+                let i = resolve_int(index, len, span, "string")?;
+                // A multi-character value takes the place of the one character,
+                // the way replacing an element of an array puts one value where
+                // one value was — the element just happens to be longer.
+                let mut out = String::new();
+                for (n, c) in chars.drain(..).enumerate() {
+                    if n == i { out.push_str(&piece); } else { out.push(c); }
+                }
+                *st = out;
+                Ok(())
+            }
+            Value::NamedTuple(fields) => {
                 match index_value {
                     // A positional WRITE is strictly worse than a positional
                     // read: it corrupts data rather than returning the wrong
                     // value. `d[2]$~ v` is exactly the failure decision 11
                     // describes — adding a key changes what sits at each
                     // position — applied to a mutation.
-                    Value::Int(_) => Err(RuntimeError::Generic {
-                        message: dict_not_positional(
+                    Value::Int(_) => Err(RuntimeError::kinded(
+                        "Type",
+                        dict_not_positional(
                             "d[n]$~ value",
                             fields.first().map(|(k, _)| k.as_str()),
                         ),
-                        span: op.span,
-                    }),
+                        span,
+                    )),
                     Value::String(name) => {
-                        for (field_name, field_value) in std::rc::Rc::make_mut(&mut fields) {
+                        for (field_name, field_value) in zymbol_common::count::make_mut(fields).iter_mut() {
                             if *field_name == name {
                                 *field_value = new_value;
-                                return Ok(Value::NamedTuple(fields));
+                                return Ok(());
                             }
                         }
                         // A key that is not there gets ADDED — `forma/diccionarios.zy`
@@ -482,25 +564,30 @@ impl<W: Write> Interpreter<W> {
                         //
                         // Without this, a JSON built piece by piece — the normal
                         // case — could not be built at all.
-                        Rc::make_mut(&mut fields).push((name.clone(), new_value));
-                        Ok(Value::NamedTuple(fields))
+                        zymbol_common::count::make_mut(fields).push((name.clone(), new_value));
+                        Ok(())
                     }
-                    _ => Err(RuntimeError::Generic {
-                        message: format!(
-                            "named tuple update index must be an integer or field name (string), got {:?}",
-                            index_value
+                    // Any other kind of index is the same mistake, told in the
+                    // same words as the VM and zyjs tell it (P4-3, decided
+                    // 2026-09-26): it said "named tuple update index must be…".
+                    _ => Err(RuntimeError::kinded(
+                        "Type",
+                        dict_not_positional(
+                            "d[n]$~ value",
+                            fields.first().map(|(k, _)| k.as_str()),
                         ),
-                        span: op.span,
-                    }),
+                        span,
+                    )),
                 }
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!(
+            other => Err(RuntimeError::kinded(
+                "Type",
+                format!(
                     "$~ writes into a collection, and this is {}\nhelp: use a[1]$~ v on an array or tuple, d[\"key\"]$~ v on a #(…)",
-                    crate::base_type_symbol(&collection)
+                    other.type_label()
                 ),
-                span: op.span,
-            }),
+                span,
+            )),
         }
     }
 
@@ -515,13 +602,14 @@ impl<W: Write> Interpreter<W> {
             Value::NamedTuple(fields) => fields.len(),
             Value::String(s) => s.chars().count(),
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: format!(
-                        "cannot slice {:?} - only arrays, tuples, named tuples, and strings support slice",
-                        collection
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "cannot slice {} - only arrays, tuples, named tuples, and strings support slice",
+                        collection.type_label()
                     ),
-                    span: op.span,
-                });
+                    op.span,
+                ));
             }
         };
 
@@ -531,10 +619,11 @@ impl<W: Write> Interpreter<W> {
             match start_value {
                 Value::Int(n) => n,
                 _ => {
-                    return Err(RuntimeError::Generic {
-                        message: format!("slice start must be an integer, got {:?}", start_value),
-                        span: op.span,
-                    })
+                    return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("slice start must be an integer, got {}", start_value.type_label()),
+                        op.span,
+                    ))
                 }
             }
         } else {
@@ -547,15 +636,23 @@ impl<W: Write> Interpreter<W> {
             match end_value {
                 Value::Int(n) => n,
                 _ => {
-                    return Err(RuntimeError::Generic {
-                        message: format!("slice end must be an integer, got {:?}", end_value),
-                        span: op.span,
-                    })
+                    return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("slice end must be an integer, got {}", end_value.type_label()),
+                        op.span,
+                    ))
                 }
             }
         } else {
             length as i64
         };
+
+        // What the reader WROTE, kept for the diagnostics below: `start` becomes a
+        // 0-based offset two lines down and `end` stays 1-based-inclusive, so a
+        // message built from them told whoever wrote `$[3..1]` that "start (2)
+        // cannot be greater than end (1)" — two numbers that are not in their
+        // program, and a relation about the wrong values (GLB-047).
+        let (written_start, written_end) = (start, raw_end);
 
         // Normalize indices (1-based: positive i maps to internal i-1; 0 = default start)
         let start = if start == 0 {
@@ -584,17 +681,63 @@ impl<W: Write> Interpreter<W> {
             return Err(RuntimeError::Generic {
                 message: format!(
                     "slice indices out of bounds: [{}..{}] for collection of length {}",
-                    start, end, length
+                    written_start, written_end, length
                 ),
                 span: op.span,
             });
         }
 
+        // D3: a slice written from a higher position to a lower one BUILDS, by
+        // reversing — `a$[3..1]` is positions 3, 2 and 1 in that order. It is
+        // the only way the language has to reverse: `$^-` SORTS descending,
+        // which is a different question.
+        //
+        // Only the direction is read this way. A bound outside the collection
+        // is still refused above, and a count (`$[i:n]`) never reverses: a
+        // count of 0 is an empty slice and a negative one is refused.
+        // The direction is read from what was WRITTEN, not from the offsets:
+        // `a$[2..1]` normalizes to start == end, which is indistinguishable
+        // from an empty ascending slice, and it is a descending one.
+        let lo_pos = if written_start == 0 { 1 }
+            else if written_start < 0 { length as i64 + written_start + 1 }
+            else { written_start };
+        let hi_pos = if written_end < 0 { length as i64 + written_end + 1 } else { written_end };
+        if lo_pos > hi_pos && !op.count_based && hi_pos >= 1 && lo_pos <= length as i64 {
+            let take = |v: &[Value]| -> Vec<Value> {
+                (hi_pos..=lo_pos).rev().map(|p| v[(p - 1) as usize].clone()).collect()
+            };
+            return match collection {
+                Value::Array(arr) => Ok(Value::array(take(&arr))),
+                Value::Tuple(tup) => Ok(Value::tuple(take(&tup))),
+                Value::String(st) => {
+                    let chars: Vec<char> = st.chars().collect();
+                    Ok(Value::String(
+                        (hi_pos..=lo_pos).rev().map(|p| chars[(p - 1) as usize]).collect::<String>().into(),
+                    ))
+                }
+                Value::NamedTuple(fields) => Err(RuntimeError::kinded(
+                    "Type",
+                    dict_not_positional("d$[a..b]", fields.first().map(|(k, _)| k.as_str())),
+                    op.span,
+                )),
+                other => Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "cannot slice {} - only arrays, tuples, named tuples, and strings support slice",
+                        other.type_label()
+                    ),
+                    op.span,
+                )),
+            };
+        }
+
+        // A count never reverses: `$[i:n]` with a negative count is refused
+        // where it is read, and 0 is the empty slice.
         if start > end {
             return Err(RuntimeError::Generic {
                 message: format!(
                     "slice start ({}) cannot be greater than end ({})",
-                    start, end
+                    written_start, written_end
                 ),
                 span: op.span,
             });
@@ -613,10 +756,11 @@ impl<W: Write> Interpreter<W> {
             // No key-based replacement, and it does not get one: "the first
             // two keys" is not a question a dictionary should answer, which is
             // why Python's `dict` has no slicing either.
-            Value::NamedTuple(fields) => Err(RuntimeError::Generic {
-                message: dict_not_positional("d$[a..b]", fields.first().map(|(k, _)| k.as_str())),
-                span: op.span,
-            }),
+            Value::NamedTuple(fields) => Err(RuntimeError::kinded(
+                "Type",
+                dict_not_positional("d$[a..b]", fields.first().map(|(k, _)| k.as_str())),
+                op.span,
+            )),
             Value::String(s) => {
                 // Convert string to chars, slice, then back to string
                 let chars: Vec<char> = s.chars().collect();
@@ -636,37 +780,82 @@ impl<W: Write> Interpreter<W> {
         let func = match lambda {
             Value::Function(f) => f,
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: "map requires lambda function".to_string(),
-                    span: op.span,
-                });
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    "map requires lambda function".to_string(),
+                    op.span,
+                ));
             }
         };
 
-        match collection {
-            Value::Array(arr) => {
-                let mut result = Vec::new();
-
-                for element in crate::own_elements(arr) {
-                    // Call lambda with element
-                    let transformed = self.eval_lambda_call(
-                        func.clone(),
-                        vec![element],
-                        &op.span,
-                    )?;
-                    result.push(transformed);
-                }
-
-                Ok(Value::array(result))
+        let items = match Self::hof_items(&collection) {
+            Some(v) => v,
+            None => {
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "map requires array, tuple, string or dictionary, got {}",
+                        collection.type_label()
+                    ),
+                    op.span,
+                ))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("map requires array, got {:?}", collection),
-                span: op.span,
-            }),
+        };
+
+        let mut result = Vec::new();
+        for element in items {
+            let transformed = self.eval_lambda_call(func.clone(), vec![element], &op.span)?;
+            result.push(transformed);
         }
+        Ok(Self::hof_rebuild(&collection, result))
     }
 
     /// Evaluate collection filter: collection$| (x -> x > 0)
+    /// What a higher-order operator walks, and how the result is put back.
+    ///
+    /// The rule is the loop's rule: what `@ e:v` hands over is what
+    /// `v$> (e -> …)` transforms. That makes one sentence cover all four
+    /// collections instead of a list — and it is why a DICTIONARY yields its
+    /// KEYS here, exactly as it does in `@ k:d` (decision 8).
+    fn hof_items(collection: &Value) -> Option<Vec<Value>> {
+        match collection {
+            Value::Array(arr) => Some(arr.as_ref().clone()),
+            Value::Tuple(tup) => Some(tup.as_ref().clone()),
+            Value::String(s) => Some(s.chars().map(Value::Char).collect()),
+            Value::NamedTuple(fields) => {
+                Some(fields.iter().map(|(k, _)| Value::String(k.clone())).collect())
+            }
+            _ => None,
+        }
+    }
+
+    /// Rebuild the shape the elements came from. A dictionary walked by key has
+    /// no shape to go back into, so it answers an array — the keys are a list
+    /// once they are out.
+    fn hof_rebuild(original: &Value, items: Vec<Value>) -> Value {
+        match original {
+            Value::Tuple(_) => Value::tuple(items),
+            Value::String(_) => {
+                if items.iter().all(|v| matches!(v, Value::Char(_) | Value::String(_))) {
+                    let mut out = String::new();
+                    for v in &items {
+                        match v {
+                            Value::Char(c) => out.push(*c),
+                            Value::String(s) => out.push_str(s),
+                            _ => unreachable!(),
+                        }
+                    }
+                    Value::String(out.into())
+                } else {
+                    // A lambda that turns characters into something else has
+                    // left the string behind; the honest shape is an array.
+                    Value::array(items)
+                }
+            }
+            _ => Value::array(items),
+        }
+    }
+
     pub(crate) fn eval_collection_filter(&mut self, op: &zymbol_ast::CollectionFilterExpr) -> Result<Value> {
         let collection = self.eval_expr(&op.collection)?;
         let lambda = self.eval_expr(&op.lambda)?;
@@ -674,45 +863,44 @@ impl<W: Write> Interpreter<W> {
         let func = match lambda {
             Value::Function(f) => f,
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: "filter requires lambda function".to_string(),
-                    span: op.span,
-                });
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    "filter requires lambda function".to_string(),
+                    op.span,
+                ));
             }
         };
 
-        match collection {
-            Value::Array(arr) => {
-                let mut result = Vec::new();
-
-                for element in crate::own_elements(arr) {
-                    // Call lambda with element
-                    let keep = self.eval_lambda_call(
-                        func.clone(),
-                        vec![element.clone()],
-                        &op.span,
-                    )?;
-
-                    // Check if result is boolean
-                    match keep {
-                        Value::Bool(true) => result.push(element),
-                        Value::Bool(false) => {}
-                        _ => {
-                            return Err(RuntimeError::Generic {
-                                message: format!("filter lambda must return boolean, got {:?}", keep),
-                                span: op.span,
-                            });
-                        }
-                    }
-                }
-
-                Ok(Value::array(result))
+        let items = match Self::hof_items(&collection) {
+            Some(v) => v,
+            None => {
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "filter requires array, tuple, string or dictionary, got {}",
+                        collection.type_label()
+                    ),
+                    op.span,
+                ))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("filter requires array, got {:?}", collection),
-                span: op.span,
-            }),
+        };
+
+        let mut result = Vec::new();
+        for element in items {
+            let keep = self.eval_lambda_call(func.clone(), vec![element.clone()], &op.span)?;
+            match keep {
+                Value::Bool(true) => result.push(element),
+                Value::Bool(false) => {}
+                _ => {
+                    return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("filter lambda must return boolean, got {}", keep.type_label()),
+                        op.span,
+                    ));
+                }
+            }
         }
+        Ok(Self::hof_rebuild(&collection, result))
     }
 
     /// Evaluate collection reduce: collection$< (0, (acc, x) -> acc + x)
@@ -724,10 +912,11 @@ impl<W: Write> Interpreter<W> {
         let func = match lambda {
             Value::Function(f) => f,
             _ => {
-                return Err(RuntimeError::Generic {
-                    message: "reduce requires lambda function".to_string(),
-                    span: op.span,
-                });
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    "reduce requires lambda function".to_string(),
+                    op.span,
+                ));
             }
         };
 
@@ -742,30 +931,64 @@ impl<W: Write> Interpreter<W> {
             });
         }
 
-        match collection {
-            Value::Array(arr) => {
-                let mut accumulator = initial;
-
-                for element in crate::own_elements(arr) {
-                    // Call lambda with (accumulator, element)
-                    accumulator = self.eval_lambda_call(
-                        func.clone(),
-                        vec![accumulator, element],
-                        &op.span,
-                    )?;
-                }
-
-                Ok(accumulator)
+        let items = match Self::hof_items(&collection) {
+            Some(v) => v,
+            None => {
+                return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "reduce requires array, tuple, string or dictionary, got {}",
+                        collection.type_label()
+                    ),
+                    op.span,
+                ))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("reduce requires array, got {:?}", collection),
-                span: op.span,
-            }),
+        };
+
+        let mut accumulator = initial;
+        for element in items {
+            accumulator =
+                self.eval_lambda_call(func.clone(), vec![accumulator, element], &op.span)?;
         }
+        Ok(accumulator)
     }
 
     /// Evaluate collection sort: collection$^+ or collection$^-
     /// Natural order for numbers/strings; custom comparator (a, b) -> Bool for named tuples.
+    /// Ask a `$^` comparator whether `a` goes before `b`. It answers a Bool;
+    /// anything else is a `##Type` (GLB-024 — no truthiness stands in for one).
+    fn sort_comparator_says(
+        &mut self,
+        func: &crate::FunctionValue,
+        a: Value,
+        b: Value,
+        span: zymbol_span::Span,
+    ) -> Result<bool> {
+        match self.eval_lambda_call(func.clone(), vec![a, b], &span)? {
+            Value::Bool(b) => Ok(b),
+            other => Err(RuntimeError::kinded(
+                "Type",
+                format!("sort comparator must return a Bool, got {}", other.type_ident()),
+                span,
+            )),
+        }
+    }
+
+    /// Rule B for one comparison of a merge: the left element goes first unless
+    /// the comparator says it does not AND says the right one does (GLB-073).
+    fn sort_takes_left(
+        &mut self,
+        func: &crate::FunctionValue,
+        left: &Value,
+        right: &Value,
+        span: zymbol_span::Span,
+    ) -> Result<bool> {
+        if self.sort_comparator_says(func, left.clone(), right.clone(), span)? {
+            return Ok(true);
+        }
+        Ok(!self.sort_comparator_says(func, right.clone(), left.clone(), span)?)
+    }
+
     pub(crate) fn eval_collection_sort(&mut self, op: &zymbol_ast::CollectionSortExpr) -> Result<Value> {
         let collection = self.eval_expr(&op.collection)?;
 
@@ -783,37 +1006,61 @@ impl<W: Write> Interpreter<W> {
                             span: op.span,
                         }),
                     };
-                    // Bubble sort — stable, correct for small arrays; avoids unsafe sort_by
-                    let n = items.len();
-                    for i in 0..n {
-                        for j in 0..n.saturating_sub(i + 1) {
-                            let keep = self.eval_lambda_call(
-                                func.clone(),
-                                vec![items[j].clone(), items[j + 1].clone()],
-                                &op.span,
-                            )?;
-                            let a_before_b = matches!(keep, Value::Bool(true));
-                            if !a_before_b {
-                                Rc::make_mut(&mut items).swap(j, j + 1);
+                    // Bottom-up merge sort, the same in the three engines call for
+                    // call (GLB-108, decided 2026-10-09): runs of width 1, 2, 4, …,
+                    // merged left to right. It was a bubble sort that visited every
+                    // pair — quadratic even on sorted input.
+                    //
+                    // Stable by rule B (GLB-073, decided 2026-10-03): the left
+                    // element is taken unless it does NOT go before the right one
+                    // AND the right one goes before it. A strict comparator
+                    // (`a < b`) answers #0 both ways on a tie, so ties keep their
+                    // input order; a non-strict one (`a <= b`) never asks twice.
+                    let mut src: Vec<Value> = items.as_ref().clone();
+                    let n = src.len();
+                    let mut dst: Vec<Value> = Vec::with_capacity(n);
+                    let mut width = 1;
+                    while width < n {
+                        dst.clear();
+                        let mut lo = 0;
+                        while lo < n {
+                            let mid = (lo + width).min(n);
+                            let hi = (lo + 2 * width).min(n);
+                            let (mut i, mut j) = (lo, mid);
+                            while i < mid && j < hi {
+                                if self.sort_takes_left(&func, &src[i], &src[j], op.span)? {
+                                    dst.push(src[i].clone());
+                                    i += 1;
+                                } else {
+                                    dst.push(src[j].clone());
+                                    j += 1;
+                                }
                             }
+                            dst.extend_from_slice(&src[i..mid]);
+                            dst.extend_from_slice(&src[j..hi]);
+                            lo = hi;
                         }
+                        std::mem::swap(&mut src, &mut dst);
+                        width *= 2;
                     }
+                    items = Rc::new(src);
                 } else {
                     // Natural order
-                    Rc::make_mut(&mut items).sort_by(|a, b| {
+                    zymbol_common::count::make_mut(&mut items).sort_by(|a, b| {
                         natural_cmp(a, b).unwrap_or(std::cmp::Ordering::Equal)
                     });
                     if !op.ascending {
-                        Rc::make_mut(&mut items).reverse();
+                        zymbol_common::count::make_mut(&mut items).reverse();
                     }
                 }
 
                 Ok(Value::Array(items))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("sort requires an array, got {:?}", collection),
-                span: op.span,
-            }),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("sort requires an array, got {}", collection.type_label()),
+                op.span,
+            )),
         }
     }
 
@@ -825,10 +1072,11 @@ impl<W: Write> Interpreter<W> {
 
         let index = match index_val {
             Value::Int(n) => n,
-            _ => return Err(RuntimeError::Generic {
-                message: format!("$+[i] index must be an integer, got {:?}", index_val),
-                span: op.span,
-            }),
+            _ => return Err(RuntimeError::kinded(
+                "Type",
+                format!("$+[i] index must be an integer, got {}", index_val.type_label()),
+                op.span,
+            )),
         };
         if index <= 0 {
             return Err(RuntimeError::Generic {
@@ -842,32 +1090,33 @@ impl<W: Write> Interpreter<W> {
             Value::Array(mut arr) => {
                 if i > arr.len() {
                     return Err(RuntimeError::Generic {
-                        message: format!("$+[{}] index out of bounds for array of length {}", i, arr.len()),
+                        message: format!("$+[{}] index out of bounds for array of length {}", index, arr.len()),
                         span: op.span,
                     });
                 }
-                Rc::make_mut(&mut arr).insert(i, element);
+                zymbol_common::count::make_mut(&mut arr).insert(i, element);
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
                 if i > tup.len() {
                     return Err(RuntimeError::Generic {
-                        message: format!("$+[{}] index out of bounds for tuple of length {}", i, tup.len()),
+                        message: format!("$+[{}] index out of bounds for tuple of length {}", index, tup.len()),
                         span: op.span,
                     });
                 }
-                Rc::make_mut(&mut tup).insert(i, element);
+                zymbol_common::count::make_mut(&mut tup).insert(i, element);
                 Ok(Value::Tuple(tup))
             }
-            Value::NamedTuple(_) => Err(RuntimeError::Generic {
-                message: "$+[i] is not supported on named tuples — no field name available".to_string(),
-                span: op.span,
-            }),
+            Value::NamedTuple(_) => Err(RuntimeError::kinded(
+                "Type",
+                "$+[i] is not supported on named tuples — no field name available".to_string(),
+                op.span,
+            )),
             Value::String(s) => {
                 let mut chars: Vec<char> = s.chars().collect();
                 if i > chars.len() {
                     return Err(RuntimeError::Generic {
-                        message: format!("$+[{}] index out of bounds for string of length {}", i, chars.len()),
+                        message: format!("$+[{}] index out of bounds for string of length {}", index, chars.len()),
                         span: op.span,
                     });
                 }
@@ -880,16 +1129,18 @@ impl<W: Write> Interpreter<W> {
                         }
                         Ok(Value::String(chars.iter().collect()))
                     }
-                    _ => Err(RuntimeError::Generic {
-                        message: format!("$+[i] on string requires char or string element, got {:?}", element),
-                        span: op.span,
-                    }),
+                    _ => Err(RuntimeError::kinded(
+                        "Type",
+                        format!("$+[i] on string requires char or string element, got {}", element.type_label()),
+                        op.span,
+                    )),
                 }
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("$+[i] requires an array, tuple, or string, got {:?}", collection),
-                span: op.span,
-            }),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("$+[i] requires an array, tuple, or string, got {}", collection.type_label()),
+                op.span,
+            )),
         }
     }
 
@@ -902,19 +1153,19 @@ impl<W: Write> Interpreter<W> {
         match collection {
             Value::Array(mut arr) => {
                 if let Some(pos) = arr.iter().position(|item| self.values_equal(item, &value)) {
-                    Rc::make_mut(&mut arr).remove(pos);
+                    zymbol_common::count::make_mut(&mut arr).remove(pos);
                 }
                 Ok(Value::Array(arr))
             }
             Value::Tuple(mut tup) => {
                 if let Some(pos) = tup.iter().position(|item| self.values_equal(item, &value)) {
-                    Rc::make_mut(&mut tup).remove(pos);
+                    zymbol_common::count::make_mut(&mut tup).remove(pos);
                 }
                 Ok(Value::Tuple(tup))
             }
             Value::NamedTuple(mut fields) => {
                 if let Some(pos) = fields.iter().position(|(_, v)| self.values_equal(v, &value)) {
-                    Rc::make_mut(&mut fields).remove(pos);
+                    zymbol_common::count::make_mut(&mut fields).remove(pos);
                 }
                 Ok(Value::NamedTuple(fields))
             }
@@ -942,17 +1193,19 @@ impl<W: Write> Interpreter<W> {
                         }
                         s.clone()
                     }
-                    _ => return Err(RuntimeError::Generic {
-                        message: format!("$- on string requires char or string value, got {:?}", value),
-                        span: op.span,
-                    }),
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("$- on string requires char or string value, got {}", value.type_label()),
+                        op.span,
+                    )),
                 };
                 Ok(Value::String(result))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("$- requires an array, tuple, or string, got {:?}", collection),
-                span: op.span,
-            }),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("$- requires an array, tuple, or string, got {}", collection.type_label()),
+                op.span,
+            )),
         }
     }
 
@@ -988,17 +1241,19 @@ impl<W: Write> Interpreter<W> {
                         if pattern.is_empty() { return Ok(Value::String(s)); }
                         s.replace(pattern.as_str(), "")
                     }
-                    _ => return Err(RuntimeError::Generic {
-                        message: format!("$-- on string requires char or string value, got {:?}", value),
-                        span: op.span,
-                    }),
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("$-- on string requires char or string value, got {}", value.type_label()),
+                        op.span,
+                    )),
                 };
                 Ok(Value::String(result))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!("$-- requires an array, tuple, or string, got {:?}", collection),
-                span: op.span,
-            }),
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!("$-- requires an array, tuple, or string, got {}", collection.type_label()),
+                op.span,
+            )),
         }
     }
 
@@ -1011,25 +1266,33 @@ impl<W: Write> Interpreter<W> {
             Value::Tuple(t) => t.len(),
             Value::NamedTuple(f) => f.len(),
             Value::String(s) => s.chars().count(),
-            _ => return Err(RuntimeError::Generic {
-                message: format!("$-[..] requires an array, tuple, or string, got {:?}", collection),
-                span: op.span,
-            }),
+            _ => return Err(RuntimeError::kinded(
+                "Type",
+                format!("$-[..] requires an array, tuple, or string, got {}", collection.type_label()),
+                op.span,
+            )),
         };
+
+        // What the reader WROTE, for the diagnostics below — see the slice above.
+        let mut written_start: i64 = 1;
+        let written_end: i64;
 
         let start = if let Some(ref s_expr) = op.start {
             match self.eval_expr(s_expr)? {
                 Value::Int(n) => {
-                    if n <= 0 { return Err(RuntimeError::Generic {
-                        message: format!("$-[start..] start must be positive (1-based), got {}", n),
-                        span: op.span,
-                    }); }
+                    if n <= 0 { return Err(RuntimeError::kinded(
+                        "Index",
+                        format!("$-[start..] start must be positive (1-based), got {}", n),
+                        op.span,
+                    )); }
+                    written_start = n;
                     (n - 1) as usize  // normalize 1-based to 0-based
                 }
-                other => return Err(RuntimeError::Generic {
-                    message: format!("$-[..] start must be an integer, got {:?}", other),
-                    span: op.span,
-                }),
+                other => return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("$-[..] start must be an integer, got {}", other.type_label()),
+                    op.span,
+                )),
             }
         } else { 0 };
 
@@ -1038,40 +1301,62 @@ impl<W: Write> Interpreter<W> {
                 Value::Int(n) => {
                     if !op.count_based && n <= 0 {
                         // For range-based $-[start..end], end must be positive (1-based)
-                        return Err(RuntimeError::Generic {
-                            message: format!("$-[..end] end must be positive (1-based), got {}", n),
-                            span: op.span,
-                        });
+                        return Err(RuntimeError::kinded(
+                            "Index",
+                            format!("$-[..end] end must be positive (1-based), got {}", n),
+                            op.span,
+                        ));
                     }
                     if n < 0 {
-                        return Err(RuntimeError::Generic {
-                            message: format!("$-[..] count must be non-negative, got {}", n),
-                            span: op.span,
-                        });
+                        return Err(RuntimeError::kinded(
+                            "Index",
+                            format!("$-[..] count must be non-negative, got {}", n),
+                            op.span,
+                        ));
                     }
+                    written_end = n;
                     n as usize  // range: 1-based inclusive = 0-based exclusive; count: raw count
                 }
-                other => return Err(RuntimeError::Generic {
-                    message: format!("$-[..] end must be an integer, got {:?}", other),
-                    span: op.span,
-                }),
+                other => return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("$-[..] end must be an integer, got {}", other.type_label()),
+                    op.span,
+                )),
             }
-        } else { length };
+        } else { written_end = length as i64; length };
 
         // count_based: end field holds count → actual_end = start + count
         let end = if op.count_based { start + raw_end } else { raw_end };
 
         if start > end {
-            return Err(RuntimeError::Generic {
-                message: format!("$-[start..end]: start ({}) cannot be greater than end ({})", start, end),
-                span: op.span,
-            });
+            return Err(RuntimeError::kinded(
+                "Index",
+                format!("$-[start..end]: start ({}) cannot be greater than end ({})", written_start, written_end),
+                op.span,
+            ));
         }
         if start > length || end > length {
-            return Err(RuntimeError::Generic {
-                message: format!("$-[{}..{}] out of bounds for collection of length {}", start, end, length),
-                span: op.span,
-            });
+            // The message is spelled the way the reader spelled it: a count is
+            // `$-[2:3]`, a range is `$-[2..3]`, and they are different requests
+            // — `[2:3]` asks for three positions from the second, `[2..3]` for
+            // two. Printing one as the other told whoever wrote `$-[2:3]` that
+            // positions 2 to 3 were out of bounds in a collection that has
+            // three. Same rule as GLB-047, on the form it had not reached.
+            return Err(RuntimeError::kinded(
+                "Index",
+                if op.count_based {
+                    format!(
+                        "$-[{}:{}] out of bounds for collection of length {}",
+                        written_start, written_end, length
+                    )
+                } else {
+                    format!(
+                        "$-[{}..{}] out of bounds for collection of length {}",
+                        written_start, written_end, length
+                    )
+                },
+                op.span,
+            ));
         }
         // i == j → no-op
         if start == end {
@@ -1079,13 +1364,14 @@ impl<W: Write> Interpreter<W> {
         }
 
         match collection {
-            Value::Array(mut arr) => { Rc::make_mut(&mut arr).drain(start..end); Ok(Value::Array(arr)) }
-            Value::Tuple(mut tup) => { Rc::make_mut(&mut tup).drain(start..end); Ok(Value::Tuple(tup)) }
+            Value::Array(mut arr) => { zymbol_common::count::make_mut(&mut arr).drain(start..end); Ok(Value::Array(arr)) }
+            Value::Tuple(mut tup) => { zymbol_common::count::make_mut(&mut tup).drain(start..end); Ok(Value::Tuple(tup)) }
             // Removing a RUN of keys by position: same family, same refusal.
-            Value::NamedTuple(fields) => Err(RuntimeError::Generic {
-                message: dict_not_positional("d$-[a..b]", fields.first().map(|(k, _)| k.as_str())),
-                span: op.span,
-            }),
+            Value::NamedTuple(fields) => Err(RuntimeError::kinded(
+                "Type",
+                dict_not_positional("d$-[a..b]", fields.first().map(|(k, _)| k.as_str())),
+                op.span,
+            )),
             Value::String(s) => {
                 let mut chars: Vec<char> = s.chars().collect();
                 chars.drain(start..end);
@@ -1125,10 +1411,21 @@ impl<W: Write> Interpreter<W> {
                     Value::String(ref pattern) => {
                         let pattern_chars: Vec<char> = pattern.chars().collect();
                         if pattern_chars.is_empty() {
-                            return Ok(Value::array(vec![]));
+                            return Err(RuntimeError::kinded(
+                                "Index",
+                                "$?? pattern must not be empty",
+                                op.span,
+                            ));
                         }
+                        // Every position the pattern starts at, overlapping
+                        // (GLB-081, decided 2026-10-03). A pattern longer than the text
+                        // is found nowhere — the range below used to slice past
+                        // the end and panic (GLB-082).
                         let mut positions = Vec::new();
-                        for i in 0..=(string_chars.len().saturating_sub(pattern_chars.len())) {
+                        if pattern_chars.len() > string_chars.len() {
+                            return Ok(Value::array(positions));
+                        }
+                        for i in 0..=(string_chars.len() - pattern_chars.len()) {
                             if string_chars[i..i + pattern_chars.len()] == pattern_chars[..] {
                                 positions.push(Value::Int((i + 1) as i64));
                             }
@@ -1143,24 +1440,26 @@ impl<W: Write> Interpreter<W> {
                             .collect()
                     }
                     _ => {
-                        return Err(RuntimeError::Generic {
-                            message: format!(
-                                "$?? on string requires char or string value, got {:?}",
-                                value
+                        return Err(RuntimeError::kinded(
+                            "Type",
+                            format!(
+                                "$?? on string requires char or string value, got {}",
+                                value.type_label()
                             ),
-                            span: op.span,
-                        })
+                            op.span,
+                        ))
                     }
                 };
                 Ok(Value::array(positions))
             }
-            _ => Err(RuntimeError::Generic {
-                message: format!(
-                    "$?? requires an array, tuple, or string, got {:?}",
-                    collection
+            _ => Err(RuntimeError::kinded(
+                "Type",
+                format!(
+                    "$?? requires an array, tuple, or string, got {}",
+                    collection.type_label()
                 ),
-                span: op.span,
-            }),
+                op.span,
+            )),
         }
     }
 }
@@ -1190,6 +1489,16 @@ fn deep_update_value(
         return Ok(new_val);
     }
     let idx = &indices[0];
+    // Every step here belongs to an EDIT, so a position into a dictionary is
+    // told as one — `d[n>…]$~ value`, as zyjs tells it. Reading the step
+    // first gave the read's sentence, `d[n>…]` (step P4-3).
+    if let (Value::NamedTuple(fields), Value::Int(_)) = (&col, idx) {
+        return Err(RuntimeError::kinded(
+            "Type",
+            dict_not_positional("d[n>…]$~ value", fields.first().map(|(k, _)| k.as_str())),
+            span,
+        ));
+    }
     let sub = get_at_step(&col, idx, span)?;
     let updated_sub = deep_update_value(sub, &indices[1..], new_val, span)?;
     set_at_step(col, idx, updated_sub, span)
@@ -1203,23 +1512,25 @@ fn get_at_step(col: &Value, step: &Value, span: zymbol_span::Span) -> Result<Val
             Some((_, v)) => Ok(v.clone()),
             None => {
                 let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
-                Err(RuntimeError::Generic {
-                    message: crate::variables::missing_key_msg(key, &available),
+                Err(RuntimeError::kinded(
+                    "Key",
+                    crate::variables::missing_key_msg(key, &available),
                     span,
-                })
+                ))
             }
         };
     }
     if let (Value::NamedTuple(fields), Value::Int(_)) = (col, step) {
-        return Err(RuntimeError::Generic {
-            message: dict_not_positional("d[n>…]", fields.first().map(|(k, _)| k.as_str())),
+        return Err(RuntimeError::kinded(
+            "Type",
+            dict_not_positional("d[n>…]", fields.first().map(|(k, _)| k.as_str())),
             span,
-        });
+        ));
     }
     match step {
         Value::Int(n) => get_at_idx(col, *n, span),
         other => Err(RuntimeError::Generic {
-            message: format!("a navigation step is a position or a key, got {:?}", other),
+            message: format!("a navigation step is a position or a key, got {}", other.type_label()),
             span,
         }),
     }
@@ -1229,22 +1540,23 @@ fn get_at_step(col: &Value, step: &Value, span: zymbol_span::Span) -> Result<Val
 /// there, exactly as the single-level `d["k"]$~ v` does.
 fn set_at_step(col: Value, step: &Value, new_val: Value, span: zymbol_span::Span) -> Result<Value> {
     if let (Value::NamedTuple(mut fields), Value::String(key)) = (col.clone(), step) {
-        match Rc::make_mut(&mut fields).iter_mut().find(|(k, _)| k == key) {
+        match zymbol_common::count::make_mut(&mut fields).iter_mut().find(|(k, _)| k == key) {
             Some(f) => f.1 = new_val,
-            None => Rc::make_mut(&mut fields).push((key.clone(), new_val)),
+            None => zymbol_common::count::make_mut(&mut fields).push((key.clone(), new_val)),
         }
         return Ok(Value::NamedTuple(fields));
     }
     if let (Value::NamedTuple(fields), Value::Int(_)) = (&col, step) {
-        return Err(RuntimeError::Generic {
-            message: dict_not_positional("d[n>…]$~ value", fields.first().map(|(k, _)| k.as_str())),
+        return Err(RuntimeError::kinded(
+            "Type",
+            dict_not_positional("d[n>…]$~ value", fields.first().map(|(k, _)| k.as_str())),
             span,
-        });
+        ));
     }
     match step {
         Value::Int(n) => set_at_idx(col, *n, new_val, span),
         other => Err(RuntimeError::Generic {
-            message: format!("a navigation step is a position or a key, got {:?}", other),
+            message: format!("a navigation step is a position or a key, got {}", other.type_label()),
             span,
         }),
     }
@@ -1252,16 +1564,33 @@ fn set_at_step(col: Value, step: &Value, new_val: Value, span: zymbol_span::Span
 
 /// Read element at 1-based (or negative) integer index from any indexable Value.
 fn get_at_idx(col: &Value, index: i64, span: zymbol_span::Span) -> Result<Value> {
+    let container = match col {
+        Value::Array(_) => "array",
+        Value::String(_) => "string",
+        Value::NamedTuple(_) => "named tuple",
+        _ => "tuple",
+    };
     let (len, get_fn): (usize, Box<dyn Fn(usize) -> Value>) = match col {
         Value::Array(arr)  => (arr.len(), Box::new(|i| arr[i].clone())),
         Value::Tuple(tup)  => (tup.len(), Box::new(|i| tup[i].clone())),
         Value::NamedTuple(fields) => (fields.len(), Box::new(|i| fields[i].1.clone())),
-        other => return Err(RuntimeError::Generic {
-            message: format!("cannot index into {:?} during deep update", other),
+        // A string IS an array of characters and is walked like one
+        // (decided 2026-09-22): a step into it yields the character there.
+        Value::String(st) => {
+            let chars: Vec<char> = st.chars().collect();
+            (chars.len(), Box::new(move |i| Value::Char(chars[i])))
+        }
+        other => return Err(RuntimeError::kinded(
+            "Type",
+            // Writing through a step that lands on a non-collection fails for
+            // the same reason READING through it does, so it says the same
+            // thing (GLB-045). Naming the operation told the reader when it
+            // happened, never what was wrong.
+            format!("cannot index into {} — expected array, tuple, or string", other.type_label()),
             span,
-        }),
+        )),
     };
-    let i = resolve_idx(index, len, span)?;
+    let i = resolve_idx(index, len, span, container)?;
     Ok(get_fn(i))
 }
 
@@ -1270,42 +1599,84 @@ fn set_at_idx(col: Value, index: i64, new_val: Value, span: zymbol_span::Span) -
     match col {
         Value::Array(mut arr) => {
             let len = arr.len();
-            let i = resolve_idx(index, len, span)?;
-            Rc::make_mut(&mut arr)[i] = new_val;
+            let i = resolve_idx(index, len, span, "array")?;
+            zymbol_common::count::make_mut(&mut arr)[i] = new_val;
             Ok(Value::Array(arr))
         }
         Value::Tuple(mut tup) => {
             let len = tup.len();
-            let i = resolve_idx(index, len, span)?;
-            Rc::make_mut(&mut tup)[i] = new_val;
+            let i = resolve_idx(index, len, span, "tuple")?;
+            zymbol_common::count::make_mut(&mut tup)[i] = new_val;
             Ok(Value::Tuple(tup))
         }
         Value::NamedTuple(mut fields) => {
             let len = fields.len();
-            let i = resolve_idx(index, len, span)?;
-            Rc::make_mut(&mut fields)[i].1 = new_val;
+            let i = resolve_idx(index, len, span, "named tuple")?;
+            zymbol_common::count::make_mut(&mut fields)[i].1 = new_val;
             Ok(Value::NamedTuple(fields))
         }
-        other => Err(RuntimeError::Generic {
-            message: format!("cannot update {:?} during deep update", other),
+        // The write half of the same rule. Only a char or a string goes in,
+        // as `$+ on string requires char or string element` already says.
+        Value::String(st) => {
+            let mut chars: Vec<char> = st.chars().collect();
+            let piece = match &new_val {
+                Value::Char(c) => c.to_string(),
+                Value::String(s2) => s2.to_string(),
+                other => return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("$~ on string requires char or string value, got {}", other.type_label()),
+                    span,
+                )),
+            };
+            let i = resolve_idx(index, chars.len(), span, "string")?;
+            let mut out = String::new();
+            for (n, c) in chars.drain(..).enumerate() {
+                if n == i { out.push_str(&piece); } else { out.push(c); }
+            }
+            Ok(Value::String(out.into()))
+        }
+        other => Err(RuntimeError::kinded(
+            "Type",
+            format!("cannot update {} during deep update", other.type_label()),
             span,
-        }),
+        )),
     }
 }
 
-fn resolve_idx(index: i64, len: usize, span: zymbol_span::Span) -> Result<usize> {
+/// The navigation path's own index resolution.
+///
+/// It said `index 0 is invalid — Zymbol uses 1-based indexing` and
+/// `index out of bounds: 9 for collection of length 2`, where READING the same
+/// position says the sentence the three engines agreed on — with the help, and
+/// naming the container. Two sets of words in one engine for one failure, and
+/// only one of them aligned; the write half was simply never brought over.
+fn resolve_idx(
+    index: i64,
+    len: usize,
+    span: zymbol_span::Span,
+    container: &str,
+) -> Result<usize> {
     if index == 0 {
-        return Err(RuntimeError::Generic {
-            message: "index 0 is invalid — Zymbol uses 1-based indexing".to_string(),
+        return Err(RuntimeError::kinded(
+            "Index",
+            "index 0 is invalid — Zymbol uses 1-based indexing (use 1 for the first element, -1 for the last)",
             span,
-        });
+        ));
     }
     let i = if index < 0 { len as i64 + index } else { index - 1 };
     if i < 0 || i as usize >= len {
-        return Err(RuntimeError::Generic {
-            message: format!("index out of bounds: {} for collection of length {}", index, len),
+        // One COMPLETE literal per container, never one template with a hole:
+        // the message inventory pairs engines by how a message is built.
+        return Err(RuntimeError::kinded(
+            "Index",
+            match container {
+                "array"  => format!("array index out of bounds: index {} for array of length {}", index, len),
+                "string" => format!("string index out of bounds: index {} for string of length {}", index, len),
+                "named tuple" => format!("named tuple index out of bounds: index {} for tuple of length {}", index, len),
+                _ => format!("tuple index out of bounds: index {} for tuple of length {}", index, len),
+            },
             span,
-        });
+        ));
     }
     Ok(i as usize)
 }

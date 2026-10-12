@@ -57,6 +57,8 @@ pub enum Instruction {
     FloatToIntRound(Reg, Reg),
     /// dst = (src as Float).trunc() as Int  — ##!expr
     FloatToIntTrunc(Reg, Reg),
+    /// dst = the Char whose code point is src (an Int), or src if a Char  — ##'expr
+    IntToChar(Reg, Reg),
 
     // ── String ops ────────────────────────────────────────────────────────
     ConcatStr(Reg, Reg, Reg),
@@ -118,6 +120,11 @@ pub enum Instruction {
     Jump(Label),
     JumpIf(Reg, Label),
     JumpIfNot(Reg, Label),
+    /// The jump of `?` and `_?`: taken on `#0`, fallen through on `#1`, and a
+    /// `##Type` error on anything else. There is no truthiness (GLB-121):
+    /// `JumpIfNot` read an Array as true where the tree-walker read it as
+    /// false, and neither is an answer the language gives.
+    JumpIfNotCond(Reg, Label),
 
     // ── Functions ─────────────────────────────────────────────────────────
     Call(Reg, FuncIdx, Vec<Reg>),
@@ -149,10 +156,23 @@ pub enum Instruction {
     ArrayInsert(Reg, Reg, Reg),
     /// Remove elements [lo..hi) from arr in-place ($-[lo..hi]); hi_reg = lo_reg + 1
     ArrayRemoveRange(Reg, Reg),
+    /// `coll$-[start:count]` — the COUNT form, kept apart from
+    /// `ArrayRemoveRange` for the same reason `ArraySliceCount` is kept apart
+    /// from `ArraySlice`: folding the count into an end loses it. `$-[1:-1]`
+    /// arrived as an end of -1 and was reported as one, and `$-[1:0]` arrived
+    /// as an end of 0 and was refused, where removing nothing is what it asks
+    /// for. `lo_reg + 1` holds the count, not an end.
+    ArrayRemoveCount(Reg, Reg),
     /// dst = arr.contains(elem)
     ArrayContains(Reg, Reg, Reg),
     /// dst = arr[lo..hi] (exclusive hi, like Python slicing)
     ArraySlice(Reg, Reg, Reg),
+    /// `coll$[start:count]` — the COUNT form, kept apart from `ArraySlice`
+    /// because a count never reverses: `$[2:0]` is the empty slice and
+    /// `$[2..1]` is two elements backwards (D3, step 4.4). `lo_reg + 1` holds
+    /// the count, not an end.
+    ArraySliceCount(Reg, Reg, Reg),
+    StrSliceCount(Reg, Reg, Reg),
     /// HOF: dst = arr.map(lambda_reg)
     ArrayMap(Reg, Reg, Reg),
     /// HOF: dst = arr.filter(lambda_reg)
@@ -176,6 +196,48 @@ pub enum Instruction {
     /// `true` demands a tuple `( … )`, `false` an array `[ … ]`. Errors on a
     /// mismatch instead of reinterpreting the value (REFERENCE.md L32).
     DestructureCheck(Reg, bool),
+    /// Refuse a range loop's step unless it is a positive Int. The loop adds
+    /// the step's magnitude in the range's own direction, so 0 never advances
+    /// and a negative one walks away from the end: without this both never
+    /// terminate (GLB-014 A). A Float step is a ##Type (GLB-014 B).
+    LoopStepCheck(Reg),
+    /// Refuse a range loop whose bounds are not both Int (GLB-014 B).
+    LoopBoundsCheck(Reg, Reg),
+    /// Refuse a call whose callee is not a function or a lambda, worded as the
+    /// tree-walker words it: `true` for a pipe (`pipe operator requires a
+    /// callable function or lambda`), `false` for a call on an expression
+    /// (`expression is not callable`). Both used to fall to `CallDynamic`'s
+    /// generic `this needs Function and got Int` (step 3.5b).
+    CallableCheck(Reg, bool),
+    /// `name(…)` where `name` holds something that is not a function. Carries
+    /// the name so the message can say it: `'v' is not a function`. Separate
+    /// from `CallableCheck` because that one has no name to print — its callee
+    /// is an expression (GLB-034, decided 2026-09-22).
+    CallableCheckNamed(Reg, StrIdx),
+    /// The bounds of a navigation range (`v[1>a..b]`), checked BEFORE the loop
+    /// walks them. `reg + 1` holds the end. Without it the loop simply asked
+    /// `ArrayGet` for position 0 and the reader got `index 0 is invalid` — true
+    /// for a plain index, and for `v[1>-1..2]` plainly false, since -1 is not 0.
+    NavRangeCheck(Reg),
+    /// One step of a navigation READ (`v[1>k]`), checked before its `ArrayGet`:
+    /// a position into a dictionary, or a step that is neither Int nor String,
+    /// is refused in the navigation's words (step P4-3).
+    NavStepCheck(Reg, Reg),
+    /// Refuse a written `>>~` slot that is not an Int (GLB-018 B). `true` also
+    /// admits a Tuple: a lone slot may hold the whole dense position.
+    OutputSlotCheck(Reg, bool),
+    /// dst = +src: an Int or a Float as it is, anything else refused
+    /// (GLB-019 B). Emitted only when src is not known to be numeric.
+    Pos(Reg, Reg),
+    /// `\ name` on a function local: its slot is marked destroyed at RUN time
+    /// and emptied. Only for names some `\` in the body names — whether that
+    /// `\` executes is not decidable when it is compiled (ZYVM-005).
+    DestroyLocal(Reg, u16),
+    /// Raise `use after destruction` if the slot was destroyed. Emitted before
+    /// a read of a name some `\` in the body names, and only then.
+    CheckAlive(Reg, u16),
+    /// An assignment gives a destroyed name a life again: clear its mark.
+    Revive(Reg),
     /// dst = the remainder of src from 1-based index `idx`: Unit when nothing is
     /// left, the bare element when exactly one is, and a collection when several
     /// are — keeping src's own shape (REFERENCE.md L33).
@@ -219,8 +281,8 @@ pub enum Instruction {
     ///
     /// ZYVM-001: the short-circuit reads the left operand through truthiness,
     /// so `0 && #1` answered `#0` and never reached `And` to be refused. The
-    /// jump cannot do the checking itself — `? 7 { … }` compiles to the same
-    /// JumpIfNot and is a warning, not an error.
+    /// jump cannot do the checking itself — it is the one loops and `??` share.
+    /// (`? 7 { … }` has had a jump of its own, `JumpIfNotCond`, since GLB-121.)
     RequireBool(Reg, bool),
 
     // ── Pattern match ─────────────────────────────────────────────────────
@@ -241,13 +303,33 @@ pub enum Instruction {
     BaseConvert(Reg, Reg, u8),
 
     // ── Try/catch ────────────────────────────────────────────────────────
-    /// Begin a try block; catch_label is where to jump on error
-    TryBegin(Label),
-    /// End try block normally (jump over catch)
-    TryEnd(Label),
-    /// Catch handler: load error value into reg
-    TryCatch(Reg),
-    /// Finally always runs; no special opcode needed — compiler emits the block twice
+    //
+    // A frame keeps ONE armed handler, and each `!?` saves the one it replaces
+    // in a register of its own, so nesting costs a register and no allocation.
+    // An error that reaches a handler becomes PENDING, tagged with that
+    // register, until a clause handles it or the `!?` ends and raises it again.
+    // Until GLB-010 there was one handler and no pending error, so a `!?` could
+    // not nest, a filter could not let an error through, and a `:>` could not
+    // finish with the error still alive.
+    //
+    // `:>` has no opcode: the compiler emits the block where the normal path
+    // falls into it, and a copy at every `@!`, `@>` and `<~` that leaves the
+    // `!?` early.
+    /// Arm the handler at `Label`; save the one it replaces in `Reg`.
+    TryBegin(Label, Reg),
+    /// The protected region ended normally: re-arm the handler saved in `Reg`.
+    TryEnd(Reg),
+    /// The first instruction at a handler. Re-arms the handler saved in the
+    /// first `Reg`, makes the error in flight pending under that register's tag,
+    /// and writes its value (`_err`) into the second `Reg`.
+    TryLand(Reg, Reg),
+    /// Load the kind of the pending error ("IO", "Index", "Type", "Div", "_") into dst
+    LoadErrorKind(Reg),
+    /// A clause matched: the error pending under the tag `Reg` is handled.
+    TryHandled(Reg),
+    /// The `!?` ends: if an error is still pending under the tag `Reg`, raise
+    /// it again, from the instruction that first raised it.
+    TryRethrow(Reg),
 
     // ── Shell execution ───────────────────────────────────────────────────
     /// Execute a shell command; parts work like BuildStr (literals and registers)
@@ -282,8 +364,13 @@ pub enum Instruction {
     // ── Error check ──────────────────────────────────────────────────────
     /// dst = src$!  → Bool: #1 if src is an error value, #0 otherwise
     IsError(Reg, Reg),
-    /// Load the error kind string ("IO", "Index", "Type", "Div", "_") into dst
-    LoadErrorKind(Reg),
+    /// dst = ##Kind(msg) → a soft error value; the kind is in the string pool,
+    /// the message a register that must hold a String (GAP-GOL-003)
+    MakeError(Reg, StrIdx, Reg),
+    /// dst = src is an error of the kind in the string pool → Bool (`##Kind` pattern)
+    ErrorKindIs(Reg, Reg, StrIdx),
+    /// dst = the message of the error in src → String (`##Kind(m)` binding)
+    ErrorMessage(Reg, Reg),
 
     /// Raise a runtime error with message from string pool (for deferred errors)
     RaiseError(StrIdx),
@@ -292,12 +379,23 @@ pub enum Instruction {
     /// Before a Call: pairs of (callee_param_idx, caller_dst_reg) for output params.
     /// On Return, callee's param registers are written back to caller's dst registers.
     SetupOutputWriteback(Vec<(u16, Reg)>),
+    /// Just before an edit of module state `g` whose receiver was loaded into
+    /// `reg`: if the slot still holds that same value, the slot lets go of it,
+    /// so the register is its only owner and the edit writes in place. The VM
+    /// puts it back if the edit fails; `StoreGlobal` ends the detachment.
+    DetachGlobal(u16, Reg),
 
     // ── Module global vars ────────────────────────────────────────────────
     /// Load a module-level global variable: dst = global_vars[idx]
     LoadGlobal(Reg, u16),
     /// Store to a module-level global variable: global_vars[idx] = src
     StoreGlobal(u16, Reg),
+    /// `\ name` on a global: end its life, and remember the name so a later
+    /// read can say what happened (GLB-008). Removing the compiler's register
+    /// binding was not enough — a file variable also lives in `global_vars`, so
+    /// the next read found it there and `\` did nothing at all.
+    /// Operands: global index, interned name.
+    DestroyGlobal(u16, u16),
 
     // ── TUI primitives ───────────────────────────────────────────────────
     /// @~ N — sleep N milliseconds (ms value in reg)
@@ -339,14 +437,15 @@ pub enum Instruction {
     /// level — mirrors the tree-walker's `$~` semantics (arr[i]$~, t[i]$~,
     /// nt["field"]$~, and deep arr[i>j>…]$~).
     DeepSet(Reg, Reg, Reg), // (dst_root, idx_path, val)
-    /// `DeepSet` for the *in-place* surface form `t[i] = val`, which is not the
-    /// same statement as the functional `new = t[i]$~ val` even though the
-    /// parser desugars both into a `CollectionUpdate`.
+    /// `DeepSet` for the *in-place* surface form — `t[i]$~ val` written as a
+    /// statement — which is not the same statement as the functional
+    /// `new = t[i]$~ val` even though the parser desugars both into a
+    /// `CollectionUpdate`.
     ///
     /// The difference only matters for a positional tuple: a tuple is immutable
-    /// (GUIDE.md § 12), so `t[i] = val` has to be refused while `new = t[i]$~
+    /// (GUIDE.md § 12), so the statement has to be refused while `new = t[i]$~
     /// val` has to work — it derives a second tuple and leaves the first alone.
-    /// The tree-walker tells them apart by `AssignSugar::IndexedAssign`; the
+    /// The tree-walker tells them apart by `AssignSugar::InPlaceEdit`; the
     /// compiler used to drop that field, so both forms reached `DeepSet` and the
     /// VM silently modified the tuple (`DM-16`).
     ///
@@ -426,6 +525,25 @@ pub struct Chunk {
     pub instructions: Vec<Instruction>,
     pub num_registers: u16,
     pub num_params: u16,
+    /// Where each instruction came from, one entry per instruction.
+    ///
+    /// A runtime error otherwise names a message and nothing else, and a
+    /// program of five modules gives no way to guess which file it came from.
+    /// The compiler stamps the statement being compiled onto every instruction
+    /// it emits, so the VM can answer the question from the instruction pointer
+    /// it already has.
+    #[serde(default)]
+    pub src: Vec<SrcPos>,
+}
+
+/// The source position an instruction was compiled from. `file` indexes
+/// `CompiledProgram::files`; a chunk compiled before this existed has an empty
+/// `src`, which reads as "unknown" rather than as line 0.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct SrcPos {
+    pub file: u16,
+    pub line: u32,
+    pub column: u32,
 }
 
 impl Chunk {
@@ -435,6 +553,7 @@ impl Chunk {
             instructions: Vec::new(),
             num_registers: 0,
             num_params: 0,
+            src: Vec::new(),
         }
     }
 }
@@ -545,6 +664,12 @@ pub struct CompiledProgram {
     pub string_pool: Vec<String>,
     /// Initial values for module global variables (indexed by LoadGlobal/StoreGlobal idx)
     pub global_var_inits: Vec<GlobalInit>,
+    /// The files this program was compiled from, indexed by `SrcPos::file`.
+    /// Index 0 is the script itself; a module is added when it is first
+    /// compiled, so the name a runtime error reports is the file the failing
+    /// line is actually in.
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 impl CompiledProgram {
@@ -554,6 +679,7 @@ impl CompiledProgram {
             functions: Vec::new(),
             string_pool: Vec::new(),
             global_var_inits: Vec::new(),
+            files: Vec::new(),
         }
     }
 }

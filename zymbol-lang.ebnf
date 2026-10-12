@@ -1,12 +1,38 @@
 (*
   Zymbol-Lang EBNF Grammar
-  Version:    3.3.0
+  Version:    3.4.0
   Generated:  2026-06-12
   Sprint:     v0.0.7, with three v0.0.9 correction passes
               (2026-08-09 targeted; 2026-09-07 collections; 2026-09-07 verified)
+              and one for v0.0.10 (2026-10-11, the forms that release added)
   Test counts: authoritative via the test suite, not this header.
     Three-engine consensus:  cd ../zyquality && ./zyq suite
     Unit tests:              cargo test
+
+  THE 2026-10-11 PASS (v0.0.10).  Targeted, like the first two: it wrote down
+  the forms v0.0.10 added and probed each against the binary in all three
+  engines.  It is NOT a second rule-by-rule verification.
+
+  MISSING ALTOGETHER, now written:
+    - ##'expr , the Int -> Char cast (GLB-109).  The four mentions of ##' this
+      file had were all the typed-input form
+    - ##Kind("message") , the error constructor, and the pattern
+      ##Kind(name) =>  that reads the message back — the first pattern that
+      creates a name
+    - the words after the path of a subscript:  </ app.zy -L es --list />
+    - a negative number as a literal pattern:  -1 =>  and  -1.5 =>
+
+  ALREADY WRITTEN HERE, AND TRUE OF NO ENGINE UNTIL THIS PASS:
+    - loop_pattern listed dictionary_destructure, which is spelled  #( .  The
+      Rust parser took the BARE  @ (k: a):ps  in a loop head and not the marked
+      one; zyjs took neither.  The bare dictionary pattern is refused since
+      GLB-122 on both sides — left of  =  and in a loop head — and the marked
+      one is accepted in both, so the rule below finally describes the parser
+
+  NARROWED BY A RULE THAT IS NOT SYNTAX, and noted where a reader would look:
+    - the condition of  ?  and  _?  is a Bool and nothing else (GLB-121)
+    - a "(" after  $>  or  $|  opens a lambda, as after  $^  (ZYJS-061)
+    - an identifier pattern is a read of that name (GLB-124)
 
   THE IMPLEMENTATION IS NORMATIVE, NOT THIS FILE.  Where they disagreed, the
   parser was right and this grammar was corrected to match it — never the other
@@ -392,6 +418,14 @@ nine_digit  = (* Unicode code-point whose digit_value in the same block is 9 *) 
   IF statement.
   Condition is a full expression.  else-if chain uses _?; else branch uses _.
 *)
+(*
+  The condition is a Bool and nothing else: there is no truthiness (GLB-121,
+  v0.0.10).  The grammar cannot say so — any expr parses here — so it is said
+  where a reader looks: a condition whose type the analyser knows and is not
+  Bool is refused before the program runs ("a condition must be a Bool, got
+  [Int]"), and one that arrives through a parameter is a ##Type error at run
+  time, before either block runs.  The same holds for each  _? .
+*)
 if_stmt =
     "?" , expr , block
   , { "_?" , expr , block }
@@ -608,6 +642,15 @@ lambda_params =
   | "(" , [ identifier , { "," , identifier } ] , ")"   (* zero, one or many *)
   ;
 
+(*
+  A block body that ends without  <~  gives  ##_ , as a named function's does
+  (ZYTW-015, v0.0.10):  lam = () -> { >> "x" ¶ }  is a callback called for its
+  effect.  The tree-walker alone refused it until then.
+
+  After  $>  and  $|  — as after  $^  — a "(" opens a lambda, so a named function
+  goes WITHOUT parentheses:  nums$> double .   nums$> (double)  is "expected
+  '->' in lambda expression" in every engine (ZYJS-061).
+*)
 lambda_body = expr | block ;
 
 (*
@@ -715,6 +758,12 @@ positional_tuple_destructure =
     "(" , positional_destructure_item , { "," , positional_destructure_item } , ")"
   ;
 
+(*
+  The mark is part of the pattern as it is of the literal (GLB-122, v0.0.10).
+  The bare  (name: n) = d  ran in every engine until 2026-10-11, a release after
+  the bare literal  (a: 1)  was refused; it is "a dictionary pattern is written
+  `#(…)`" now, left of  =  and in a loop head alike.
+*)
 dictionary_destructure =
     "#(" , identifier , ":" , identifier , { "," , identifier , ":" , identifier } , ")"
   ;
@@ -983,7 +1032,27 @@ data_prefix =
     "##." , postfix_expr                   (* cast to Float *)
   | "###" , postfix_expr                   (* cast to Int  (round) *)
   | "##!" , postfix_expr                   (* cast to Int  (truncate) *)
+  | "##'" , postfix_expr                   (* cast to Char: an Int code point  (v0.0.10) *)
   ;
+
+(*
+  ##'expr  (GLB-109, v0.0.10) turns an Int code point into its Char:  ##'65  is
+  'A' and  ##'(64 + 1)  is too.  Like its three siblings it refuses nothing
+  statically: a Float is a ##Type and a code with no character a ##Range, both
+  at run time.  The same mark after  <<  is the typed-input form (one character
+  read from the keyboard); the two are told apart by where they stand.
+  Probe:  >> ##'(64 + 1) ##'65 ¶   → AA   (all three engines, 2026-10-11)
+*)
+
+(*
+  The error constructor (GAP-GOL-003, v0.0.10):  ##Kind("message")  builds a
+  soft error VALUE — the spelling an error prints as, and the kind a  :!
+  matches.  The kind is any name in any script; the message is a String.
+   v$!  sees it,  v$!!  propagates it, and no  :!  catches it, because nothing
+  was raised.  Fused: "##Kind (" with a space is not this form.
+  Probe:  e = ##Κανόνας("regla")   >> e ¶   → ##Κανόνας(regla)
+*)
+error_construct = "##" , identifier , "(" , juxtapose_chain , ")" ;
 
 (*
   Pipe-style operators that wrap an expression in |…|.
@@ -1120,8 +1189,29 @@ pattern =
   | "==" , addition_expr                  (* equality comparison pattern *)
   | "<>" , addition_expr                  (* not-equal comparison pattern *)
   | identifier                             (* variable / containment pattern *)
+  | "-" , ( integer_literal | float_literal )  (* a negative number  (v0.0.10) *)
+  | "##" , identifier , "(" , identifier , ")"  (* error pattern: binds the message  (v0.0.10) *)
   | pattern , "||" , pattern               (* or-pattern: alternatives, left to right *)
   ;
+
+(*
+  Three notes on the rule above, all v0.0.10.
+
+  An IDENTIFIER pattern is a read of that name (GLB-124): it has to exist, and
+  inside a named function it cannot be a variable of the file (MEM-2).  Until
+  2026-10-11 the type checker did not look at it at all.
+
+  A NEGATIVE NUMBER is a literal pattern (GLB-062):  -1 =>  and  -1.5 => .  A
+  parenthesised one —  (3) =>  — is not a pattern.
+
+  The ERROR pattern  ##Kind(m) =>  (GAP-GOL-016) matches an error of that kind
+  and puts its message in  m .  It is the only pattern that creates a name, and
+  the binding is a birth like  m = … : a visible  m  is assigned, never
+  shadowed (MEM-7).  It stands alone in its arm — not inside  ||  and not inside
+  a list pattern — and the message is bound, never compared:  ##Kind("text") =>
+  is refused.
+  Probe:  >> (?? e { ##Κανόνας(m) => m  _ => "x" }) ¶   → regla
+*)
 
 
 (* ============================================================
@@ -1140,7 +1230,8 @@ primary_expr =
   | match_expr                             (* ?? expr { cases } *)
   | lambda_expr                            (* x -> expr  or  (a,b) -> expr *)
   | terminal_size_expr                     (* >>? — returns (cols, rows) *)
-  | data_prefix                            (* ##.  ###  ##! *)
+  | data_prefix                            (* ##.  ###  ##!  ##' *)
+  | error_construct                        (* ##Kind("message") *)
   | data_wrapped_expr                      (* #|..| #,|..| etc. *)
   | base_literal                           (* 0x  0b  0o *)
   | execute_expr                           (* </ path /> *)
@@ -1184,9 +1275,19 @@ array_literal = "[" , [ juxtapose_chain , { "," , juxtapose_chain } , [ "," ] ] 
 
 (*
   Execute a Zymbol script file inline.
+
+  The words after the path are the subscript's own command line (GAP-GOL-010,
+  v0.0.10):  </ app.zy -L es --list />  hands  ["-L", "es", "--list"]  to the
+  subscript's  >< .  They are LITERAL, like the path — nothing in them is
+  evaluated — so the reachable program can still be read without running it
+  (AGT-3) and  zymbol package  follows the path as before.  With no words the
+  subscript inherits its caller's arguments.
+  Probe:  o = </ ./sub.zy -L es --list />   with  >< a  >> a ¶  in sub.zy
+          → [-L, es, --list]
 *)
-execute_expr = "</" , path_string , "/>" ;
-path_string = (* raw file path between </ and />, whitespace-trimmed *) ;
+execute_expr = "</" , path_string , { subscript_word } , "/>" ;
+path_string = (* raw file path after </ , whitespace-trimmed *) ;
+subscript_word = (* a shell-style word: bare, or quoted to hold whitespace *) ;
 
 (*
   Shell execution: evaluates expressions and concatenates them as a command string.

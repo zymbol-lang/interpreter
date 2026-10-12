@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use std::fs;
 use std::path::{Path, PathBuf};
 use zymbol_compiler::Compiler;
-use zymbol_error::DiagnosticBag;
+use zymbol_error::{Diagnostic, DiagnosticBag};
 use zymbol_formatter::{format_with_config, FormatterConfig};
 use zymbol_interpreter::Interpreter;
 use zymbol_lexer::Lexer;
@@ -59,6 +59,22 @@ enum Commands {
         /// path — useful for debugging a package. Ignored for a plain .zy file.
         #[arg(long)]
         keep_temp: bool,
+
+        /// Run a full-screen program with no terminal: `>>|` draws on a virtual
+        /// screen of 24×80, `<<|` reads its keys from FILE (one per line: a
+        /// character, SPACE, ENTER, ESC, TAB, BACKSPACE, UP/DOWN/LEFT/RIGHT,
+        /// CTRL+X, or WAIT n), and each block's last frame is printed as text.
+        #[arg(long, value_name = "FILE")]
+        keys: Option<PathBuf>,
+
+        /// After the program ends, print what it cost on stderr, in units that
+        /// do not depend on the machine: `count  steps=…  calls=…  allocs=…
+        /// bytes=…  copied=…`. Steps and calls are the engine's own work and
+        /// differ between `--vm` and the tree-walker; allocs and bytes are the
+        /// whole run, reading and compiling the program included; copied is the
+        /// elements duplicated because a collection being written was shared.
+        #[arg(long)]
+        count: bool,
 
         /// Arguments to pass to the script
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -144,12 +160,46 @@ enum Commands {
     },
 }
 
+/// Set by `zymbol run --count`.
+static COUNT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The system allocator, counting what it is asked for (`zymbol run --count`).
+///
+/// Two thread-local increments per request and nothing else: the counters have
+/// constant initializers and no destructors, so reading them here cannot
+/// allocate and cannot recurse.
+struct CountingAllocator;
+
+unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        zymbol_common::count::alloc(layout.size());
+        unsafe { std::alloc::System.alloc(layout) }
+    }
+    unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
+        zymbol_common::count::alloc(layout.size());
+        unsafe { std::alloc::System.alloc_zeroed(layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
+        // A growth is a request for the new size: that is what a `Vec` that
+        // doubles costs, whether or not the block could be extended in place.
+        zymbol_common::count::alloc(new_size);
+        unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { file, vm, tw, script, keep_temp, args } => {
-            run_file(file, args, vm, tw, script, keep_temp)
+        Commands::Run { file, vm, tw, script, keep_temp, keys, count, args } => {
+            COUNT.store(count, std::sync::atomic::Ordering::Relaxed);
+            on_program_stack(move || run_file(file, args, vm, tw, script, keep_temp, keys))
         }
         Commands::Build { file, output, release } => build_file(file, output, release),
         Commands::Package { path, output, scripts, name, version, dry_run } => {
@@ -160,6 +210,27 @@ fn main() -> Result<()> {
         Commands::Repl => start_repl(),
         Commands::Lsp { .. } => start_lsp(),
     }
+}
+
+/// The stack a program runs on: 64 MiB, against the 8 MiB of the main thread.
+///
+/// Both engines recurse in Rust where a Zymbol program recurses through
+/// something that is not a plain call — every frame of the tree-walker, and in
+/// the register VM every function a higher-order operator calls, which runs the
+/// dispatch loop again (ZYVM-004). On the main thread's 8 MiB that was 1 099
+/// levels of plain recursion in the tree-walker and 593 through `$>` in the VM,
+/// and the next one aborted the process with no Zymbol error at all. The size is
+/// reserved, not committed: a program that does not recurse does not pay it.
+const PROGRAM_STACK: usize = 64 * 1024 * 1024;
+
+fn on_program_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .name("zymbol-program".into())
+        .stack_size(PROGRAM_STACK)
+        .spawn(f)
+        .expect("could not start the thread a program runs on")
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }
 
 fn start_repl() -> Result<()> {
@@ -185,6 +256,8 @@ struct RunOpts {
     display_name: Option<String>,
     args: Vec<String>,
     use_vm: bool,
+    /// `--keys` (D11): the virtual screen and its key script, if asked for.
+    keys: Option<zymbol_common::vscreen::KeyScript>,
 }
 
 fn run_file(
@@ -194,11 +267,26 @@ fn run_file(
     use_tw: bool,
     script: Option<String>,
     keep_temp: bool,
+    keys_file: Option<PathBuf>,
 ) -> Result<()> {
+    let keys = match keys_file {
+        None => None,
+        Some(f) => {
+            let text = fs::read_to_string(&f)
+                .with_context(|| format!("--keys: cannot read {}", f.display()))?;
+            match zymbol_common::vscreen::KeyScript::parse(&text) {
+                Ok(k) => Some(k),
+                Err(e) => {
+                    eprintln!("error: --keys {}: {}", f.display(), e);
+                    std::process::exit(2);
+                }
+            }
+        }
+    };
     if is_zyp(&path) {
-        return run_zyp(path, args, use_vm, use_tw, script, keep_temp);
+        return run_zyp(path, args, use_vm, use_tw, script, keep_temp, keys);
     }
-    let code = run_file_inner(&path, RunOpts { display_name: None, args, use_vm })?;
+    let code = run_file_inner(&path, RunOpts { display_name: None, args, use_vm, keys })?;
     std::process::exit(code);
 }
 
@@ -226,6 +314,7 @@ fn run_zyp(
     force_tw: bool,
     script: Option<String>,
     keep_temp: bool,
+    keys: Option<zymbol_common::vscreen::KeyScript>,
 ) -> Result<()> {
     // No `.with_context("failed to open …")` here: every PackageError already names the
     // package and says what was wrong with it, so adding a wrapper only stacks a second
@@ -265,7 +354,7 @@ fn run_zyp(
     let entry_abs = pkg.script_abs_path(temp.path(), &entry_name, &entry_path)?;
     let display_name = format!("{}!{}", path.display(), entry_path);
 
-    let code = run_file_inner(&entry_abs, RunOpts { display_name: Some(display_name), args, use_vm })?;
+    let code = run_file_inner(&entry_abs, RunOpts { display_name: Some(display_name), args, use_vm, keys })?;
 
     if keep_temp {
         let kept = temp.keep();
@@ -311,7 +400,24 @@ fn prepend_self_to_path() {
 /// that used to `exit(1)` now returns `Ok(1)` instead, so a caller holding a `TempDir` (or any
 /// other RAII guard) gets to run its `Drop` before the process actually exits.
 fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
-    let RunOpts { display_name, args, use_vm } = opts;
+    let before = zymbol_common::count::now();
+    let result = run_program(path, opts, std::io::stdout(), &mut Report::terminal());
+    // `--count`: on every way out, a failed run included — what a program cost
+    // before it failed is as much a fact as what it cost to finish.
+    if COUNT.load(std::sync::atomic::Ordering::Relaxed) {
+        eprintln!("{}", zymbol_common::count::now().since(&before).line());
+    }
+    result
+}
+
+/// The whole of `zymbol run`: read, analyse, run. `out` receives what the
+/// program prints, and `report` what the CLI has to say about it.
+///
+/// A subscript `</ file />` goes down this same road (GLB-017 I, decided
+/// 2026-09-26), with its output in a buffer and a report that keeps the
+/// failure and drops the warnings — see [`subscript_runner`].
+fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &mut Report) -> Result<i32> {
+    let RunOpts { display_name, args, use_vm, keys } = opts;
 
     // Read source file
     let source = fs::read_to_string(path)
@@ -336,9 +442,13 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         for diag in lex_diagnostics {
             bag.add(diag);
         }
-        bag.emit_all(&source_map);
+        report.bag(&bag, &source_map);
         return Ok(1);
     }
+
+    // `check_stdlib_access` reads tokens, not the AST (a re-export in an
+    // export block is not an expression).
+    let tokens_for_stdlib = tokens.clone();
 
     // Parse
     let parser = ZParser::new(tokens);
@@ -349,7 +459,7 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
             for diag in diagnostics {
                 bag.add(diag);
             }
-            bag.emit_all(&source_map);
+            report.bag(&bag, &source_map);
             return Ok(1);
         }
     };
@@ -357,11 +467,11 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
     // Module files are not directly executable
     if program.module_decl.is_some() {
         let module_name = program.module_decl.as_ref().map(|m| m.name.as_str()).unwrap_or("?");
-        eprintln!("warning: '{}' is a module file and cannot be run directly", display_name);
+        report.error(&format!("warning: '{}' is a module file and cannot be run directly", display_name));
         // `=>`, not the pre-v0.0.6 `<=`: that spelling is rejected by the parser
         // (`test_import_le_syntax_rejected`), so the help was handing out an
         // import line that cannot parse. The browser engine already said `=>`.
-        eprintln!("  = help: module '{}' is meant to be imported with <# ./{} => alias", module_name, path.file_stem().and_then(|s| s.to_str()).unwrap_or("module"));
+        report.error(&format!("  = help: module '{}' is meant to be imported with <# ./{} => alias", module_name, path.file_stem().and_then(|s| s.to_str()).unwrap_or("module")));
         return Ok(1);
     }
 
@@ -376,23 +486,23 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         for err in semantic_errors {
             bag.add(err.clone());
         }
-        bag.emit_all(&source_map);
+        report.bag(&bag, &source_map);
         return Ok(1);
     }
 
     // Show variable analysis warnings but continue
     if !warnings.is_empty() {
         for warning in &warnings {
-            eprintln!("warning: {}", warning.message);
-            eprintln!("  --> {}:{}:{}",
+            report.warning(&format!("warning: {}", warning.message));
+            report.warning(&format!("  --> {}:{}:{}",
                 display_name,
                 warning.span.start.line,
                 warning.span.start.column
-            );
+            ));
             if let Some(help) = &warning.help {
-                eprintln!("  = help: {}", help);
+                report.warning(&format!("  = help: {}", help));
             }
-            eprintln!();
+            report.warning("");
         }
     }
 
@@ -419,7 +529,7 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
             bag.add(err);
         }
         if !bag.is_empty() {
-            bag.emit_all(&source_map);
+            report.bag(&bag, &source_map);
             return Ok(1);
         }
     }
@@ -435,7 +545,7 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         for err in loop_errors {
             bag.add(err);
         }
-        bag.emit_all(&source_map);
+        report.bag(&bag, &source_map);
         return Ok(1);
     }
 
@@ -452,15 +562,45 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
+    type_checker.set_module_exports(zymbol_semantic::module_exports(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
     let type_errors = type_checker.check_errors(&program);
 
-    // Type errors are fatal - stop execution
+    // The warnings of this phase: the type checker's, an import nobody uses
+    // (HLZ-015) and code that cannot run (HLZ-016).
+    let mut phase_warnings: Vec<Diagnostic> = type_checker.get_warnings().to_vec();
+    phase_warnings.extend(zymbol_semantic::check_unused_imports(&tokens_for_stdlib, &program.imports));
+    phase_warnings.extend(zymbol_semantic::check_unreachable(&program));
+
+    // Type errors are fatal - stop execution. The phase's warnings go out
+    // first: `check` reports them next to the errors and the browser engine
+    // did too, and `run` dropped them — `? x { }` with an Int `x` warned in
+    // `check` and said nothing in a `run` that was refused for another reason
+    // (GO/Depurando_GO.md DG-08).
     if !type_errors.is_empty() {
+        emit_phase_warnings(report, &phase_warnings, &display_name);
         let mut bag = DiagnosticBag::new();
         for err in type_errors {
             bag.add(err);
         }
-        bag.emit_all(&source_map);
+        report.bag(&bag, &source_map);
+        return Ok(1);
+    }
+
+    // A member a `std/` module does not have — `math::nada(1)`, `math.NADA` —
+    // is refused here as `check` refuses it (ZYVM-008, decided 2026-09-26).
+    // Only `check` and the editor asked, so `run` refused it when the line ran,
+    // and in a branch that never ran it said nothing.
+    let stdlib_errors = zymbol_semantic::check_stdlib_access(&tokens_for_stdlib, &program.imports);
+    if !stdlib_errors.is_empty() {
+        emit_phase_warnings(report, &phase_warnings, &display_name);
+        let mut bag = DiagnosticBag::new();
+        for err in stdlib_errors {
+            bag.add(err);
+        }
+        report.bag(&bag, &source_map);
         return Ok(1);
     }
 
@@ -499,35 +639,22 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
                     AmbiguityReason::ConditionalUse => "variable is used in some branches but not others",
                     AmbiguityReason::MultipleExitPaths => "multiple possible last uses",
                 };
-                eprintln!("warning: ambiguous lifetime for '{}'", chain.variable);
-                eprintln!("  --> {}:{}:{}", display_name,
-                    ambiguity.suggested_span.start.line, ambiguity.suggested_span.start.column);
-                eprintln!("  = note: {}", reason);
-                eprintln!("  = help: consider using explicit lifetime annotation");
-                eprintln!();
+                report.warning(&format!("warning: ambiguous lifetime for '{}'", chain.variable));
+                report.warning(&format!("  --> {}:{}:{}", display_name,
+                    ambiguity.suggested_span.start.line, ambiguity.suggested_span.start.column));
+                report.warning(&format!("  = note: {}", reason));
+                report.warning(&format!("  = help: consider using explicit lifetime annotation"));
+                report.warning("");
             }
         }
     }
 
-    // Show type warnings but continue execution
-    for warning in type_checker.get_warnings() {
-        eprintln!("warning: {}", warning.message);
-        if let Some(span) = &warning.span {
-            eprintln!("  --> {}:{}:{}",
-                display_name,
-                span.start.line,
-                span.start.column
-            );
-        }
-        if let Some(help) = &warning.help {
-            eprintln!("  = help: {}", help);
-        }
-        eprintln!();
-    }
+    // Show the phase's warnings but continue execution.
+    emit_phase_warnings(report, &phase_warnings, &display_name);
 
     if use_vm {
         // Sprint 4: Register VM path
-        let compiled = match Compiler::compile_with_dir(&program, path.parent()) {
+        let compiled = match Compiler::compile_named(&program, path.parent(), Some(&display_name)) {
             Ok(c) => c,
             Err(e) => {
                 // These errors match the tree-walker "Runtime error:" format
@@ -536,21 +663,28 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
                     zymbol_compiler::CompileError::ModuleParse(_) |
                     zymbol_compiler::CompileError::ModuleNotFound(_)
                 ) {
-                    eprintln!("Runtime error: {}", e);
+                    report.error(&format!("Runtime error: {}", e));
                 } else {
                     // Never the engine's name: a reader is told what the
                     // LANGUAGE refuses, not which of its three implementations
                     // noticed. `VM compile error:` on a program the tree-walker
                     // refuses too is a fact about our build, not about Zymbol.
-                    eprintln!("error: {}", e);
+                    report.error(&format!("error: {}", e));
                 }
                 return Ok(1);
             }
         };
-        let mut vm = VM::new(std::io::stdout());
+        let mut vm = VM::new(out);
         vm.set_cli_args(args.clone());
+        vm.set_subscript_runner(subscript_runner(true, args.clone()));
+        if let Some(k) = keys.clone() {
+            vm.set_keys(k);
+        }
         if let Err(e) = vm.run(&compiled) {
-            eprintln!("Runtime error: {}", e);
+            report.error(&format!("Runtime error: {}", e));
+            if let Some((file, line)) = e.location() {
+                report.error(&format!("  --> {}:{}", file, line));
+            }
             return Ok(1);
         }
         // GAP-ZYB-006: a top-level `<~ n` is the program's exit status.
@@ -559,7 +693,11 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         }
     } else {
         // Execute with tree-walker interpreter
-        let mut interpreter = Interpreter::new();
+        let mut interpreter = Interpreter::with_output(out);
+        interpreter.set_subscript_runner(subscript_runner(false, args.clone()));
+        if let Some(k) = keys.clone() {
+            interpreter.set_keys(k);
+        }
 
         // Set the current file path for module resolution
         interpreter.set_current_file(path);
@@ -573,7 +711,13 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
         interpreter.set_cli_args(args);
 
         if let Err(e) = interpreter.execute(&program) {
-            eprintln!("Runtime error: {}", e);
+            report.error(&format!("Runtime error: {}", e));
+            // Where it happened, spelled as the warnings above spell it. An
+            // error with no location says nothing extra rather than guessing at
+            // the entry file: a program of five modules gives no way to guess.
+            if let Some((file, line)) = e.location() {
+                report.error(&format!("  --> {}:{}", file, line));
+            }
             return Ok(1);
         }
         // GAP-ZYB-006: a top-level `<~ n` is the program's exit status.
@@ -583,6 +727,105 @@ fn run_file_inner(path: &Path, opts: RunOpts) -> Result<i32> {
     }
 
     Ok(0)
+}
+
+/// Where `run` writes what it has to say about a program.
+///
+/// On a terminal, everything goes to stderr as it always did. For a subscript
+/// the failure is kept, as text without colour, to become the error the caller
+/// sees (and `_err`), and the warnings are dropped: a subscript that runs
+/// cleanly never showed them either.
+struct Report {
+    captured: Option<String>,
+    failed: bool,
+}
+
+impl Report {
+    fn terminal() -> Self {
+        Report { captured: None, failed: false }
+    }
+
+    fn capture() -> Self {
+        Report { captured: Some(String::new()), failed: false }
+    }
+
+    fn warning(&mut self, line: &str) {
+        if self.captured.is_none() {
+            eprintln!("{}", line);
+        }
+    }
+
+    fn error(&mut self, line: &str) {
+        self.failed = true;
+        match &mut self.captured {
+            None => eprintln!("{}", line),
+            Some(text) => {
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+    }
+
+    fn bag(&mut self, bag: &DiagnosticBag, source_map: &SourceMap) {
+        for diag in bag.iter() {
+            let text = diag.render(source_map, self.captured.is_none());
+            if diag.severity == zymbol_error::Severity::Warning {
+                if self.captured.is_none() {
+                    eprint!("{}", text);
+                }
+            } else {
+                self.failed = true;
+                match &mut self.captured {
+                    None => eprint!("{}", text),
+                    Some(buf) => buf.push_str(&text),
+                }
+            }
+        }
+    }
+}
+
+/// The runner both engines call for `</ file />` (GLB-017 I, decided
+/// 2026-09-26): the subscript is analysed and run in this process by the
+/// engine that runs its caller, and gives back what it printed — or, when it
+/// fails, what `zymbol run` would have written about it, without the
+/// warnings. The VM used to shell out to whatever `zymbol` was on the PATH,
+/// always in the tree-walker, and passed the child's whole stderr on.
+/// Print the warnings of the type-checking phase, as `run` prints them.
+fn emit_phase_warnings(report: &mut Report, warnings: &[Diagnostic], display_name: &str) {
+    for warning in warnings {
+        report.warning(&format!("warning: {}", warning.message));
+        if let Some(span) = &warning.span {
+            report.warning(&format!("  --> {}:{}:{}",
+                display_name,
+                span.start.line,
+                span.start.column
+            ));
+        }
+        if let Some(help) = &warning.help {
+            report.warning(&format!("  = help: {}", help));
+        }
+        report.warning("");
+    }
+}
+
+fn subscript_runner(use_vm: bool, args: Vec<String>) -> zymbol_interpreter::SubscriptRunner {
+    std::rc::Rc::new(move |file: &Path, own: &[String]| {
+        let mut printed = Vec::new();
+        let mut report = Report::capture();
+        // The words after the path are the subscript's command line (D10);
+        // without any it inherits the caller's, as it always has.
+        let args = if own.is_empty() { args.clone() } else { own.to_vec() };
+        // A subscript gets the words after its path, never the caller's `--keys`.
+        let opts = RunOpts { display_name: None, args, use_vm, keys: None };
+        let code = run_program(file, opts, &mut printed, &mut report).map_err(|e| format!("{:#}", e))?;
+        if report.failed {
+            let text = report.captured.unwrap_or_default();
+            return Err(text.trim_end().to_string());
+        }
+        // The status goes back with the output: a `<~ 3` the subscript gave is
+        // what its caller reads (D2).
+        Ok((String::from_utf8_lossy(&printed).into_owned(), code))
+    })
 }
 
 fn build_file(path: PathBuf, output: Option<PathBuf>, release: bool) -> Result<()> {
@@ -672,6 +915,10 @@ fn build_file(path: PathBuf, output: Option<PathBuf>, release: bool) -> Result<(
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
     type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
+    type_checker.set_module_exports(zymbol_semantic::module_exports(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
@@ -1192,6 +1439,10 @@ fn check_source(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
+    type_checker.set_module_exports(zymbol_semantic::module_exports(
+        &program.imports,
+        path.parent().unwrap_or(std::path::Path::new(".")),
+    ));
     let type_errors = type_checker.check_errors(&program);
 
     // Type errors are fatal
@@ -1206,7 +1457,11 @@ fn check_source(
 
     // Report type warnings
     let mut type_warning_count = 0;
-    for diag in type_checker.get_warnings() {
+    // An import whose alias the file never names again (HLZ-015) and code that
+    // cannot run (HLZ-016), counted and printed with the type warnings.
+    let mut unused_imports = zymbol_semantic::check_unused_imports(&tokens_for_stdlib, &program.imports);
+    unused_imports.extend(zymbol_semantic::check_unreachable(&program));
+    for diag in type_checker.get_warnings().iter().chain(unused_imports.iter()) {
         if !report_warnings {
             continue;
         }

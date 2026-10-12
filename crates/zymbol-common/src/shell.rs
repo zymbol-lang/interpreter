@@ -327,3 +327,70 @@ mod tests {
         assert_eq!(cmd.get_envs().count(), 0);
     }
 }
+
+/// The message of the soft `##IO` error a command or a subscript becomes when it
+/// ends with a status other than 0 (GAP-GOL-011, decided 2026-09-29/30 as D2
+/// and D8): `exit 3`, or `exit 3: <what it said>` when it said something. The
+/// status comes first so a program can read it back with
+/// `?? r { ##IO(m) => … }` and the text after the colon is whatever the command
+/// wrote — its stderr when there is one, otherwise its stdout.
+///
+/// `None` is a process ended by a signal, which has no status to report.
+pub fn exit_failure_message(code: Option<i32>, said: &str) -> String {
+    let head = match code {
+        Some(c) => format!("exit {c}"),
+        None => "terminated by a signal".to_string(),
+    };
+    let said = said.trim_end_matches(['\n', '\r']);
+    if said.is_empty() { head } else { format!("{head}: {said}") }
+}
+
+/// What a failed command said: its stderr when it wrote any, else its stdout.
+pub fn failure_text(output: &std::process::Output) -> String {
+    let err = String::from_utf8_lossy(&output.stderr);
+    if err.trim().is_empty() {
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    } else {
+        err.into_owned()
+    }
+}
+
+/// What is written inside `</ … />`: the path, whether it was quoted, and the
+/// arguments after it (D10, 2026-09-30). Words are separated by blanks; a word
+/// in double quotes may contain blanks, and loses the quotes. Everything is
+/// literal — the path because `zymbol package` and AGT-3 read it without
+/// running anything, the arguments because they are written the way a command
+/// line is. With no arguments the subscript inherits its caller's, as before.
+///
+/// One reader for the parser and the packager, so the two cannot disagree about
+/// which word is the file.
+pub fn split_execute(raw: &str) -> (String, bool, Vec<String>) {
+    let mut words: Vec<(String, bool)> = Vec::new();
+    let mut chars = raw.trim().chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        if c == '"' {
+            chars.next();
+            let mut w = String::new();
+            for ch in chars.by_ref() {
+                if ch == '"' { break; }
+                w.push(ch);
+            }
+            words.push((w, true));
+        } else {
+            let mut w = String::new();
+            while let Some(&ch) = chars.peek() {
+                if ch.is_whitespace() { break; }
+                w.push(ch);
+                chars.next();
+            }
+            words.push((w, false));
+        }
+    }
+    let mut it = words.into_iter();
+    let (path, quoted) = it.next().unwrap_or_default();
+    (path, quoted, it.map(|(w, _)| w).collect())
+}

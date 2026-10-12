@@ -53,12 +53,6 @@ pub enum RuntimeError {
     #[error("module not found: {path}")]
     ModuleNotFound { path: String },
 
-    #[error("module '{module}' does not export function '{function}'")]
-    FunctionNotExported { module: String, function: String },
-
-    #[error("module '{module}' does not export constant '{constant}'")]
-    ConstantNotExported { module: String, constant: String },
-
     #[error("circular dependency detected")]
     CircularDependency,
 
@@ -67,7 +61,112 @@ pub enum RuntimeError {
 
     #[error("failed to parse module: {0}")]
     ParseError(String),
+
+    /// A runtime error that knows where it happened.
+    ///
+    /// Every `Generic` already carries a `Span`, but a span alone names a line
+    /// in *some* file — and a program of five modules gives no way to guess
+    /// which. So the file is attached where it is known: the frame that was
+    /// executing when the error propagated out of a function body, and the
+    /// interpreter's own `current_file` at the top level. The `Display` is the
+    /// message and nothing else, so `!?` catches text that has not changed.
+    #[error("{message}")]
+    Located { message: String, file: String, line: u32, column: u32 },
+
+    /// An error that says which `##` family it belongs to, rather than leaving
+    /// it to be read from its words.
+    ///
+    /// The other two engines have always had this half: the register VM in the
+    /// variant it raises (`VmError::TypeMsg` and its siblings) and the browser
+    /// engine in `ZyRuntimeError(msg, kind)`. The tree-walker had only the
+    /// other half — the shared word rule in `zymbol_common::errkind` — and
+    /// words cannot tell `index must be an integer` (a wrong TYPE) from
+    /// `index out of bounds` (a wrong VALUE): "index" matches first and both
+    /// landed in `##Index`. A `:! ##Type` is part of the language, so the same
+    /// failure has to land in the same family in all three (GLB-010, D1).
+    ///
+    /// It WRAPS rather than adding a field, so the 200-odd sites that have
+    /// nothing to declare keep saying nothing and go on being read by the
+    /// words. Only a site that knows its family says so.
+    #[error("{inner}")]
+    Kinded { kind: &'static str, inner: Box<RuntimeError> },
+
+    /// Not an error: the way out of an expression for a `<~`, `@!` or `@>`
+    /// written in the block of a `??` arm whose value is used. The signal waits
+    /// in `control_flow`, as it does for one written as a statement; this only
+    /// abandons the expression around the `??`, and `execute_statement` turns
+    /// it back into `Ok` at the statement that holds it, so the loop, the
+    /// function or the program takes the signal as usual. Without it the
+    /// expression went on with the arm worth Unit: `x = 1 + (?? v { 1 => {
+    /// <~ 7 } })` failed at the `+` instead of ending the program (GLB-107).
+    /// Its text is never shown, and is too short for the message inventory
+    /// (`zyquality/messages/`) to take it for a diagnostic.
+    #[error("unwinding")]
+    Unwind,
 }
+
+impl RuntimeError {
+    /// Attach a file and line to an error that does not yet know where it
+    /// happened.
+    ///
+    /// The line is the **statement being executed**, not the span the error
+    /// carries. The two are usually the same and sometimes are not: a builtin
+    /// that raises with a span of its own, or one of the several errors built
+    /// with a default span, reported line 1 for a failure on line 4. The
+    /// register VM stamps the statement onto every instruction and the browser
+    /// engine onto every node, so the statement is also the answer the other
+    /// two give — and `zyq consensus` compares the text.
+    ///
+    /// Only an unlocated error is rewritten: the innermost frame that knows the
+    /// file wins, so an error raised in a module keeps the module's name as it
+    /// travels out through its callers.
+    pub fn locate(self, file: &std::path::Path, line: u32) -> Self {
+        match self {
+            RuntimeError::Generic { message, .. } if line > 0 => {
+                RuntimeError::Located {
+                    message,
+                    file: zymbol_span::display_path(file),
+                    line,
+                    column: 0,
+                }
+            }
+            // The family travels with the error, and learning where it
+            // happened does not change it.
+            RuntimeError::Kinded { kind, inner } => RuntimeError::Kinded {
+                kind,
+                inner: Box::new(inner.locate(file, line)),
+            },
+            other => other,
+        }
+    }
+
+    /// An error that declares its `##` family.
+    ///
+    /// `kind` is the family without the `##`: `"Type"`, `"Index"`, `"Range"`,
+    /// `"Key"`, `"Div"`, `"Parse"`. D1: a wrong TYPE is `##Type` and a wrong
+    /// VALUE is `##Index`.
+    pub fn kinded(kind: &'static str, message: impl Into<String>, span: Span) -> Self {
+        RuntimeError::Kinded {
+            kind,
+            inner: Box::new(RuntimeError::Generic { message: message.into(), span }),
+        }
+    }
+
+    /// Where the error happened, if it knows.
+    ///
+    /// Line only, no column: the span of a failing statement starts at its
+    /// indentation, so the column said nothing a reader could use — and the
+    /// browser engine's tokens carry no column at all, so a three-engine
+    /// `file:line:col` would have been a divergence by construction.
+    pub fn location(&self) -> Option<(&str, u32)> {
+        match self {
+            RuntimeError::Located { file, line, .. } => Some((file, *line)),
+            RuntimeError::Kinded { inner, .. } => inner.location(),
+            _ => None,
+        }
+    }
+}
+
 
 pub type Result<T> = std::result::Result<T, RuntimeError>;
 
@@ -264,6 +363,19 @@ pub enum Value {
     /// Error value for try-catch error handling
     Error(ErrorValue),
     Unit,
+}
+
+/// Keep `Interpreter::file_vars` in step with a write to a file-level variable.
+///
+/// A callable is mirrored, so a named function can call it at any depth;
+/// anything else is not, and takes the name out if a callable was there before.
+#[inline]
+fn mirror_file_var(file_vars: &mut HashMap<String, Value>, name: &str, value: &Value) {
+    if matches!(value, Value::Function(_)) {
+        file_vars.insert(name.to_string(), value.clone());
+    } else if !file_vars.is_empty() {
+        file_vars.remove(name);
+    }
 }
 
 /// The module aliases visible at one point in the program (alias -> file path).
@@ -546,6 +658,32 @@ impl Value {
         }
     }
 
+    /// The type as a diagnostic names it, the way the analyzer does: `Int`,
+    /// `[Int]`, `(Int, String)`, `#(k: Int)`, `Function`
+    /// (`zymbol_common::typeword`, decided 2026-09-16). A message says what KIND
+    /// of value arrived, never the value itself — `got Float`, not
+    /// `got Float(1.5)`. It supersedes [`Self::type_ident`], which names a
+    /// collection by its shape alone (`Array`), as the steps of the plan reach
+    /// each engine.
+    pub fn type_label(&self) -> String {
+        use zymbol_common::typeword as tw;
+        match self {
+            Value::Int(_) => tw::INT.to_string(),
+            Value::Float(_) => tw::FLOAT.to_string(),
+            Value::String(_) => tw::STRING.to_string(),
+            Value::Char(_) => tw::CHAR.to_string(),
+            Value::Bool(_) => tw::BOOL.to_string(),
+            Value::Unit => tw::UNIT.to_string(),
+            Value::Error(_) => tw::ERROR.to_string(),
+            Value::Function(_) => tw::FUNCTION.to_string(),
+            Value::Array(items) => tw::array(items.iter().map(Value::type_label)),
+            Value::Tuple(items) => tw::tuple(items.iter().map(Value::type_label)),
+            Value::NamedTuple(fields) => {
+                tw::dict(fields.iter().map(|(k, v)| (k.as_str(), v.type_label())))
+            }
+        }
+    }
+
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Int(_)        => "###",
@@ -577,6 +715,15 @@ impl Value {
 }
 
 /// Interpreter for executing Zymbol programs
+/// What runs a subscript: the resolved path in, what the program printed out,
+/// or the failure as `zymbol run` writes it.
+/// Runs a subscript: its printed output and the exit status it gave, or the
+/// text of a failure.
+///
+/// The arguments are the words after the path (D10); an empty slice means the
+/// subscript inherits its caller's command line.
+pub type SubscriptRunner = std::rc::Rc<dyn Fn(&std::path::Path, &[String]) -> std::result::Result<(String, i32), String>>;
+
 pub struct Interpreter<W: Write> {
     output: W,
     /// Stack of variable scopes (lexical scoping)
@@ -599,18 +746,36 @@ pub struct Interpreter<W: Write> {
     loading_modules: HashSet<PathBuf>,
     /// Import aliases (alias -> file_path)
     import_aliases: ModuleAliases,
-    /// The module variables injected into the CURRENT frame, as they were at
-    /// injection time.
+    /// Whether this frame runs against a module's state. Then `scope_stack[0]`
+    /// IS that module's variable table — moved out of `loaded_modules` for as
+    /// long as the frame runs and no longer — and the frame's own scopes start
+    /// at index 1.
     ///
-    /// Two things read it. The write-back when the frame returns diffs against
-    /// it, so a frame that never touched a key cannot clobber what a nested
-    /// call wrote (MM-2). And a call to another function of the same module
-    /// flushes the difference to the store on the way in, so the callee sees
-    /// what this frame has written rather than what the store last heard
-    /// (MM-12 — see `flush_module_frame`).
-    frame_module_vars: HashMap<String, Value>,
+    /// Until 2026-10-10 a module frame was handed a COPY of each variable its
+    /// body names, and on the way out compared every one with what it had been
+    /// given to decide what to write back. The store kept the original, so the
+    /// frame was never the only owner of a collection: the first write of every
+    /// call copied all of it, and the comparison walked it again — a call that
+    /// wrote one cell cost the size of the state (ZYTW-010). Three more things
+    /// existed only to keep the copies honest: the snapshot each frame diffed
+    /// against (MM-2), the flush on the way into a sibling (MM-12), and the
+    /// refresh of the caller on the way back; `ZYTW-008` and `ZYTW-013` were
+    /// bugs of that machinery, and a frame that failed dropped its copy, so
+    /// what it had written before failing was lost where the other two engines
+    /// keep it. The state lives in one place now, as it always did in them.
+    ///
+    /// The table is in the frame only while the frame is the one running:
+    /// `take_call_state` puts it back in the store before any call, and
+    /// `restore_call_state` takes it again. So whatever a call reaches — the
+    /// same module, directly or through three others — finds it there.
+    module_scope: bool,
+    /// The names of that module's state that are destroyed, moved in and out of
+    /// the store with its table (`LoadedModule::dead_variables`).
+    module_dead: HashSet<String>,
     /// Current file path (for resolving relative imports)
     current_file: Option<PathBuf>,
+    /// Line of the statement now executing — see `execute_statement`.
+    cur_stmt_line: u32,
     /// Base directory for module resolution
     base_dir: PathBuf,
     /// The code a top-level `<~ n` asked the program to end with (GAP-ZYB-006).
@@ -623,6 +788,11 @@ pub struct Interpreter<W: Write> {
     exit_code: Option<i64>,
     /// CLI arguments passed to the script
     cli_args: Option<Vec<Value>>,
+    /// Runs a subscript `</ file />` the way `zymbol run` runs a program, and
+    /// hands back what it printed or the failure as the CLI writes it. The CLI
+    /// installs it (GLB-017 I); without it the subscript runs in the legacy
+    /// in-process path below, which is what the REPL gets.
+    subscript_runner: Option<SubscriptRunner>,
     /// Auto-free (v0.0.8): top-level statement index → variables to destroy
     /// after that statement (last-use analysis, computed in `execute()`)
     destruction_schedule: HashMap<usize, Vec<String>>,
@@ -646,23 +816,15 @@ pub struct Interpreter<W: Write> {
     const_vec_pool: Vec<Vec<HashSet<String>>>,
     /// QW9: Recycled Vec pool for argument evaluation (avoids per-call heap alloc)
     arg_vec_pool: Vec<Vec<Value>>,
-    /// Which of a module's bindings each module function body actually names,
-    /// keyed by the address of its `Rc<FunctionDef>`.
-    ///
-    /// A module function frame is given a copy of the module's state on entry
-    /// and diffs it on the way out. The tree-walker's collections are not
-    /// reference-counted, so both halves are deep copies, and the cost was
-    /// proportional to the whole of the module's state rather than to the part
-    /// the function touches — a module holding a sixty-key table paid for it on
-    /// every call, including calls to functions that never name the table.
-    /// Computed once per function body and reused (REFERENCE.md L44).
-    module_var_mentions: HashMap<usize, std::rc::Rc<std::collections::HashSet<String>>>,
     /// MoveOrClone guard: depth of active try/catch blocks.
     /// When > 0, Return must clone (finally block may reference the variable after <~).
     /// When == 0, Return can move (take_variable) — O(1) for String/Array.
     try_depth: u8,
     /// Depth of active >>| TUI blocks. When > 0, raw mode is active and ¶/\\ must emit \r\n.
     pub(crate) tui_depth: u8,
+    /// `zymbol run --keys` (D11): the screen `>>|` draws on and the keys `<<|`
+    /// reads, when there is no terminal to take over. `None` is the ordinary run.
+    pub(crate) headless: Option<zymbol_common::vscreen::Headless>,
     /// TCO support: name of the currently executing function (None = not in a function).
     /// Used to detect `<~ f(same_args)` tail-call patterns.
     pub(crate) current_function: Option<String>,
@@ -673,11 +835,8 @@ pub struct Interpreter<W: Write> {
     /// Names the MoveOrClone optimisation in `Statement::Return` must NOT move
     /// out of scope, because something after the return still needs to read them:
     ///   - output parameters (QW13), whose writeback copies the value to the caller;
-    ///   - module state variables (MM-2), whose write-back diffs the frame's final
-    ///     value against the injected snapshot. `<~ v` used to move `v` out, the
-    ///     write-back then found nothing, and the mutation was silently dropped —
-    ///     a module function that wrote state *and* returned a value lost the write
-    ///     in the tree-walker while the VM kept it.
+    /// A module's variables used to be here too; `take_variable` no longer
+    /// reaches them (see `module_scope`).
     pub(crate) move_guard_names: std::collections::HashSet<String>,
     /// Active output numeral system (block base codepoint).
     /// Default: 0x0030 (ASCII). Changed by #<d0><d9># statements.
@@ -723,6 +882,14 @@ pub struct Interpreter<W: Write> {
     /// Only writes that land in the file body itself are mirrored — a block's
     /// locals are not the file's, and a named function is written at file level
     /// so it cannot see them anyway.
+    ///
+    /// And only CALLABLES. Since MEM-2 a function body reaches a file variable
+    /// in one way the analyser allows: by calling a lambda that lives in one.
+    /// Mirroring everything made this map a second owner of every collection
+    /// the file body held — so the first edit after each assignment copied it,
+    /// and an output parameter could never be the only owner of what it was
+    /// lent (GLB-117) — and cost a key and an insert on every top-level
+    /// assignment. See `mirror_file_var`.
     file_vars: HashMap<String, Value>,
     /// The free names of each named function's body, computed once per
     /// definition instead of once per call.
@@ -799,7 +966,8 @@ impl<W: Write> Interpreter<W> {
         if let Some(&idx) = self.loop_scope_depths.last() {
             self.scope_stack[idx].insert(name.to_string(), value);
         } else {
-            self.scope_stack[0].insert(name.to_string(), value);
+            let base = self.frame_base();
+            self.scope_stack[base].insert(name.to_string(), value);
         }
     }
 
@@ -812,7 +980,8 @@ impl<W: Write> Interpreter<W> {
             self.scope_stack[idx].insert(name.to_string(), value);
         } else {
             // Single loop or no loop: anchor to global/function bottom scope
-            self.scope_stack[0].insert(name.to_string(), value);
+            let base = self.frame_base();
+            self.scope_stack[base].insert(name.to_string(), value);
         }
     }
 
@@ -831,6 +1000,14 @@ impl<W: Write> Interpreter<W> {
             return self.global_consts.get(name);
         }
         None
+    }
+
+    /// A variable in view with this name: behind a `.` it hides the import
+    /// alias of the same name (GLB-070, decided 2026-09-26). It can only be a
+    /// function's or a lambda's — the analyser refuses a variable of the file
+    /// that takes an alias's name (MEM-7).
+    pub(crate) fn variable_hides_alias(&self, name: &str) -> bool {
+        self.scope_stack.iter().any(|scope| scope.contains_key(name))
     }
 
     /// Get a mutable reference to a variable, searching from innermost to outermost scope.
@@ -857,11 +1034,11 @@ impl<W: Write> Interpreter<W> {
             self.auto_dead_variables.remove(name);
         }
         let at_file_level = self.call_depth == 0 && self.scope_stack.len() == 1;
-        if let Some(scope) = self.scope_stack.last_mut() {
-            scope.insert(name.to_string(), value.clone());
-        }
         if at_file_level {
-            self.file_vars.insert(name.to_string(), value);
+            mirror_file_var(&mut self.file_vars, name, &value);
+        }
+        if let Some(scope) = self.scope_stack.last_mut() {
+            scope.insert(name.to_string(), value);
         }
     }
 
@@ -874,7 +1051,10 @@ impl<W: Write> Interpreter<W> {
         // A Unit sentinel would be written back to module.all_variables on write-back,
         // corrupting module constants returned via bare-identifier <~ CONST expressions.
         // After a Return statement the variable is unreachable anyway, so removal is safe.
-        for scope in self.scope_stack.iter_mut().rev() {
+        // Only the frame's own scopes: a module's variable outlives the frame,
+        // and `<~ tabla` hands out a reference to it, not the table itself.
+        let base = self.frame_base();
+        for scope in self.scope_stack[base..].iter_mut().rev() {
             if scope.contains_key(name) {
                 return scope.remove(name);
             }
@@ -896,19 +1076,26 @@ impl<W: Write> Interpreter<W> {
         let at_depth_zero = self.call_depth == 0;
         for (i, scope) in self.scope_stack.iter_mut().enumerate().rev() {
             if let Some(existing) = scope.get_mut(name) {
-                *existing = value.clone();
                 if at_depth_zero && i == 0 {
-                    self.file_vars.insert(name.to_string(), value);
+                    mirror_file_var(&mut self.file_vars, name, &value);
                 }
+                *existing = value;
                 return;
             }
         }
-        let at_file_level = at_depth_zero && self.scope_stack.len() == 1;
-        if let Some(scope) = self.scope_stack.last_mut() {
-            scope.insert(name.to_string(), value.clone());
+        // Not in view anywhere. If it is a variable of the module that a `\`
+        // ended, assigning it gives it back to the MODULE — a local of that
+        // name would leave the module without its variable for good.
+        if !self.module_dead.is_empty() && self.module_dead.remove(name) {
+            self.scope_stack[0].insert(name.to_string(), value);
+            return;
         }
+        let at_file_level = at_depth_zero && self.scope_stack.len() == 1;
         if at_file_level {
-            self.file_vars.insert(name.to_string(), value);
+            mirror_file_var(&mut self.file_vars, name, &value);
+        }
+        if let Some(scope) = self.scope_stack.last_mut() {
+            scope.insert(name.to_string(), value);
         }
     }
 
@@ -921,9 +1108,12 @@ impl<W: Write> Interpreter<W> {
         if self.current_module_path.is_none() && self.global_consts.contains_key(name) {
             return true;
         }
-        for const_set in self.const_vars_stack.iter().rev() {
+        for (i, const_set) in self.const_vars_stack.iter().enumerate().rev() {
             if const_set.contains(name) {
-                return true;
+                // The module's constants sit under the frame: a parameter or
+                // a local of the same name is not one of them (MM-9).
+                return !(i == 0 && self.module_scope)
+                    || !self.scope_stack[1..].iter().any(|scope| scope.contains_key(name));
             }
         }
         false
@@ -962,7 +1152,10 @@ impl<W: Write> Interpreter<W> {
     /// the parameter must stay assignable inside the function body.
     pub(crate) fn unmark_const(&mut self, name: &str) {
         if !self.has_any_const { return; }
-        for const_set in self.const_vars_stack.iter_mut() {
+        // The frame's own marks only — `is_const` already reads a parameter
+        // past the module's set, which is not this frame's to edit.
+        let base = self.frame_base();
+        for const_set in self.const_vars_stack[base..].iter_mut() {
             const_set.remove(name);
         }
     }
@@ -1020,12 +1213,17 @@ impl<W: Write> Interpreter<W> {
     /// Used by both lambda calls and traditional function calls (B2).
     /// B10: reuses pooled Vecs/HashMaps. QW3: also pools mutable/const_vars Vecs.
     pub(crate) fn take_call_state(&mut self) -> SavedCallState {
+        // Every call, of a named function or a lambda, starts here (`--count`).
+        zymbol_common::count::call();
+        // A module's table goes back to the store before anything is called:
+        // the callee, or something it calls, may be a function of this module.
+        self.check_in_module_scope();
         let saved = SavedCallState {
             scope_stack: std::mem::take(&mut self.scope_stack),
             mutable_vars_stack: std::mem::take(&mut self.mutable_vars_stack),
             const_vars_stack: std::mem::take(&mut self.const_vars_stack),
             import_aliases: std::mem::take(&mut self.import_aliases),
-            frame_module_vars: std::mem::take(&mut self.frame_module_vars),
+            module_scope: std::mem::take(&mut self.module_scope),
             has_any_const: self.has_any_const,
             // MM-1: loop anchors index into the caller's scope_stack — they must
             // not leak into the callee frame or x°/°x would write out of bounds.
@@ -1061,7 +1259,7 @@ impl<W: Write> Interpreter<W> {
         let mut fn_mut = std::mem::replace(&mut self.mutable_vars_stack, saved.mutable_vars_stack);
         let mut fn_const = std::mem::replace(&mut self.const_vars_stack, saved.const_vars_stack);
         self.import_aliases = saved.import_aliases;
-        self.frame_module_vars = saved.frame_module_vars;
+        self.module_scope = saved.module_scope;
         self.has_any_const = saved.has_any_const;
         self.loop_scope_depths = saved.loop_scope_depths;      // MM-1
         self.dead_variables = saved.dead_variables;            // MM-3
@@ -1089,6 +1287,63 @@ impl<W: Write> Interpreter<W> {
             if self.const_set_pool.len() < 128 { self.const_set_pool.push(s); }
         }
         if self.const_vec_pool.len() < 32 { self.const_vec_pool.push(fn_const); }
+
+        // Back in a module frame: its table is in the store, where the call
+        // that just ended left it. `current_module_path` is the caller's again.
+        self.check_out_module_scope();
+    }
+
+    /// Put the running frame's module table back in the store, leaving an
+    /// empty scope in its place. Nothing to do outside a module frame.
+    pub(crate) fn check_in_module_scope(&mut self) {
+        if !self.module_scope {
+            return;
+        }
+        if let (Some(path), Some(slot)) = (&self.current_module_path, self.scope_stack.first_mut()) {
+            if let Some(module) = self.loaded_modules.get_mut(path) {
+                module.all_variables = std::mem::take(slot);
+                module.dead_variables = std::mem::take(&mut self.module_dead);
+            }
+        }
+    }
+
+    /// Take the module's table out of the store and make it `scope_stack[0]`
+    /// of the running frame. Nothing to do outside a module frame.
+    pub(crate) fn check_out_module_scope(&mut self) {
+        if !self.module_scope {
+            return;
+        }
+        if let (Some(path), Some(slot)) = (&self.current_module_path, self.scope_stack.first_mut()) {
+            if let Some(module) = self.loaded_modules.get_mut(path) {
+                *slot = std::mem::take(&mut module.all_variables);
+                self.module_dead = std::mem::take(&mut module.dead_variables);
+            }
+        }
+    }
+
+    /// The index of the running frame's own first scope: 1 in a module frame,
+    /// where 0 is the module's table.
+    #[inline(always)]
+    pub(crate) fn frame_base(&self) -> usize {
+        self.module_scope as usize
+    }
+
+    /// Whether `name` is a variable of the module that some `\` ended, with no
+    /// parameter or local of this frame in front of it.
+    #[inline(always)]
+    pub(crate) fn is_dead_module_state(&self, name: &str) -> bool {
+        !self.module_dead.is_empty()
+            && self.module_dead.contains(name)
+            && !self.scope_stack[1..].iter().any(|scope| scope.contains_key(name))
+    }
+
+    /// Whether `name` is, in this frame, a variable of the module the frame
+    /// runs against — not a parameter or a local that hides one.
+    #[inline(always)]
+    pub(crate) fn is_module_state(&self, name: &str) -> bool {
+        self.module_scope
+            && self.scope_stack[0].contains_key(name)
+            && !self.scope_stack[1..].iter().any(|scope| scope.contains_key(name))
     }
 }
 
@@ -1098,7 +1353,7 @@ pub(crate) struct SavedCallState {
     mutable_vars_stack: Vec<HashSet<String>>,
     pub(crate) const_vars_stack: Vec<HashSet<String>>,
     pub(crate) import_aliases: ModuleAliases,
-    pub(crate) frame_module_vars: HashMap<String, Value>,
+    module_scope: bool,
     has_any_const: bool,
     loop_scope_depths: Vec<usize>,
     dead_variables: HashSet<String>,
@@ -1129,11 +1384,14 @@ impl Interpreter<std::io::Stdout> {
             loaded_modules: HashMap::new(),
             loading_modules: HashSet::new(),
             import_aliases: ModuleAliases::default(),
-            frame_module_vars: HashMap::new(),
+            module_scope: false,
+            module_dead: HashSet::new(),
             current_file: None,
+            cur_stmt_line: 0,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             exit_code: None,
             cli_args: None,
+            subscript_runner: None,
             destruction_schedule: HashMap::new(),
             dead_variables: HashSet::new(),
             has_any_const: false,
@@ -1145,9 +1403,9 @@ impl Interpreter<std::io::Stdout> {
             mut_vec_pool: Vec::new(),
             const_vec_pool: Vec::new(),
             arg_vec_pool: Vec::new(),
-            module_var_mentions: HashMap::new(),
             try_depth: 0,
             tui_depth: 0,
+            headless: None,
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),
@@ -1185,11 +1443,14 @@ impl<W: Write> Interpreter<W> {
             loaded_modules: HashMap::new(),
             loading_modules: HashSet::new(),
             import_aliases: ModuleAliases::default(),
-            frame_module_vars: HashMap::new(),
+            module_scope: false,
+            module_dead: HashSet::new(),
             current_file: None,
+            cur_stmt_line: 0,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             exit_code: None,
             cli_args: None,
+            subscript_runner: None,
             destruction_schedule: HashMap::new(),
             dead_variables: HashSet::new(),
             has_any_const: false,
@@ -1201,9 +1462,9 @@ impl<W: Write> Interpreter<W> {
             mut_vec_pool: Vec::new(),
             const_vec_pool: Vec::new(),
             arg_vec_pool: Vec::new(),
-            module_var_mentions: HashMap::new(),
             try_depth: 0,
             tui_depth: 0,
+            headless: None,
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),
@@ -1248,19 +1509,56 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Destroy a variable immediately (remove from all scopes and mark as dead)
-    fn destroy_variable(&mut self, var_name: &str) {
+    ///
+    /// A name the analyser let through that is no longer in any scope was
+    /// destroyed by a `\` that RAN, and a second `\` is a use after that
+    /// destruction (MEM-8, GLB-055) — the same error, and the same run-time
+    /// moment, as a read.
+    fn destroy_variable(&mut self, var_name: &str, span: &Span) -> Result<()> {
         // A destroyed root constant must not resurrect through the global table.
         if !self.global_consts.is_empty() {
             self.global_consts.remove(var_name);
         }
         // Remove from all scopes (search from innermost to outermost)
-        for scope in self.scope_stack.iter_mut().rev() {
+        let base = self.frame_base();
+        for scope in self.scope_stack[base..].iter_mut().rev() {
             if scope.remove(var_name).is_some() {
                 // Found and removed - mark as dead
                 self.dead_variables.insert(var_name.to_string());
-                return;
+                return Ok(());
             }
         }
+        // A module's variable is ended for the MODULE (GLB-120, decided
+        // 2026-10-11): it leaves the table, and every function of the module
+        // finds it dead until one of them assigns it. A second `\` with no
+        // assignment in between is a use after the first.
+        if base == 1 {
+            if self.scope_stack[0].remove(var_name).is_some() {
+                self.module_dead.insert(var_name.to_string());
+                return Ok(());
+            }
+            if self.module_dead.contains(var_name) {
+                return Err(RuntimeError::kinded(
+                    "_",
+                    format!(
+                        "use after destruction: variable '{}' was destroyed after its last use",
+                        var_name
+                    ),
+                    *span,
+                ));
+            }
+        }
+        if self.dead_variables.contains(var_name) {
+            return Err(RuntimeError::kinded(
+                "_",
+                format!(
+                    "use after destruction: variable '{}' was destroyed after its last use",
+                    var_name
+                ),
+                *span,
+            ));
+        }
+        Ok(())
     }
 
     /// Auto-free (v0.0.8): destroy a variable scheduled after its last use.
@@ -1272,7 +1570,10 @@ impl<W: Write> Interpreter<W> {
         if self.is_const(name) {
             return;
         }
-        for scope in self.scope_stack.iter_mut().rev() {
+        // Never the module's table: a name that is dead for this body is not
+        // dead for the module.
+        let base = self.frame_base();
+        for scope in self.scope_stack[base..].iter_mut().rev() {
             if scope.remove(name).is_some() {
                 self.auto_dead_variables.insert(name.to_string());
                 return;
@@ -1283,17 +1584,21 @@ impl<W: Write> Interpreter<W> {
     /// Check if a variable has been destroyed (use-after-free detection)
     fn check_variable_alive(&self, var_name: &str, span: &Span) -> Result<()> {
         // B8: short-circuit
-        if self.dead_variables.is_empty() && self.auto_dead_variables.is_empty() {
+        if self.dead_variables.is_empty()
+            && self.auto_dead_variables.is_empty()
+            && self.module_dead.is_empty()
+        {
             return Ok(());
         }
-        if self.dead_variables.contains(var_name) {
-            return Err(RuntimeError::Generic {
-                message: format!(
+        if self.dead_variables.contains(var_name) || self.is_dead_module_state(var_name) {
+            return Err(RuntimeError::kinded(
+                "_",
+                format!(
                     "use after destruction: variable '{}' was destroyed after its last use",
                     var_name
                 ),
-                span: *span,
-            });
+                *span,
+            ));
         }
         // Auto-free is invisible by design — reaching this error means the
         // last-use analyzer scheduled a destruction too early.
@@ -1310,6 +1615,17 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// Set CLI arguments
+    /// Install the runner for `</ file />` (GLB-017 I).
+    pub fn set_subscript_runner(&mut self, runner: SubscriptRunner) {
+        self.subscript_runner = Some(runner);
+    }
+
+    /// `zymbol run --keys FILE` (D11): `>>|` draws on a virtual screen, `<<|`
+    /// reads these keys, and each block's last frame goes to the output.
+    pub fn set_keys(&mut self, keys: zymbol_common::vscreen::KeyScript) {
+        self.headless = Some(zymbol_common::vscreen::Headless::new(keys));
+    }
+
     pub fn set_cli_args(&mut self, args: Vec<String>) {
         // Convert strings to Value::String
         let args_values: Vec<Value> = args.into_iter()
@@ -1330,7 +1646,8 @@ impl<W: Write> Interpreter<W> {
         self.functions.clear();
         self.dead_variables.clear();
         self.import_aliases = ModuleAliases::default();
-        self.frame_module_vars.clear();
+        self.module_scope = false;
+        self.module_dead.clear();
         self.loading_modules.clear();
         self.loop_scope_depths.clear();
         self.has_any_const = false;
@@ -1543,13 +1860,37 @@ impl<W: Write> Interpreter<W> {
 
         // Execute statements with auto-destruction after each one's last uses
         for (i, statement) in program.statements.iter().enumerate() {
-            self.execute_statement(statement)?;
+            // Top level of this file: an error raised here has no enclosing
+            // function frame to name the file, so name it here. A module's body
+            // runs through its own `execute`, whose `current_file` is the
+            // module — so a module that fails while loading reports itself.
+            if let Err(e) = self.execute_statement(statement) {
+                return Err(match self.current_file.as_deref() {
+                    Some(f) => e.locate(f, self.cur_stmt_line),
+                    None => e,
+                });
+            }
 
             // GAP-ZYB-006: a `<~` that reaches the top level ends the program,
             // and its value is the exit status. The other two engines already
             // stopped here; this one used to walk past and keep going, so the
             // same file printed different things under `--vm`.
             if let ControlFlow::Return(value) = &self.control_flow {
+                // A `$!!` that carries an error out of the top level: the caller
+                // it propagates to is the operating system, and the program ends
+                // saying which error ended it — through the same channel, and
+                // with the same `-->` line, as any runtime error. It used to end
+                // with status 1 and nothing on stderr (ZYJS-027, decided
+                // 2026-09-16). A `<~` of an error never gets here: the analyzer
+                // refuses a top-level `<~` that is not an integer.
+                if let Some(v @ Value::Error(_)) = value {
+                    let err = RuntimeError::Generic { message: v.to_display_string(), span: statement.span() };
+                    self.clear_control_flow();
+                    return Err(match self.current_file.as_deref() {
+                        Some(f) => err.locate(f, self.cur_stmt_line),
+                        None => err,
+                    });
+                }
                 self.exit_code = Some(match value {
                     Some(Value::Int(n)) => *n,
                     // No value: ended deliberately, with nothing to report.
@@ -1608,6 +1949,34 @@ impl<W: Write> Interpreter<W> {
 
     /// Execute a single statement
     fn execute_statement(&mut self, statement: &Statement) -> Result<()> {
+        zymbol_common::count::step();
+        let holder = self.cur_stmt_line;
+        // A `<~`, `@!` or `@>` that left an expression of this statement is the
+        // statement's own exit: the signal is in `control_flow` (GLB-107).
+        let result = match self.execute_statement_inner(statement) {
+            Err(RuntimeError::Unwind) => Ok(()),
+            other => other,
+        };
+        // Finished, with nothing pending: the line goes back to the statement
+        // that holds this one — the block of a `??` arm runs inside an
+        // expression, and an error raised after it in that expression is the
+        // holder's. An error keeps the innermost line, and so does a pending
+        // signal, which the top level reads it for (GLB-106).
+        if result.is_ok() && !self.is_control_flow_pending() {
+            self.cur_stmt_line = holder;
+        }
+        result
+    }
+
+    fn execute_statement_inner(&mut self, statement: &Statement) -> Result<()> {
+        // The line an error raised from here is reported at: the innermost
+        // statement running. `execute_statement` gives it back when this one
+        // finishes, and a call when the function returns, so an error raised
+        // after them in the same statement names that statement — as the other
+        // two engines do. Never given back, the line of the last statement that
+        // ran named an error of the one around it (GLB-106).
+        let line = statement.span().start.line;
+        if line > 0 { self.cur_stmt_line = line; }
         match statement {
             Statement::Output(output) => self.execute_output(output),
             Statement::Assignment(assign) => self.execute_assignment(assign),
@@ -1652,8 +2021,8 @@ impl<W: Write> Interpreter<W> {
                     // MoveOrClone: if returning a bare identifier and not inside a try block
                     // (finally could reference the variable), move instead of clone — O(1).
                     // Names in move_guard_names are read again after the return —
-                    // output-param writeback and module-state write-back — so they
-                    // are cloned instead.
+                    // the output-param writeback — so they are cloned instead. A
+                    // module's variable is not in reach of `take_variable` at all.
                     if self.try_depth == 0 {
                         if let Expr::Identifier(ident) = expr.unwrap_group() {
                             if !self.move_guard_names.contains(&ident.name) {
@@ -1686,8 +2055,7 @@ impl<W: Write> Interpreter<W> {
                 Ok(())
             }
             Statement::LifetimeEnd(lifetime_end) => {
-                self.destroy_variable(&lifetime_end.variable_name);
-                Ok(())
+                self.destroy_variable(&lifetime_end.variable_name, &lifetime_end.span)
             }
             Statement::DestructureAssign(d) => self.eval_destructure_assign(d),
             Statement::Try(try_stmt) => self.execute_try(try_stmt),
@@ -1753,7 +2121,7 @@ impl<W: Write> Interpreter<W> {
                     _ => return Err(RuntimeError::Generic {
                         message: format!(
                             "array pattern '[ … ]' requires an array, got {}",
-                            self.value_type_name(&rhs)
+                            rhs.type_label()
                         ),
                         span,
                     }),
@@ -1766,7 +2134,7 @@ impl<W: Write> Interpreter<W> {
                     _ => return Err(RuntimeError::Generic {
                         message: format!(
                             "tuple pattern '( … )' requires a tuple, got {}",
-                            self.value_type_name(&rhs)
+                            rhs.type_label()
                         ),
                         span,
                     }),
@@ -1779,7 +2147,7 @@ impl<W: Write> Interpreter<W> {
                     _ => return Err(RuntimeError::Generic {
                         message: format!(
                             "the pattern #(…) requires a dictionary, got {}\nhelp: #(key: name) = d unpacks a dictionary; use (a, b) for a tuple, [a, b] for an array",
-                            crate::base_type_symbol(&rhs)
+                            rhs.type_label()
                         ),
                         span,
                     }),
@@ -1793,10 +2161,11 @@ impl<W: Write> Interpreter<W> {
                     else {
                         let available: Vec<String> =
                             pairs.iter().map(|(k, _)| k.clone()).collect();
-                        return Err(RuntimeError::Generic {
-                            message: crate::variables::missing_key_msg(field, &available),
+                        return Err(RuntimeError::kinded(
+                            "Key",
+                            crate::variables::missing_key_msg(field, &available),
                             span,
-                        });
+                        ));
                     };
                     self.set_variable(var_name, val);
                 }
@@ -1858,6 +2227,9 @@ impl<W: Write> Interpreter<W> {
 
     /// Evaluate an expression
     fn eval_expr(&mut self, expr: &Expr) -> Result<Value> {
+        // An expression evaluated: with a statement executed, the
+        // tree-walker's unit of work (`--count`).
+        zymbol_common::count::step();
         match expr {
             // Grouping parens are transparent
             Expr::Group(group) => self.eval_expr(&group.expr),
@@ -1908,6 +2280,19 @@ impl<W: Write> Interpreter<W> {
             Expr::BashExec(bash) => self.eval_bash_exec(bash),
             Expr::Round(op) => self.eval_round(op),
             Expr::Trunc(op) => self.eval_trunc(op),
+            Expr::ErrorConstruct(e) => {
+                // ##Kind("message") — a soft error value, never a raise
+                // (GAP-GOL-003). The analyser refuses a message whose type it
+                // knows is not text; this is the case it could not know.
+                match self.eval_expr(&e.message)? {
+                    Value::String(m) => Ok(Value::Error(ErrorValue::new(e.kind.clone(), m))),
+                    other => Err(RuntimeError::kinded(
+                        "Type",
+                        format!("an error's message is a String, got {}", other.type_label()),
+                        e.message.span(),
+                    )),
+                }
+            }
             Expr::ErrorCheck(check) => {
                 // expr$! - returns #1 if expression is an error, #0 otherwise
                 let value = self.eval_expr(&check.expr)?;
@@ -1930,43 +2315,59 @@ impl<W: Write> Interpreter<W> {
 
     /// Execute a try-catch-finally statement
     fn execute_try(&mut self, try_stmt: &TryStmt) -> Result<()> {
+        // ZYTW-003: where the environment stood when this `!?` began. An error
+        // leaves through `?` from however many blocks and loops deep it was
+        // raised, and none of them pops the scope it pushed — so every caught
+        // error left scopes behind, and a loop that caught one per turn made
+        // every name lookup walk all of them: 4x the errors cost 19.5x the time.
+        // This is the one place an error stops travelling, so it is the one
+        // place the stack is put back.
+        let scope_depth = self.scope_stack.len();
+        let loop_depth = self.loop_scope_depths.len();
+
         // Guard: Return inside try/catch must clone (finally may reference the variable).
         self.try_depth += 1;
         let try_result = self.execute_block(&try_stmt.try_block);
         self.try_depth -= 1;
 
-        // Check if we got an error (either RuntimeError or returned Error value)
-        let error_value = match &try_result {
-            Err(e) => Some(self.runtime_error_to_value(e)),
-            // A pending `Return` is VALUE flow and never exception flow, even
-            // when the value it carries is an error.
-            //
-            // This used to look inside the return, and treat an error found
-            // there as something `:!` should catch. That made `$!!` — an early
-            // return, by definition — behave as a throw whenever it happened to
-            // sit inside a `!?`, so a function propagating a failure upwards
-            // was intercepted by its own catch clause instead of returning.
-            // The register VM and the browser engine both returned the value;
-            // only the tree-walker caught it, and `GUIDE.md` § "Value flow"
-            // states the rule the other two follow: "`$!!` … does not throw an
-            // exception, so it cannot be caught with `!?`/`:!`".
-            //
-            // A `<~` of an ordinary value already left through here untouched,
-            // so this is the same path, now taken by every return alike. The
-            // finally clause below still runs: that is what a finally is.
-            Ok(()) => None,
-        };
-
-        // If we have an error, try to find a matching catch clause
-        let mut caught = false;
-        if let Some(ref err_val) = error_value {
-            for catch_clause in &try_stmt.catch_clauses {
-                if self.catch_matches(catch_clause, err_val) {
-                    // Execute catch block with _err variable
-                    self.execute_catch_block(catch_clause, err_val.clone())?;
-                    caught = true;
-                    break;
+        // A pending `Return` is VALUE flow and never exception flow, even when
+        // the value it carries is an error.
+        //
+        // This used to look inside the return, and treat an error found there
+        // as something `:!` should catch. That made `$!!` — an early return, by
+        // definition — behave as a throw whenever it happened to sit inside a
+        // `!?`, so a function propagating a failure upwards was intercepted by
+        // its own catch clause instead of returning. The register VM and the
+        // browser engine both returned the value; only the tree-walker caught
+        // it, and `GUIDE.md` § "Value flow" states the rule the other two
+        // follow: "`$!!` … does not throw an exception, so it cannot be caught
+        // with `!?`/`:!`".
+        //
+        // The error still owed to whoever is outside, and the line it was raised
+        // at. The line travels with it (ZYTW-002): the `:>` below runs
+        // statements, each one moves `cur_stmt_line`, and the error used to be
+        // located on the way out with whatever line the cleanup left behind.
+        let mut pending: Option<(RuntimeError, u32)> = None;
+        if let Err(e) = try_result {
+            self.unwind_scopes_to(scope_depth, loop_depth);
+            let raised_at = self.cur_stmt_line;
+            let err_val = self.runtime_error_to_value(&e);
+            let clause = try_stmt.catch_clauses.iter()
+                .find(|c| self.catch_matches(c, &err_val));
+            match clause {
+                Some(clause) => {
+                    // ZYTW-002: a catch that fails still owes its `:>`. This
+                    // was a `?`, which returned before the finally below —
+                    // against REFERENCE.md ("always executes, regardless of
+                    // error"), the browser engine, and every language with the
+                    // construct.
+                    if let Err(e) = self.execute_catch_block(clause, err_val) {
+                        self.unwind_scopes_to(scope_depth, loop_depth);
+                        pending = Some((e, self.cur_stmt_line));
+                    }
                 }
+                // A filter that matches nothing has handled nothing.
+                None => pending = Some((e, raised_at)),
             }
         }
 
@@ -1981,7 +2382,7 @@ impl<W: Write> Interpreter<W> {
         // afterwards unless the finally raised its own control flow, which
         // legitimately wins.
         if let Some(ref finally) = try_stmt.finally_clause {
-            let pending = std::mem::replace(&mut self.control_flow, ControlFlow::None);
+            let pending_flow = std::mem::replace(&mut self.control_flow, ControlFlow::None);
             let pending_flag = std::mem::replace(&mut self.has_control_flow, false);
             let finally_result = self.execute_block(&finally.block);
             // BUG-ZYB-011: a `:>` is cleanup, and cleanup does not decide what
@@ -1995,63 +2396,78 @@ impl<W: Write> Interpreter<W> {
             // warn against relying on it in their own style guides. Zymbol
             // takes the warning instead of the feature, and the analyzer says
             // so at the `<~` rather than letting it look like it did something.
-            self.control_flow = pending;
+            // A cleanup that fails is the error that leaves: the one it was
+            // carrying is replaced, as in every language with a finally — and so
+            // is a return it was carrying. Restoring that return before
+            // propagating let it travel on with the error: it cut the caller's
+            // `>> f() ¶` after the value and before the `¶`, and reached the top
+            // level as the program's exit status (ZYTW-002).
+            if let Err(e) = finally_result {
+                self.unwind_scopes_to(scope_depth, loop_depth);
+                return Err(e);
+            }
+            self.control_flow = pending_flow;
             self.has_control_flow = pending_flag;
-            finally_result?;
         }
 
-        // If error wasn't caught, propagate it
-        if error_value.is_some() && !caught {
-            try_result?;
+        if let Some((e, raised_at)) = pending {
+            self.cur_stmt_line = raised_at;
+            return Err(e);
         }
-
         Ok(())
+    }
+
+    /// Put the scope stack back to the depth a `!?` found it at (ZYTW-003).
+    fn unwind_scopes_to(&mut self, scope_depth: usize, loop_depth: usize) {
+        while self.scope_stack.len() > scope_depth {
+            self.pop_scope();
+        }
+        self.loop_scope_depths.truncate(loop_depth);
     }
 
     /// Convert a RuntimeError to an ErrorValue
     fn runtime_error_to_value(&self, error: &RuntimeError) -> Value {
         match error {
+            // A family declared at the raise site wins over the words, which is
+            // the rule the other two engines already follow.
+            RuntimeError::Kinded { kind, inner } => {
+                let m = inner.to_string();
+                Value::Error(match *kind {
+                    "Range" => ErrorValue::range(m),
+                    "Key" => ErrorValue::key(m),
+                    "Index" => ErrorValue::index(m),
+                    "Type" => ErrorValue::type_error(m),
+                    "Div" => ErrorValue::div(m),
+                    "Parse" => ErrorValue::parse(m),
+                    // A subscript that is not there (GLB-099).
+                    "IO" => ErrorValue::io(m),
+                    _ => ErrorValue::generic(m),
+                })
+            }
             RuntimeError::Io(io_err) => {
                 Value::Error(ErrorValue::io(io_err.to_string()))
             }
-            RuntimeError::Generic { message, .. } => {
-                // Try to classify the error based on message content
-                let lower_msg = message.to_lowercase();
-                // Checked before the rest: an integer that left its range is a
-                // ##Range whatever else the message happens to mention.
-                if lower_msg.contains("overflow") || lower_msg.contains("out of range") {
-                    Value::Error(ErrorValue::range(message.clone()))
-                // Before the index branch: a missing key is a ##Key even though
-                // the reader reached it through the index syntax `d["k"]`.
-                } else if lower_msg.contains("no key") {
-                    Value::Error(ErrorValue::key(message.clone()))
-                } else if lower_msg.contains("index") || lower_msg.contains("out of bounds") {
-                    Value::Error(ErrorValue::index(message.clone()))
-                } else if lower_msg.contains("type") {
-                    Value::Error(ErrorValue::type_error(message.clone()))
-                } else if lower_msg.contains("division") || lower_msg.contains("divide by zero")
-                    || lower_msg.contains("modulo") {
-                    Value::Error(ErrorValue::div(message.clone()))
-                } else if lower_msg.contains("parse") {
-                    Value::Error(ErrorValue::parse(message.clone()))
-                } else {
-                    Value::Error(ErrorValue::generic(message.clone()))
-                }
+            // Never caught: `execute_statement` takes it first (GLB-107).
+            RuntimeError::Unwind => Value::Error(ErrorValue::generic(error.to_string())),
+            // A located error is a `Generic` that learned where it happened —
+            // `!?` classifies it by exactly the same text, so attaching a file
+            // never moves an error from one `##` family to another.
+            RuntimeError::Generic { message, .. } | RuntimeError::Located { message, .. } => {
+                // The family is read from the words, by the rule both Rust
+                // engines share (`zymbol_common::errkind`, GLB-010).
+                let m = message.clone();
+                Value::Error(match zymbol_common::errkind::error_kind_of_message(message) {
+                    "Range" => ErrorValue::range(m),
+                    "Key" => ErrorValue::key(m),
+                    "Index" => ErrorValue::index(m),
+                    "Type" => ErrorValue::type_error(m),
+                    "Div" => ErrorValue::div(m),
+                    "Parse" => ErrorValue::parse(m),
+                    _ => ErrorValue::generic(m),
+                })
             }
             RuntimeError::ModuleNotFound { path } => {
                 Value::Error(ErrorValue::io(format!("module not found: {}", path)))
-            }
-            RuntimeError::FunctionNotExported { module, function } => {
-                Value::Error(ErrorValue::generic(format!(
-                    "function '{}' not exported from module '{}'",
-                    function, module
-                )))
-            }
-            RuntimeError::ConstantNotExported { module, constant } => {
-                Value::Error(ErrorValue::generic(format!(
-                    "constant '{}' not exported from module '{}'",
-                    constant, module
-                )))
             }
             RuntimeError::CircularDependency => {
                 Value::Error(ErrorValue::generic("circular dependency detected"))

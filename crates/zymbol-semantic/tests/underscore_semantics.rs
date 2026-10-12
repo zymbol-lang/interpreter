@@ -7,10 +7,29 @@
 //! - Accessing _variables from sibling scopes produces semantic errors
 //! - Multiple _variables with same name in different scopes don't interfere
 
-use zymbol_semantic::VariableAnalyzer;
+use zymbol_semantic::{TypeChecker, VariableAnalyzer};
 use zymbol_parser::Parser;
 use zymbol_lexer::Lexer;
 use zymbol_span::FileId;
+
+/// Every error the full semantic check reports, not only the underscore
+/// analyzer's.
+///
+/// Needed since GLB-039: reading a block's `_name` from outside is no longer
+/// the underscore analyzer's business — the name does not exist out there, with
+/// or without the `_` — so the error it deserves is `undefined variable`, which
+/// comes from the type checker.
+fn full_check_errors(source: &str) -> Vec<String> {
+    let (tokens, _) = Lexer::new(source, FileId(0)).tokenize();
+    let program = Parser::new(tokens).parse().expect("parse failed");
+    let mut checker = TypeChecker::new();
+    checker
+        .check(&program)
+        .into_iter()
+        .filter(|d| matches!(d.severity, zymbol_error::Severity::Error))
+        .map(|d| d.message)
+        .collect()
+}
 
 fn parse_and_analyze(source: &str) -> (Vec<String>, Vec<String>) {
     let file_id = FileId(0);
@@ -97,17 +116,19 @@ _c = _a + _b
 // ============================================================================
 
 #[test]
-fn test_underscore_var_invalid_access_from_outer_scope() {
+fn test_underscore_var_read_from_outer_scope_is_undefined() {
     let source = r#"
 ? #1 {
     _inner = 42
 }
 >> _inner ¶
 "#;
+    // Not the underscore's doing: the block already hides the name, and the
+    // same program without the `_` fails the same way (GLB-039).
     let (_warnings, errors) = parse_and_analyze(source);
-    assert_eq!(errors.len(), 1, "Expected error for accessing _inner from outer scope");
-    assert!(errors[0].contains("cannot access underscore variable '_inner'"));
-    assert!(errors[0].contains("outer scope"));
+    assert!(errors.is_empty(), "the underscore analyzer should say nothing here, got {errors:?}");
+    let all = full_check_errors(source);
+    assert_eq!(all, vec!["undefined variable '_inner'".to_string()]);
 }
 
 #[test]
@@ -155,7 +176,7 @@ _? #0 {
 }
 
 #[test]
-fn test_underscore_var_invalid_after_loop() {
+fn test_underscore_var_read_after_loop_is_undefined() {
     let source = r#"
 @ i:1..3 {
     _sum = i * 2
@@ -163,8 +184,8 @@ fn test_underscore_var_invalid_after_loop() {
 >> _sum ¶
 "#;
     let (_warnings, errors) = parse_and_analyze(source);
-    assert_eq!(errors.len(), 1, "Expected error for accessing _sum after loop");
-    assert!(errors[0].contains("cannot access underscore variable '_sum'"));
+    assert!(errors.is_empty(), "the underscore analyzer should say nothing here, got {errors:?}");
+    assert_eq!(full_check_errors(source), vec!["undefined variable '_sum'".to_string()]);
 }
 
 // ============================================================================
@@ -172,16 +193,19 @@ fn test_underscore_var_invalid_after_loop() {
 // ============================================================================
 
 #[test]
-fn test_underscore_var_invalid_assignment_from_outer() {
+fn test_underscore_var_assignment_from_outer_declares_a_new_one() {
     let source = r#"
 ? #1 {
     _value = 10
 }
 _value = 20
 "#;
+    // `_` means PRIVATE: the variable does not escape its block, so once the
+    // block closes the name is free again — exactly as it is without the `_`.
+    // This assignment declares a new, different `_value` (decided 2026-09-24).
     let (_warnings, errors) = parse_and_analyze(source);
-    assert_eq!(errors.len(), 1, "Expected error for assigning to _value from outer scope");
-    assert!(errors[0].contains("cannot access underscore variable '_value'"));
+    assert!(errors.is_empty(), "a new variable outside is valid, got {errors:?}");
+    assert!(full_check_errors(source).is_empty());
 }
 
 #[test]
@@ -456,7 +480,7 @@ data = [1, 2, 3]
 }
 
 #[test]
-fn test_underscore_iterator_invalid_after_loop() {
+fn test_underscore_iterator_read_after_loop_is_undefined() {
     let source = r#"
 data = [1, 2, 3]
 @ _item:data {
@@ -465,8 +489,8 @@ data = [1, 2, 3]
 >> _item ¶
 "#;
     let (_warnings, errors) = parse_and_analyze(source);
-    assert_eq!(errors.len(), 1, "Expected error for accessing _item after loop");
-    assert!(errors[0].contains("cannot access underscore variable '_item'"));
+    assert!(errors.is_empty(), "the underscore analyzer should say nothing here, got {errors:?}");
+    assert_eq!(full_check_errors(source), vec!["undefined variable '_item'".to_string()]);
 }
 
 // ============================================================================

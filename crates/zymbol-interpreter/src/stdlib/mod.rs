@@ -32,6 +32,7 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
                 import_aliases: crate::ModuleAliases::default(),
                 loaded_modules_refs: HashMap::new(),
             const_names: std::collections::HashSet::new(),
+            dead_variables: std::collections::HashSet::new(),
             };
             module.constants.insert("PI".into(), Value::Float(std::f64::consts::PI));
             module.constants.insert("E".into(),  Value::Float(std::f64::consts::E));
@@ -46,6 +47,7 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
             import_aliases: crate::ModuleAliases::default(),
             loaded_modules_refs: HashMap::new(),
             const_names: std::collections::HashSet::new(),
+            dead_variables: std::collections::HashSet::new(),
         }),
         "std/term" => Some(LoadedModule {
             name: "std/term".to_string(),
@@ -56,6 +58,7 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
             import_aliases: crate::ModuleAliases::default(),
             loaded_modules_refs: HashMap::new(),
             const_names: std::collections::HashSet::new(),
+            dead_variables: std::collections::HashSet::new(),
         }),
         "std/time" => Some(LoadedModule {
             name: "std/time".to_string(),
@@ -66,6 +69,7 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
             import_aliases: crate::ModuleAliases::default(),
             loaded_modules_refs: HashMap::new(),
             const_names: std::collections::HashSet::new(),
+            dead_variables: std::collections::HashSet::new(),
         }),
         "std/json" => Some(LoadedModule {
             name: "std/json".to_string(),
@@ -76,6 +80,7 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
             import_aliases: crate::ModuleAliases::default(),
             loaded_modules_refs: HashMap::new(),
             const_names: std::collections::HashSet::new(),
+            dead_variables: std::collections::HashSet::new(),
         }),
         "std/io" => Some(LoadedModule {
             name: "std/io".to_string(),
@@ -86,6 +91,7 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
             import_aliases: crate::ModuleAliases::default(),
             loaded_modules_refs: HashMap::new(),
             const_names: std::collections::HashSet::new(),
+            dead_variables: std::collections::HashSet::new(),
         }),
         "std/net" => Some(LoadedModule {
             name: "std/net".to_string(),
@@ -96,6 +102,7 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
             import_aliases: crate::ModuleAliases::default(),
             loaded_modules_refs: HashMap::new(),
             const_names: std::collections::HashSet::new(),
+            dead_variables: std::collections::HashSet::new(),
         }),
         // Without the `db` feature this falls through to `None` → the standard
         // module-not-found error (prebuilt static binaries exclude std/db).
@@ -109,6 +116,7 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
             import_aliases: crate::ModuleAliases::default(),
             loaded_modules_refs: HashMap::new(),
             const_names: std::collections::HashSet::new(),
+            dead_variables: std::collections::HashSet::new(),
         }),
         _ => None,
     }

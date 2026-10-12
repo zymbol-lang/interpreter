@@ -43,10 +43,11 @@ impl<W: Write> Interpreter<W> {
                 self.eval_lambda_call(func, arg_values, &pipe.span)
             }
             _ => {
-                Err(RuntimeError::Generic {
-                    message: "pipe operator requires a callable function or lambda".to_string(),
-                    span: pipe.span,
-                })
+                Err(RuntimeError::kinded(
+                    "Type",
+                    "pipe operator requires a callable function or lambda".to_string(),
+                    pipe.span,
+                ))
             }
         }
     }
@@ -74,10 +75,12 @@ impl<W: Write> Interpreter<W> {
             let left = self.eval_expr(&binary.left)?;
             let left_bool = match &left {
                 Value::Bool(b) => *b,
-                _ => return Err(RuntimeError::Generic {
-                    message: format!("logical {name} requires boolean operands, got {}", left.type_ident()),
-                    span: binary.span,
-                }),
+                // A wrong TYPE is a `##Type` (D1; GLB-091).
+                _ => return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("logical {name} requires boolean operands, got {}", left.type_ident()),
+                    binary.span,
+                )),
             };
             // `#0 && _` is #0 and `#1 || _` is #1 whatever the right side says,
             // so the right side is not evaluated at all — not even to type-check
@@ -88,10 +91,12 @@ impl<W: Write> Interpreter<W> {
             let right = self.eval_expr(&binary.right)?;
             let right_bool = match &right {
                 Value::Bool(b) => *b,
-                _ => return Err(RuntimeError::Generic {
-                    message: format!("logical {name} requires boolean operands, got {}", right.type_ident()),
-                    span: binary.span,
-                }),
+                // A wrong TYPE is a `##Type` (D1; GLB-091).
+                _ => return Err(RuntimeError::kinded(
+                    "Type",
+                    format!("logical {name} requires boolean operands, got {}", right.type_ident()),
+                    binary.span,
+                )),
             };
             return Ok(Value::Bool(right_bool));
         }
@@ -194,59 +199,76 @@ impl<W: Write> Interpreter<W> {
         // Slow path: full eval
         let left = self.eval_expr(&binary.left)?;
         let right = self.eval_expr(&binary.right)?;
+        self.apply_binary(binary, &left, &right)
+    }
 
+    /// A binary operator applied to two values already in hand.
+    ///
+    /// Separate from `eval_binary` so that `x = x OP y`, which reads its
+    /// receiver where it lives, can evaluate `y` once and finish here — it used
+    /// to hand the whole expression back whenever its shortcut did not apply,
+    /// and `y` ran twice (ZYTW-011).
+    pub(crate) fn apply_binary(&self, binary: &BinaryExpr, left: &Value, right: &Value) -> Result<Value> {
         match binary.op {
             // Juxtaposition concatenation (implicit, no explicit operator)
-            BinaryOp::Concat => self.eval_concat(&left, &right, &binary.span),
+            BinaryOp::Concat => self.eval_concat(left, right, &binary.span),
 
             // Arithmetic operators
-            BinaryOp::Add => self.eval_add(&left, &right, &binary.span),
-            BinaryOp::Sub => self.eval_arithmetic(&left, &right, num::sub, |a, b| a - b, "-", &binary.span),
-            BinaryOp::Mul => self.eval_arithmetic(&left, &right, num::mul, |a, b| a * b, "*", &binary.span),
-            BinaryOp::Div => self.eval_div(&left, &right, &binary.span),
-            BinaryOp::Mod => self.eval_mod(&left, &right, &binary.span),
-            BinaryOp::Pow => self.eval_pow(&left, &right, &binary.span),
+            BinaryOp::Add => self.eval_add(left, right, &binary.span),
+            BinaryOp::Sub => self.eval_arithmetic(left, right, num::sub, |a, b| a - b, "-", &binary.span),
+            BinaryOp::Mul => self.eval_arithmetic(left, right, num::mul, |a, b| a * b, "*", &binary.span),
+            BinaryOp::Div => self.eval_div(left, right, &binary.span),
+            BinaryOp::Mod => self.eval_mod(left, right, &binary.span),
+            BinaryOp::Pow => self.eval_pow(left, right, &binary.span),
 
             // Comparison operators
-            BinaryOp::Eq => Ok(Value::Bool(self.values_equal(&left, &right))),
-            BinaryOp::Neq => Ok(Value::Bool(!self.values_equal(&left, &right))),
-            BinaryOp::Lt => self.compare_values(&left, &right, |a, b| a < b, |a, b| a < b, &binary.op),
-            BinaryOp::Gt => self.compare_values(&left, &right, |a, b| a > b, |a, b| a > b, &binary.op),
-            BinaryOp::Le => self.compare_values(&left, &right, |a, b| a <= b, |a, b| a <= b, &binary.op),
-            BinaryOp::Ge => self.compare_values(&left, &right, |a, b| a >= b, |a, b| a >= b, &binary.op),
+            BinaryOp::Eq => Ok(Value::Bool(self.values_equal(left, right))),
+            BinaryOp::Neq => Ok(Value::Bool(!self.values_equal(left, right))),
+            BinaryOp::Lt => self.compare_values(left, right, |a, b| a < b, |a, b| a < b, &binary.op),
+            BinaryOp::Gt => self.compare_values(left, right, |a, b| a > b, |a, b| a > b, &binary.op),
+            BinaryOp::Le => self.compare_values(left, right, |a, b| a <= b, |a, b| a <= b, &binary.op),
+            BinaryOp::Ge => self.compare_values(left, right, |a, b| a >= b, |a, b| a >= b, &binary.op),
 
             // Logical operators
             BinaryOp::And => {
-                let left_bool = match &left {
+                let left_bool = match left {
                     Value::Bool(b) => *b,
-                    _ => return Err(RuntimeError::Generic {
-                        message: format!("logical AND requires boolean operands, got {}", left.type_ident()),
-                        span: binary.span,
-                    }),
+                    // A wrong TYPE is a `##Type` (D1; GLB-091).
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("logical AND requires boolean operands, got {}", left.type_ident()),
+                        binary.span,
+                    )),
                 };
-                let right_bool = match &right {
+                let right_bool = match right {
                     Value::Bool(b) => *b,
-                    _ => return Err(RuntimeError::Generic {
-                        message: format!("logical AND requires boolean operands, got {}", right.type_ident()),
-                        span: binary.span,
-                    }),
+                    // A wrong TYPE is a `##Type` (D1; GLB-091).
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("logical AND requires boolean operands, got {}", right.type_ident()),
+                        binary.span,
+                    )),
                 };
                 Ok(Value::Bool(left_bool && right_bool))
             }
             BinaryOp::Or => {
-                let left_bool = match &left {
+                let left_bool = match left {
                     Value::Bool(b) => *b,
-                    _ => return Err(RuntimeError::Generic {
-                        message: format!("logical OR requires boolean operands, got {}", left.type_ident()),
-                        span: binary.span,
-                    }),
+                    // A wrong TYPE is a `##Type` (D1; GLB-091).
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("logical OR requires boolean operands, got {}", left.type_ident()),
+                        binary.span,
+                    )),
                 };
-                let right_bool = match &right {
+                let right_bool = match right {
                     Value::Bool(b) => *b,
-                    _ => return Err(RuntimeError::Generic {
-                        message: format!("logical OR requires boolean operands, got {}", right.type_ident()),
-                        span: binary.span,
-                    }),
+                    // A wrong TYPE is a `##Type` (D1; GLB-091).
+                    _ => return Err(RuntimeError::kinded(
+                        "Type",
+                        format!("logical OR requires boolean operands, got {}", right.type_ident()),
+                        binary.span,
+                    )),
                 };
                 Ok(Value::Bool(left_bool || right_bool))
             }
@@ -266,30 +288,36 @@ impl<W: Write> Interpreter<W> {
             zymbol_common::UnaryOp::Not => {
                 match operand {
                     Value::Bool(b) => Ok(Value::Bool(!b)),
-                    _ => Err(RuntimeError::Generic {
-                        message: format!("logical NOT requires boolean operand, got {}", operand.type_ident()),
-                        span: unary.span,
-                    }),
+                    // A wrong TYPE is a `##Type` (D1; GLB-091).
+                    _ => Err(RuntimeError::kinded(
+                        "Type",
+                        format!("logical NOT requires boolean operand, got {}", operand.type_ident()),
+                        unary.span,
+                    )),
                 }
             }
             zymbol_common::UnaryOp::Neg => {
                 match operand {
                     Value::Int(n) => Ok(Value::Int(-n)),
                     Value::Float(f) => Ok(Value::Float(-f)),
-                    _ => Err(RuntimeError::Generic {
-                        message: format!("negation requires numeric operand, got {}", operand.type_ident()),
-                        span: unary.span,
-                    }),
+                    // A wrong TYPE is a `##Type` (D1; GLB-088).
+                    _ => Err(RuntimeError::kinded(
+                        "Type",
+                        format!("negation requires numeric operand, got {}", operand.type_ident()),
+                        unary.span,
+                    )),
                 }
             }
             zymbol_common::UnaryOp::Pos => {
                 match operand {
                     Value::Int(n) => Ok(Value::Int(n)),
                     Value::Float(f) => Ok(Value::Float(f)),
-                    _ => Err(RuntimeError::Generic {
-                        message: format!("unary plus requires numeric operand, got {:?}", operand),
-                        span: unary.span,
-                    }),
+                    // A wrong TYPE is a `##Type` (D1; GLB-088).
+                    _ => Err(RuntimeError::kinded(
+                        "Type",
+                        format!("unary plus requires numeric operand, got {}", operand.type_ident()),
+                        unary.span,
+                    )),
                 }
             }
         }

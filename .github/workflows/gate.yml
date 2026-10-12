@@ -149,6 +149,14 @@ jobs:
           clone zy-Zofia        Zofia
           clone zy-ZyAudit      ZyAudit
           clone ZyBank          ZyBank
+          clone ZyGoL           GoL
+          clone ZyBF            ZyBrainfuck
+
+          # The design, which is source: `zyddt premises` crosses PREMISES.md
+          # with the cells in both directions, and without it that check does
+          # not run — exit 2, "no verdict", which is the right answer to a
+          # missing input and also a red Gate. ZyDDT looks for it beside itself.
+          clone zymbol-design   zymbol-design
 
       # ZyAudit is cloned — ZyFmtCheck formats it and compares against the same
       # machine's own output, which no service can perturb — but four of its
