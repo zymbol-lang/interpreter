@@ -1,14 +1,24 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **v0.0.9 (in development)** — a *decision* release: rules that existed
+> Current status: **v0.0.10 (in development)** — a *measurement* release: nothing in it was
+> planned as a feature, it is what a systematic question finds when it is asked some 1 700
+> times of three engines. The design became source (`zymbol-design/PREMISES.md`, 29
+> premises, each crossed with its cells), ZyDDT's matrix filed some 200 findings against
+> the engines and they are closed, a function sees only its parameters again (MEM-2), a
+> condition is a Bool and nothing else, and a performance sweep
+> found one shape four times — *a collection with two owners is copied by its first edit* —
+> and removed it. See `IMPL_V0010.md`.
+> Validation (measured 2026-10-11): **683 corpus files, 677 agreeing, 0 diverging** across
+> all three engines; **1065 unit tests**, 0 failed; **1 704 ZyDDT cells**, all agreeing;
+> **227 findings closed, 1 open** (ZYVM-022, a memory debt declared below); `zyq suite`
+> reports **all gates pass**. **0.0.9 is the latest published release**; every figure on
+> this page is measured on the `v0.0.10` branch.
+>
+> Previously: **v0.0.9 (released 2026-09-09)** — a *decision* release: rules that existed
 > in the prose and in no engine, or in three engines three ways, decided once and enforced
 > in all three. The collections (`COLLECTIONS.md`), the dictionary's own notation `#(…)`,
 > the withdrawn chained index, `std/time`, the safe integer, and the eleven Windows
 > findings. See `IMPL_V009.md` and `WINDOWS_V009.md`.
-> Validation (measured 2026-09-07): **666 corpus files, 660 agreeing, 0 diverging** across
-> all three engines; **1026 unit tests**, 0 failed; `zyq suite` reports **all gates pass**.
-> **0.0.8 is the latest published release**; every figure on this page is measured on the
-> `v0.0.9` branch.
 >
 > Previously: **v0.0.8 (released 2026-08-02)** — a *debt* release, scoped by evidence rather
 > than by a feature wish list: the design-vs-implementation audit in `MEMORY_MODEL.md`
@@ -70,6 +80,14 @@
 | Automatic destruction at last use (auto-free, both engines, unobservable) | ✅ v0.0.8 |
 | `##!` on `Char` → Unicode code point | ✅ v0.0.8 |
 | Zymbol Packages `.zyp` — `zymbol package` / `zymbol run pkg.zyp` | ✅ v0.0.8 |
+| A named function sees only its parameters; a lambda inherits its enclosing scope (MEM-2, MEM-6) | ✅ v0.0.10 |
+| A condition of `?` / `_?` is a Bool and nothing else (static where the type is known, `##Type` at run time) | ✅ v0.0.10 |
+| `##Kind("message")` builds an error; `##Kind(m) =>` reads its message back | ✅ v0.0.10 |
+| `##'expr` — an Int code point to its Char, a sibling of `###` and `##.` | ✅ v0.0.10 |
+| A command's exit status is a soft `##IO` that carries it | ✅ v0.0.10 |
+| A subscript takes its own arguments: `</ app.zy -L es --list />` | ✅ v0.0.10 |
+| A slice written high-to-low builds backwards: `a$[3..1]` → `[30, 20, 10]` | ✅ v0.0.10 |
+| The dictionary pattern is written `#(k: v)`, in a loop head too | ✅ v0.0.10 |
 
 ### Execution Modes (complete)
 
@@ -96,23 +114,27 @@
 | VS Code extension | ✅ |
 | Standalone executable builder | ✅ |
 | Install script | ✅ |
+| `zymbol run --keys` — a full-screen program tested without a terminal | ✅ v0.0.10 |
+| `zymbol run --count` — what a program cost, in units a machine does not change | ✅ v0.0.10 |
 
 ### Test Coverage (complete)
 
 | Suite | Status |
 |-------|--------|
-| Unit + integration (`cargo test`) | ✅ 1026 passed, 0 failed, 4 ignored |
-| TW/VM consensus (`zyq consensus --engines zytw,zyvm`) | ✅ 660 of 666 agree, 0 diverge (6 excused for every engine by a reason in `corpus.toml`) |
-| Three-engine consensus (`zyq consensus`) | ✅ 660 agree, 0 diverge — the browser engine included |
-| Golden files (`zyq expect`) | ✅ 635/639 via `run`, **0 stale**, 4 unchecked · 25/25 via `check` |
-| Rejection corpus (`zyq reject`) | ✅ 41 forms, all refused in every engine |
-| Formatter property suite (`zyq suite --only fmt`) | ✅ 710 PASS / 55 SKIP / 0 FAIL over 764 files, P1–P4 all zero, no regressions vs. baseline |
-| JS mirror parity (`zyq consensus --engines zytw,zyjs`) | ✅ 636 of 666 agree, **0 diverge** — the 30 excused for `zyjs` in `corpus.toml`. The seven gaps of `IMPL_V008.md` § E.3 are closed |
+| Unit + integration (`cargo test`) | ✅ 1065 passed, 0 failed, 4 ignored |
+| TW/VM consensus (`zyq consensus --engines zytw,zyvm`) | ✅ 677 of 683 agree, 0 diverge (6 excused for every engine by a reason in `corpus.toml`) |
+| Three-engine consensus (`zyq consensus`) | ✅ 677 agree, 0 diverge — the browser engine included |
+| Golden files (`zyq expect`) | ✅ 647/647 via `run`, **0 stale** · 30/30 via `check` |
+| Rejection corpus (`zyq reject`) | ✅ 55 forms, all refused in every engine |
+| Formatter property suite (`zyq suite --only fmt`) | ✅ 733 PASS / 48 SKIP / 0 FAIL over 781 files, P1–P4 all zero, no regressions vs. baseline |
+| JS mirror parity (`zyq consensus --engines zytw,zyjs`) | ✅ 664 of 683 agree, **0 diverge** — the 19 excused in `corpus.toml` (`std/db`, `<\ cmd \>`, TUI, and the 6 excused for every engine) |
 | Benchmark gate | ✅ 16/16 within tolerance, no performance regressions |
 | RosettaStone i18n suite (105 languages) | ✅ PASS |
 
 The whole question at once: `cd ../zyquality && ./zyq suite` — **all gates pass** as of
-2026-09-07.
+2026-10-11. Three layers that did not exist at v0.0.9 are in it: ZyDDT's matrix (46 axes,
+1 704 cells, 171 checked against an implementation that is not ours), the 88 probes behind
+`LLM.md`, and the cost gate (14 cases, 60 of its assertions counted with `--count`).
 
 ---
 
@@ -152,16 +174,19 @@ They are documented in the manual as known limitations.
 | `arithmetic on non-numeric` for string `/` split | Analyzer cannot distinguish `/` operators by context |
 | ~~`type mismatch` for `arr[i] = val`~~ | **Moot since v0.0.9** — indexed assignment was withdrawn, so there is nothing to model: the form is refused in all three engines |
 
-### Auto-free debt — inherited from v0.0.8, still undecided
+### Auto-free debt — inherited from v0.0.8, re-measured 2026-10-11, still undecided
 
 Both were recorded in `IMPL_V008.md` § B as "known and accepted, not regressions", with
 the note that they *should be decided explicitly before v0.0.9 rather than inherited
-silently*. v0.0.9 is the branch in flight and neither has been decided, so they are moved
-here — a debt whose deadline passed inside a released plan is a debt nobody is looking at.
+silently*. That deadline has now passed three times — v0.0.9, v0.0.10, and the ROADMAP
+that took them over — and neither is decided. What v0.0.10 changed is that the first now
+has a number, a finding and a case that watches it: a debt whose deadline passed inside a
+released plan is a debt nobody is looking at, and this one was written in two plans with
+no finding and no cell.
 
 | Debt | What it costs | Shape of the fix |
 |------|---------------|------------------|
-| **VM expression temporaries** | `emit_auto_free` clears the *named* variable's register; a temporary holding the same large value lives until its register is reused, so the VM's peak-memory win is measurably smaller than the tree-walker's | Teach the register allocator to release temporaries at their last read — a change to allocation, not to the analysis. Worth a before/after measurement on the same 30 MB benchmark used for the tree-walker |
+| **VM expression temporaries** (ZYVM-022, in `ZyDDT/HALLAZGOS/zyvm.md`) | `emit_auto_free` clears the *named* variable's register; the value a call returns and the caller uses once is left in a temporary register until something reuses it. Two such calls in sequence cost **1.79× one** in the VM (2.05 net of an empty process) against 1.00 in the tree-walker. Named variables (1.00) and a `$` expression used as a value (0.98) do not have it, and the VM still uses about six times less memory per array (38 MB against 236 MB for 2 000 000 integers): what is smaller is the *relative* win. `ZYMBOL_POISON_TEMPS=1`, which overwrites a temporary when its statement ends, brings the ratio to 0.96 — the register is the cause, and clearing every temporary at statement end costs +7.7 % to +9.1 % VM steps | Release at the temporary's last read (a change to the register allocator, not to the analysis), or clear at statement end only what can be an aggregate. Held by `autofree/call-result` in `zyquality/cost`, declared KNOWN until the author decides |
 | **Flat regions only** | A variable created inside a nested block, loop body or lambda body is attributed to the enclosing statement and freed there — correct, but later than necessary in long loop bodies | Extending regions into blocks needs the analysis to model block lifetimes, which is exactly the complexity the current design avoids. **Standing recommendation: leave it, and write the reason into `last_use.rs`** so the next reader does not rediscover it as a bug |
 
 ---
@@ -236,8 +261,8 @@ worse than no line: it sends projects to the tree-walker by default, which is ex
 zy-GO did before HLZ-008 was found.
 
 - ~~**Module system in VM**~~ — HLZ-008, HLZ-009, HLZ-010, MM-10 and MM-11 closed the known
-  divergences. The TW/VM consensus reports **660 of 666** corpus files byte-identical under
-  both engines (2026-09-07), `zyquality/corpus/modules_scope/` included. **No corpus file
+  divergences. The TW/VM consensus reports **677 of 683** corpus files byte-identical under
+  both engines (2026-10-11), `zyquality/corpus/modules_scope/` included. **No corpus file
   carries an in-file skip marker**: `@vm-skip` was retired along with the four other
   exclusion mechanisms `zyquality/corpus.toml` replaced, and every exclusion now names the
   engine, the tag and the reason in that one file.
@@ -249,9 +274,10 @@ zy-GO did before HLZ-008 was found.
 - CLI args capture (`><`) also has parity, despite older tables marking it VM-unsupported.
 
 Remaining VM-side debt is not a parity gap but a memory one: auto-free clears a named
-variable's register, while an expression temporary holding the same value survives until
-its register is reused. Closing it is a register-allocator change. See
-[IMPL_V008.md](IMPL_V008.md) § "Auto-free debt".
+variable's register, while the value a call returns survives in a temporary register until
+something reuses it (ZYVM-022 — 1.79× in the VM against 1.00 in the tree-walker,
+re-measured 2026-10-11). Closing it is a register-allocator change. See
+§ "Auto-free debt" above, and [IMPL_V008.md](IMPL_V008.md) § B for where it began.
 
 ### Medium Term
 
@@ -532,3 +558,7 @@ letters — language-agnostic):
 | v0.0.4 | Module system + REPL | Full module import/export, circular import detection, REPL improvements |
 | v0.0.5 | TUI + VM parity | `>>|` `>>~` `>>!` `>>?` `<<\|` `@~`, `$*` string repeat, tuple equality VM, LSP `<<\|` fix, text styles `>>~(,,BKS,fg,bg)` |
 | **v0.0.6** | **Refinement + Scientific Stdlib** | `std/math` (sqrt/exp/ln/log/pow/sin/cos/abs/max/min/floor/ceil/round + PI/E), `std/random` (xoshiro256++), stdlib infrastructure (`enum FunctionDef`, `load_stdlib_module`, semantic suppression), 9 stdlib tests — **driven by Zofía**; float formatting + typed input pending |
+| **v0.0.7** | **Native stdlib** | `std/json`, `std/io`, `std/net`, `std/db` (ODBC), typed and validated input, fail-closed formatter, `DeepSet` VM parity for every `$~` form, LSP↔check diagnostic parity, Rust edition 2024 |
+| **v0.0.8** | **Debt** | Auto-free (destruction at last use), `std/term`, `##!` on `Char`, match or-patterns, Zymbol Packages (`.zyp`), VM module-system parity, the design-vs-implementation audit (MM-1 … MM-11) |
+| **v0.0.9** | **Decisions** | The collections (`COLLECTIONS.md`), the dictionary `#(k: v)`, the withdrawn chained index, `std/time`, the safe integer, the eleven Windows findings |
+| **v0.0.10** | **Measurement** | `PREMISES.md` as source, ZyDDT's matrix (46 axes, 1 704 cells), MEM-2 isolation restored, a condition is a Bool, `##Kind("…")`, `##'expr`, `--keys`, `--count`, edits that happen in place |
