@@ -14,6 +14,7 @@
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square"/>
   <img src="https://img.shields.io/badge/status-active-brightgreen?style=flat-square"/>
+  <a href="https://zymbol-lang.org"><img alt="web: zymbol-lang.org" src="https://img.shields.io/badge/web-zymbol--lang.org-7c3aed?style=flat-square"/></a>
 </p>
 
 ---
