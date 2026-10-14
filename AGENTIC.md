@@ -356,8 +356,8 @@ Nothing in the corpus writes `? arr {`, so `zyq consensus` never asked.
 ```bash
 zymbol check file.zy      # parse + semantics, follows imports, reports where from
 zymbol fmt file.zy --write
-zymbol run file.zy        # tree-walker
-zymbol run --vm file.zy   # register VM — run both; a difference is a bug in one of them
+zymbol run file.zy        # register VM (the default)
+zymbol run --tw file.zy   # tree-walker — run both; a difference is a bug in one of them
 cd zyquality && ./zyq suite    # the whole gate, one verdict
 ```
 

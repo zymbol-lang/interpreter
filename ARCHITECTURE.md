@@ -171,7 +171,7 @@ Static analysis passes over the AST:
 ### Tree-Walker Execution
 
 #### `zymbol-interpreter`
-Walks the AST directly and evaluates it. This is the default execution mode.
+Walks the AST directly and evaluates it. It was the default execution mode until v0.0.11; it is now asked for with `--tw`, and is the only engine the REPL has.
 
 **Runtime `Value` enum**:
 
@@ -446,7 +446,7 @@ Main binary (`zymbol`). Orchestrates the full pipeline.
 
 ## Execution Pipelines
 
-### Tree-Walker (default)
+### Tree-Walker (`--tw` flag)
 
 ```
 Source file
@@ -464,7 +464,7 @@ zymbol-semantic     analyze()   →  diagnostics (warnings/errors)
 zymbol-interpreter  execute()   →  stdout / return value
 ```
 
-### Register VM (`--vm` flag)
+### Register VM (default)
 
 ```
 Source file
@@ -518,12 +518,13 @@ zymbol-cli       (all of the above) ──────────────�
 
 | Command | Description |
 |---------|-------------|
-| `zymbol run FILE` | Execute with tree-walker (default) |
-| `zymbol run --vm FILE` | Execute with register VM |
+| `zymbol run FILE` | Execute with the register VM (default since v0.0.11) |
+| `zymbol run --tw FILE` | Execute with the tree-walker |
+| `zymbol run --vm FILE` | The same as `zymbol run FILE`: accepted because scripts written before v0.0.11 spell it |
 | `zymbol run --keys KEYS FILE` | Run a full-screen program with no terminal: `>>\|` draws on a virtual 24×80 screen, `<<\|` reads its keys from `KEYS`, and each block's last frame goes to the output as text. Tree-walker and VM |
 | `zymbol run --count FILE` | After the program ends, one line on stderr — `steps`, `calls`, `allocs`, `bytes`, `copied` — exact, the same on every run. Tree-walker and VM (not the browser engine) |
 | `zymbol run FILE [ARGS]` | Pass CLI arguments to program (`><` capture) |
-| `zymbol run PKG.zyp [--script NAME] [--tw\|--vm] [--keep-temp]` | Run a `.zyp` package. Extracts to an ephemeral temp dir and runs from there — never `chdir`s. Defaults to `--vm` (loose `.zy` files still default to the tree-walker); precedence is `--tw` > `--vm` > manifest `mode` > VM |
+| `zymbol run PKG.zyp [--script NAME] [--tw\|--vm] [--keep-temp]` | Run a `.zyp` package. Extracts to an ephemeral temp dir and runs from there — never `chdir`s. The VM unless told otherwise, as for a loose `.zy` file; precedence is `--tw` > `--vm` > manifest `mode` > VM |
 | `zymbol package DIR [-o OUT.zyp] [--script NAME]... [--dry-run]` | Package source (+ its transitive dependency closure) into a portable `.zyp`. `--dry-run` prints the closure and warnings without writing the archive |
 | `zymbol build FILE -o OUT [--release]` | Package into standalone executable (bundles source + interpreter; not native compilation). Requires: Rust/Cargo installed, full repo checkout, run from `interpreter/` |
 | `zymbol check FILE` | Syntax and semantic check of the whole program: the file **and every module it imports**, transitively. Errors in a module are reported at the module's own line, followed by `note: reached from <importer>`. Style warnings (unused variables, ambiguous lifetimes) stay with the file named on the command line |

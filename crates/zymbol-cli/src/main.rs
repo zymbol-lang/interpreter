@@ -32,21 +32,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run a Zymbol program with interpreter — a .zy file directly, or a .zyp package
+    /// Run a Zymbol program — a .zy file directly, or a .zyp package — on the register VM
     Run {
         /// Path to the .zy file, or a .zyp package, to run
         file: PathBuf,
 
-        /// Execute using the register VM (experimental, Sprint 4). For a .zyp package this
-        /// is already the default unless its manifest says `mode = "tw"`; the flag exists
-        /// mainly to override that.
-        #[arg(long, help = "Execute using the register VM (experimental)")]
+        /// Execute using the register VM. It is the default engine since v0.0.11, so for
+        /// a plain .zy file the flag changes nothing and is kept because scripts written
+        /// before then spell it. For a .zyp package it overrides a manifest that says
+        /// `mode = "tw"`.
+        #[arg(long, help = "Execute using the register VM (the default)")]
         vm: bool,
 
-        /// Force the tree-walking interpreter. For a plain .zy file this is already the
-        /// default (only useful to make that explicit); for a .zyp package it overrides
-        /// both `--vm` and the manifest's `mode`.
-        #[arg(long, conflicts_with = "vm")]
+        /// Execute using the tree-walking interpreter instead of the register VM. For a
+        /// .zyp package it overrides the manifest's `mode` as well.
+        #[arg(long, conflicts_with = "vm", help = "Execute using the tree-walking interpreter")]
         tw: bool,
 
         /// Which [[script]] of a .zyp package to run (default: the one marked
@@ -286,7 +286,10 @@ fn run_file(
     if is_zyp(&path) {
         return run_zyp(path, args, use_vm, use_tw, script, keep_temp, keys);
     }
-    let code = run_file_inner(&path, RunOpts { display_name: None, args, use_vm, keys })?;
+    // The VM is the engine unless the tree-walker is asked for by name. `--vm`
+    // decides nothing for a plain file: `--tw` conflicts with it, so it can only
+    // repeat the default.
+    let code = run_file_inner(&path, RunOpts { display_name: None, args, use_vm: !use_tw, keys })?;
     std::process::exit(code);
 }
 
@@ -327,9 +330,8 @@ fn run_zyp(
     let entry = pkg.manifest.resolve_script(script.as_deref())?;
     let (entry_name, entry_path) = (entry.name.clone(), entry.path.clone());
 
-    // Precedence: --tw > --vm > manifest's `mode` > Vm (the .zyp default; see the `Run`
-    // command's doc comment for why plain .zy files keep defaulting to the tree-walker
-    // instead).
+    // Precedence: --tw > --vm > manifest's `mode` > Vm. A plain .zy file has no
+    // manifest, so for it this is --tw > Vm (`run_file`).
     let use_vm = if force_tw {
         false
     } else if force_vm {

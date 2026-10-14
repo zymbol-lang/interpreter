@@ -1,7 +1,7 @@
 # Zymbol-Lang — Language Guide
 
 > **Authoritative reference** — all examples verified empirically on both execution modes:
-> `zymbol run` (tree-walker) and `zymbol run --vm` (register VM).
+> `zymbol run` (register VM, the default since v0.0.11) and `zymbol run --tw` (tree-walker).
 > If a construct is not documented here, it may not be implemented.
 
 **Interpreter version**: v0.0.10
@@ -157,8 +157,8 @@ The 69 Unicode digit scripts (`#०९#` Devanagari, `#٠٩#` Arabic-Indic, `#�
 ## 1. Running Programs
 
 ```bash
-zymbol run program.zy              # tree-walker (canonical, best error messages)
-zymbol run --vm program.zy         # register VM (faster for compute-heavy programs)
+zymbol run program.zy              # register VM (the default since v0.0.11)
+zymbol run --tw program.zy         # tree-walker (canonical, best error messages)
 
 zymbol --help
 zymbol run --help
@@ -166,7 +166,7 @@ zymbol run --help
 
 **When to use each mode:**
 - **Tree-walker**: canonical behavior, descriptive error messages, debugging
-- **VM**: production. There is no single speedup factor — 1.4–6× the tree-walker on the
+- **VM**: the default, and production. There is no single speedup factor — 1.4–6× the tree-walker on the
   `zyquality/bench/` microbenchmarks, 4.1× on a 19×19 go game and 11–13× on Chaturanga's
   alpha-beta search, where per-frame and per-scope cost dominates. Quote the workload, and
   re-measure before quoting: these are the interpreter of the day.
