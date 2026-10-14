@@ -13,9 +13,9 @@ holds, and what does not, when the code is generated rather than written).
 (Spanish, 日本語, العربية, pIqaD, emoji). `//` is the only comment form.
 
 ```bash
-zymbol run f.zy        # tree-walker (default)   zymbol check f.zy   # parse+semantic, follows imports
-zymbol run --vm f.zy   # register VM             zymbol fmt f.zy --write
-zymbol run app.zyp     # .zyp bundle (--vm default)   zymbol repl
+zymbol run f.zy        # register VM (default)   zymbol check f.zy   # parse+semantic, follows imports
+zymbol run --tw f.zy   # tree-walker             zymbol fmt f.zy --write
+zymbol run app.zyp     # .zyp bundle (VM too)    zymbol repl
 ```
 
 Three engines must agree: `zytw` (Rust tree-walker), `zyvm` (Rust register VM),

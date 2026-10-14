@@ -149,11 +149,11 @@ bash install-zymbol.sh
 ### Run
 
 ```bash
-# Tree-walker (default, best error messages)
+# Register VM (the default since v0.0.11)
 zymbol run hello.zy
 
-# Register VM (faster for compute-heavy programs)
-zymbol run --vm hello.zy
+# Tree-walker
+zymbol run --tw hello.zy
 
 # Interactive REPL
 zymbol repl
