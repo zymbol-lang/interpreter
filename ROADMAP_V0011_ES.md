@@ -2,7 +2,8 @@
 
 > **Estado: abierta.** La rama `v0.0.11` existe desde el 2026-10-12 y lleva un solo commit propio,
 > el de versión (`62baa56`). **La etapa 1 está implementada** (2026-10-13) salvo el sondeo de las
-> cinco zonas: ver «Avance» dentro de ella. De las etapas 2 a 4 no hay nada hecho.
+> cinco zonas: ver «Avance» dentro de ella. **La etapa 2 tiene lista de trabajos y arnés de medición**
+> (2026-10-14), y ninguna corrección hecha todavía. De las etapas 3 y 4 no hay nada hecho.
 >
 > **Escrito el 2026-10-13.** Toda cifra sin otra fecha se midió ese día, sobre esa rama, con un
 > binario de release. Las que vienen de antes llevan su fecha y hay que volver a medirlas antes
@@ -195,15 +196,93 @@ ser urgente.
 
 ## Etapa 2 — Optimización de tiempos y recursos
 
-### Primero el perfil
+### De dónde sale la lista
 
-Esta etapa no tiene todavía una lista de trabajos, y escribirla hoy sería inventarla. Lo primero
-es un perfil de la VM sobre **cargas reales** —GO a 19×19, la búsqueda de Chaturanga,
-`ZyBF/pesado2.zy`— además de `zyquality/bench/`. Los microbenchmarks no copian agregados, y ahí
-es donde los programas de verdad gastan el tiempo. Del perfil sale el orden; los objetivos
-numéricos se fijan después de verlo.
+Este documento decía que la etapa no tenía lista de trabajos y que escribirla sería inventarla. La
+lista salió de fuera: **ZyBigBench**, una medición hecha entre el 2026-10-10 y el 2026-10-13 en otra
+sesión (una cuenta aparte de claude.ai, en un contenedor de 4 GB), que buscó defectos por **curva de
+crecimiento** — la misma operación a n, 2n, 4n y 8n — en vez de por tiempo a un solo tamaño. Encontró
+ocho (PERF-01 a PERF-08); el 2026-10-14 se trajo a `zyquality/bench/big/` y se volvió a medir sobre
+esta rama con los instrumentos del proyecto.
 
-### Lo que ya se sabe
+PERF-01 y PERF-02 ya estaban corregidos (`ee48143`, ZYVM-013, 2026-10-10). Los otros seis siguen
+vivos. Las recomendaciones de abajo se incorporaron al plan por decisión del autor el 2026-10-14; cada
+una se archiva como hallazgo antes de tocar código.
+
+Los defectos de complejidad no necesitan un perfil para ordenarse: el perfil de cargas reales —GO a
+19×19, la búsqueda de Chaturanga, `ZyBF/pesado2.zy`— sigue haciendo falta, pero para las
+**constantes**, y va después.
+
+### La lista
+
+Cifras en instrucciones (`perf stat -e instructions:u`, mediana de 7, VM de esta rama), salvo donde se
+dice otra cosa. El control es el mismo programa sin el defecto.
+
+| Orden | Id | Qué | Recomendación | Motores | Cómo se sujeta en `cost/` |
+|---|---|---|---|---|---|
+| 1 | PERF-06 | `s = s "x"` es cuadrático | Implementar | VM | `--count` bytes, exacto |
+| 2 | PERF-04 | `@ ch:texto` es cuadrático | Implementar | VM | Reloj |
+| 3 | PERF-05 a | `s$[a..b]` copia el texto entero | Implementar | VM y TW | `--count` bytes, exacto |
+| — | PERF-05 b | `s$#` y `s[i]` recorren el texto | Aplazar (D8) | VM y TW | — |
+| 4 | PERF-03 | El diccionario busca recorriendo | Implementar, como pieza propia | VM, TW y zyjs | Reloj |
+| 5 | PERF-07 | La recursión profunda aborta sin error de Zymbol | Implementar el tope (D7) | VM y TW | Celda de ZyDDT |
+| — | PERF-08 | El binario estático con musl es más lento | Reproducir primero | Empaquetado | — |
+
+**1. PERF-06 — `s = s "x"`.** 128 000 añadidos cuestan 968 M instrucciones contra 290 M con la mitad
+(×3,3), y `bytes` va de 2,05 a 8,20 GB (×4,00). Control: el tree-walker es lineal (b = 1,00), y
+`v = v $+ i` en la VM dobla al doblar n. Causa: el compilador manda `ConcatStr` a un temporal nuevo
+(`zymbol-compiler`, `BinaryOp::Concat`), y la rama de la VM que reutiliza el búfer exige que destino y
+operando izquierdo sean el mismo registro: la vía rápida existe y no se alcanza. Arreglo: cuando el
+destino de la asignación es la variable del operando izquierdo, emitir `ConcatStr(s, s, x)`. Va
+primero porque es la forma de construir texto de cualquier programa y el arreglo es local. Riesgo: un
+registro reutilizado mientras sigue vivo — `ZYMBOL_POISON_TEMPS=1` y la puerta entera.
+
+**2. PERF-04 — `@ ch:texto`.** 4,5 G → 17,8 G instrucciones de 147 456 a 294 912 caracteres (×4 al
+doblar); `--count` no lo ve (los pasos doblan). Control: el tree-walker es lineal, Python 33 → 66 M.
+Causa: cada vuelta es un `StrCharAt(i)` que llama a `is_ascii()` sobre todo el texto, y con texto no
+ASCII además a `chars().nth(i)`. Arreglo: una instrucción de iteración con un cursor de bytes en un
+registro — O(1) por carácter, sin reservar, sobre la cadena que había al entrar al bucle. En
+`strings_scan_long` la VM ejecuta ~1 300 instrucciones por paso donde `fib_rec` ejecuta ~110.
+
+**3. PERF-05 a — `s$[a..b]`.** 2 000 cortes de 10 caracteres: 1,6 G instrucciones sobre 73 728
+caracteres y 3,2 G sobre 147 456; Python 1,5 M. Control: `v$[1..10]` sobre un arreglo, 3,7 M a
+cualquier tamaño. Causa: el corte copia el texto a un `Vec<char>` antes de cortar — 516 KB por corte
+en la VM y 590 KB en el tree-walker, y `--count` lo ve exacto en bytes. Arreglo: localizar los dos
+bordes con `char_indices` (o por bytes si el texto es ASCII) y copiar sólo el trozo. El mismo
+`collect()` está en 12 sitios de la VM y 8 del tree-walker: se revisan todos.
+
+**PERF-05 b — `s$#` y `s[i]`: aplazado.** 15 600 instrucciones por `s$#` sobre 147 456 caracteres
+contra 490 de Python: un recorrido a ~40 GB/s, cuadrático sólo dentro de un bucle sobre un texto largo.
+El arreglo de verdad cambia la representación de la cadena (una marca «es ASCII» o la cuenta de
+caracteres dentro de `ZyStr`), y se decide con el perfil de cargas reales delante (D8). En el
+tree-walker, además, **leer una variable de texto la copia** (`Value::String(String)`, sin `Rc`): es
+HLZ-012 para cadenas, y se archiva como deuda declarada con su celda `KNOWN`.
+
+**4. PERF-03 — el diccionario.** Leer la última clave cuesta ~40 000 instrucciones con 2 000 claves y
+~105 000 con 4 000; Python ~425 a cualquier tamaño. Control: leer `d["k1"]`, plano. Por eso insertar
+n claves es cuadrático en los tres motores (`dict_insert`, b = 1,98). Los tres buscan recorriendo:
+`Vec<(String, Value)>` en los dos de Rust, `keys.indexOf` en `zymbol.js`. Arreglo: `IndexMap` (ya es
+dependencia de `zymbol-common`), que conserva el orden de inserción que imprime `#(…)`; borrar con
+`shift_remove`, nunca `swap_remove`. Va aparte porque cambia la representación del valor —igualdad,
+impresión, recorrido, borrado, desestructuración— y porque la tupla con nombre comparte hoy esa
+representación sin necesitar el índice.
+
+**5. PERF-07 — el aborto.** El tree-walker aborta (134) entre 8 000 y 9 000 niveles; la VM, a través
+de `$>`, entre 2 500 y 3 000 (~24 KB de pila de Rust por cada reentrada del bucle). Control: la
+recursión directa en la VM llega a 2 048 000 niveles. Lo grave no es el límite: el proceso desaparece
+sin error de Zymbol y sin la salida pendiente. Arreglo: un contador de profundidad que lance un error
+de ejecución, con su línea, antes de agotar la pila (D7). Subir el límite de la VM achicando su marco
+es otra cosa, y queda aplazada.
+
+**PERF-08 — musl: reproducir antes de decidir.** Según ZyBigBench, el estático de la v0.0.10 es 11×
+más lento en `str_concat` y 1,6–2,3× en interpolación, cortes y cierres, por el asignador de musl; y es
+la descarga por defecto para «any Linux». No se reprodujo aquí. No hace falta compilar musl: se
+descargan los dos binarios oficiales de la v0.0.10 (estático y `.deb`, mismo commit), se verifica su
+SHA-256 y se les pasa `bench/big/`. Si se confirma: `mimalloc` sólo para el target musl, detrás del
+asignador que cuenta para `--count`. Es empaquetado y se decide en la release. PERF-06 se lleva el
+×11 de `str_concat` de todas formas.
+
+### Lo que ya se sabía
 
 | Id | Qué es | Estado |
 |---|---|---|
@@ -214,16 +293,31 @@ numéricos se fijan después de verlo.
 
 Es el de la v0.0.10 y no se relaja:
 
-- Se cuenta en **instrucciones**, no en milisegundos; mediana de siete corridas.
+- Se cuenta con los dos instrumentos del proyecto, nunca con un reloj propio. **`zymbol run --count`**
+  —pasos, asignaciones, bytes, copias— es exacto: una corrida basta y un antes/después en esas unidades
+  es el que se cita. **`perf stat -e instructions:u`**, mediana de 7, es la unidad del tiempo y la única
+  que compara con Python.
+- **`--count` no ve un recorrido dentro de una instrucción:** `s$#` sobre un texto largo es un paso.
+  PERF-03, PERF-04 y el `s$#` de la VM son ciegos a él; un caso de `cost/` para ellos va por reloj.
+- `perf` necesita `kernel.perf_event_paranoid` en 2 o menos, y eso lo cambia el autor; al terminar
+  vuelve a 3. **`perf stat` devuelve 0 cuando el programa muere por una señal**: el estado se toma de
+  una corrida sin `perf`.
 - Se comparan variantes del **mismo** `HEAD`, nunca un binario de hoy contra uno de ayer.
 - Una mejora se afirma como **razón** (`zyquality/cost/`), no como valor.
-- `perf` necesita `kernel.perf_event_paranoid` por debajo de 3, y eso lo cambia el autor.
-- Un hallazgo, un commit, una ficha.
+- Un hallazgo, un commit, una ficha. El hallazgo se archiva con su caso en rojo **antes** del arreglo.
+
+Las herramientas están en `zyquality/bench/big/` (ver su `README.md`): `run.py` (16 programas
+largos contra un gemelo en Python, suite `bigbench`), `gap.py` (cada operación contra Python a n y
+2n) y `scaling.py` (el exponente de crecimiento en tiempo, en pasos y en bytes, y si `--count` puede
+sujetar lo que encuentra). Primera corrida en instrucciones, 2026-10-14: 16 de 16 programas y 108 de
+108 valores iguales a Python en los dos motores, dispersión 0,00 % en la VM.
 
 ### Lo que no es prioridad
 
-El rendimiento del tree-walker. Y el de `zymbol.js`: se sustituye en la etapa 4, y optimizar lo
-que se va a reemplazar es trabajo que no queda.
+El rendimiento del tree-walker, salvo donde comparte el defecto con la VM (PERF-03, PERF-05 a). Y el
+de `zymbol.js`: se sustituye en la etapa 4, y optimizar lo que se va a reemplazar es trabajo que no
+queda — PERF-03 es la excepción, porque cambia la representación de un valor que los tres motores
+tienen que imprimir igual.
 
 ---
 
@@ -371,7 +465,9 @@ Tres riesgos que hay que resolver en el paso 1:
 | D3 | ¿Qué pasa con `--vm`? | Se conserva y se acepta sin efecto: hay scripts que lo escriben |
 | D4 | ¿`std/db` sale de las features por defecto? | Sí. Los releases de Linux y macOS ya se construyen sin ella |
 | D5 | ¿Dónde va la etapa 4? | Después de 3.3, dentro de esta versión si la etapa 2 no la desplaza |
-| D6 | ¿Qué falló en el contenedor de 4 GB? | No es una decisión sino un dato que falta, y cambia el primer arreglo de 3.2 |
+| D6 | ¿Qué falló en el contenedor de 4 GB? | No es una decisión sino un dato que falta, y cambia el primer arreglo de 3.2. ZyBigBench, hecho en ese contenedor, apunta a una pista: su `README` dice que el perfil de release con LTO no terminaba allí |
+| D7 | PERF-07: el error que sustituye al aborto, ¿se captura con `!?`, y de qué familia es? | Que se capture, como cualquier error de ejecución (el `RecursionError` de Python lo es); la familia la nombra el autor |
+| D8 | PERF-05 b: ¿la cadena guarda si es ASCII, o cuántos caracteres tiene? | Aplazar hasta tener el perfil de cargas reales; sin él, el arreglo cambia una representación por un caso que quizá ningún programa paga |
 
 ---
 
