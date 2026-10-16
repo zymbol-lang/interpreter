@@ -5006,8 +5006,10 @@ impl Compiler {
         let (r_item, item_slot) = self.binding_target(iter_var, ctx)?;
         let r_cmp = ctx.alloc_temp()?;
 
+        let mut r_cursor = None;
         if coll_is_string {
-            // String-specific path: StrLen + StrCharAt, 0-based index.
+            // String-specific path: StrLen + StrCharNext, 0-based index, and a
+            // byte cursor that StrCharNext moves past each character.
             // Avoids StrChars Vec<Value::Char> allocation — critical when this
             // loop appears inside another loop (N outer × O(len) allocs otherwise).
             //
@@ -5021,6 +5023,9 @@ impl Compiler {
             r_coll = r_snap;
             ctx.emit(Instruction::StrLen(r_len, r_coll));
             ctx.emit(Instruction::LoadInt(r_idx, 0));
+            let r_cur = ctx.alloc_temp()?;
+            ctx.emit(Instruction::LoadInt(r_cur, 0));
+            r_cursor = Some(r_cur);
         } else {
             // Generic path: StrChars normalises the collection once — O(1) for an
             // array, String→Array<Char>, and dictionary→array of KEYS.
@@ -5062,7 +5067,10 @@ impl Compiler {
             // Exit if r_idx >= r_len (0-based: indices 0..len)
             ctx.emit(Instruction::CmpGe(r_cmp, r_idx, r_len));
             let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
-            ctx.emit(Instruction::StrCharAt(r_item, r_coll, r_idx));
+            // The character at the cursor, not the r_idx-th one: finding it
+            // scanned the text from the start on every turn (ZYVM-025).
+            let r_cur = r_cursor.expect("the string path sets its cursor");
+            ctx.emit(Instruction::StrCharNext(r_item, r_coll, r_cur));
             if let Some(g) = item_slot {
                 ctx.emit(Instruction::StoreGlobal(g, r_item));
             }
@@ -6085,7 +6093,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::StrRepeat(d, s, n) => { upd(*d); upd(*s); upd(*n); }
             Instruction::StrSplit(d, s, p) | Instruction::StrContains(d, s, p)
             | Instruction::StrSlice(d, s, p) | Instruction::StrFindPos(d, s, p)
-            | Instruction::ConcatStr(d, s, p) | Instruction::StrCharAt(d, s, p) => { upd(*d); upd(*s); upd(*p); }
+            | Instruction::ConcatStr(d, s, p) | Instruction::StrCharNext(d, s, p) => { upd(*d); upd(*s); upd(*p); }
             Instruction::ConcatBuild(d, b, items) => { upd(*d); upd(*b); for &i in items { upd(i); } }
             Instruction::StrInsert(d, s, p, t) | Instruction::StrRemove(d, s, p, t)
             | Instruction::StrReplace(d, s, p, t) => { upd(*d); upd(*s); upd(*p); upd(*t); }

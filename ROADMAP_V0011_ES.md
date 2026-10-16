@@ -3,8 +3,8 @@
 > **Estado: abierta.** La rama `v0.0.11` existe desde el 2026-10-12 y lleva un solo commit propio,
 > el de versión (`62baa56`). **La etapa 1 está implementada** (2026-10-13) salvo el sondeo de las
 > cinco zonas: ver «Avance» dentro de ella. **La etapa 2 tiene lista de trabajos y arnés de medición**
-> (2026-10-14), y su primera corrección hecha: PERF-06 (2026-10-16, `ZYVM-023`). Ver «Avance» dentro de
-> ella. De las etapas 3 y 4 no hay nada hecho.
+> (2026-10-14), y dos correcciones hechas: PERF-06 y PERF-04 (2026-10-16, `ZYVM-023` y `ZYVM-025`). Ver
+> «Avance» dentro de ella. De las etapas 3 y 4 no hay nada hecho.
 >
 > **Escrito el 2026-10-13.** Toda cifra sin otra fecha se midió ese día, sobre esa rama, con un
 > binario de release. Las que vienen de antes llevan su fecha y hay que volver a medirlas antes
@@ -300,6 +300,15 @@ Dos cosas que salieron por el camino:
   exacta; la de reloj, 1 200 000 añadidos en ~127 ms en la VM.
 
 `zyquality/corpus/modules_scope/concat_receptor.zy` sujeta las formas que el arreglo podía romper.
+
+**PERF-04, corregido** como `ZYVM-025`. El bucle de texto lleva un cursor de bytes y `StrCharNext` decodifica el
+carácter que hay en él, en vez de buscar el carácter `i` desde el principio en cada vuelta. 1 280 000 caracteres
+ASCII: 21,4 s antes, 0,21 s ahora. Se sujeta por reloj (`growth/foreach-over-text`), porque `--count` no lo ve.
+
+Al leer ese bucle salió **`ZYVM-024`**, que la puerta no veía: cuando el iterable era un nombre, la VM recorría la
+variable y no el texto que tenía al empezar, así que un cuerpo que la reescribía se recorría sobre el texto nuevo,
+y pasado su final daba el carácter 0. Se corrigió antes que el cursor, que depende de ello;
+`zyquality/corpus/loops/14_foreach_string_snapshot.zy` lo sujeta.
 
 ### Lo que ya se sabía
 
