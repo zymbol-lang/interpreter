@@ -3295,17 +3295,19 @@ impl<W: Write> VM<W> {
                     };
                     wreg!(dst, val);
                 }
-                &Instruction::StrCharAt(dst, str_reg, idx_reg) => {
-                    let ch = match (&self.value_stack[base + str_reg as usize],
-                                    &self.value_stack[base + idx_reg as usize]) {
-                        (Value::String(s), Value::Int(i)) => {
-                            let i = *i as usize;
-                            if s.is_ascii() {
-                                // O(1) ASCII fast path
-                                s.as_bytes().get(i).map(|&b| b as char)
-                                    .unwrap_or('\0')
-                            } else {
-                                s.chars().nth(i).unwrap_or('\0')
+                &Instruction::StrCharNext(dst, str_reg, cur_reg) => {
+                    let (ch, next) = match (&self.value_stack[base + str_reg as usize],
+                                            &self.value_stack[base + cur_reg as usize]) {
+                        (Value::String(s), Value::Int(at)) => {
+                            let at = *at as usize;
+                            // The loop counts characters and stops at the
+                            // last, so a cursor past the end or inside a
+                            // character is the compiler's bug, not the
+                            // program's: refused, never answered with '\0'.
+                            match s.as_str().get(at..).and_then(|rest| rest.chars().next()) {
+                                Some(c) => (c, at + c.len_utf8()),
+                                None => raise!(VmError::PlainMsg(format!(
+                                    "internal: string cursor {} outside the text", at))),
                             }
                         }
                         (o, _) => raise!(VmError::TypeError {
@@ -3313,6 +3315,7 @@ impl<W: Write> VM<W> {
                             got: o.type_name().to_string(),
                         }),
                     };
+                    wreg!(cur_reg, Value::Int(next as i64));
                     wreg!(dst, Value::Char(ch));
                 }
                 // ── String modification operators ─────────────────────────────

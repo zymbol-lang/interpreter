@@ -77,10 +77,11 @@ pub enum Instruction {
     /// Emitted before every for-each loop to convert strings to char arrays once
     /// (O(N)), avoiding the O(N²) pattern of ArrayGet on String per iteration.
     StrChars(Reg, Reg),
-    /// dst = str[idx] → Char  (0-based, no allocation).
-    /// ASCII fast path: O(1) byte lookup. Unicode fallback: O(N) chars().nth().
-    /// Used by the string-specific for-each loop to avoid StrChars allocations.
-    StrCharAt(Reg, Reg, Reg),
+    /// (dst, str, cursor): dst = the Char that starts at byte offset `cursor`
+    /// of `str`, and `cursor` moves past it. O(1), no allocation. The
+    /// string-specific for-each loop walks its text with it; finding the i-th
+    /// character on every turn instead made the walk quadratic (ZYVM-025).
+    StrCharNext(Reg, Reg, Reg),
     /// dst = str$??pat → Array<Int>  — all char-indices where pat is found
     StrFindPos(Reg, Reg, Reg),
     /// dst = str$++[pos:text] → String  — insert text at char position
