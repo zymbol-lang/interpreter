@@ -343,6 +343,12 @@ quedó es la de la VM —`<~ f(…)` a la propia función, sin un `!?` suyo abie
 corregidos: **`ZYTW-017`** (un `!?` de quien llama desactivaba la llamada en cola de toda la cadena de debajo) y
 **`ZYVM-027`** (dentro de un módulo la VM nunca la tomaba). `LLM.md` § 12 cambió una frase, con su sonda.
 
+**PERF-08, reproducido** como `GLB-134`, con los dos binarios oficiales de la v0.0.10 para x86-64 (SHA-256
+verificado): el estático es ×17 más lento en `str_concat`, ×4,6 en `str_slice_small` y ×1,3 en interpolación y
+cierres, e igual en los 16 programas largos. Lo peor era copiar un texto entero, que esta rama ya no hace (PERF-06,
+PERF-05 a); cuánto queda en el `HEAD` no se ha medido, porque aquí no hay target musl. La decisión sigue siendo de la
+release.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |
