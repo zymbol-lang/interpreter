@@ -3214,15 +3214,10 @@ impl<W: Write> VM<W> {
                     // to clamp with `.max(0).min(len).max(lo)` and had a byte
                     // fast path that could not reverse.
                     let result = match &self.value_stack[base + str_reg as usize] {
-                        Value::String(s) => {
-                            let chars: Vec<char> = s.chars().collect();
-                            match slice_span(lo_val, hi_val, chars.len()) {
-                                Ok(SliceSpan::Up(a, b)) => chars[a..b].iter().collect::<String>(),
-                                Ok(SliceSpan::Down(a, b)) =>
-                                    (b..=a).rev().map(|p| chars[(p - 1) as usize]).collect::<String>(),
-                                Err(e) => raise!(e),
-                            }
-                        }
+                        Value::String(s) => match str_slice(s.as_str(), lo_val, hi_val) {
+                            Ok(r) => r,
+                            Err(e) => raise!(e),
+                        },
                         other => raise!(VmError::TypeMsg(format!("cannot slice {} - only arrays, tuples, named tuples, and strings support slice", other.type_label()))),
                     };
                     self.reg_set(dst, Value::String(ZyStr::new(result)));
@@ -3720,14 +3715,16 @@ impl<W: Write> VM<W> {
                         // the subject was a runtime value rather than a literal
                         // the compiler could fold, which is why the gap showed
                         // up inside module functions and nowhere else.
-                        Value::String(rc_s) => {
-                            let chars: Vec<char> = rc_s.chars().collect();
-                            let len = chars.len() as i64;
-                            let lo_norm = (if lo == 0 { 0i64 } else if lo < 0 { len + lo } else { lo - 1 }).max(0).min(len) as usize;
-                            let hi_norm = (if hi < 0 { len + hi + 1 } else { hi }).max(0).min(len) as usize;
-                            let hi_norm = hi_norm.max(lo_norm);
-                            Value::String(ZyStr::new(chars[lo_norm..hi_norm].iter().collect()))
-                        }
+                        //
+                        // By the same rule as `StrSlice`. This branch kept the
+                        // clamp from before D3, so a text whose type was not
+                        // known at compile time — a parameter — sliced
+                        // backwards to nothing and past its end in silence
+                        // (ZYVM-026).
+                        Value::String(rc_s) => match str_slice(rc_s.as_str(), lo, hi) {
+                            Ok(r) => Value::String(ZyStr::new(r)),
+                            Err(e) => raise!(e),
+                        },
                         other => raise!(VmError::TypeMsg(format!("cannot slice {} - only arrays, tuples, named tuples, and strings support slice", other.type_label()))),
                     };
                     self.reg_set(dst, result);
@@ -5159,6 +5156,16 @@ fn count_span(lo: i64, n: i64, len: usize) -> Result<(usize, usize), VmError> {
             "slice indices out of bounds: [{}:{}] for collection of length {}", lo, n, len)));
     }
     Ok((start as usize, end as usize))
+}
+
+/// `s$[lo..hi]` on a text: the one rule, whichever instruction the compiler
+/// chose for it (ZYVM-026).
+fn str_slice(s: &str, lo: i64, hi: i64) -> Result<String, VmError> {
+    let chars: Vec<char> = s.chars().collect();
+    Ok(match slice_span(lo, hi, chars.len())? {
+        SliceSpan::Up(a, b) => chars[a..b].iter().collect(),
+        SliceSpan::Down(a, b) => (b..=a).rev().map(|p| chars[(p - 1) as usize]).collect(),
+    })
 }
 
 fn slice_span(lo: i64, hi: i64, len: usize) -> Result<SliceSpan, VmError> {
