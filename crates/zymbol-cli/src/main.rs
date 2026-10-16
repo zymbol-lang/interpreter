@@ -207,27 +207,34 @@ fn main() -> Result<()> {
         }
         Commands::Check { file } => check_file(file),
         Commands::Fmt { file, write, check, indent } => format_file(file, write, check, indent),
-        Commands::Repl => start_repl(),
+        // On the program's stack too: the REPL runs the tree-walker, whose
+        // 10 000 calls the depth limit allows do not fit in 8 MiB (GLB-133).
+        Commands::Repl => on_program_stack(start_repl),
         Commands::Lsp { .. } => start_lsp(),
     }
 }
 
-/// The stack a program runs on: 64 MiB, against the 8 MiB of the main thread.
+/// The stack a program runs on: `zymbol_common::depth::PROGRAM_STACK`, against
+/// the 8 MiB of the main thread.
 ///
 /// Both engines recurse in Rust where a Zymbol program recurses through
 /// something that is not a plain call — every frame of the tree-walker, and in
 /// the register VM every function a higher-order operator calls, which runs the
 /// dispatch loop again (ZYVM-004). On the main thread's 8 MiB that was 1 099
 /// levels of plain recursion in the tree-walker and 593 through `$>` in the VM,
-/// and the next one aborted the process with no Zymbol error at all. The size is
-/// reserved, not committed: a program that does not recurse does not pay it.
-const PROGRAM_STACK: usize = 64 * 1024 * 1024;
-
+/// and the next one aborted the process with no Zymbol error at all. 64 MiB
+/// moved the abort to near 9 000 and 2 500; since D7 (GLB-133) a counter stops
+/// a program at 10 000 active calls with a `##Depth` error, and the stack is
+/// sized for that counter to come first. Reserved, not committed: a program
+/// that does not recurse does not pay it.
 fn on_program_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     std::thread::Builder::new()
         .name("zymbol-program".into())
-        .stack_size(PROGRAM_STACK)
-        .spawn(f)
+        .stack_size(zymbol_common::depth::PROGRAM_STACK)
+        .spawn(move || {
+            zymbol_common::depth::mark_stack_base(zymbol_common::depth::PROGRAM_STACK);
+            f()
+        })
         .expect("could not start the thread a program runs on")
         .join()
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic))

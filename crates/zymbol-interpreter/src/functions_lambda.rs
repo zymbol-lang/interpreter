@@ -66,8 +66,32 @@ impl<W: Write> Interpreter<W> {
         captures
     }
 
+    /// Count a call in, or refuse it: at most `MAX_ACTIVE_CALLS` at once, the
+    /// same number in the three engines (D7, GLB-133). The stack check is the
+    /// backstop for a path that recurses in Rust without passing a call.
+    fn enter_call(&mut self, span: &Span) -> Result<()> {
+        use zymbol_common::depth;
+        if self.active_calls >= depth::MAX_ACTIVE_CALLS || depth::stack_nearly_spent() {
+            return Err(RuntimeError::Generic { message: depth::exceeded_message(), span: *span });
+        }
+        self.active_calls += 1;
+        Ok(())
+    }
+
     /// Call a lambda function with given arguments
     pub(crate) fn eval_lambda_call(
+        &mut self,
+        func: FunctionValue,
+        arg_values: Vec<Value>,
+        span: &Span,
+    ) -> Result<Value> {
+        self.enter_call(span)?;
+        let result = self.eval_lambda_call_body(func, arg_values, span);
+        self.active_calls -= 1;
+        result
+    }
+
+    fn eval_lambda_call_body(
         &mut self,
         func: FunctionValue,
         mut arg_values: Vec<Value>,
@@ -421,8 +445,26 @@ impl<W: Write> Interpreter<W> {
             .collect()
     }
 
-    /// Helper to evaluate traditional (non-lambda) function calls
+    /// Helper to evaluate traditional (non-lambda) function calls. A native
+    /// function is Rust and does not count as a call of the program (D7).
     pub(crate) fn eval_traditional_function_call(
+        &mut self,
+        func_def: Rc<FunctionDef>,
+        arguments: &[zymbol_ast::Expr],
+        span: &Span,
+        module_info: Option<(String, std::path::PathBuf)>,
+        func_name: Option<&str>,
+    ) -> Result<Value> {
+        if matches!(func_def.as_ref(), FunctionDef::Native { .. }) {
+            return self.eval_traditional_function_call_body(func_def, arguments, span, module_info, func_name);
+        }
+        self.enter_call(span)?;
+        let result = self.eval_traditional_function_call_body(func_def, arguments, span, module_info, func_name);
+        self.active_calls -= 1;
+        result
+    }
+
+    fn eval_traditional_function_call_body(
         &mut self,
         func_def: Rc<FunctionDef>,
         arguments: &[zymbol_ast::Expr],

@@ -287,6 +287,11 @@ impl ErrorValue {
     pub fn key(message: impl Into<String>) -> Self {
         Self::new("Key", message)
     }
+
+    /// Create a Depth error — too many calls active at once (D7, GLB-133).
+    pub fn depth(message: impl Into<String>) -> Self {
+        Self::new("Depth", message)
+    }
 }
 
 /// The type symbol a value carries, before any refinement.
@@ -871,6 +876,9 @@ pub struct Interpreter<W: Write> {
     /// MM-9: call-frame depth — 0 while executing top-level statements.
     /// Distinguishes the root scope from a function frame's bottom scope.
     call_depth: usize,
+    /// Calls active at once, every one: `call_depth` skips a lambda that does
+    /// not take the call state. Bounded by `depth::MAX_ACTIVE_CALLS` (GLB-133).
+    pub(crate) active_calls: usize,
     /// The file body's variables, reachable at any call depth.
     ///
     /// A named function CAPTURES what its body reads from the scope it was
@@ -1239,6 +1247,7 @@ impl<W: Write> Interpreter<W> {
             auto_dead_variables: std::mem::take(&mut self.auto_dead_variables),
             // MM-2: module context is frame-local.
             current_module_path: self.current_module_path.take(),
+            try_depth: std::mem::replace(&mut self.try_depth, 0),
         };
         self.call_depth += 1;
         // B10: reuse pooled Vec for scope_stack
@@ -1270,6 +1279,7 @@ impl<W: Write> Interpreter<W> {
         self.dead_variables = saved.dead_variables;            // MM-3
         self.auto_dead_variables = saved.auto_dead_variables;  // auto-free
         self.current_module_path = saved.current_module_path;  // MM-2
+        self.try_depth = saved.try_depth;                      // ZYTW-017
         self.call_depth = self.call_depth.saturating_sub(1);
 
         // Pool scope_stack components
@@ -1364,6 +1374,11 @@ pub(crate) struct SavedCallState {
     dead_variables: HashSet<String>,
     auto_dead_variables: HashSet<String>,
     pub(crate) current_module_path: Option<PathBuf>,
+    /// The caller's open `!?` blocks. A frame starts with none of its own: the
+    /// caller's handler is not armed inside the callee's frame, and counting it
+    /// there turned off the tail call of every function called from inside a
+    /// `!?` — which the VM, deciding per function, kept (ZYTW-017).
+    try_depth: u8,
 }
 
 fn default_input_fn() -> Box<dyn FnMut() -> std::io::Result<String>> {
@@ -1420,6 +1435,7 @@ impl Interpreter<std::io::Stdout> {
             global_consts: HashMap::new(),
             current_module_path: None,
             call_depth: 0,
+            active_calls: 0,
             auto_dead_variables: HashSet::new(),
             auto_free_excluded: Rc::new(HashSet::new()),
         }
@@ -1479,6 +1495,7 @@ impl<W: Write> Interpreter<W> {
             global_consts: HashMap::new(),
             current_module_path: None,
             call_depth: 0,
+            active_calls: 0,
             auto_dead_variables: HashSet::new(),
             auto_free_excluded: Rc::new(HashSet::new()),
         }
@@ -1667,6 +1684,7 @@ impl<W: Write> Interpreter<W> {
         self.global_consts.clear();
         self.current_module_path = None;
         self.call_depth = 0;
+        self.active_calls = 0;
         self.auto_dead_variables.clear();
         self.destruction_schedule.clear();
         self.auto_free_excluded = Rc::new(HashSet::new());
@@ -2365,7 +2383,13 @@ impl<W: Write> Interpreter<W> {
                     // against REFERENCE.md ("always executes, regardless of
                     // error"), the browser engine, and every language with the
                     // construct.
-                    if let Err(e) = self.execute_catch_block(clause, err_val) {
+                    // Still inside the `!?` for the tail call, as the VM's
+                    // `try_stack` has it: a `<~ f()` here owes the `:>`
+                    // (ZYTW-017).
+                    self.try_depth += 1;
+                    let caught = self.execute_catch_block(clause, err_val);
+                    self.try_depth -= 1;
+                    if let Err(e) = caught {
                         self.unwind_scopes_to(scope_depth, loop_depth);
                         pending = Some((e, self.cur_stmt_line));
                     }
@@ -2388,7 +2412,9 @@ impl<W: Write> Interpreter<W> {
         if let Some(ref finally) = try_stmt.finally_clause {
             let pending_flow = std::mem::replace(&mut self.control_flow, ControlFlow::None);
             let pending_flag = std::mem::replace(&mut self.has_control_flow, false);
+            self.try_depth += 1;
             let finally_result = self.execute_block(&finally.block);
+            self.try_depth -= 1;
             // BUG-ZYB-011: a `:>` is cleanup, and cleanup does not decide what
             // the function returns. A `<~` written inside it is discarded, and
             // the return the try block was carrying continues — which is what
@@ -2467,6 +2493,7 @@ impl<W: Write> Interpreter<W> {
                     "Type" => ErrorValue::type_error(m),
                     "Div" => ErrorValue::div(m),
                     "Parse" => ErrorValue::parse(m),
+                    "Depth" => ErrorValue::depth(m),
                     _ => ErrorValue::generic(m),
                 })
             }

@@ -6,13 +6,29 @@ use zymbol_bytecode::CompiledProgram;
 use zymbol_vm::VM;
 
 fn main() {
-    let compiled: CompiledProgram = bincode::deserialize(bytecode::BYTECODE)
-        .expect("Failed to deserialize embedded bytecode");
-
-    let stdout = std::io::stdout();
-    let mut vm = VM::new(stdout.lock());
-    if let Err(e) = vm.run(&compiled) {
-        eprintln!("Runtime error: {}", e);
-        std::process::exit(1);
-    }
+    // On a stack of its own, as `zymbol run` gives a program (GLB-133): a call
+    // through `$>` re-enters the VM's loop in Rust, and the main thread's 8 MiB
+    // aborted near 600 of them.
+    let size = zymbol_common::depth::PROGRAM_STACK;
+    let code = std::thread::Builder::new()
+        .name("zymbol-program".into())
+        .stack_size(size)
+        .spawn(move || {
+            zymbol_common::depth::mark_stack_base(size);
+            let compiled: CompiledProgram = bincode::deserialize(bytecode::BYTECODE)
+                .expect("Failed to deserialize embedded bytecode");
+            let stdout = std::io::stdout();
+            let mut vm = VM::new(stdout.lock());
+            match vm.run(&compiled) {
+                Ok(_) => 0,
+                Err(e) => {
+                    eprintln!("Runtime error: {}", e);
+                    1
+                }
+            }
+        })
+        .expect("could not start the thread a program runs on")
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    std::process::exit(code);
 }

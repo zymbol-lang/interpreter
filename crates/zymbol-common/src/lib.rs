@@ -10,8 +10,10 @@
 //! - Locating the POSIX shell that `<\ \>` runs through (`shell`)
 //! - Which `##` family an error belongs to, read from its message (`errkind`)
 //! - A text addressed by character position without copying it (`text`)
+//! - How deep a program may call, and the stack it runs on (`depth`)
 
 pub mod count;
+pub mod depth;
 pub mod errkind;
 pub mod num;
 pub mod shell;

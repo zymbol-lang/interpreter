@@ -3,8 +3,9 @@
 > **Estado: abierta.** La rama `v0.0.11` existe desde el 2026-10-12 y lleva un solo commit propio,
 > el de versión (`62baa56`). **La etapa 1 está implementada** (2026-10-13) salvo el sondeo de las
 > cinco zonas: ver «Avance» dentro de ella. **La etapa 2 tiene lista de trabajos y arnés de medición**
-> (2026-10-14), y cuatro correcciones hechas: PERF-06, PERF-04, PERF-05 a y PERF-03 (2026-10-16, `ZYVM-023`,
-> `ZYVM-025`, `GLB-130` y `GLB-132`). Ver «Avance» dentro de ella. De las etapas 3 y 4 no hay nada hecho.
+> (2026-10-14), y las cinco correcciones de la lista hechas: PERF-06, PERF-04, PERF-05 a, PERF-03 y PERF-07
+> (2026-10-16, `ZYVM-023`, `ZYVM-025`, `GLB-130`, `GLB-132` y `GLB-133`). Quedan PERF-05 b (aplazada, D8) y PERF-08
+> (reproducir primero). Ver «Avance» dentro de ella. De las etapas 3 y 4 no hay nada hecho.
 >
 > **Escrito el 2026-10-13.** Toda cifra sin otra fecha se midió ese día, sobre esa rama, con un
 > binario de release. Las que vienen de antes llevan su fecha y hay que volver a medirlas antes
@@ -333,6 +334,15 @@ Antes hubo que decidir **`GLB-131`** —el autor, el 2026-10-16—: un literal q
 rechaza al analizar el programa. Los tres motores la guardaban dos veces, contra `COLLECTIONS.md` § 5, que ya decía
 que las claves son únicas.
 
+**PERF-07, corregido** como `GLB-133`, con D7 decidida por el autor: la llamada que haría más de **10 000 llamadas
+activas** a la vez es un error `##Depth`, nuevo, que `!?` captura; el mismo número en los tres motores. La pila del
+programa sube a 512 MiB y un seguro mira la que queda; `zymbol build` y el REPL corren ahora en ese hilo también.
+
+Con un número, qué llamada cuenta pasó a verse, y la llamada en cola no se decidía igual en los tres. La regla que
+quedó es la de la VM —`<~ f(…)` a la propia función, sin un `!?` suyo abierto—, y salieron dos hallazgos más,
+corregidos: **`ZYTW-017`** (un `!?` de quien llama desactivaba la llamada en cola de toda la cadena de debajo) y
+**`ZYVM-027`** (dentro de un módulo la VM nunca la tomaba). `LLM.md` § 12 cambió una frase, con su sonda.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |
@@ -517,7 +527,7 @@ Tres riesgos que hay que resolver en el paso 1:
 | D4 | ¿`std/db` sale de las features por defecto? | Sí. Los releases de Linux y macOS ya se construyen sin ella |
 | D5 | ¿Dónde va la etapa 4? | Después de 3.3, dentro de esta versión si la etapa 2 no la desplaza |
 | D6 | ¿Qué falló en el contenedor de 4 GB? | No es una decisión sino un dato que falta, y cambia el primer arreglo de 3.2. ZyBigBench, hecho en ese contenedor, apunta a una pista: su `README` dice que el perfil de release con LTO no terminaba allí |
-| D7 | PERF-07: el error que sustituye al aborto, ¿se captura con `!?`, y de qué familia es? | Que se capture, como cualquier error de ejecución (el `RecursionError` de Python lo es); la familia la nombra el autor |
+| D7 | PERF-07: el error que sustituye al aborto, ¿se captura con `!?`, y de qué familia es? | **Decidida por el autor el 2026-10-16:** se captura con `!?`; su familia es una nueva, `##Depth`; el límite es de 10 000 llamadas activas, el mismo número en los tres motores, con la pila del programa en 512 MiB y un seguro que mira la pila que queda |
 | D8 | PERF-05 b: ¿la cadena guarda si es ASCII, o cuántos caracteres tiene? | Aplazar hasta tener el perfil de cargas reales; sin él, el arreglo cambia una representación por un caso que quizá ningún programa paga |
 
 ---
