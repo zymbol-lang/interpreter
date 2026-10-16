@@ -638,7 +638,13 @@ impl<W: Write> Interpreter<W> {
                 _ => {
                     return Err(RuntimeError::kinded(
                         "Type",
-                        format!("slice end must be an integer, got {}", end_value.type_label()),
+                        // The count form names its count: `$[2:2.0]` has no
+                        // end in it (GLB-129, the rule GLB-047 gave `$-[i:n]`).
+                        if op.count_based {
+                            format!("slice count must be an integer, got {}", end_value.type_label())
+                        } else {
+                            format!("slice end must be an integer, got {}", end_value.type_label())
+                        },
                         op.span,
                     ))
                 }
@@ -653,6 +659,18 @@ impl<W: Write> Interpreter<W> {
         // cannot be greater than end (1)" — two numbers that are not in their
         // program, and a relation about the wrong values (GLB-047).
         let (written_start, written_end) = (start, raw_end);
+
+        // A count never reverses, and a negative one is refused as what it is
+        // — before the bounds, as the VM's `count_span` does. It used to fall
+        // through to "slice start (2) cannot be greater than end (-1)", a
+        // relation about an end nobody wrote, in no family (GLB-129).
+        if op.count_based && raw_end < 0 {
+            return Err(RuntimeError::kinded(
+                "Index",
+                format!("slice count must be non-negative, got {}", raw_end),
+                op.span,
+            ));
+        }
 
         // Normalize indices (1-based: positive i maps to internal i-1; 0 = default start)
         let start = if start == 0 {
@@ -679,10 +697,19 @@ impl<W: Write> Interpreter<W> {
         // Validate indices
         if start < 0 || end < 0 || start > length as i64 || end > length as i64 {
             return Err(RuntimeError::Generic {
-                message: format!(
-                    "slice indices out of bounds: [{}..{}] for collection of length {}",
-                    written_start, written_end, length
-                ),
+                // Spelled as the reader spelled it: a count is `[i:n]`
+                // (GLB-129, GLB-047's rule on the form it had not reached).
+                message: if op.count_based {
+                    format!(
+                        "slice indices out of bounds: [{}:{}] for collection of length {}",
+                        written_start, written_end, length
+                    )
+                } else {
+                    format!(
+                        "slice indices out of bounds: [{}..{}] for collection of length {}",
+                        written_start, written_end, length
+                    )
+                },
                 span: op.span,
             });
         }
