@@ -4666,6 +4666,9 @@ impl<W: Write> VM<W> {
                         (Some(Value::Array(a)), Value::Array(b)) => Rc::ptr_eq(a, b),
                         (Some(Value::Tuple(a)), Value::Tuple(b)) => Rc::ptr_eq(a, b),
                         (Some(Value::NamedTuple(a)), Value::NamedTuple(b)) => Rc::ptr_eq(a, b),
+                        // `s = s "x"`: `ConcatStr` grows the text in its own
+                        // buffer only when nothing else holds it (ZYVM-023).
+                        (Some(Value::String(a)), Value::String(b)) => a.shares_buffer(b),
                         _ => false,
                     };
                     if same {

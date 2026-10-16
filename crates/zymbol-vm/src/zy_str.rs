@@ -113,6 +113,13 @@ impl ZyStr {
         }
     }
 
+    /// Whether the two hold the same heap buffer — `Rc::ptr_eq` for a string.
+    /// Two inline strings share nothing, so they never do.
+    #[inline]
+    pub fn shares_buffer(&self, other: &ZyStr) -> bool {
+        !self.is_inline() && self.0 == other.0
+    }
+
     // ── accessors ─────────────────────────────────────────────────────────────
 
     #[inline]
