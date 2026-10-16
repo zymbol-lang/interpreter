@@ -145,6 +145,18 @@ impl Parser {
             }
             self.advance(); // consume :
 
+            // A key appears once (GLB-131, decided 2026-10-16): the literal
+            // kept both, `$#` counted two, and every read and write went to
+            // the first.
+            if fields.iter().any(|(k, _)| *k == field_name) {
+                return Err(Diagnostic::error(format!(
+                    "key '{}' appears twice in the dictionary",
+                    field_name
+                ))
+                .with_span(field_token.span)
+                .with_help("a dictionary holds each key once: keep the one you mean, or rename the other"));
+            }
+
             let value_expr = self.parse_expr()?;
             fields.push((field_name, value_expr));
 
