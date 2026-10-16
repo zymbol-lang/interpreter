@@ -129,10 +129,10 @@ impl<W: Write> Interpreter<W> {
         if let Expr::Identifier(id) = member.object.unwrap_group() {
             self.check_variable_alive(&id.name, &id.span)?;
             if let Some(Value::NamedTuple(fields)) = self.get_variable(&id.name) {
-                if let Some((_, v)) = fields.iter().find(|(k, _)| k == &member.field) {
+                if let Some(v) = fields.get(&member.field) {
                     return Ok(v.clone());
                 }
-                let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                let available: Vec<String> = fields.keys().cloned().collect();
                 return Err(RuntimeError::kinded(
                     "Key",
                     crate::variables::missing_key_msg(&member.field, &available),
@@ -147,11 +147,9 @@ impl<W: Write> Interpreter<W> {
 
         match object {
             Value::NamedTuple(fields) => {
-                // Search for field by name
-                for (field_name, field_value) in fields.iter() {
-                    if field_name == &member.field {
-                        return Ok(field_value.clone());
-                    }
+                // By hash, not by walking the pairs (GLB-132).
+                if let Some(v) = fields.get(&member.field) {
+                    return Ok(v.clone());
                 }
                 // Field not found
                 let available_fields: Vec<String> = fields.iter()
@@ -317,10 +315,10 @@ impl<W: Write> Interpreter<W> {
         // any key, which is what JSON needs — `d["mi clave"]` cannot be written
         // any other way.
         if let (Value::NamedTuple(fields), Value::String(key)) = (collection, index_value) {
-            if let Some((_, v)) = fields.iter().find(|(k, _)| k == key) {
+            if let Some(v) = fields.get(key) {
                 return Ok(Some(v));
             }
-            let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+            let available: Vec<String> = fields.keys().cloned().collect();
             return Err(RuntimeError::kinded(
                 "Key",
                 crate::variables::missing_key_msg(key, &available),
@@ -409,7 +407,7 @@ impl<W: Write> Interpreter<W> {
                 // the tuple.
                 let len = fields.len();
                 match Self::resolve_index(index, len, span)? {
-                    Some(i) => Ok(Some(&fields[i].1)),
+                    Some(i) => Ok(Some(&fields[i])),
                     None => Err(RuntimeError::Generic {
                         message: format!(
                             "named tuple index out of bounds: index {} for tuple of length {}",

@@ -221,10 +221,10 @@ impl<W: Write> Interpreter<W> {
 /// Descend into a dictionary by KEY — the String half of a navigation step.
 fn descend_key(collection: Value, key: &str, op_span: zymbol_span::Span) -> Result<Value> {
     match collection {
-        Value::NamedTuple(fields) => match fields.iter().find(|(k, _)| k == key) {
-            Some((_, v)) => Ok(v.clone()),
+        Value::NamedTuple(fields) => match fields.get(key) {
+            Some(v) => Ok(v.clone()),
             None => {
-                let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                let available: Vec<String> = fields.keys().cloned().collect();
                 Err(RuntimeError::kinded(
                     "Key",
                     crate::variables::missing_key_msg(key, &available),

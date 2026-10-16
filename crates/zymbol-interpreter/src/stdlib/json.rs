@@ -44,7 +44,7 @@ fn json_to_value(v: serde_json::Value) -> Value {
             Value::array(arr.into_iter().map(json_to_value).collect())
         }
         serde_json::Value::Object(map) => Value::named_tuple(
-            map.into_iter().map(|(k, v)| (k, json_to_value(v))).collect(),
+            map.into_iter().map(|(k, v)| (k, json_to_value(v))),
         ),
     }
 }
@@ -129,8 +129,7 @@ fn rekey(value: Value, table: &HashMap<String, String>) -> Value {
                 .map(|(k, v)| {
                     let new_key = table.get(&k).cloned().unwrap_or(k);
                     (new_key, rekey(v, table))
-                })
-                .collect(),
+                }),
         ),
         Value::Array(items) => Value::array(crate::own_elements(items).into_iter().map(|v| rekey(v, table)).collect()),
         Value::Tuple(items) => Value::tuple(crate::own_elements(items).into_iter().map(|v| rekey(v, table)).collect()),

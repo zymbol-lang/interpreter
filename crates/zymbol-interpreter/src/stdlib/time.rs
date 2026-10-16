@@ -84,8 +84,7 @@ fn parts_value(p: &t::Parts) -> Value {
     Value::named_tuple(
         t::parts_fields(p)
             .into_iter()
-            .map(|(k, v)| (k.to_string(), Value::Int(v)))
-            .collect(),
+            .map(|(k, v)| (k.to_string(), Value::Int(v))),
     )
 }
 
@@ -251,8 +250,8 @@ mod tests {
                     names,
                     ["year", "month", "day", "hour", "minute", "second", "millisecond", "weekday", "offset"]
                 );
-                assert_eq!(fields[0].1, Value::Int(2026));
-                assert_eq!(fields[7].1, Value::Int(7)); // a Sunday
+                assert_eq!(fields[0], Value::Int(2026));
+                assert_eq!(fields[7], Value::Int(7)); // a Sunday
             }
             other => panic!("expected a dictionary, got {other:?}"),
         }

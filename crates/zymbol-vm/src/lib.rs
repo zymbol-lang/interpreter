@@ -108,8 +108,8 @@ pub enum Value {
     Array(Rc<Vec<Value>>),
     /// Positional tuple: (v1, v2, v3)
     Tuple(Rc<Vec<Value>>),
-    /// Named tuple: Vec of (field_name, value) pairs
-    NamedTuple(Rc<Vec<(String, Value)>>),
+    /// The dictionary, `#(…)`: keys in insertion order, found by hash (GLB-132).
+    NamedTuple(Rc<zymbol_common::Dict<Value>>),
     /// Lambda (with or without captures): function + arity + upvalues (type ##->, display <lambd/N>)
     Closure(FuncIdx, u8, Rc<Vec<Value>>),
     /// Error value (error-as-value flow: <~ _err inside :! block)
@@ -499,9 +499,7 @@ impl Value {
             // different order still hold the same thing.
             (Value::NamedTuple(a), Value::NamedTuple(b)) => {
                 a.len() == b.len()
-                    && a.iter().all(|(ka, va)| {
-                        b.iter().any(|(kb, vb)| ka == kb && va.equals(vb))
-                    })
+                    && a.iter().all(|(ka, va)| b.get(ka).is_some_and(|vb| va.equals(vb)))
             }
             _ => false,
         }
@@ -1029,8 +1027,8 @@ fn cmp_direct(va: &Value, vb: &Value) -> i32 {
         (Value::NamedTuple(x), Value::NamedTuple(y)) => {
             if x.len() != y.len() { return 1; }
             for (ka, va) in x.iter() {
-                match y.iter().find(|(kb, _)| kb == ka) {
-                    Some((_, vb)) if cmp_direct(va, vb) == 0 => {}
+                match y.get(ka) {
+                    Some(vb) if cmp_direct(va, vb) == 0 => {}
                     _ => return 1,
                 }
             }
@@ -2472,12 +2470,12 @@ impl<W: Write> VM<W> {
                     if let (Value::NamedTuple(fields), Value::String(key)) =
                         (&self.value_stack[base + arr_reg as usize], self.reg_get(idx_reg))
                     {
-                        let key = key.as_str().to_string();
-                        match fields.iter().find(|(k, _)| *k == key) {
-                            Some((_, v)) => { let v = v.clone(); self.reg_set(dst, v); }
+                        // By hash, not by walking the pairs (GLB-132).
+                        match fields.get(key.as_str()) {
+                            Some(v) => { let v = v.clone(); self.reg_set(dst, v); }
                             None => {
-                                let available: Vec<String> =
-                                    fields.iter().map(|(k, _)| k.clone()).collect();
+                                let key = key.as_str().to_string();
+                                let available: Vec<String> = fields.keys().cloned().collect();
                                 raise!(VmError::KeyMsg(missing_key_msg(&key, &available)));
                             }
                         }
@@ -2532,7 +2530,7 @@ impl<W: Write> VM<W> {
                             if i < 0 || i as usize >= fields.len() {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() , container: "named tuple" });
                             }
-                            fields[i as usize].1.clone()
+                            fields[i as usize].clone()
                         }
                         Value::String(s) => {
                             // Single-pass: find the i-th char without collecting Vec<char>
@@ -2621,7 +2619,7 @@ impl<W: Write> VM<W> {
                             arr[i as usize] = val;
                         }
                         Value::NamedTuple(rc_fields) => {
-                            let fields = zymbol_common::count::make_mut(rc_fields);
+                            let fields = zymbol_common::count::make_mut_dict(rc_fields);
                             match idx_val {
                                 // A positional WRITE corrupts data rather than
                                 // returning the wrong value: strictly worse than
@@ -2638,14 +2636,15 @@ impl<W: Write> VM<W> {
                                     if i < 0 || i as usize >= fields.len() {
                                         raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() , container: "named tuple" });
                                     }
-                                    fields[i as usize].1 = val;
+                                    fields[i as usize] = val;
                                 }
                                 Value::String(name) => {
-                                    if let Some(f) = fields.iter_mut().find(|(k, _)| k == name.as_str()) {
-                                        f.1 = val;
+                                    // By hash (GLB-132). A key that is there keeps
+                                    // its place; one that is not gets added last.
+                                    if let Some(f) = fields.get_mut(name.as_str()) {
+                                        *f = val;
                                     } else {
-                                        // A key that is not there gets added.
-                                        fields.push((name.as_str().to_string(), val));
+                                        fields.insert(name.as_str().to_string(), val);
                                     }
                                 }
                                 other => raise!(VmError::TypeMsg(format!("named tuple update index must be an integer or field name (string), got {}", other.type_label()))),
@@ -2673,17 +2672,16 @@ impl<W: Write> VM<W> {
                         (&self.value_stack[base + arr_reg as usize], self.reg_get(idx_reg))
                     {
                         let key = key.as_str().to_string();
-                        let mut out = fields.as_ref().clone();
-                        match out.iter().position(|(k, _)| *k == key) {
-                            Some(i) => { out.remove(i); }
-                            None => {
-                                let available: Vec<String> =
-                                    fields.iter().map(|(k, _)| k.clone()).collect();
-                                raise!(VmError::KeyMsg(missing_key_msg(&key, &available)));
-                            }
+                        if !fields.contains_key(&key) {
+                            let available: Vec<String> = fields.keys().cloned().collect();
+                            raise!(VmError::KeyMsg(missing_key_msg(&key, &available)));
                         }
-                        self.value_stack[base + arr_reg as usize] =
-                            Value::NamedTuple(Rc::new(out));
+                        // In place, and only once the key is known to be there:
+                        // it cloned the whole dictionary to remove one key
+                        // (GLB-132). `shift_remove`, so the rest keep their order.
+                        if let Value::NamedTuple(rc) = &mut self.value_stack[base + arr_reg as usize] {
+                            zymbol_common::count::make_mut_dict(rc).shift_remove(&key);
+                        }
                         continue;
                     }
                     let idx = match self.as_int_for(idx_reg, "remove index") { Ok(v) => v, Err(e) => raise!(e) };
@@ -2769,7 +2767,7 @@ impl<W: Write> VM<W> {
                         // it, as in an array (COLLECTIONS.md; ZYVM-017).
                         Value::NamedTuple(mut rc_fields) => {
                             if let Some(pos) = rc_fields.iter().position(|(_, v)| v.equals(&val)) {
-                                zymbol_common::count::make_mut(&mut rc_fields).remove(pos);
+                                zymbol_common::count::make_mut_dict(&mut rc_fields).shift_remove_index(pos);
                             }
                             self.value_stack[base + arr_reg as usize] = Value::NamedTuple(rc_fields);
                         }
@@ -2800,8 +2798,10 @@ impl<W: Write> VM<W> {
                             self.value_stack[base + arr_reg as usize] = Value::String(ZyStr::new(result));
                         }
                         Value::NamedTuple(rc_fields) => {
-                            let fields: Vec<(String, Value)> = rc_fields.iter()
-                                .filter(|(_, v)| !v.equals(&val)).cloned().collect();
+                            let fields: zymbol_common::Dict<Value> = rc_fields.iter()
+                                .filter(|(_, v)| !v.equals(&val))
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
                             self.value_stack[base + arr_reg as usize] = Value::NamedTuple(Rc::new(fields));
                         }
                         other => raise!(VmError::TypeMsg(format!("$-- requires an array, tuple, or string, got {}", other.type_label()))),
@@ -2912,9 +2912,8 @@ impl<W: Write> VM<W> {
                             self.value_stack[base + arr_reg as usize] = Value::Tuple(Rc::new(tup));
                         }
                         Value::NamedTuple(rc_nt) => {
-                            let fields = rc_nt.as_ref().clone();
                             let _ = (lo, hi);
-                            let first = fields.first().map(|(k, _)| k.clone());
+                            let first = rc_nt.first().map(|(k, _)| k.clone());
                             raise!(VmError::TypeMsg(dict_not_positional("d$-[a..b]", first.as_deref())));
                         }
                         Value::String(rc_s) => {
@@ -3660,7 +3659,7 @@ impl<W: Write> VM<W> {
                         // there are no keys to ask about.
                         Value::NamedTuple(fields) => match &elem {
                             Value::String(key) => {
-                                fields.iter().any(|(k, _)| k.as_str() == key.as_str())
+                                fields.contains_key(key.as_str())
                             }
                             other => raise!(VmError::TypeMsg(format!("a dictionary is asked about a key, so `$?` needs a String, got {}", other.type_label()))),
                         },
@@ -4102,11 +4101,12 @@ impl<W: Write> VM<W> {
                 // ── Named tuples ─────────────────────────────────────────────
                 Instruction::MakeNamedTuple(dst, names, regs) => {
                     let dst = *dst;
-                    let mut fields = Vec::with_capacity(names.len());
+                    let mut fields = zymbol_common::Dict::with_capacity(names.len());
                     for (name_idx, &reg) in names.iter().zip(regs.iter()) {
                         let name = program.string_pool[*name_idx as usize].clone();
                         let val = self.reg_get(reg).clone();
-                        fields.push((name, val));
+                        // The parser refuses a key written twice (GLB-131).
+                        fields.insert(name, val);
                     }
                     self.reg_set(dst, Value::NamedTuple(Rc::new(fields)));
                 }
@@ -4132,11 +4132,11 @@ impl<W: Write> VM<W> {
                     let field_name = &program.string_pool[field_idx as usize];
                     let result = match self.reg_get(tuple_reg) {
                         Value::NamedTuple(fields) => {
-                            let field_name = field_name.clone();
-                            match fields.iter().find(|(n, _)| *n == field_name).map(|(_, v)| v.clone()) {
-                                Some(v) => v,
+                            match fields.get(field_name.as_str()) {
+                                Some(v) => v.clone(),
                                 None => {
-                                    let available: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
+                                    let field_name = field_name.clone();
+                                    let available: Vec<String> = fields.keys().cloned().collect();
                                     raise!(VmError::KeyMsg(missing_key_msg(&field_name, &available)));
                                 }
                             }
@@ -5299,8 +5299,8 @@ fn vm_deep_set_in(col: &mut Value, path: &[Value], new_val: Value, single: bool)
         }
         Value::NamedTuple(rc) => {
             match step {
-                Value::String(name) => match rc.iter().position(|(k, _)| k == name.as_str()) {
-                    Some(i) => vm_deep_set_in(&mut zymbol_common::count::make_mut(rc)[i].1, rest, new_val, false),
+                Value::String(name) => match rc.get_index_of(name.as_str()) {
+                    Some(i) => vm_deep_set_in(&mut zymbol_common::count::make_mut_dict(rc)[i], rest, new_val, false),
                     // A key that is not there gets ADDED, as it does in Python.
                     // The array refuses the same move (decision 13) and the two
                     // are not inconsistent: an array is addressed by POSITION,
@@ -5314,7 +5314,7 @@ fn vm_deep_set_in(col: &mut Value, path: &[Value], new_val: Value, single: bool)
                     None => {
                         let mut fresh = Value::Unit;
                         vm_deep_set_in(&mut fresh, rest, new_val, false)?;
-                        zymbol_common::count::make_mut(rc).push((name.as_str().to_string(), fresh));
+                        zymbol_common::count::make_mut_dict(rc).insert(name.as_str().to_string(), fresh);
                         Ok(())
                     }
                 },

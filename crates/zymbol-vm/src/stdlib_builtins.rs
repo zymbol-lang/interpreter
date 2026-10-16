@@ -757,7 +757,7 @@ fn db_rows_from_cursor(
     let mut rows: Vec<Value> = Vec::new();
     let mut buf: Vec<u8> = Vec::new();
     while let Some(mut row) = cursor.next_row().map_err(db_odbc_err)? {
-        let mut fields: Vec<(String, Value)> = Vec::with_capacity(names.len());
+        let mut fields: zymbol_common::Dict<Value> = zymbol_common::Dict::with_capacity(names.len());
         let take_cols = if single_col { 1 } else { ncols };
         for idx in 0..take_cols {
             let col = idx + 1;
@@ -781,7 +781,7 @@ fn db_rows_from_cursor(
                     db_cell_from_text(String::from_utf8_lossy(&buf).into_owned(), dt)
                 }
             };
-            fields.push((names[idx as usize].clone(), value));
+            fields.insert(names[idx as usize].clone(), value);
         }
         rows.push(Value::NamedTuple(Rc::new(fields)));
         if only_first {

@@ -3,8 +3,8 @@
 > **Estado: abierta.** La rama `v0.0.11` existe desde el 2026-10-12 y lleva un solo commit propio,
 > el de versión (`62baa56`). **La etapa 1 está implementada** (2026-10-13) salvo el sondeo de las
 > cinco zonas: ver «Avance» dentro de ella. **La etapa 2 tiene lista de trabajos y arnés de medición**
-> (2026-10-14), y tres correcciones hechas: PERF-06, PERF-04 y PERF-05 a (2026-10-16, `ZYVM-023`, `ZYVM-025` y
-> `GLB-130`). Ver «Avance» dentro de ella. De las etapas 3 y 4 no hay nada hecho.
+> (2026-10-14), y cuatro correcciones hechas: PERF-06, PERF-04, PERF-05 a y PERF-03 (2026-10-16, `ZYVM-023`,
+> `ZYVM-025`, `GLB-130` y `GLB-132`). Ver «Avance» dentro de ella. De las etapas 3 y 4 no hay nada hecho.
 >
 > **Escrito el 2026-10-13.** Toda cifra sin otra fecha se midió ese día, sobre esa rama, con un
 > binario de release. Las que vienen de antes llevan su fecha y hay que volver a medirlas antes
@@ -324,6 +324,14 @@ Por el camino salieron tres cosas más, todas archivadas:
   los dos la VM.
 - **`ZYTW-016`**, abierto como deuda declarada: leer una variable de texto la copia en el tree-walker. Es la parte de
   PERF-05 b que este documento ya decía que se archivaría así.
+
+**PERF-03, corregido** como `GLB-132`, en los tres motores. En Rust el diccionario es un `IndexMap`
+(`zymbol_common::Dict`); en `zymbol.js`, un índice de claves y la escritura en el sitio que ZYJS-014 dio a los
+arreglos. 16 000 claves: la VM 438 → 14 ms, el tree-walker 651 → 28 ms, `zymbol.js` 2 685 → 399 ms.
+
+Antes hubo que decidir **`GLB-131`** —el autor, el 2026-10-16—: un literal que escribe una clave dos veces se
+rechaza al analizar el programa. Los tres motores la guardaban dos veces, contra `COLLECTIONS.md` § 5, que ya decía
+que las claves son únicas.
 
 ### Lo que ya se sabía
 
