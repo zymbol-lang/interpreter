@@ -3238,13 +3238,10 @@ impl<W: Write> VM<W> {
                             let first = f.first().map(|(k, _)| k.clone());
                             raise!(VmError::TypeMsg(dict_not_positional("d$[a..b]", first.as_deref())));
                         }
-                        Value::String(st) => {
-                            let chars: Vec<char> = st.chars().collect();
-                            match count_span(lo, n, chars.len()) {
-                                Ok((x, y)) => Value::String(ZyStr::new(chars[x..y].iter().collect::<String>())),
-                                Err(e) => raise!(e),
-                            }
-                        }
+                        Value::String(st) => match str_slice_count(st.as_str(), lo, n) {
+                            Ok(r) => Value::String(ZyStr::new(r)),
+                            Err(e) => raise!(e),
+                        },
                         other => raise!(VmError::TypeMsg(format!("cannot slice {} - only arrays, tuples, named tuples, and strings support slice", other.type_label()))),
                     };
                     self.reg_set(dst, result);
@@ -3253,13 +3250,10 @@ impl<W: Write> VM<W> {
                     let lo = match self.as_int_for(lo_reg, "slice start") { Ok(v) => v, Err(e) => raise!(e) };
                     let n  = match self.as_int_for(lo_reg + 1, "slice count") { Ok(v) => v, Err(e) => raise!(e) };
                     let result = match &self.value_stack[base + str_reg as usize] {
-                        Value::String(s) => {
-                            let chars: Vec<char> = s.chars().collect();
-                            match count_span(lo, n, chars.len()) {
-                                Ok((x, y)) => chars[x..y].iter().collect::<String>(),
-                                Err(e) => raise!(e),
-                            }
-                        }
+                        Value::String(s) => match str_slice_count(s.as_str(), lo, n) {
+                            Ok(r) => r,
+                            Err(e) => raise!(e),
+                        },
                         other => raise!(VmError::TypeMsg(format!("cannot slice {} - only arrays, tuples, named tuples, and strings support slice", other.type_label()))),
                     };
                     self.reg_set(dst, Value::String(ZyStr::new(result)));
@@ -5160,12 +5154,23 @@ fn count_span(lo: i64, n: i64, len: usize) -> Result<(usize, usize), VmError> {
 
 /// `s$[lo..hi]` on a text: the one rule, whichever instruction the compiler
 /// chose for it (ZYVM-026).
+///
+/// Borrowed and then copied, the piece and never the text: it used to collect
+/// the whole text into a `Vec<char>` to cut it (GLB-130).
 fn str_slice(s: &str, lo: i64, hi: i64) -> Result<String, VmError> {
-    let chars: Vec<char> = s.chars().collect();
-    Ok(match slice_span(lo, hi, chars.len())? {
-        SliceSpan::Up(a, b) => chars[a..b].iter().collect(),
-        SliceSpan::Down(a, b) => (b..=a).rev().map(|p| chars[(p - 1) as usize]).collect(),
+    use zymbol_common::text::{char_len, char_range};
+    Ok(match slice_span(lo, hi, char_len(s))? {
+        SliceSpan::Up(a, b) => char_range(s, a, b).to_string(),
+        // Positions `a` down to `b`, 1-based: the range [b, a] read backwards.
+        SliceSpan::Down(a, b) => char_range(s, (b - 1) as usize, a as usize).chars().rev().collect(),
     })
+}
+
+/// `s$[lo:n]` on a text, by the same rule as a collection's (`count_span`).
+fn str_slice_count(s: &str, lo: i64, n: i64) -> Result<String, VmError> {
+    use zymbol_common::text::{char_len, char_range};
+    let (x, y) = count_span(lo, n, char_len(s))?;
+    Ok(char_range(s, x, y).to_string())
 }
 
 fn slice_span(lo: i64, hi: i64, len: usize) -> Result<SliceSpan, VmError> {

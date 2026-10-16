@@ -600,7 +600,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(arr) => arr.len(),
             Value::Tuple(tup) => tup.len(),
             Value::NamedTuple(fields) => fields.len(),
-            Value::String(s) => s.chars().count(),
+            Value::String(s) => zymbol_common::text::char_len(s),
             _ => {
                 return Err(RuntimeError::kinded(
                     "Type",
@@ -736,12 +736,14 @@ impl<W: Write> Interpreter<W> {
             return match collection {
                 Value::Array(arr) => Ok(Value::array(take(&arr))),
                 Value::Tuple(tup) => Ok(Value::tuple(take(&tup))),
-                Value::String(st) => {
-                    let chars: Vec<char> = st.chars().collect();
-                    Ok(Value::String(
-                        (hi_pos..=lo_pos).rev().map(|p| chars[(p - 1) as usize]).collect::<String>().into(),
-                    ))
-                }
+                // Positions `lo_pos` down to `hi_pos`: the range read backwards,
+                // borrowed — never the whole text copied to cut it (GLB-130).
+                Value::String(st) => Ok(Value::String(
+                    zymbol_common::text::char_range(&st, (hi_pos - 1) as usize, lo_pos as usize)
+                        .chars()
+                        .rev()
+                        .collect::<String>(),
+                )),
                 Value::NamedTuple(fields) => Err(RuntimeError::kinded(
                     "Type",
                     dict_not_positional("d$[a..b]", fields.first().map(|(k, _)| k.as_str())),
@@ -788,13 +790,12 @@ impl<W: Write> Interpreter<W> {
                 dict_not_positional("d$[a..b]", fields.first().map(|(k, _)| k.as_str())),
                 op.span,
             )),
-            Value::String(s) => {
-                // Convert string to chars, slice, then back to string
-                let chars: Vec<char> = s.chars().collect();
-                let sliced_chars = &chars[(start as usize)..(end as usize)];
-                let slice: String = sliced_chars.iter().collect();
-                Ok(Value::String(slice))
-            }
+            // The piece, borrowed and then copied — not the whole text into a
+            // `Vec<char>` first, which made a slice cost what the text was
+            // long (GLB-130).
+            Value::String(s) => Ok(Value::String(
+                zymbol_common::text::char_range(&s, start as usize, end as usize).to_string(),
+            )),
             _ => unreachable!(), // Already checked above
         }
     }

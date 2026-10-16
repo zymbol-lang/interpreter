@@ -438,13 +438,16 @@ impl<W: Write> Interpreter<W> {
 
         match collection {
             Value::String(s) => {
-                // String indexing returns a char
-                let chars: Vec<char> = s.chars().collect();
+                // String indexing returns a char — found where it is, not
+                // by copying the text into a Vec<char> first (GLB-130).
                 // `index_ref` rejected every other index kind before this point.
                 let Value::Int(index) = index_value else { unreachable!() };
-                let len = chars.len();
+                let len = zymbol_common::text::char_len(s);
                 match Self::resolve_index(*index, len, span)? {
-                    Some(i) => Ok(Value::Char(chars[i])),
+                    Some(i) => Ok(Value::Char(
+                        zymbol_common::text::char_range(s, i, i + 1).chars().next()
+                            .expect("resolve_index answered a position inside the text"),
+                    )),
                     None => Err(RuntimeError::Generic {
                         message: format!(
                             "string index out of bounds: index {} for string of length {}",
