@@ -304,7 +304,7 @@ impl<W: Write> Interpreter<W> {
             (Value::NamedTuple(a), Value::NamedTuple(b)) => {
                 a.len() == b.len()
                     && a.iter().all(|(ka, va)| {
-                        b.iter().any(|(kb, vb)| ka == kb && Self::values_equal_static(va, vb))
+                        b.get(ka).is_some_and(|vb| Self::values_equal_static(va, vb))
                     })
             }
             (Value::Unit, Value::Unit) => true,

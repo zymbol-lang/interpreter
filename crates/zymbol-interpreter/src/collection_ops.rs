@@ -140,10 +140,11 @@ impl<W: Write> Interpreter<W> {
         if let (Value::NamedTuple(fields), Value::String(key)) =
             (&mut *collection, &index_value)
         {
-            match fields.iter().position(|(k, _)| k == key) {
-                Some(i) => { zymbol_common::count::make_mut(fields).remove(i); }
+            // By hash, and `shift_remove` so the rest keep their order (GLB-132).
+            match fields.get_index_of(key) {
+                Some(i) => { zymbol_common::count::make_mut_dict(fields).shift_remove_index(i); }
                 None => {
-                    let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                    let available: Vec<String> = fields.keys().cloned().collect();
                     return Err(RuntimeError::kinded(
                         "Key",
                         crate::variables::missing_key_msg(key, &available),
@@ -235,7 +236,7 @@ impl<W: Write> Interpreter<W> {
                         span: span,
                     });
                 }
-                zymbol_common::count::make_mut(fields).remove(i as usize);
+                zymbol_common::count::make_mut_dict(fields).shift_remove_index(i as usize);
                 Ok(())
             }
             Value::String(s) => {
@@ -306,7 +307,7 @@ impl<W: Write> Interpreter<W> {
                         op.span,
                     )),
                 };
-                Ok(Value::Bool(fields.iter().any(|(k, _)| *k == key)))
+                Ok(Value::Bool(fields.contains_key(&key)))
             }
             Value::String(ref s) => {
                 // Check if string contains character or substring
@@ -545,11 +546,10 @@ impl<W: Write> Interpreter<W> {
                         span,
                     )),
                     Value::String(name) => {
-                        for (field_name, field_value) in zymbol_common::count::make_mut(fields).iter_mut() {
-                            if *field_name == name {
-                                *field_value = new_value;
-                                return Ok(());
-                            }
+                        // By hash (GLB-132): a key that is there keeps its place.
+                        if let Some(field_value) = zymbol_common::count::make_mut_dict(fields).get_mut(&name) {
+                            *field_value = new_value;
+                            return Ok(());
                         }
                         // A key that is not there gets ADDED — `forma/diccionarios.zy`
                         // § 3, and it is what `d[k] = v` does in Python.
@@ -564,7 +564,7 @@ impl<W: Write> Interpreter<W> {
                         //
                         // Without this, a JSON built piece by piece — the normal
                         // case — could not be built at all.
-                        zymbol_common::count::make_mut(fields).push((name.clone(), new_value));
+                        zymbol_common::count::make_mut_dict(fields).insert(name.clone(), new_value);
                         Ok(())
                     }
                     // Any other kind of index is the same mistake, told in the
@@ -1193,7 +1193,7 @@ impl<W: Write> Interpreter<W> {
             }
             Value::NamedTuple(mut fields) => {
                 if let Some(pos) = fields.iter().position(|(_, v)| self.values_equal(v, &value)) {
-                    zymbol_common::count::make_mut(&mut fields).remove(pos);
+                    zymbol_common::count::make_mut_dict(&mut fields).shift_remove_index(pos);
                 }
                 Ok(Value::NamedTuple(fields))
             }
@@ -1257,7 +1257,7 @@ impl<W: Write> Interpreter<W> {
                 Ok(Value::tuple(result))
             }
             Value::NamedTuple(fields) => {
-                let result: Vec<(String, Value)> = crate::own_fields(fields).into_iter()
+                let result: zymbol_common::Dict<Value> = crate::own_fields(fields).into_iter()
                     .filter(|(_, v)| !self.values_equal(v, &value))
                     .collect();
                 Ok(Value::named_tuple(result))
@@ -1536,10 +1536,10 @@ fn deep_update_value(
 /// 1-based position on anything else.
 fn get_at_step(col: &Value, step: &Value, span: zymbol_span::Span) -> Result<Value> {
     if let (Value::NamedTuple(fields), Value::String(key)) = (col, step) {
-        return match fields.iter().find(|(k, _)| k == key) {
-            Some((_, v)) => Ok(v.clone()),
+        return match fields.get(key) {
+            Some(v) => Ok(v.clone()),
             None => {
-                let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                let available: Vec<String> = fields.keys().cloned().collect();
                 Err(RuntimeError::kinded(
                     "Key",
                     crate::variables::missing_key_msg(key, &available),
@@ -1567,10 +1567,14 @@ fn get_at_step(col: &Value, step: &Value, span: zymbol_span::Span) -> Result<Val
 /// Replace the element a navigation step addresses. Adds the key when it is not
 /// there, exactly as the single-level `d["k"]$~ v` does.
 fn set_at_step(col: Value, step: &Value, new_val: Value, span: zymbol_span::Span) -> Result<Value> {
-    if let (Value::NamedTuple(mut fields), Value::String(key)) = (col.clone(), step) {
-        match zymbol_common::count::make_mut(&mut fields).iter_mut().find(|(k, _)| k == key) {
-            Some(f) => f.1 = new_val,
-            None => zymbol_common::count::make_mut(&mut fields).push((key.clone(), new_val)),
+    // By hash, and on `col` itself: it cloned `col` first, so the write had a
+    // second owner and copied the whole dictionary every time (GLB-132).
+    if let (Value::NamedTuple(_), Value::String(key)) = (&col, step) {
+        let Value::NamedTuple(mut fields) = col else { unreachable!() };
+        let m = zymbol_common::count::make_mut_dict(&mut fields);
+        match m.get_mut(key) {
+            Some(f) => *f = new_val,
+            None => { m.insert(key.clone(), new_val); }
         }
         return Ok(Value::NamedTuple(fields));
     }
@@ -1601,7 +1605,7 @@ fn get_at_idx(col: &Value, index: i64, span: zymbol_span::Span) -> Result<Value>
     let (len, get_fn): (usize, Box<dyn Fn(usize) -> Value>) = match col {
         Value::Array(arr)  => (arr.len(), Box::new(|i| arr[i].clone())),
         Value::Tuple(tup)  => (tup.len(), Box::new(|i| tup[i].clone())),
-        Value::NamedTuple(fields) => (fields.len(), Box::new(|i| fields[i].1.clone())),
+        Value::NamedTuple(fields) => (fields.len(), Box::new(|i| fields[i].clone())),
         // A string IS an array of characters and is walked like one
         // (decided 2026-09-22): a step into it yields the character there.
         Value::String(st) => {
@@ -1640,7 +1644,7 @@ fn set_at_idx(col: Value, index: i64, new_val: Value, span: zymbol_span::Span) -
         Value::NamedTuple(mut fields) => {
             let len = fields.len();
             let i = resolve_idx(index, len, span, "named tuple")?;
-            zymbol_common::count::make_mut(&mut fields)[i].1 = new_val;
+            zymbol_common::count::make_mut_dict(&mut fields)[i] = new_val;
             Ok(Value::NamedTuple(fields))
         }
         // The write half of the same rule. Only a char or a string goes in,

@@ -358,7 +358,8 @@ pub enum Value {
     Bool(bool),
     Array(Rc<Vec<Value>>),
     Tuple(Rc<Vec<Value>>),
-    NamedTuple(Rc<Vec<(String, Value)>>),  // (field_name, value) pairs
+    /// The dictionary, `#(…)`: keys in insertion order, found by hash (GLB-132).
+    NamedTuple(Rc<zymbol_common::Dict<Value>>),
     Function(FunctionValue),
     /// Error value for try-catch error handling
     Error(ErrorValue),
@@ -478,7 +479,7 @@ pub(crate) fn own_elements(rc: Rc<Vec<Value>>) -> Vec<Value> {
 
 /// `own_elements` for a dictionary's `(key, value)` pairs.
 #[inline]
-pub(crate) fn own_fields(rc: Rc<Vec<(String, Value)>>) -> Vec<(String, Value)> {
+pub(crate) fn own_fields(rc: Rc<zymbol_common::Dict<Value>>) -> zymbol_common::Dict<Value> {
     Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone())
 }
 
@@ -498,8 +499,12 @@ impl Value {
 
     /// Build a dictionary (named tuple), from its `(key, value)` pairs in order.
     #[inline]
-    pub fn named_tuple(fields: Vec<(String, Value)>) -> Value {
-        Value::NamedTuple(Rc::new(fields))
+    ///
+    /// The parser refuses a key written twice (GLB-131); a key that still
+    /// arrives twice — two columns of one name, two keys renamed alike — keeps
+    /// the place of the first and the value of the last.
+    pub fn named_tuple(fields: impl IntoIterator<Item = (String, Value)>) -> Value {
+        Value::NamedTuple(Rc::new(fields.into_iter().collect()))
     }
 
     /// Convert value to displayable string, in ASCII numerals.
@@ -2142,7 +2147,7 @@ impl<W: Write> Interpreter<W> {
                 self.bind_positional(items, elements, true);
             }
             DestructurePattern::NamedTuple(fields) => {
-                let pairs: &Vec<(String, Value)> = match &rhs {
+                let pairs: &zymbol_common::Dict<Value> = match &rhs {
                     Value::NamedTuple(p) => p,
                     _ => return Err(RuntimeError::Generic {
                         message: format!(
@@ -2157,10 +2162,9 @@ impl<W: Write> Interpreter<W> {
                     // Unit: binding nothing made `#(zzz: n) = d` succeed with `n`
                     // empty and exit 0, which is the very answer decision 10 exists
                     // to refuse. The register VM already raised here.
-                    let Some(val) = pairs.iter().find(|(k, _)| k == field).map(|(_, v)| v.clone())
+                    let Some(val) = pairs.get(field).cloned()
                     else {
-                        let available: Vec<String> =
-                            pairs.iter().map(|(k, _)| k.clone()).collect();
+                        let available: Vec<String> = pairs.keys().cloned().collect();
                         return Err(RuntimeError::kinded(
                             "Key",
                             crate::variables::missing_key_msg(field, &available),

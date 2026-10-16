@@ -24,6 +24,13 @@ pub mod vscreen;
 use indexmap::IndexMap;
 use std::fmt;
 
+/// A dictionary's contents: its keys in the order they were added, each found
+/// by hash (GLB-132). It was a `Vec<(String, V)>` searched pair by pair, which
+/// made adding n keys cost n². The order is what `#(…)` prints, so a key is
+/// only ever removed with `shift_remove` — `swap_remove` would move the last
+/// key into the hole. Keys are unique (GLB-131).
+pub type Dict<V> = IndexMap<String, V>;
+
 /// Symbol is an interned string represented as a 32-bit integer
 /// This allows for fast comparison and reduces memory usage
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
