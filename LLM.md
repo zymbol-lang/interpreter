@@ -364,8 +364,9 @@ Not guaranteed — do not assume these:
 
 - **No capability enforcement and no shell quoting.** `<\ "{cmd}" \>`
   interpolates a runtime string straight into `sh -c`.
-- **No termination bound.** Infinite recursion and `@ { }` run until something
-  outside kills them.
+- **No termination bound.** A tail recursion and `@ { }` run until something
+  outside kills them. **A recursion that is not a tail call stops at 10 000 active calls**
+  with a `##Depth` error that `!?` catches (v0.0.11).
 - **`check` does not catch everything it looks like it should**: use after `\`
   and a non-exhaustive `??` are runtime-only.
 

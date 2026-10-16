@@ -83,6 +83,7 @@ impl StandaloneBuilder {
 
         let bytecode_path = current_dir.join("crates/zymbol-bytecode").canonicalize()?;
         let vm_path = current_dir.join("crates/zymbol-vm").canonicalize()?;
+        let common_path = current_dir.join("crates/zymbol-common").canonicalize()?;
 
         let cargo_toml = format!(r#"[package]
 name = "zymbol-program"
@@ -92,6 +93,7 @@ edition = "2024"
 [dependencies]
 zymbol-bytecode = {{ path = "{}" }}
 zymbol-vm = {{ path = "{}" }}
+zymbol-common = {{ path = "{}" }}
 bincode = "1.3"
 serde = {{ version = "1.0", features = ["derive"] }}
 
@@ -102,7 +104,8 @@ strip = true
 codegen-units = 1
 "#,
             bytecode_path.display(),
-            vm_path.display()
+            vm_path.display(),
+            common_path.display()
         );
 
         fs::write(build_dir.join("Cargo.toml"), cargo_toml)

@@ -2236,6 +2236,15 @@ impl<W: Write> VM<W> {
                     let num_regs = program.functions[func_idx as usize].num_registers as usize;
                     let _num_args = arg_regs.len();
 
+                    // At most MAX_ACTIVE_CALLS at once, the same number in
+                    // the three engines (D7, GLB-133); `frame_stack` holds
+                    // `<main>` too. Before anything is touched.
+                    if self.frame_stack.len() > zymbol_common::depth::MAX_ACTIVE_CALLS
+                        || zymbol_common::depth::stack_nearly_spent()
+                    {
+                        raise!(VmError::Generic(zymbol_common::depth::exceeded_message()));
+                    }
+
                     // Save current IP to caller frame before pushing callee
                     self.frame_stack.last_mut().unwrap().ip = ip as u32;
 
@@ -3572,6 +3581,15 @@ impl<W: Write> VM<W> {
                     if arg_regs.len() != num_params {
                         raise!(VmError::Generic(format!(
                             "lambda expects {} arguments, got {}", num_params, arg_regs.len())));
+                    }
+
+                    // At most MAX_ACTIVE_CALLS at once, the same number in
+                    // the three engines (D7, GLB-133); `frame_stack` holds
+                    // `<main>` too. Before anything is touched.
+                    if self.frame_stack.len() > zymbol_common::depth::MAX_ACTIVE_CALLS
+                        || zymbol_common::depth::stack_nearly_spent()
+                    {
+                        raise!(VmError::Generic(zymbol_common::depth::exceeded_message()));
                     }
 
                     // Save caller IP
@@ -4992,6 +5010,14 @@ impl<W: Write> VM<W> {
         if args.len() != num_params {
             return Err(VmError::Generic(format!(
                 "lambda expects {} arguments, got {}", num_params, args.len())));
+        }
+        // The calls `$>`, `$|`, `$<` and `$^` make count as any other (GLB-133),
+        // and this is the path that re-enters the loop in Rust: the stack check
+        // matters most here.
+        if self.frame_stack.len() > zymbol_common::depth::MAX_ACTIVE_CALLS
+            || zymbol_common::depth::stack_nearly_spent()
+        {
+            return Err(VmError::Generic(zymbol_common::depth::exceeded_message()));
         }
 
         let floor = self.frame_stack.len();
