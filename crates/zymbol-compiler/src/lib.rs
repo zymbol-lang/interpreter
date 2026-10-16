@@ -1406,7 +1406,14 @@ impl Compiler {
                         if let Expr::FunctionCall(call) = val.unwrap_group() {
                             if let Expr::Identifier(id) = call.callable.unwrap_group() {
                                 if id.name == ctx.name {
-                                    if let Some(&func_idx) = self.function_index.get(&id.name) {
+                                    // Resolved as `compile_call` resolves it: a
+                                    // module's own function is in `module_scope`,
+                                    // and looking only in `function_index` made a
+                                    // tail call in a module never one — the
+                                    // tree-walker's was (ZYVM-027).
+                                    if let Some(&func_idx) = self.function_index.get(&id.name)
+                                        .or_else(|| self.module_scope.get(&id.name))
+                                    {
                                         let mut arg_regs = Vec::with_capacity(call.arguments.len());
                                         for arg in &call.arguments {
                                             arg_regs.push(self.compile_expr(arg, ctx)?);
