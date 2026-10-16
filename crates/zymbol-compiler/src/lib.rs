@@ -5010,6 +5010,15 @@ impl Compiler {
             // String-specific path: StrLen + StrCharAt, 0-based index.
             // Avoids StrChars Vec<Value::Char> allocation — critical when this
             // loop appears inside another loop (N outer × O(len) allocs otherwise).
+            //
+            // Over a register of the loop's own, like the generic path below:
+            // when the iterable is a bare name `r_coll` IS the variable, and a
+            // body that rewrote it was walked over the new text, with the
+            // length of the old one — past its end every turn gave '\0'
+            // (ZYVM-024). The copy is one reference count.
+            let r_snap = ctx.alloc_temp()?;
+            ctx.emit(Instruction::CopyReg(r_snap, r_coll));
+            r_coll = r_snap;
             ctx.emit(Instruction::StrLen(r_len, r_coll));
             ctx.emit(Instruction::LoadInt(r_idx, 0));
         } else {
