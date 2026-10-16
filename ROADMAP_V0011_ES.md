@@ -3,8 +3,8 @@
 > **Estado: abierta.** La rama `v0.0.11` existe desde el 2026-10-12 y lleva un solo commit propio,
 > el de versión (`62baa56`). **La etapa 1 está implementada** (2026-10-13) salvo el sondeo de las
 > cinco zonas: ver «Avance» dentro de ella. **La etapa 2 tiene lista de trabajos y arnés de medición**
-> (2026-10-14), y dos correcciones hechas: PERF-06 y PERF-04 (2026-10-16, `ZYVM-023` y `ZYVM-025`). Ver
-> «Avance» dentro de ella. De las etapas 3 y 4 no hay nada hecho.
+> (2026-10-14), y tres correcciones hechas: PERF-06, PERF-04 y PERF-05 a (2026-10-16, `ZYVM-023`, `ZYVM-025` y
+> `GLB-130`). Ver «Avance» dentro de ella. De las etapas 3 y 4 no hay nada hecho.
 >
 > **Escrito el 2026-10-13.** Toda cifra sin otra fecha se midió ese día, sobre esa rama, con un
 > binario de release. Las que vienen de antes llevan su fecha y hay que volver a medirlas antes
@@ -309,6 +309,21 @@ Al leer ese bucle salió **`ZYVM-024`**, que la puerta no veía: cuando el itera
 variable y no el texto que tenía al empezar, así que un cuerpo que la reescribía se recorría sobre el texto nuevo,
 y pasado su final daba el carácter 0. Se corrigió antes que el cursor, que depende de ello;
 `zyquality/corpus/loops/14_foreach_string_snapshot.zy` lo sujeta.
+
+**PERF-05 a, corregido** como `GLB-130`. Un corte de texto localiza su trozo y lo copia solo, en vez de copiar el
+texto entero a un `Vec<char>`: `zymbol_common::text`, usado por la VM y el tree-walker. 8 000 cortes de un carácter
+sobre 8 000 «ñ» en la VM: 1 155 MB antes, 2,66 MB ahora. Se sujeta sólo por `bytes` (un `clock_off` nuevo en el
+corredor de `cost/`): el reloj sigue cuadrático por PERF-05 b, que cuenta los caracteres en cada corte.
+
+Por el camino salieron tres cosas más, todas archivadas:
+
+- **`ZYVM-026`**, corregido: un texto cortado a través de un parámetro iba por `ArraySlice`, que recortaba el rango
+  como antes de D3.
+- **`GLB-129`**, corregido por decisión del autor (la VM es la referencia): `$[i:n]` no coincidía en ninguno de sus
+  errores en los tres motores. Y `zyquality/messages/reach.py` corría `run` y `run --vm`, que desde la etapa 1 eran
+  los dos la VM.
+- **`ZYTW-016`**, abierto como deuda declarada: leer una variable de texto la copia en el tree-walker. Es la parte de
+  PERF-05 b que este documento ya decía que se archivaría así.
 
 ### Lo que ya se sabía
 

@@ -282,10 +282,10 @@ fn descend(
             op_span,
         )),
         Value::String(s) => {
-            let chars: Vec<char> = s.chars().collect();
-            let len = chars.len();
+            // The character where it is, not the text copied to find it (GLB-130).
+            let len = zymbol_common::text::char_len(&s);
             let i = resolve_index(index, len, op_span, "string")?;
-            Ok(Value::String(chars[i].to_string()))
+            Ok(Value::String(zymbol_common::text::char_range(&s, i, i + 1).to_string()))
         }
         other => Err(RuntimeError::kinded(
             "Type",
