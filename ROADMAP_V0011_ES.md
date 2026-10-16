@@ -3,7 +3,8 @@
 > **Estado: abierta.** La rama `v0.0.11` existe desde el 2026-10-12 y lleva un solo commit propio,
 > el de versión (`62baa56`). **La etapa 1 está implementada** (2026-10-13) salvo el sondeo de las
 > cinco zonas: ver «Avance» dentro de ella. **La etapa 2 tiene lista de trabajos y arnés de medición**
-> (2026-10-14), y ninguna corrección hecha todavía. De las etapas 3 y 4 no hay nada hecho.
+> (2026-10-14), y su primera corrección hecha: PERF-06 (2026-10-16, `ZYVM-023`). Ver «Avance» dentro de
+> ella. De las etapas 3 y 4 no hay nada hecho.
 >
 > **Escrito el 2026-10-13.** Toda cifra sin otra fecha se midió ese día, sobre esa rama, con un
 > binario de release. Las que vienen de antes llevan su fecha y hay que volver a medirlas antes
@@ -281,6 +282,24 @@ descargan los dos binarios oficiales de la v0.0.10 (estático y `.deb`, mismo co
 SHA-256 y se les pasa `bench/big/`. Si se confirma: `mimalloc` sólo para el target musl, detrás del
 asignador que cuenta para `--count`. Es empaquetado y se decide en la release. PERF-06 se lleva el
 ×11 de `str_concat` de todas formas.
+
+### Avance — 2026-10-16
+
+**PERF-06, corregido** como `ZYVM-023` (`ZyDDT/HALLAZGOS/zyvm.md`). Archivado primero, con tres casos
+de `zyquality/cost/` como deuda declarada —uno por receptor: la variable del programa, la local de una función y
+el estado de un módulo—, y cerrado después en el mismo día. `s = s x y` se escribe sobre el registro del receptor,
+y `DetachGlobal` suelta también un texto, no sólo un agregado. `bytes` de `--count` de 2 000 a 8 000 añadidos:
+×8,12 antes, ×1,12 ahora.
+
+Dos cosas que salieron por el camino:
+
+- **El corredor de `cost/` no leía `open_finding` en las razones contadas**: ninguna deuda declarada hasta hoy
+  era de `--count`. Ahora lo hace, y una deuda se da por pagada sólo cuando pasan todas las lecturas de su
+  motor — si no, PERF-04, ciego al conteo, se daría por pagado al declararlo.
+- **Sin instrucciones de `perf`:** `perf_event_paranoid` está en 3. La cifra citable es la de `--count`, que es
+  exacta; la de reloj, 1 200 000 añadidos en ~127 ms en la VM.
+
+`zyquality/corpus/modules_scope/concat_receptor.zy` sujeta las formas que el arreglo podía romper.
 
 ### Lo que ya se sabía
 

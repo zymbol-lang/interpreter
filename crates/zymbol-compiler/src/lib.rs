@@ -1840,6 +1840,55 @@ impl Compiler {
                     return Ok(());
                 }
             }
+            // `s = s x y` adds to the end of a text. `ConcatStr` grows its left
+            // operand's buffer only when its destination IS that operand; sent
+            // to a fresh temporary and copied back, every append copied the
+            // whole text, and building one cost the square of its length
+            // (ZYVM-023). The chain is `((s x) y)`: its leftmost leaf is the
+            // receiver, and the rest are appended to it one by one.
+            Expr::Binary(bin) if bin.op == BinaryOp::Concat => {
+                let mut parts: Vec<&Expr> = Vec::new();
+                let mut root: &Expr = value.unwrap_group();
+                while let Expr::Binary(b) = root {
+                    if b.op != BinaryOp::Concat {
+                        break;
+                    }
+                    parts.push(&b.right);
+                    root = b.left.unwrap_group();
+                }
+                parts.reverse();
+                match receiver_of(root) {
+                    Receiver::Own(mirror) => {
+                        let reg = ctx.get_reg(name)?;
+                        let part_regs = self.compile_concat_parts(&parts, reg, ctx)?;
+                        if let Some(g) = mirror {
+                            ctx.emit(Instruction::DetachGlobal(g, reg));
+                        }
+                        for r in part_regs {
+                            ctx.emit(Instruction::ConcatStr(reg, reg, r));
+                        }
+                        if let Some(g) = mirror {
+                            ctx.emit(Instruction::StoreGlobal(g, reg));
+                        }
+                        ctx.set_reg_type(reg, StaticType::String);
+                        return Ok(());
+                    }
+                    Receiver::State(g) => {
+                        let t = self.compile_expr(root, ctx)?;
+                        let part_regs = self.compile_concat_parts(&parts, t, ctx)?;
+                        let mut keep = vec![t];
+                        keep.extend(&part_regs);
+                        Self::release_state_temps(g, &keep, ctx);
+                        ctx.emit(Instruction::DetachGlobal(g, t));
+                        for r in part_regs {
+                            ctx.emit(Instruction::ConcatStr(t, t, r));
+                        }
+                        ctx.emit(Instruction::StoreGlobal(g, t));
+                        return Ok(());
+                    }
+                    Receiver::Copy => {}
+                }
+            }
             _ => {}
         }
         // Optimise: arr = arr$+ elem → ArrayPush in-place (O(1), no clone).
@@ -4352,6 +4401,31 @@ impl Compiler {
 
     /// Clear the temporaries this statement loaded module state `g` into, except
     /// the ones the edit about to run reads. See `FunctionCtx::state_temps`.
+    /// The operands appended to a text by `s = s x y`, every one of them
+    /// evaluated before the first append writes `recv`: left to right, `y` sees
+    /// the `s` the statement started with. An operand that IS the receiver's
+    /// register is copied out first, or `s = s "-" s` would append the text it
+    /// had already grown.
+    fn compile_concat_parts(
+        &mut self,
+        parts: &[&Expr],
+        recv: Reg,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Vec<Reg>, CompileError> {
+        let mut regs = Vec::with_capacity(parts.len());
+        for part in parts {
+            let r = self.compile_expr(part, ctx)?;
+            if r == recv {
+                let t = ctx.alloc_temp()?;
+                ctx.emit(Instruction::CopyReg(t, recv));
+                regs.push(t);
+            } else {
+                regs.push(r);
+            }
+        }
+        Ok(regs)
+    }
+
     fn release_state_temps(g: u16, keep: &[Reg], ctx: &mut FunctionCtx) {
         let stale: Vec<Reg> = ctx.state_temps.iter()
             .filter(|&&(slot, reg)| slot == g && !keep.contains(&reg))
