@@ -1227,6 +1227,208 @@ fn truncate_regs(stack: &mut Vec<Value>, len: usize) {
     unsafe { stack.set_len(len) };
 }
 
+/// `coll[index]`: the `ArrayGet` instruction, and the comparator `$^`
+/// evaluates without a call (2026-10-17) — one body, so the two cannot drift.
+#[inline(always)]
+fn vm_index_get(coll: &Value, index: &Value) -> Result<Value, VmError> {
+    // A dictionary is addressed by KEY, and the key may be
+    // computed (decision 7, DM-09). Checked before the index is
+    // read as an Int, which is what used to make `d[clave]` a
+    // type error here.
+    if let (Value::NamedTuple(fields), Value::String(key)) =
+        (coll, index)
+    {
+        // By hash, not by walking the pairs (GLB-132).
+        match fields.get(key.as_str()) {
+            Some(v) => return Ok(v.clone()),
+            None => {
+                let key = key.as_str().to_string();
+                let available: Vec<String> = fields.keys().cloned().collect();
+                return Err(VmError::KeyMsg(missing_key_msg(&key, &available)));
+            }
+        }
+    }
+    // Decision 11: a dictionary is addressed by KEY, never by
+    // position. In a mutable dictionary a positional index is
+    // fragile — adding a key changes what sits at each position.
+    if let (Value::NamedTuple(fields), Value::Int(_)) =
+        (coll, index)
+    {
+        let first = fields.first().map(|(k, _)| k.clone())
+            .unwrap_or_else(|| "clave".to_string());
+        return Err(VmError::TypeMsg(format!(
+            "a dictionary is addressed by key, not by position\nhelp: use d[\"{}\"] — adding a key changes what sits at each position",
+            first
+        )));
+    }
+    // The words of the tree-walker for each of the two ways
+    // this can fail (step 3.5b): a String reaches a dictionary
+    // key, and anything else that is not an Int is not an index.
+    let idx = match index {
+        Value::Int(n) => *n,
+        Value::String(_) => {
+            let label = coll.type_label();
+            return Err(VmError::TypeMsg(format!(
+                "a String addresses a dictionary key, and this is {}", label)))
+        }
+        other => return Err(VmError::TypeMsg(format!(
+            "index must be an integer, got {}", other.type_label()))),
+    };
+    let val = match coll {
+        Value::Array(arr) => {
+            let i = if idx == 0 { return Err(VmError::IndexZero);
+            } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
+            if i < 0 || i as usize >= arr.len() {
+                return Err(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
+            }
+            arr[i as usize].clone()
+        }
+        Value::Tuple(items) => {
+            let i = if idx == 0 { return Err(VmError::IndexZero);
+            } else if idx < 0 { items.len() as i64 + idx } else { idx - 1 };
+            if i < 0 || i as usize >= items.len() {
+                return Err(VmError::IndexOutOfBounds { index: idx, length: items.len() , container: "tuple" });
+            }
+            items[i as usize].clone()
+        }
+        Value::NamedTuple(fields) => {
+            let i = if idx == 0 { return Err(VmError::IndexZero);
+            } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
+            if i < 0 || i as usize >= fields.len() {
+                return Err(VmError::IndexOutOfBounds { index: idx, length: fields.len() , container: "named tuple" });
+            }
+            fields[i as usize].clone()
+        }
+        Value::String(s) => {
+            // The count is kept by the text (PERF-05 b); an ASCII
+            // text is read at its byte, any other walked to it.
+            let char_count = s.char_len();
+            let i = if idx == 0 { return Err(VmError::IndexZero);
+            } else if idx < 0 { char_count as i64 + idx } else { idx - 1 };
+            if i < 0 || i as usize >= char_count {
+                return Err(VmError::IndexOutOfBounds { index: idx, length: char_count , container: "string" });
+            }
+            let ch = if s.is_ascii_text() {
+                s.as_bytes()[i as usize] as char
+            } else {
+                s.chars().nth(i as usize).unwrap()
+            };
+            Value::Char(ch)
+        }
+        other => return Err(VmError::TypeMsg(format!(
+            "cannot index into {} — expected array, tuple, or string", other.type_label()))),
+    };
+    Ok(val)
+}
+
+/// `x.field`: the `NamedTupleGet` instruction, and the comparator `$^`
+/// evaluates without a call (2026-10-17) — one body, so the two cannot drift.
+#[inline(always)]
+fn vm_field_get(target: &Value, field_name: &str) -> Result<Value, VmError> {
+    Ok(match target {
+        Value::NamedTuple(fields) => {
+            match fields.get(field_name) {
+                Some(v) => v.clone(),
+                None => {
+                    let field_name = field_name.to_string();
+                    let available: Vec<String> = fields.keys().cloned().collect();
+                    return Err(VmError::KeyMsg(missing_key_msg(&field_name, &available)));
+                }
+            }
+        }
+        // A numeric field name is unreachable from source — the
+        // parser refuses `a.1` in every engine — so an array
+        // reaching here is the dot on the wrong collection, and
+        // it gets the same message the tree-walker gives.
+        Value::Array(arr) => {
+            if let Ok(i) = field_name.parse::<usize>() {
+                arr.get(i).cloned().unwrap_or(Value::Unit)
+            } else {
+                let field_name = field_name.to_string();
+                let got = Value::Array(arr.clone()).type_label();
+                return Err(VmError::TypeMsg(format!(
+                    "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
+                    got, field_name
+                )));
+            }
+        }
+        Value::Tuple(_) => {
+            let field_name = field_name.to_string();
+            // A `##Type` (D1), declared: the words of the
+            // name chose the family (GLB-099).
+            return Err(VmError::TypeMsg(format!(
+                "a positional tuple is addressed by position, not by name: '{}'\nhelp: use t[1] — names live in a dictionary, #(key: value)",
+                field_name
+            )));
+        }
+        other => {
+            let got = other.type_label();
+            let field_name = field_name.to_string();
+            return Err(VmError::TypeMsg(format!(
+                "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
+                got, field_name
+            )));
+        }
+    })
+}
+
+/// `x$#`: the `ArrayLen` instruction, and the comparator `$^` evaluates
+/// without a call (2026-10-17) — one body, so the two cannot drift.
+#[inline(always)]
+fn vm_len(v: &Value) -> Result<Value, VmError> {
+    let n = match v {
+        Value::Array(arr) => arr.len() as i64,
+        Value::String(s) => s.char_len() as i64,  // counted once and kept (PERF-05 b)
+        Value::Tuple(items) => items.len() as i64,
+        Value::NamedTuple(fields) => fields.len() as i64,
+        other => return Err(VmError::TypeMsg(format!("cannot get length of {} - only arrays, tuples, and strings have length", other.type_label()))),
+    };
+    Ok(Value::Int(n))
+}
+
+/// Whether a function can be run by `call_pure`: straight-line code — no jump,
+/// no call, nothing that writes outside its own registers — made only of the
+/// instructions `call_pure` knows, up to its first `Return`. That is what a
+/// comparator such as `(a, b -> a.age < b.age)` compiles to (2026-10-17).
+fn chunk_is_pure(chunk: &Chunk) -> bool {
+    for ins in &chunk.instructions {
+        let dst = match *ins {
+            Instruction::Return(_) => return true,
+            Instruction::LoadInt(d, _) | Instruction::LoadFloat(d, _) | Instruction::LoadBool(d, _)
+            | Instruction::LoadStr(d, _) | Instruction::LoadChar(d, _) | Instruction::LoadUnit(d)
+            | Instruction::CopyReg(d, _)
+            | Instruction::CmpEq(d, _, _) | Instruction::CmpNe(d, _, _) | Instruction::CmpLt(d, _, _)
+            | Instruction::CmpLe(d, _, _) | Instruction::CmpGt(d, _, _) | Instruction::CmpGe(d, _, _)
+            | Instruction::NamedTupleGet(d, _, _) | Instruction::ArrayGet(d, _, _)
+            | Instruction::ArrayLen(d, _) => d,
+            _ => return false,
+        };
+        // The parameters are read in place and never written (`call_pure`):
+        // a body that assigns one — `a = a.x` in a block — is called.
+        if dst < 2 {
+            return false;
+        }
+    }
+    false
+}
+
+/// `Vec::push`, inline when there is room — the merge of `$^` reserves all it
+/// needs up front, and the standard push was an out-of-line call per element
+/// (2026-10-17).
+#[inline(always)]
+fn push_in_capacity(v: &mut Vec<Value>, x: Value) {
+    let len = v.len();
+    if len < v.capacity() {
+        // SAFETY: there is room at `len`, past the initialised part.
+        unsafe {
+            std::ptr::write(v.as_mut_ptr().add(len), x);
+            v.set_len(len + 1);
+        }
+    } else {
+        v.push(x);
+    }
+}
+
 /// Grow the register stack to `len` with `Unit`, kept inline: `resize_with`
 /// was an out-of-line call once per call (2026-10-17). Never shrinks.
 #[inline(always)]
@@ -1307,6 +1509,9 @@ pub struct VM<W: Write> {
     pending_output_writeback: Vec<(usize, Reg)>,
     /// Interned string pool — ZyStr for each entry, shared across LoadStr calls
     string_rcs: Vec<ZyStr>,
+    /// The registers of a comparator `$^` runs without a frame (`call_pure`),
+    /// kept between comparisons so they are not allocated for each one.
+    pure_regs: Vec<Value>,
     /// Active numeral mode: block base codepoint (0x0030 = ASCII default).
     numeral_mode: u32,
     /// Module-level global variables (mutable, shared across all calls)
@@ -1371,6 +1576,7 @@ impl<W: Write> VM<W> {
             tco_buf: Vec::with_capacity(16),
             pending_output_writeback: Vec::new(),
             string_rcs: Vec::new(),
+            pure_regs: Vec::new(),
             numeral_mode: 0x0030, // ASCII_BASE default
             global_vars: Vec::new(),
             destroyed_globals: std::collections::HashMap::new(),
@@ -2560,95 +2766,10 @@ impl<W: Write> VM<W> {
                     }
                 }
                 &Instruction::ArrayGet(dst, arr_reg, idx_reg) => {
-                    // A dictionary is addressed by KEY, and the key may be
-                    // computed (decision 7, DM-09). Checked before the index is
-                    // read as an Int, which is what used to make `d[clave]` a
-                    // type error here.
-                    if let (Value::NamedTuple(fields), Value::String(key)) =
-                        (&self.value_stack[base + arr_reg as usize], rreg!(idx_reg))
-                    {
-                        // By hash, not by walking the pairs (GLB-132).
-                        match fields.get(key.as_str()) {
-                            Some(v) => { let v = v.clone(); wreg!(dst, v); }
-                            None => {
-                                let key = key.as_str().to_string();
-                                let available: Vec<String> = fields.keys().cloned().collect();
-                                raise!(VmError::KeyMsg(missing_key_msg(&key, &available)));
-                            }
-                        }
-                        continue;
+                    match vm_index_get(rreg!(arr_reg), rreg!(idx_reg)) {
+                        Ok(v) => wreg!(dst, v),
+                        Err(e) => raise!(e),
                     }
-                    // Decision 11: a dictionary is addressed by KEY, never by
-                    // position. In a mutable dictionary a positional index is
-                    // fragile — adding a key changes what sits at each position.
-                    if let (Value::NamedTuple(fields), Value::Int(_)) =
-                        (&self.value_stack[base + arr_reg as usize], rreg!(idx_reg))
-                    {
-                        let first = fields.first().map(|(k, _)| k.clone())
-                            .unwrap_or_else(|| "clave".to_string());
-                        raise!(VmError::TypeMsg(format!(
-                            "a dictionary is addressed by key, not by position\nhelp: use d[\"{}\"] — adding a key changes what sits at each position",
-                            first
-                        )));
-                    }
-                    // The words of the tree-walker for each of the two ways
-                    // this can fail (step 3.5b): a String reaches a dictionary
-                    // key, and anything else that is not an Int is not an index.
-                    let idx = match rreg!(idx_reg) {
-                        Value::Int(n) => *n,
-                        Value::String(_) => {
-                            let label = self.value_stack[base + arr_reg as usize].type_label();
-                            raise!(VmError::TypeMsg(format!(
-                                "a String addresses a dictionary key, and this is {}", label)))
-                        }
-                        other => raise!(VmError::TypeMsg(format!(
-                            "index must be an integer, got {}", other.type_label()))),
-                    };
-                    let val = match &self.value_stack[base + arr_reg as usize] {
-                        Value::Array(arr) => {
-                            let i = if idx == 0 { raise!(VmError::IndexZero);
-                            } else if idx < 0 { arr.len() as i64 + idx } else { idx - 1 };
-                            if i < 0 || i as usize >= arr.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: arr.len() , container: "array" });
-                            }
-                            arr[i as usize].clone()
-                        }
-                        Value::Tuple(items) => {
-                            let i = if idx == 0 { raise!(VmError::IndexZero);
-                            } else if idx < 0 { items.len() as i64 + idx } else { idx - 1 };
-                            if i < 0 || i as usize >= items.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: items.len() , container: "tuple" });
-                            }
-                            items[i as usize].clone()
-                        }
-                        Value::NamedTuple(fields) => {
-                            let i = if idx == 0 { raise!(VmError::IndexZero);
-                            } else if idx < 0 { fields.len() as i64 + idx } else { idx - 1 };
-                            if i < 0 || i as usize >= fields.len() {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: fields.len() , container: "named tuple" });
-                            }
-                            fields[i as usize].clone()
-                        }
-                        Value::String(s) => {
-                            // The count is kept by the text (PERF-05 b); an ASCII
-                            // text is read at its byte, any other walked to it.
-                            let char_count = s.char_len();
-                            let i = if idx == 0 { raise!(VmError::IndexZero);
-                            } else if idx < 0 { char_count as i64 + idx } else { idx - 1 };
-                            if i < 0 || i as usize >= char_count {
-                                raise!(VmError::IndexOutOfBounds { index: idx, length: char_count , container: "string" });
-                            }
-                            let ch = if s.is_ascii_text() {
-                                s.as_bytes()[i as usize] as char
-                            } else {
-                                s.chars().nth(i as usize).unwrap()
-                            };
-                            Value::Char(ch)
-                        }
-                        other => raise!(VmError::TypeMsg(format!(
-                            "cannot index into {} — expected array, tuple, or string", other.type_label()))),
-                    };
-                    wreg!(dst, val);
                 }
                 &Instruction::DeepSet(dst, path_reg, val_reg) => {
                     let val = rreg!(val_reg).clone();
@@ -2756,14 +2877,10 @@ impl<W: Write> VM<W> {
                     }
                 }
                 &Instruction::ArrayLen(dst, src) => {
-                    let n = match rreg!(src) {
-                        Value::Array(arr) => arr.len() as i64,
-                        Value::String(s) => s.char_len() as i64,  // counted once and kept (PERF-05 b)
-                        Value::Tuple(items) => items.len() as i64,
-                        Value::NamedTuple(fields) => fields.len() as i64,
-                        other => raise!(VmError::TypeMsg(format!("cannot get length of {} - only arrays, tuples, and strings have length", other.type_label()))),
-                    };
-                    wreg!(dst, Value::Int(n));
+                    match vm_len(rreg!(src)) {
+                        Ok(v) => wreg!(dst, v),
+                        Err(e) => raise!(e),
+                    }
                 }
                 &Instruction::ArrayRemove(arr_reg, idx_reg) => {
                     // In a dictionary the ADDRESS is the key, so `$-[…]` — which
@@ -3990,6 +4107,16 @@ impl<W: Write> VM<W> {
                         // element is taken unless it does NOT go before the right one
                         // AND the right one goes before it.
                         let callable = rreg!(func_reg).clone();
+                        // A comparator that is a comparison of its two
+                        // parameters runs without a frame (`call_pure`).
+                        let pure = match &callable {
+                            Value::Function(idx, _) | Value::Closure(idx, _, _) => program
+                                .functions
+                                .get(*idx as usize)
+                                .filter(|c| c.num_params == 2 && chunk_is_pure(c))
+                                .map(|_| *idx),
+                            _ => None,
+                        };
                         let n = items.len();
                         let outcome: Result<(), VmError> = 'calls: {
                             let mut src = std::mem::take(&mut items);
@@ -4005,26 +4132,33 @@ impl<W: Write> VM<W> {
                                     while i < mid && j < hi {
                                         let mut says = [false; 2];
                                         for (k, (x, y)) in [(i, j), (j, i)].into_iter().enumerate() {
-                                            says[k] = match self.call_callable(
-                                                &callable,
-                                                [src[x].clone(), src[y].clone()],
-                                                program,
-                                            ) {
+                                            let answer = match pure {
+                                                // The error stays boxed until it is the
+                                                // way out: unboxing it on every answer
+                                                // moved a `Result` the size of `VmError`.
+                                                Some(f) => self.call_pure(program, f, &callable, &src[x], &src[y]),
+                                                None => self.call_callable(
+                                                    &callable,
+                                                    [src[x].clone(), src[y].clone()],
+                                                    program,
+                                                ).map_err(Box::new),
+                                            };
+                                            says[k] = match answer {
                                                 // A comparator answers a Bool, and no
                                                 // truthiness stands in for one (GLB-024).
                                                 Ok(Value::Bool(b)) => b,
                                                 Ok(other) => break 'calls Err(VmError::TypeMsg(format!(
                                                     "sort comparator must return a Bool, got {}", other.type_name()))),
-                                                Err(e) => break 'calls Err(e),
+                                                Err(e) => break 'calls Err(*e),
                                             };
                                             // The left goes first: no second question.
                                             if k == 0 && says[0] { break; }
                                         }
                                         if says[0] || !says[1] {
-                                            merged.push(src[i].clone());
+                                            push_in_capacity(&mut merged, src[i].clone());
                                             i += 1;
                                         } else {
-                                            merged.push(src[j].clone());
+                                            push_in_capacity(&mut merged, src[j].clone());
                                             j += 1;
                                         }
                                     }
@@ -4283,52 +4417,10 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::NamedTupleGet(dst, tuple_reg, field_idx) => {
                     let field_name = &program.string_pool[field_idx as usize];
-                    let result = match rreg!(tuple_reg) {
-                        Value::NamedTuple(fields) => {
-                            match fields.get(field_name.as_str()) {
-                                Some(v) => v.clone(),
-                                None => {
-                                    let field_name = field_name.clone();
-                                    let available: Vec<String> = fields.keys().cloned().collect();
-                                    raise!(VmError::KeyMsg(missing_key_msg(&field_name, &available)));
-                                }
-                            }
-                        }
-                        // A numeric field name is unreachable from source — the
-                        // parser refuses `a.1` in every engine — so an array
-                        // reaching here is the dot on the wrong collection, and
-                        // it gets the same message the tree-walker gives.
-                        Value::Array(arr) => {
-                            if let Ok(i) = field_name.parse::<usize>() {
-                                arr.get(i).cloned().unwrap_or(Value::Unit)
-                            } else {
-                                let field_name = field_name.clone();
-                                let got = Value::Array(arr.clone()).type_label();
-                                raise!(VmError::TypeMsg(format!(
-                                    "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
-                                    got, field_name
-                                )));
-                            }
-                        }
-                        Value::Tuple(_) => {
-                            let field_name = field_name.clone();
-                            // A `##Type` (D1), declared: the words of the
-                            // name chose the family (GLB-099).
-                            raise!(VmError::TypeMsg(format!(
-                                "a positional tuple is addressed by position, not by name: '{}'\nhelp: use t[1] — names live in a dictionary, #(key: value)",
-                                field_name
-                            )));
-                        }
-                        other => {
-                            let got = other.type_label();
-                            let field_name = field_name.clone();
-                            raise!(VmError::TypeMsg(format!(
-                                "the dot reaches a dictionary key, and this is {}\nhelp: use d.{} on a #(…) — for a position, use x[1]",
-                                got, field_name
-                            )));
-                        }
-                    };
-                    wreg!(dst, result);
+                    match vm_field_get(rreg!(tuple_reg), field_name) {
+                        Ok(v) => wreg!(dst, v),
+                        Err(e) => raise!(e),
+                    }
                 }
 
                 // ── Data ops ─────────────────────────────────────────────────
@@ -5163,6 +5255,115 @@ impl<W: Write> VM<W> {
             writeback: None,
         });
         Ok((new_base, func_idx))
+    }
+
+    /// Call a two-parameter function that `chunk_is_pure` accepted, without a
+    /// frame and without re-entering `exec` (option B, decided by the author
+    /// on 2026-10-17): what `$^` does with a comparator such as
+    /// `(a, b -> a < b)`. Everything that can be seen is `call_callable`'s —
+    /// the depth check, the count of the call and of each step, the value, the
+    /// error, and where the error is reported — and each instruction is the
+    /// same code `exec` runs (`cmp_order`, `cmp_direct`, `vm_index_get`,
+    /// `vm_field_get`, `vm_len`). Only the frame is gone. The caller checked
+    /// that it is a function or a closure of two parameters.
+    fn call_pure(
+        &mut self,
+        program: &CompiledProgram,
+        func_idx: FuncIdx,
+        callable: &Value,
+        a: &Value,
+        b: &Value,
+    ) -> Result<Value, Box<VmError>> {
+        if self.frame_stack.len() > zymbol_common::depth::MAX_ACTIVE_CALLS
+            || zymbol_common::depth::stack_nearly_spent()
+        {
+            return Err(Box::new(VmError::Generic(zymbol_common::depth::exceeded_message())));
+        }
+        let chunk = &program.functions[func_idx as usize];
+        let n = chunk.num_registers as usize;
+        // The registers are kept from one comparison to the next and hold
+        // nothing that owns memory between them (see the end): they are
+        // resized only when the comparator changes, and written as `exec`
+        // writes them, without the drop glue of what was there.
+        let mut regs = mem::take(&mut self.pure_regs);
+        if regs.len() != n {
+            truncate_regs(&mut regs, 0);
+            grow_regs(&mut regs, n);
+        }
+        // The two parameters are read where they are, borrowed from the items
+        // being sorted (`rd` below); their registers are never written.
+        if let Value::Closure(_, _, upvalues) = callable {
+            for (i, uv) in upvalues.iter().enumerate() {
+                if let Some(slot) = regs.get_mut(2 + i) { put_reg(slot, uv.clone()); }
+            }
+        }
+        zymbol_common::count::call();
+        let (caller_ip, caller_chunk) = (self.cur_ip, self.cur_chunk);
+        let mut outcome: Result<Value, VmError> = Ok(Value::Unit);
+        for (k, ins) in chunk.instructions.iter().enumerate() {
+            self.cur_ip = k as u32;
+            self.cur_chunk = func_idx;
+            zymbol_common::count::step();
+            let rd = |r: Reg| -> &Value {
+                match r { 0 => a, 1 => b, _ => &regs[r as usize] }
+            };
+            let ord = |x: Reg, y: Reg, op: &str| -> Result<i32, VmError> {
+                let (x, y) = (rd(x), rd(y));
+                cmp_order(x, y).ok_or_else(|| cmp_order_error(x, y, op))
+            };
+            let step: Result<(Reg, Value), VmError> = match *ins {
+                Instruction::Return(src) => {
+                    outcome = Ok(match src {
+                        0 | 1 => rd(src).clone(),
+                        _ => mem::replace(&mut regs[src as usize], Value::Unit),
+                    });
+                    break;
+                }
+                Instruction::LoadInt(d, n) => Ok((d, Value::Int(n))),
+                Instruction::LoadFloat(d, n) => Ok((d, Value::Float(n))),
+                Instruction::LoadBool(d, v) => Ok((d, Value::Bool(v))),
+                Instruction::LoadStr(d, idx) => Ok((d, Value::String(self.string_rcs[idx as usize].clone()))),
+                Instruction::LoadChar(d, c) => Ok((d, Value::Char(c))),
+                Instruction::LoadUnit(d) => Ok((d, Value::Unit)),
+                Instruction::CopyReg(d, s) => Ok((d, rd(s).clone())),
+                Instruction::CmpEq(d, x, y) => Ok((d, Value::Bool(cmp_direct(rd(x), rd(y)) == 0))),
+                Instruction::CmpNe(d, x, y) => Ok((d, Value::Bool(cmp_direct(rd(x), rd(y)) != 0))),
+                Instruction::CmpLt(d, x, y) => ord(x, y, "<").map(|r| (d, Value::Bool(ord_lt(r)))),
+                Instruction::CmpLe(d, x, y) => ord(x, y, "<=").map(|r| (d, Value::Bool(ord_le(r)))),
+                Instruction::CmpGt(d, x, y) => ord(x, y, ">").map(|r| (d, Value::Bool(ord_gt(r)))),
+                Instruction::CmpGe(d, x, y) => ord(x, y, ">=").map(|r| (d, Value::Bool(ord_ge(r)))),
+                Instruction::NamedTupleGet(d, s, field_idx) => {
+                    vm_field_get(rd(s), &program.string_pool[field_idx as usize]).map(|v| (d, v))
+                }
+                Instruction::ArrayGet(d, s, i) => vm_index_get(rd(s), rd(i)).map(|v| (d, v)),
+                Instruction::ArrayLen(d, s) => vm_len(rd(s)).map(|v| (d, v)),
+                _ => unreachable!("chunk_is_pure accepted it"),
+            };
+            match step {
+                // `chunk_is_pure` refused any body that writes a parameter.
+                Ok((d, v)) => put_reg(&mut regs[d as usize], v),
+                Err(e) => { outcome = Err(e); break; }
+            }
+        }
+        // Nothing the comparator read stays alive here: an element held by a
+        // scratch register would have a second owner, and the next write to
+        // it would copy it.
+        for v in regs.iter_mut() {
+            if v.owns_memory() { *v = Value::Unit; }
+        }
+        // Where `call_callable` leaves it: back at the operator, unless the
+        // error is on a line of the comparator's own (ZYVM-012).
+        match &outcome {
+            Err(_) if Self::line_at(program, self.cur_chunk, self.cur_ip) != 0 => {}
+            _ => {
+                self.cur_ip = caller_ip;
+                self.cur_chunk = caller_chunk;
+            }
+        }
+        self.pure_regs = regs;
+        // Boxed: a `Result` the size of `VmError` was moved out on every
+        // comparison, and the error is the rare way out.
+        outcome.map_err(Box::new)
     }
 
     fn call_callable<const N: usize>(
