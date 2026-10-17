@@ -1528,6 +1528,41 @@ impl TypeChecker {
             }
 
             Statement::Output(output) => {
+                // An edit that starts a line inside a `>>` is printed, not made
+                // (GLB-137, decided by the author 2026-10-16). A line break
+                // does not end an output — 181 programs of the workspace spread
+                // one over several lines — so `>> "a"⏎d["z"]$~ 2` prints the
+                // dictionary the edit would build and leaves `d` as it was,
+                // where a reader sees a statement of its own.
+                let mut prev_line = output.span.start.line;
+                for expr in &output.exprs {
+                    let span = expr.span();
+                    let is_edit = matches!(
+                        expr.unwrap_group(),
+                        Expr::CollectionUpdate(_)
+                            | Expr::CollectionAppend(_)
+                            | Expr::CollectionInsert(_)
+                            | Expr::CollectionRemoveValue(_)
+                            | Expr::CollectionRemoveAll(_)
+                            | Expr::CollectionRemoveAt(_)
+                            | Expr::CollectionRemoveRange(_)
+                            | Expr::CollectionSortAsc(_)
+                            | Expr::CollectionSortDesc(_)
+                            | Expr::CollectionSortCustom(_)
+                            | Expr::ConcatBuild(_)
+                    );
+                    if is_edit && span.start.line > prev_line {
+                        self.warnings.push(
+                            Diagnostic::warning(
+                                "this line continues the `>>` above: an edit here is printed, \
+                                 not made — end the output with ¶ to make it a statement"
+                                    .to_string(),
+                            )
+                            .with_span(span),
+                        );
+                    }
+                    prev_line = span.end.line;
+                }
                 for expr in &output.exprs {
                     // Hot/pre_hot identifiers in output context are always wrong:
                     // `°` marks initialization, but >> is a read operation.

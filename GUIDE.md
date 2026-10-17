@@ -619,6 +619,12 @@ anything over the line, and always work.
 > `>> "Score: " -95 ¶` is `"Score: " - 95` — arithmetic on a string, which is an error, not
 > two items. Write `>> "Score: " (-95) ¶`.
 
+> **Trap**: a line break does **not** end `>>` — it ends at `¶`, `\\`, `}`, `;`, another `>>`, a
+> statement keyword or an assignment, so one output may run over several lines. An **edit** that
+> starts the next line is therefore an item of the output: after `>> "a"`, a line `d["z"]$~ 2`
+> prints the dictionary the edit would build and leaves `d` as it was. `zymbol check` warns —
+> *this line continues the `>>` above* (v0.0.11). End the output with `¶` first.
+
 ### Newline
 
 ```zymbol
@@ -4980,6 +4986,7 @@ hex = 0x|255|    // Int → hex string → "0x00FF"
 bin = 0b|65|     // Int → binary string → "0b1000001"
 oct = 0o|8|      // Int → octal string → "0o10"
 dec = 0d|255|    // Int → decimal string → "0d0255"
+neg = 0x|(0 - 255)|  // a negative one: the sign in front → "-0x00FF" (v0.0.11)
 ```
 
 ---
