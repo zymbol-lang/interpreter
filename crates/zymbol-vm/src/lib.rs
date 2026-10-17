@@ -1522,6 +1522,9 @@ impl<W: Write> VM<W> {
             let top = self.frame_stack.last().unwrap();
             (top.ip as usize, top.chunk_idx as usize, top.base as usize)
         };
+        // The current function's code, fetched again only when `chunk_idx` changes
+        // — at a call, a return, a handler — not on every instruction (2026-10-17).
+        let mut chunk_ref: &Chunk = get_chunk(program, chunk_idx);
 
         // ── Hot-path register access macros ──────────────────────────────────
         // SAFETY: base + reg < value_stack.len() by compiler construction.
@@ -1658,6 +1661,7 @@ impl<W: Write> VM<W> {
                         let frame = self.frame_stack.last_mut().unwrap();
                         base = frame.base as usize;
                         chunk_idx = frame.chunk_idx as usize;
+                        chunk_ref = get_chunk(program, chunk_idx);
                         // Disarmed until `TryLand` re-arms the one outside it: an
                         // error raised before then must not come back here.
                         std::mem::replace(&mut frame.catch_ip, u32::MAX)
@@ -1758,7 +1762,7 @@ impl<W: Write> VM<W> {
 
         loop {
             // chunk borrows only from `program` — no conflict with `self.value_stack`
-            let chunk = get_chunk(program, chunk_idx);
+            let chunk = chunk_ref;
             if ip >= chunk.instructions.len() {
                 // Fell off end of chunk — implicit return Unit
                 if self.frame_stack.len() == 1 {
@@ -1798,11 +1802,14 @@ impl<W: Write> VM<W> {
                 let caller = self.frame_stack.last().unwrap();
                 ip = caller.ip as usize;
                 chunk_idx = caller.chunk_idx as usize;
+                chunk_ref = get_chunk(program, chunk_idx);
                 continue;
             }
 
             // Reference (no clone!) — safe because chunk borrows from program, not self
-            let instr = &chunk.instructions[ip];
+            // SAFETY: `ip < chunk.instructions.len()` — the block above leaves
+            // the iteration (`continue` or `return`) whenever it is not.
+            let instr = unsafe { chunk.instructions.get_unchecked(ip) };
             // Where we are, for whoever has to report an error. Two stores of a
             // register-resident u32; the alternative was threading a position
             // through every `?` in the match below.
@@ -2258,7 +2265,11 @@ impl<W: Write> VM<W> {
                     // Copy args from caller into callee arg registers
                     for (i, &reg) in arg_regs.iter().enumerate() {
                         let val = unsafe { self.value_stack.get_unchecked(base + reg as usize).clone() };
-                        unsafe { *self.value_stack.get_unchecked_mut(new_base + i) = val; }
+                        // The slot holds the Unit `resize_with` just put there:
+                        // written over, not assigned — an assignment dropped the
+                        // Unit through an out-of-line `drop_glue` call per
+                        // argument (2026-10-17).
+                        unsafe { std::ptr::write(self.value_stack.get_unchecked_mut(new_base + i), val); }
                     }
 
                     self.forget_destroyed_from(new_base);
@@ -2287,6 +2298,7 @@ impl<W: Write> VM<W> {
                     base = new_base;
                     ip = 0;
                     chunk_idx = func_idx as usize;
+                    chunk_ref = get_chunk(program, chunk_idx);
                 }
 
                 // TailCall: reuse current frame — no push/pop, no heap alloc
@@ -2332,6 +2344,7 @@ impl<W: Write> VM<W> {
 
                     ip = 0;
                     chunk_idx = func_idx as usize;
+                    chunk_ref = get_chunk(program, chunk_idx);
                 }
 
                 &Instruction::Return(src) => {
@@ -2393,9 +2406,12 @@ impl<W: Write> VM<W> {
                     base = caller.base as usize;
                     ip = caller.ip as usize;
                     chunk_idx = caller.chunk_idx as usize;
+                    chunk_ref = get_chunk(program, chunk_idx);
 
                     // Write return value into caller
-                    unsafe { *self.value_stack.get_unchecked_mut(base + return_reg as usize) = result; }
+                    // `put_reg`, as every other register write: the value it
+                    // replaces is dropped only if it owns memory.
+                    put_reg(unsafe { self.value_stack.get_unchecked_mut(base + return_reg as usize) }, result);
 
                     // Apply output param writeback (rare path)
                     if let Some(wbs) = wb_pending {
@@ -3603,7 +3619,11 @@ impl<W: Write> VM<W> {
                     // Copy explicit args into [0..num_args)
                     for (i, &reg) in arg_regs.iter().enumerate() {
                         let val = unsafe { self.value_stack.get_unchecked(base + reg as usize).clone() };
-                        unsafe { *self.value_stack.get_unchecked_mut(new_base + i) = val; }
+                        // The slot holds the Unit `resize_with` just put there:
+                        // written over, not assigned — an assignment dropped the
+                        // Unit through an out-of-line `drop_glue` call per
+                        // argument (2026-10-17).
+                        unsafe { std::ptr::write(self.value_stack.get_unchecked_mut(new_base + i), val); }
                     }
 
                     // Load upvalues into [num_params..num_params+k)
@@ -3640,6 +3660,7 @@ impl<W: Write> VM<W> {
                     base = new_base;
                     ip = 0;
                     chunk_idx = func_idx as usize;
+                    chunk_ref = get_chunk(program, chunk_idx);
                 }
 
                 // ── Stdlib builtin call ───────────────────────────────────────
