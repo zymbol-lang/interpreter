@@ -281,3 +281,35 @@ mod tests {
         assert_eq!(overflow_msg(9007199254740991, "+", 1), "integer overflow: 9007199254740991 + 1");
     }
 }
+
+/// `0x|n|`, `0b|n|`, `0o|n|`, `0d|n|` on an integer: the prefix and the digits
+/// of the value, `0x` and `0d` padded to four. A negative one carries its sign
+/// in front — `-0x00FF`, as Python's `hex(-255)` is `-0xff` (GLB-136, decided
+/// by the author 2026-10-16). The two Rust engines printed the two's complement
+/// of an `i64`, a width this model does not have, and zyjs put the sign inside
+/// the padding (`0x0-FF`).
+pub fn base_string(n: i64, radix: u32) -> String {
+    let sign = if n < 0 { "-" } else { "" };
+    let m = n.unsigned_abs();
+    match radix {
+        2 => format!("{sign}0b{m:b}"),
+        8 => format!("{sign}0o{m:o}"),
+        10 => format!("{sign}0d{m:04}"),
+        _ => format!("{sign}0x{m:04X}"),
+    }
+}
+
+#[cfg(test)]
+mod base_string_tests {
+    use super::base_string;
+
+    #[test]
+    fn signed_and_padded() {
+        assert_eq!(base_string(255, 16), "0x00FF");
+        assert_eq!(base_string(-255, 16), "-0x00FF");
+        assert_eq!(base_string(-1, 10), "-0d0001");
+        assert_eq!(base_string(-5, 2), "-0b101");
+        assert_eq!(base_string(8, 8), "0o10");
+        assert_eq!(base_string(0, 16), "0x0000");
+    }
+}

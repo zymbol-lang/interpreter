@@ -350,14 +350,15 @@ impl<W: Write> Interpreter<W> {
             }
 
             // Case 2: int → string (format integer in specified base)
+            // The sign in front of a negative one (GLB-136).
             Value::Int(n) => {
-                let formatted = match op.prefix {
-                    BasePrefix::Binary => format!("0b{:b}", n),
-                    BasePrefix::Octal => format!("0o{:o}", n),
-                    BasePrefix::Decimal => format!("0d{:04}", n),
-                    BasePrefix::Hex => format!("0x{:04X}", n),
+                let radix = match op.prefix {
+                    BasePrefix::Binary => 2,
+                    BasePrefix::Octal => 8,
+                    BasePrefix::Decimal => 10,
+                    BasePrefix::Hex => 16,
                 };
-                Ok(Value::String(formatted))
+                Ok(Value::String(zymbol_common::num::base_string(n, radix)))
             }
 
             // Case 3: text → char (parse string as number in base, create char)
