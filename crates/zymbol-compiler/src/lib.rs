@@ -5899,12 +5899,32 @@ fn eliminate_dead_code(
         }
     }
 
+    // A `LoadUnit` right before the `Return` that ends the frame does nothing
+    // the `Return` does not: the frame is let go entire in the same dispatch.
+    // They are the auto-free of the last use (v0.0.8), and in a small function
+    // they were most of what it ran — in `tak`, two of the five dispatches of
+    // the base case (2026-10-17). Never the register being returned, and
+    // never an output parameter's, which the auto-free does not touch.
+    for i in (0..n).rev() {
+        if let Instruction::LoadUnit(r) = &instructions[i] {
+            let mut j = i + 1;
+            while let Some(Instruction::LoadUnit(_)) = instructions.get(j) { j += 1; }
+            if let Some(Instruction::Return(ret)) = instructions.get(j) {
+                if ret != r {
+                    reachable[i] = false;
+                }
+            }
+        }
+    }
+
     // Quick exit: if everything is reachable, skip transformation
     if reachable.iter().all(|&r| r) {
         return (instructions, src, old_num_regs);
     }
 
     // --- Pass 2: build old-IP → new-IP mapping ---
+    // A dropped instruction maps to the next one kept, so a jump to it lands
+    // where it would have fallen through.
     let mut ip_map = vec![0u32; n + 1];
     let mut new_ip = 0u32;
     for i in 0..n {

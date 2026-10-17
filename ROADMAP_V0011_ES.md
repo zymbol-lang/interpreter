@@ -383,6 +383,13 @@ vez por elemento, se retiran. Una primera versión con un bucle de ocho instrucc
 destructor de un error de marco vacío—. Por el camino salió **`ZYJS-067`**, corregido: `"abc" $> (c -> ##!c)` daba un
 texto en zyjs y un array en Rust.
 
+**Sin `LoadUnit` antes de `Return`** (2026-10-17). El auto-liberado del último uso vaciaba los parámetros justo antes
+del `Return`, que suelta el marco entero en el mismo despacho: en `tak` eran dos de los cinco despachos del caso base.
+El optimizador final los quita (nunca el registro devuelto; los parámetros de salida no se auto-liberan). `tak` −8,4 %
+(de ×1,44 a ×1,32 de Python), `nqueens` −1,8 %. Al hacerlo salió **`ZYVM-030`**, corregido antes en su commit: un
+parámetro que nada lee no tenía registro, y la llamada escribía fuera del marco sin comprobar límites — también en la
+v0.0.10.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |
