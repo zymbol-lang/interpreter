@@ -2238,10 +2238,11 @@ impl<W: Write> VM<W> {
 
                     // At most MAX_ACTIVE_CALLS at once, the same number in
                     // the three engines (D7, GLB-133); `frame_stack` holds
-                    // `<main>` too. Before anything is touched.
-                    if self.frame_stack.len() > zymbol_common::depth::MAX_ACTIVE_CALLS
-                        || zymbol_common::depth::stack_nearly_spent()
-                    {
+                    // `<main>` too. Before anything is touched. No stack check
+                    // here: this call pushes a frame on the heap and does not
+                    // recurse in Rust — reading the thread's stack on every
+                    // call cost ~8 % of a loop of small calls (2026-10-17).
+                    if self.frame_stack.len() > zymbol_common::depth::MAX_ACTIVE_CALLS {
                         raise!(VmError::Generic(zymbol_common::depth::exceeded_message()));
                     }
 
@@ -3585,10 +3586,11 @@ impl<W: Write> VM<W> {
 
                     // At most MAX_ACTIVE_CALLS at once, the same number in
                     // the three engines (D7, GLB-133); `frame_stack` holds
-                    // `<main>` too. Before anything is touched.
-                    if self.frame_stack.len() > zymbol_common::depth::MAX_ACTIVE_CALLS
-                        || zymbol_common::depth::stack_nearly_spent()
-                    {
+                    // `<main>` too. Before anything is touched. No stack check
+                    // here: this call pushes a frame on the heap and does not
+                    // recurse in Rust — reading the thread's stack on every
+                    // call cost ~8 % of a loop of small calls (2026-10-17).
+                    if self.frame_stack.len() > zymbol_common::depth::MAX_ACTIVE_CALLS {
                         raise!(VmError::Generic(zymbol_common::depth::exceeded_message()));
                     }
 

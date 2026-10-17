@@ -354,6 +354,12 @@ cierres, e igual en los 16 programas largos. Lo peor era copiar un texto entero,
 PERF-05 a); cuánto queda en el `HEAD` no se ha medido, porque aquí no hay target musl. La decisión sigue siendo de la
 release.
 
+**Medición de la etapa 2, 2026-10-17** (`zyquality/bench/big/README.md` tiene las tablas). En la VM, frente a la rama
+al empezar la etapa y frente a la v0.0.10 publicada, en la misma sesión: los 16 programas largos dan lo mismo que
+Python y cuestan ×0,84 y ×0,79 en tiempo de CPU (bytes ×0,78); las operaciones de cada PERF bajan entre ×8 y ×50 y
+crecen lineales. La comprobación de profundidad de GLB-133 encarecía un ~8 % una llamada vacía: se quitó el seguro de
+pila de la llamada directa, que no recurre en Rust, y queda ~4 %, sin `perf` para atribuirlo.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |
