@@ -2247,30 +2247,27 @@ impl Compiler {
             return Ok(());
         }
 
-        // Compile as: r_i = 0; while r_i < n { body; r_i++ }
+        // Compile as: r_i = 0; do { body } while ++r_i <= n - 1 — `n` is at
+        // least 1, so the first pass needs no test.
         let r_i = ctx.alloc_temp()?;
         let r_end = ctx.alloc_temp()?;
-        let r_cmp = ctx.alloc_temp()?;
+        let r_fwd = ctx.alloc_temp()?;
         let r_one = ctx.alloc_temp()?;
         ctx.emit(Instruction::LoadInt(r_i, 0));
         ctx.emit(Instruction::LoadInt(r_end, n - 1));
         ctx.emit(Instruction::LoadInt(r_one, 1));
+        ctx.emit(Instruction::LoadBool(r_fwd, true));
 
         let pre_loop_hot = ctx.hot_vars.clone();
-        let loop_start = ctx.current_label();
+        let body_label = ctx.current_label();
         ctx.loop_stack.push(LoopCtx { break_patches: Vec::new(), continue_patches: Vec::new(), label: lp.label.clone(), try_depth: ctx.try_stack.len() });
-
-        ctx.emit(Instruction::CmpGt(r_cmp, r_i, r_end));
-        let exit_jump = ctx.emit(Instruction::JumpIf(r_cmp, 0));
 
         self.compile_block(&lp.body, ctx)?;
 
         let inc_label = ctx.current_label();
-        ctx.emit(Instruction::AddInt(r_i, r_i, r_one));
-        ctx.emit(Instruction::Jump(loop_start));
+        ctx.emit(Instruction::RangeStep(r_i, r_end, r_one, r_fwd, body_label));
 
         let loop_end = ctx.current_label();
-        ctx.patch_jump(exit_jump, loop_end);
 
         let lctx = ctx.loop_stack.pop().unwrap();
         for pos in lctx.break_patches { ctx.patch_jump(pos, loop_end); }
@@ -2445,7 +2442,7 @@ impl Compiler {
         };
 
         // Allocate registers: r_i (named iterator), r_cnt (hidden counter),
-        // r_end (inclusive bound), r_cmp, r_step, r_fwd.
+        // r_end (inclusive bound), r_step, r_fwd.
         // L24/MM-11 (tree-walker parity): the loop advances a HIDDEN counter and
         // copies it into the named variable at the top of each iteration — so
         // the leftover value after the loop is the last executed one (never the
@@ -2454,7 +2451,6 @@ impl Compiler {
         let (r_i, i_slot) = self.binding_target(iter_var, ctx)?;
         let r_cnt = ctx.alloc_temp()?;
         let r_end = ctx.alloc_temp()?;
-        let r_cmp = ctx.alloc_temp()?;
         let r_step = ctx.alloc_temp()?;
         let r_fwd = ctx.alloc_temp()?; // Bool: true = forward, false = reverse
 
@@ -2491,10 +2487,11 @@ impl Compiler {
         // Detect direction: r_fwd = (r_cnt <= r_end)  → Bool
         ctx.emit(Instruction::CmpLe(r_fwd, r_cnt, r_end));
 
-        // Loop header: check exit condition using conditional branches
-        // Range is INCLUSIVE: @ i:0..N → 0,1,...,N
+        // Range is INCLUSIVE and its direction is read from its bounds, so
+        // the first pass always runs — `start` is within `start..end` either
+        // way — and the only test is `RangeStep`'s, at the end of each pass.
         let pre_loop_hot = ctx.hot_vars.clone();
-        let loop_start = ctx.current_label();
+        let body_label = ctx.current_label();
 
         ctx.loop_stack.push(LoopCtx {
             break_patches: Vec::new(),
@@ -2502,23 +2499,6 @@ impl Compiler {
             label: lp.label.clone(),
             try_depth: ctx.try_stack.len(),
         });
-
-        // Exit check:
-        //   if r_fwd → exit when r_cnt > r_end
-        //   else     → exit when r_cnt < r_end
-        // JumpIfNot r_fwd, check_rev
-        let fwd_branch_patch = ctx.emit(Instruction::JumpIfNot(r_fwd, 0));
-        // Forward path: exit if r_cnt > r_end
-        ctx.emit(Instruction::CmpGt(r_cmp, r_cnt, r_end));
-        let fwd_exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
-        let skip_rev_patch = ctx.emit(Instruction::Jump(0)); // skip over reverse check
-        // Reverse path:
-        let check_rev_label = ctx.current_label();
-        ctx.patch_jump(fwd_branch_patch, check_rev_label);
-        ctx.emit(Instruction::CmpLt(r_cmp, r_cnt, r_end));
-        let rev_exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
-        let body_label = ctx.current_label();
-        ctx.patch_jump(skip_rev_patch, body_label);
 
         // Publish the counter into the named iterator variable (L24)
         ctx.emit(Instruction::CopyReg(r_i, r_cnt));
@@ -2531,24 +2511,11 @@ impl Compiler {
         // continue label = start of increment, so @> increments before re-checking
         let inc_label = ctx.current_label();
 
-        // Increment/decrement the hidden counter:
-        //   if r_fwd → r_cnt = r_cnt + r_step
-        //   else     → r_cnt = r_cnt - r_step
-        let inc_fwd_patch = ctx.emit(Instruction::JumpIfNot(r_fwd, 0));
-        ctx.emit(Instruction::AddInt(r_cnt, r_cnt, r_step));
-        let skip_sub_patch = ctx.emit(Instruction::Jump(0));
-        let do_sub_label = ctx.current_label();
-        ctx.patch_jump(inc_fwd_patch, do_sub_label);
-        ctx.emit(Instruction::SubInt(r_cnt, r_cnt, r_step));
-        let after_inc_label = ctx.current_label();
-        ctx.patch_jump(skip_sub_patch, after_inc_label);
-
-        // Back to loop_start
-        ctx.emit(Instruction::Jump(loop_start));
+        // Advance the hidden counter, up or down, and go round again while
+        // it is within the bound.
+        ctx.emit(Instruction::RangeStep(r_cnt, r_end, r_step, r_fwd, body_label));
 
         let loop_end = ctx.current_label();
-        ctx.patch_jump(fwd_exit_patch, loop_end);
-        ctx.patch_jump(rev_exit_patch, loop_end);
 
         let lctx = ctx.loop_stack.pop().unwrap();
         for pos in lctx.break_patches {
@@ -5869,7 +5836,8 @@ fn eliminate_dead_code(
             }
             // Conditional jumps: fall-through AND target
             Instruction::JumpIf(_, target) | Instruction::JumpIfNot(_, target)
-            | Instruction::JumpIfNotCond(_, target) => {
+            | Instruction::JumpIfNotCond(_, target)
+            | Instruction::RangeStep(_, _, _, _, target) => {
                 worklist.push(*target as usize);
                 worklist.push(ip + 1);
             }
@@ -5919,6 +5887,7 @@ fn eliminate_dead_code(
             Instruction::JumpIf(r, t)          => Instruction::JumpIf(r, remap(t)),
             Instruction::JumpIfNot(r, t)       => Instruction::JumpIfNot(r, remap(t)),
             Instruction::JumpIfNotCond(r, t)   => Instruction::JumpIfNotCond(r, remap(t)),
+            Instruction::RangeStep(c, e, s, f, t) => Instruction::RangeStep(c, e, s, f, remap(t)),
             Instruction::MatchInt(r, v, t)     => Instruction::MatchInt(r, v, remap(t)),
             Instruction::MatchRange(r, lo, hi, t) => Instruction::MatchRange(r, lo, hi, remap(t)),
             Instruction::MatchStr(r, s, t)     => Instruction::MatchStr(r, s, remap(t)),
@@ -6076,6 +6045,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::Return(r) | Instruction::Print(r)
             | Instruction::JumpIf(r, _) | Instruction::JumpIfNot(r, _)
             | Instruction::JumpIfNotCond(r, _) => upd(*r),
+            Instruction::RangeStep(c, e, s, f, _) => { upd(*c); upd(*e); upd(*s); upd(*f); }
             Instruction::MatchInt(r, _, _) | Instruction::MatchRange(r, _, _, _)
             | Instruction::MatchStr(r, _, _) | Instruction::MatchBool(r, _, _) => upd(*r),
             Instruction::Call(d, _, args) => { upd(*d); for &a in args { upd(a); } }

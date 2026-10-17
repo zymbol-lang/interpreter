@@ -126,6 +126,15 @@ pub enum Instruction {
     /// `JumpIfNot` read an Array as true where the tree-walker read it as
     /// false, and neither is an answer the language gives.
     JumpIfNotCond(Reg, Label),
+    /// The end of one pass of a counted loop (`@ i:a..b:s`, `@ n`), in one
+    /// dispatch (2026-10-17): (counter, end, step, forward, body). Moves the
+    /// hidden counter one step — up when `forward` is `#1`, down otherwise —
+    /// and jumps back to the body while it is still within the inclusive
+    /// bound; past it, falls through out of the loop. The step that would
+    /// leave the bound is never stored, so a range that ends at the largest
+    /// integer does not overflow on its way out (ZYVM-029). It replaced seven
+    /// dispatches per pass: the direction was asked twice on every one.
+    RangeStep(Reg, Reg, Reg, Reg, Label),
 
     // ── Functions ─────────────────────────────────────────────────────────
     Call(Reg, FuncIdx, Vec<Reg>),
