@@ -410,6 +410,17 @@ exacto, restando una variante sin `$^`: **648 instrucciones por llamada al compa
 identidad cuesta ~525 por elemento — una llamada con su retorno ronda las 400 en cualquier camino. Eso es lo que
 queda, y la opción B (un comparador puro evaluado sin llamada) es la que lo evita en `$^`.
 
+**Opción B: el comparador puro de `$^`, sin llamada** (decidida por el autor el 2026-10-17: sólo en la VM). Si el
+trozo del comparador es una secuencia recta de `Load*`, `CopyReg`, `x.campo`, `x[i]`, `x$#` y las seis comparaciones,
+sin escribir en sus parámetros, la VM lo evalúa sin marco (`call_pure`): el mismo merge sort de GLB-108, las mismas
+preguntas, la misma comprobación de profundidad, los mismos `steps` y `calls` de `--count`, y el error donde lo daría
+la llamada. Para que no puedan divergir, `ArrayGet`, `NamedTupleGet` y `ArrayLen` salieron a funciones que usan los
+dos caminos —eso solo mueve `matmul` un +1 %, reacomodo del código de `exec`—. Un comparador con bloque, con efectos o
+que reasigna un parámetro se sigue llamando. `sort_cmp_300k` −39 % frente al commit anterior: de ×1,13 a **×0,69** de
+Python. La primera versión sólo bajaba un 15 %: lo que costaba no era el marco sino escribir registros con el
+destructor del valor anterior y mover un `Result` del tamaño de `VmError` en cada comparación.
+`zyquality/corpus/collections/sort_comparador_puro.zy` sujeta el «igual».
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |
