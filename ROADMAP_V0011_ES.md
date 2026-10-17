@@ -374,6 +374,15 @@ instrucciones: `loop_mod` −34 %, `matmul` −24 %, `match_loop` −23 %, `sort
 Por el camino, **`ZYVM-029`**, corregido con ello: un bucle cuyo límite es 2^53−1 corría todas sus vueltas y abortaba
 al salir, porque el contador avanzaba antes de compararse con el límite.
 
+**`$>`, `$|` y `$<` sin reentrar en la VM** (2026-10-17, decidido por el autor). Una instrucción, `HofNext`, hace
+cada vuelta: recoge lo que devolvió la lambda, toma el elemento siguiente y le monta el marco a la lambda, que vuelve
+a ella con su `Return`. `ArrayMap`, `ArrayFilter` y `ArrayReduce`, que entraban en el bucle de la VM desde Rust una
+vez por elemento, se retiran. Una primera versión con un bucle de ocho instrucciones por elemento **costaba más**
+(`hof_chain` +52 %): la reentrada no era el coste; la llamada sí. Medido frente al commit anterior: `hof_chain`
+−3,5 % (×0,97 de Python), `sort_cmp_300k` −1,9 %, `fib_rec` −1,5 % —esto último por un `Return` que ya no llama al
+destructor de un error de marco vacío—. Por el camino salió **`ZYJS-067`**, corregido: `"abc" $> (c -> ##!c)` daba un
+texto en zyjs y un array en Rust.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |

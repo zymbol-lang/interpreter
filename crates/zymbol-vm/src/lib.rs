@@ -2383,6 +2383,10 @@ impl<W: Write> VM<W> {
                             (caller_reg, unsafe { self.value_stack.get_unchecked(base + param_idx).clone() })
                         }).collect::<Vec<_>>()
                     });
+                    // Moved out and dropped only when there is one: letting the
+                    // frame go out of scope called the drop glue of an empty
+                    // `Option<Box<_>>`, out of line, on every return (2026-10-17).
+                    if let Some(err) = frame.error { drop(err); }
 
                     // Take the return value (zeroes out callee register — OK since
                     // writeback was already collected above)
@@ -3605,9 +3609,11 @@ impl<W: Write> VM<W> {
                     let (dst, callee_reg) = (*dst, *callee_reg);
                     let callable = unsafe { self.value_stack.get_unchecked(base + callee_reg as usize).clone() };
 
-                    let (func_idx, upvalues): (FuncIdx, Vec<Value>) = match callable {
-                        Value::Function(idx, _) => (idx, Vec::new()),
-                        Value::Closure(idx, _, uvs) => (idx, uvs.as_ref().clone()),
+                    // The captures stay behind their `Rc`: cloning the Vec cost
+                    // an allocation on every call of a closure (2026-10-17).
+                    let (func_idx, upvalues): (FuncIdx, Option<Rc<Vec<Value>>>) = match callable {
+                        Value::Function(idx, _) => (idx, None),
+                        Value::Closure(idx, _, uvs) => (idx, Some(uvs)),
                         other => raise!(VmError::TypeError { expected: "Function", got: other.type_name().to_string() }),
                     };
 
@@ -3655,10 +3661,13 @@ impl<W: Write> VM<W> {
                     }
 
                     // Load upvalues into [num_params..num_params+k)
-                    for (i, uv) in upvalues.into_iter().enumerate() {
-                        let slot = new_base + num_params + i;
-                        if slot < new_base + num_regs {
-                            self.value_stack[slot] = uv;
+                    if let Some(uvs) = upvalues {
+                        for (i, uv) in uvs.iter().enumerate() {
+                            let slot = new_base + num_params + i;
+                            if slot < new_base + num_regs {
+                                // Over the Unit `resize_with` put there.
+                                unsafe { std::ptr::write(self.value_stack.get_unchecked_mut(slot), uv.clone()); }
+                            }
                         }
                     }
 
@@ -3791,100 +3800,123 @@ impl<W: Write> VM<W> {
                     };
                     wreg!(dst, result);
                 }
-                &Instruction::ArrayMap(dst, arr_reg, func_reg) => {
-                    let callable = rreg!(func_reg).clone();
-                    // The function before the array, as the tree-walker checks
-                    // them — so an empty array with no function is refused too;
-                    // it used to answer `[]` (step 3.5b).
+                // ── `$>`, `$|`, `$<` as a loop (2026-10-17) ────────────────────
+                &Instruction::HofItems(dst, coll_reg, func_reg, kind) => {
+                    // The callable, the arity of a reduce and then the collection,
+                    // as the tree-walker checks them — so an empty collection with
+                    // no function is refused too (step 3.5b), and a one-parameter
+                    // lambda is a mistake, not a fold (GLB-015 A).
+                    let callable = rreg!(func_reg);
                     if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
-                        raise!(VmError::TypeMsg("map requires lambda function".to_string()));
+                        raise!(VmError::TypeMsg(match kind {
+                            0 => "map requires lambda function",
+                            1 => "filter requires lambda function",
+                            _ => "reduce requires lambda function",
+                        }.to_string()));
                     }
-                    let original = rreg!(arr_reg).clone();
-                    let arr = match hof_items(&original) {
-                        Some(v) => v,
-                        None => raise!(VmError::TypeMsg(format!(
-                            "map requires array, tuple, string or dictionary, got {}",
-                            original.type_label()))),
-                    };
-                    let mut results = Vec::with_capacity(arr.len());
-                    let outcome: Result<(), VmError> = 'calls: {
-                        for elem in arr {
-                            match self.call_callable(callable.clone(), [elem], program) {
-                                Ok(r) => results.push(r),
-                                Err(e) => break 'calls Err(e),
+                    if kind == 2 {
+                        if let Value::Function(_, n) | Value::Closure(_, n, _) = callable {
+                            let n = *n;
+                            if n != 2 {
+                                raise!(VmError::Generic(format!(
+                                    "reduce lambda requires 2 parameters (accumulator, element), got {n}")));
                             }
                         }
-                        Ok(())
+                    }
+                    let items = match hof_items(rreg!(coll_reg)) {
+                        Some(v) => v,
+                        None => {
+                            let got = rreg!(coll_reg).type_label();
+                            raise!(VmError::TypeMsg(match kind {
+                                0 => format!("map requires array, tuple, string or dictionary, got {}", got),
+                                1 => format!("filter requires array, tuple, string or dictionary, got {}", got),
+                                _ => format!("reduce requires array, tuple, string or dictionary, got {}", got),
+                            }))
+                        }
                     };
-                    if let Err(e) = outcome { raise!(e); }
-                    wreg!(dst, hof_rebuild(&original, results));
+                    wreg!(dst, Value::Array(Rc::new(items)));
                 }
-                &Instruction::ArrayFilter(dst, arr_reg, func_reg) => {
-                    let callable = rreg!(func_reg).clone();
-                    // The function before the array, as the tree-walker checks
-                    // them — so an empty array with no function is refused too;
-                    // it used to answer `[]` (step 3.5b).
-                    if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
-                        raise!(VmError::TypeMsg("filter requires lambda function".to_string()));
-                    }
-                    let original = rreg!(arr_reg).clone();
-                    let arr = match hof_items(&original) {
-                        Some(v) => v,
-                        None => raise!(VmError::TypeMsg(format!(
-                            "filter requires array, tuple, string or dictionary, got {}",
-                            original.type_label()))),
+                &Instruction::HofRebuild(dst, coll_reg, res_reg) => {
+                    let results = match mem::replace(
+                        unsafe { self.value_stack.get_unchecked_mut(base + res_reg as usize) }, Value::Unit)
+                    {
+                        Value::Array(rc) => Rc::try_unwrap(rc).unwrap_or_else(|rc| rc.as_ref().clone()),
+                        _ => Vec::new(),
                     };
-                    let mut results = Vec::new();
-                    let outcome: Result<(), VmError> = 'calls: {
-                        for elem in arr {
-                            match self.call_callable(callable.clone(), [elem.clone()], program) {
-                                // A predicate answers a Bool, and no truthiness stands
-                                // in for one (GLB-080, as the sort comparator, GLB-024).
-                                Ok(Value::Bool(true)) => results.push(elem),
-                                Ok(Value::Bool(false)) => {}
-                                Ok(other) => break 'calls Err(VmError::TypeMsg(format!(
-                                    "filter lambda must return boolean, got {}", other.type_label()))),
-                                Err(e) => break 'calls Err(e),
-                            }
-                        }
-                        Ok(())
-                    };
-                    if let Err(e) = outcome { raise!(e); }
-                    wreg!(dst, hof_rebuild(&original, results));
+                    let rebuilt = hof_rebuild(rreg!(coll_reg), results);
+                    wreg!(dst, rebuilt);
                 }
-                &Instruction::ArrayReduce(dst, arr_reg, init_reg, func_reg) => {
-                    let callable = rreg!(func_reg).clone();
-                    if !matches!(callable, Value::Function(..) | Value::Closure(..)) {
-                        raise!(VmError::TypeMsg("reduce requires lambda function".to_string()));
-                    }
-                    // Before the array, as the tree-walker checks it: a one-
-                    // parameter lambda is a mistake, not a fold, and calling it
-                    // anyway answered the initial value (GLB-015 A).
-                    if let Value::Function(_, n) | Value::Closure(_, n, _) = &callable {
-                        if *n != 2 {
-                            raise!(VmError::Generic(format!(
-                                "reduce lambda requires 2 parameters (accumulator, element), got {n}")));
-                        }
-                    }
-                    let original = rreg!(arr_reg).clone();
-                    let arr = match hof_items(&original) {
-                        Some(v) => v,
-                        None => raise!(VmError::TypeMsg(format!(
-                            "reduce requires array, tuple, string or dictionary, got {}",
-                            original.type_label()))),
-                    };
-                    let mut acc = rreg!(init_reg).clone();
-                    let outcome: Result<(), VmError> = 'calls: {
-                        for elem in arr {
-                            match self.call_callable(callable.clone(), [mem::replace(&mut acc, Value::Unit), elem], program) {
-                                Ok(r) => acc = r,
-                                Err(e) => break 'calls Err(e),
+                &Instruction::HofNext(kind, items_reg, idx_reg, acc_reg, out_reg, keep_reg, func_reg) => {
+                    let idx = match rreg!(idx_reg) { Value::Int(n) => *n as usize, _ => 0 };
+                    // What the previous call answered.
+                    if idx > 0 {
+                        match kind {
+                            0 => {
+                                let out = mem::replace(
+                                    unsafe { self.value_stack.get_unchecked_mut(base + out_reg as usize) }, Value::Unit);
+                                if let Value::Array(rc) = unsafe { self.value_stack.get_unchecked_mut(base + acc_reg as usize) } {
+                                    zymbol_common::count::make_mut(rc).push(out);
+                                }
                             }
+                            1 => {
+                                // A predicate answers a Bool, and no truthiness
+                                // stands in for one (GLB-080).
+                                let keep = match rreg!(out_reg) {
+                                    Value::Bool(b) => *b,
+                                    other => {
+                                        let got = other.type_label();
+                                        raise!(VmError::TypeMsg(format!("filter lambda must return boolean, got {}", got)));
+                                    }
+                                };
+                                let elem = mem::replace(
+                                    unsafe { self.value_stack.get_unchecked_mut(base + keep_reg as usize) }, Value::Unit);
+                                if keep {
+                                    if let Value::Array(rc) = unsafe { self.value_stack.get_unchecked_mut(base + acc_reg as usize) } {
+                                        zymbol_common::count::make_mut(rc).push(elem);
+                                    }
+                                }
+                            }
+                            // The call wrote the new accumulator where it is.
+                            _ => {}
                         }
-                        Ok(())
+                    }
+                    let elem = match unsafe { self.value_stack.get_unchecked_mut(base + items_reg as usize) } {
+                        Value::Array(rc) if idx < rc.len() => {
+                            mem::replace(&mut zymbol_common::count::make_mut(rc)[idx], Value::Unit)
+                        }
+                        // Past the last item: on to the next instruction.
+                        _ => continue,
                     };
-                    if let Err(e) = outcome { raise!(e); }
-                    wreg!(dst, acc);
+                    wreg!(idx_reg, Value::Int(idx as i64 + 1));
+                    // `HofItems` checked it is a function or a closure.
+                    let (func_idx, upvalues) = match rreg!(func_reg) {
+                        Value::Closure(idx, _, uvs) => (*idx, Some(uvs.clone())),
+                        Value::Function(idx, _) => (*idx, None),
+                        _ => (FuncIdx::MAX, None),
+                    };
+                    // The callee returns HERE, to gather and go on.
+                    self.frame_stack.last_mut().unwrap().ip = (ip - 1) as u32;
+                    let entered = match kind {
+                        0 => self.enter_callable(program, func_idx, upvalues, [elem], out_reg),
+                        1 => {
+                            wreg!(keep_reg, elem.clone());
+                            self.enter_callable(program, func_idx, upvalues, [elem], out_reg)
+                        }
+                        _ => {
+                            let acc = mem::replace(
+                                unsafe { self.value_stack.get_unchecked_mut(base + acc_reg as usize) }, Value::Unit);
+                            self.enter_callable(program, func_idx, upvalues, [acc, elem], acc_reg)
+                        }
+                    };
+                    match entered {
+                        Ok((new_base, func_idx)) => {
+                            base = new_base;
+                            ip = 0;
+                            chunk_idx = func_idx as usize;
+                            chunk_ref = get_chunk(program, chunk_idx);
+                        }
+                        Err(e) => raise!(e),
+                    }
                 }
                 &Instruction::ArraySort(dst, arr_reg, ascending, func_reg) => {
                     let arr = match rreg!(arr_reg).clone() {
@@ -5027,6 +5059,60 @@ impl<W: Write> VM<W> {
     ///
     /// The arguments come as an array, not a `Vec`: every operator passes one or
     /// two, and a `Vec` was a heap allocation per element of the collection.
+    /// Push the frame of a call of function `func_idx` with `args`, moved in, its
+    /// result going to `dst` of the caller — which must already hold the ip to
+    /// come back to. Returns the new base and the callee. The checks are
+    /// `CallDynamic`'s, in its order and words, past the callable one that
+    /// `HofItems` made: the arity, the depth (GLB-133). Used by `HofNext`, so `$>`, `$|` and `$<` call their
+    /// lambda on the VM's frames instead of re-entering `exec`.
+    fn enter_callable<const N: usize>(
+        &mut self,
+        program: &CompiledProgram,
+        func_idx: FuncIdx,
+        upvalues: Option<Rc<Vec<Value>>>,
+        args: [Value; N],
+        dst: Reg,
+    ) -> Result<(usize, FuncIdx), VmError> {
+        let Some(chunk) = program.functions.get(func_idx as usize) else {
+            return Err(VmError::UndefinedFunction(func_idx));
+        };
+        let num_params = chunk.num_params as usize;
+        let num_regs = chunk.num_registers as usize;
+        if N != num_params {
+            return Err(VmError::Generic(format!(
+                "lambda expects {} arguments, got {}", num_params, N)));
+        }
+        if self.frame_stack.len() > zymbol_common::depth::MAX_ACTIVE_CALLS {
+            return Err(VmError::Generic(zymbol_common::depth::exceeded_message()));
+        }
+        let new_base = self.value_stack.len();
+        self.value_stack.resize_with(new_base + num_regs, || Value::Unit);
+        for (i, v) in args.into_iter().enumerate() {
+            // SAFETY: i < N == num_params <= num_regs, inside what was just resized.
+            unsafe { std::ptr::write(self.value_stack.get_unchecked_mut(new_base + i), v); }
+        }
+        if let Some(uvs) = upvalues {
+            for (i, uv) in uvs.iter().enumerate() {
+                let slot = new_base + num_params + i;
+                if slot < new_base + num_regs {
+                    unsafe { std::ptr::write(self.value_stack.get_unchecked_mut(slot), uv.clone()); }
+                }
+            }
+        }
+        self.forget_destroyed_from(new_base);
+        zymbol_common::count::call();
+        self.frame_stack.push(FrameInfo {
+            base: new_base as u32,
+            ip: 0,
+            chunk_idx: func_idx,
+            return_reg: dst,
+            catch_ip: u32::MAX,
+            error: None,
+            writeback: None,
+        });
+        Ok((new_base, func_idx))
+    }
+
     fn call_callable<const N: usize>(
         &mut self,
         callable: Value,

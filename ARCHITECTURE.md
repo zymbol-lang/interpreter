@@ -257,6 +257,7 @@ ones a reader meets first.
 | Tuples | `MakeTuple`, `MakeNamedTuple`, `NamedTupleGet` |
 | Control | `Jump`, `JumpIf`, `JumpIfNot`, `JumpIfNotCond` (the jump of a `?` condition, which refuses what is not a Bool), `RangeStep` (the end of a pass of a counted loop: step, test, jump back — one dispatch), `Call`, `TailCall`, `CallDynamic`, `Return` |
 | Closures | `MakeClosure`, `CallDynamic` |
+| Higher-order | `HofItems`, `HofNext` (one turn of `$>`/`$\|`/`$<`: calls the lambda on the VM's own frames, and the lambda returns to it), `HofRebuild` |
 | Data ops | `NumericEval`, `TypeOf`, `BaseConversion`, `RoundFloat`, `Format` |
 | I/O | `Print`, `PrintNewline` |
 | System | `BashExec`, `ExecuteBytecode` |
