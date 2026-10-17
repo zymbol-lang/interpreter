@@ -396,6 +396,13 @@ salida en cada llamada. Las tres van en línea o no se hacen. `fib_rec` −6,7 %
 Una prueba que no se quedó: copiar los escalares sin la llamada al `clone` derivado empeoraba (+0,5 a +1,2 %); con LTO
 ya estaba en línea donde importaba.
 
+**`$^` con comparador: probado y descartado** (2026-10-17). La otra mitad de lo decidido —ordenar sin reentrar— se
+construyó como `HofNext`: una instrucción `SortNext` con el estado del merge sort de GLB-108 en registros, pregunta por
+pregunta igual (la sonda con un comparador que imprime daba lo mismo en los tres motores). Costaba **más**:
+`sort_cmp_300k` +6,8 %. Leer y escribir siete registros de estado en cada comparación pesa más que volver a entrar en
+`exec`, donde el bucle de Rust tiene ese estado en registros de la CPU. Lo que acerca `$^` a Python es abaratar la
+llamada misma, no cambiar quién la hace.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |
