@@ -117,3 +117,20 @@ fn a_slice_keeps_its_bounds_adjacent_among_reused_temporaries() {
     };
     assert!(writes(lo) && writes(lo + 1), "both bounds are written, at lo and lo + 1");
 }
+
+/// ZYVM-030: dead-code elimination recounts a chunk's registers from the
+/// instructions that survive, and a parameter nothing reads appears in none of
+/// them. The frame came out shorter than the parameters, and the call wrote
+/// the arguments past its end without a bounds check.
+#[test]
+fn a_frame_holds_every_parameter_even_one_nothing_reads() {
+    let compiled = compile("f(a, b, c) {\n    <~ a\n}\n>> f(1, 2, 3) ¶\ng = (x, y) -> x\n>> g(1, 2) ¶");
+    assert!(!compiled.functions.is_empty());
+    for chunk in &compiled.functions {
+        assert!(
+            chunk.num_registers >= chunk.num_params,
+            "{}: {} registers for {} parameters",
+            chunk.name, chunk.num_registers, chunk.num_params
+        );
+    }
+}
