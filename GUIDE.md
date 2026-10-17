@@ -3926,11 +3926,12 @@ r6 = 7 |> (x -> x * factor)
 | `##Network` | Network errors |
 | `##DB` | Database errors (`std/db`) |
 | `##Time` | A date that does not exist, an unknown zone or unit (`std/time`) |
+| `##Depth` | More than 10 000 calls active at once (v0.0.11) — a tail call does not count |
 | `##_` | Generic catch-all |
 
 `##Div` to `##Type` come from the operation that fails. `##Parse` to `##Time` are
 also the kinds of the soft error values the standard modules return, tested with
-`$!`. These are the eleven kinds an engine produces; the parser accepts any name
+`$!`. `##Depth` comes from the call that would go one past the limit. These are the twelve kinds an engine produces; the parser accepts any name
 after `##`, and a name that is not one of them simply never matches.
 
 ```zymbol
