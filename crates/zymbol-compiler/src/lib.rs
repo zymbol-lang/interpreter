@@ -4693,11 +4693,7 @@ impl Compiler {
             ctx.emit(Instruction::StrSplitMap(dst, r_str, r_sep, r_fn));
             return Ok(dst);
         }
-        let r_arr = self.compile_expr(&cm.collection, ctx)?;
-        let r_fn  = self.compile_expr(&cm.lambda, ctx)?;
-        let dst   = ctx.alloc_temp()?;
-        ctx.emit(Instruction::ArrayMap(dst, r_arr, r_fn));
-        Ok(dst)
+        self.compile_hof_loop(0, &cm.collection, None, &cm.lambda, ctx)
     }
 
     fn compile_collection_filter(
@@ -4714,11 +4710,7 @@ impl Compiler {
             ctx.emit(Instruction::StrSplitFilter(dst, r_str, r_sep, r_fn));
             return Ok(dst);
         }
-        let r_arr = self.compile_expr(&cf.collection, ctx)?;
-        let r_fn  = self.compile_expr(&cf.lambda, ctx)?;
-        let dst   = ctx.alloc_temp()?;
-        ctx.emit(Instruction::ArrayFilter(dst, r_arr, r_fn));
-        Ok(dst)
+        self.compile_hof_loop(1, &cf.collection, None, &cf.lambda, ctx)
     }
 
     fn compile_collection_reduce(
@@ -4736,11 +4728,57 @@ impl Compiler {
             ctx.emit(Instruction::StrSplitReduce(dst, r_str, r_sep, r_init, r_fn));
             return Ok(dst);
         }
-        let r_arr  = self.compile_expr(&cr.collection, ctx)?;
-        let r_init = self.compile_expr(&cr.initial, ctx)?;
-        let r_fn   = self.compile_expr(&cr.lambda, ctx)?;
-        let dst    = ctx.alloc_temp()?;
-        ctx.emit(Instruction::ArrayReduce(dst, r_arr, r_init, r_fn));
+        self.compile_hof_loop(2, &cr.collection, Some(&cr.initial), &cr.lambda, ctx)
+    }
+
+    /// `$>` (kind 0), `$|` (1) and `$<` (2) on the VM's own frames: one
+    /// `HofNext` per element calls the lambda as `CallDynamic` would, and the
+    /// lambda's `Return` comes back to it. They used to be `ArrayMap`/
+    /// `ArrayFilter`/`ArrayReduce`, which re-entered the VM's loop from Rust
+    /// through `call_callable` for every element (2026-10-17). The operands are
+    /// evaluated in the same order as before — the collection, the initial
+    /// value, the lambda — and `HofItems` checks them in the same order and
+    /// words.
+    fn compile_hof_loop(
+        &mut self,
+        kind: u8,
+        collection: &Expr,
+        initial: Option<&Expr>,
+        lambda: &Expr,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let r_coll = self.compile_expr(collection, ctx)?;
+        let r_init = match initial {
+            Some(e) => Some(self.compile_expr(e, ctx)?),
+            None => None,
+        };
+        let r_fn = self.compile_expr(lambda, ctx)?;
+        let r_items = ctx.alloc_temp()?;
+        ctx.emit(Instruction::HofItems(r_items, r_coll, r_fn, kind));
+        let r_i = ctx.alloc_temp()?;
+        ctx.emit(Instruction::LoadInt(r_i, 0));
+        let r_out = ctx.alloc_temp()?;
+        let r_keep = ctx.alloc_temp()?;
+        // The results of `$>`/`$|`, or the accumulator of `$<`.
+        let r_acc = ctx.alloc_temp()?;
+        match r_init {
+            Some(init) => { ctx.emit(Instruction::CopyReg(r_acc, init)); }
+            None => { ctx.emit(Instruction::NewArray(r_acc)); }
+        }
+        // Runs once per item and once more past the last: each call returns to
+        // it, and it falls through when the items are done.
+        ctx.emit(Instruction::HofNext(kind, r_items, r_i, r_acc, r_out, r_keep, r_fn));
+        // Nothing of the loop outlives it in a register.
+        ctx.emit(Instruction::LoadUnit(r_out));
+        ctx.emit(Instruction::LoadUnit(r_keep));
+        ctx.emit(Instruction::LoadUnit(r_items));
+
+        let dst = ctx.alloc_temp()?;
+        if kind == 2 {
+            ctx.emit(Instruction::MoveReg(dst, r_acc));
+        } else {
+            ctx.emit(Instruction::HofRebuild(dst, r_coll, r_acc));
+        }
         Ok(dst)
     }
 
@@ -6051,6 +6089,8 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::Call(d, _, args) => { upd(*d); for &a in args { upd(a); } }
             Instruction::TailCall(_, args) => { for &a in args { upd(a); } }
             Instruction::CallDynamic(d, f, args) => { upd(*d); upd(*f); for &a in args { upd(a); } }
+            Instruction::HofItems(d, c, f, _) | Instruction::HofRebuild(d, c, f) => { upd(*d); upd(*c); upd(*f); }
+            Instruction::HofNext(_, a, b, c, d, e, f) => { upd(*a); upd(*b); upd(*c); upd(*d); upd(*e); upd(*f); }
             Instruction::MakeClosure(d, _, caps) => { upd(*d); for &c in caps { upd(c); } }
             Instruction::NewArray(d) => upd(*d),
             Instruction::ArrayPush(a, e) => { upd(*a); upd(*e); }
@@ -6077,8 +6117,6 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             | Instruction::CheckAlive(s, _) | Instruction::Revive(s) => upd(*s),
             Instruction::LoopBoundsCheck(a, b) | Instruction::NavStepCheck(a, b) => { upd(*a); upd(*b); }
             Instruction::DestructureAbsorb(d, s, _) => { upd(*d); upd(*s); }
-            Instruction::ArrayMap(d, a, f) | Instruction::ArrayFilter(d, a, f) => { upd(*d); upd(*a); upd(*f); }
-            Instruction::ArrayReduce(d, a, i, f) => { upd(*d); upd(*a); upd(*i); upd(*f); }
             Instruction::ArraySort(d, a, _, f) => { upd(*d); upd(*a); if *f != u16::MAX { upd(*f); } }
             Instruction::StrSplitCount(d, s, p) => { upd(*d); upd(*s); upd(*p); }
             Instruction::StrSplitMap(d, s, p, f) | Instruction::StrSplitFilter(d, s, p, f) => { upd(*d); upd(*s); upd(*p); upd(*f); }

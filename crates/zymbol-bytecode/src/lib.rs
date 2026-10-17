@@ -183,12 +183,22 @@ pub enum Instruction {
     /// the count, not an end.
     ArraySliceCount(Reg, Reg, Reg),
     StrSliceCount(Reg, Reg, Reg),
-    /// HOF: dst = arr.map(lambda_reg)
-    ArrayMap(Reg, Reg, Reg),
-    /// HOF: dst = arr.filter(lambda_reg)
-    ArrayFilter(Reg, Reg, Reg),
-    /// HOF: dst = arr.reduce(init_reg, lambda_reg)
-    ArrayReduce(Reg, Reg, Reg, Reg),
+    /// `$>`, `$|` and `$<` run on the VM's own frames instead of re-entering
+    /// its loop from Rust for every element, as `ArrayMap`/`ArrayFilter`/
+    /// `ArrayReduce` did (2026-10-17). (dst, collection, callable, kind — 0
+    /// map, 1 filter, 2 reduce): checks the callable and the collection, in
+    /// the order and the words those used, and writes the items to walk as an
+    /// array.
+    HofItems(Reg, Reg, Reg, u8),
+    /// One turn of `$>`/`$|`/`$<`, in one dispatch: (kind, items, idx, acc,
+    /// out, keep, callable). Gathers what the previous call returned (into the
+    /// results, or the kept element, or the accumulator), and either calls the
+    /// lambda on the next item — leaving ITSELF as the place to return to, so
+    /// the callee's `Return` runs it again — or, past the last item, falls
+    /// through to the next instruction.
+    HofNext(u8, Reg, Reg, Reg, Reg, Reg, Reg),
+    /// (dst, collection walked, results): the results in the collection's shape.
+    HofRebuild(Reg, Reg, Reg),
     /// Fused: dst = (str $/ sep)$#  — count parts, zero Vec<Value> (via intrinsics::split::count)
     StrSplitCount(Reg, Reg, Reg),
     /// Fused: dst = (str $/ sep) $> fn  — no intermediate Vec<Value>
