@@ -1227,6 +1227,42 @@ fn truncate_regs(stack: &mut Vec<Value>, len: usize) {
     unsafe { stack.set_len(len) };
 }
 
+/// Grow the register stack to `len` with `Unit`, kept inline: `resize_with`
+/// was an out-of-line call once per call (2026-10-17). Never shrinks.
+#[inline(always)]
+fn grow_regs(stack: &mut Vec<Value>, len: usize) {
+    let old = stack.len();
+    if len <= old {
+        return;
+    }
+    stack.reserve(len - old);
+    // SAFETY: `reserve` made room for `len` values; every slot between the old
+    // length and the new one is written before the length covers it.
+    unsafe {
+        let p = stack.as_mut_ptr();
+        for i in old..len {
+            std::ptr::write(p.add(i), Value::Unit);
+        }
+        stack.set_len(len);
+    }
+}
+
+/// `Vec::push` for a frame, kept inline. The standard one was called out of
+/// line from inside `exec`, once per call (2026-10-17).
+#[inline(always)]
+fn push_frame(stack: &mut Vec<FrameInfo>, frame: FrameInfo) {
+    if stack.len() == stack.capacity() {
+        stack.reserve(1);
+    }
+    let len = stack.len();
+    // SAFETY: there is room for one more, reserved just above, and the slot at
+    // `len` is past the initialised part, so nothing is overwritten.
+    unsafe {
+        std::ptr::write(stack.as_mut_ptr().add(len), frame);
+        stack.set_len(len + 1);
+    }
+}
+
 #[inline]
 fn get_chunk(program: &CompiledProgram, chunk_idx: usize) -> &Chunk {
     // chunk_idx == usize::MAX OR u32::MAX as usize both indicate the main chunk
@@ -2283,7 +2319,7 @@ impl<W: Write> VM<W> {
                     // Extend flat stack with Unit (single vectorizable loop), then
                     // overwrite the arg slots with the actual arg values via unsafe
                     // indexed write (no bounds check, no double capacity check).
-                    self.value_stack.resize_with(new_base + num_regs, || Value::Unit);
+                    grow_regs(&mut self.value_stack, new_base + num_regs);
 
                     // Copy args from caller into callee arg registers
                     for (i, &reg) in arg_regs.iter().enumerate() {
@@ -2296,26 +2332,34 @@ impl<W: Write> VM<W> {
                     }
 
                     self.forget_destroyed_from(new_base);
-                    let wb = mem::take(&mut self.pending_output_writeback);
-                    // An output argument is LENT to its parameter (GLB-117):
-                    // the copy above made two owners of the collection for as
-                    // long as the call lasts, and the first edit inside the
-                    // function copied all of it. The caller's register lets go,
-                    // after every argument has been read — `g(d<~, d)` still
-                    // hands the second one what `d` held. It gets the value
-                    // back when the frame returns or is unwound.
-                    for &(_, caller_reg) in &wb {
-                        put_reg(&mut self.value_stack[base + caller_reg as usize], Value::Unit);
-                    }
+                    // Taken only when there is one: `mem::take` built and
+                    // dropped an empty `Vec` on every call (2026-10-17).
+                    let writeback = if self.pending_output_writeback.is_empty() {
+                        None
+                    } else {
+                        let wb = mem::take(&mut self.pending_output_writeback);
+                        // An output argument is LENT to its parameter (GLB-117):
+                        // the copy above made two owners of the collection for
+                        // as long as the call lasts, and the first edit inside
+                        // the function copied all of it. The caller's register
+                        // lets go, after every argument has been read —
+                        // `g(d<~, d)` still hands the second one what `d` held.
+                        // It gets the value back when the frame returns or is
+                        // unwound.
+                        for &(_, caller_reg) in &wb {
+                            put_reg(&mut self.value_stack[base + caller_reg as usize], Value::Unit);
+                        }
+                        Some(Box::new(wb))
+                    };
                     zymbol_common::count::call();
-                    self.frame_stack.push(FrameInfo {
+                    push_frame(&mut self.frame_stack, FrameInfo {
                         base: new_base as u32,
                         ip: 0,
                         chunk_idx: func_idx,
                         return_reg: dst,
                         catch_ip: u32::MAX,
                         error: None,
-                        writeback: if wb.is_empty() { None } else { Some(Box::new(wb)) },
+                        writeback,
                     });
 
                     base = new_base;
@@ -3648,7 +3692,7 @@ impl<W: Write> VM<W> {
                     self.frame_stack.last_mut().unwrap().ip = ip as u32;
 
                     let new_base = self.value_stack.len();
-                    self.value_stack.resize_with(new_base + num_regs, || Value::Unit);
+                    grow_regs(&mut self.value_stack, new_base + num_regs);
 
                     // Copy explicit args into [0..num_args)
                     for (i, &reg) in arg_regs.iter().enumerate() {
@@ -3672,26 +3716,34 @@ impl<W: Write> VM<W> {
                     }
 
                     self.forget_destroyed_from(new_base);
-                    let wb = mem::take(&mut self.pending_output_writeback);
-                    // An output argument is LENT to its parameter (GLB-117):
-                    // the copy above made two owners of the collection for as
-                    // long as the call lasts, and the first edit inside the
-                    // function copied all of it. The caller's register lets go,
-                    // after every argument has been read — `g(d<~, d)` still
-                    // hands the second one what `d` held. It gets the value
-                    // back when the frame returns or is unwound.
-                    for &(_, caller_reg) in &wb {
-                        put_reg(&mut self.value_stack[base + caller_reg as usize], Value::Unit);
-                    }
+                    // Taken only when there is one: `mem::take` built and
+                    // dropped an empty `Vec` on every call (2026-10-17).
+                    let writeback = if self.pending_output_writeback.is_empty() {
+                        None
+                    } else {
+                        let wb = mem::take(&mut self.pending_output_writeback);
+                        // An output argument is LENT to its parameter (GLB-117):
+                        // the copy above made two owners of the collection for
+                        // as long as the call lasts, and the first edit inside
+                        // the function copied all of it. The caller's register
+                        // lets go, after every argument has been read —
+                        // `g(d<~, d)` still hands the second one what `d` held.
+                        // It gets the value back when the frame returns or is
+                        // unwound.
+                        for &(_, caller_reg) in &wb {
+                            put_reg(&mut self.value_stack[base + caller_reg as usize], Value::Unit);
+                        }
+                        Some(Box::new(wb))
+                    };
                     zymbol_common::count::call();
-                    self.frame_stack.push(FrameInfo {
+                    push_frame(&mut self.frame_stack, FrameInfo {
                         base: new_base as u32,
                         ip: 0,
                         chunk_idx: func_idx,
                         return_reg: dst,
                         catch_ip: u32::MAX,
                         error: None,
-                        writeback: if wb.is_empty() { None } else { Some(Box::new(wb)) },
+                        writeback,
                     });
 
                     base = new_base;
@@ -5086,7 +5138,7 @@ impl<W: Write> VM<W> {
             return Err(VmError::Generic(zymbol_common::depth::exceeded_message()));
         }
         let new_base = self.value_stack.len();
-        self.value_stack.resize_with(new_base + num_regs, || Value::Unit);
+        grow_regs(&mut self.value_stack, new_base + num_regs);
         for (i, v) in args.into_iter().enumerate() {
             // SAFETY: i < N == num_params <= num_regs, inside what was just resized.
             unsafe { std::ptr::write(self.value_stack.get_unchecked_mut(new_base + i), v); }
@@ -5101,7 +5153,7 @@ impl<W: Write> VM<W> {
         }
         self.forget_destroyed_from(new_base);
         zymbol_common::count::call();
-        self.frame_stack.push(FrameInfo {
+        push_frame(&mut self.frame_stack, FrameInfo {
             base: new_base as u32,
             ip: 0,
             chunk_idx: func_idx,
@@ -5147,7 +5199,7 @@ impl<W: Write> VM<W> {
 
         let floor = self.frame_stack.len();
         let new_base = self.value_stack.len();
-        self.value_stack.resize_with(new_base + num_regs, || Value::Unit);
+        grow_regs(&mut self.value_stack, new_base + num_regs);
         for (i, v) in args.into_iter().enumerate() {
             if i < num_regs { self.value_stack[new_base + i] = v; }
         }
@@ -5159,7 +5211,7 @@ impl<W: Write> VM<W> {
         }
         self.forget_destroyed_from(new_base);
         zymbol_common::count::call();
-                    self.frame_stack.push(FrameInfo {
+        push_frame(&mut self.frame_stack, FrameInfo {
             base: new_base as u32,
             ip: 0,
             chunk_idx: func_idx,

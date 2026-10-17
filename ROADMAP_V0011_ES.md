@@ -390,6 +390,12 @@ El optimizador final los quita (nunca el registro devuelto; los parámetros de s
 parámetro que nada lee no tenía registro, y la llamada escribía fuera del marco sin comprobar límites — también en la
 v0.0.10.
 
+**La llamada, sin tres llamadas fuera de línea** (2026-10-17). Montar un marco hacía `Vec::push` del marco y
+`resize_with` de sus registros fuera de línea, y un `mem::take` que creaba y soltaba un `Vec` vacío de parámetros de
+salida en cada llamada. Las tres van en línea o no se hacen. `fib_rec` −6,7 %, `tak` −3,2 %, `hof_chain` −1,2 %.
+Una prueba que no se quedó: copiar los escalares sin la llamada al `clone` derivado empeoraba (+0,5 a +1,2 %); con LTO
+ya estaba en línea donde importaba.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |
