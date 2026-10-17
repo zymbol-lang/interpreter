@@ -419,7 +419,7 @@ impl FunctionCtx {
         let old_num_registers = self.next_reg;
         self.emit(Instruction::Halt);
         let (instructions, src, num_registers) =
-            eliminate_dead_code(self.instructions, self.src, old_num_registers);
+            eliminate_dead_code(self.instructions, self.src, old_num_registers, num_params);
         Chunk {
             name: self.name,
             instructions,
@@ -5855,6 +5855,7 @@ fn eliminate_dead_code(
     instructions: Vec<Instruction>,
     src: Vec<SrcPos>,
     old_num_regs: u16,
+    num_params: u16,
 ) -> (Vec<Instruction>, Vec<SrcPos>, u16) {
     let n = instructions.len();
     if n == 0 { return (instructions, src, old_num_regs); }
@@ -5945,7 +5946,10 @@ fn eliminate_dead_code(
 
     // --- Pass 4: recalculate num_registers from surviving instructions ---
     let max_reg = max_reg_used(&new_instructions);
-    let num_registers = max_reg.map(|r| r + 1).unwrap_or(0).max(old_num_regs.min(1));
+    // Never fewer than the parameters: a call writes every argument into the
+    // frame without a bounds check, and a parameter no instruction reads is
+    // still written (ZYVM-030).
+    let num_registers = max_reg.map(|r| r + 1).unwrap_or(0).max(old_num_regs.min(1)).max(num_params);
 
     (new_instructions, new_src, num_registers)
 }
