@@ -403,6 +403,13 @@ pregunta igual (la sonda con un comparador que imprime daba lo mismo en los tres
 `exec`, donde el bucle de Rust tiene ese estado en registros de la CPU. Lo que acerca `$^` a Python es abaratar la
 llamada misma, no cambiar quién la hace.
 
+**`call_callable` más barato (opción A, 2026-10-17).** Escribía los argumentos con una asignación —comprobación de
+límites y destructor del `Unit` que había— y los operadores le pasaban un clon del invocable en cada llamada. Ahora
+`ptr::write`, como `Call`, y el invocable prestado. `sort_cmp_300k` −9,8 % (de ×1,25 a ×1,13 de Python). Medido
+exacto, restando una variante sin `$^`: **648 instrucciones por llamada al comparador**, y con `HofNext` una lambda
+identidad cuesta ~525 por elemento — una llamada con su retorno ronda las 400 en cualquier camino. Eso es lo que
+queda, y la opción B (un comparador puro evaluado sin llamada) es la que lo evita en `$^`.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |

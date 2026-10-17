@@ -3199,7 +3199,7 @@ impl<W: Write> VM<W> {
                     let outcome: Result<(), VmError> = 'calls: {
                         for part in parts {
                             let v = Value::String(ZyStr::new(part));
-                            match self.call_callable(callable.clone(), [v], program) {
+                            match self.call_callable(&callable, [v], program) {
                                 Ok(r) => results.push(r),
                                 Err(e) => break 'calls Err(e),
                             }
@@ -3236,7 +3236,7 @@ impl<W: Write> VM<W> {
                     let outcome: Result<(), VmError> = 'calls: {
                         for part in parts {
                             let v = Value::String(ZyStr::new(part));
-                            match self.call_callable(callable.clone(), [v.clone()], program) {
+                            match self.call_callable(&callable, [v.clone()], program) {
                                 // A predicate answers a Bool, and no truthiness stands
                                 // in for one (GLB-080, as the sort comparator, GLB-024).
                                 Ok(Value::Bool(true)) => results.push(v),
@@ -3278,7 +3278,7 @@ impl<W: Write> VM<W> {
                     let outcome: Result<(), VmError> = 'calls: {
                         for part in parts {
                             let elem = Value::String(ZyStr::new(part));
-                            match self.call_callable(callable.clone(), [mem::replace(&mut acc, Value::Unit), elem], program) {
+                            match self.call_callable(&callable, [mem::replace(&mut acc, Value::Unit), elem], program) {
                                 Ok(r) => acc = r,
                                 Err(e) => break 'calls Err(e),
                             }
@@ -4006,7 +4006,7 @@ impl<W: Write> VM<W> {
                                         let mut says = [false; 2];
                                         for (k, (x, y)) in [(i, j), (j, i)].into_iter().enumerate() {
                                             says[k] = match self.call_callable(
-                                                callable.clone(),
+                                                &callable,
                                                 [src[x].clone(), src[y].clone()],
                                                 program,
                                             ) {
@@ -5167,13 +5167,15 @@ impl<W: Write> VM<W> {
 
     fn call_callable<const N: usize>(
         &mut self,
-        callable: Value,
+        callable: &Value,
         args: [Value; N],
         program: &CompiledProgram,
     ) -> Result<Value, VmError> {
+        // Borrowed: the operators that call here hold the callable in a local
+        // and used to clone it for every element or comparison (2026-10-17).
         let (func_idx, upvalues) = match callable {
-            Value::Function(idx, _) => (idx, None),
-            Value::Closure(idx, _, upvalues) => (idx, Some(upvalues)),
+            Value::Function(idx, _) => (*idx, None),
+            Value::Closure(idx, _, upvalues) => (*idx, Some(upvalues)),
             other => return Err(VmError::TypeError { expected: "Function", got: other.type_name().to_string() }),
         };
         let Some(chunk) = program.functions.get(func_idx as usize) else {
@@ -5200,13 +5202,22 @@ impl<W: Write> VM<W> {
         let floor = self.frame_stack.len();
         let new_base = self.value_stack.len();
         grow_regs(&mut self.value_stack, new_base + num_regs);
+        // Written over the `Unit` that `grow_regs` just put there, as `Call`
+        // writes them: the assignment ran the drop glue of that `Unit`, out of
+        // line, behind a bounds check — a fifth of `$^` with a comparator
+        // (2026-10-17).
         for (i, v) in args.into_iter().enumerate() {
-            if i < num_regs { self.value_stack[new_base + i] = v; }
+            // SAFETY: i < N == num_params <= num_regs (a chunk never has fewer
+            // registers than parameters, ZYVM-030), inside what was just grown.
+            unsafe { std::ptr::write(self.value_stack.get_unchecked_mut(new_base + i), v); }
         }
         if let Some(upvalues) = upvalues {
             for (i, uv) in upvalues.iter().enumerate() {
                 let slot = num_params + i;
-                if slot < num_regs { self.value_stack[new_base + slot] = uv.clone(); }
+                if slot < num_regs {
+                    // SAFETY: slot < num_regs, inside what was just grown.
+                    unsafe { std::ptr::write(self.value_stack.get_unchecked_mut(new_base + slot), uv.clone()); }
+                }
             }
         }
         self.forget_destroyed_from(new_base);
