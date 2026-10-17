@@ -2299,9 +2299,12 @@ impl Compiler {
         let r_is_times = ctx.alloc_temp()?;
         let r_i = ctx.alloc_temp()?;
         let r_cmp = ctx.alloc_temp()?;
+        let r_zero = ctx.alloc_temp()?;
+        let r_cond_val = ctx.alloc_temp()?;
         ctx.emit(Instruction::CopyReg(r_n, r_first));
         ctx.emit(Instruction::IsInt(r_is_times, r_n));
         ctx.emit(Instruction::LoadInt(r_i, 0));
+        ctx.emit(Instruction::LoadInt(r_zero, 0));
 
         let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
@@ -2317,10 +2320,24 @@ impl Compiler {
         // that is neither a count nor a condition raises here rather than being
         // read through truthiness — this is also what catches it on the first
         // pass, since a non-Int specifier always arrives down this path.
+        //
+        // The first pass tests the value already evaluated to tell the two
+        // kinds apart: evaluating the specifier again ran its calls one extra
+        // time — `@ s() && c < 2 { … }` called `s` four times where it is
+        // checked three (GLB-135). `r_i` counts the passes on this path too.
         let while_label = ctx.current_label();
+        ctx.emit(Instruction::CmpEq(r_cmp, r_i, r_zero));
+        let not_first = ctx.emit_jump_if_not_placeholder(r_cmp);
+        ctx.emit(Instruction::CopyReg(r_cond_val, r_n));
+        let to_check = ctx.emit(Instruction::Jump(0));
+        let eval_label = ctx.current_label();
         let r_cond = self.compile_expr(cond_expr, ctx)?;
+        ctx.emit(Instruction::CopyReg(r_cond_val, r_cond));
+        let check_label = ctx.current_label();
+        ctx.patch_jump(not_first, eval_label);
+        ctx.patch_jump(to_check, check_label);
         let r_checked = ctx.alloc_temp()?;
-        ctx.emit(Instruction::AsLoopCond(r_checked, r_cond));
+        ctx.emit(Instruction::AsLoopCond(r_checked, r_cond_val));
         let exit_while = ctx.emit(Instruction::JumpIfNot(r_checked, 0));
 
         let body_label = ctx.current_label();
