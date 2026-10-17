@@ -166,8 +166,13 @@ de ZYVM-022), `cargo test` 1 065 pasan y 0 fallan, `zyddt premises` 29 premisas 
 
 Lo que **no** está hecho:
 
-- **El sondeo de las cinco zonas.** Sigue pendiente. El cambio se subió a la rama con la puerta en
-  verde y sin él; hay que hacerlo antes de la release.
+- ~~**El sondeo de las cinco zonas.**~~ **Hecho el 2026-10-16**, después de la etapa 2. Cada zona es un programa
+  con operandos que imprimen, en los tres motores y con `ZYMBOL_POISON_TEMPS=1`, y queda en el corpus
+  (`zyquality/corpus/sondeo_v0011/`). Encontró y se corrigieron: `GLB-135` (la condición de `@ cond` se evaluaba
+  una vez de más en los dos motores de Rust), `ZYJS-063` (`()` era un valor en zyjs), `ZYJS-064` y `ZYJS-065`
+  (listas de patrones anidadas y una comparación evaluada dos veces) y `ZYJS-066` (un `_err` de más en un `:!`
+  anidado). Dejó dos preguntas para el autor: el formato en base de un entero negativo (`0x|-1|`) y qué hace una
+  línea que empieza por una edición después de un `>>` sin `¶`.
 - **D1, D2 y D3** se dejaron en su opción conservadora, que no cambia nada: los goldens los sigue
   grabando `zytw`, el REPL sigue en el tree-walker, `--vm` se conserva.
 - **Los documentos de `web/`** (`install.md`, `write-zymbol/SKILL.md`) llevan sello `0.0.10` y
