@@ -4266,15 +4266,9 @@ impl<W: Write> VM<W> {
                             Value::String(ZyStr::new(s))
                         }
                         // Int → String (format integer in specified base)
-                        Value::Int(n) => {
-                            let s = match radix {
-                                2  => format!("0b{:b}", n),
-                                8  => format!("0o{:o}", n),
-                                10 => format!("0d{:04}", n),
-                                _  => format!("0x{:04X}", n),
-                            };
-                            Value::String(ZyStr::new(s))
-                        }
+                        // The sign in front of a negative one (GLB-136).
+                        Value::Int(n) => Value::String(ZyStr::new(
+                            zymbol_common::num::base_string(n, radix as u32))),
                         // String → Char (parse in given base, then create char)
                         Value::String(s) => {
                             let stripped = s.as_ref()
