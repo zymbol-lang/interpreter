@@ -2150,7 +2150,7 @@ impl<W: Write> VM<W> {
                 }
                 &Instruction::StrLen(dst, src) => {
                     let n = match rreg!(src) {
-                        Value::String(s)      => if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 },
+                        Value::String(s)      => s.char_len() as i64,  // counted once and kept (PERF-05 b)
                         Value::Array(arr)     => arr.len() as i64,
                         other => raise!(VmError::TypeMsg(format!("cannot get length of {} - only arrays, tuples, and strings have length", other.type_label()))),
                     };
@@ -2559,14 +2559,19 @@ impl<W: Write> VM<W> {
                             fields[i as usize].clone()
                         }
                         Value::String(s) => {
-                            // Single-pass: find the i-th char without collecting Vec<char>
-                            let char_count = s.chars().count();
+                            // The count is kept by the text (PERF-05 b); an ASCII
+                            // text is read at its byte, any other walked to it.
+                            let char_count = s.char_len();
                             let i = if idx == 0 { raise!(VmError::IndexZero);
                             } else if idx < 0 { char_count as i64 + idx } else { idx - 1 };
                             if i < 0 || i as usize >= char_count {
                                 raise!(VmError::IndexOutOfBounds { index: idx, length: char_count , container: "string" });
                             }
-                            let ch = s.chars().nth(i as usize).unwrap();
+                            let ch = if s.is_ascii_text() {
+                                s.as_bytes()[i as usize] as char
+                            } else {
+                                s.chars().nth(i as usize).unwrap()
+                            };
                             Value::Char(ch)
                         }
                         other => raise!(VmError::TypeMsg(format!(
@@ -2682,7 +2687,7 @@ impl<W: Write> VM<W> {
                 &Instruction::ArrayLen(dst, src) => {
                     let n = match self.reg_get(src) {
                         Value::Array(arr) => arr.len() as i64,
-                        Value::String(s) => if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 },
+                        Value::String(s) => s.char_len() as i64,  // counted once and kept (PERF-05 b)
                         Value::Tuple(items) => items.len() as i64,
                         Value::NamedTuple(fields) => fields.len() as i64,
                         other => raise!(VmError::TypeMsg(format!("cannot get length of {} - only arrays, tuples, and strings have length", other.type_label()))),
@@ -3239,7 +3244,7 @@ impl<W: Write> VM<W> {
                     // to clamp with `.max(0).min(len).max(lo)` and had a byte
                     // fast path that could not reverse.
                     let result = match &self.value_stack[base + str_reg as usize] {
-                        Value::String(s) => match str_slice(s.as_str(), lo_val, hi_val) {
+                        Value::String(s) => match str_slice(s, lo_val, hi_val) {
                             Ok(r) => r,
                             Err(e) => raise!(e),
                         },
@@ -3263,7 +3268,7 @@ impl<W: Write> VM<W> {
                             let first = f.first().map(|(k, _)| k.clone());
                             raise!(VmError::TypeMsg(dict_not_positional("d$[a..b]", first.as_deref())));
                         }
-                        Value::String(st) => match str_slice_count(st.as_str(), lo, n) {
+                        Value::String(st) => match str_slice_count(st, lo, n) {
                             Ok(r) => Value::String(ZyStr::new(r)),
                             Err(e) => raise!(e),
                         },
@@ -3275,7 +3280,7 @@ impl<W: Write> VM<W> {
                     let lo = match self.as_int_for(lo_reg, "slice start") { Ok(v) => v, Err(e) => raise!(e) };
                     let n  = match self.as_int_for(lo_reg + 1, "slice count") { Ok(v) => v, Err(e) => raise!(e) };
                     let result = match &self.value_stack[base + str_reg as usize] {
-                        Value::String(s) => match str_slice_count(s.as_str(), lo, n) {
+                        Value::String(s) => match str_slice_count(s, lo, n) {
                             Ok(r) => r,
                             Err(e) => raise!(e),
                         },
@@ -3755,7 +3760,7 @@ impl<W: Write> VM<W> {
                         // known at compile time — a parameter — sliced
                         // backwards to nothing and past its end in silence
                         // (ZYVM-026).
-                        Value::String(rc_s) => match str_slice(rc_s.as_str(), lo, hi) {
+                        Value::String(rc_s) => match str_slice(rc_s, lo, hi) {
                             Ok(r) => Value::String(ZyStr::new(r)),
                             Err(e) => raise!(e),
                         },
@@ -5200,20 +5205,28 @@ fn count_span(lo: i64, n: i64, len: usize) -> Result<(usize, usize), VmError> {
 ///
 /// Borrowed and then copied, the piece and never the text: it used to collect
 /// the whole text into a `Vec<char>` to cut it (GLB-130).
-fn str_slice(s: &str, lo: i64, hi: i64) -> Result<String, VmError> {
-    use zymbol_common::text::{char_len, char_range};
-    Ok(match slice_span(lo, hi, char_len(s))? {
-        SliceSpan::Up(a, b) => char_range(s, a, b).to_string(),
+fn str_slice(s: &ZyStr, lo: i64, hi: i64) -> Result<String, VmError> {
+    Ok(match slice_span(lo, hi, s.char_len())? {
+        SliceSpan::Up(a, b) => zy_char_range(s, a, b).to_string(),
         // Positions `a` down to `b`, 1-based: the range [b, a] read backwards.
-        SliceSpan::Down(a, b) => char_range(s, (b - 1) as usize, a as usize).chars().rev().collect(),
+        SliceSpan::Down(a, b) => zy_char_range(s, (b - 1) as usize, a as usize).chars().rev().collect(),
     })
 }
 
 /// `s$[lo:n]` on a text, by the same rule as a collection's (`count_span`).
-fn str_slice_count(s: &str, lo: i64, n: i64) -> Result<String, VmError> {
-    use zymbol_common::text::{char_len, char_range};
-    let (x, y) = count_span(lo, n, char_len(s))?;
-    Ok(char_range(s, x, y).to_string())
+fn str_slice_count(s: &ZyStr, lo: i64, n: i64) -> Result<String, VmError> {
+    let (x, y) = count_span(lo, n, s.char_len())?;
+    Ok(zy_char_range(s, x, y).to_string())
+}
+
+/// Characters `a..b` of a text: by bytes when the text knows it is ASCII —
+/// no walk at all (PERF-05 b) — and walked to otherwise.
+fn zy_char_range(s: &ZyStr, a: usize, b: usize) -> &str {
+    if s.is_ascii_text() {
+        &s.as_str()[a..b]
+    } else {
+        zymbol_common::text::char_range(s.as_str(), a, b)
+    }
 }
 
 fn slice_span(lo: i64, hi: i64, len: usize) -> Result<SliceSpan, VmError> {

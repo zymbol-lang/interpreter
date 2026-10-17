@@ -21,6 +21,7 @@
 //! Valid only on platforms where user-space virtual addresses have bit 63 == 0
 //! (x86-64, arm64 with 48-bit VA). Asserted at compile time.
 
+use std::cell::Cell;
 use std::mem::ManuallyDrop;
 use std::rc::Rc;
 use std::{fmt, hash};
@@ -40,6 +41,29 @@ const MAX_INLINE: usize = 7;
 #[repr(transparent)]
 pub struct ZyStr([u8; 8]);
 
+/// What a heap string points to: the text, and how many characters it has —
+/// unknown until someone asks, then kept (PERF-05 b, 2026-10-17). A position
+/// in Zymbol counts characters and a `str` is addressed by bytes, so `s$#`,
+/// `s[i]` and a slice walked the text every time; the count is found once, and
+/// a text whose count equals its length is ASCII, where a position is a byte.
+///
+/// Nothing changes the text behind an `Rc` that others hold: a write in place
+/// (`try_into_string`) takes the `String` out of a sole owner, and the new
+/// value is a new `Heap` with its count unknown again.
+struct Heap {
+    s: String,
+    chars: Cell<usize>,
+}
+
+const UNKNOWN: usize = usize::MAX;
+
+impl Heap {
+    #[inline]
+    fn new(s: String) -> Self {
+        Heap { s, chars: Cell::new(UNKNOWN) }
+    }
+}
+
 impl ZyStr {
     // ── constructors ─────────────────────────────��────────────────────────────
 
@@ -54,7 +78,7 @@ impl ZyStr {
             buf[7] = INLINE_FLAG | (len as u8);
             ZyStr(buf)
         } else {
-            let ptr = Rc::into_raw(Rc::new(s)) as u64;
+            let ptr = Rc::into_raw(Rc::new(Heap::new(s))) as u64;
             ZyStr(ptr.to_le_bytes())
         }
     }
@@ -69,7 +93,7 @@ impl ZyStr {
             buf[7] = INLINE_FLAG | (len as u8);
             ZyStr(buf)
         } else {
-            let ptr = Rc::into_raw(Rc::new(s.to_string())) as u64;
+            let ptr = Rc::into_raw(Rc::new(Heap::new(s.to_string()))) as u64;
             ZyStr(ptr.to_le_bytes())
         }
     }
@@ -91,26 +115,47 @@ impl ZyStr {
                     let owned_rc = ManuallyDrop::into_inner(rc);
                     std::mem::forget(self);
                     // strong_count == 1, so try_unwrap always succeeds.
-                    Rc::try_unwrap(owned_rc).unwrap_or_else(|rc| (*rc).clone())
+                    match Rc::try_unwrap(owned_rc) {
+                        Ok(heap) => heap.s,
+                        Err(rc) => rc.s.clone(),
+                    }
                 } else {
                     // Shared — must copy.
-                    rc.as_str().to_string()
+                    rc.s.clone()
                 }
             }
         }
     }
 
-    /// Wrap an existing Rc<String> (takes ownership).
+    /// Wrap an existing Rc<String>: its text, moved out when this is the
+    /// only holder.
     #[inline]
     pub fn from_rc(rc: Rc<String>) -> Self {
-        if rc.len() <= MAX_INLINE {
-            let z = Self::from_str_ref(rc.as_str());
-            drop(rc);
-            z
-        } else {
-            let ptr = Rc::into_raw(rc) as u64;
-            ZyStr(ptr.to_le_bytes())
+        Self::new(Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone()))
+    }
+
+    /// How many characters — code points — the text has. Counted once and
+    /// kept, for a heap string; an inline one is at most seven bytes.
+    #[inline]
+    pub fn char_len(&self) -> usize {
+        if self.is_inline() {
+            return self.as_str().chars().count();
         }
+        // SAFETY: pointer from Rc::into_raw, alive while self is alive.
+        let heap = unsafe { &*self.heap_ptr() };
+        let known = heap.chars.get();
+        if known != UNKNOWN {
+            return known;
+        }
+        let n = if heap.s.is_ascii() { heap.s.len() } else { heap.s.chars().count() };
+        heap.chars.set(n);
+        n
+    }
+
+    /// Whether every character is one byte — then a position is a byte.
+    #[inline]
+    pub fn is_ascii_text(&self) -> bool {
+        self.char_len() == self.len()
     }
 
     /// Whether the two hold the same heap buffer — `Rc::ptr_eq` for a string.
@@ -141,26 +186,20 @@ impl ZyStr {
             unsafe { std::str::from_utf8_unchecked(&self.0[..len]) }
         } else {
             // SAFETY: pointer from Rc::into_raw, allocation alive while self is alive.
-            unsafe { (*self.heap_ptr()).as_str() }
+            unsafe { (*self.heap_ptr()).s.as_str() }
         }
     }
 
     #[inline]
-    fn heap_ptr(&self) -> *const String {
-        u64::from_le_bytes(self.0) as *const String
+    fn heap_ptr(&self) -> *const Heap {
+        u64::from_le_bytes(self.0) as *const Heap
     }
 
-    /// Clone the underlying Rc<String> (for callers that need an owned Rc).
+    /// The text in an `Rc<String>` of its own (a copy: the heap holds more
+    /// than the text since PERF-05 b).
     #[inline]
     pub fn to_rc(&self) -> Rc<String> {
-        if self.is_inline() {
-            Rc::new(self.as_str().to_string())
-        } else {
-            unsafe {
-                let rc = ManuallyDrop::new(Rc::from_raw(self.heap_ptr()));
-                Rc::clone(&*rc)
-            }
-        }
+        Rc::new(self.as_str().to_string())
     }
 }
 
@@ -257,6 +296,21 @@ impl AsRef<str> for ZyStr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn char_len_is_counted_once_and_stays_true() {
+        let s = ZyStr::new("ñandú y un texto largo".to_string());
+        assert_eq!(s.char_len(), 22);
+        assert_eq!(s.char_len(), 22);
+        assert!(!s.is_ascii_text());
+        let a = ZyStr::new("ascii text, long".to_string());
+        assert!(a.is_ascii_text());
+        assert_eq!(ZyStr::new("ñ".to_string()).char_len(), 1);
+        // grown in place: a new heap, counted again
+        let mut grown = s.try_into_string();
+        grown.push_str("éé");
+        assert_eq!(ZyStr::new(grown).char_len(), 24);
+    }
 
     #[test]
     fn size_is_8_bytes() {

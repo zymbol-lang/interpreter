@@ -360,6 +360,13 @@ Python y cuestan ×0,84 y ×0,79 en tiempo de CPU (bytes ×0,78); las operacione
 crecen lineales. La comprobación de profundidad de GLB-133 encarecía un ~8 % una llamada vacía: se quitó el seguro de
 pila de la llamada directa, que no recurre en Rust, y queda ~4 %, sin `perf` para atribuirlo.
 
+**La etapa sigue abierta (2026-10-17).** El autor la amplió tras medir contra Python: «python es nuestro oráculo,
+debemos acercarnos porque no es una competencia es una validación, pero debemos mejorar bajo nuestra oferta de valor
+simbólica». Hecho desde entonces, en instrucciones y variantes del mismo `HEAD`: el bucle de la VM deja de buscar el
+código de la función en cada instrucción y de soltar valores al escribir argumentos y resultados (`fib_rec` −6,9 %,
+`tak` −8,5 %, `loop_mod` −7,8 %, `collatz` −8,2 %), y PERF-05 b como `ZYVM-028` (`s$#` de ×61 a ×1,2 de Python; un
+corte corto de ×85 a ×2,1).
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |
@@ -545,7 +552,7 @@ Tres riesgos que hay que resolver en el paso 1:
 | D5 | ¿Dónde va la etapa 4? | Después de 3.3, dentro de esta versión si la etapa 2 no la desplaza |
 | D6 | ¿Qué falló en el contenedor de 4 GB? | No es una decisión sino un dato que falta, y cambia el primer arreglo de 3.2. ZyBigBench, hecho en ese contenedor, apunta a una pista: su `README` dice que el perfil de release con LTO no terminaba allí |
 | D7 | PERF-07: el error que sustituye al aborto, ¿se captura con `!?`, y de qué familia es? | **Decidida por el autor el 2026-10-16:** se captura con `!?`; su familia es una nueva, `##Depth`; el límite es de 10 000 llamadas activas, el mismo número en los tres motores, con la pila del programa en 512 MiB y un seguro que mira la pila que queda |
-| D8 | PERF-05 b: ¿la cadena guarda si es ASCII, o cuántos caracteres tiene? | Aplazar hasta tener el perfil de cargas reales; sin él, el arreglo cambia una representación por un caso que quizá ningún programa paga |
+| D8 | PERF-05 b: ¿la cadena guarda si es ASCII, o cuántos caracteres tiene? | **Decidida por el autor el 2026-10-17:** entra en la etapa 2, con Python como oráculo. Hecho como `ZYVM-028`: el texto guarda su número de caracteres, calculado la primera vez; de ahí sale si es ASCII |
 
 ---
 
