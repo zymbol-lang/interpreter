@@ -367,6 +367,13 @@ código de la función en cada instrucción y de soltar valores al escribir argu
 `tak` −8,5 %, `loop_mod` −7,8 %, `collatz` −8,2 %), y PERF-05 b como `ZYVM-028` (`s$#` de ×61 a ×1,2 de Python; un
 corte corto de ×85 a ×2,1).
 
+**El control del bucle contado, en una instrucción** (2026-10-17). Al volcar el bytecode de un `@ i:1..n` salió que
+el control de cada vuelta eran nueve despachos —la dirección del rango se preguntaba dos veces en cada una— frente a
+unos seis del trabajo. `RangeStep` hace el final de la vuelta entero: dos despachos. Frente al `HEAD` anterior, en
+instrucciones: `loop_mod` −34 %, `matmul` −24 %, `match_loop` −23 %, `sort_builtin` −19 %, `array_update` −41 %.
+Por el camino, **`ZYVM-029`**, corregido con ello: un bucle cuyo límite es 2^53−1 corría todas sus vueltas y abortaba
+al salir, porque el contador avanzaba antes de compararse con el límite.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |

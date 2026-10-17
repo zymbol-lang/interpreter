@@ -2223,6 +2223,29 @@ impl<W: Write> VM<W> {
                 &Instruction::Jump(label)          => { ip = label as usize; }
                 &Instruction::JumpIf(cond, label)    => { if  rreg!(cond).is_truthy() { ip = label as usize; } }
                 &Instruction::JumpIfNot(cond, label) => { if !rreg!(cond).is_truthy() { ip = label as usize; } }
+                &Instruction::RangeStep(cnt, end, step, fwd, body) => {
+                    // The bounds are Ints and the step a positive Int: the
+                    // compiler or `LoopBoundsCheck`/`LoopStepCheck` saw to it.
+                    let (c, e, s) = match (rreg!(cnt), rreg!(end), rreg!(step)) {
+                        (Value::Int(c), Value::Int(e), Value::Int(s)) => (*c, *e, *s),
+                        _ => raise!(VmError::TypeMsg(format!(
+                            "range bounds must be integers, got {} and {}",
+                            rreg!(cnt).type_label(), rreg!(end).type_label()
+                        ))),
+                    };
+                    // Both within ±(2^53−1), so neither sum leaves an i64.
+                    let again = if matches!(rreg!(fwd), Value::Bool(true)) {
+                        let next = c + s;
+                        (next <= e).then_some(next)
+                    } else {
+                        let next = c - s;
+                        (next >= e).then_some(next)
+                    };
+                    if let Some(next) = again {
+                        wreg!(cnt, Value::Int(next));
+                        ip = body as usize;
+                    }
+                }
                 // `?` and `_?`: a Bool and nothing else (GLB-121). A wrong
                 // TYPE is a `##Type` (D1).
                 &Instruction::JumpIfNotCond(cond, label) => {
@@ -4968,12 +4991,6 @@ impl<W: Write> VM<W> {
     fn reg_get(&self, reg: Reg) -> &Value {
         let base = self.frame_stack.last().unwrap().base as usize;
         &self.value_stack[base + reg as usize]
-    }
-
-    #[inline(always)]
-    fn reg_set(&mut self, reg: Reg, val: Value) {
-        let base = self.frame_stack.last().unwrap().base as usize;
-        put_reg(&mut self.value_stack[base + reg as usize], val);
     }
 
     #[inline(always)]
