@@ -4480,6 +4480,11 @@ impl Compiler {
             Some(idx) => Instruction::DeepSetInPlace(dst, path, val, idx),
             None => Instruction::DeepSet(dst, path, val),
         };
+        // One step: the same write, the step in its own register.
+        let set_one = move |dst, step, val| match target {
+            Some(idx) => Instruction::SetOneInPlace(dst, step, val, idx),
+            None => Instruction::SetOne(dst, step, val),
+        };
         match cu.target.unwrap_group() {
             // Single-level: arr[i]$~ val, t[i]$~ val, nt["field"]$~ val.
             // Routed through DeepSet (not ArraySet) because $~ is the functional
@@ -4489,15 +4494,12 @@ impl Compiler {
                 // Same evaluation order as the tree-walker: collection, index, value
                 let r_arr = self.compile_expr(&idx_expr.array, ctx)?;
                 let r_idx = self.compile_expr(&idx_expr.index, ctx)?;
-                let r_path = ctx.alloc_temp()?;
-                ctx.emit(Instruction::NewArray(r_path));
-                ctx.emit(Instruction::ArrayPush(r_path, r_idx));
                 let r_val = self.compile_expr(&cu.value, ctx)?;
                 if let Receiver::State(g) = receiver {
-                    Self::release_state_temps(g, &[r_arr, r_path, r_val], ctx);
+                    Self::release_state_temps(g, &[r_arr, r_idx, r_val], ctx);
                 }
                 let dst = land(ctx, r_arr)?;
-                ctx.emit(deep_set(dst, r_path, r_val));
+                ctx.emit(set_one(dst, r_idx, r_val));
                 Ok(dst)
             }
             // Deep: arr[i>j>…]$~ val
@@ -4536,15 +4538,12 @@ impl Compiler {
                 let r_key = ctx.alloc_temp()?;
                 let key_idx = self.intern_string(&ma.field);
                 ctx.emit(Instruction::LoadStr(r_key, key_idx));
-                let r_path = ctx.alloc_temp()?;
-                ctx.emit(Instruction::NewArray(r_path));
-                ctx.emit(Instruction::ArrayPush(r_path, r_key));
                 let r_val = self.compile_expr(&cu.value, ctx)?;
                 if let Receiver::State(g) = receiver {
-                    Self::release_state_temps(g, &[r_obj, r_path, r_val], ctx);
+                    Self::release_state_temps(g, &[r_obj, r_key, r_val], ctx);
                 }
                 let dst = land(ctx, r_obj)?;
-                ctx.emit(deep_set(dst, r_path, r_val));
+                ctx.emit(set_one(dst, r_key, r_val));
                 Ok(dst)
             }
             _ => Err(CompileError::Unsupported("collection update on non-index expr".into())),
@@ -6121,6 +6120,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::ArrayGet(d, a, i) | Instruction::ArraySet(d, a, i)
             | Instruction::DeepSet(d, a, i) => { upd(*d); upd(*a); upd(*i); }
             Instruction::DeepSetInPlace(d, a, i, _) => { upd(*d); upd(*a); upd(*i); }
+            Instruction::SetOne(d, a, i) | Instruction::SetOneInPlace(d, a, i, _) => { upd(*d); upd(*a); upd(*i); }
             Instruction::AssertMutable(r, _) => { upd(*r); }
             Instruction::IterPairs(d, s) => { upd(*d); upd(*s); }
             Instruction::DestructureRest(d, s, _, _) => { upd(*d); upd(*s); }

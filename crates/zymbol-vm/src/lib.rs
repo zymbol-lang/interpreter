@@ -2802,6 +2802,31 @@ impl<W: Write> VM<W> {
                         raise!(e);
                     }
                 }
+                // A path of one step (2026-10-17): `DeepSet` and
+                // `DeepSetInPlace` word for word, with the step borrowed as a
+                // one-element slice instead of an array built for it.
+                &Instruction::SetOne(dst, step_reg, val_reg) => {
+                    let val = rreg!(val_reg).clone();
+                    let step = rreg!(step_reg).clone();
+                    if let Err(e) = vm_deep_set_in(
+                        &mut self.value_stack[base + dst as usize], std::slice::from_ref(&step), val, true,
+                    ) {
+                        raise!(e);
+                    }
+                }
+                &Instruction::SetOneInPlace(dst, step_reg, val_reg, name_idx) => {
+                    let val = rreg!(val_reg).clone();
+                    let step = rreg!(step_reg).clone();
+                    if let Value::Tuple(_) = &self.value_stack[base + dst as usize] {
+                        let name = self.string_rcs[name_idx as usize].as_str();
+                        raise!(VmError::Generic(tuple_immutable_msg(name)));
+                    }
+                    if let Err(e) = vm_deep_set_in(
+                        &mut self.value_stack[base + dst as usize], std::slice::from_ref(&step), val, true,
+                    ) {
+                        raise!(e);
+                    }
+                }
                 &Instruction::IterPairs(dst, src) => {
                     let val = match &self.value_stack[base + src as usize] {
                         Value::NamedTuple(nt) => Value::Array(Rc::new(

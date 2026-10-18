@@ -481,6 +481,12 @@ pub enum Instruction {
     /// refusal has to be spelled in the tree-walker's exact words, and a
     /// register has no name.
     DeepSetInPlace(Reg, Reg, Reg, StrIdx),
+    /// `DeepSet` of a path of one step, the step in a register of its own:
+    /// `(dst_root, index, val)`. `v[i]$~ x` and `d.k$~ x` built a one-element
+    /// array on the heap for every edit to carry the step (2026-10-17).
+    SetOne(Reg, Reg, Reg),
+    /// `DeepSetInPlace` of a path of one step: `(dst_root, index, val, target_name)`.
+    SetOneInPlace(Reg, Reg, Reg, StrIdx),
 
     /// `(dst, src)` — normalise an iterable for a `@ (a, b):x` loop.
     ///
