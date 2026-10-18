@@ -431,6 +431,11 @@ más de instrucciones, con ciclos casi iguales.
 **`TailCall` con las piezas de `Call`** (2026-10-17): un `push` fuera de línea por argumento, una asignación con
 destructor por registro del marco y otra por argumento eran ~13 % de `tak`. `tak` −8,0 %: ×1,21 → **×1,11** de Python.
 
+**Una edición de un paso sin ruta en el montón** (2026-10-17). `v[i]$~ x`, `d["k"]$~ x` y `d.k$~ x` construían un
+array de un elemento para llevar el paso, en cada edición. `SetOne`/`SetOneInPlace` llaman al mismo `vm_deep_set_in`
+con el paso prestado. `gap.py`: `arr_update_each` de ×1,9 a **×0,9** de Python; `arr_update_one` de ×3,0 a ~×1,4;
+`dict_update_existing` de ×2,5 a ~×1,4. `zyquality/corpus/collections/edicion_un_paso.zy` lo sujeta.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |
