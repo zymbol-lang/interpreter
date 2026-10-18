@@ -428,6 +428,9 @@ entre −3 % y −12 % en los 16 programas (`fib_rec` ×1,10 → ×1,02, `nqueen
 `MakeNamedTuple`, la variante que hace medir 56 bytes a todas, bajaba la instrucción a 32 bytes pero costaba un 1 %
 más de instrucciones, con ciclos casi iguales.
 
+**`TailCall` con las piezas de `Call`** (2026-10-17): un `push` fuera de línea por argumento, una asignación con
+destructor por registro del marco y otra por argumento eran ~13 % de `tak`. `tak` −8,0 %: ×1,21 → **×1,11** de Python.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |
