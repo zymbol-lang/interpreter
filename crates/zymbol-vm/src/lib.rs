@@ -2582,31 +2582,49 @@ impl<W: Write> VM<W> {
                     }
                     let num_regs = program.functions[func_idx as usize].num_registers as usize;
 
-                    // Stage args into tco_buf (move to avoid aliasing)
+                    // Stage args into tco_buf (move to avoid aliasing). The
+                    // three steps below are `Call`'s: an inline push, a frame
+                    // let go of with `put_reg` — what owns memory is dropped,
+                    // a scalar is not, where an assignment ran the drop glue
+                    // on every register — and the arguments written over the
+                    // `Unit`s; in `tak` this arm was ~13 % of the run
+                    // (2026-10-17).
                     let tco_buf = &mut self.tco_buf;
                     tco_buf.clear();
                     for &reg in arg_regs.iter() {
-                        tco_buf.push(mem::replace(
+                        let v = mem::replace(
                             unsafe { self.value_stack.get_unchecked_mut(base + reg as usize) },
                             Value::Unit,
-                        ));
+                        );
+                        push_in_capacity(tco_buf, v);
                     }
 
                     // Extend value_stack if callee needs more registers than we have
                     let current_size = self.value_stack.len() - base;
                     if num_regs > current_size {
-                        self.value_stack.resize_with(base + num_regs, || Value::Unit);
+                        grow_regs(&mut self.value_stack, base + num_regs);
                     }
 
                     // Zero all registers [base..base+num_regs]
                     for v in &mut self.value_stack[base..base + num_regs] {
-                        *v = Value::Unit;
+                        put_reg(v, Value::Unit);
                     }
 
-                    // Write staged args into callee registers
-                    for (i, v) in self.tco_buf.drain(..).enumerate() {
-                        self.value_stack[base + i] = v;
+                    // Write staged args into callee registers. There are as
+                    // many as the callee has parameters, and a frame never has
+                    // fewer registers than that (ZYVM-030).
+                    let n_args = self.tco_buf.len();
+                    debug_assert!(n_args <= num_regs);
+                    for i in 0..n_args {
+                        // SAFETY: each staged value is read once and the length
+                        // set to 0 after, so none is dropped twice; the slot it
+                        // goes to is inside the frame and holds a `Unit`.
+                        unsafe {
+                            let v = std::ptr::read(self.tco_buf.as_ptr().add(i));
+                            std::ptr::write(self.value_stack.get_unchecked_mut(base + i), v);
+                        }
                     }
+                    unsafe { self.tco_buf.set_len(0); }
 
                     // Update frame metadata (same base, new chunk). The compiler
                     // never emits a tail call inside a `!?`, so there is no
