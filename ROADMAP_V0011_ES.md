@@ -421,6 +421,13 @@ Python. La primera versión sólo bajaba un 15 %: lo que costaba no era el marco
 destructor del valor anterior y mover un `Result` del tamaño de `VmError` en cada comparación.
 `zyquality/corpus/collections/sort_comparador_puro.zy` sujeta el «igual».
 
+**`Instruction` con etiqueta propia, `#[repr(u8)]`** (2026-10-17). Sin ella, el compilador de Rust escondía la
+variante en un nicho de la capacidad de un `Vec`, y el bucle de la VM la reconstruía en cada instrucción. Una línea:
+entre −3 % y −12 % en los 16 programas (`fib_rec` ×1,10 → ×1,02, `nqueens` ×1,06 → **×0,95**, `tak` ×1,27 → ×1,21,
+`collatz` −12 %, `strings_scan_*` −11,5 %). Probado y descartado: meter en una caja los dos `Vec` de
+`MakeNamedTuple`, la variante que hace medir 56 bytes a todas, bajaba la instrucción a 32 bytes pero costaba un 1 %
+más de instrucciones, con ciclos casi iguales.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |
