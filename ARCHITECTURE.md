@@ -244,7 +244,7 @@ struct Interpreter {
 ### Register VM Execution
 
 #### `zymbol-bytecode`
-Instruction set definition: 168 instruction variants (counted 2026-10-17); the table names the
+Instruction set definition: 171 instruction variants (counted 2026-10-17); the table names the
 ones a reader meets first.
 
 | Category | Instructions |
@@ -255,7 +255,7 @@ ones a reader meets first.
 | Strings | `ConcatStr`, `StrLen`, `StrSplit`, `StrContains`, `StrSlice`, `BuildStr` |
 | Arrays | `NewArray`, `ArrayPush`, `ArrayGet`, `ArraySet`, `ArrayLen`, `ArraySlice` |
 | Tuples | `MakeTuple`, `MakeNamedTuple`, `NamedTupleGet` |
-| Control | `Jump`, `JumpIf`, `JumpIfNot`, `JumpIfNotCond` (the jump of a `?` condition, which refuses what is not a Bool), `RangeStep` (the end of a pass of a counted loop: step, test, jump back — one dispatch), `Call`, `TailCall`, `CallDynamic`, `Return` |
+| Control | `Jump`, `JumpIf`, `JumpIfNot`, `JumpIfNotCond` (the jump of a `?` condition, which refuses what is not a Bool), `RangeStep` (the end of a pass of a counted loop: step, test, jump back — one dispatch), `IterStep` (the same for a for-each), `Call`, `TailCall`, `CallDynamic`, `Return` |
 | Closures | `MakeClosure`, `CallDynamic` |
 | Higher-order | `HofItems`, `HofNext` (one turn of `$>`/`$\|`/`$<`: calls the lambda on the VM's own frames, and the lambda returns to it), `HofRebuild` |
 | Data ops | `NumericEval`, `TypeOf`, `BaseConversion`, `RoundFloat`, `Format` |

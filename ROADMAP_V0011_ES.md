@@ -436,6 +436,10 @@ array de un elemento para llevar el paso, en cada edición. `SetOne`/`SetOneInPl
 con el paso prestado. `gap.py`: `arr_update_each` de ×1,9 a **×0,9** de Python; `arr_update_one` de ×3,0 a ~×1,4;
 `dict_update_existing` de ×2,5 a ~×1,4. `zyquality/corpus/collections/edicion_un_paso.zy` lo sujeta.
 
+**El recorrido de una colección, en una instrucción** (2026-10-17), como el rango: `IterStep` al final de cada vuelta
+en vez de la prueba arriba y el salto de vuelta. `gap.py`: `arr_foreach` ×1,3 → **×0,9**, `str_iter` ×2,1 → ×1,4;
+`strings_scan_*` −19 %, `array_update` −16 %.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |

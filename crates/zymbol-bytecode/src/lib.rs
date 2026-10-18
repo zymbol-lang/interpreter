@@ -140,6 +140,12 @@ pub enum Instruction {
     /// integer does not overflow on its way out (ZYVM-029). It replaced seven
     /// dispatches per pass: the direction was asked twice on every one.
     RangeStep(Reg, Reg, Reg, Reg, Label),
+    /// The end of one pass of a for-each, in one dispatch (2026-10-17):
+    /// (index, length, body). The 1-based index moves on and the loop goes back
+    /// to the body while it is still within the length; past it, falls through
+    /// out of the loop. The test at the top of every pass, and its jump back,
+    /// were four dispatches.
+    IterStep(Reg, Reg, Label),
 
     // ── Functions ─────────────────────────────────────────────────────────
     Call(Reg, FuncIdx, Vec<Reg>),

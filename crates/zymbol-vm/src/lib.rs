@@ -2465,6 +2465,17 @@ impl<W: Write> VM<W> {
                 &Instruction::Jump(label)          => { ip = label as usize; }
                 &Instruction::JumpIf(cond, label)    => { if  rreg!(cond).is_truthy() { ip = label as usize; } }
                 &Instruction::JumpIfNot(cond, label) => { if !rreg!(cond).is_truthy() { ip = label as usize; } }
+                &Instruction::IterStep(idx, len, body) => {
+                    // Both Ints: a counter from `LoadInt` and a length from
+                    // `StrLen`/`ArrayLen`.
+                    if let (Value::Int(i), Value::Int(n)) = (rreg!(idx), rreg!(len)) {
+                        let next = *i + 1;
+                        if next <= *n {
+                            wreg!(idx, Value::Int(next));
+                            ip = body as usize;
+                        }
+                    }
+                }
                 &Instruction::RangeStep(cnt, end, step, fwd, body) => {
                     // The bounds are Ints and the step a positive Int: the
                     // compiler or `LoopBoundsCheck`/`LoopStepCheck` saw to it.
