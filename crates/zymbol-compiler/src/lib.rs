@@ -5050,7 +5050,9 @@ impl Compiler {
             ctx.emit(Instruction::CopyReg(r_snap, r_coll));
             r_coll = r_snap;
             ctx.emit(Instruction::StrLen(r_len, r_coll));
-            ctx.emit(Instruction::LoadInt(r_idx, 0));
+            // 1-based, as the generic path: the index only counts the turns
+            // here, and `IterStep` is one rule for both.
+            ctx.emit(Instruction::LoadInt(r_idx, 1));
             let r_cur = ctx.alloc_temp()?;
             ctx.emit(Instruction::LoadInt(r_cur, 0));
             r_cursor = Some(r_cur);
@@ -5079,11 +5081,12 @@ impl Compiler {
             ctx.emit(Instruction::LoadInt(r_idx, 1));  // 1-based: start at 1
         }
 
-        let r_one = ctx.alloc_temp()?;
-        ctx.emit(Instruction::LoadInt(r_one, 1));
-
         let pre_loop_hot = ctx.hot_vars.clone();
-        let loop_start = ctx.current_label();
+        // Tested once on the way in — an empty collection runs nothing — and
+        // after that by `IterStep`, at the end of each pass.
+        ctx.emit(Instruction::CmpGt(r_cmp, r_idx, r_len));
+        let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
+        let body_label = ctx.current_label();
         ctx.loop_stack.push(LoopCtx {
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
@@ -5092,9 +5095,6 @@ impl Compiler {
         });
 
         if coll_is_string {
-            // Exit if r_idx >= r_len (0-based: indices 0..len)
-            ctx.emit(Instruction::CmpGe(r_cmp, r_idx, r_len));
-            let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
             // The character at the cursor, not the r_idx-th one: finding it
             // scanned the text from the start on every turn (ZYVM-025).
             let r_cur = r_cursor.expect("the string path sets its cursor");
@@ -5104,25 +5104,20 @@ impl Compiler {
             }
             self.compile_block(&lp.body, ctx)?;
             let inc_label = ctx.current_label();
-            ctx.emit(Instruction::AddIntImm(r_idx, r_idx, 1));
-            ctx.emit(Instruction::Jump(loop_start));
+            ctx.emit(Instruction::IterStep(r_idx, r_len, body_label));
             let loop_end = ctx.current_label();
             ctx.patch_jump(exit_patch, loop_end);
             let lctx = ctx.loop_stack.pop().unwrap();
             for pos in lctx.break_patches    { ctx.patch_jump(pos, loop_end); }
             for pos in lctx.continue_patches { ctx.patch_jump(pos, inc_label); }
         } else {
-            // Exit if r_idx > r_len (1-based: indices 1..=len)
-            ctx.emit(Instruction::CmpGt(r_cmp, r_idx, r_len));
-            let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
             ctx.emit(Instruction::ArrayGet(r_item, r_coll, r_idx));
             if let Some(g) = item_slot {
                 ctx.emit(Instruction::StoreGlobal(g, r_item));
             }
             self.compile_block(&lp.body, ctx)?;
             let inc_label = ctx.current_label();
-            ctx.emit(Instruction::AddInt(r_idx, r_idx, r_one));
-            ctx.emit(Instruction::Jump(loop_start));
+            ctx.emit(Instruction::IterStep(r_idx, r_len, body_label));
             let loop_end = ctx.current_label();
             ctx.patch_jump(exit_patch, loop_end);
             let lctx = ctx.loop_stack.pop().unwrap();
@@ -5875,7 +5870,8 @@ fn eliminate_dead_code(
             // Conditional jumps: fall-through AND target
             Instruction::JumpIf(_, target) | Instruction::JumpIfNot(_, target)
             | Instruction::JumpIfNotCond(_, target)
-            | Instruction::RangeStep(_, _, _, _, target) => {
+            | Instruction::RangeStep(_, _, _, _, target)
+            | Instruction::IterStep(_, _, target) => {
                 worklist.push(*target as usize);
                 worklist.push(ip + 1);
             }
@@ -5946,6 +5942,7 @@ fn eliminate_dead_code(
             Instruction::JumpIfNot(r, t)       => Instruction::JumpIfNot(r, remap(t)),
             Instruction::JumpIfNotCond(r, t)   => Instruction::JumpIfNotCond(r, remap(t)),
             Instruction::RangeStep(c, e, s, f, t) => Instruction::RangeStep(c, e, s, f, remap(t)),
+            Instruction::IterStep(i, n, t) => Instruction::IterStep(i, n, remap(t)),
             Instruction::MatchInt(r, v, t)     => Instruction::MatchInt(r, v, remap(t)),
             Instruction::MatchRange(r, lo, hi, t) => Instruction::MatchRange(r, lo, hi, remap(t)),
             Instruction::MatchStr(r, s, t)     => Instruction::MatchStr(r, s, remap(t)),
@@ -6107,6 +6104,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             | Instruction::JumpIf(r, _) | Instruction::JumpIfNot(r, _)
             | Instruction::JumpIfNotCond(r, _) => upd(*r),
             Instruction::RangeStep(c, e, s, f, _) => { upd(*c); upd(*e); upd(*s); upd(*f); }
+            Instruction::IterStep(i, n, _) => { upd(*i); upd(*n); }
             Instruction::MatchInt(r, _, _) | Instruction::MatchRange(r, _, _, _)
             | Instruction::MatchStr(r, _, _) | Instruction::MatchBool(r, _, _) => upd(*r),
             Instruction::Call(d, _, args) => { upd(*d); for &a in args { upd(a); } }
