@@ -1935,7 +1935,7 @@ impl Compiler {
             }
             _ => self.compile_expr(value, ctx)?,
         };
-        self.store_to_name(name, src, ctx)
+        self.store_to_name_with(name, src, ends_in_one_instruction(value), ctx)
     }
 
     /// `name = <src>`: where a value that is already in a register goes when a
@@ -1943,6 +1943,17 @@ impl Compiler {
     /// (written back from the file body), or a local register. Shared by `=` and
     /// by the `##Kind(m) =>` arm binding, which is a birth like any other.
     fn store_to_name(&mut self, name: &str, src: Reg, ctx: &mut FunctionCtx)
+        -> Result<(), CompileError>
+    {
+        self.store_to_name_with(name, src, false, ctx)
+    }
+
+    /// `store_to_name`, told whether the value was computed by the last
+    /// instruction emitted and nothing can jump past it (`retarget`). Then a
+    /// local's value is written by that instruction itself instead of into a
+    /// temporary that a `CopyReg` copies — one dispatch less for every such
+    /// `x = expr` (2026-10-17).
+    fn store_to_name_with(&mut self, name: &str, src: Reg, retarget: bool, ctx: &mut FunctionCtx)
         -> Result<(), CompileError>
     {
         let src_ty = ctx.get_reg_type(src);
@@ -1979,7 +1990,14 @@ impl Compiler {
             ctx.set_reg_type(dst, src_ty);
         }
         if src != dst {
-            ctx.emit(Instruction::CopyReg(dst, src));
+            // Only a temporary: a register some name holds is that name's
+            // value, and writing over its producer would change the name.
+            let src_is_temp = !ctx.register_map.values().any(|&r| r == src);
+            let retargeted = retarget && src_is_temp
+                && ctx.instructions.last_mut().is_some_and(|ins| retarget_dst(ins, src, dst));
+            if !retargeted {
+                ctx.emit(Instruction::CopyReg(dst, src));
+            }
         }
         Ok(())
     }
@@ -6068,6 +6086,55 @@ pub fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16
 }
 
 /// Return the highest register index referenced in `instructions`, if any.
+/// Whether the code an expression compiles to ENDS with the one instruction
+/// that writes its value, with no jump that lands after it: true for the
+/// shapes whose last step is their own operator — a literal, arithmetic or a
+/// comparison (not `&&`/`||`, which branch), a read by index or by name, a
+/// length, a slice. A conditional, a match or a `??` end in jumps.
+fn ends_in_one_instruction(e: &Expr) -> bool {
+    match e.unwrap_group() {
+        Expr::Literal(_) => true,
+        Expr::Binary(b) => !matches!(b.op, BinaryOp::And | BinaryOp::Or | BinaryOp::Pipe
+            | BinaryOp::Comma | BinaryOp::Range | BinaryOp::Concat),
+        Expr::Unary(_) => true,
+        Expr::Index(_) => true,
+        Expr::MemberAccess(ma) => !ma.is_module_access,
+        Expr::CollectionLength(_) => true,
+        Expr::CollectionSlice(_) => true,
+        _ => false,
+    }
+}
+
+/// Make `ins` write `to` where it writes `from`, if it is one of the
+/// instructions that read every operand before writing their destination —
+/// which each of these arms of the VM does (`wreg!` last). Anything else is
+/// left alone and the caller copies.
+fn retarget_dst(ins: &mut Instruction, from: Reg, to: Reg) -> bool {
+    use Instruction as I;
+    let d = match ins {
+        I::LoadInt(d, _) | I::LoadFloat(d, _) | I::LoadBool(d, _) | I::LoadStr(d, _)
+        | I::LoadChar(d, _) | I::LoadUnit(d)
+        | I::AddInt(d, _, _) | I::SubInt(d, _, _) | I::MulInt(d, _, _) | I::DivInt(d, _, _)
+        | I::ModInt(d, _, _) | I::PowInt(d, _, _) | I::NegInt(d, _)
+        | I::AddIntImm(d, _, _) | I::SubIntImm(d, _, _) | I::MulIntImm(d, _, _)
+        | I::CmpEqImm(d, _, _) | I::CmpNeImm(d, _, _) | I::CmpLtImm(d, _, _)
+        | I::CmpLeImm(d, _, _) | I::CmpGtImm(d, _, _) | I::CmpGeImm(d, _, _)
+        | I::AddFloat(d, _, _) | I::SubFloat(d, _, _) | I::MulFloat(d, _, _)
+        | I::DivFloat(d, _, _) | I::PowFloat(d, _, _) | I::NegFloat(d, _)
+        | I::CmpEq(d, _, _) | I::CmpNe(d, _, _) | I::CmpLt(d, _, _) | I::CmpLe(d, _, _)
+        | I::CmpGt(d, _, _) | I::CmpGe(d, _, _) | I::Not(d, _)
+        | I::StrLen(d, _) | I::StrSlice(d, _, _) | I::StrSliceCount(d, _, _)
+        | I::ArrayGet(d, _, _) | I::ArrayLen(d, _) | I::ArraySlice(d, _, _)
+        | I::ArraySliceCount(d, _, _) | I::NamedTupleGet(d, _, _) => d,
+        _ => return false,
+    };
+    if *d != from {
+        return false;
+    }
+    *d = to;
+    true
+}
+
 fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
     let mut max: Option<u16> = None;
     let mut upd = |r: u16| { max = Some(max.map_or(r, |m: u16| m.max(r))); };

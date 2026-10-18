@@ -440,6 +440,12 @@ con el paso prestado. `gap.py`: `arr_update_each` de ×1,9 a **×0,9** de Python
 en vez de la prueba arriba y el salto de vuelta. `gap.py`: `arr_foreach` ×1,3 → **×0,9**, `str_iter` ×2,1 → ×1,4;
 `strings_scan_*` −19 %, `array_update` −16 %.
 
+**`x = expr` sin la copia final** (2026-10-17). La expresión se calculaba en un temporal y un `CopyReg` lo llevaba a
+`x`. Ahora, si la última instrucción es la que produce el valor y nada salta detrás de ella —un literal, aritmética, una
+comparación, una lectura, una longitud, un corte—, escribe directamente en `x`; sólo instrucciones que leen todos sus
+operandos antes de escribir el destino. `collatz` −19 %, `primes_trial` −16,5 %, `mandelbrot` −14,7 %, `nqueens`
+−13,6 % (×0,82 de Python), `loop_mod` −10,9 %.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |
