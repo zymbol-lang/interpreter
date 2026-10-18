@@ -3525,6 +3525,7 @@ dependencies = [
 name = "zymbol-common"
 version = "0.0.11"
 dependencies = [
+ "foldhash",
  "indexmap",
  "unicode-segmentation",
  "unicode-width",

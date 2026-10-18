@@ -7,6 +7,7 @@ description = "Common types and utilities for Zymbol-Lang"
 
 [dependencies]
 indexmap.workspace = true
+foldhash.workspace = true
 # For `vscreen`: a frame is laid out in columns as a terminal lays it out.
 unicode-segmentation.workspace = true
 unicode-width.workspace = true

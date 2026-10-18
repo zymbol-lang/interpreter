@@ -4442,7 +4442,7 @@ impl<W: Write> VM<W> {
                 // ── Named tuples ─────────────────────────────────────────────
                 Instruction::MakeNamedTuple(dst, names, regs) => {
                     let dst = *dst;
-                    let mut fields = zymbol_common::Dict::with_capacity(names.len());
+                    let mut fields = zymbol_common::Dict::with_capacity_and_hasher(names.len(), Default::default());
                     for (name_idx, &reg) in names.iter().zip(regs.iter()) {
                         let name = program.string_pool[*name_idx as usize].clone();
                         let val = rreg!(reg).clone();

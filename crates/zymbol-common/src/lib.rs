@@ -31,7 +31,15 @@ use std::fmt;
 /// made adding n keys cost n². The order is what `#(…)` prints, so a key is
 /// only ever removed with `shift_remove` — `swap_remove` would move the last
 /// key into the hole. Keys are unique (GLB-131).
-pub type Dict<V> = IndexMap<String, V>;
+///
+/// Hashed with foldhash, seeded at random per process, rather than the
+/// standard library's SipHash (2026-10-18): hashing the key was a quarter of
+/// `d["k"]`, and a key of up to 7 bytes lives inside its `ZyStr` with no room to
+/// keep its hash, as Python keeps it in the string. foldhash is what hashbrown
+/// uses by default: fast, and resistant enough to keys chosen to collide. The
+/// order a dictionary prints is the order its keys were added, whatever the
+/// hash, so no output depends on the seed.
+pub type Dict<V> = IndexMap<String, V, foldhash::fast::RandomState>;
 
 /// Symbol is an interned string represented as a 32-bit integer
 /// This allows for fast comparison and reduces memory usage
