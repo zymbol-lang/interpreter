@@ -7,7 +7,12 @@ pub type Label = u32;
 pub type FuncIdx = u32;
 pub type StrIdx = u32;
 
+/// `repr(u8)`: the variant is a byte of its own at the start. Without it the
+/// compiler hid it in a niche of a `Vec` capacity, and the dispatch loop of the
+/// VM rebuilt it — a `movabs`, a `xor` and a `cmov` — on every instruction it
+/// ran (2026-10-17).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[repr(u8)]
 pub enum Instruction {
     // ── Literals ──────────────────────────────────────────────────────────
     LoadInt(Reg, i64),
