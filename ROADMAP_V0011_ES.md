@@ -446,6 +446,14 @@ comparación, una lectura, una longitud, un corte—, escribe directamente en `x
 operandos antes de escribir el destino. `collatz` −19 %, `primes_trial` −16,5 %, `mandelbrot` −14,7 %, `nqueens`
 −13,6 % (×0,82 de Python), `loop_mod` −10,9 %.
 
+**El hash del diccionario: foldhash** (2026-10-18, por decisión del autor: «la mejor opción»). Hashear la clave era un
+cuarto de `d["k"]`. La opción recomendada primero —guardar el hash en el texto, como Python— no servía para el caso
+común: una clave de hasta 7 bytes vive dentro de los 8 del `ZyStr`, sin sitio para el hash. foldhash, con semilla
+aleatoria por proceso, es el hash por defecto de hashbrown y ya estaba en el `Cargo.lock`: rápido y resistente a claves
+elegidas para chocar, que SipHash daba y un FNV no. El orden de un diccionario es el de inserción, así que ninguna
+salida depende de la semilla. `gap.py`: `dict_lookup` ×1,3 → **×1,0**, `dict_lookup_last` ×1,2 → ×0,8, `dict_insert`
+×1,4 → ×1,2.
+
 ### Lo que ya se sabía
 
 | Id | Qué es | Estado |

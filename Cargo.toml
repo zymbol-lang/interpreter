@@ -71,6 +71,9 @@ owo-colors = "4.0"
 
 # Data structures
 indexmap = "2.2"
+# The hasher of `zymbol_common::Dict` (2026-10-18): already in the lock
+# through hashbrown, so it brings in no new crate.
+foldhash = "0.1.5"
 
 # Serialization (for bytecode)
 # bincode stays on 1.x deliberately: 2.x/3.x changes the wire format, and the
