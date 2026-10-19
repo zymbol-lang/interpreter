@@ -67,7 +67,7 @@ impl<W: Write> Interpreter<W> {
         // Not in scope — check if it's a named function used as a first-class value.
         // Captures the current scope at point of use (Opción A).
         if let Some(func_def) = self.functions.get(&ident.name) {
-            return Ok(Value::Function(self.func_def_to_value(func_def)));
+            return Ok(Value::function(self.func_def_to_value(func_def)));
         }
 
         Err(RuntimeError::Generic {

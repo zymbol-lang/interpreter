@@ -1057,7 +1057,7 @@ impl<W: Write> Interpreter<W> {
     /// anything else is a `##Type` (GLB-024 — no truthiness stands in for one).
     fn sort_comparator_says(
         &mut self,
-        func: &crate::FunctionValue,
+        func: &Box<crate::FunctionValue>,
         a: Value,
         b: Value,
         span: zymbol_span::Span,
@@ -1076,7 +1076,7 @@ impl<W: Write> Interpreter<W> {
     /// the comparator says it does not AND says the right one does (GLB-073).
     fn sort_takes_left(
         &mut self,
-        func: &crate::FunctionValue,
+        func: &Box<crate::FunctionValue>,
         left: &Value,
         right: &Value,
         span: zymbol_span::Span,

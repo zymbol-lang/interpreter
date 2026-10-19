@@ -67,7 +67,7 @@ thread_local! {
 // --- error helpers --------------------------------------------------------
 
 fn db_error(msg: impl Into<String>) -> Value {
-    Value::Error(ErrorValue::db(msg))
+    Value::error(ErrorValue::db(msg))
 }
 
 fn odbc_err(e: odbc_api::Error) -> Value {

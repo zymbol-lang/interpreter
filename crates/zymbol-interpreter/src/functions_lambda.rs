@@ -23,7 +23,7 @@ impl<W: Write> Interpreter<W> {
 
         let captures = self.capture_only(&refs);
 
-        Ok(Value::Function(FunctionValue {
+        Ok(Value::function(FunctionValue {
             params: lambda.params.clone(),
             body: lambda.body.clone(),
             captures: Rc::new(captures),
@@ -81,7 +81,7 @@ impl<W: Write> Interpreter<W> {
     /// Call a lambda function with given arguments
     pub(crate) fn eval_lambda_call(
         &mut self,
-        func: FunctionValue,
+        func: Box<FunctionValue>,
         arg_values: Vec<Value>,
         span: &Span,
     ) -> Result<Value> {
@@ -93,7 +93,7 @@ impl<W: Write> Interpreter<W> {
 
     fn eval_lambda_call_body(
         &mut self,
-        func: FunctionValue,
+        func: Box<FunctionValue>,
         mut arg_values: Vec<Value>,
         span: &Span,
     ) -> Result<Value> {

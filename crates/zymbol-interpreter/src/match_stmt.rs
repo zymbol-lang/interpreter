@@ -208,7 +208,7 @@ impl<W: Write> Interpreter<W> {
                 let named_function = match self.get_variable(name) {
                     Some(_) => None,
                     None => self.functions.get(name)
-                        .map(|def| Value::Function(self.func_def_to_value(def))),
+                        .map(|def| Value::function(self.func_def_to_value(def))),
                 };
                 if let Some(function) = named_function {
                     return Ok(if self.values_equal(value, &function) { Some(true) } else { None });

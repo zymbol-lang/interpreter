@@ -77,7 +77,7 @@ fn json_decode(args: Vec<Value>, span: Span) -> Result<Value> {
     match args.into_iter().next() {
         Some(Value::String(text)) => match serde_json::from_str::<serde_json::Value>(&text) {
             Ok(v) => Ok(json_to_value(v)),
-            Err(e) => Ok(Value::Error(ErrorValue::parse(e.to_string()))),
+            Err(e) => Ok(Value::error(ErrorValue::parse(e.to_string()))),
         },
         _ => Err(RuntimeError::Generic {
             message: "json::decode: expected String".into(),
@@ -154,7 +154,7 @@ fn json_decode_map(args: Vec<Value>, span: Span) -> Result<Value> {
     let table = build_rename_map(it.next().unwrap_or(Value::Unit), span)?;
     match serde_json::from_str::<serde_json::Value>(&text) {
         Ok(v) => Ok(rekey(json_to_value(v), &table)),
-        Err(e) => Ok(Value::Error(ErrorValue::parse(e.to_string()))),
+        Err(e) => Ok(Value::error(ErrorValue::parse(e.to_string()))),
     }
 }
 
@@ -164,7 +164,7 @@ fn json_encode(args: Vec<Value>, _span: Span) -> Result<Value> {
     let value = args.into_iter().next().unwrap_or(Value::Unit);
     match serde_json::to_string(&value_to_json(value)) {
         Ok(s) => Ok(Value::String(s)),
-        Err(e) => Ok(Value::Error(ErrorValue::parse(e.to_string()))),
+        Err(e) => Ok(Value::error(ErrorValue::parse(e.to_string()))),
     }
 }
 

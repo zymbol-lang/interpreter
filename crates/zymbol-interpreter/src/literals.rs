@@ -55,7 +55,7 @@ impl<W: Write> Interpreter<W> {
                     // itself here while `>> f` printed <funct/1>).
                     let maybe_display = self.get_variable(&var_name).cloned()
                         .or_else(|| self.functions.get(&var_name)
-                            .map(|def| Value::Function(self.func_def_to_value(def))))
+                            .map(|def| Value::function(self.func_def_to_value(def))))
                         .map(|v| self.format_value(&v));
                     if let Some(display) = maybe_display {
                         result.push_str(&display);

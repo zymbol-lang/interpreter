@@ -25,7 +25,7 @@ fn io_read(args: Vec<Value>, span: Span) -> Result<Value> {
     match args.into_iter().next() {
         Some(Value::String(path)) => match std::fs::read_to_string(&path) {
             Ok(content) => Ok(Value::String(content)),
-            Err(e) => Ok(Value::Error(ErrorValue::io(e.to_string()))),
+            Err(e) => Ok(Value::error(ErrorValue::io(e.to_string()))),
         },
         _ => Err(RuntimeError::Generic {
             message: "io::read: expected String path".into(),
@@ -41,7 +41,7 @@ fn io_write(args: Vec<Value>, span: Span) -> Result<Value> {
         (Some(Value::String(path)), Some(Value::String(content))) => {
             match std::fs::write(&path, content.as_bytes()) {
                 Ok(_) => Ok(Value::Unit),
-                Err(e) => Ok(Value::Error(ErrorValue::io(e.to_string()))),
+                Err(e) => Ok(Value::error(ErrorValue::io(e.to_string()))),
             }
         }
         _ => Err(RuntimeError::Generic {
@@ -60,9 +60,9 @@ fn io_append(args: Vec<Value>, span: Span) -> Result<Value> {
             match std::fs::OpenOptions::new().append(true).create(true).open(&path) {
                 Ok(mut f) => match f.write_all(content.as_bytes()) {
                     Ok(_) => Ok(Value::Unit),
-                    Err(e) => Ok(Value::Error(ErrorValue::io(e.to_string()))),
+                    Err(e) => Ok(Value::error(ErrorValue::io(e.to_string()))),
                 },
-                Err(e) => Ok(Value::Error(ErrorValue::io(e.to_string()))),
+                Err(e) => Ok(Value::error(ErrorValue::io(e.to_string()))),
             }
         }
         _ => Err(RuntimeError::Generic {
@@ -95,7 +95,7 @@ fn io_delete(args: Vec<Value>, span: Span) -> Result<Value> {
             };
             match result {
                 Ok(_) => Ok(Value::Unit),
-                Err(e) => Ok(Value::Error(ErrorValue::io(e.to_string()))),
+                Err(e) => Ok(Value::error(ErrorValue::io(e.to_string()))),
             }
         }
         _ => Err(RuntimeError::Generic {
@@ -116,7 +116,7 @@ fn io_list(args: Vec<Value>, span: Span) -> Result<Value> {
                 }
                 Ok(Value::array(names))
             }
-            Err(e) => Ok(Value::Error(ErrorValue::io(e.to_string()))),
+            Err(e) => Ok(Value::error(ErrorValue::io(e.to_string()))),
         },
         _ => Err(RuntimeError::Generic {
             message: "io::list: expected String path".into(),
@@ -130,7 +130,7 @@ fn io_mkdir(args: Vec<Value>, span: Span) -> Result<Value> {
     match args.into_iter().next() {
         Some(Value::String(path)) => match std::fs::create_dir_all(&path) {
             Ok(_) => Ok(Value::Unit),
-            Err(e) => Ok(Value::Error(ErrorValue::io(e.to_string()))),
+            Err(e) => Ok(Value::error(ErrorValue::io(e.to_string()))),
         },
         _ => Err(RuntimeError::Generic {
             message: "io::mkdir: expected String path".into(),
