@@ -209,6 +209,17 @@ struct FunctionCtx {
     /// Names some `\` in this body ends. Their destruction is tracked at run
     /// time, and reading one checks it (ZYVM-005).
     destroyable: HashSet<String>,
+    /// Temporaries a call has written its result into and nothing has shown
+    /// to be a number since (ZYVM-022). `release_temps` clears them when their
+    /// statement ends: a result used once and dropped — `big()$#` — stayed
+    /// alive in its register until another temporary reused it, so two such
+    /// calls in a row held two arrays where the tree-walker holds one. An
+    /// arithmetic instruction that reads one takes it out: if it ran, what
+    /// the register holds is a number, and clearing it would be a step for
+    /// nothing — `acc + classify(i)` paid one a turn. Clearing every
+    /// temporary of unknown type cost 18.7 % of the steps of `bench/big`;
+    /// this costs 0.05 %.
+    call_results: HashSet<Reg>,
 }
 
 impl FunctionCtx {
@@ -221,6 +232,7 @@ impl FunctionCtx {
             state_temps: Vec::new(),
             postfix_hot_vars: HashSet::new(),
             destroyable: HashSet::new(),
+            call_results: HashSet::new(),
             reg_types: Vec::new(),
             next_reg: 0,
             live_temps: Vec::new(),
@@ -308,6 +320,9 @@ impl FunctionCtx {
             }
             if self.poison_temps {
                 self.emit(Instruction::LoadInt(r, POISON));
+            } else if self.call_results.remove(&r) {
+                // A call's result, perhaps a collection: let it go now.
+                self.emit(Instruction::LoadUnit(r));
             }
             self.free_temps.push(r);
         }
@@ -322,6 +337,23 @@ impl FunctionCtx {
     }
 
     fn emit(&mut self, instr: Instruction) -> usize {
+        match &instr {
+            Instruction::Call(d, ..) | Instruction::CallDynamic(d, ..) | Instruction::CallBuiltin(d, ..) => {
+                self.call_results.insert(*d);
+            }
+            Instruction::AddInt(_, a, b) | Instruction::SubInt(_, a, b) | Instruction::MulInt(_, a, b)
+            | Instruction::DivInt(_, a, b) | Instruction::ModInt(_, a, b) | Instruction::PowInt(_, a, b)
+            | Instruction::AddFloat(_, a, b) | Instruction::SubFloat(_, a, b) | Instruction::MulFloat(_, a, b)
+            | Instruction::DivFloat(_, a, b) | Instruction::PowFloat(_, a, b) => {
+                self.call_results.remove(a);
+                self.call_results.remove(b);
+            }
+            Instruction::NegInt(_, a) | Instruction::NegFloat(_, a)
+            | Instruction::AddIntImm(_, a, _) | Instruction::SubIntImm(_, a, _) | Instruction::MulIntImm(_, a, _) => {
+                self.call_results.remove(a);
+            }
+            _ => {}
+        }
         let pos = self.instructions.len();
         self.instructions.push(instr);
         self.src.push(self.cur_src);
