@@ -20,7 +20,7 @@ use zymbol_ast::{
     CollectionAppendExpr, CollectionContainsExpr, CollectionFindAllExpr,
     CollectionInsertExpr, CollectionLengthExpr,
     CollectionRemoveAllExpr, CollectionRemoveAtExpr, CollectionRemoveRangeExpr,
-    CollectionRemoveValueExpr, CollectionSliceExpr, CollectionUpdateExpr, Expr,
+    CollectionRemoveValueExpr, CollectionSliceExpr, CollectionUpdateExpr, DeepIndexExpr, Expr,
 };
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
@@ -343,6 +343,92 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
+    /// The steps of `m[i>j>…]`, left to right. A step is an ordinary
+    /// expression, and its VALUE says how to address: Int → position, String →
+    /// dictionary key. Same rule as `d[clave]`, one level down.
+    pub(crate) fn eval_nav_steps(&mut self, di: &DeepIndexExpr, span: zymbol_span::Span) -> Result<Vec<Value>> {
+        let mut indices: Vec<Value> = Vec::with_capacity(di.path.steps.len());
+        for step in &di.path.steps {
+            match self.eval_expr(&step.index)? {
+                v @ (Value::Int(_) | Value::String(_)) => indices.push(v),
+                other => return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                        other.type_label()
+                    ),
+                    span,
+                )),
+            }
+        }
+        Ok(indices)
+    }
+
+    /// `m[i>j>…]$~ v` on `m` where it lives — the receiver of the statement,
+    /// handed over by `assign_update` (GLB-140). The path is checked first,
+    /// reading and copying nothing; a path of arrays, tuples and dictionaries
+    /// whose every step is there is then written level by level, each level
+    /// copied only if somebody else holds it. Anything else — a text on the
+    /// way, a step that is not there, a position into a dictionary — goes the
+    /// way it always went, `deep_update_value` on a copy, so it fails with the
+    /// same words, and a refusal leaves `col` as it was.
+    ///
+    /// It used to go that way every time: the receiver was read as a second
+    /// owner of its `Rc`, and every edit copied the outer collection whole.
+    pub(crate) fn deep_update_in(
+        col: &mut Value,
+        indices: &[Value],
+        new_val: Value,
+        span: zymbol_span::Span,
+    ) -> Result<()> {
+        let Some((last, inner)) = indices.split_last() else {
+            *col = new_val;
+            return Ok(());
+        };
+        if !deep_path_in_place(col, inner, last) {
+            let updated = deep_update_value(col.clone(), indices, new_val, span)?;
+            *col = updated;
+            return Ok(());
+        }
+        let mut at = col;
+        for step in inner {
+            at = match (at, step) {
+                (Value::Array(arr), Value::Int(n)) => {
+                    let i = position(*n, arr.len()).expect("checked by deep_path_in_place");
+                    &mut zymbol_common::count::make_mut(arr)[i]
+                }
+                (Value::Tuple(tup), Value::Int(n)) => {
+                    let i = position(*n, tup.len()).expect("checked by deep_path_in_place");
+                    &mut zymbol_common::count::make_mut(tup)[i]
+                }
+                (Value::NamedTuple(fields), Value::String(key)) => zymbol_common::count::make_mut_dict(fields)
+                    .get_mut(key)
+                    .expect("checked by deep_path_in_place"),
+                _ => unreachable!("deep_path_in_place checked every step"),
+            };
+        }
+        match (at, last) {
+            (Value::Array(arr), Value::Int(n)) => {
+                let i = position(*n, arr.len()).expect("checked by deep_path_in_place");
+                zymbol_common::count::make_mut(arr)[i] = new_val;
+            }
+            (Value::Tuple(tup), Value::Int(n)) => {
+                let i = position(*n, tup.len()).expect("checked by deep_path_in_place");
+                zymbol_common::count::make_mut(tup)[i] = new_val;
+            }
+            // A key that is not there is added, as `set_at_step` does.
+            (Value::NamedTuple(fields), Value::String(key)) => {
+                let m = zymbol_common::count::make_mut_dict(fields);
+                match m.get_mut(key) {
+                    Some(f) => *f = new_val,
+                    None => { m.insert(key.clone(), new_val); }
+                }
+            }
+            _ => unreachable!("deep_path_in_place checked the last step"),
+        }
+        Ok(())
+    }
+
     /// Evaluate collection update operator: collection[index]$~ value
     pub(crate) fn eval_collection_update(&mut self, op: &CollectionUpdateExpr) -> Result<Value> {
         // Deep update path: arr[i>j>k]$~ val
@@ -358,23 +444,7 @@ impl<W: Write> Interpreter<W> {
             // so a step that wrote it had its write edited instead of
             // overwritten (GLB-115).
             let root = self.eval_expr(&di.array)?;
-            // A step is an ordinary expression, and its VALUE says how to
-            // address: Int → position, String → dictionary key. Same rule as
-            // `d[clave]`, one level down.
-            let mut indices: Vec<Value> = Vec::with_capacity(di.path.steps.len());
-            for step in &di.path.steps {
-                match self.eval_expr(&step.index)? {
-                    v @ (Value::Int(_) | Value::String(_)) => indices.push(v),
-                    other => return Err(RuntimeError::kinded(
-                        "Type",
-                        format!(
-                            "a navigation step is a position (Int) or a dictionary key (String), got {}",
-                            other.type_label()
-                        ),
-                        op.span,
-                    )),
-                }
-            }
+            let indices = self.eval_nav_steps(di, op.span)?;
             let new_val = self.eval_expr(&op.value)?;
             return deep_update_value(root, &indices, new_val, op.span);
         }
@@ -1503,6 +1573,48 @@ fn natural_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         (Value::Bool(x), Value::Bool(y))     => Some(x.cmp(y)),
         _ => None,
     }
+}
+
+/// Whether `deep_update_in` can write this path where it is: every step before
+/// the last lands on an element that is there, through an array, a tuple or a
+/// dictionary, and the last one addresses an element of an array or a tuple
+/// that is there, or a key of a dictionary — which is added if it is not. Any
+/// other shape is `deep_update_value`'s, errors included.
+fn deep_path_in_place(col: &Value, inner: &[Value], last: &Value) -> bool {
+    let mut at = col;
+    for step in inner {
+        at = match (at, step) {
+            (Value::Array(arr), Value::Int(n)) => match position(*n, arr.len()) {
+                Some(i) => &arr[i],
+                None => return false,
+            },
+            (Value::Tuple(tup), Value::Int(n)) => match position(*n, tup.len()) {
+                Some(i) => &tup[i],
+                None => return false,
+            },
+            (Value::NamedTuple(fields), Value::String(key)) => match fields.get(key) {
+                Some(v) => v,
+                None => return false,
+            },
+            _ => return false,
+        };
+    }
+    match (at, last) {
+        (Value::Array(arr), Value::Int(n)) => position(*n, arr.len()).is_some(),
+        (Value::Tuple(tup), Value::Int(n)) => position(*n, tup.len()).is_some(),
+        (Value::NamedTuple(_), Value::String(_)) => true,
+        _ => false,
+    }
+}
+
+/// A 1-based (or negative) position, 0-based, when it is inside `len` — the
+/// question `resolve_idx` answers, without the error it builds.
+fn position(index: i64, len: usize) -> Option<usize> {
+    if index == 0 {
+        return None;
+    }
+    let i = if index < 0 { len as i64 + index } else { index - 1 };
+    (i >= 0 && (i as usize) < len).then_some(i as usize)
 }
 
 /// Perform a pure functional deep update: set the element at `indices` path to `new_val`.
