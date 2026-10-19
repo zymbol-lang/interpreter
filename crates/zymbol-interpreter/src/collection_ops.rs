@@ -1639,6 +1639,12 @@ fn deep_update_value(
             span,
         ));
     }
+    // The last step into a dictionary writes its key whether or not it is
+    // there, as `d["k"]$~ v` does: reading it first made an absent key fail
+    // instead of being added — in the tree-walker only (ZYTW-018).
+    if indices.len() == 1 && matches!((&col, idx), (Value::NamedTuple(_), Value::String(_))) {
+        return set_at_step(col, idx, new_val, span);
+    }
     let sub = get_at_step(&col, idx, span)?;
     let updated_sub = deep_update_value(sub, &indices[1..], new_val, span)?;
     set_at_step(col, idx, updated_sub, span)
