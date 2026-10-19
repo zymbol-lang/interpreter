@@ -25,7 +25,7 @@ use std::rc::Rc;
 use zymbol_span::Span;
 
 fn net_error(msg: impl Into<String>) -> Value {
-    Value::Error(ErrorValue::new("Network", msg))
+    Value::error(ErrorValue::new("Network", msg))
 }
 
 /// Parse the optional `headers` argument into (name, value) pairs.

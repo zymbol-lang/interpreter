@@ -40,7 +40,7 @@ use zymbol_span::Span;
 
 /// A soft `##Time`: the call was well formed and the data was not.
 fn soft(message: String) -> Value {
-    Value::Error(ErrorValue::new("Time", message))
+    Value::error(ErrorValue::new("Time", message))
 }
 
 /// A hard error: this call could not be made at all.

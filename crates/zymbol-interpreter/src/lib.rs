@@ -365,10 +365,27 @@ pub enum Value {
     Tuple(Rc<Vec<Value>>),
     /// The dictionary, `#(…)`: keys in insertion order, found by hash (GLB-132).
     NamedTuple(Rc<zymbol_common::Dict<Value>>),
-    Function(FunctionValue),
+    /// Boxed, as `Error` is: inline, a `FunctionValue` (120 bytes) made every
+    /// value that size — an array of integers took 120 bytes an element, and
+    /// shifting one moved seven times what the VM's 16-byte value moves.
+    Function(Box<FunctionValue>),
     /// Error value for try-catch error handling
-    Error(ErrorValue),
+    Error(Box<ErrorValue>),
     Unit,
+}
+
+impl Value {
+    /// `Value::Error`, boxed.
+    #[inline]
+    pub fn error(e: ErrorValue) -> Self {
+        Value::Error(Box::new(e))
+    }
+
+    /// `Value::Function`, boxed.
+    #[inline]
+    pub fn function(f: FunctionValue) -> Self {
+        Value::Function(Box::new(f))
+    }
 }
 
 /// Keep `Interpreter::file_vars` in step with a write to a file-level variable.
@@ -2307,7 +2324,7 @@ impl<W: Write> Interpreter<W> {
                 // (GAP-GOL-003). The analyser refuses a message whose type it
                 // knows is not text; this is the case it could not know.
                 match self.eval_expr(&e.message)? {
-                    Value::String(m) => Ok(Value::Error(ErrorValue::new(e.kind.clone(), m))),
+                    Value::String(m) => Ok(Value::error(ErrorValue::new(e.kind.clone(), m))),
                     other => Err(RuntimeError::kinded(
                         "Type",
                         format!("an error's message is a String, got {}", other.type_label()),
@@ -2462,7 +2479,7 @@ impl<W: Write> Interpreter<W> {
             // the rule the other two engines already follow.
             RuntimeError::Kinded { kind, inner } => {
                 let m = inner.to_string();
-                Value::Error(match *kind {
+                Value::error(match *kind {
                     "Range" => ErrorValue::range(m),
                     "Key" => ErrorValue::key(m),
                     "Index" => ErrorValue::index(m),
@@ -2475,10 +2492,10 @@ impl<W: Write> Interpreter<W> {
                 })
             }
             RuntimeError::Io(io_err) => {
-                Value::Error(ErrorValue::io(io_err.to_string()))
+                Value::error(ErrorValue::io(io_err.to_string()))
             }
             // Never caught: `execute_statement` takes it first (GLB-107).
-            RuntimeError::Unwind => Value::Error(ErrorValue::generic(error.to_string())),
+            RuntimeError::Unwind => Value::error(ErrorValue::generic(error.to_string())),
             // A located error is a `Generic` that learned where it happened —
             // `!?` classifies it by exactly the same text, so attaching a file
             // never moves an error from one `##` family to another.
@@ -2486,7 +2503,7 @@ impl<W: Write> Interpreter<W> {
                 // The family is read from the words, by the rule both Rust
                 // engines share (`zymbol_common::errkind`, GLB-010).
                 let m = message.clone();
-                Value::Error(match zymbol_common::errkind::error_kind_of_message(message) {
+                Value::error(match zymbol_common::errkind::error_kind_of_message(message) {
                     "Range" => ErrorValue::range(m),
                     "Key" => ErrorValue::key(m),
                     "Index" => ErrorValue::index(m),
@@ -2498,19 +2515,19 @@ impl<W: Write> Interpreter<W> {
                 })
             }
             RuntimeError::ModuleNotFound { path } => {
-                Value::Error(ErrorValue::io(format!("module not found: {}", path)))
+                Value::error(ErrorValue::io(format!("module not found: {}", path)))
             }
             RuntimeError::CircularDependency => {
-                Value::Error(ErrorValue::generic("circular dependency detected"))
+                Value::error(ErrorValue::generic("circular dependency detected"))
             }
             RuntimeError::CircularImport { module } => {
-                Value::Error(ErrorValue::generic(format!(
+                Value::error(ErrorValue::generic(format!(
                     "E004: Circular import detected: module '{}' is already being loaded",
                     module
                 )))
             }
             RuntimeError::ParseError(msg) => {
-                Value::Error(ErrorValue::parse(msg.clone()))
+                Value::error(ErrorValue::parse(msg.clone()))
             }
         }
     }
@@ -2596,7 +2613,7 @@ mod error_handling_tests {
 
     #[test]
     fn test_value_is_error() {
-        let error = Value::Error(ErrorValue::generic("test"));
+        let error = Value::error(ErrorValue::generic("test"));
         assert!(error.is_error());
 
         let int = Value::Int(42);
@@ -2608,7 +2625,7 @@ mod error_handling_tests {
 
     #[test]
     fn test_value_as_error() {
-        let error = Value::Error(ErrorValue::io("test"));
+        let error = Value::error(ErrorValue::io("test"));
         assert!(error.as_error().is_some());
         assert_eq!(error.as_error().unwrap().error_type, "IO");
 
@@ -2618,10 +2635,10 @@ mod error_handling_tests {
 
     #[test]
     fn test_error_display_string() {
-        let error = Value::Error(ErrorValue::new("IO", "file not found"));
+        let error = Value::error(ErrorValue::new("IO", "file not found"));
         assert_eq!(error.to_display_string(), "##IO(file not found)");
 
-        let generic = Value::Error(ErrorValue::generic("unknown error"));
+        let generic = Value::error(ErrorValue::generic("unknown error"));
         assert_eq!(generic.to_display_string(), "##_(unknown error)");
     }
 
@@ -2771,8 +2788,8 @@ mod error_handling_tests {
             dummy_span,
         );
 
-        let io_error = Value::Error(ErrorValue::io("test"));
-        let generic_error = Value::Error(ErrorValue::generic("test"));
+        let io_error = Value::error(ErrorValue::io("test"));
+        let generic_error = Value::error(ErrorValue::generic("test"));
 
         assert!(interp.catch_matches(&catch, &io_error));
         assert!(interp.catch_matches(&catch, &generic_error));
@@ -2796,8 +2813,8 @@ mod error_handling_tests {
             dummy_span,
         );
 
-        let io_error = Value::Error(ErrorValue::io("test"));
-        let generic_error = Value::Error(ErrorValue::generic("test"));
+        let io_error = Value::error(ErrorValue::io("test"));
+        let generic_error = Value::error(ErrorValue::generic("test"));
 
         assert!(interp.catch_matches(&io_catch, &io_error));
         assert!(!interp.catch_matches(&io_catch, &generic_error));
@@ -2821,8 +2838,8 @@ mod error_handling_tests {
             dummy_span,
         );
 
-        let io_error = Value::Error(ErrorValue::io("test"));
-        let div_error = Value::Error(ErrorValue::div("test"));
+        let io_error = Value::error(ErrorValue::io("test"));
+        let div_error = Value::error(ErrorValue::div("test"));
 
         assert!(interp.catch_matches(&wildcard_catch, &io_error));
         assert!(interp.catch_matches(&wildcard_catch, &div_error));
@@ -3124,5 +3141,16 @@ mod error_handling_tests {
         let (output, result) = parse_and_run(code);
         assert!(result.is_ok());
         assert_eq!(String::from_utf8_lossy(&output), "1\nerror 2\nno error\n");
+    }
+
+    /// Every value pays the size of the largest variant. A `FunctionValue`
+    /// inline made it 120 bytes: an array of two million integers took 236 MiB
+    /// where the VM's took 38, and removing the first element moved seven times
+    /// the memory (ZYTW-019). Boxed, the largest is a `String`, and the tag
+    /// lives in a niche of its capacity: a value is 24 bytes.
+    #[test]
+    fn a_value_is_as_large_as_a_string() {
+        assert_eq!(std::mem::size_of::<Value>(), std::mem::size_of::<String>());
+        assert_eq!(std::mem::size_of::<Value>(), 24);
     }
 }

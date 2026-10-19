@@ -59,7 +59,7 @@ impl<W: Write> Interpreter<W> {
             // decided the second.
             return match runner(&file_path, &execute.args) {
                 Ok((printed, 0)) => Ok(Value::String(printed)),
-                Ok((printed, code)) => Ok(Value::Error(crate::ErrorValue::new(
+                Ok((printed, code)) => Ok(Value::error(crate::ErrorValue::new(
                     "IO",
                     zymbol_common::shell::exit_failure_message(Some(code), &printed),
                 ))),
@@ -188,7 +188,7 @@ impl<W: Write> Interpreter<W> {
         // empty string, and nothing could tell them apart.
         if !output.status.success() {
             let said = zymbol_common::shell::failure_text(&output);
-            return Ok(Value::Error(crate::ErrorValue::new(
+            return Ok(Value::error(crate::ErrorValue::new(
                 "IO",
                 zymbol_common::shell::exit_failure_message(output.status.code(), &said),
             )));
