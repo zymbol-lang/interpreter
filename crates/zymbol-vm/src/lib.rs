@@ -5786,10 +5786,15 @@ fn vm_deep_set_in(col: &mut Value, path: &[Value], new_val: Value, single: bool)
                     // so writing past the end leaves a hole; a dictionary is
                     // addressed by KEY and has no holes to leave.
                     //
-                    // Added only once the rest of the path is known to hold:
-                    // the write is made into a scratch value first, so a path
-                    // that goes on past the new key fails with the dictionary
-                    // untouched.
+                    // Only as the LAST step: a path that goes on past a key
+                    // that is not there fails as reading it fails, `##Key`
+                    // with the keys there are (COLLECTIONS.md, "An absent key
+                    // is `##Key`"). It walked on into a `Unit` it made, and
+                    // said "cannot index into Unit" (GLB-141).
+                    None if !rest.is_empty() => {
+                        let available: Vec<String> = rc.keys().cloned().collect();
+                        Err(VmError::KeyMsg(missing_key_msg(name.as_str(), &available)))
+                    }
                     None => {
                         let mut fresh = Value::Unit;
                         vm_deep_set_in(&mut fresh, rest, new_val, false)?;
