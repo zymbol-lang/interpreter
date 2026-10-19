@@ -8,7 +8,7 @@
 > (reproducir primero). Ver «Avance» dentro de ella. De las etapas 3 y 4 no hay nada hecho.
 >
 > **Plan de cierre (2026-10-19):** lo que queda va en seis grupos, aprobados por el autor con la opción recomendada de
-> cada uno; ver «Plan de cierre — lo que queda, por grupos». El grupo 1 está hecho. Las etapas 3 (salvo la medición de
+> cada uno; ver «Plan de cierre — lo que queda, por grupos». Los grupos 1 y 2 están hechos. Las etapas 3 (salvo la medición de
 > 3.2) y 4 pasan a la v0.0.12.
 >
 > **Escrito el 2026-10-13.** Toda cifra sin otra fecha se midió ese día, sobre esa rama, con un
@@ -512,7 +512,7 @@ puerta entera.
 | Grupo | Temas | Se implementa | Se cierra como deuda de la v0.0.11 | Estado |
 |---|---|---|---|---|
 | 1. Leer un texto por posición | `GLB-139`, `ZYTW-016` | Migas en la VM | `GLB-139` en el tree-walker y en zyjs; `ZYTW-016` | **Hecho** (2026-10-19) |
-| 2. Editar una colección sin copiarla | `GLB-140`, `ZYJS-068` | `GLB-140` en el tree-walker y en zyjs; `ZYJS-068` | — | Pendiente |
+| 2. Editar una colección sin copiarla | `GLB-140`, `ZYJS-068` | `GLB-140` en el tree-walker y en zyjs; `ZYJS-068` | — | **Hecho** (2026-10-19), y dos más que salieron: `ZYTW-018`, `GLB-141` |
 | 3. La memoria de los motores | `Value` del tree-walker (120 bytes), `ZYVM-022` | `FunctionValue` y `ErrorValue` en caja; `ZYVM-022` opción A, medida antes | `ZYVM-022` si cuesta más de un 2 % de pasos | Pendiente |
 | 4. El binario y su distribución | `GLB-134`, D4 | D4; medir musl en el `HEAD` y, si hace falta, `mimalloc` | — | Pendiente |
 | 5. La puerta y los documentos | D1, `GUIDE.md` § 3b, `LLM.md` | `zyq expect` también contra `zyvm`; quitar la frase de § 3b; `LLM.md` a v0.0.11 | — | Pendiente |
@@ -581,6 +581,16 @@ Con la fila en una variable (`m$+ fila`), 211 ms a 20 000; con el literal, 2 123
   `GLB-115`.
 - **zyjs:** el `own` de `ZYJS-014`, nivel a nivel en la ruta; y en `plainOperand`, un literal de colección cuyos
   elementos sean todos `plainOperand` (un literal no ejecuta código del programa).
+
+**Hecho el 2026-10-19.** El tree-walker escribe la ruta en el sitio: 4 000 ediciones sobre 400 filas copiaban 1 612 000
+valores y ahora 0, también a través de `<~`. zyjs escribe en el sitio el nivel de fuera y copia sólo la fila que escribe
+—marcar también las filas dejaría que una leída antes con `r = m[2]` viera la escritura—: `growth/update-nested`
+384 → 5 916 ms antes, 275 → 474 ms ahora. `ZYJS-068`: 312 → 6 634 ms antes, 171 → 317 ms ahora. Comparar el tree-walker
+de antes con el de después sacó dos divergencias que la puerta no veía, corregidas el mismo día: `ZYTW-018` (el
+tree-walker abortaba al añadir una clave en el último paso de una ruta, que la VM y zyjs añaden) y `GLB-141` (la VM y
+zyjs leían una clave ausente a medio camino como `Unit`, donde `COLLECTIONS.md` dice `##Key`). Lo sujetan
+`growth/update-nested` y `growth/append-rows`, sin deuda en ningún motor, y
+`zyquality/corpus/collections/edicion_profunda_en_el_sitio.zy`.
 
 ### Grupo 3 — La memoria de los motores
 
