@@ -6,9 +6,11 @@
 //! cost what the text was long, in memory as well as in time (GLB-130,
 //! PERF-05 a). These borrow instead.
 //!
-//! They still walk the text to find a position, as `chars().count()` does:
-//! knowing where the n-th character starts without walking needs the string to
-//! carry more than its bytes, which is PERF-05 b, deferred by D8.
+//! On a text that is not ASCII they still walk it to find a position, as
+//! `chars().count()` does: knowing where the n-th character starts without
+//! walking needs the string to carry more than its bytes. The VM's `ZyStr`
+//! carries its character count (ZYVM-028, decision D8) and reads an ASCII text
+//! by byte; the position of a character in any other text is GLB-139, open.
 
 /// How many characters `s` has.
 pub fn char_len(s: &str) -> usize {
