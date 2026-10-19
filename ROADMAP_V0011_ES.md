@@ -7,6 +7,10 @@
 > (2026-10-16, `ZYVM-023`, `ZYVM-025`, `GLB-130`, `GLB-132` y `GLB-133`). Quedan PERF-05 b (aplazada, D8) y PERF-08
 > (reproducir primero). Ver «Avance» dentro de ella. De las etapas 3 y 4 no hay nada hecho.
 >
+> **Plan de cierre (2026-10-19):** lo que queda va en seis grupos, aprobados por el autor con la opción recomendada de
+> cada uno; ver «Plan de cierre — lo que queda, por grupos». El grupo 1 está hecho. Las etapas 3 (salvo la medición de
+> 3.2) y 4 pasan a la v0.0.12.
+>
 > **Escrito el 2026-10-13.** Toda cifra sin otra fecha se midió ese día, sobre esa rama, con un
 > binario de release. Las que vienen de antes llevan su fecha y hay que volver a medirlas antes
 > de citarlas fuera de aquí.
@@ -461,6 +465,9 @@ salida depende de la semilla. `gap.py`: `dict_lookup` ×1,3 → **×1,0**, `dict
 | ZYVM-022 | El valor que devuelve una llamada sobrevive en su registro temporal: la VM tiene dos arrays donde el tree-walker tiene uno (1,79× de memoria, medido en la v0.0.10) | Abierto, con celda `KNOWN` en `zyquality/cost/` |
 | GLB-127 | `>> +a` lo rechazan `zytw` y `zyvm` y `zyjs` lo acepta | Abierto; no es de rendimiento, se hereda |
 
+Lo que se abrió después, el 2026-10-19 —`GLB-139`, `GLB-140`, `ZYJS-068`— y el destino de cada tema abierto están en
+«Plan de cierre — lo que queda, por grupos», más abajo.
+
 ### El método
 
 Es el de la v0.0.10 y no se relaja:
@@ -490,6 +497,136 @@ El rendimiento del tree-walker, salvo donde comparte el defecto con la VM (PERF-
 de `zymbol.js`: se sustituye en la etapa 4, y optimizar lo que se va a reemplazar es trabajo que no
 queda — PERF-03 es la excepción, porque cambia la representación de un valor que los tres motores
 tienen que imprimir igual.
+
+---
+
+## Plan de cierre — lo que queda, por grupos (2026-10-19)
+
+El 2026-10-19 se revisó `zyquality/bench/big/HALLAZGOS.md` contra la rama: PERF-01 a 07 están corregidos y PERF-08 es
+`GLB-134`. La revisión abrió tres hallazgos (`GLB-139`, `GLB-140`, `ZYJS-068`) y midió un cuarto hecho, el tamaño del
+valor del tree-walker. Con lo que ya estaba abierto salieron doce temas, que aquí van agrupados por lo que comparten:
+la misma causa, el mismo código o el mismo motor. **El autor aprobó el plan ese día, con la opción recomendada de cada
+grupo, y pidió empezar por el grupo 1.** Cada grupo sigue el método de la etapa 2: ficha con su caso en rojo, arreglo,
+puerta entera.
+
+| Grupo | Temas | Se implementa | Se cierra como deuda de la v0.0.11 | Estado |
+|---|---|---|---|---|
+| 1. Leer un texto por posición | `GLB-139`, `ZYTW-016` | Migas en la VM | `GLB-139` en el tree-walker y en zyjs; `ZYTW-016` | **Hecho** (2026-10-19) |
+| 2. Editar una colección sin copiarla | `GLB-140`, `ZYJS-068` | `GLB-140` en el tree-walker y en zyjs; `ZYJS-068` | — | Pendiente |
+| 3. La memoria de los motores | `Value` del tree-walker (120 bytes), `ZYVM-022` | `FunctionValue` y `ErrorValue` en caja; `ZYVM-022` opción A, medida antes | `ZYVM-022` si cuesta más de un 2 % de pasos | Pendiente |
+| 4. El binario y su distribución | `GLB-134`, D4 | D4; medir musl en el `HEAD` y, si hace falta, `mimalloc` | — | Pendiente |
+| 5. La puerta y los documentos | D1, `GUIDE.md` § 3b, `LLM.md` | `zyq expect` también contra `zyvm`; quitar la frase de § 3b; `LLM.md` a v0.0.11 | — | Pendiente |
+| 6. El alcance de la versión | Etapas 3 y 4 | La medición de 3.2 | 3.1, 3.3, 3.4 y la etapa 4 pasan a la v0.0.12 | Pendiente |
+
+### Grupo 1 — Leer un texto por posición
+
+Una posición de Zymbol cuenta caracteres y el texto se guarda en UTF-8: llegar a `s[i]` exigía caminar desde el
+principio, y la VM sólo se lo ahorraba con un texto ASCII (`ZYVM-028`). Dentro de un bucle, cuadrático.
+
+```zymbol
+s = ""
+@ _i:1..128000 { s = s "ñ" }
+k = 0
+@ i:1..128000 { ? s[i] == 'ñ' { k = k + 1 } }
+>> k ¶
+```
+
+El control es el mismo programa con `"a"`: plano en los dos motores de Rust. Con «ñ», antes, la VM ×13 de 32 000 a
+128 000, el tree-walker ×13 y zyjs ×15 (que recorre también un texto ASCII). Python indexa en O(1).
+
+- **VM, opción A, migas — elegida y hecha.** Un texto del montón que no es ASCII guarda, la primera vez que se le pide
+  una posición, el byte donde empieza cada carácter 64; `s[i]` y un corte saltan a la miga anterior. 128 000 «ñ»:
+  941 → 39 ms. Descartadas: recordar la última posición (deja cuadrático el acceso hacia atrás o al azar) y un texto de
+  ancho fijo como el de Python (rehace `ZyStr`).
+- **Tree-walker — deuda.** Arreglarlo pide que su texto deje de ser un `String` que se copia en cada lectura
+  (`ZYTW-016`); llevar `ZyStr` a `zymbol-common` cerraría los dos, y es el cambio más grande de esta lista.
+- **zyjs — deuda.** Lo pequeño sería guardar `[...v]` en el valor la primera vez (zyjs nunca cambia un texto en el
+  sitio); el motor se sustituye en la etapa 4.
+
+Lo sujetan `growth/index-a-text` y `growth/slice-a-text` (este, por reloj otra vez en la VM) de `zyquality/cost/`, y
+`zyquality/corpus/strings/34_position_crumbs.zy`.
+
+### Grupo 2 — Editar una colección sin copiarla
+
+La regla es «escribo en el sitio si el valor es sólo mío», y tiene dos huecos. `GLB-140`: una edición de dos niveles
+copia el array exterior entero en el tree-walker y en zyjs.
+
+```zymbol
+fila = [0, 0, 0]
+m = []
+@ _i:1..400 { m$+ fila }
+@ k:1..4000 {
+    r = (k % 400) + 1
+    m[r>2]$~ k
+}
+>> m[1>2] ¶
+```
+
+El control, `m[r]$~ k` sobre un array de números, copia 0 en los tres. Con dos niveles el tree-walker copia 1 612 000
+valores (las 400 filas en cada edición) y zyjs pasa de 61 a 651 ms de 2 000 a 32 000 filas; la VM copia 3. Es la
+forma de editar una matriz, y GoL y GO corren en el playground sobre zyjs.
+
+`ZYJS-068`: con un literal como operando, zyjs copia el receptor.
+
+```zymbol
+m = []
+@ i:1..40000 { m$+ [i, 0, 0] }
+>> m$# ¶
+```
+
+Con la fila en una variable (`m$+ fila`), 211 ms a 20 000; con el literal, 2 123 ms a 20 000 y 9 818 a 40 000.
+
+- **Tree-walker:** la edición profunda por `edit_receiver_done`, como la de un nivel: la raíz sale de su variable,
+  se baja con `&mut` y `make_mut` nivel a nivel, y vuelve; el mismo `receiver_read_first` conserva el orden de
+  `GLB-115`.
+- **zyjs:** el `own` de `ZYJS-014`, nivel a nivel en la ruta; y en `plainOperand`, un literal de colección cuyos
+  elementos sean todos `plainOperand` (un literal no ejecuta código del programa).
+
+### Grupo 3 — La memoria de los motores
+
+El `Value` del tree-walker mide **120 bytes** y el de la VM, 16: `Function(FunctionValue)` va en línea y mide 120
+(`ErrorValue`, 48; `String`, 24).
+
+```zymbol
+v = []
+@ i:1..40000 { v$+ i }
+@ _i:1..40000 { v$-[1] }
+>> v$# ¶
+```
+
+Quitar el primero desplaza los que quedan en cualquier lenguaje: Python `pop(0)` 87 ms, la VM 189, el tree-walker
+3 141 (mueve 7,5 veces más memoria). El control, `v$-[v$#]`, ~12 y ~37 ms. Un array de 2 000 000 de enteros: 235,9 MiB
+en el tree-walker, 37,7 en la VM.
+
+- **`Value` del tree-walker:** `FunctionValue` y `ErrorValue` en caja; unos 32 bytes, por medir, y lo que cueste una
+  reserva más al crear una función como valor lo dirá `closure_create_call`.
+- **`ZYVM-022`** (el resultado de una llamada sobrevive en su temporal; ×1,82 de memoria en `autofree/call-result`):
+  liberar sólo los temporales que pueden ser una colección, con el tipo por registro que el compilador ya lleva. Se
+  mide antes con `--count` en `bench/big`; si cuesta más de un 2 % de pasos, se cierra como deuda escribiendo la razón
+  en `alloc_temp`.
+
+### Grupo 4 — El binario y su distribución
+
+- **`GLB-134`:** medir el estático en el `HEAD` (el target musl se instala con `rustup`), porque esta rama ya no copia
+  textos enteros; si algo queda por encima de ×1,5, `mimalloc` sólo para ese target, debajo del `CountingAllocator`
+  para que `--count` siga contando.
+- **D4:** `default = []` en `zymbol-cli`, `std/db` con `--features db`, dicho en el README y en `install.md`; los
+  trabajos de la puerta que prueban `STD_DB` compilan con la feature.
+
+### Grupo 5 — La puerta y los documentos
+
+- **D1:** `zyq expect` compara hoy los goldens **sólo con `zytw`**; la VM, el motor que ejecuta la gente, queda
+  verificada sólo de forma indirecta, a través del consenso. Los goldens los sigue grabando `zytw` —lo nuevo se
+  construye primero en el tree-walker—, y `zyq expect` los compara con `zytw` y `zyvm`.
+- **`GUIDE.md` § 3b** dice que algunas primitivas de TUI son sólo del tree-walker y remite a unas notas por primitiva
+  que no existen; la suite `tui` ya obliga a que los dos motores coincidan. Se quita la frase.
+- **`LLM.md`** sigue titulado v0.0.10, y la suite `llm` lo marca.
+
+### Grupo 6 — El alcance de la versión
+
+La v0.0.11 se cierra con las etapas 1 y 2, los grupos 1 a 5 y la **medición** de 3.2 (compilar sin LSP, REPL, HTTP ni
+`db`, y medir peso, memoria al compilar y arranque), que contesta D6. Las evaluaciones 3.1, 3.3 y 3.4 y la etapa 4
+pasan a la v0.0.12 tal como están escritas aquí.
 
 ---
 
@@ -632,12 +769,12 @@ Tres riesgos que hay que resolver en el paso 1:
 
 | Id | La pregunta | Recomendación |
 |---|---|---|
-| D1 | ¿Qué motor graba los goldens? | `zyvm`, desde el cierre de la etapa 1: es el motor que ejecuta todo el mundo, y `zytw` tiene que coincidir con él |
+| D1 | ¿Qué motor graba los goldens? | **Decidida por el autor el 2026-10-19 (grupo 5):** los sigue grabando `zytw`, porque lo nuevo se construye primero en el tree-walker, y `zyq expect` los compara con `zytw` y `zyvm` — hasta ese día sólo con `zytw`. La recomendación anterior, grabar con `zyvm`, rompía ese orden |
 | D2 | ¿Qué hace el REPL? | Se queda en el tree-walker en esta versión, y se dice. Portarlo es diseño, no un flag |
 | D3 | ¿Qué pasa con `--vm`? | Se conserva y se acepta sin efecto: hay scripts que lo escriben |
-| D4 | ¿`std/db` sale de las features por defecto? | Sí. Los releases de Linux y macOS ya se construyen sin ella |
-| D5 | ¿Dónde va la etapa 4? | Después de 3.3, dentro de esta versión si la etapa 2 no la desplaza |
-| D6 | ¿Qué falló en el contenedor de 4 GB? | No es una decisión sino un dato que falta, y cambia el primer arreglo de 3.2. ZyBigBench, hecho en ese contenedor, apunta a una pista: su `README` dice que el perfil de release con LTO no terminaba allí |
+| D4 | ¿`std/db` sale de las features por defecto? | **Decidida por el autor el 2026-10-19 (grupo 4):** sí. Los releases de Linux y macOS ya se construyen sin ella |
+| D5 | ¿Dónde va la etapa 4? | **Decidida por el autor el 2026-10-19 (grupo 6):** en la v0.0.12. La etapa 2 la desplazó |
+| D6 | ¿Qué falló en el contenedor de 4 GB? | No es una decisión sino un dato que falta, y cambia el primer arreglo de 3.2. ZyBigBench, hecho en ese contenedor, apunta a una pista: su `README` dice que el perfil de release con LTO no terminaba allí. **Desde el 2026-10-19 (grupo 6)** la contesta la medición de 3.2, que se queda en esta versión |
 | D7 | PERF-07: el error que sustituye al aborto, ¿se captura con `!?`, y de qué familia es? | **Decidida por el autor el 2026-10-16:** se captura con `!?`; su familia es una nueva, `##Depth`; el límite es de 10 000 llamadas activas, el mismo número en los tres motores, con la pila del programa en 512 MiB y un seguro que mira la pila que queda |
 | D8 | PERF-05 b: ¿la cadena guarda si es ASCII, o cuántos caracteres tiene? | **Decidida por el autor el 2026-10-17:** entra en la etapa 2, con Python como oráculo. Hecho como `ZYVM-028`: el texto guarda su número de caracteres, calculado la primera vez; de ahí sale si es ASCII |
 
