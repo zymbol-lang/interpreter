@@ -1301,7 +1301,8 @@ fn vm_index_get(coll: &Value, index: &Value) -> Result<Value, VmError> {
         }
         Value::String(s) => {
             // The count is kept by the text (PERF-05 b); an ASCII
-            // text is read at its byte, any other walked to it.
+            // text is read at its byte, any other from its nearest crumb
+            // (GLB-139).
             let char_count = s.char_len();
             let i = if idx == 0 { return Err(VmError::IndexZero);
             } else if idx < 0 { char_count as i64 + idx } else { idx - 1 };
@@ -1311,7 +1312,7 @@ fn vm_index_get(coll: &Value, index: &Value) -> Result<Value, VmError> {
             let ch = if s.is_ascii_text() {
                 s.as_bytes()[i as usize] as char
             } else {
-                s.chars().nth(i as usize).unwrap()
+                s.as_str()[s.char_byte(i as usize)..].chars().next().unwrap()
             };
             Value::Char(ch)
         }
@@ -5641,12 +5642,13 @@ fn str_slice_count(s: &ZyStr, lo: i64, n: i64) -> Result<String, VmError> {
 }
 
 /// Characters `a..b` of a text: by bytes when the text knows it is ASCII —
-/// no walk at all (PERF-05 b) — and walked to otherwise.
+/// no walk at all (PERF-05 b) — and from the nearest crumb otherwise
+/// (GLB-139).
 fn zy_char_range(s: &ZyStr, a: usize, b: usize) -> &str {
     if s.is_ascii_text() {
         &s.as_str()[a..b]
     } else {
-        zymbol_common::text::char_range(s.as_str(), a, b)
+        &s.as_str()[s.char_byte(a)..s.char_byte(b)]
     }
 }
 
