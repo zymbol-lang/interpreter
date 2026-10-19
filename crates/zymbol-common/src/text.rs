@@ -9,8 +9,10 @@
 //! On a text that is not ASCII they still walk it to find a position, as
 //! `chars().count()` does: knowing where the n-th character starts without
 //! walking needs the string to carry more than its bytes. The VM's `ZyStr`
-//! carries its character count (ZYVM-028, decision D8) and reads an ASCII text
-//! by byte; the position of a character in any other text is GLB-139, open.
+//! carries them — its character count (ZYVM-028) and a crumb every 64
+//! characters (GLB-139) — and no longer calls these. The tree-walker, whose
+//! text is a plain `String`, does: GLB-139 stays open there, decided as debt
+//! for v0.0.11.
 
 /// How many characters `s` has.
 pub fn char_len(s: &str) -> usize {

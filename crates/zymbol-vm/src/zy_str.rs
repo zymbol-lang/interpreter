@@ -21,7 +21,7 @@
 //! Valid only on platforms where user-space virtual addresses have bit 63 == 0
 //! (x86-64, arm64 with 48-bit VA). Asserted at compile time.
 
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell};
 use std::mem::ManuallyDrop;
 use std::rc::Rc;
 use std::{fmt, hash};
@@ -50,17 +50,29 @@ pub struct ZyStr([u8; 8]);
 /// Nothing changes the text behind an `Rc` that others hold: a write in place
 /// (`try_into_string`) takes the `String` out of a sole owner, and the new
 /// value is a new `Heap` with its count unknown again.
+///
+/// A text that is not ASCII also keeps, once a position is asked of it, the
+/// byte where every `CRUMB_EVERY`-th character starts (GLB-139): `s[i]` and a
+/// slice jump to the crumb before their position and walk fewer than
+/// `CRUMB_EVERY` characters from there, instead of walking from the start —
+/// which made a loop over the positions of a long text quadratic. Boxed, so
+/// the cell of a text nobody indexes costs one word.
 struct Heap {
     s: String,
     chars: Cell<usize>,
+    crumbs: OnceCell<Box<Vec<usize>>>,
 }
 
 const UNKNOWN: usize = usize::MAX;
 
+/// One crumb every this many characters: a byte offset (8 bytes) per 64
+/// characters, and a walk of at most 63 to reach any position.
+const CRUMB_EVERY: usize = 64;
+
 impl Heap {
     #[inline]
     fn new(s: String) -> Self {
-        Heap { s, chars: Cell::new(UNKNOWN) }
+        Heap { s, chars: Cell::new(UNKNOWN), crumbs: OnceCell::new() }
     }
 }
 
@@ -156,6 +168,35 @@ impl ZyStr {
     #[inline]
     pub fn is_ascii_text(&self) -> bool {
         self.char_len() == self.len()
+    }
+
+    /// The byte where character `i` (0-based) starts, and the length in bytes
+    /// when `i` is the count or past it. By byte on an ASCII text; on any other,
+    /// from the nearest crumb (GLB-139), built the first time it is needed.
+    #[inline]
+    pub fn char_byte(&self, i: usize) -> usize {
+        let n = self.char_len();
+        if i >= n {
+            return self.len();
+        }
+        if n == self.len() {
+            return i;
+        }
+        let s = self.as_str();
+        let (from, skip) = if self.is_inline() {
+            (0, i)
+        } else {
+            // SAFETY: pointer from Rc::into_raw, alive while self is alive.
+            let heap = unsafe { &*self.heap_ptr() };
+            let crumbs = heap.crumbs.get_or_init(|| {
+                Box::new(heap.s.char_indices().step_by(CRUMB_EVERY).map(|(b, _)| b).collect())
+            });
+            (crumbs[i / CRUMB_EVERY], i % CRUMB_EVERY)
+        };
+        match s[from..].char_indices().nth(skip) {
+            Some((b, _)) => from + b,
+            None => s.len(),
+        }
     }
 
     /// Whether the two hold the same heap buffer — `Rc::ptr_eq` for a string.
@@ -296,6 +337,34 @@ impl AsRef<str> for ZyStr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_crumbs_of_a_text_nobody_indexes_cost_one_word() {
+        assert_eq!(std::mem::size_of::<OnceCell<Box<Vec<usize>>>>(), 8);
+        assert_eq!(std::mem::size_of::<Heap>(), 40);
+    }
+
+    #[test]
+    fn char_byte_agrees_with_a_walk_from_the_start() {
+        // Every position of texts whose count falls on, before and after a
+        // crumb boundary, with characters of one to four bytes, inline and on
+        // the heap, ASCII and not — against `char_indices` from the start.
+        let mixed = "añ€🦆";
+        let mut texts: Vec<String> = vec!["ñ".into(), "añ€".into(), "abc".into(), String::new()];
+        for n in [63usize, 64, 65, 127, 128, 129, 300] {
+            texts.push(mixed.chars().cycle().take(n).collect());
+            texts.push("x".repeat(n - 1) + "é");
+        }
+        for t in texts {
+            let z = ZyStr::new(t.clone());
+            let starts: Vec<usize> = t.char_indices().map(|(b, _)| b).collect();
+            for (i, &b) in starts.iter().enumerate() {
+                assert_eq!(z.char_byte(i), b, "text of {} chars, position {}", starts.len(), i);
+            }
+            assert_eq!(z.char_byte(starts.len()), t.len());
+            assert_eq!(z.char_byte(starts.len() + 5), t.len());
+        }
+    }
 
     #[test]
     fn char_len_is_counted_once_and_stays_true() {
