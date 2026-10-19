@@ -8,7 +8,7 @@
 > (reproducir primero). Ver «Avance» dentro de ella. De las etapas 3 y 4 no hay nada hecho.
 >
 > **Plan de cierre (2026-10-19):** lo que queda va en seis grupos, aprobados por el autor con la opción recomendada de
-> cada uno; ver «Plan de cierre — lo que queda, por grupos». Los grupos 1 y 2 están hechos. Las etapas 3 (salvo la medición de
+> cada uno; ver «Plan de cierre — lo que queda, por grupos». Los grupos 1, 2 y 3 están hechos. Las etapas 3 (salvo la medición de
 > 3.2) y 4 pasan a la v0.0.12.
 >
 > **Escrito el 2026-10-13.** Toda cifra sin otra fecha se midió ese día, sobre esa rama, con un
@@ -513,7 +513,7 @@ puerta entera.
 |---|---|---|---|---|
 | 1. Leer un texto por posición | `GLB-139`, `ZYTW-016` | Migas en la VM | `GLB-139` en el tree-walker y en zyjs; `ZYTW-016` | **Hecho** (2026-10-19) |
 | 2. Editar una colección sin copiarla | `GLB-140`, `ZYJS-068` | `GLB-140` en el tree-walker y en zyjs; `ZYJS-068` | — | **Hecho** (2026-10-19), y dos más que salieron: `ZYTW-018`, `GLB-141` |
-| 3. La memoria de los motores | `Value` del tree-walker (120 bytes), `ZYVM-022` | `FunctionValue` y `ErrorValue` en caja; `ZYVM-022` opción A, medida antes | `ZYVM-022` si cuesta más de un 2 % de pasos | Pendiente |
+| 3. La memoria de los motores | `Value` del tree-walker (120 bytes), `ZYVM-022` | `FunctionValue` y `ErrorValue` en caja; `ZYVM-022` opción A, medida antes | `ZYVM-022` si cuesta más de un 2 % de pasos | **Hecho** (2026-10-19): `ZYTW-019`, y `ZYVM-022` corregida (+0,05 % de pasos) |
 | 4. El binario y su distribución | `GLB-134`, D4 | D4; medir musl en el `HEAD` y, si hace falta, `mimalloc` | — | Pendiente |
 | 5. La puerta y los documentos | D1, `GUIDE.md` § 3b, `LLM.md` | `zyq expect` también contra `zyvm`; quitar la frase de § 3b; `LLM.md` a v0.0.11 | — | Pendiente |
 | 6. El alcance de la versión | Etapas 3 y 4 | La medición de 3.2 | 3.1, 3.3, 3.4 y la etapa 4 pasan a la v0.0.12 | Pendiente |
@@ -614,6 +614,16 @@ en el tree-walker, 37,7 en la VM.
   liberar sólo los temporales que pueden ser una colección, con el tipo por registro que el compilador ya lleva. Se
   mide antes con `--count` en `bench/big`; si cuesta más de un 2 % de pasos, se cierra como deuda escribiendo la razón
   en `alloc_temp`.
+
+**Hecho el 2026-10-19.** El `Value` del tree-walker mide **24 bytes**, no los 32 estimados: con las dos variantes en caja
+la más grande es un `String`, y la etiqueta cabe en un hueco de su capacidad (`ZYTW-019`). Un array de 2 000 000 de
+enteros, 236,1 → 53,3 MiB; quitar 40 000 por el principio, ~2 640 → ~313 ms; crear un cierre o un error cuesta una
+reserva más (+1,6 % y ~+5 % con ruido). `ZYVM-022`, en tres variantes medidas contra el mismo `HEAD`: limpiar todo
+temporal de tipo desconocido costaba +18,7 % de pasos; sólo los que recibieron una llamada, +0,45 % con un pico de
++6,4 %; y sin los que una instrucción aritmética mostró numéricos, **+0,05 %** con un pico de +0,8 %, que es lo que
+quedó. `autofree/call-result` pasa en la VM: 68 → 39 MiB. Por el camino, `zyddt findings` no veía una cabecera que
+nombraba abierto un hallazgo cerrado cuando la frase iba en negrita o tras una coma, y la de `zyvm.md` llevaba así desde
+el arreglo: se amplió el patrón, con su caso en la autoprueba.
 
 ### Grupo 4 — El binario y su distribución
 
