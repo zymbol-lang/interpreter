@@ -266,8 +266,11 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// `arr[i]$~ v`, `d["k"]$~ v` and `d.k$~ v`: one element written in place,
-    /// whatever the collection. The deep form, `m[i>j]$~ v`, takes the general
-    /// path — it evaluates each operand once too.
+    /// whatever the collection. The deep form, `m[i>j]$~ v` — and what the
+    /// parser rewrites into it, `d.x["y"]$~ v` and `d.x$+ 3` — is written in
+    /// place too (GLB-140): it took the general path, which read the receiver
+    /// as a second owner and copied the outer collection on every edit. A path
+    /// with a range in it still takes the general path, which refuses it.
     ///
     /// A positional tuple reaches this only as `t = t[i]$~ v`, the functional
     /// form bound back to its own name, which derives a tuple like
@@ -291,6 +294,23 @@ impl<W: Write> Interpreter<W> {
                 let key = Value::String(ma.field.clone());
                 self.edit_receiver_done(name, read, &ma.object, |c| {
                     Self::update_in(c, key, new_value, op.span)
+                })
+            }
+            // Left to right, as the general path: the receiver, then the
+            // steps, then the value. Only a receiver in view: one that is not
+            // has its error said by the general path, before any operand runs.
+            Expr::DeepIndex(di)
+                if is_named(name, &di.array)
+                    && di.path.steps.iter().all(|step| step.range_end.is_none())
+                    && self.get_variable(name).is_some() =>
+            {
+                let mut operands: Vec<&Expr> = di.path.steps.iter().map(|step| &*step.index).collect();
+                operands.push(&op.value);
+                let read = self.receiver_read_first(name, &operands);
+                let indices = self.eval_nav_steps(di, op.span)?;
+                let new_value = self.eval_expr(&op.value)?;
+                self.edit_receiver_done(name, read, &di.array, |c| {
+                    Self::deep_update_in(c, &indices, new_value, op.span)
                 })
             }
             _ => Ok(false),
