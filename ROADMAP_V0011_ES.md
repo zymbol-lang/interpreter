@@ -725,6 +725,61 @@ El paso más barato no necesita esperar a la evaluación: sacar `db` de las feat
 arreglo es el perfil de LTO y sacar LSP y portapapeles; si fue el enlazado por `-lodbc` o el
 arranque del binario, es D4. Ver D6.
 
+#### Medición — 2026-10-20
+
+Sobre `6666f8f`, rustc 1.99.1. Un prototipo desechable (fuera de la rama, en `target/w32/`) puso `lsp`, `repl` y `http`
+como features del CLI y `http` en la VM y el tree-walker; `crossterm` se queda, porque la TUI es parte del lenguaje. Cada
+cifra sale de una compilación limpia, `cargo build --release --offline -p zymbol-cli`, dentro de un cgroup
+(`systemd-run --user --scope -p MemoryMax=… -p MemorySwapMax=0`): la memoria es el `memory.peak` del cgroup —lo que ve el
+límite de un contenedor— y, aparte, la suma del RSS de cada proceso muestreada cada 100 ms, que es lo que medía la tabla
+de «Peso» y cuenta dos veces las páginas compartidas. El programa de control es la misma orden en `HEAD` sin features.
+
+| Medida | 2026-10-13 | `HEAD` | `HEAD --features db` | Compacto |
+|---|---|---|---|---|
+| Crates (normales y de build, `cargo tree`) | 208 | 210 | 214 | 100 |
+| Pico de memoria del cgroup, 16 trabajos | — | 2 731 MB | 2 778 MB | 1 601 MB |
+| Suma de RSS de los procesos, 16 trabajos | 3 850 MB | 3 970 MB | 4 220 MB | 2 716 MB |
+| Enlazado final con LTO | 1 342 MB | 1 344 MB | 1 366 MB | 870 MB |
+| Compilar `zymbol_vm` | 798–890 MB | 799–855 MB | 949 MB | 763–923 MB |
+| Binario | 12,76 MB | 12,32 MB | 12,54 MB | 6,60 MB |
+| Compilación limpia, 16 núcleos | 3 min 23 s | 3 min 02 s | 3 min 05 s | 1 min 48 s |
+| Arranque de un programa de una línea, mediana de 300, alternados | — | 6,3 ms | 6,8 ms | 5,9 ms |
+| Pico de RSS de ese arranque (`wait4`) | 11,0 MB | 7,8 MB | 7,8 MB | 7,8 MB |
+| `target/` al terminar | — | 549 MB | — | 203 MB |
+
+El compacto con las tres features encendidas da un binario idéntico al de `HEAD`, byte a byte en tamaño (12 321 240): las
+features no cambian nada cuando están puestas. El pico de RSS del arranque de 2026-10-13 se midió con otro instrumento.
+
+**D6, en un cgroup de 4 GB sin swap:**
+
+| Configuración | Termina | Tiempo | CPU total | Pico del cgroup |
+|---|---|---|---|---|
+| `HEAD`, LTO completo, 16 núcleos | sí | 3 min 03 s | 562 s | 2 684 MB |
+| `HEAD`, LTO completo, 4 trabajos | sí | 3 min 18 s | — | 2 225 MB |
+| `HEAD`, LTO completo, 2 núcleos (`taskset`) | sí | 4 min 29 s | 391 s | 2 228 MB |
+| `HEAD`, sin LTO, 2 núcleos | sí | 4 min 16 s | 411 s | 1 764 MB |
+| `HEAD`, LTO `thin`, 16 núcleos | sí | 2 min 32 s | — | 2 671 MB |
+| Compacto, 2 núcleos | sí | 2 min 18 s | 180 s | 1 296 MB |
+
+**La memoria al compilar no reproduce D6:** el perfil de release con LTO completo cabe en 4 GB con 2 núcleos y deja 1,8 GB
+libres. Quitar el LTO tampoco es el arreglo que apuntaba la pista: con 16 trabajos sube el pico de la fase en paralelo, y
+con 2 núcleos ahorra un 5 % del tiempo. ZyBigBench sólo dejó escrito que el perfil «no termina en un contenedor de 4 GB»,
+con otra toolchain, sobre la v0.0.10. Quedan dos explicaciones que desde aquí no se pueden comprobar: un límite de tiempo
+por orden en un contenedor de pocos núcleos lentos (con uno solo, 6,5 minutos de CPU), o memoria que ya ocupaba el resto
+del contenedor —un `target/` en RAM son 549 MB más—. El compacto ataca las dos: −54 % de CPU y −42 % de memoria con 2
+núcleos.
+
+Lo que pierde el compacto: `zymbol lsp`, `zymbol repl`, `std/net` y `std/db`. De la puerta, sólo
+`stdlib/stdlib_net_type_err.zy` (`i18n/test_http_api.zy` ya está excluido como ENVIRONMENT).
+
+**Decidido por el autor el 2026-10-20: implementar la forma A.** Features `lsp`, `repl` y `http` en `zymbol-cli`,
+encendidas por defecto, de modo que `cargo build --release` da lo mismo que hoy; el compacto es
+`cargo build --release -p zymbol-cli --no-default-features`. Sin `http`, `<# std/net` responde `module not found:
+std/net` en los dos motores, como `std/db` desde D4. La CI comprueba que el compacto compila. Las formas descartadas: un
+segundo binario (B: `main.rs` tendría que pasar a una biblioteca, `cargo build` en la raíz seguiría compilando todo el
+workspace, y la extensión dejó el binario aparte por el «unified binary» de su v0.1.1) y el compacto por defecto (C: quien
+compila desde el README perdería el LSP y la extensión).
+
 ### 3.3 `.zyb` — Zymbol Binary
 
 **La pregunta:** ¿merece la pena un formato de bytecode en disco, al estilo del `.class` de la
@@ -799,6 +854,9 @@ El plan, en cinco pasos:
 Módulos ES en JavaScript, no TypeScript: `web/` no tiene paso de build y GitHub Pages sirve las
 fuentes tal cual.
 
+**En pausa desde el 2026-10-20, pasos 3 a 5** (decisión del autor, D5): dependen de cómo salga 3.4. Si el motor de
+WebAssembly sale bien, no haría falta una VM nueva en JavaScript.
+
 Tres riesgos que hay que resolver en el paso 1:
 
 - **Suspensión dentro de lambdas.** La VM de Rust reentra su bucle para las lambdas de `$>`, `$|`
@@ -826,8 +884,8 @@ Tres riesgos que hay que resolver en el paso 1:
 | D2 | ¿Qué hace el REPL? | Se queda en el tree-walker en esta versión, y se dice. Portarlo es diseño, no un flag |
 | D3 | ¿Qué pasa con `--vm`? | Se conserva y se acepta sin efecto: hay scripts que lo escriben |
 | D4 | ¿`std/db` sale de las features por defecto? | **Decidida por el autor el 2026-10-19 (grupo 4):** sí. Los releases de Linux y macOS ya se construyen sin ella |
-| D5 | ¿Dónde va la etapa 4? | **Decidida por el autor el 2026-10-20:** en la v0.0.11, después de la etapa 3. Deroga lo decidido el 2026-10-19 (grupo 6), que la pasaba a la v0.0.12 porque la etapa 2 la había desplazado |
-| D6 | ¿Qué falló en el contenedor de 4 GB? | No es una decisión sino un dato que falta, y cambia el primer arreglo de 3.2. ZyBigBench, hecho en ese contenedor, apunta a una pista: su `README` dice que el perfil de release con LTO no terminaba allí. **Desde el 2026-10-19 (grupo 6)** la contesta la medición de 3.2, que es el primer trabajo de la etapa 3 en esta versión (2026-10-20) |
+| D5 | ¿Dónde va la etapa 4? | **Decidida por el autor el 2026-10-20:** en la v0.0.11, después de la etapa 3. Deroga lo decidido el 2026-10-19 (grupo 6), que la pasaba a la v0.0.12 porque la etapa 2 la había desplazado. **El mismo día, al ver el calendario,** el autor dejó **en pausa los pasos 3 a 5** (la VM completa, el compilador en JavaScript y el cambio del playground): si el motor de WebAssembly de 3.4 sale bien, no haría falta una VM nueva en JavaScript |
+| D6 | ¿Qué falló en el contenedor de 4 GB? | No es una decisión sino un dato que falta, y cambia el primer arreglo de 3.2. ZyBigBench, hecho en ese contenedor, apunta a una pista: su `README` dice que el perfil de release con LTO no terminaba allí. **Contestada en parte por la medición de 3.2 (2026-10-20):** no fue la memoria al compilar —en `HEAD` el perfil con LTO cabe en 4 GB con 2 núcleos, con 2,2 GB de pico—; quedan un límite de tiempo por orden o memoria ocupada por otra cosa, que no se pueden comprobar desde aquí. El compacto reduce las dos |
 | D7 | PERF-07: el error que sustituye al aborto, ¿se captura con `!?`, y de qué familia es? | **Decidida por el autor el 2026-10-16:** se captura con `!?`; su familia es una nueva, `##Depth`; el límite es de 10 000 llamadas activas, el mismo número en los tres motores, con la pila del programa en 512 MiB y un seguro que mira la pila que queda |
 | D8 | PERF-05 b: ¿la cadena guarda si es ASCII, o cuántos caracteres tiene? | **Decidida por el autor el 2026-10-17:** entra en la etapa 2, con Python como oráculo. Hecho como `ZYVM-028`: el texto guarda su número de caracteres, calculado la primera vez; de ahí sale si es ASCII |
 
