@@ -23,20 +23,32 @@ zymbol-bytecode.workspace = true
 zymbol-vm.workspace = true
 zymbol-compiler.workspace = true
 zymbol-formatter.workspace = true
-zymbol-repl.workspace = true
+zymbol-repl = { workspace = true, optional = true }
 zymbol-package.workspace = true
-zymbol-lsp = { path = "../zymbol-lsp" }
+zymbol-lsp = { path = "../zymbol-lsp", optional = true }
 clap.workspace = true
 anyhow.workspace = true
 tempfile.workspace = true
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full"], optional = true }
 
 [features]
+# `lsp`, `repl` and `http` are on by default, so `cargo build --release` gives
+# the binary it always gave. `--no-default-features` is the compact build
+# (ROADMAP_V0011_ES.md § 3.2, decided 2026-10-20): 100 crates instead of 210,
+# about half the binary, half the CPU and 60 % of the memory to compile — for
+# small containers. What it loses: `zymbol lsp`, `zymbol repl` and std/net.
+default = ["lsp", "repl", "http"]
+# `zymbol lsp`: tower-lsp, lsp-types and tokio.
+lsp = ["dep:zymbol-lsp", "dep:tokio"]
+# `zymbol repl`: brings arboard (the clipboard), and with it an image codec
+# and the X11 protocol.
+repl = ["dep:zymbol-repl"]
+# std/net in both engines: ureq, rustls, ring.
+http = ["zymbol-interpreter/http", "zymbol-vm/http", "zymbol-compiler/http"]
 # Off by default since v0.0.11 (decision D4): with it the binary needs
 # libodbc.so.2 and libltdl.so.7 just to START, and a static one cannot have it
 # at all (the ODBC driver manager loads drivers with dlopen). `--features db`
 # turns it on — the Windows release and the gate build that way.
-default = []
 # std/db (ODBC) in both engines. See REFERENCE.md L17.
 db = ["zymbol-interpreter/db", "zymbol-vm/db", "zymbol-compiler/db"]
 
@@ -47,6 +59,11 @@ db = ["zymbol-interpreter/db", "zymbol-vm/db", "zymbol-compiler/db"]
 mimalloc = { version = "0.1", default-features = false }
 # `extended`, for `mi_option_set`: see `tune_allocator` in main.rs.
 libmimalloc-sys = { version = "0.1", features = ["extended"] }
+
+# The REPL's integration tests start `zymbol repl`.
+[[test]]
+name = "cli_repl"
+required-features = ["repl"]
 
 [dev-dependencies]
 # CLI integration tests spawn the `zymbol` binary. `CARGO_BIN_EXE_zymbol` is only

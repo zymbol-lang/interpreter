@@ -286,6 +286,11 @@ Where `std/db` IS available:
   all; since v0.0.11 it is off (decision D4) and a plain build is what the prebuilt
   Linux and macOS binaries are.
 
+The compact build (`cargo build --release -p zymbol-cli --no-default-features`, since
+v0.0.11) leaves out `std/net` the same way — `module not found: std/net` in both
+engines — together with `zymbol lsp` and `zymbol repl`, which answer that the binary
+was built without them. See `ROADMAP_V0011_ES.md` § 3.2 for what it saves.
+
 ### ~~L18 — `x°`/`°x` inside a function called from a `@` loop panics~~ Fixed in v0.0.8
 
 The caller's loop anchors leaked into the callee frame (`loop_scope_depths` was not

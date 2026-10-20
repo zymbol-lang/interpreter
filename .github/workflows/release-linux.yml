@@ -56,12 +56,14 @@ jobs:
             zstd ${{ matrix.cross_linker_pkg }}
 
       - name: Build GNU binary
-        # --no-default-features: prebuilt Linux binaries exclude std/db — ODBC links
-        # against system libodbc (undeclared package dependency) and the driver
-        # manager needs dlopen, impossible in the static builds below.
-        # verify-deb.sh enforces this: it fails the release if the packaged
-        # binary links anything beyond libc.
-        run: cargo build --release --no-default-features --target ${{ matrix.rust_target }}
+        # The default features. Prebuilt Linux binaries exclude std/db, which is
+        # off by default since v0.0.11 (D4) — ODBC links against system libodbc
+        # (undeclared package dependency) and the driver manager needs dlopen,
+        # impossible in the static builds below. verify-deb.sh enforces this: it
+        # fails the release if the packaged binary links anything beyond libc.
+        # Not --no-default-features: since 3.2 that is the compact build, with no
+        # LSP, no REPL and no std/net — and verify-deb.sh checks std/net is there.
+        run: cargo build --release --target ${{ matrix.rust_target }}
 
       - name: Expose binary at target/release/ for build-packages.sh
         run: |
@@ -103,7 +105,7 @@ jobs:
         if: matrix.use_cross == false
         run: |
           RUSTFLAGS="-C target-feature=+crt-static" \
-            cargo build --release --no-default-features --target ${{ matrix.musl_target }}
+            cargo build --release --target ${{ matrix.musl_target }}
           install -m755 \
             "target/${{ matrix.musl_target }}/release/zymbol" \
             "packaging/dist/zymbol_lang_v${VERSION}_${{ matrix.arch }}_linux"
@@ -112,7 +114,7 @@ jobs:
         if: matrix.use_cross == true
         run: |
           cargo install cross --locked
-          cross build --release --no-default-features --target ${{ matrix.musl_target }}
+          cross build --release --target ${{ matrix.musl_target }}
           install -m755 \
             "target/${{ matrix.musl_target }}/release/zymbol" \
             "packaging/dist/zymbol_lang_v${VERSION}_${{ matrix.arch }}_linux"

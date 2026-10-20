@@ -12,6 +12,7 @@ use zymbol_formatter::{format_with_config, FormatterConfig};
 use zymbol_interpreter::Interpreter;
 use zymbol_lexer::Lexer;
 use zymbol_parser::Parser as ZParser;
+#[cfg(feature = "repl")]
 use zymbol_repl::Repl;
 use zymbol_semantic::{VariableAnalyzer, TypeChecker, ControlFlowGraph, DefUseAnalyzer, AmbiguityReason, ModuleAnalyzer};
 use zymbol_span::SourceMap;
@@ -275,16 +276,28 @@ fn on_program_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }
 
+#[cfg(feature = "repl")]
 fn start_repl() -> Result<()> {
     let mut repl = Repl::new();
     repl.start().map_err(|e| anyhow::anyhow!("REPL error: {}", e))
 }
 
+#[cfg(not(feature = "repl"))]
+fn start_repl() -> Result<()> {
+    anyhow::bail!("this zymbol was built without the REPL (the `repl` feature)")
+}
+
+#[cfg(feature = "lsp")]
 fn start_lsp() -> Result<()> {
     tokio::runtime::Runtime::new()
         .map_err(|e| anyhow::anyhow!("failed to create tokio runtime: {}", e))?
         .block_on(zymbol_lsp::run());
     Ok(())
+}
+
+#[cfg(not(feature = "lsp"))]
+fn start_lsp() -> Result<()> {
+    anyhow::bail!("this zymbol was built without the language server (the `lsp` feature)")
 }
 
 /// Options for [`run_file_inner`]. Kept separate from the plain `run_file(path, args, vm)`

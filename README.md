@@ -141,6 +141,9 @@ cd interpreter
 cargo build --release
 # …with std/db (ODBC), which needs unixODBC to build and to run
 cargo build --release --features db
+# …or the compact build, for small machines: no `zymbol lsp`, no `zymbol repl`
+# and no std/net, in half the time and 60 % of the memory
+cargo build --release -p zymbol-cli --no-default-features
 
 # Install to PATH
 cp target/release/zymbol ~/.local/bin/

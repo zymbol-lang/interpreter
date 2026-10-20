@@ -30,9 +30,11 @@ jobs:
         run: cargo install cross --locked
 
       - name: Build static binary
-        # --no-default-features: static binaries exclude std/db (ODBC driver
-        # manager needs dlopen, impossible in a fully static musl binary).
-        run: cross build --release --no-default-features --target aarch64-unknown-linux-musl
+        # The default features: std/db is not one of them since v0.0.11 (D4) — the
+        # ODBC driver manager needs dlopen, impossible in a fully static musl
+        # binary. Not --no-default-features: since 3.2 that is the compact build,
+        # with no LSP, no REPL and no std/net.
+        run: cross build --release --target aarch64-unknown-linux-musl
 
       - name: Prepare asset
         run: |

@@ -36,9 +36,11 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build
-        # --no-default-features: prebuilt macOS binaries exclude std/db — linking
+        # The default features, which exclude std/db since v0.0.11 (D4) — linking
         # ODBC would make libodbc.dylib (brew unixodbc) a hard startup requirement.
-        run: cargo build --release --no-default-features --target ${{ matrix.target }}
+        # Not --no-default-features: since 3.2 that is the compact build, with no
+        # LSP, no REPL and no std/net.
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare asset
         run: |

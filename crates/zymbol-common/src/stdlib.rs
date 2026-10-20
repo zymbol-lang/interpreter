@@ -33,7 +33,8 @@ pub struct StdModule {
     pub functions: &'static [StdFunction],
     /// Constants, read with `.`
     pub constants: &'static [&'static str],
-    /// Whether the module is only present in builds with the `db` feature
+    /// Whether the module is only present in builds with a Cargo feature
+    /// (`db` for std/db, `http` for std/net)
     pub feature_gated: bool,
 }
 
@@ -114,7 +115,7 @@ pub const MODULES: &[StdModule] = &[
         path: "std/net",
         functions: &[f("get", -1), f("post", -1), f("post_json", -1), f("head", 1)],
         constants: &[],
-        feature_gated: false,
+        feature_gated: true,
     },
     StdModule {
         path: "std/term",

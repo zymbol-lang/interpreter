@@ -500,12 +500,15 @@ fn io_mkdir(args: Vec<Value>) -> Result<Value, String> {
 //
 // Mirrors zymbol-interpreter/src/stdlib/net.rs. Network failures are returned as
 // soft `Value::Error("##Network(...)")` (catchable); a wrong argument type is a hard `Err`.
+// Only in builds with the `http` feature (on by default; see zymbol-cli).
 
+#[cfg(feature = "http")]
 fn net_err(msg: impl Into<String>) -> Value {
     Value::Error(ZyStr::new(format!("##Network({})", msg.into())))
 }
 
 /// Parse the optional headers arg: Array of 2-element (String, String) tuples.
+#[cfg(feature = "http")]
 fn parse_headers(arg: Option<Value>, fname: &str) -> Result<Vec<(String, String)>, String> {
     let value = match arg {
         None => return Ok(Vec::new()),
@@ -532,6 +535,7 @@ fn parse_headers(arg: Option<Value>, fname: &str) -> Result<Vec<(String, String)
     }
 }
 
+#[cfg(feature = "http")]
 fn response_to_value(resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Value {
     match resp {
         Ok(mut resp) => match resp.body_mut().read_to_string() {
@@ -542,6 +546,7 @@ fn response_to_value(resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>
     }
 }
 
+#[cfg(feature = "http")]
 fn net_get(args: Vec<Value>) -> Result<Value, String> {
     let mut it = args.into_iter();
     let url = match it.next() {
@@ -556,6 +561,7 @@ fn net_get(args: Vec<Value>) -> Result<Value, String> {
     Ok(response_to_value(req.call()))
 }
 
+#[cfg(feature = "http")]
 fn net_post(args: Vec<Value>) -> Result<Value, String> {
     let mut it = args.into_iter();
     match (it.next(), it.next()) {
@@ -571,6 +577,7 @@ fn net_post(args: Vec<Value>) -> Result<Value, String> {
     }
 }
 
+#[cfg(feature = "http")]
 fn net_post_json(args: Vec<Value>) -> Result<Value, String> {
     let mut it = args.into_iter();
     match (it.next(), it.next()) {
@@ -586,11 +593,30 @@ fn net_post_json(args: Vec<Value>) -> Result<Value, String> {
     }
 }
 
+#[cfg(feature = "http")]
 fn net_head(args: Vec<Value>) -> Result<Value, String> {
     match args.into_iter().next() {
         Some(Value::String(url)) => Ok(Value::Bool(ureq::head(url.as_str()).call().is_ok())),
         _ => Err("net::head: expected String url".into()),
     }
+}
+
+#[cfg(feature = "http")]
+fn net_dispatch(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
+    match builtin_id {
+        B::NET_GET       => net_get(args),
+        B::NET_POST      => net_post(args),
+        B::NET_POST_JSON => net_post_json(args),
+        B::NET_HEAD      => net_head(args),
+        other => Err(format!("unknown net builtin id {}", other)),
+    }
+}
+
+// Only reachable from bytecode produced by an `http`-enabled compiler (the
+// compiler without it rejects `<# std/net` with module-not-found).
+#[cfg(not(feature = "http"))]
+fn net_dispatch(_builtin_id: u16, _args: Vec<Value>) -> Result<Value, String> {
+    Err("std/net is not available in this build (compiled without HTTP support)".into())
 }
 
 // ── std/db ─────────────────────────────────────────────────────────────────────
@@ -1327,10 +1353,6 @@ pub fn call(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
         B::IO_DELETE     => io_delete(args),
         B::IO_LIST       => io_list(args),
         B::IO_MKDIR      => io_mkdir(args),
-        B::NET_GET       => net_get(args),
-        B::NET_POST      => net_post(args),
-        B::NET_POST_JSON => net_post_json(args),
-        B::NET_HEAD      => net_head(args),
         B::TERM_WIDTH     => term_width(args),
         B::TERM_PAD_LEFT  => term_pad_left(args),
         B::TERM_PAD_RIGHT => term_pad_right(args),
@@ -1343,6 +1365,7 @@ pub fn call(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
         B::TIME_FORMAT    => time_format(args),
         B::TIME_ADD       => time_add(args),
         B::TIME_DIFF      => time_diff(args),
+        id if (B::NET_GET..=B::NET_HEAD).contains(&id) => net_dispatch(id, args),
         id if (B::DB_CONNECT..=B::DB_TABLE_EXISTS).contains(&id) => db_dispatch(id, args),
         other => Err(format!("unknown builtin id {}", other)),
     }
