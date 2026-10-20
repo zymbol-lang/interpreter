@@ -732,6 +732,8 @@ fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &m
             }
         };
         let mut vm = VM::new(out);
+        vm.set_terminal(Box::new(zymbol_host::NativeTerminal::new()));
+        vm.set_host(Box::new(zymbol_host::NativeHost::new()));
         vm.set_cli_args(args.clone());
         vm.set_subscript_runner(subscript_runner(true, args.clone()));
         if let Some(k) = keys.clone() {

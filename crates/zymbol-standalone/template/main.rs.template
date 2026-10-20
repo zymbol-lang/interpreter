@@ -19,6 +19,8 @@ fn main() {
                 .expect("Failed to deserialize embedded bytecode");
             let stdout = std::io::stdout();
             let mut vm = VM::new(stdout.lock());
+            vm.set_terminal(Box::new(zymbol_host::NativeTerminal::new()));
+            vm.set_host(Box::new(zymbol_host::NativeHost::new()));
             match vm.run(&compiled) {
                 Ok(_) => 0,
                 Err(e) => {

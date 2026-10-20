@@ -14,6 +14,7 @@
 mod zy_str;
 pub use zy_str::ZyStr;
 mod stdlib_builtins;
+pub mod host;
 
 use zymbol_intrinsics as intrinsics;
 
@@ -1477,20 +1478,6 @@ fn get_chunk(program: &CompiledProgram, chunk_idx: usize) -> &Chunk {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// TuiGuard — restores terminal on drop, regardless of control-flow path
-// ──────────────────────────────────────────────────────────────────────────────
-
-struct TuiGuard;
-impl Drop for TuiGuard {
-    fn drop(&mut self) {
-        let _ = crossterm::execute!(std::io::stdout(),
-            crossterm::terminal::LeaveAlternateScreen,
-            crossterm::cursor::Show);
-        let _ = crossterm::terminal::disable_raw_mode();
-    }
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
 // VM — Sprint 5C: flat register stack
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -1548,13 +1535,17 @@ pub struct VM<W: Write> {
     /// The error `raise!` is carrying to a handler, between the jump and the
     /// `TryLand` that receives it.
     in_flight: Option<Pending>,
-    /// Terminal guards: dropping one restores the terminal, so they live as long
-    /// as the TUI they opened — across every nested run of the loop.
-    tui_stack: Vec<TuiGuard>,
-    /// `zymbol run --keys` (D11): the virtual screen and the key script, and
-    /// how many `>>|` blocks are open on it. `None` is the ordinary run.
-    headless: Option<zymbol_common::vscreen::Headless>,
-    headless_tui: u32,
+    /// The terminal `>>|` and its kin draw on, `@~` waits on and `<<` reads
+    /// from (3.1). `BasicTerminal` until the embedder installs another; the
+    /// CLI installs the native one, `--keys` the virtual one.
+    terminal: Box<dyn host::Terminal>,
+    /// The clock, `std/random`'s seed, `std/net` and `std/db` (3.1).
+    host: Box<dyn host::Host>,
+    /// How many `>>|` blocks are open, and how many of those the terminal
+    /// draws itself — where a `>>` goes to `terminal.write` instead of to
+    /// `output` (the virtual screen of `--keys`).
+    tui_open: u32,
+    tui_captured: u32,
     output: W,
 }
 
@@ -1589,9 +1580,10 @@ impl<W: Write> VM<W> {
             cur_ip: 0,
             cur_chunk: u32::MAX,
             in_flight: None,
-            tui_stack: Vec::new(),
-            headless: None,
-            headless_tui: 0,
+            terminal: Box::new(host::BasicTerminal),
+            host: Box::new(host::BasicHost),
+            tui_open: 0,
+            tui_captured: 0,
             output,
         }
     }
@@ -1606,9 +1598,20 @@ impl<W: Write> VM<W> {
         self.cli_args = args;
     }
 
-    /// `zymbol run --keys FILE` (D11): see the tree-walker's `set_keys`.
+    /// `zymbol run --keys FILE` (D11): see the tree-walker's `set_keys`. It
+    /// replaces the terminal, and nothing else.
     pub fn set_keys(&mut self, keys: zymbol_common::vscreen::KeyScript) {
-        self.headless = Some(zymbol_common::vscreen::Headless::new(keys));
+        self.terminal = Box::new(host::Headless::new(keys));
+    }
+
+    /// The terminal the program runs on (see [`host::Terminal`]).
+    pub fn set_terminal(&mut self, terminal: Box<dyn host::Terminal>) {
+        self.terminal = terminal;
+    }
+
+    /// The clock, the network and the database (see [`host::Host`]).
+    pub fn set_host(&mut self, host: Box<dyn host::Host>) {
+        self.host = host;
     }
 
     /// The exit status a top-level `<~ n` asked for, if the program asked
@@ -1742,7 +1745,9 @@ impl<W: Write> VM<W> {
 
         let result = self.exec(program, 0).map(|_| ());
         // The terminal is given back on every way out, error included.
-        self.tui_stack.clear();
+        self.terminal.release();
+        self.tui_open = 0;
+        self.tui_captured = 0;
         self.in_flight = None;
         result
     }
@@ -2729,10 +2734,10 @@ impl<W: Write> VM<W> {
                 }
 
                 // ── I/O ─────────────────────────────────────────────────────
-                &Instruction::Print(reg) if self.headless_tui > 0 => {
-                    // Inside `>>|` under --keys: onto the virtual screen (D11).
+                &Instruction::Print(reg) if self.tui_captured > 0 => {
+                    // Inside `>>|` on a terminal that draws it (--keys, D11).
                     let s = self.numeral_repr(&self.value_stack[base + reg as usize]);
-                    if let Some(h) = self.headless.as_mut() { h.screen.write(&s); }
+                    self.terminal.write(&s);
                 }
                 &Instruction::Print(reg) => {
                     let mode = self.numeral_mode;
@@ -2748,8 +2753,8 @@ impl<W: Write> VM<W> {
                         other             => write!(self.output, "{}", other.to_display_in(mode))?,
                     }
                 }
-                Instruction::PrintNewline if self.headless_tui > 0 => {
-                    if let Some(h) = self.headless.as_mut() { h.screen.write("\n"); }
+                Instruction::PrintNewline if self.tui_captured > 0 => {
+                    self.terminal.write("\n");
                 }
                 Instruction::PrintNewline => {
                     writeln!(self.output)?;
@@ -3936,7 +3941,7 @@ impl<W: Write> VM<W> {
                     // hard error from any `std/` function was catchable in this
                     // engine — `!? { m::ln(0.0) } :! ##_ { }` caught it in the
                     // tree-walker and aborted the program here.
-                    let result = match crate::stdlib_builtins::call(builtin_id, args) {
+                    let result = match crate::stdlib_builtins::call(builtin_id, args, &mut *self.host) {
                         Ok(v) => v,
                         Err(e) => raise!(VmError::Generic(e)),
                     };
@@ -4986,83 +4991,30 @@ impl<W: Write> VM<W> {
                             "@~ requires non-negative duration, got {}", n))),
                         other => raise!(VmError::TypeMsg(format!("@~ requires integer milliseconds, got {}", other.type_label()))),
                     };
-                    // Under --keys the script's WAIT counts polls, not time (D11).
-                    if self.headless.is_none() {
-                        std::thread::sleep(std::time::Duration::from_millis(ms));
-                    }
+                    // Under --keys the script's WAIT counts polls, not time (D11):
+                    // that terminal's sleep does nothing.
+                    self.terminal.sleep(ms);
                 }
 
-                Instruction::ClearScreen if self.headless.is_some() => {
-                    if let Some(h) = self.headless.as_mut() { h.screen.clear(); }
-                }
                 Instruction::ClearScreen => {
-                    crossterm::execute!(std::io::stdout(),
-                        crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
-                        crossterm::cursor::MoveTo(0, 0)).ok();
+                    self.terminal.clear();
                 }
 
                 &Instruction::QueryTerminalSize(dst) => {
-                    let (cols, rows) = if self.headless.is_some() {
-                        (zymbol_common::vscreen::COLS as u16, zymbol_common::vscreen::ROWS as u16)
-                    } else {
-                        crossterm::terminal::size().unwrap_or((80, 24))
-                    };
+                    let (cols, rows) = self.terminal.size();
                     wreg!(dst, Value::Tuple(std::rc::Rc::new(vec![Value::Int(rows as i64), Value::Int(cols as i64)])));
                 }
 
-                &Instruction::ReadKey(dst, blocking) if self.headless.is_some() => {
-                    let h = self.headless.as_mut().expect("guarded");
-                    let (ch, frames) = if blocking {
-                        h.read_blocking()
-                    } else {
-                        let (k, f) = h.read_poll();
-                        (Some(k), f)
-                    };
-                    for frame in frames {
-                        writeln!(self.output, "{}", frame)?;
-                    }
-                    let ch = match ch {
-                        Some(c) => c,
-                        None => raise!(VmError::Generic(zymbol_common::vscreen::OUT_OF_KEYS.to_string())),
-                    };
-                    wreg!(dst, Value::Char(ch));
-                }
                 &Instruction::ReadKey(dst, blocking) => {
-                    use crossterm::event::{self, Event};
-                    let ch = if blocking {
-                        loop {
-                            match event::read() {
-                                Ok(Event::Key(key)) if vm_is_key_press(&key) => {
-                                    break vm_map_key_code(&key)
-                                }
-                                Ok(_) => continue,
-                                Err(e) => return Err(VmError::Generic(e.to_string())),
-                            }
-                        }
-                    } else {
-                        // Drain to the first keypress rather than giving up on the
-                        // first event that is not one — see the tree-walker's
-                        // execute_key_input for why a single read per call makes a
-                        // game loop fall a fixed number of ticks behind on Windows.
-                        let mut found = '\0';
-                        while event::poll(std::time::Duration::ZERO).unwrap_or(false) {
-                            match event::read() {
-                                Ok(Event::Key(key)) if vm_is_key_press(&key) => {
-                                    found = vm_map_key_code(&key);
-                                    break;
-                                }
-                                Ok(_) => continue,
-                                Err(_) => break,
-                            }
-                        }
-                        found
+                    let ch = match self.terminal.read_key(blocking, &mut self.output) {
+                        Ok(c) => c,
+                        Err(host::TerminalError::Raise(e)) => raise!(VmError::Generic(e)),
+                        Err(host::TerminalError::Abort(e)) => return Err(VmError::Generic(e)),
                     };
                     wreg!(dst, Value::Char(ch));
                 }
 
                 Instruction::ReadLine(dst, prompt_reg, kind) => {
-                    use std::io::{BufRead, Write};
-                    let in_tui = !self.tui_stack.is_empty();
                     // Read / validate / re-prompt loop (mirrors the tree-walker). An empty
                     // raw line means EOF (a typed blank line is "\n"); EOF aborts so a failed
                     // constraint cannot spin forever on a closed pipe.
@@ -5071,22 +5023,11 @@ impl<W: Write> VM<W> {
                         // read end-of-input again with the handler already spent,
                         // so `!? { << n } :! { }` never caught it.
                     let value: Result<Value, VmError> = loop {
-                        if let Some(pr) = prompt_reg {
-                            print!("{}", self.numeral_repr(rreg!(*pr)));
-                            std::io::stdout().flush().ok();
-                        }
-                        if in_tui {
-                            crossterm::terminal::disable_raw_mode().ok();
-                            crossterm::execute!(std::io::stdout(), crossterm::cursor::Show).ok();
-                        }
-                        let mut line = String::new();
-                        std::io::stdin().lock().read_line(&mut line).ok();
-                        if in_tui {
-                            crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide).ok();
-                            if let Err(e) = crossterm::terminal::enable_raw_mode() {
-                                break Err(VmError::Generic(format!("input: failed to restore raw mode: {}", e)));
-                            }
-                        }
+                        let prompt = prompt_reg.map(|pr| self.numeral_repr(rreg!(pr)));
+                        let line = match self.terminal.read_line(prompt.as_deref()) {
+                            Ok(l) => l,
+                            Err(e) => break Err(VmError::Generic(e)),
+                        };
                         if line.is_empty() {
                             break Err(VmError::Generic(format!(
                                 "end of input while waiting for {}", vm_describe_input_kind(kind)
@@ -5094,102 +5035,55 @@ impl<W: Write> VM<W> {
                         }
                         match vm_validate_input(line.trim(), kind) {
                             Ok(v) => break Ok(v),
-                            Err(hint) => {
-                                println!("  ({})", hint);
-                                std::io::stdout().flush().ok();
-                            }
+                            Err(hint) => self.terminal.input_hint(&hint),
                         }
                     };
                     let value = match value { Ok(v) => v, Err(e) => raise!(e) };
                     wreg!(*dst, value);
                 }
 
-                Instruction::PrintAt(r_pos, item_regs) if self.headless.is_some() => {
-                    // Position and text on the virtual screen; no styles (D11).
-                    let pos_val = rreg!(*r_pos).clone();
-                    let (fila, col, _bks, _fg, _bg) = vm_extract_pos(pos_val);
-                    let text: String = item_regs.iter()
-                        .map(|&r| self.numeral_repr(rreg!(r)))
-                        .collect();
-                    let h = self.headless.as_mut().expect("guarded");
-                    if let (Some(r), Some(c)) = (fila, col) {
-                        h.screen.move_to(r as i64, c as i64);
-                    }
-                    h.screen.write(&text);
-                }
                 Instruction::PrintAt(r_pos, item_regs) => {
                     let pos_val = rreg!(*r_pos).clone();
                     let (fila, col, bks, fg, bg) = vm_extract_pos(pos_val);
-                    if let (Some(r), Some(c)) = (fila, col) {
-                        crossterm::execute!(std::io::stdout(),
-                            crossterm::cursor::MoveTo(c - 1, r - 1)).ok();
-                    }
-                    let mut styled = false;
-                    if bks & 1 != 0 { crossterm::execute!(std::io::stdout(), crossterm::style::SetAttribute(crossterm::style::Attribute::Bold)).ok();       styled = true; }
-                    if bks & 2 != 0 { crossterm::execute!(std::io::stdout(), crossterm::style::SetAttribute(crossterm::style::Attribute::Italic)).ok();     styled = true; }
-                    if bks & 4 != 0 { crossterm::execute!(std::io::stdout(), crossterm::style::SetAttribute(crossterm::style::Attribute::Underlined)).ok(); styled = true; }
-                    let mut colored = false;
-                    if let Some(fg) = fg {
-                        crossterm::execute!(std::io::stdout(),
-                            crossterm::style::SetForegroundColor(
-                                crossterm::style::Color::AnsiValue(fg as u8))).ok();
-                        colored = true;
-                    }
-                    if let Some(bg) = bg {
-                        crossterm::execute!(std::io::stdout(),
-                            crossterm::style::SetBackgroundColor(
-                                crossterm::style::Color::AnsiValue(bg as u8))).ok();
-                        colored = true;
-                    }
-                    for &r in item_regs {
-                        print!("{}", self.numeral_repr(rreg!(r)));
-                    }
-                    if styled || colored {
-                        crossterm::execute!(std::io::stdout(),
-                            crossterm::style::SetAttribute(crossterm::style::Attribute::Reset)).ok();
-                    }
-                    std::io::stdout().flush().ok();
+                    let at = match (fila, col) {
+                        (Some(r), Some(c)) => Some((r, c)),
+                        _ => None,
+                    };
+                    let style = host::Style {
+                        bold: bks & 1 != 0,
+                        italic: bks & 2 != 0,
+                        underline: bks & 4 != 0,
+                        fg: fg.map(|n| n as u8),
+                        bg: bg.map(|n| n as u8),
+                    };
+                    let text: String = item_regs.iter()
+                        .map(|&r| self.numeral_repr(rreg!(r)))
+                        .collect();
+                    self.terminal.print_at(at, style, &text);
                 }
 
-                Instruction::EnterTui if self.headless.is_some() => {
-                    // --keys: no terminal is taken over (D11).
-                    if let Some(h) = self.headless.as_mut() { h.screen.clear(); }
-                    self.headless_tui += 1;
-                }
-                Instruction::ExitTui if self.headless_tui > 0 => {
-                    self.headless_tui -= 1;
-                    let frame = self.headless.as_ref().map(|h| h.screen.frame()).unwrap_or_default();
-                    writeln!(self.output, "{}", frame)?;
-                    self.output.flush()?;
-                }
                 Instruction::EnterTui => {
-                    // The language's words when there is no terminal, as in the
-                    // tree-walker and zyjs (P4-3 E5, 2026-09-26).
-                    {
-                        use std::io::IsTerminal;
-                        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-                            raise!(VmError::Generic("failed to enable raw mode: not a terminal".to_string()));
+                    match self.terminal.enter_tui() {
+                        Ok(captures) => {
+                            self.tui_open += 1;
+                            if captures {
+                                self.tui_captured += 1;
+                            }
                         }
+                        Err(e) => raise!(VmError::Generic(e)),
                     }
-                    if let Err(e) = crossterm::terminal::enable_raw_mode() {
-                        raise!(VmError::Generic(format!("failed to enable raw mode: {}", e)));
-                    }
-                    if let Err(e) = crossterm::execute!(std::io::stdout(),
-                        crossterm::terminal::EnterAlternateScreen,
-                        crossterm::cursor::MoveTo(0, 0),
-                        crossterm::cursor::Hide)
-                    {
-                        let _ = crossterm::terminal::disable_raw_mode();
-                        raise!(VmError::Generic(format!("failed to enter alternate screen: {}", e)));
-                    }
-                    self.tui_stack.push(TuiGuard);
                 }
 
                 Instruction::ExitTui => {
-                    // Pop the guard — its Drop performs cleanup.
-                    // If ExitTui is skipped (@:label! / error), the guard is dropped
-                    // when `run` clears the stack on its way out.
-                    self.tui_stack.pop();
+                    // If ExitTui is skipped (@:label! / error), `run` gives the
+                    // terminal back on its way out.
+                    if self.tui_open > 0 {
+                        self.tui_open -= 1;
+                        if self.tui_captured > 0 {
+                            self.tui_captured -= 1;
+                        }
+                        self.terminal.exit_tui(&mut self.output)?;
+                    }
                 }
 
                 &Instruction::HotInit(dst, neutral) => {
@@ -5837,63 +5731,6 @@ fn vm_deep_set_in(col: &mut Value, path: &[Value], new_val: Value, single: bool)
             "$~ writes into a collection, and this is {}\nhelp: use a[1]$~ v on an array or tuple, d[\"key\"]$~ v on a #(…)",
             other.type_label()
         ))),
-    }
-}
-
-/// Is this a key going *down*, as opposed to coming back up?
-///
-/// Mirrors the tree-walker's `is_key_press` — Windows reports key releases as well
-/// as presses, so `<<|` counted every keystroke twice there. See the comment on the
-/// tree-walker copy for the full story; the two must agree or the engines diverge on
-/// exactly the platform where the behaviour is hard to notice.
-fn vm_is_key_press(key: &crossterm::event::KeyEvent) -> bool {
-    use crossterm::event::KeyEventKind;
-    matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-}
-
-/// Translate a key event into the single character `<<|` yields.
-///
-/// Mirrors the tree-walker's `map_key_code`; the two must agree or the engines
-/// diverge on the keyboard, which only the pty harness can catch.
-fn vm_map_key_code(key: &crossterm::event::KeyEvent) -> char {
-    use crossterm::event::{KeyCode::*, KeyModifiers};
-
-    // Ctrl+letter is a control character, and that is what the terminal puts on
-    // the wire: Ctrl+A is 0x01, Ctrl+S is 0x13. crossterm hands it over
-    // decoded — `Char('a')` with CONTROL set — and this function used to read
-    // the code and drop the modifiers, so Ctrl+A arrived as the letter `a`
-    // (BUG-ZYB-006). Not "the combination never arrived": it arrived wearing
-    // another key's clothes, which is worse — a Ctrl+X shortcut fired when the
-    // user typed an x into a text field, and no full-screen program could offer
-    // Ctrl+S, Ctrl+Q or Ctrl+C at all.
-    //
-    // Handing back the control character adds nothing to the language: `0d1`
-    // already writes it, and `##!t < 32` already asks the question.
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        if let Char(c) = key.code {
-            let lower = c.to_ascii_lowercase();
-            if lower.is_ascii_lowercase() {
-                return (lower as u8 - b'a' + 1) as char;
-            }
-        }
-    }
-
-    match key.code {
-        Char(c) => c,
-        Up      => '\u{2191}',
-        Down    => '\u{2193}',
-        Left    => '\u{2190}',
-        Right   => '\u{2192}',
-        Enter   => '\n',
-        Esc     => '\x1B',
-        // Tab and Backspace used to fall through to `'\0'` together, so a
-        // program could not tell them apart — harmless in a numeric field,
-        // which is why ZyBank treated both as "delete", and impossible in a
-        // form where Tab moves between fields: every jump would erase a
-        // character. Both now carry what the terminal sends for them.
-        Tab       => '\t',      // 0d9
-        Backspace => '\x7F',    // 0d127 — DEL, which is what a terminal sends
-        _         => '\0',
     }
 }
 

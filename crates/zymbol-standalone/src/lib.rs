@@ -83,9 +83,10 @@ impl StandaloneBuilder {
 
         let bytecode_path = current_dir.join("crates/zymbol-bytecode").canonicalize()?;
         let vm_path = current_dir.join("crates/zymbol-vm").canonicalize()?;
+        let host_path = current_dir.join("crates/zymbol-host").canonicalize()?;
         let common_path = current_dir.join("crates/zymbol-common").canonicalize()?;
 
-        fs::write(build_dir.join("Cargo.toml"), cargo_toml(&bytecode_path, &vm_path, &common_path))
+        fs::write(build_dir.join("Cargo.toml"), cargo_toml(&bytecode_path, &vm_path, &host_path, &common_path))
             .context("Failed to write Cargo.toml")?;
 
         Ok(())
@@ -181,10 +182,11 @@ impl StandaloneBuilder {
     }
 }
 
-/// The generated project's `Cargo.toml`. Its zymbol-vm gets the features of
-/// the compiler that wrote the bytecode (ZYVM-031): without them the compiler
-/// emits std/net or std/db calls the executable's VM cannot answer.
-fn cargo_toml(bytecode_path: &Path, vm_path: &Path, common_path: &Path) -> String {
+/// The generated project's `Cargo.toml`. Its zymbol-host — the VM's network
+/// and database since 3.1 — gets the features of the compiler that wrote the
+/// bytecode (ZYVM-031): without them the compiler emits std/net or std/db calls
+/// the executable's VM cannot answer.
+fn cargo_toml(bytecode_path: &Path, vm_path: &Path, host_path: &Path, common_path: &Path) -> String {
     let features: Vec<&str> = [("http", cfg!(feature = "http")), ("db", cfg!(feature = "db"))]
         .into_iter()
         .filter_map(|(name, on)| on.then_some(name))
@@ -197,7 +199,8 @@ edition = "2024"
 
 [dependencies]
 zymbol-bytecode = {{ path = "{}" }}
-zymbol-vm = {{ path = "{}", features = [{}] }}
+zymbol-vm = {{ path = "{}" }}
+zymbol-host = {{ path = "{}", features = [{}] }}
 zymbol-common = {{ path = "{}" }}
 bincode = "1.3"
 serde = {{ version = "1.0", features = ["derive"] }}
@@ -210,6 +213,7 @@ codegen-units = 1
 "#,
         bytecode_path.display(),
         vm_path.display(),
+        host_path.display(),
         features,
         common_path.display()
     )
@@ -233,8 +237,9 @@ mod tests {
     /// of the `zymbol` it is in; the generated project used to ask for none.
     #[test]
     fn the_generated_vm_has_the_modules_its_compiler_accepts() {
-        let toml = cargo_toml(Path::new("/b"), Path::new("/v"), Path::new("/c"));
-        let vm_line = toml.lines().find(|l| l.starts_with("zymbol-vm")).expect("a zymbol-vm line");
+        let toml = cargo_toml(Path::new("/b"), Path::new("/v"), Path::new("/h"), Path::new("/c"));
+        // The VM answers std/net and std/db through its host (3.1).
+        let vm_line = toml.lines().find(|l| l.starts_with("zymbol-host")).expect("a zymbol-host line");
         for (module, feature) in [("std/net", "http"), ("std/db", "db")] {
             let builder = StandaloneBuilder::new_from_source(
                 // A base directory, as `zymbol build` always gives: without one
