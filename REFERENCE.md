@@ -279,9 +279,12 @@ reports **`module not found: std/db`**.
 Where `std/db` IS available:
 
 - **Windows prebuilt binaries** — ODBC is part of the OS (`odbc32.dll`).
-- **Any source build** — `cargo build --release` (the `db` feature is on by default).
+- **A source build with the feature** — `cargo build --release --features db`.
   Build-time prereq: `unixodbc-dev`; runtime prereq: `unixodbc` + the engine's ODBC
-  driver. To reproduce the prebuilt behavior use `--no-default-features`.
+  driver. Until v0.0.10 the feature was on by default, so a plain `cargo build
+  --release` made a binary that needed `libodbc.so.2` and `libltdl.so.7` to start at
+  all; since v0.0.11 it is off (decision D4) and a plain build is what the prebuilt
+  Linux and macOS binaries are.
 
 ### ~~L18 — `x°`/`°x` inside a function called from a `@` loop panics~~ Fixed in v0.0.8
 

@@ -27,9 +27,10 @@ base64 = { workspace = true, optional = true }
 once_cell = { workspace = true, optional = true }
 
 [features]
-default = ["db"]
-# std/db (ODBC). Disabled in prebuilt static binaries: the ODBC driver manager
-# loads engine drivers with dlopen, which a fully static binary cannot do.
+# Off by default since v0.0.11 (D4); `zymbol-cli`'s `db` feature turns it on.
+default = []
+# std/db (ODBC). The ODBC driver manager loads engine drivers with dlopen,
+# which a fully static binary cannot do.
 db = ["dep:odbc-api", "dep:base64", "dep:once_cell"]
 
 [dev-dependencies]

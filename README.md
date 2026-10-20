@@ -139,6 +139,8 @@ cd interpreter
 
 # Build release binary
 cargo build --release
+# …with std/db (ODBC), which needs unixODBC to build and to run
+cargo build --release --features db
 
 # Install to PATH
 cp target/release/zymbol ~/.local/bin/

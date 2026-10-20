@@ -21,7 +21,7 @@ base64 = { workspace = true, optional = true }
 once_cell = { workspace = true, optional = true }
 
 [features]
-default = ["db"]
-# std/db builtins (ODBC). Mirrors zymbol-interpreter's `db` feature; disabled
-# in prebuilt static binaries (the ODBC driver manager needs dlopen).
+# Off by default since v0.0.11 (D4); `zymbol-cli`'s `db` feature turns it on.
+default = []
+# std/db builtins (ODBC). Mirrors zymbol-interpreter's `db` feature.
 db = ["dep:odbc-api", "dep:base64", "dep:once_cell"]

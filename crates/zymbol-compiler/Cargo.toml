@@ -17,7 +17,8 @@ zymbol-error.workspace = true
 thiserror.workspace = true
 
 [features]
-default = ["db"]
+# Off by default since v0.0.11 (D4); `zymbol-cli`'s `db` feature turns it on.
+default = []
 # Registers the std/db builtin ids at `<# std/db` compile time. Pure cfg flag
 # (no extra deps); mirrors the `db` feature of zymbol-interpreter/zymbol-vm.
 db = []
