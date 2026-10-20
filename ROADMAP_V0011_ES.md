@@ -706,6 +706,27 @@ base de datos (500), terminal (600), tiempo (700). Hoy `zymbol-vm` llama a `cros
 
 Es el requisito de 3.2 y de 3.4, y define el contrato que tendrá que cumplir la VM del navegador.
 
+#### Evaluación — 2026-10-20
+
+Medido sobre `17bfdb8` con `cargo check --target wasm32-unknown-unknown`: span, common, lexer, ast, parser, semantic,
+bytecode, intrinsics y compiler **ya compilan**; `zymbol-vm` y `zymbol-interpreter` fallan dentro de `crossterm`, y sólo
+ahí —`ureq` y `odbc-api` ya no entran sin features desde 3.2—. rustc se detiene en ese crate, así que el código propio de
+la VM no quedó comprobado. Dos cosas más compilan para wasm pero fallan al ejecutarse: `SystemTime::now` aborta y `std::fs`
+responde «unsupported».
+
+La VM ya tiene dos terminales —la real, con `crossterm`, y la virtual de `--keys` (`vscreen::Headless`)—, elegidas con 19
+guardas `if self.headless` en siete instrucciones (`ClearScreen`, `QueryTerminalSize`, `ReadKey`, `ReadLine`, `PrintAt`,
+`EnterTui`, `ExitTui`). La salida de `>>` ya llega inyectada (`VM<W: Write>`).
+
+**Decidido por el autor el 2026-10-20: forma B.** Una interfaz `Host` sólo para la VM —terminal, reloj, red y base de
+datos— con dos implementaciones: la nativa (`crossterm`, `ureq`, `odbc-api`) y la virtual de `--keys`, que sustituye las
+guardas. El tree-walker no cambia: no es parte del núcleo de la tabla de arriba, ni va a WebAssembly. `>>` sigue fuera de
+la interfaz, para no tocar el camino caliente. Se verifica contra `17bfdb8` con la puerta entera, la suite `tui`, los pasos
+de `--count`, `ab.py` alternado y `ZYMBOL_POISON_TEMPS=1`, y la CI pasa a comprobar `cargo check -p zymbol-vm --target
+wasm32-unknown-unknown` (el primer paso de 3.4). Descartadas: la misma interfaz en los dos motores con la implementación
+compartida (A: el doble de trabajo, y el consenso dejaría de ver un fallo del anfitrión que los dos compartieran) y una
+feature `term` sin interfaz (C: el motor de 3.4 se quedaría sin TUI ni entrada).
+
 ### 3.2 Un motor ultracompacto
 
 **La pregunta:** ¿cuánto pesa un `zymbol` sin LSP, sin REPL, sin `std/db` y sin HTTP, y qué pierde?
@@ -854,8 +875,9 @@ El plan, en cinco pasos:
 Módulos ES en JavaScript, no TypeScript: `web/` no tiene paso de build y GitHub Pages sirve las
 fuentes tal cual.
 
-**En pausa desde el 2026-10-20, pasos 3 a 5** (decisión del autor, D5): dependen de cómo salga 3.4. Si el motor de
-WebAssembly sale bien, no haría falta una VM nueva en JavaScript.
+**En pausa desde el 2026-10-20, entera** (decisión del autor, D5): primero los pasos 3 a 5 y, el mismo día, también la
+sonda y la partición del monolito. Todo depende de cómo salga 3.4: si el motor de WebAssembly sale bien, no haría falta una
+VM nueva en JavaScript.
 
 Tres riesgos que hay que resolver en el paso 1:
 
@@ -884,7 +906,7 @@ Tres riesgos que hay que resolver en el paso 1:
 | D2 | ¿Qué hace el REPL? | Se queda en el tree-walker en esta versión, y se dice. Portarlo es diseño, no un flag |
 | D3 | ¿Qué pasa con `--vm`? | Se conserva y se acepta sin efecto: hay scripts que lo escriben |
 | D4 | ¿`std/db` sale de las features por defecto? | **Decidida por el autor el 2026-10-19 (grupo 4):** sí. Los releases de Linux y macOS ya se construyen sin ella |
-| D5 | ¿Dónde va la etapa 4? | **Decidida por el autor el 2026-10-20:** en la v0.0.11, después de la etapa 3. Deroga lo decidido el 2026-10-19 (grupo 6), que la pasaba a la v0.0.12 porque la etapa 2 la había desplazado. **El mismo día, al ver el calendario,** el autor dejó **en pausa los pasos 3 a 5** (la VM completa, el compilador en JavaScript y el cambio del playground): si el motor de WebAssembly de 3.4 sale bien, no haría falta una VM nueva en JavaScript |
+| D5 | ¿Dónde va la etapa 4? | **Decidida por el autor el 2026-10-20:** en la v0.0.11, después de la etapa 3. Deroga lo decidido el 2026-10-19 (grupo 6), que la pasaba a la v0.0.12 porque la etapa 2 la había desplazado. **El mismo día, al ver el calendario,** el autor dejó **en pausa la etapa 4 entera** —primero los pasos 3 a 5, después también la sonda y la partición del monolito—: si el motor de WebAssembly de 3.4 sale bien, no haría falta una VM nueva en JavaScript |
 | D6 | ¿Qué falló en el contenedor de 4 GB? | No es una decisión sino un dato que falta, y cambia el primer arreglo de 3.2. ZyBigBench, hecho en ese contenedor, apunta a una pista: su `README` dice que el perfil de release con LTO no terminaba allí. **Contestada en parte por la medición de 3.2 (2026-10-20):** no fue la memoria al compilar —en `HEAD` el perfil con LTO cabe en 4 GB con 2 núcleos, con 2,2 GB de pico—; quedan un límite de tiempo por orden o memoria ocupada por otra cosa, que no se pueden comprobar desde aquí. El compacto reduce las dos |
 | D7 | PERF-07: el error que sustituye al aborto, ¿se captura con `!?`, y de qué familia es? | **Decidida por el autor el 2026-10-16:** se captura con `!?`; su familia es una nueva, `##Depth`; el límite es de 10 000 llamadas activas, el mismo número en los tres motores, con la pila del programa en 512 MiB y un seguro que mira la pila que queda |
 | D8 | PERF-05 b: ¿la cadena guarda si es ASCII, o cuántos caracteres tiene? | **Decidida por el autor el 2026-10-17:** entra en la etapa 2, con Python como oráculo. Hecho como `ZYVM-028`: el texto guarda su número de caracteres, calculado la primera vez; de ahí sale si es ASCII |
