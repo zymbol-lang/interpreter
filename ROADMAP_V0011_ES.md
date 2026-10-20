@@ -8,7 +8,7 @@
 > (reproducir primero). Ver «Avance» dentro de ella. De las etapas 3 y 4 no hay nada hecho.
 >
 > **Plan de cierre (2026-10-19):** lo que queda va en seis grupos, aprobados por el autor con la opción recomendada de
-> cada uno; ver «Plan de cierre — lo que queda, por grupos». Los grupos 1, 2 y 3 están hechos. Las etapas 3 (salvo la medición de
+> cada uno; ver «Plan de cierre — lo que queda, por grupos». Los grupos 1 a 4 están hechos. Las etapas 3 (salvo la medición de
 > 3.2) y 4 pasan a la v0.0.12.
 >
 > **Escrito el 2026-10-13.** Toda cifra sin otra fecha se midió ese día, sobre esa rama, con un
@@ -514,7 +514,7 @@ puerta entera.
 | 1. Leer un texto por posición | `GLB-139`, `ZYTW-016` | Migas en la VM | `GLB-139` en el tree-walker y en zyjs; `ZYTW-016` | **Hecho** (2026-10-19) |
 | 2. Editar una colección sin copiarla | `GLB-140`, `ZYJS-068` | `GLB-140` en el tree-walker y en zyjs; `ZYJS-068` | — | **Hecho** (2026-10-19), y dos más que salieron: `ZYTW-018`, `GLB-141` |
 | 3. La memoria de los motores | `Value` del tree-walker (120 bytes), `ZYVM-022` | `FunctionValue` y `ErrorValue` en caja; `ZYVM-022` opción A, medida antes | `ZYVM-022` si cuesta más de un 2 % de pasos | **Hecho** (2026-10-19): `ZYTW-019`, y `ZYVM-022` corregida (+0,05 % de pasos) |
-| 4. El binario y su distribución | `GLB-134`, D4 | D4; medir musl en el `HEAD` y, si hace falta, `mimalloc` | — | Pendiente |
+| 4. El binario y su distribución | `GLB-134`, D4 | D4; medir musl en el `HEAD` y, si hace falta, `mimalloc` | — | **Hecho** (2026-10-19); quedan los documentos de `web/`, que cambian en la release |
 | 5. La puerta y los documentos | D1, `GUIDE.md` § 3b, `LLM.md` | `zyq expect` también contra `zyvm`; quitar la frase de § 3b; `LLM.md` a v0.0.11 | — | Pendiente |
 | 6. El alcance de la versión | Etapas 3 y 4 | La medición de 3.2 | 3.1, 3.3, 3.4 y la etapa 4 pasan a la v0.0.12 | Pendiente |
 
@@ -632,6 +632,23 @@ el arreglo: se amplió el patrón, con su caso en la autoprueba.
   para que `--count` siga contando.
 - **D4:** `default = []` en `zymbol-cli`, `std/db` con `--features db`, dicho en el README y en `install.md`; los
   trabajos de la puerta que prueban `STD_DB` compilan con la feature.
+
+**Hecho el 2026-10-19.** D4: `default = []` en los **cuatro** crates que tenían `db` por defecto —`zymbol-cli`,
+`zymbol-vm`, `zymbol-interpreter`, `zymbol-compiler`—, porque `cargo build` en la raíz compila cada miembro con sus
+defectos y Cargo une las features: con sólo el del CLI, `db` seguía encendido. Sin la feature: 281 paquetes en vez de 286,
+11,76 MB en vez de 11,96, y ninguna biblioteca de ODBC para arrancar. La nombran ahora la puerta (`gate.yml`, en la
+compilación y en `cargo test`), la release de Windows —donde ODBC es del sistema y el binario la llevaba—, el `.exe` de
+`build-packages.sh`, `bench/run_all.sh` y `coverage/run.sh`; y lo dicen el README, `REFERENCE.md` L17,
+`packaging/verify/README.md`, el `README-odbc.md` del corpus y el `CLAUDE.md` de la raíz. Sin la feature, `<# std/db`
+responde `module not found: std/db`, así que un binario sin ella hace **fallar** los ficheros `STD_DB` de la puerta en vez
+de saltarlos. La trampa que queda: `cargo test --release` sin `--features db` reescribe `target/release/zymbol` sin ella
+(dicho en `CLAUDE.md`). `web/install.md` y su gemelo describen el binario publicado y cambian en la release.
+
+`GLB-134`: el estático del `HEAD` iba a ×2,1 de glibc en `s = s "x"` (×17 en la v0.0.10) y a ×1,05 en los 16 programas
+largos. Con `mimalloc` sólo para musl, debajo del `CountingAllocator` —`--count` da lo mismo—, y tres opciones fijadas
+al arrancar para que no retenga memoria, va a ×0,983 en los 16 programas y como glibc en cada operación; el pico de
+memoria queda de 1 a 6 MiB por encima en los programas que hacen crecer colecciones. La ficha tiene la tabla y por qué
+20 ms de purga y no 0. El target musl se instaló con `rustup`; la CI compila el C con `musl-gcc`.
 
 ### Grupo 5 — La puerta y los documentos
 
