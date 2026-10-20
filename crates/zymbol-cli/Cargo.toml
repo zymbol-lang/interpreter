@@ -40,6 +40,14 @@ default = []
 # std/db (ODBC) in both engines. See REFERENCE.md L17.
 db = ["zymbol-interpreter/db", "zymbol-vm/db", "zymbol-compiler/db"]
 
+# The static Linux binary's allocator (GLB-134): musl's malloc made building a
+# text 2.1 times slower than glibc's at v0.0.11, 17 times at v0.0.10. Only the
+# musl target links it; every other build keeps the system allocator.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1", default-features = false }
+# `extended`, for `mi_option_set`: see `tune_allocator` in main.rs.
+libmimalloc-sys = { version = "0.1", features = ["extended"] }
+
 [dev-dependencies]
 # CLI integration tests spawn the `zymbol` binary. `CARGO_BIN_EXE_zymbol` is only
 # exported to integration tests of the crate that declares the binary, so

@@ -163,7 +163,40 @@ enum Commands {
 /// Set by `zymbol run --count`.
 static COUNT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// The system allocator, counting what it is asked for (`zymbol run --count`).
+/// The allocator underneath the counter: the system's, except in the static
+/// musl binary, where it is mimalloc. musl's malloc is slow at what an
+/// interpreter does most — growing and freeing blocks of every size — and it
+/// made `s = s "x"` 2.1 times slower than glibc's, interpolation 1.5 (GLB-134).
+#[cfg(target_env = "musl")]
+static INNER: mimalloc::MiMalloc = mimalloc::MiMalloc;
+#[cfg(not(target_env = "musl"))]
+static INNER: std::alloc::System = std::alloc::System;
+
+/// mimalloc as it comes keeps memory: it commits a whole arena up front and
+/// gives freed pages back a second later, and a program that grows a text
+/// peaked at twice what glibc's malloc needs (21 MiB against 11). Committing on
+/// demand and a 4 MiB first arena take the start back to glibc's (10.8 MiB);
+/// purging after 20 ms takes most of the rest. Purging at once went further
+/// and cost the time back: `hof_chain`, which frees and remakes arrays of
+/// 100 000 in a loop, ran 1.22 times glibc's; at 20 ms, 1.04 (GLB-134).
+///
+/// The ids are the positions in `mi_option_e` of the mimalloc v3 that
+/// libmimalloc-sys 0.1.49 bundles (`Cargo.lock`); the crate names only some of
+/// them. Its own constants for the ones it names — `reserve_os_memory` 9,
+/// `use_numa_nodes` 16, `max_errors` 19 — are where this count was checked.
+#[cfg(target_env = "musl")]
+fn tune_allocator() {
+    const ARENA_EAGER_COMMIT: libmimalloc_sys::mi_option_t = 4;
+    const PURGE_DELAY: libmimalloc_sys::mi_option_t = 15;
+    const ARENA_RESERVE_KIB: libmimalloc_sys::mi_option_t = 23;
+    unsafe {
+        libmimalloc_sys::mi_option_set(ARENA_EAGER_COMMIT, 0);
+        libmimalloc_sys::mi_option_set(PURGE_DELAY, 20);
+        libmimalloc_sys::mi_option_set(ARENA_RESERVE_KIB, 4096);
+    }
+}
+
+/// The allocator, counting what it is asked for (`zymbol run --count`).
 ///
 /// Two thread-local increments per request and nothing else: the counters have
 /// constant initializers and no destructors, so reading them here cannot
@@ -173,20 +206,20 @@ struct CountingAllocator;
 unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
         zymbol_common::count::alloc(layout.size());
-        unsafe { std::alloc::System.alloc(layout) }
+        unsafe { std::alloc::GlobalAlloc::alloc(&INNER, layout) }
     }
     unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
         zymbol_common::count::alloc(layout.size());
-        unsafe { std::alloc::System.alloc_zeroed(layout) }
+        unsafe { std::alloc::GlobalAlloc::alloc_zeroed(&INNER, layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
         // A growth is a request for the new size: that is what a `Vec` that
         // doubles costs, whether or not the block could be extended in place.
         zymbol_common::count::alloc(new_size);
-        unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
+        unsafe { std::alloc::GlobalAlloc::realloc(&INNER, ptr, layout, new_size) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
-        unsafe { std::alloc::System.dealloc(ptr, layout) }
+        unsafe { std::alloc::GlobalAlloc::dealloc(&INNER, ptr, layout) }
     }
 }
 
@@ -194,6 +227,8 @@ unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 fn main() -> Result<()> {
+    #[cfg(target_env = "musl")]
+    tune_allocator();
     let cli = Cli::parse();
 
     match cli.command {
