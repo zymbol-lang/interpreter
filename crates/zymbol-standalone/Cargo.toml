@@ -15,3 +15,12 @@ zymbol-compiler.workspace = true
 anyhow.workspace = true
 bincode.workspace = true
 tempfile.workspace = true
+
+[features]
+# The stdlib modules the executable's VM answers for, which must be the ones
+# the compiler that writes its bytecode accepts (ZYVM-031): each turns on the
+# compiler's own, and `cargo_toml` asks the generated project's zymbol-vm for
+# it. zymbol-cli's `http` and `db` turn these on.
+default = []
+http = ["zymbol-compiler/http"]
+db = ["zymbol-compiler/db"]

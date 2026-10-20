@@ -85,30 +85,7 @@ impl StandaloneBuilder {
         let vm_path = current_dir.join("crates/zymbol-vm").canonicalize()?;
         let common_path = current_dir.join("crates/zymbol-common").canonicalize()?;
 
-        let cargo_toml = format!(r#"[package]
-name = "zymbol-program"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-zymbol-bytecode = {{ path = "{}" }}
-zymbol-vm = {{ path = "{}" }}
-zymbol-common = {{ path = "{}" }}
-bincode = "1.3"
-serde = {{ version = "1.0", features = ["derive"] }}
-
-[profile.release]
-opt-level = 3
-lto = true
-strip = true
-codegen-units = 1
-"#,
-            bytecode_path.display(),
-            vm_path.display(),
-            common_path.display()
-        );
-
-        fs::write(build_dir.join("Cargo.toml"), cargo_toml)
+        fs::write(build_dir.join("Cargo.toml"), cargo_toml(&bytecode_path, &vm_path, &common_path))
             .context("Failed to write Cargo.toml")?;
 
         Ok(())
@@ -204,6 +181,40 @@ codegen-units = 1
     }
 }
 
+/// The generated project's `Cargo.toml`. Its zymbol-vm gets the features of
+/// the compiler that wrote the bytecode (ZYVM-031): without them the compiler
+/// emits std/net or std/db calls the executable's VM cannot answer.
+fn cargo_toml(bytecode_path: &Path, vm_path: &Path, common_path: &Path) -> String {
+    let features: Vec<&str> = [("http", cfg!(feature = "http")), ("db", cfg!(feature = "db"))]
+        .into_iter()
+        .filter_map(|(name, on)| on.then_some(name))
+        .collect();
+    let features = features.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
+    format!(r#"[package]
+name = "zymbol-program"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+zymbol-bytecode = {{ path = "{}" }}
+zymbol-vm = {{ path = "{}", features = [{}] }}
+zymbol-common = {{ path = "{}" }}
+bincode = "1.3"
+serde = {{ version = "1.0", features = ["derive"] }}
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1
+"#,
+        bytecode_path.display(),
+        vm_path.display(),
+        features,
+        common_path.display()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,5 +226,28 @@ mod tests {
         let builder = StandaloneBuilder::new_from_source(source.clone(), None, output, true);
 
         assert_eq!(builder.source_code, source);
+    }
+
+    /// ZYVM-031: the executable's VM must answer for every stdlib module the
+    /// compiler that wrote its bytecode accepts. The compiler has the features
+    /// of the `zymbol` it is in; the generated project used to ask for none.
+    #[test]
+    fn the_generated_vm_has_the_modules_its_compiler_accepts() {
+        let toml = cargo_toml(Path::new("/b"), Path::new("/v"), Path::new("/c"));
+        let vm_line = toml.lines().find(|l| l.starts_with("zymbol-vm")).expect("a zymbol-vm line");
+        for (module, feature) in [("std/net", "http"), ("std/db", "db")] {
+            let builder = StandaloneBuilder::new_from_source(
+                // A base directory, as `zymbol build` always gives: without one
+                // the compiler does not look at the imports at all.
+                format!("<# {module} => m\n"), Some(PathBuf::from(".")), PathBuf::new(), true);
+            let compiles = builder.compile_to_bytecode().is_ok();
+            let asks = vm_line.contains(&format!("\"{feature}\""));
+            assert_eq!(
+                compiles, asks,
+                "the compiler {} `<# {module}`, and the generated `{vm_line}` {} `{feature}`",
+                if compiles { "accepts" } else { "refuses" },
+                if asks { "asks for" } else { "does not ask for" },
+            );
+        }
     }
 }

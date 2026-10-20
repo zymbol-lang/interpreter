@@ -44,13 +44,13 @@ lsp = ["dep:zymbol-lsp", "dep:tokio"]
 # and the X11 protocol.
 repl = ["dep:zymbol-repl"]
 # std/net in both engines: ureq, rustls, ring.
-http = ["zymbol-interpreter/http", "zymbol-vm/http", "zymbol-compiler/http"]
+http = ["zymbol-interpreter/http", "zymbol-vm/http", "zymbol-compiler/http", "zymbol-standalone/http"]
 # Off by default since v0.0.11 (decision D4): with it the binary needs
 # libodbc.so.2 and libltdl.so.7 just to START, and a static one cannot have it
 # at all (the ODBC driver manager loads drivers with dlopen). `--features db`
 # turns it on — the Windows release and the gate build that way.
 # std/db (ODBC) in both engines. See REFERENCE.md L17.
-db = ["zymbol-interpreter/db", "zymbol-vm/db", "zymbol-compiler/db"]
+db = ["zymbol-interpreter/db", "zymbol-vm/db", "zymbol-compiler/db", "zymbol-standalone/db"]
 
 # The static Linux binary's allocator (GLB-134): musl's malloc made building a
 # text 2.1 times slower than glibc's at v0.0.11, 17 times at v0.0.10. Only the
