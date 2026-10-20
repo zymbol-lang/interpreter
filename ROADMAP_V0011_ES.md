@@ -10,6 +10,9 @@
 > **Plan de cierre (2026-10-19):** lo que queda va en seis grupos, aprobados por el autor con la opción recomendada de
 > cada uno; ver «Plan de cierre — lo que queda, por grupos». Los grupos 1 a 5 están hechos.
 >
+> **Avance del 2026-10-20:** 3.2 (forma A), 3.1 (forma B) y 3.4 (forma A) hechas; 3.3 aplazada por el autor, que la
+> retoma quizá el 2026-10-23; la etapa 4, en pausa entera. De paso: `ZYVM-031`, `GLB-142` y `GLB-143`, corregidos.
+>
 > **Alcance y fecha (decisión del autor, 2026-10-20):** las etapas 3 (3.1 a 3.4) y 4 (`zyvm.js`) **entran en la v0.0.11**,
 > empezando por 3.2. Esto deroga lo que el grupo 6 y D5 decidieron el 2026-10-19, que las pasaban a la v0.0.12. La v0.0.11
 > sale el **2026-11-01**; si falta mucho, como tarde el **2026-11-11**. Recortar el alcance para llegar lo decide el autor.
@@ -924,6 +927,14 @@ compila a `wasm32-unknown-unknown`. No se publica ningún motor. Por qué 32 bit
 navegadores y Node, y el único que Rust estable compila (`wasm64-unknown-unknown` es de nivel 3, sólo con nightly y
 recompilando `std`). Las pruebas sobre `wasm64` quedan para después, por decisión del autor. Descartadas por ahora: un
 motor provisional `zywasm` en el consenso (B, ~2–3 días) y aplazar.
+
+**Hecho el 2026-10-20** (`interpreter` `dd311b1`, `zyquality` `3f9bbd5`). La aserción de `ZyStr` admite punteros de 4
+bytes, su comentario dice por qué el byte 7 no choca, y la prueba de tamaños habla en palabras (8 y 40 en 64 bits, 4 y 20
+en wasm32). Ejecutadas en `wasm32-wasip1` con el WASI de Node, pasan las pruebas del núcleo —vm 14, intrinsics 16, lexer
+191, parser 58, common 37, semantic 75—, salvo las que lanzan un proceso o escriben un fichero temporal, que allí no pueden
+correr. Con el código de la rama, el prototipo de medición (que sigue fuera de ella, en `target/w32/proto-main`) da en
+wasm32 la salida de la VM nativa en los 16 programas. `gate.yml` comprueba `cargo check -p zymbol-compiler -p zymbol-vm
+--target wasm32-unknown-unknown`.
 
 ---
 
