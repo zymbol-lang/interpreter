@@ -1,10 +1,10 @@
-# Zymbol for LLMs — v0.0.10
+# Zymbol for LLMs — v0.0.11
 
 Dense, executable-verified brief. Every rule of § 1 and every bullet of § 12 stands
 behind a probe that runs in all three engines, and so do most sentences in between:
 `zyquality/docs/llm_verify.py` (`zyq suite --only llm`) runs them against the binary and
 fails when one stops holding, when a quoted sentence is edited away, or when a rule is
-added with nothing that runs. Last green against `zymbol 0.0.10`. Canonical sources: `GUIDE.md` (tutorial), `REFERENCE.md` (limits + full
+added with nothing that runs. Last green against `zymbol 0.0.11`. Canonical sources: `GUIDE.md` (tutorial), `REFERENCE.md` (limits + full
 symbol table), `SYMBOLS.md` (why each mark has its shape), `AGENTIC.md` (what
 holds, and what does not, when the code is generated rather than written).
 
