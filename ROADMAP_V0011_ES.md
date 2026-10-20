@@ -8,7 +8,7 @@
 > (reproducir primero). Ver «Avance» dentro de ella. De las etapas 3 y 4 no hay nada hecho.
 >
 > **Plan de cierre (2026-10-19):** lo que queda va en seis grupos, aprobados por el autor con la opción recomendada de
-> cada uno; ver «Plan de cierre — lo que queda, por grupos». Los grupos 1 a 4 están hechos. Las etapas 3 (salvo la medición de
+> cada uno; ver «Plan de cierre — lo que queda, por grupos». Los grupos 1 a 5 están hechos. Las etapas 3 (salvo la medición de
 > 3.2) y 4 pasan a la v0.0.12.
 >
 > **Escrito el 2026-10-13.** Toda cifra sin otra fecha se midió ese día, sobre esa rama, con un
@@ -515,7 +515,7 @@ puerta entera.
 | 2. Editar una colección sin copiarla | `GLB-140`, `ZYJS-068` | `GLB-140` en el tree-walker y en zyjs; `ZYJS-068` | — | **Hecho** (2026-10-19), y dos más que salieron: `ZYTW-018`, `GLB-141` |
 | 3. La memoria de los motores | `Value` del tree-walker (120 bytes), `ZYVM-022` | `FunctionValue` y `ErrorValue` en caja; `ZYVM-022` opción A, medida antes | `ZYVM-022` si cuesta más de un 2 % de pasos | **Hecho** (2026-10-19): `ZYTW-019`, y `ZYVM-022` corregida (+0,05 % de pasos) |
 | 4. El binario y su distribución | `GLB-134`, D4 | D4; medir musl en el `HEAD` y, si hace falta, `mimalloc` | — | **Hecho** (2026-10-19); quedan los documentos de `web/`, que cambian en la release |
-| 5. La puerta y los documentos | D1, `GUIDE.md` § 3b, `LLM.md` | `zyq expect` también contra `zyvm`; quitar la frase de § 3b; `LLM.md` a v0.0.11 | — | Pendiente |
+| 5. La puerta y los documentos | D1, `GUIDE.md` § 3b, `LLM.md` | Quitar la frase de § 3b; `LLM.md` a v0.0.11 | D1 se queda como está, documentado | **Hecho** (2026-10-19) |
 | 6. El alcance de la versión | Etapas 3 y 4 | La medición de 3.2 | 3.1, 3.3, 3.4 y la etapa 4 pasan a la v0.0.12 | Pendiente |
 
 ### Grupo 1 — Leer un texto por posición
@@ -655,9 +655,17 @@ memoria queda de 1 a 6 MiB por encima en los programas que hacen crecer coleccio
 - **D1:** `zyq expect` compara hoy los goldens **sólo con `zytw`**; la VM, el motor que ejecuta la gente, queda
   verificada sólo de forma indirecta, a través del consenso. Los goldens los sigue grabando `zytw` —lo nuevo se
   construye primero en el tree-walker—, y `zyq expect` los compara con `zytw` y `zyvm`.
+  **Corregido el 2026-10-19:** `zyquality/corpus.toml` ya decía por qué no —comparar un segundo motor con un golden
+  «answers the consensus question in a noisier way»— y la vía indirecta es completa: el consenso obliga a `zyvm` a
+  coincidir con `zytw` en cada fichero, y `expect` obliga a `zytw` a coincidir con el golden. El autor decidió dejarlo
+  como está y escribirlo; `corpus.toml` lo dice ahora junto a la razón que ya tenía.
 - **`GUIDE.md` § 3b** dice que algunas primitivas de TUI son sólo del tree-walker y remite a unas notas por primitiva
   que no existen; la suite `tui` ya obliga a que los dos motores coincidan. Se quita la frase.
 - **`LLM.md`** sigue titulado v0.0.10, y la suite `llm` lo marca.
+
+**Hecho el 2026-10-19.** § 3b dice ahora lo comprobado: las siete primitivas (`@~`, `>>!`, `>>?`, `>>~`, `<<|`, `<<|?`,
+`>>|`) dan la misma salida, byte a byte, en los dos motores con `--keys`, y la suite `tui` los sujeta. `LLM.md` se titula
+v0.0.11 y dice que pasa contra `zymbol 0.0.11`: la suite `llm` da 89 de 89 sin `STALE TITLE`.
 
 ### Grupo 6 — El alcance de la versión
 
@@ -806,7 +814,7 @@ Tres riesgos que hay que resolver en el paso 1:
 
 | Id | La pregunta | Recomendación |
 |---|---|---|
-| D1 | ¿Qué motor graba los goldens? | **Decidida por el autor el 2026-10-19 (grupo 5):** los sigue grabando `zytw`, porque lo nuevo se construye primero en el tree-walker, y `zyq expect` los compara con `zytw` y `zyvm` — hasta ese día sólo con `zytw`. La recomendación anterior, grabar con `zyvm`, rompía ese orden |
+| D1 | ¿Qué motor graba los goldens? | **Decidida por el autor el 2026-10-19 (grupo 5):** se queda como está. Los graba `zytw`, porque lo nuevo se construye primero en el tree-walker, y `zyq expect` los compara con el motor que los grabó, como dice `zyquality/corpus.toml`: la VM queda comprobada contra cada golden por el consenso, que la obliga a coincidir con `zytw`, más `expect`. `zyq expect --engines zyvm` da 677 de 677. Una primera versión de esta fila proponía añadir `zyvm` a `expect` sin contar con esa razón escrita |
 | D2 | ¿Qué hace el REPL? | Se queda en el tree-walker en esta versión, y se dice. Portarlo es diseño, no un flag |
 | D3 | ¿Qué pasa con `--vm`? | Se conserva y se acepta sin efecto: hay scripts que lo escriben |
 | D4 | ¿`std/db` sale de las features por defecto? | **Decidida por el autor el 2026-10-19 (grupo 4):** sí. Los releases de Linux y macOS ya se construyen sin ella |
