@@ -2,24 +2,17 @@
 //!
 //! Mirrors the implementations in zymbol-interpreter/src/stdlib/, but without
 //! the interpreter dependency. Called from CallBuiltin instructions.
+//!
+//! What needs the system — the clock, the seed of `std/random`, `std/net`,
+//! `std/db` — goes through the [`Host`] the VM was given (3.1).
 
-#[cfg(feature = "db")]
-use std::cell::RefCell;
 use zymbol_common::num;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-#[cfg(feature = "db")]
-use base64::Engine as _;
-#[cfg(feature = "db")]
-use odbc_api::{
-    handles::DataType, parameter::InputParameter, Connection, ConnectionOptions, Cursor,
-    Environment, IntoParameter,
-};
-#[cfg(feature = "db")]
-use once_cell::sync::Lazy;
 use zymbol_bytecode::builtins as B;
 
+use crate::host::{Host, HttpError, HttpMethod, HttpRequest};
 use crate::{Value, ZyStr};
 
 #[inline]
@@ -218,14 +211,11 @@ thread_local! {
     static SEEDED: Cell<bool>     = const { Cell::new(false) };
 }
 
-fn xoshiro_next() -> u64 {
+fn xoshiro_next(host: &mut dyn Host) -> u64 {
     STATE.with(|s| {
         let mut st = s.get();
         if !SEEDED.with(|b| b.get()) {
-            let ns = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos())
-                .unwrap_or(12345) as u64;
+            let ns = host.entropy();
             st = [
                 ns ^ 0xdead_beef,
                 ns.wrapping_mul(6_364_136_223_846_793_005),
@@ -243,27 +233,27 @@ fn xoshiro_next() -> u64 {
     })
 }
 
-fn rand_entero(args: Vec<Value>) -> Result<Value, String> {
+fn rand_entero(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     match (args.first(), args.get(1)) {
         (Some(Value::Int(lo)), Some(Value::Int(hi))) if hi >= lo => {
             let range = (hi - lo + 1) as u64;
-            Ok(Value::Int(*lo + (xoshiro_next() % range) as i64))
+            Ok(Value::Int(*lo + (xoshiro_next(host) % range) as i64))
         }
         _ => Err("random::entero: expected (###, ###) with max >= min".into()),
     }
 }
 
-fn rand_rango(args: Vec<Value>) -> Result<Value, String> {
+fn rand_rango(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     match args.first() {
         Some(Value::Int(n)) if *n > 0 => {
-            Ok(Value::Int((xoshiro_next() % (*n as u64)) as i64))
+            Ok(Value::Int((xoshiro_next(host) % (*n as u64)) as i64))
         }
         _ => Err("random::rango: expected positive ###".into()),
     }
 }
 
-fn rand_peso_f64(_args: Vec<Value>) -> Result<Value, String> {
-    Ok(Value::Float(((xoshiro_next() % 201) as f64 - 100.0) / 1000.0))
+fn rand_peso_f64(_args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
+    Ok(Value::Float(((xoshiro_next(host) % 201) as f64 - 100.0) / 1000.0))
 }
 
 // ── std/json ───────────────────────────────────────────────────────────────────
@@ -500,15 +490,15 @@ fn io_mkdir(args: Vec<Value>) -> Result<Value, String> {
 //
 // Mirrors zymbol-interpreter/src/stdlib/net.rs. Network failures are returned as
 // soft `Value::Error("##Network(...)")` (catchable); a wrong argument type is a hard `Err`.
-// Only in builds with the `http` feature (on by default; see zymbol-cli).
+// The request itself is the host's (`Host::http`); a host without a network
+// answers with a hard error, which a compiler without `http` never lets a
+// program reach, since it refuses `<# std/net`.
 
-#[cfg(feature = "http")]
 fn net_err(msg: impl Into<String>) -> Value {
     Value::Error(ZyStr::new(format!("##Network({})", msg.into())))
 }
 
 /// Parse the optional headers arg: Array of 2-element (String, String) tuples.
-#[cfg(feature = "http")]
 fn parse_headers(arg: Option<Value>, fname: &str) -> Result<Vec<(String, String)>, String> {
     let value = match arg {
         None => return Ok(Vec::new()),
@@ -535,575 +525,61 @@ fn parse_headers(arg: Option<Value>, fname: &str) -> Result<Vec<(String, String)
     }
 }
 
-#[cfg(feature = "http")]
-fn response_to_value(resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Value {
+/// The body as a String, a network failure as a soft error, no network at all
+/// as a hard one.
+fn response_to_value(resp: Result<String, HttpError>) -> Result<Value, String> {
     match resp {
-        Ok(mut resp) => match resp.body_mut().read_to_string() {
-            Ok(body) => Value::String(ZyStr::new(body)),
-            Err(e) => net_err(e.to_string()),
-        },
-        Err(e) => net_err(e.to_string()),
+        Ok(body) => Ok(Value::String(ZyStr::new(body))),
+        Err(HttpError::Network(e)) => Ok(net_err(e)),
+        Err(HttpError::Unavailable(e)) => Err(e),
     }
 }
 
-#[cfg(feature = "http")]
-fn net_get(args: Vec<Value>) -> Result<Value, String> {
+fn net_get(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     let mut it = args.into_iter();
     let url = match it.next() {
         Some(Value::String(u)) => u,
         _ => return Err("net::get: expected String url".into()),
     };
     let headers = parse_headers(it.next(), "net::get")?;
-    let mut req = ureq::get(url.as_str());
-    for (k, v) in &headers {
-        req = req.header(k, v);
-    }
-    Ok(response_to_value(req.call()))
+    response_to_value(host.http(HttpRequest {
+        method: HttpMethod::Get, url: url.as_str(), headers: &headers, body: None,
+    }))
 }
 
-#[cfg(feature = "http")]
-fn net_post(args: Vec<Value>) -> Result<Value, String> {
+fn net_post_as(args: Vec<Value>, host: &mut dyn Host, fname: &str, content_type: &str) -> Result<Value, String> {
     let mut it = args.into_iter();
     match (it.next(), it.next()) {
         (Some(Value::String(url)), Some(Value::String(body))) => {
-            let headers = parse_headers(it.next(), "net::post")?;
-            let mut req = ureq::post(url.as_str()).header("Content-Type", "text/plain");
-            for (k, v) in &headers {
-                req = req.header(k, v);
-            }
-            Ok(response_to_value(req.send(body.as_str())))
+            let headers = parse_headers(it.next(), fname)?;
+            response_to_value(host.http(HttpRequest {
+                method: HttpMethod::Post, url: url.as_str(), headers: &headers,
+                body: Some((content_type, body.as_str())),
+            }))
         }
-        _ => Err("net::post: expected (String, String)".into()),
+        _ => Err(format!("{}: expected (String, String)", fname)),
     }
 }
 
-#[cfg(feature = "http")]
-fn net_post_json(args: Vec<Value>) -> Result<Value, String> {
-    let mut it = args.into_iter();
-    match (it.next(), it.next()) {
-        (Some(Value::String(url)), Some(Value::String(body))) => {
-            let headers = parse_headers(it.next(), "net::post_json")?;
-            let mut req = ureq::post(url.as_str()).header("Content-Type", "application/json");
-            for (k, v) in &headers {
-                req = req.header(k, v);
-            }
-            Ok(response_to_value(req.send(body.as_str())))
-        }
-        _ => Err("net::post_json: expected (String, String)".into()),
-    }
-}
-
-#[cfg(feature = "http")]
-fn net_head(args: Vec<Value>) -> Result<Value, String> {
+fn net_head(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     match args.into_iter().next() {
-        Some(Value::String(url)) => Ok(Value::Bool(ureq::head(url.as_str()).call().is_ok())),
+        Some(Value::String(url)) => match host.http_head(url.as_str()) {
+            Ok(b) => Ok(Value::Bool(b)),
+            Err(HttpError::Network(_)) => Ok(Value::Bool(false)),
+            Err(HttpError::Unavailable(e)) => Err(e),
+        },
         _ => Err("net::head: expected String url".into()),
     }
 }
 
-#[cfg(feature = "http")]
-fn net_dispatch(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
+fn net_dispatch(builtin_id: u16, args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     match builtin_id {
-        B::NET_GET       => net_get(args),
-        B::NET_POST      => net_post(args),
-        B::NET_POST_JSON => net_post_json(args),
-        B::NET_HEAD      => net_head(args),
+        B::NET_GET       => net_get(args, host),
+        B::NET_POST      => net_post_as(args, host, "net::post", "text/plain"),
+        B::NET_POST_JSON => net_post_as(args, host, "net::post_json", "application/json"),
+        B::NET_HEAD      => net_head(args, host),
         other => Err(format!("unknown net builtin id {}", other)),
     }
-}
-
-// Only reachable from bytecode produced by an `http`-enabled compiler (the
-// compiler without it rejects `<# std/net` with module-not-found).
-#[cfg(not(feature = "http"))]
-fn net_dispatch(_builtin_id: u16, _args: Vec<Value>) -> Result<Value, String> {
-    Err("std/net is not available in this build (compiled without HTTP support)".into())
-}
-
-// ── std/db ─────────────────────────────────────────────────────────────────────
-//
-// Mirrors zymbol-interpreter/src/stdlib/db.rs. Vendor-neutral database access via
-// ODBC. Runtime/SQL failures are soft `Value::Error("##DB(...)")` (catchable); a
-// wrong argument type is a hard `Err`. This crate keeps its own ODBC environment
-// and connection registry (separate from the tree-walker's); a program runs under
-// one engine at a time, so only one registry is ever used.
-
-#[cfg(feature = "db")]
-static DB_ODBC_ENV: Lazy<Result<Environment, String>> =
-    Lazy::new(|| Environment::new().map_err(|e| e.to_string()));
-
-#[cfg(feature = "db")]
-fn db_env() -> Result<&'static Environment, String> {
-    match &*DB_ODBC_ENV {
-        Ok(e) => Ok(e),
-        Err(msg) => Err(msg.clone()),
-    }
-}
-
-#[cfg(feature = "db")]
-struct DbConnEntry {
-    conn: Connection<'static>,
-    in_tx: bool,
-}
-
-#[cfg(feature = "db")]
-thread_local! {
-    static VM_DB_CONNS: RefCell<HashMap<String, DbConnEntry>> = RefCell::new(HashMap::new());
-}
-
-#[cfg(feature = "db")]
-fn db_err(msg: impl Into<String>) -> Value {
-    Value::Error(ZyStr::new(format!("##DB({})", msg.into())))
-}
-
-#[cfg(feature = "db")]
-fn db_odbc_err(e: odbc_api::Error) -> Value {
-    db_err(e.to_string())
-}
-
-/// The soft error `query_one` gives back when the query ran and matched nothing.
-///
-/// BUG-ZYB-007: it used to return `Unit`, which is also what a `NULL` column
-/// returns, so `$!` answered `#0` for "no such row" exactly as it does for a
-/// row that exists. The documented check — `? fila$!` — could never be true,
-/// and the branch behind it was dead code that read as live: a program with a
-/// perfectly good "no such account" message, translated into four languages,
-/// instead died several lines later with `Cannot access member 'moneda' on
-/// non-tuple value`, naming a tuple in a line that was written correctly.
-///
-/// A failure has to be reported where it happens or it is reported somewhere
-/// it did not.
-#[cfg(feature = "db")]
-fn db_no_rows() -> Value {
-    db_err("query_one matched no rows".to_string())
-}
-
-#[cfg(feature = "db")]
-fn db_with_conn<F>(name: &str, f: F) -> Value
-where
-    F: FnOnce(&mut DbConnEntry) -> Value,
-{
-    VM_DB_CONNS.with(|c| {
-        let mut map = c.borrow_mut();
-        match map.get_mut(name) {
-            Some(entry) => f(entry),
-            None => db_err(format!("unknown connection '{}'", name)),
-        }
-    })
-}
-
-#[cfg(feature = "db")]
-fn db_take_string(v: Option<Value>, what: &str) -> Result<String, String> {
-    match v {
-        Some(Value::String(s)) => Ok(s.as_str().to_string()),
-        _ => Err(format!("db: expected String {}", what)),
-    }
-}
-
-#[cfg(feature = "db")]
-fn db_take_params(v: Option<Value>) -> Result<Vec<Value>, String> {
-    match v {
-        None => Ok(Vec::new()),
-        Some(Value::Tuple(items)) | Some(Value::Array(items)) => Ok(items.as_ref().clone()),
-        Some(
-            s @ (Value::Int(_)
-            | Value::Float(_)
-            | Value::String(_)
-            | Value::Bool(_)
-            | Value::Char(_)
-            | Value::Unit),
-        ) => Ok(vec![s]),
-        Some(_) => Err("db: params must be a Tuple, Array, or scalar".into()),
-    }
-}
-
-#[cfg(feature = "db")]
-fn db_bind_params(params: Vec<Value>) -> Result<Vec<Box<dyn InputParameter>>, String> {
-    let mut out: Vec<Box<dyn InputParameter>> = Vec::with_capacity(params.len());
-    for p in params {
-        let boxed: Box<dyn InputParameter> = match p {
-            Value::Int(i) => Box::new(i.into_parameter()),
-            Value::Float(f) => Box::new(f.into_parameter()),
-            Value::Bool(b) => Box::new((if b { 1i64 } else { 0i64 }).into_parameter()),
-            Value::String(s) => Box::new(s.as_str().to_string().into_parameter()),
-            Value::Char(c) => Box::new(c.to_string().into_parameter()),
-            Value::Unit => Box::new(Option::<String>::None.into_parameter()),
-            other => return Err(format!("db: cannot bind {} as a parameter", other.type_label())),
-        };
-        out.push(boxed);
-    }
-    Ok(out)
-}
-
-#[cfg(feature = "db")]
-fn db_is_binary(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Binary { .. } | DataType::Varbinary { .. } | DataType::LongVarbinary { .. }
-    )
-}
-
-#[cfg(feature = "db")]
-fn db_cell_from_text(text: String, dt: &DataType) -> Value {
-    match dt {
-        DataType::Integer
-        | DataType::SmallInt
-        | DataType::BigInt
-        | DataType::TinyInt
-        // A BIGINT column is wider than a Zymbol integer; past the range the
-        // value stays the String the driver sent (as the tree-walker does).
-        | DataType::Bit => match num::parse(text.trim()) {
-            num::Num::Int(n) => Value::Int(n),
-            _ => Value::String(ZyStr::new(text)),
-        },
-        DataType::Real | DataType::Double | DataType::Float { .. } => text
-            .parse::<f64>()
-            .map(Value::Float)
-            .unwrap_or_else(|_| Value::String(ZyStr::new(text))),
-        _ => Value::String(ZyStr::new(text)),
-    }
-}
-
-#[cfg(feature = "db")]
-fn db_rows_from_cursor(
-    cursor: &mut impl Cursor,
-    only_first: bool,
-    single_col: bool,
-) -> Result<Vec<Value>, Value> {
-    let names: Vec<String> = cursor
-        .column_names()
-        .map_err(db_odbc_err)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(db_odbc_err)?;
-    let ncols = names.len() as u16;
-    let mut types: Vec<DataType> = Vec::with_capacity(names.len());
-    for col in 1..=ncols {
-        types.push(cursor.col_data_type(col).map_err(db_odbc_err)?);
-    }
-
-    let mut rows: Vec<Value> = Vec::new();
-    let mut buf: Vec<u8> = Vec::new();
-    while let Some(mut row) = cursor.next_row().map_err(db_odbc_err)? {
-        let mut fields: zymbol_common::Dict<Value> = zymbol_common::Dict::with_capacity_and_hasher(names.len(), Default::default());
-        let take_cols = if single_col { 1 } else { ncols };
-        for idx in 0..take_cols {
-            let col = idx + 1;
-            let dt = &types[idx as usize];
-            let value = if db_is_binary(dt) {
-                buf.clear();
-                let not_null = row.get_binary(col, &mut buf).map_err(db_odbc_err)?;
-                if !not_null {
-                    Value::Unit
-                } else {
-                    Value::String(ZyStr::new(
-                        base64::engine::general_purpose::STANDARD.encode(&buf),
-                    ))
-                }
-            } else {
-                buf.clear();
-                let not_null = row.get_text(col, &mut buf).map_err(db_odbc_err)?;
-                if !not_null {
-                    Value::Unit
-                } else {
-                    db_cell_from_text(String::from_utf8_lossy(&buf).into_owned(), dt)
-                }
-            };
-            fields.insert(names[idx as usize].clone(), value);
-        }
-        rows.push(Value::NamedTuple(Rc::new(fields)));
-        if only_first {
-            break;
-        }
-    }
-    Ok(rows)
-}
-
-#[cfg(feature = "db")]
-fn db_connect(args: Vec<Value>) -> Result<Value, String> {
-    let mut it = args.into_iter();
-    let name = db_take_string(it.next(), "name")?;
-    let conn_str = db_take_string(it.next(), "connection string")?;
-    let env = match db_env() {
-        Ok(e) => e,
-        Err(msg) => return Ok(db_err(msg)),
-    };
-    match env.connect_with_connection_string(&conn_str, ConnectionOptions::default()) {
-        Ok(conn) => {
-            VM_DB_CONNS.with(|c| {
-                c.borrow_mut()
-                    .insert(name, DbConnEntry { conn, in_tx: false })
-            });
-            Ok(Value::Unit)
-        }
-        Err(e) => Ok(db_odbc_err(e)),
-    }
-}
-
-#[cfg(feature = "db")]
-fn db_disconnect(args: Vec<Value>) -> Result<Value, String> {
-    let name = db_take_string(args.into_iter().next(), "name")?;
-    VM_DB_CONNS.with(|c| {
-        c.borrow_mut().remove(&name);
-    });
-    Ok(Value::Unit)
-}
-
-#[cfg(feature = "db")]
-fn db_exec(args: Vec<Value>) -> Result<Value, String> {
-    let mut it = args.into_iter();
-    let name = db_take_string(it.next(), "name")?;
-    let sql = db_take_string(it.next(), "sql")?;
-    let bound = db_bind_params(db_take_params(it.next())?)?;
-    Ok(db_with_conn(&name, |entry| {
-        let mut stmt = match entry.conn.preallocate() {
-            Ok(s) => s,
-            Err(e) => return db_odbc_err(e),
-        };
-        let outcome: Result<(), odbc_api::Error> = {
-            let res = if bound.is_empty() {
-                stmt.execute(&sql, ())
-            } else {
-                stmt.execute(&sql, bound.as_slice())
-            };
-            res.map(|_| ())
-        };
-        if let Err(e) = outcome {
-            return db_odbc_err(e);
-        }
-        let n = stmt.row_count().ok().flatten().unwrap_or(0);
-        Value::Int(n as i64)
-    }))
-}
-
-#[cfg(feature = "db")]
-fn db_run_query(
-    name: &str,
-    sql: &str,
-    bound: Vec<Box<dyn InputParameter>>,
-    only_first: bool,
-    single_col: bool,
-) -> Value {
-    db_with_conn(name, |entry| {
-        let res = if bound.is_empty() {
-            entry.conn.execute(sql, (), None)
-        } else {
-            entry.conn.execute(sql, bound.as_slice(), None)
-        };
-        match res {
-            Ok(Some(mut cursor)) => match db_rows_from_cursor(&mut cursor, only_first, single_col) {
-                Ok(rows) => Value::Array(Rc::new(rows)),
-                Err(e) => e,
-            },
-            Ok(None) => Value::Array(Rc::new(Vec::new())),
-            Err(e) => db_odbc_err(e),
-        }
-    })
-}
-
-#[cfg(feature = "db")]
-fn db_query(args: Vec<Value>) -> Result<Value, String> {
-    let mut it = args.into_iter();
-    let name = db_take_string(it.next(), "name")?;
-    let sql = db_take_string(it.next(), "sql")?;
-    let bound = db_bind_params(db_take_params(it.next())?)?;
-    Ok(db_run_query(&name, &sql, bound, false, false))
-}
-
-#[cfg(feature = "db")]
-fn db_query_one(args: Vec<Value>) -> Result<Value, String> {
-    let mut it = args.into_iter();
-    let name = db_take_string(it.next(), "name")?;
-    let sql = db_take_string(it.next(), "sql")?;
-    let bound = db_bind_params(db_take_params(it.next())?)?;
-    Ok(match db_run_query(&name, &sql, bound, true, false) {
-        Value::Array(rows) => rows.first().cloned().unwrap_or_else(db_no_rows),
-        other => other,
-    })
-}
-
-#[cfg(feature = "db")]
-fn db_query_value(args: Vec<Value>) -> Result<Value, String> {
-    let mut it = args.into_iter();
-    let name = db_take_string(it.next(), "name")?;
-    let sql = db_take_string(it.next(), "sql")?;
-    let bound = db_bind_params(db_take_params(it.next())?)?;
-    Ok(match db_run_query(&name, &sql, bound, true, true) {
-        Value::Array(rows) => match rows.first() {
-            Some(Value::NamedTuple(fields)) => {
-                fields.first().map(|(_, v)| v.clone()).unwrap_or(Value::Unit)
-            }
-            _ => Value::Unit,
-        },
-        other => other,
-    })
-}
-
-#[cfg(feature = "db")]
-fn db_tx(args: Vec<Value>) -> Result<Value, String> {
-    let mut it = args.into_iter();
-    let name = db_take_string(it.next(), "name")?;
-    let statements = match it.next() {
-        Some(Value::Array(items)) => items.as_ref().clone(),
-        _ => return Err("db::tx: statements must be an Array".into()),
-    };
-
-    let mut prepared: Vec<(String, Vec<Box<dyn InputParameter>>)> =
-        Vec::with_capacity(statements.len());
-    for st in statements {
-        match st {
-            Value::Tuple(pair) if pair.len() == 2 => {
-                let sql = match &pair[0] {
-                    Value::String(s) => s.as_str().to_string(),
-                    _ => return Err("db::tx: each statement is (String sql, Array params)".into()),
-                };
-                let params = db_take_params(Some(pair[1].clone()))?;
-                prepared.push((sql, db_bind_params(params)?));
-            }
-            _ => return Err("db::tx: each statement must be a (sql, params) tuple".into()),
-        }
-    }
-
-    Ok(db_with_conn(&name, |entry| {
-        if let Err(e) = entry.conn.set_autocommit(false) {
-            return db_odbc_err(e);
-        }
-        for (sql, bound) in &prepared {
-            let res = if bound.is_empty() {
-                entry.conn.execute(sql, (), None)
-            } else {
-                entry.conn.execute(sql, bound.as_slice(), None)
-            };
-            if let Err(e) = res {
-                let _ = entry.conn.rollback();
-                let _ = entry.conn.set_autocommit(true);
-                return db_odbc_err(e);
-            }
-        }
-        let result = match entry.conn.commit() {
-            Ok(_) => Value::Unit,
-            Err(e) => {
-                let _ = entry.conn.rollback();
-                db_odbc_err(e)
-            }
-        };
-        let _ = entry.conn.set_autocommit(true);
-        result
-    }))
-}
-
-#[cfg(feature = "db")]
-fn db_begin(args: Vec<Value>) -> Result<Value, String> {
-    let name = db_take_string(args.into_iter().next(), "name")?;
-    Ok(db_with_conn(&name, |entry| {
-        if entry.in_tx {
-            return db_err("transaction already active (use savepoints to nest)");
-        }
-        match entry.conn.set_autocommit(false) {
-            Ok(_) => {
-                entry.in_tx = true;
-                Value::Unit
-            }
-            Err(e) => db_odbc_err(e),
-        }
-    }))
-}
-
-#[cfg(feature = "db")]
-fn db_commit(args: Vec<Value>) -> Result<Value, String> {
-    let name = db_take_string(args.into_iter().next(), "name")?;
-    Ok(db_with_conn(&name, |entry| {
-        let result = match entry.conn.commit() {
-            Ok(_) => Value::Unit,
-            Err(e) => db_odbc_err(e),
-        };
-        let _ = entry.conn.set_autocommit(true);
-        entry.in_tx = false;
-        result
-    }))
-}
-
-#[cfg(feature = "db")]
-fn db_rollback(args: Vec<Value>) -> Result<Value, String> {
-    let name = db_take_string(args.into_iter().next(), "name")?;
-    Ok(db_with_conn(&name, |entry| {
-        let result = match entry.conn.rollback() {
-            Ok(_) => Value::Unit,
-            Err(e) => db_odbc_err(e),
-        };
-        let _ = entry.conn.set_autocommit(true);
-        entry.in_tx = false;
-        result
-    }))
-}
-
-#[cfg(feature = "db")]
-fn db_valid_savepoint(sp: &str) -> bool {
-    !sp.is_empty()
-        && sp.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && sp.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-#[cfg(feature = "db")]
-fn db_savepoint_op(args: Vec<Value>, verb: &str) -> Result<Value, String> {
-    let mut it = args.into_iter();
-    let name = db_take_string(it.next(), "name")?;
-    let sp = db_take_string(it.next(), "savepoint name")?;
-    if !db_valid_savepoint(&sp) {
-        return Ok(db_err(format!("invalid savepoint name '{}'", sp)));
-    }
-    let sql = format!("{} {}", verb, sp);
-    Ok(db_with_conn(&name, |entry| {
-        match entry.conn.execute(&sql, (), None) {
-            Ok(_) => Value::Unit,
-            Err(e) => db_odbc_err(e),
-        }
-    }))
-}
-
-#[cfg(feature = "db")]
-fn db_exec_script(args: Vec<Value>) -> Result<Value, String> {
-    let mut it = args.into_iter();
-    let name = db_take_string(it.next(), "name")?;
-    let script = db_take_string(it.next(), "sql")?;
-    let statements: Vec<String> = script
-        .split(';')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    Ok(db_with_conn(&name, |entry| {
-        if let Err(e) = entry.conn.set_autocommit(false) {
-            return db_odbc_err(e);
-        }
-        for stmt in &statements {
-            if let Err(e) = entry.conn.execute(stmt, (), None) {
-                let _ = entry.conn.rollback();
-                let _ = entry.conn.set_autocommit(true);
-                return db_odbc_err(e);
-            }
-        }
-        let result = match entry.conn.commit() {
-            Ok(_) => Value::Unit,
-            Err(e) => db_odbc_err(e),
-        };
-        let _ = entry.conn.set_autocommit(true);
-        result
-    }))
-}
-
-#[cfg(feature = "db")]
-fn db_table_exists(args: Vec<Value>) -> Result<Value, String> {
-    let mut it = args.into_iter();
-    let name = db_take_string(it.next(), "name")?;
-    let table = db_take_string(it.next(), "table")?;
-    Ok(db_with_conn(&name, |entry| {
-        match entry.conn.tables("", "", &table, "") {
-            Ok(mut iter) => match iter.next() {
-                Some(Ok(_)) => Value::Bool(true),
-                Some(Err(e)) => db_odbc_err(e),
-                None => Value::Bool(false),
-            },
-            Err(e) => db_odbc_err(e),
-        }
-    }))
 }
 
 // ── std/time ──────────────────────────────────────────────────────────────────
@@ -1146,23 +622,23 @@ fn time_zone(args: &[Value], from: usize) -> Result<Option<&str>, ()> {
     }
 }
 
-fn time_now(_args: Vec<Value>) -> Result<Value, String> {
-    Ok(Value::Int(zt::now_ms()))
+fn time_now(_args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
+    Ok(Value::Int(host.clock().now_ms()))
 }
 
-fn time_today(args: Vec<Value>) -> Result<Value, String> {
+fn time_today(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     let zone = time_zone(&args, 0).map_err(|_| "time::today: expected an optional zone String".to_string())?;
-    Ok(match zt::call_today(zone) {
+    Ok(match zt::call_today_with(host.clock(), zone) {
         Ok(s) => Value::String(ZyStr::new(s)),
         Err(e) => time_soft(e),
     })
 }
 
-fn time_parts(args: Vec<Value>) -> Result<Value, String> {
+fn time_parts(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     let expected = "time::parts: expected (### epoch [, zone])";
     let epoch = time_int(args.first()).ok_or_else(|| expected.to_string())?;
     let zone = time_zone(&args, 1).map_err(|_| expected.to_string())?;
-    Ok(match zt::call_parts(epoch, zone) {
+    Ok(match zt::call_parts_with(host.clock(), epoch, zone) {
         Ok(p) => Value::NamedTuple(Rc::new(
             zt::parts_fields(&p)
                 .into_iter()
@@ -1173,7 +649,7 @@ fn time_parts(args: Vec<Value>) -> Result<Value, String> {
     })
 }
 
-fn time_of(args: Vec<Value>) -> Result<Value, String> {
+fn time_of(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     let expected = "time::of: expected (year, month, day) or (year, month, day, hour, minute, second), each ###, plus an optional zone";
     // The zone is text and every field is a number, so a trailing String is the
     // zone and nothing else can be — no counting of arguments decides it.
@@ -1189,42 +665,42 @@ fn time_of(args: Vec<Value>) -> Result<Value, String> {
             _ => return Err(expected.to_string()),
         }
     }
-    Ok(match zt::call_of(&numbers, zone) {
+    Ok(match zt::call_of_with(host.clock(), &numbers, zone) {
         Ok(ms) => Value::Int(ms),
         Err(e) => time_soft(e),
     })
 }
 
-fn time_format(args: Vec<Value>) -> Result<Value, String> {
+fn time_format(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     let expected = "time::format: expected (### epoch, \"pattern\" [, zone])";
     let epoch = time_int(args.first()).ok_or_else(|| expected.to_string())?;
     let pattern = time_text(args.get(1)).ok_or_else(|| expected.to_string())?;
     let zone = time_zone(&args, 2).map_err(|_| expected.to_string())?;
-    Ok(match zt::call_format(epoch, pattern, zone) {
+    Ok(match zt::call_format_with(host.clock(), epoch, pattern, zone) {
         Ok(s) => Value::String(ZyStr::new(s)),
         Err(e) => time_soft(e),
     })
 }
 
-fn time_add(args: Vec<Value>) -> Result<Value, String> {
+fn time_add(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     let expected = "time::add: expected (### epoch, ### count, \"unit\" [, zone])";
     let epoch = time_int(args.first()).ok_or_else(|| expected.to_string())?;
     let count = time_int(args.get(1)).ok_or_else(|| expected.to_string())?;
     let unit = time_text(args.get(2)).ok_or_else(|| expected.to_string())?;
     let zone = time_zone(&args, 3).map_err(|_| expected.to_string())?;
-    Ok(match zt::call_add(epoch, count, unit, zone) {
+    Ok(match zt::call_add_with(host.clock(), epoch, count, unit, zone) {
         Ok(ms) => Value::Int(ms),
         Err(e) => time_soft(e),
     })
 }
 
-fn time_diff(args: Vec<Value>) -> Result<Value, String> {
+fn time_diff(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     let expected = "time::diff: expected (### a, ### b, \"unit\" [, zone])";
     let a = time_int(args.first()).ok_or_else(|| expected.to_string())?;
     let b = time_int(args.get(1)).ok_or_else(|| expected.to_string())?;
     let unit = time_text(args.get(2)).ok_or_else(|| expected.to_string())?;
     let zone = time_zone(&args, 3).map_err(|_| expected.to_string())?;
-    Ok(match zt::call_diff(a, b, unit, zone) {
+    Ok(match zt::call_diff_with(host.clock(), a, b, unit, zone) {
         Ok(n) => Value::Int(n),
         Err(e) => time_soft(e),
     })
@@ -1316,7 +792,7 @@ fn term_truncate(args: Vec<Value>) -> Result<Value, String> {
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
-pub fn call(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
+pub fn call(builtin_id: u16, args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     match builtin_id {
         B::SQRT    => math_sqrt(args),
         B::EXP     => math_exp(args),
@@ -1340,9 +816,9 @@ pub fn call(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
         B::FLOOR   => math_floor(args),
         B::CEIL    => math_ceil(args),
         B::ROUND   => math_round(args),
-        B::RAND_ENTERO   => rand_entero(args),
-        B::RAND_RANGO    => rand_rango(args),
-        B::RAND_PESO_F64 => rand_peso_f64(args),
+        B::RAND_ENTERO   => rand_entero(args, host),
+        B::RAND_RANGO    => rand_rango(args, host),
+        B::RAND_PESO_F64 => rand_peso_f64(args, host),
         B::JSON_DECODE   => json_decode(args),
         B::JSON_DECODE_MAP => json_decode_map(args),
         B::JSON_ENCODE   => json_encode(args),
@@ -1358,44 +834,16 @@ pub fn call(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
         B::TERM_PAD_RIGHT => term_pad_right(args),
         B::TERM_CENTER    => term_center(args),
         B::TERM_TRUNCATE  => term_truncate(args),
-        B::TIME_NOW       => time_now(args),
-        B::TIME_TODAY     => time_today(args),
-        B::TIME_PARTS     => time_parts(args),
-        B::TIME_OF        => time_of(args),
-        B::TIME_FORMAT    => time_format(args),
-        B::TIME_ADD       => time_add(args),
-        B::TIME_DIFF      => time_diff(args),
-        id if (B::NET_GET..=B::NET_HEAD).contains(&id) => net_dispatch(id, args),
-        id if (B::DB_CONNECT..=B::DB_TABLE_EXISTS).contains(&id) => db_dispatch(id, args),
+        B::TIME_NOW       => time_now(args, host),
+        B::TIME_TODAY     => time_today(args, host),
+        B::TIME_PARTS     => time_parts(args, host),
+        B::TIME_OF        => time_of(args, host),
+        B::TIME_FORMAT    => time_format(args, host),
+        B::TIME_ADD       => time_add(args, host),
+        B::TIME_DIFF      => time_diff(args, host),
+        id if (B::NET_GET..=B::NET_HEAD).contains(&id) => net_dispatch(id, args, host),
+        id if (B::DB_CONNECT..=B::DB_TABLE_EXISTS).contains(&id) => host.db(id, args),
         other => Err(format!("unknown builtin id {}", other)),
     }
 }
 
-#[cfg(feature = "db")]
-fn db_dispatch(builtin_id: u16, args: Vec<Value>) -> Result<Value, String> {
-    match builtin_id {
-        B::DB_CONNECT      => db_connect(args),
-        B::DB_DISCONNECT   => db_disconnect(args),
-        B::DB_EXEC         => db_exec(args),
-        B::DB_QUERY        => db_query(args),
-        B::DB_QUERY_ONE    => db_query_one(args),
-        B::DB_QUERY_VALUE  => db_query_value(args),
-        B::DB_TX           => db_tx(args),
-        B::DB_BEGIN        => db_begin(args),
-        B::DB_COMMIT       => db_commit(args),
-        B::DB_ROLLBACK     => db_rollback(args),
-        B::DB_SAVEPOINT    => db_savepoint_op(args, "SAVEPOINT"),
-        B::DB_RELEASE      => db_savepoint_op(args, "RELEASE"),
-        B::DB_ROLLBACK_TO  => db_savepoint_op(args, "ROLLBACK TO"),
-        B::DB_EXEC_SCRIPT  => db_exec_script(args),
-        B::DB_TABLE_EXISTS => db_table_exists(args),
-        other => Err(format!("unknown db builtin id {}", other)),
-    }
-}
-
-// Only reachable from bytecode produced by a `db`-enabled compiler (the no-db
-// compiler rejects `<# std/db` with module-not-found before emitting these ids).
-#[cfg(not(feature = "db"))]
-fn db_dispatch(_builtin_id: u16, _args: Vec<Value>) -> Result<Value, String> {
-    Err("std/db is not available in this build (compiled without ODBC support)".into())
-}

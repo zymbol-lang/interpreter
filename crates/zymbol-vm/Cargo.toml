@@ -13,18 +13,9 @@ zymbol-intrinsics.workspace = true
 unicode-width.workspace = true
 unicode-segmentation.workspace = true
 thiserror.workspace = true
-crossterm = { workspace = true }
 serde_json = { workspace = true }
-ureq = { workspace = true, optional = true }
-odbc-api = { workspace = true, optional = true }
-base64 = { workspace = true, optional = true }
-once_cell = { workspace = true, optional = true }
 
-[features]
-# Off by default since v0.0.11 (D4); `zymbol-cli`'s `db` feature turns it on.
-default = []
-# std/net (HTTP through ureq, which brings rustls and ring). On in zymbol-cli's
-# defaults; `--no-default-features` leaves it out (the compact build, 3.2).
-http = ["dep:ureq"]
-# std/db builtins (ODBC). Mirrors zymbol-interpreter's `db` feature.
-db = ["dep:odbc-api", "dep:base64", "dep:once_cell"]
+# Nothing a system has to provide (ROADMAP_V0011_ES.md § 3.1): the terminal,
+# the network and the database are behind `host::Terminal` and `host::Host`,
+# and their native implementations are in zymbol-host. That is what lets this
+# crate build for wasm32-unknown-unknown.

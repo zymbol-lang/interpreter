@@ -46,6 +46,7 @@ interpreter/
 │   ├── zymbol-bytecode/        # Bytecode instruction set
 │   ├── zymbol-compiler/        # AST → Bytecode compiler
 │   ├── zymbol-vm/              # Register-based virtual machine
+│   ├── zymbol-host/            # The VM's native host: terminal, network, database
 │   ├── zymbol-intrinsics/      # Unboxed string/collection intrinsics (VM fast paths)
 │   ├── zymbol-formatter/       # Code formatter
 │   ├── zymbol-analyzer/        # LSP analysis engine
@@ -410,6 +411,22 @@ Built-in commands: `HELP`, `EXIT`, `VARS`, `CLEAR`, `HISTORY`.
 
 **Dependencies**: `zymbol-lexer`, `zymbol-parser`, `zymbol-interpreter`, `zymbol-error`
 
+#### `zymbol-host`
+The register VM's native host (v0.0.11, `ROADMAP_V0011_ES.md` § 3.1). `zymbol-vm` depends
+on nothing a system has to provide: what a program needs from outside comes through two
+traits in `zymbol_vm::host` — `Terminal` (the seven TUI primitives, `@~`, `<<`) and `Host`
+(the clock, `std/random`'s seed, `std/net`, `std/db`). This crate implements them for the
+machine the binary runs on: `NativeTerminal` with `crossterm`, `NativeHost` with `ureq`
+(feature `http`) and ODBC (feature `db`). The CLI and the executable `zymbol build` writes
+install both; `zymbol run --keys` replaces the terminal with `zymbol_vm::host::Headless`
+and nothing else. A VM nobody gave a host has `BasicTerminal` and `BasicHost`: standard
+input and output, the system clock, and no network or database. That split is what lets
+`zymbol-vm` build for `wasm32-unknown-unknown`. The tree-walker keeps its own calls into
+`crossterm`, `ureq` and ODBC, as it did.
+
+**Dependencies**: `zymbol-vm`, `zymbol-bytecode`, `zymbol-common`, `zymbol-intrinsics`,
+`crossterm`, and optionally `ureq` and `odbc-api`
+
 #### `zymbol-standalone`
 Embeds a Zymbol source file into a Rust project template, builds it with `cargo`,
 and produces a self-contained executable (debug or release).
@@ -502,7 +519,8 @@ zymbol-interpreter (ast, parser, lexer, span, error, semantic)│
                                                               │
 zymbol-bytecode (none)                                        │
 zymbol-compiler (bytecode, ast, parser, lexer, span)          │
-zymbol-vm (bytecode)                                          │
+zymbol-vm (bytecode, common, lexer, intrinsics)               │
+zymbol-host (vm, bytecode, common, intrinsics)                │
                                                               │
 zymbol-formatter (ast, parser, lexer, span, error)            │
 zymbol-analyzer  (ast, parser, lexer, semantic, span, error)  │

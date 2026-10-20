@@ -3536,6 +3536,7 @@ dependencies = [
  "zymbol-compiler",
  "zymbol-error",
  "zymbol-formatter",
+ "zymbol-host",
  "zymbol-interpreter",
  "zymbol-lexer",
  "zymbol-lsp",
@@ -3594,6 +3595,21 @@ dependencies = [
  "zymbol-lexer",
  "zymbol-parser",
  "zymbol-span",
+]
+
+[[package]]
+name = "zymbol-host"
+version = "0.0.11"
+dependencies = [
+ "base64",
+ "crossterm",
+ "odbc-api",
+ "once_cell",
+ "ureq",
+ "zymbol-bytecode",
+ "zymbol-common",
+ "zymbol-intrinsics",
+ "zymbol-vm",
 ]
 
 [[package]]
@@ -3739,15 +3755,10 @@ dependencies = [
 name = "zymbol-vm"
 version = "0.0.11"
 dependencies = [
- "base64",
- "crossterm",
- "odbc-api",
- "once_cell",
  "serde_json",
  "thiserror 2.0.18",
  "unicode-segmentation",
  "unicode-width",
- "ureq",
  "zymbol-bytecode",
  "zymbol-common",
  "zymbol-intrinsics",
