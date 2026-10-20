@@ -611,15 +611,16 @@ fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &m
     // to be fatal for `alias::func(...)` exactly as it already was for a bare
     // `func(...)`. Without it `run` would reject one and execute the other.
     let mut type_checker = TypeChecker::new();
-    type_checker.set_module_arities(zymbol_semantic::module_arities(
+    let mut tables = zymbol_semantic::ModuleTables::new();
+    type_checker.set_module_arities(tables.arities(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
-    type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+    type_checker.set_module_out_slots(tables.out_slots(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
-    type_checker.set_module_exports(zymbol_semantic::module_exports(
+    type_checker.set_module_exports(tables.exports(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
@@ -969,15 +970,16 @@ fn build_file(path: PathBuf, output: Option<PathBuf>, release: bool) -> Result<(
 
     // Run type checking, with the same arity table `run` and `check` use.
     let mut type_checker = TypeChecker::new();
-    type_checker.set_module_arities(zymbol_semantic::module_arities(
+    let mut tables = zymbol_semantic::ModuleTables::new();
+    type_checker.set_module_arities(tables.arities(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
-    type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+    type_checker.set_module_out_slots(tables.out_slots(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
-    type_checker.set_module_exports(zymbol_semantic::module_exports(
+    type_checker.set_module_exports(tables.exports(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
@@ -1324,7 +1326,10 @@ fn check_file(path: PathBuf) -> Result<()> {
         .with_context(|| format!("failed to read file: {}", path.display()))?;
 
     let mut source_map = SourceMap::new();
-    let entry = check_source(&path, &source, &mut source_map, true)?;
+    // One for the whole check: a module is parsed once, not once per file
+    // that imports it (GLB-143).
+    let mut tables = zymbol_semantic::ModuleTables::new();
+    let entry = check_source(&path, &source, &mut source_map, &mut tables, true)?;
     let mut has_errors = entry.has_errors;
 
     // Walk the import graph depth-first so a cycle can be reported with the
@@ -1352,7 +1357,7 @@ fn check_file(path: PathBuf) -> Result<()> {
             }
         };
 
-        let module = check_source(&module_path, &module_source, &mut source_map, false)?;
+        let module = check_source(&module_path, &module_source, &mut source_map, &mut tables, false)?;
         if module.has_errors {
             eprintln!(
                 "  = note: reached from {} ({}:{})",
@@ -1391,6 +1396,7 @@ fn check_source(
     path: &Path,
     source: &str,
     source_map: &mut SourceMap,
+    tables: &mut zymbol_semantic::ModuleTables,
     report_warnings: bool,
 ) -> Result<FileCheck> {
     let file_id = source_map.add_file(display_path(path), source.to_string());
@@ -1490,15 +1496,15 @@ fn check_source(
     // a wrong count there only ever failed at runtime, on whichever branch
     // happened to make the call.
     let mut type_checker = TypeChecker::new();
-    type_checker.set_module_arities(zymbol_semantic::module_arities(
+    type_checker.set_module_arities(tables.arities(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
-    type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+    type_checker.set_module_out_slots(tables.out_slots(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
-    type_checker.set_module_exports(zymbol_semantic::module_exports(
+    type_checker.set_module_exports(tables.exports(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));

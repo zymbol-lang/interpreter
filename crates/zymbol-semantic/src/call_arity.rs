@@ -54,12 +54,102 @@ pub type AliasArities = HashMap<String, ModuleArities>;
 /// the only job is to terminate.
 const MAX_REEXPORT_DEPTH: usize = 8;
 
-/// What one query has already resolved, by file and depth: a layer that
-/// re-exports N names of one module asks for that module N times, and used to
-/// read and parse it each time (GLB-142). The depth is part of the key so that
-/// the answer stays the one it was even in a chain longer than
-/// `MAX_REEXPORT_DEPTH`, where the depth decides what is cut off.
+/// What has already been resolved, by file and depth: a layer that re-exports
+/// N names of one module asks for that module N times (GLB-142). The depth is
+/// part of the key so that the answer stays the one it was even in a chain
+/// longer than `MAX_REEXPORT_DEPTH`, where the depth decides what is cut off.
 type Memo<T> = HashMap<(PathBuf, usize), Option<T>>;
+
+/// The module tables of a whole check, built once per file however many files
+/// import it.
+///
+/// Every file being checked needs the arities, output slots and exports of its
+/// own imports, and each table reads and parses the module it describes. A
+/// module with k importers was therefore parsed 3 k times by `zymbol check`
+/// (GLB-143), and a re-export layer parsed its source once per name
+/// (GLB-142). One `ModuleTables` parses each file once and keeps what it
+/// resolved; `zymbol check` keeps one for the whole run. The free functions
+/// [`module_arities`], [`module_out_slots`] and [`module_exports`] each use a
+/// fresh one.
+///
+/// It reads the files once: an edit made on disk after a file was first read is
+/// not seen by the same `ModuleTables`. The LSP, which checks one buffer at a
+/// time against files that change, uses the free functions.
+#[derive(Default)]
+pub struct ModuleTables {
+    parsed: HashMap<PathBuf, Option<std::rc::Rc<Program>>>,
+    arities: Memo<ModuleArities>,
+    exports: Memo<ModuleExports>,
+    out_slots: HashMap<PathBuf, Option<ModuleOutSlots>>,
+}
+
+impl ModuleTables {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A module file, read and parsed the first time it is asked for.
+    fn program(&mut self, path: &Path) -> Option<std::rc::Rc<Program>> {
+        if let Some(known) = self.parsed.get(path) {
+            return known.clone();
+        }
+        let program = std::fs::read_to_string(path).ok().and_then(|source| {
+            note_parsed(path);
+            parse(&source)
+        }).map(std::rc::Rc::new);
+        self.parsed.insert(path.to_path_buf(), program.clone());
+        program
+    }
+
+    /// [`module_arities`], with what this object already resolved.
+    pub fn arities(&mut self, imports: &[ImportStmt], base_dir: &Path) -> AliasArities {
+        let mut table = AliasArities::new();
+        for import in imports {
+            if let Some(arities) = arities_of_import(import, base_dir, 0, self) {
+                table.insert(import.alias.clone(), arities);
+            }
+        }
+        table
+    }
+
+    /// [`module_exports`], with what this object already resolved.
+    pub fn exports(&mut self, imports: &[ImportStmt], base_dir: &Path) -> AliasExports {
+        let mut table = AliasExports::new();
+        for import in imports {
+            if import.path.is_stdlib() {
+                continue;
+            }
+            if let Some(exports) = exports_of_import(import, base_dir, 0, self) {
+                table.insert(import.alias.clone(), exports);
+            }
+        }
+        table
+    }
+
+    /// [`module_out_slots`], with what this object already resolved.
+    pub fn out_slots(&mut self, imports: &[ImportStmt], base_dir: &Path) -> AliasOutSlots {
+        let mut table = AliasOutSlots::new();
+        for import in imports {
+            if import.path.is_stdlib() {
+                continue;
+            }
+            let Some(path) = import.path.resolve_from(base_dir) else { continue };
+            let slots = match self.out_slots.get(&path) {
+                Some(known) => known.clone(),
+                None => {
+                    let slots = out_slots_of_file(&path, self);
+                    self.out_slots.insert(path.clone(), slots.clone());
+                    slots
+                }
+            };
+            let Some(slots) = slots else { continue };
+            if !slots.is_empty() {
+                table.insert(import.alias.clone(), slots);
+            }
+        }
+        table
+    }
+}
 
 /// Build the arity table for every import in `program`.
 ///
@@ -67,18 +157,11 @@ type Memo<T> = HashMap<(PathBuf, usize), Option<T>>;
 /// `ModulePath::resolve_from` takes, so an import resolves to the file the
 /// interpreter and the VM would load.
 pub fn module_arities(imports: &[ImportStmt], base_dir: &Path) -> AliasArities {
-    let mut table = AliasArities::new();
-    let mut memo = Memo::new();
-    for import in imports {
-        if let Some(arities) = arities_of_import(import, base_dir, 0, &mut memo) {
-            table.insert(import.alias.clone(), arities);
-        }
-    }
-    table
+    ModuleTables::new().arities(imports, base_dir)
 }
 
 /// Arities exported by the module one import points at, native or on disk.
-fn arities_of_import(import: &ImportStmt, base_dir: &Path, depth: usize, memo: &mut Memo<ModuleArities>) -> Option<ModuleArities> {
+fn arities_of_import(import: &ImportStmt, base_dir: &Path, depth: usize, tables: &mut ModuleTables) -> Option<ModuleArities> {
     if import.path.is_stdlib() {
         let path = format!("std/{}", import.path.components[1..].join("/"));
         let module = stdlib::module(&path)?;
@@ -92,7 +175,7 @@ fn arities_of_import(import: &ImportStmt, base_dir: &Path, depth: usize, memo: &
     }
 
     let resolved = import.path.resolve_from(base_dir)?;
-    arities_of_file(&resolved, depth, memo)
+    arities_of_file(&resolved, depth, tables)
 }
 
 /// Arities exported by a module file.
@@ -100,24 +183,22 @@ fn arities_of_import(import: &ImportStmt, base_dir: &Path, depth: usize, memo: &
 /// Only the names in the export block are collected: a private helper is not
 /// reachable through the alias, so recording it would let a typo that happens
 /// to match one pass as a real call.
-fn arities_of_file(path: &Path, depth: usize, memo: &mut Memo<ModuleArities>) -> Option<ModuleArities> {
+fn arities_of_file(path: &Path, depth: usize, tables: &mut ModuleTables) -> Option<ModuleArities> {
     let key = (path.to_path_buf(), depth);
-    if let Some(known) = memo.get(&key) {
+    if let Some(known) = tables.arities.get(&key) {
         return known.clone();
     }
-    let arities = arities_of_file_uncached(path, depth, memo);
-    memo.insert(key, arities.clone());
+    let arities = arities_of_file_uncached(path, depth, tables);
+    tables.arities.insert(key, arities.clone());
     arities
 }
 
-fn arities_of_file_uncached(path: &Path, depth: usize, memo: &mut Memo<ModuleArities>) -> Option<ModuleArities> {
+fn arities_of_file_uncached(path: &Path, depth: usize, tables: &mut ModuleTables) -> Option<ModuleArities> {
     if depth > MAX_REEXPORT_DEPTH {
         return None;
     }
 
-    let source = std::fs::read_to_string(path).ok()?;
-    note_parsed(path);
-    let program = parse(&source)?;
+    let program = tables.program(path)?;
     let module_decl = program.module_decl.as_ref()?;
     let export_block = module_decl.export_block.as_ref()?;
 
@@ -159,7 +240,7 @@ fn arities_of_file_uncached(path: &Path, depth: usize, memo: &mut Memo<ModuleAri
                 else {
                     continue;
                 };
-                let Some(source_arities) = arities_of_import(source_import, module_dir, depth + 1, memo)
+                let Some(source_arities) = arities_of_import(source_import, module_dir, depth + 1, tables)
                 else {
                     continue;
                 };
@@ -201,7 +282,7 @@ fn parse(source: &str) -> Option<Program> {
 /// Resolve a module file to its exported arities, for callers that already know
 /// the path — the LSP, which holds resolved module paths in its document cache.
 pub fn arities_of_module_file(path: &Path) -> Option<ModuleArities> {
-    arities_of_file(path, 0, &mut Memo::new())
+    arities_of_file(path, 0, &mut ModuleTables::new())
 }
 
 // ── What each alias exports, by kind ─────────────────────────────────────────
@@ -232,20 +313,10 @@ pub type AliasExports = HashMap<String, ModuleExports>;
 
 /// Build the export table for every user-module import in `program`.
 pub fn module_exports(imports: &[ImportStmt], base_dir: &Path) -> AliasExports {
-    let mut table = AliasExports::new();
-    let mut memo = Memo::new();
-    for import in imports {
-        if import.path.is_stdlib() {
-            continue;
-        }
-        if let Some(exports) = exports_of_import(import, base_dir, 0, &mut memo) {
-            table.insert(import.alias.clone(), exports);
-        }
-    }
-    table
+    ModuleTables::new().exports(imports, base_dir)
 }
 
-fn exports_of_import(import: &ImportStmt, base_dir: &Path, depth: usize, memo: &mut Memo<ModuleExports>) -> Option<ModuleExports> {
+fn exports_of_import(import: &ImportStmt, base_dir: &Path, depth: usize, tables: &mut ModuleTables) -> Option<ModuleExports> {
     if import.path.is_stdlib() {
         let path = format!("std/{}", import.path.components[1..].join("/"));
         let module = stdlib::module(&path)?;
@@ -255,26 +326,24 @@ fn exports_of_import(import: &ImportStmt, base_dir: &Path, depth: usize, memo: &
         });
     }
     let resolved = import.path.resolve_from(base_dir)?;
-    exports_of_file(&resolved, depth, memo)
+    exports_of_file(&resolved, depth, tables)
 }
 
-fn exports_of_file(path: &Path, depth: usize, memo: &mut Memo<ModuleExports>) -> Option<ModuleExports> {
+fn exports_of_file(path: &Path, depth: usize, tables: &mut ModuleTables) -> Option<ModuleExports> {
     let key = (path.to_path_buf(), depth);
-    if let Some(known) = memo.get(&key) {
+    if let Some(known) = tables.exports.get(&key) {
         return known.clone();
     }
-    let exports = exports_of_file_uncached(path, depth, memo);
-    memo.insert(key, exports.clone());
+    let exports = exports_of_file_uncached(path, depth, tables);
+    tables.exports.insert(key, exports.clone());
     exports
 }
 
-fn exports_of_file_uncached(path: &Path, depth: usize, memo: &mut Memo<ModuleExports>) -> Option<ModuleExports> {
+fn exports_of_file_uncached(path: &Path, depth: usize, tables: &mut ModuleTables) -> Option<ModuleExports> {
     if depth > MAX_REEXPORT_DEPTH {
         return None;
     }
-    let source = std::fs::read_to_string(path).ok()?;
-    note_parsed(path);
-    let program = parse(&source)?;
+    let program = tables.program(path)?;
     let module_decl = program.module_decl.as_ref()?;
     let export_block = module_decl.export_block.as_ref()?;
 
@@ -304,7 +373,7 @@ fn exports_of_file_uncached(path: &Path, depth: usize, memo: &mut Memo<ModuleExp
             }
             ExportItem::ReExport { module_alias, item_name, rename, .. } => {
                 let source_import = program.imports.iter().find(|i| &i.alias == module_alias)?;
-                let source = exports_of_import(source_import, module_dir, depth + 1, memo)?;
+                let source = exports_of_import(source_import, module_dir, depth + 1, tables)?;
                 let public = rename.clone().unwrap_or_else(|| item_name.clone());
                 if source.functions.contains(item_name) {
                     exports.functions.insert(public);
@@ -322,7 +391,7 @@ fn exports_of_file_uncached(path: &Path, depth: usize, memo: &mut Memo<ModuleExp
 /// The same table for one module file, for the LSP, which holds resolved
 /// module paths in its document cache.
 pub fn exports_of_module_file(path: &Path) -> Option<ModuleExports> {
-    exports_of_file(path, 0, &mut Memo::new())
+    exports_of_file(path, 0, &mut ModuleTables::new())
 }
 
 // ── Output-parameter slots, per alias ────────────────────────────────────────
@@ -346,24 +415,12 @@ pub type AliasOutSlots = HashMap<String, ModuleOutSlots>;
 /// its calls go unchecked rather than guessed at — the same rule the arity check
 /// already follows.
 pub fn module_out_slots(imports: &[ImportStmt], base_dir: &Path) -> AliasOutSlots {
-    let mut table = AliasOutSlots::new();
-    for import in imports {
-        if import.path.is_stdlib() {
-            continue;
-        }
-        let Some(path) = import.path.resolve_from(base_dir) else { continue };
-        let Some(slots) = out_slots_of_file(&path) else { continue };
-        if !slots.is_empty() {
-            table.insert(import.alias.clone(), slots);
-        }
-    }
-    table
+    ModuleTables::new().out_slots(imports, base_dir)
 }
 
 /// The exported functions of one module file that take output parameters.
-fn out_slots_of_file(path: &Path) -> Option<ModuleOutSlots> {
-    let source = std::fs::read_to_string(path).ok()?;
-    let program = parse(&source)?;
+fn out_slots_of_file(path: &Path, tables: &mut ModuleTables) -> Option<ModuleOutSlots> {
+    let program = tables.program(path)?;
     let module_decl = program.module_decl.as_ref()?;
     let export_block = module_decl.export_block.as_ref()?;
 
@@ -479,6 +536,30 @@ mod tests {
         let exports = module_exports(&imports, &dir.0);
         assert_eq!(exports["en"].functions.len(), 10);
         assert_eq!(parsed_core(), 1, "module_exports parsed core.zy {} times for a layer re-exporting 10 of its functions", parsed_core());
+    }
+
+    /// GLB-143: `zymbol check` builds the three tables for the imports of
+    /// every file it checks, and parsed a module once per table per importer.
+    /// One `ModuleTables` for the whole check parses it once.
+    #[test]
+    fn one_module_tables_parses_a_shared_module_once() {
+        let dir = TempDir::new("shared");
+        write(&dir.0, "core.zy", "# core {\n    #> { f, g }\n    f(x) {\n        <~ x\n    }\n    g(a, b<~) {\n        b = a\n    }\n}\n");
+        write(&dir.0, "a.zy", "# a {\n    <# ./core => c\n    #> { h }\n    h(x) {\n        <~ c::f(x)\n    }\n}\n");
+        write(&dir.0, "b.zy", "# b {\n    <# ./core => c\n    #> { k }\n    k(x) {\n        <~ c::f(x)\n    }\n}\n");
+        let parsed_core = || PARSED.with(|p| p.borrow().iter()
+            .find(|(k, _)| k.ends_with("core.zy")).map(|(_, n)| *n).unwrap_or(0));
+
+        PARSED.with(|p| p.borrow_mut().clear());
+        let mut tables = ModuleTables::new();
+        for importer in ["a.zy", "b.zy"] {
+            let source = std::fs::read_to_string(dir.0.join(importer)).unwrap();
+            let imports = imports_of(&source);
+            assert_eq!(tables.arities(&imports, &dir.0)["c"].get("g"), Some(&2));
+            assert_eq!(tables.out_slots(&imports, &dir.0)["c"].get("g"), Some(&vec![1]));
+            assert!(tables.exports(&imports, &dir.0)["c"].functions.contains("f"));
+        }
+        assert_eq!(parsed_core(), 1, "two importers, three tables each: core.zy parsed {} times", parsed_core());
     }
 
     #[test]
