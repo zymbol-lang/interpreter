@@ -62,8 +62,12 @@ jobs:
       # builds as well as for this job. That is a decision about the project,
       # not about this workflow.
 
-      - name: Build (release, as packaged)
-        run: cargo build --release
+      # `--features db`: std/db is off by default since v0.0.11 (D4), and the
+      # gate is what tests it — against the SQLite driver installed below. A
+      # build without it answers `module not found: std/db`, so forgetting the
+      # flag fails the std/db files instead of skipping them.
+      - name: Build (release, with std/db)
+        run: cargo build --release --features db
 
       # `cargo test` is not self-contained, on purpose: zymbol-analyzer's
       # diagnostic tests read their fixtures out of the corpus, so that the
@@ -81,7 +85,7 @@ jobs:
       - name: Unit and integration tests
         env:
           ZYQUALITY_DIR: ${{ runner.temp }}/zyquality
-        run: cargo test --workspace --release
+        run: cargo test --workspace --release --features db
 
   gate:
     name: ZyQuality + ZyFmtCheck + ZyDDT
@@ -232,7 +236,8 @@ jobs:
 
       - name: Build the interpreter
         working-directory: interpreter
-        run: cargo build --release
+        # With std/db, which this job tests: see the build step above (D4).
+        run: cargo build --release --features db
 
       - name: The VS Code grammar's tokeniser
         # tmgrammar_scopes.mjs tokenises with real vscode-textmate over

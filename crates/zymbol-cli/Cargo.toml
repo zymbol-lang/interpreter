@@ -32,9 +32,12 @@ tempfile.workspace = true
 tokio = { version = "1", features = ["full"] }
 
 [features]
-default = ["db"]
-# std/db (ODBC) in both engines. Build with `--no-default-features` for a
-# fully static binary (ODBC needs dlopen; see REFERENCE.md).
+# Off by default since v0.0.11 (decision D4): with it the binary needs
+# libodbc.so.2 and libltdl.so.7 just to START, and a static one cannot have it
+# at all (the ODBC driver manager loads drivers with dlopen). `--features db`
+# turns it on — the Windows release and the gate build that way.
+default = []
+# std/db (ODBC) in both engines. See REFERENCE.md L17.
 db = ["zymbol-interpreter/db", "zymbol-vm/db", "zymbol-compiler/db"]
 
 [dev-dependencies]
