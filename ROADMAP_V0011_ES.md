@@ -843,6 +843,37 @@ Lo que la evaluación tiene que contestar:
 Sirve además para otra cosa: un `.zyb` generado por Rust es el oráculo de la VM del navegador
 (mismo bytecode, otro ejecutor; cualquier diferencia es un fallo del ejecutor).
 
+#### Evaluación — 2026-10-20
+
+El ejecutable de `zymbol build --release` ya es un `.zyb` sin fichero: lleva el `CompiledProgram` en `bincode` y arranca
+sin lexer, parser, semántico ni compilador. Lo que un `.zyb` ahorraría es, como mucho, lo que separa `zymbol run x.zy` de
+ese ejecutable. Medido sobre `c64c8cd`, alternados, CPU, mediana de 60 rondas; los siete dan la misma salida de las dos
+maneras:
+
+| Programa | Bytecode | `zymbol run` | Ejecutable | Ahorro |
+|---|---|---|---|---|
+| Programa de una línea | 148 B | 4,7 ms | 3,6 ms | 1,1 ms |
+| `GO/試験/api試験` | 23 KB | 13,3 | 4,0 | 9,3 |
+| `GO/試験/文字試験` | 9 KB | 8,5 | 4,1 | 4,5 |
+| `GO/試験/盤試験` | 24 KB | 17,2 | 4,2 | 12,9 |
+| `Chaturanga/परीक्षा/भाषापरीक्षा` | 66 KB | 19,9 | 4,9 | 15,0 |
+| `Chaturanga/परीक्षा/नियमपरीक्षा` | 53 KB | 19,5 | 7,0 | 12,6 |
+| `GO/試験/思考試験` (con cálculo) | 63 KB | 49,0 | 38,9 | 10,1 |
+
+A esta escala la máquina varía mucho (`盤試験` dio 10 ms en una corrida suelta y 15,6–18,9 entre cuartiles en esta). Un
+medidor por fases en un mismo proceso suma unos 5,6 ms de front-end en frío para `盤試験`; el resto de la diferencia —parte
+es el tamaño del binario, 1,1 ms en el programa de una línea— no está localizado.
+
+Al medir salieron dos hallazgos: **`GLB-142`** (una capa de reexportación hacía parsear su módulo de origen una vez por
+nombre; `api試験` pasó de 51 a 13 ms en `zymbol run`, corregido en `c64c8cd`) y **`GLB-143`** (`zymbol check` parsea un
+módulo una vez por importador). Las preguntas de arriba: el formato necesitaría versión en la cabecera y rechazar otra;
+`</ fichero.zy />` seguiría compilando al vuelo, con el `.zy` al lado; `.zyp` no cambia; y como oráculo de la etapa 4 no
+hace falta mientras esté en pausa, y un motor wasm puede llevar el compilador, que ya compila a wasm.
+
+**Decidido por el autor el 2026-10-20: se aplaza**, ni ahora ni a la v0.0.12: el autor la retoma, quizá, el viernes
+2026-10-23. Las opciones que quedan sobre la mesa: un `.zyb` explícito (`zymbol compile`, ~1,5 días), una caché automática
+al estilo de `__pycache__` (~2–3 días) o desestimarlo.
+
 ### 3.4 WebAssembly
 
 **La pregunta:** ¿qué cuesta y qué da un motor en WebAssembly, como opción, para sistemas web que
