@@ -895,6 +895,36 @@ Depende de 3.1. El primer paso, barato y útil aunque nunca se publique nada, es
 que el núcleo compila a `wasm32-unknown-unknown`: es la prueba de que no tiene dependencias del
 sistema escondidas.
 
+#### Evaluación — 2026-10-20
+
+Un prototipo desechable (fuera de la rama, en `target/w32/src-wasm`): `ZyStr` con su aserción de 64 bits relajada —lo
+único del núcleo que impedía compilar, ver 3.1—, un crate `cdylib` con dos exportaciones escritas a mano, sin
+`wasm-bindgen` (lexer → parser → compilador → VM, el reloj importado de JavaScript), y Node 24 como ejecutor. Los 16
+programas de `zyquality/bench/big/` dan en wasm exactamente la misma salida que la VM nativa.
+
+| | Sin comprimir | `gzip -9` |
+|---|---|---|
+| `zymbol.js` | 636 KB | 185 KB |
+| wasm, `opt-level = 3` | 1 809 KB | 474 KB |
+| wasm, `opt-level = "z"` | 1 066 KB | 319 KB |
+
+Tiempo transcurrido del proceso, arranque de Node incluido, mediana de 5, media geométrica de los 16: `zymbol.js` va a ×61
+de la VM nativa; el wasm, sólo con Liftoff (el compilador rápido de V8), a ×3,2, unas 19 veces más rápido que `zymbol.js`.
+En `fib_rec`: 0,98 s nativo, 1,9 s wasm, 70 s `zymbol.js`; con TurboFan, ya compilado, ~1,3 s. Pero compilar con TurboFan
+el módulo de `opt-level = 3` cuesta ~3,7 s de CPU (~1,4 s el de `"z"`): Node lo espera al salir, y un navegador lo hace en
+otro hilo, más despacio en un equipo modesto — una razón más para que sea opcional.
+
+Fuera, o por construir: la entrada `<<`, la TUI (una `Terminal` en JavaScript), los imports (un resolvedor desde
+JavaScript, como el del playground), `std/net` (`Host::http` es síncrono), `std/db`, el shell, `</ />`, la recursión
+profunda (la pila de wasm es de 1 MiB y se fija al enlazar) y el análisis semántico, que compila pero el prototipo no corre.
+
+**Decidido por el autor el 2026-10-20: forma A.** `ZyStr` pasa a ser portable a 32 bits —su texto ya guarda el puntero
+como `u64`, y en 32 bits el byte 7 queda a cero y no choca con la marca de texto en línea—, y la CI comprueba que la VM
+compila a `wasm32-unknown-unknown`. No se publica ningún motor. Por qué 32 bits: es el WebAssembly que ejecutan los
+navegadores y Node, y el único que Rust estable compila (`wasm64-unknown-unknown` es de nivel 3, sólo con nightly y
+recompilando `std`). Las pruebas sobre `wasm64` quedan para después, por decisión del autor. Descartadas por ahora: un
+motor provisional `zywasm` en el consenso (B, ~2–3 días) y aplazar.
+
 ---
 
 ## Etapa 4 — La VM del navegador (`zyvm.js`)
