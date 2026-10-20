@@ -13,6 +13,7 @@ mod db;
 mod io;
 mod json;
 mod math;
+#[cfg(feature = "http")]
 mod net;
 mod random;
 mod term;
@@ -93,6 +94,8 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
             const_names: std::collections::HashSet::new(),
             dead_variables: std::collections::HashSet::new(),
         }),
+        // Without the `http` feature, like `std/db` without `db`: module-not-found.
+        #[cfg(feature = "http")]
         "std/net" => Some(LoadedModule {
             name: "std/net".to_string(),
             functions: net::register(),

@@ -103,11 +103,11 @@ if [[ "${DO_BUILD}" == true ]]; then
             -e CARGO_TARGET_DIR=/workspace/target/container \
             -e CARGO_HOME=/workspace/target/container/cargo-home \
             "${BUILD_IMAGE}" \
-            cargo build --release --no-default-features --target "${RUST_TARGET}"
+            cargo build --release --target "${RUST_TARGET}"
     else
-        echo "==> Building with the host toolchain (--no-default-features, as packaged)"
+        echo "==> Building with the host toolchain (default features, as packaged)"
         BIN="${HOST_BIN}"
-        cargo build --release --no-default-features --target "${RUST_TARGET}"
+        cargo build --release --target "${RUST_TARGET}"
     fi
 
     echo "==> Building .deb from ${BIN}"

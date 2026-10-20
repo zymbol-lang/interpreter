@@ -69,6 +69,14 @@ jobs:
       - name: Build (release, with std/db)
         run: cargo build --release --features db
 
+      # The compact build (ROADMAP_V0011_ES.md § 3.2): no LSP, no REPL, no
+      # std/net, for containers too small for the full one. Nothing else in
+      # this workflow builds without the default features, so this is what
+      # notices a `use` of zymbol_lsp, zymbol_repl or ureq that a feature does
+      # not guard.
+      - name: The compact build compiles
+        run: cargo check -p zymbol-cli --no-default-features --all-targets
+
       # `cargo test` is not self-contained, on purpose: zymbol-analyzer's
       # diagnostic tests read their fixtures out of the corpus, so that the
       # editor's answer is graded against the same files as everything else.

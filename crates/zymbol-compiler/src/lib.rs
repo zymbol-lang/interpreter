@@ -866,13 +866,13 @@ impl Compiler {
                 return Ok(());
             }
 
-            // A stdlib path that has no entries here (`std/db` in a build without
-            // the `db` feature, or a typo like `std/mth`) has no file to fall back
-            // to: `resolve_from` returns None for stdlib paths by contract. Report
-            // it now, exactly as the tree-walker does in load_stdlib_module — the
-            // fallthrough below reported `std/db.zy`, and the two engines then
-            // disagreed on every `<# std/db` in a --no-default-features binary,
-            // which is what ships in the Linux packages.
+            // A stdlib path that has no entries here (`std/db` or `std/net` in a
+            // build without the `db` or `http` feature, or a typo like `std/mth`)
+            // has no file to fall back to: `resolve_from` returns None for stdlib
+            // paths by contract. Report it now, exactly as the tree-walker does in
+            // load_stdlib_module — the fallthrough below reported `std/db.zy`, and
+            // the two engines then disagreed on every `<# std/db` in a binary
+            // without `db`, which is what ships in the Linux packages.
             return Err(CompileError::ModuleNotFound(module_key));
         }
 
@@ -6080,6 +6080,8 @@ pub fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16
             ("add",    B::TIME_ADD),
             ("diff",   B::TIME_DIFF),
         ]),
+        // Without the `http` feature: module-not-found, as for `std/db` below.
+        #[cfg(feature = "http")]
         "std/net" => Some(vec![
             ("get",       B::NET_GET),
             ("post",      B::NET_POST),

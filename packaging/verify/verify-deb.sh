@@ -261,13 +261,32 @@ RESOLVED="$(command -v zymbol || true)"
 VERSION_OUT="$("${ZYMBOL_BIN}" --version 2>&1)"
 check_contains "--version reports ${EXPECTED_VERSION}" "${VERSION_OUT}" "${EXPECTED_VERSION}"
 
+# The package ships the default features, not the compact build of 3.2
+# (`--no-default-features`), which has no REPL, no language server and no
+# std/net. Each of the three answers at end of input with exit 0 when present.
+"${ZYMBOL_BIN}" repl < /dev/null > /dev/null 2>&1 \
+    && ok "zymbol repl is in the binary" \
+    || bad "zymbol repl is missing — built --no-default-features?"
+timeout 10 "${ZYMBOL_BIN}" lsp < /dev/null > /dev/null 2>&1 \
+    && ok "zymbol lsp is in the binary" \
+    || bad "zymbol lsp is missing — built --no-default-features?"
+NET_PROBE="$(mktemp --suffix=.zy)"
+printf '<# std/net => net\n>> "net" ¶\n' > "${NET_PROBE}"
+NET_OUT="$("${ZYMBOL_BIN}" run "${NET_PROBE}" 2>&1)"
+rm -f "${NET_PROBE}"
+if grep -qF "module not found" <<< "${NET_OUT}"; then
+    bad "std/net is missing — built --no-default-features?"
+else
+    check_contains "std/net is in the binary" "${NET_OUT}" "net"
+fi
+
 # ---------------------------------------------------------------------------
 # 4. Dynamic linkage — every .so must be covered by Depends
 # ---------------------------------------------------------------------------
 section "4. Dynamic linkage"
 
-# Release packages are built with --no-default-features precisely so the binary
-# needs nothing beyond libc: std/db links libodbc, which Depends does not declare
+# Release packages are built with the default features, which leave std/db out
+# (D4), precisely so the binary needs nothing beyond libc: std/db links libodbc, which Depends does not declare
 # and a pristine Debian does not ship. Anything outside this list means the
 # package was built with the wrong feature set, or Depends is now a lie.
 ALLOWED_LIBS="linux-vdso|libgcc_s|libm|libc|libdl|libpthread|librt|ld-linux"
@@ -290,7 +309,7 @@ else
             ok "links only against libc and friends"
         else
             bad "links against undeclared libraries: ${UNEXPECTED}"
-            note "release packages must be built with --no-default-features (see release-linux.yml)"
+            note "release packages must be built without --features db (see release-linux.yml)"
         fi
 
         grep -q "not found" <<< "${LDD_OUT}" \
@@ -426,7 +445,7 @@ elif [[ "${SCOPE}" == "full" ]]; then
     section "6. E2E parity suite (tests/scripts/vm_compare.sh)"
 
     # The whole corpus runs, including the std/db tests: a package built
-    # --no-default-features has no std/db, and both engines must then report the
+    # without --features db has no std/db, and both engines must then report the
     # identical "module not found: std/db". They did not until the VM stopped
     # appending .zy to stdlib module names — that divergence surfaced here first,
     # so this suite stays unfiltered to keep catching its like.

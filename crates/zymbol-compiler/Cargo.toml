@@ -22,6 +22,9 @@ default = []
 # Registers the std/db builtin ids at `<# std/db` compile time. Pure cfg flag
 # (no extra deps); mirrors the `db` feature of zymbol-interpreter/zymbol-vm.
 db = []
+# Registers the std/net builtin ids. Pure cfg flag, like `db`; mirrors the
+# `http` feature of zymbol-interpreter/zymbol-vm.
+http = []
 
 [dev-dependencies]
 bincode.workspace = true
