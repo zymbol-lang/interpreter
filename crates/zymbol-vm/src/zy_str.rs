@@ -11,25 +11,30 @@
 //!   byte[len..7]  — zero padding
 //!
 //! Heap  (byte[7] bit 7 == 0):
-//!   bytes[0..8] as u64 (LE) — raw pointer from Rc::into_raw()
-//!   On x86-64 / arm64, user-space pointers have bit 63 == 0,
-//!   so they are always distinguishable from inline values.
+//!   bytes[0..8] as u64 (LE) — raw pointer from Rc::into_raw(), zero-extended
+//!   On x86-64 / arm64, user-space pointers have bit 63 == 0; on a 32-bit
+//!   platform (wasm32) the pointer fills bytes[0..4] and bytes[4..8] are
+//!   zero. Either way byte[7] has bit 7 clear, so a heap value is always
+//!   distinguishable from an inline one.
 //! ```
 //!
 //! # Safety
 //!
-//! Valid only on platforms where user-space virtual addresses have bit 63 == 0
-//! (x86-64, arm64 with 48-bit VA). Asserted at compile time.
+//! Valid on 64-bit platforms where user-space virtual addresses have bit 63 == 0
+//! (x86-64, arm64 with 48-bit VA) and on every 32-bit one, whose pointers never
+//! reach byte[7]. The pointer width is asserted at compile time. 32-bit is there
+//! for wasm32-unknown-unknown, the WebAssembly browsers run (ROADMAP_V0011_ES.md
+//! § 3.4, decided 2026-10-20); until then this said "requires a 64-bit platform".
 
 use std::cell::{Cell, OnceCell};
 use std::mem::ManuallyDrop;
 use std::rc::Rc;
 use std::{fmt, hash};
 
-const _ASSERT_64BIT: () = {
+const _ASSERT_POINTER_WIDTH: () = {
     assert!(
-        std::mem::size_of::<usize>() == 8,
-        "ZyStr requires a 64-bit platform"
+        std::mem::size_of::<usize>() == 8 || std::mem::size_of::<usize>() == 4,
+        "ZyStr requires a 32-bit or 64-bit platform"
     );
 };
 
@@ -340,8 +345,11 @@ mod tests {
 
     #[test]
     fn the_crumbs_of_a_text_nobody_indexes_cost_one_word() {
-        assert_eq!(std::mem::size_of::<OnceCell<Box<Vec<usize>>>>(), 8);
-        assert_eq!(std::mem::size_of::<Heap>(), 40);
+        // In words, so it says the same on 64 bits (8, 40) and on wasm32 (4, 20):
+        // the String's three, the character count, and the crumbs' one.
+        let word = std::mem::size_of::<usize>();
+        assert_eq!(std::mem::size_of::<OnceCell<Box<Vec<usize>>>>(), word);
+        assert_eq!(std::mem::size_of::<Heap>(), 5 * word);
     }
 
     #[test]
