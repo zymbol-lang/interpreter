@@ -727,6 +727,22 @@ wasm32-unknown-unknown` (el primer paso de 3.4). Descartadas: la misma interfaz 
 compartida (A: el doble de trabajo, y el consenso dejaría de ver un fallo del anfitrión que los dos compartieran) y una
 feature `term` sin interfaz (C: el motor de 3.4 se quedaría sin TUI ni entrada).
 
+**Hecho el 2026-10-20** (`interpreter` `11f5c5d` y `b0ba2d0`, `zyquality` `0a8c0ad`). `zymbol_vm::host` tiene dos
+interfaces y no una, porque `--keys` cambia la terminal y nada más: `Terminal` (las siete primitivas, `@~`, `<<`) y `Host`
+(el reloj, la semilla de `std/random`, `std/net`, `std/db`). `zymbol-vm` ya no depende de `crossterm`, `ureq` ni ODBC: sus
+implementaciones nativas se movieron sin cambios al crate nuevo `zymbol-host` (`NativeTerminal`, `NativeHost`, con `http` y
+`db` como features). La de `--keys` es `host::Headless` y sustituye las 19 guardas; una VM a la que nadie da otra tiene
+`BasicTerminal` y `BasicHost`. El reloj de `std/time` pasa por `zymbol_intrinsics::time::Clock`, con las funciones de
+siempre para el tree-walker y variantes `_with` para la VM. Contra `11f5c5d`, los dos binarios con `-p zymbol-cli --features
+db`: el corpus da el mismo código de salida, la misma salida y los mismos pasos, llamadas y copias en los dos motores —salvo
+los dos ficheros ENVIRONMENT, que cambian de una corrida a otra—, con una asignación de 24 bytes más en la VM (la terminal
+nativa en su caja); `ab.py`, mismos pasos y CPU de la VM entre ×0,89 y ×1,05. Salió de paso `ZYVM-031`: el ejecutable de
+`zymbol build` había perdido `std/net` y `std/db` con D4 y con 3.2, y se corrigió antes (`7dd33bb`).
+
+**Lo que encontró para 3.4:** con la terminal fuera, `cargo check -p zymbol-vm --target wasm32-unknown-unknown` sólo falla
+en una aserción de `ZyStr`, «ZyStr requires a 64-bit platform». Con ella relajada a 32 bits —en una prueba que no se
+guardó— la VM entera compila para wasm32. La comprobación en CI que pedía B espera a esa decisión, que es de 3.4.
+
 ### 3.2 Un motor ultracompacto
 
 **La pregunta:** ¿cuánto pesa un `zymbol` sin LSP, sin REPL, sin `std/db` y sin HTTP, y qué pierde?
