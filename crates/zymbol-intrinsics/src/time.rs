@@ -10,6 +10,10 @@
 //! The one impure pair — [`now_ms`] and [`local_offset_minutes_at`] — lives
 //! here for the same reason: a clock read is primitive (it returns an `i64`),
 //! and putting it anywhere else would mean writing the local-zone lookup twice.
+//! It is reached through [`Clock`], so that an engine running where there is no
+//! system clock — WebAssembly in a browser (ROADMAP_V0011_ES § 3.1) — can hand
+//! in its own; [`SystemClock`] is the machine's, and the `call_*` functions use
+//! it. The `call_*_with` ones take the clock to read.
 //!
 //! # The instant and the calendar are different things
 //!
@@ -172,11 +176,11 @@ fn bad_zone(spec: &str) -> String {
 /// The instant matters: a zone that observes daylight saving is two different
 /// offsets in the same year, so asking "what is the local offset" without
 /// saying when has no single answer.
-pub fn offset_of(zone: Zone, epoch_ms: i64) -> Result<i64, String> {
+pub fn offset_of(clock: &dyn Clock, zone: Zone, epoch_ms: i64) -> Result<i64, String> {
     match zone {
         Zone::Utc => Ok(0),
         Zone::Fixed(m) => Ok(m),
-        Zone::Local => local_offset_minutes_at(epoch_ms),
+        Zone::Local => clock.local_offset_minutes_at(epoch_ms),
     }
 }
 
@@ -276,6 +280,7 @@ pub fn epoch_from_civil(
 /// answer onto the right side of the jump.
 #[allow(clippy::too_many_arguments)]
 pub fn epoch_from_civil_in(
+    clock: &dyn Clock,
     year: i64,
     month: i64,
     day: i64,
@@ -290,12 +295,12 @@ pub fn epoch_from_civil_in(
         Zone::Fixed(m) => m,
         Zone::Local => {
             let guess = epoch_from_civil(year, month, day, hour, minute, second, millisecond, 0)?;
-            local_offset_minutes_at(guess)?
+            clock.local_offset_minutes_at(guess)?
         }
     };
     let mut ms = epoch_from_civil(year, month, day, hour, minute, second, millisecond, offset)?;
     if zone == Zone::Local {
-        let corrected = local_offset_minutes_at(ms)?;
+        let corrected = clock.local_offset_minutes_at(ms)?;
         if corrected != offset {
             offset = corrected;
             ms = epoch_from_civil(year, month, day, hour, minute, second, millisecond, offset)?;
@@ -312,7 +317,7 @@ pub fn epoch_from_civil_in(
 /// 31st of January is 15:00 on the 28th of February, because there is no 31st.
 /// Clamping is what every calendar does — the alternative is rolling into
 /// March, which turns "next month" into "the month after next".
-pub fn add(epoch_ms: i64, count: i64, unit: Unit, zone: Zone) -> Result<i64, String> {
+pub fn add(clock: &dyn Clock, epoch_ms: i64, count: i64, unit: Unit, zone: Zone) -> Result<i64, String> {
     match unit {
         Unit::Duration(step) => guard(
             epoch_ms
@@ -320,16 +325,16 @@ pub fn add(epoch_ms: i64, count: i64, unit: Unit, zone: Zone) -> Result<i64, Str
                 .ok_or_else(overflow)?,
         ),
         Unit::Days(per) => {
-            let offset = offset_of(zone, epoch_ms)?;
+            let offset = offset_of(clock, zone, epoch_ms)?;
             let p = parts_at(epoch_ms, offset);
             let days = days_from_civil(p.year, p.month, p.day)
                 .checked_add(count.checked_mul(per).ok_or_else(overflow)?)
                 .ok_or_else(overflow)?;
             let (year, month, day) = civil_from_days(days);
-            rebuild(year, month, day, &p, zone)
+            rebuild(clock, year, month, day, &p, zone)
         }
         Unit::Months(per) => {
-            let offset = offset_of(zone, epoch_ms)?;
+            let offset = offset_of(clock, zone, epoch_ms)?;
             let p = parts_at(epoch_ms, offset);
             let total = (p.year * 12 + (p.month - 1))
                 .checked_add(count.checked_mul(per).ok_or_else(overflow)?)
@@ -337,14 +342,15 @@ pub fn add(epoch_ms: i64, count: i64, unit: Unit, zone: Zone) -> Result<i64, Str
             let year = total.div_euclid(12);
             let month = total.rem_euclid(12) + 1;
             let day = p.day.min(days_in_month(year, month));
-            rebuild(year, month, day, &p, zone)
+            rebuild(clock, year, month, day, &p, zone)
         }
     }
 }
 
 /// Rebuild an instant from a moved date, keeping the original wall clock.
-fn rebuild(year: i64, month: i64, day: i64, p: &Parts, zone: Zone) -> Result<i64, String> {
+fn rebuild(clock: &dyn Clock, year: i64, month: i64, day: i64, p: &Parts, zone: Zone) -> Result<i64, String> {
     epoch_from_civil_in(
+        clock,
         year,
         month,
         day,
@@ -363,19 +369,19 @@ fn rebuild(year: i64, month: i64, day: i64, p: &Parts, zone: Zone) -> Result<i64
 /// midnight is one day, because they are on different days — and across a
 /// daylight-saving change a day is still a day, which dividing by 86 400 000
 /// would get wrong once a year.
-pub fn diff(a: i64, b: i64, unit: Unit, zone: Zone) -> Result<i64, String> {
+pub fn diff(clock: &dyn Clock, a: i64, b: i64, unit: Unit, zone: Zone) -> Result<i64, String> {
     match unit {
         Unit::Duration(step) => Ok((a - b) / step),
         Unit::Days(per) => {
-            let pa = parts_at(a, offset_of(zone, a)?);
-            let pb = parts_at(b, offset_of(zone, b)?);
+            let pa = parts_at(a, offset_of(clock, zone, a)?);
+            let pb = parts_at(b, offset_of(clock, zone, b)?);
             let days = days_from_civil(pa.year, pa.month, pa.day)
                 - days_from_civil(pb.year, pb.month, pb.day);
             Ok(days / per)
         }
         Unit::Months(per) => {
-            let pa = parts_at(a, offset_of(zone, a)?);
-            let pb = parts_at(b, offset_of(zone, b)?);
+            let pa = parts_at(a, offset_of(clock, zone, a)?);
+            let pb = parts_at(b, offset_of(clock, zone, b)?);
             let mut months = (pa.year - pb.year) * 12 + (pa.month - pb.month);
             // A whole month has not passed until the day-of-month is reached.
             if months > 0 && day_time(&pa) < day_time(&pb) {
@@ -503,6 +509,26 @@ fn guard(ms: i64) -> Result<i64, String> {
 
 // ── The clock ────────────────────────────────────────────────────────────────
 
+/// Where `std/time` reads the time and the local zone from.
+pub trait Clock {
+    /// Now, as milliseconds since the epoch.
+    fn now_ms(&self) -> i64;
+    /// The local offset from UTC, in minutes, at a given instant.
+    fn local_offset_minutes_at(&self, epoch_ms: i64) -> Result<i64, String>;
+}
+
+/// The machine's clock and zone: [`now_ms`] and [`local_offset_minutes_at`].
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now_ms(&self) -> i64 {
+        now_ms()
+    }
+    fn local_offset_minutes_at(&self, epoch_ms: i64) -> Result<i64, String> {
+        local_offset_minutes_at(epoch_ms)
+    }
+}
+
 /// Now, as milliseconds since the epoch.
 pub fn now_ms() -> i64 {
     match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
@@ -552,13 +578,23 @@ fn zone_or_utc(spec: Option<&str>) -> Result<Zone, String> {
 
 /// `time::today([zone])` — the current date as `YYYY-MM-DD`.
 pub fn call_today(zone: Option<&str>) -> Result<String, String> {
-    let now = now_ms();
-    Ok(iso_date(now, offset_of(zone_or_utc(zone)?, now)?))
+    call_today_with(&SystemClock, zone)
+}
+
+/// [`call_today`], reading `clock`.
+pub fn call_today_with(clock: &dyn Clock, zone: Option<&str>) -> Result<String, String> {
+    let now = clock.now_ms();
+    Ok(iso_date(now, offset_of(clock, zone_or_utc(zone)?, now)?))
 }
 
 /// `time::parts(epoch [, zone])` — an instant read on the calendar.
 pub fn call_parts(epoch_ms: i64, zone: Option<&str>) -> Result<Parts, String> {
-    Ok(parts_at(epoch_ms, offset_of(zone_or_utc(zone)?, epoch_ms)?))
+    call_parts_with(&SystemClock, epoch_ms, zone)
+}
+
+/// [`call_parts`], reading `clock`.
+pub fn call_parts_with(clock: &dyn Clock, epoch_ms: i64, zone: Option<&str>) -> Result<Parts, String> {
+    Ok(parts_at(epoch_ms, offset_of(clock, zone_or_utc(zone)?, epoch_ms)?))
 }
 
 /// `time::of(year, month, day [, hour, minute, second] [, zone])`.
@@ -567,6 +603,11 @@ pub fn call_parts(epoch_ms: i64, zone: Option<&str>) -> Result<Parts, String> {
 /// missing clock fields are midnight, because a date without a time is the
 /// start of that day in every calendar there is.
 pub fn call_of(fields: &[i64], zone: Option<&str>) -> Result<i64, String> {
+    call_of_with(&SystemClock, fields, zone)
+}
+
+/// [`call_of`], reading `clock`.
+pub fn call_of_with(clock: &dyn Clock, fields: &[i64], zone: Option<&str>) -> Result<i64, String> {
     let (y, mo, d, h, mi, s) = match fields {
         [y, mo, d] => (*y, *mo, *d, 0, 0, 0),
         [y, mo, d, h, mi, s] => (*y, *mo, *d, *h, *mi, *s),
@@ -577,22 +618,37 @@ pub fn call_of(fields: &[i64], zone: Option<&str>) -> Result<i64, String> {
             ))
         }
     };
-    epoch_from_civil_in(y, mo, d, h, mi, s, 0, zone_or_utc(zone)?)
+    epoch_from_civil_in(clock, y, mo, d, h, mi, s, 0, zone_or_utc(zone)?)
 }
 
 /// `time::format(epoch, pattern [, zone])`.
 pub fn call_format(epoch_ms: i64, pattern: &str, zone: Option<&str>) -> Result<String, String> {
-    format(epoch_ms, pattern, offset_of(zone_or_utc(zone)?, epoch_ms)?)
+    call_format_with(&SystemClock, epoch_ms, pattern, zone)
+}
+
+/// [`call_format`], reading `clock`.
+pub fn call_format_with(clock: &dyn Clock, epoch_ms: i64, pattern: &str, zone: Option<&str>) -> Result<String, String> {
+    format(epoch_ms, pattern, offset_of(clock, zone_or_utc(zone)?, epoch_ms)?)
 }
 
 /// `time::add(epoch, count, unit [, zone])`.
 pub fn call_add(epoch_ms: i64, count: i64, unit: &str, zone: Option<&str>) -> Result<i64, String> {
-    add(epoch_ms, count, parse_unit(unit)?, zone_or_utc(zone)?)
+    call_add_with(&SystemClock, epoch_ms, count, unit, zone)
+}
+
+/// [`call_add`], reading `clock`.
+pub fn call_add_with(clock: &dyn Clock, epoch_ms: i64, count: i64, unit: &str, zone: Option<&str>) -> Result<i64, String> {
+    add(clock, epoch_ms, count, parse_unit(unit)?, zone_or_utc(zone)?)
 }
 
 /// `time::diff(a, b, unit [, zone])` — whole units from `b` to `a`.
 pub fn call_diff(a: i64, b: i64, unit: &str, zone: Option<&str>) -> Result<i64, String> {
-    diff(a, b, parse_unit(unit)?, zone_or_utc(zone)?)
+    call_diff_with(&SystemClock, a, b, unit, zone)
+}
+
+/// [`call_diff`], reading `clock`.
+pub fn call_diff_with(clock: &dyn Clock, a: i64, b: i64, unit: &str, zone: Option<&str>) -> Result<i64, String> {
+    diff(clock, a, b, parse_unit(unit)?, zone_or_utc(zone)?)
 }
 
 /// The dictionary `parts` answers with, as `(key, value)` in the order the
@@ -691,19 +747,19 @@ mod tests {
     #[test]
     fn adding_a_month_clamps_instead_of_rolling_over() {
         let jan31 = epoch_from_civil(2026, 1, 31, 15, 0, 0, 0, 0).unwrap();
-        let feb = add(jan31, 1, Unit::Months(1), Zone::Utc).unwrap();
+        let feb = add(&SystemClock, jan31, 1, Unit::Months(1), Zone::Utc).unwrap();
         let p = parts_at(feb, 0);
         assert_eq!((p.year, p.month, p.day, p.hour), (2026, 2, 28, 15));
         // and in a leap year it reaches the 29th
         let jan31_leap = epoch_from_civil(2024, 1, 31, 0, 0, 0, 0, 0).unwrap();
-        let feb_leap = add(jan31_leap, 1, Unit::Months(1), Zone::Utc).unwrap();
+        let feb_leap = add(&SystemClock, jan31_leap, 1, Unit::Months(1), Zone::Utc).unwrap();
         assert_eq!(parts_at(feb_leap, 0).day, 29);
     }
 
     #[test]
     fn adding_a_year_of_months_is_the_same_day_next_year() {
         let d = epoch_from_civil(2026, 8, 23, 9, 30, 0, 0, 0).unwrap();
-        let next = add(d, 1, Unit::Months(12), Zone::Utc).unwrap();
+        let next = add(&SystemClock, d, 1, Unit::Months(12), Zone::Utc).unwrap();
         let p = parts_at(next, 0);
         assert_eq!((p.year, p.month, p.day, p.hour, p.minute), (2027, 8, 23, 9, 30));
     }
@@ -712,12 +768,12 @@ mod tests {
     fn days_are_calendar_and_hours_are_duration() {
         let d = epoch_from_civil(2026, 8, 23, 12, 0, 0, 0, 0).unwrap();
         assert_eq!(
-            parts_at(add(d, 30, Unit::Days(1), Zone::Utc).unwrap(), 0).day,
+            parts_at(add(&SystemClock, d, 30, Unit::Days(1), Zone::Utc).unwrap(), 0).day,
             22
         );
-        assert_eq!(add(d, 25, Unit::Duration(MS_PER_HOUR), Zone::Utc).unwrap(), d + 25 * MS_PER_HOUR);
+        assert_eq!(add(&SystemClock, d, 25, Unit::Duration(MS_PER_HOUR), Zone::Utc).unwrap(), d + 25 * MS_PER_HOUR);
         // a week is seven of them
-        let w = add(d, 1, Unit::Days(7), Zone::Utc).unwrap();
+        let w = add(&SystemClock, d, 1, Unit::Days(7), Zone::Utc).unwrap();
         assert_eq!(w - d, 7 * MS_PER_DAY);
     }
 
@@ -725,10 +781,10 @@ mod tests {
     fn diff_counts_whole_units_toward_zero() {
         let a = epoch_from_civil(2026, 8, 23, 0, 0, 0, 0, 0).unwrap();
         let b = epoch_from_civil(2026, 7, 24, 0, 0, 0, 0, 0).unwrap();
-        assert_eq!(diff(a, b, Unit::Days(1), Zone::Utc).unwrap(), 30);
-        assert_eq!(diff(b, a, Unit::Days(1), Zone::Utc).unwrap(), -30);
-        assert_eq!(diff(a, b, Unit::Days(7), Zone::Utc).unwrap(), 4);
-        assert_eq!(diff(a, b, Unit::Duration(MS_PER_HOUR), Zone::Utc).unwrap(), 720);
+        assert_eq!(diff(&SystemClock, a, b, Unit::Days(1), Zone::Utc).unwrap(), 30);
+        assert_eq!(diff(&SystemClock, b, a, Unit::Days(1), Zone::Utc).unwrap(), -30);
+        assert_eq!(diff(&SystemClock, a, b, Unit::Days(7), Zone::Utc).unwrap(), 4);
+        assert_eq!(diff(&SystemClock, a, b, Unit::Duration(MS_PER_HOUR), Zone::Utc).unwrap(), 720);
     }
 
     #[test]
@@ -736,8 +792,8 @@ mod tests {
         // Calendar distance, not elapsed time: 23:59 and 00:00 are one day apart.
         let a = epoch_from_civil(2026, 8, 22, 23, 59, 0, 0, 0).unwrap();
         let b = epoch_from_civil(2026, 8, 23, 0, 0, 0, 0, 0).unwrap();
-        assert_eq!(diff(b, a, Unit::Days(1), Zone::Utc).unwrap(), 1);
-        assert_eq!(diff(b, a, Unit::Duration(MS_PER_HOUR), Zone::Utc).unwrap(), 0);
+        assert_eq!(diff(&SystemClock, b, a, Unit::Days(1), Zone::Utc).unwrap(), 1);
+        assert_eq!(diff(&SystemClock, b, a, Unit::Duration(MS_PER_HOUR), Zone::Utc).unwrap(), 0);
     }
 
     #[test]
@@ -745,9 +801,9 @@ mod tests {
         let start = epoch_from_civil(2026, 1, 15, 0, 0, 0, 0, 0).unwrap();
         let before = epoch_from_civil(2026, 2, 14, 0, 0, 0, 0, 0).unwrap();
         let on = epoch_from_civil(2026, 2, 15, 0, 0, 0, 0, 0).unwrap();
-        assert_eq!(diff(before, start, Unit::Months(1), Zone::Utc).unwrap(), 0);
-        assert_eq!(diff(on, start, Unit::Months(1), Zone::Utc).unwrap(), 1);
-        assert_eq!(diff(start, on, Unit::Months(1), Zone::Utc).unwrap(), -1);
+        assert_eq!(diff(&SystemClock, before, start, Unit::Months(1), Zone::Utc).unwrap(), 0);
+        assert_eq!(diff(&SystemClock, on, start, Unit::Months(1), Zone::Utc).unwrap(), 1);
+        assert_eq!(diff(&SystemClock, start, on, Unit::Months(1), Zone::Utc).unwrap(), -1);
     }
 
     #[test]
