@@ -737,7 +737,8 @@ zymbol run cuenta.zy && echo "ok"     # the `&&` now means something
 ## 3b. TUI Primitives
 
 Terminal control operators for building interactive terminal UIs.
-Some TUI primitives are tree-walker only; see the per-primitive notes below for VM support status.
+Both engines run every primitive below, and run it the same way: the `tui` suite of
+`zyquality/` drives them through a real terminal and holds the two to one output.
 
 > Most TUI primitives require an enclosing `>>| { }` block (raw mode + alternate screen).
 > `>>!` and `>>?` work standalone. `<<|` and `<<|?` require raw mode provided by `>>|`.
