@@ -8,8 +8,11 @@
 > (reproducir primero). Ver «Avance» dentro de ella. De las etapas 3 y 4 no hay nada hecho.
 >
 > **Plan de cierre (2026-10-19):** lo que queda va en seis grupos, aprobados por el autor con la opción recomendada de
-> cada uno; ver «Plan de cierre — lo que queda, por grupos». Los grupos 1 a 5 están hechos. Las etapas 3 (salvo la medición de
-> 3.2) y 4 pasan a la v0.0.12.
+> cada uno; ver «Plan de cierre — lo que queda, por grupos». Los grupos 1 a 5 están hechos.
+>
+> **Alcance y fecha (decisión del autor, 2026-10-20):** las etapas 3 (3.1 a 3.4) y 4 (`zyvm.js`) **entran en la v0.0.11**,
+> empezando por 3.2. Esto deroga lo que el grupo 6 y D5 decidieron el 2026-10-19, que las pasaban a la v0.0.12. La v0.0.11
+> sale el **2026-11-01**; si falta mucho, como tarde el **2026-11-11**. Recortar el alcance para llegar lo decide el autor.
 >
 > **Escrito el 2026-10-13.** Toda cifra sin otra fecha se midió ese día, sobre esa rama, con un
 > binario de release. Las que vienen de antes llevan su fecha y hay que volver a medirlas antes
@@ -41,7 +44,7 @@ lenguaje». No es un release de funciones.
 | 1 | La VM pasa a ser el motor por defecto de Rust | Un cambio hecho y sostenido por la puerta |
 | 2 | Optimización de tiempos y recursos | Mejoras medidas, una por hallazgo |
 | 3 | Cuatro evaluaciones: componentes, motor compacto, `.zyb`, WebAssembly | Una **decisión** del autor por cada una |
-| 4 | La VM del navegador (`zyvm.js`) | Posición por confirmar: ver decisión D5 |
+| 4 | La VM del navegador (`zyvm.js`) | En la v0.0.11, después de la etapa 3: ver decisión D5 |
 
 La etapa 1 va primero porque todo lo demás se mide sobre el motor que la gente ejecuta: optimizar
 antes de cambiar el defecto es optimizar el motor equivocado. La etapa 3 evalúa y no construye;
@@ -516,7 +519,7 @@ puerta entera.
 | 3. La memoria de los motores | `Value` del tree-walker (120 bytes), `ZYVM-022` | `FunctionValue` y `ErrorValue` en caja; `ZYVM-022` opción A, medida antes | `ZYVM-022` si cuesta más de un 2 % de pasos | **Hecho** (2026-10-19): `ZYTW-019`, y `ZYVM-022` corregida (+0,05 % de pasos) |
 | 4. El binario y su distribución | `GLB-134`, D4 | D4; medir musl en el `HEAD` y, si hace falta, `mimalloc` | — | **Hecho** (2026-10-19); quedan los documentos de `web/`, que cambian en la release |
 | 5. La puerta y los documentos | D1, `GUIDE.md` § 3b, `LLM.md` | Quitar la frase de § 3b; `LLM.md` a v0.0.11 | D1 se queda como está, documentado | **Hecho** (2026-10-19) |
-| 6. El alcance de la versión | Etapas 3 y 4 | La medición de 3.2 | 3.1, 3.3, 3.4 y la etapa 4 pasan a la v0.0.12 | Pendiente |
+| 6. El alcance de la versión | Etapas 3 y 4 | Las etapas 3 (3.1 a 3.4) y 4, por decisión del autor del 2026-10-20 | — (el 2026-10-19 eran 3.1, 3.3, 3.4 y la etapa 4, a la v0.0.12) | En curso, desde 3.2 |
 
 ### Grupo 1 — Leer un texto por posición
 
@@ -673,6 +676,11 @@ La v0.0.11 se cierra con las etapas 1 y 2, los grupos 1 a 5 y la **medición** d
 `db`, y medir peso, memoria al compilar y arranque), que contesta D6. Las evaluaciones 3.1, 3.3 y 3.4 y la etapa 4
 pasan a la v0.0.12 tal como están escritas aquí.
 
+**Cambiado por el autor el 2026-10-20:** las etapas 3 y 4 enteras entran en la v0.0.11, que sale el 2026-11-01 (como tarde
+el 2026-11-11). El orden de trabajo es 3.2, 3.1, 3.3, 3.4 y la etapa 4. Cada evaluación de la etapa 3 sigue terminando en
+una decisión del autor —implementar, aplazar o desestimar— y nada se construye sin ella. Si el calendario no alcanza, lo que
+se deja fuera se le propone al autor; no se recorta por cuenta propia.
+
 ---
 
 ## Etapa 3 — Cuatro evaluaciones
@@ -818,8 +826,8 @@ Tres riesgos que hay que resolver en el paso 1:
 | D2 | ¿Qué hace el REPL? | Se queda en el tree-walker en esta versión, y se dice. Portarlo es diseño, no un flag |
 | D3 | ¿Qué pasa con `--vm`? | Se conserva y se acepta sin efecto: hay scripts que lo escriben |
 | D4 | ¿`std/db` sale de las features por defecto? | **Decidida por el autor el 2026-10-19 (grupo 4):** sí. Los releases de Linux y macOS ya se construyen sin ella |
-| D5 | ¿Dónde va la etapa 4? | **Decidida por el autor el 2026-10-19 (grupo 6):** en la v0.0.12. La etapa 2 la desplazó |
-| D6 | ¿Qué falló en el contenedor de 4 GB? | No es una decisión sino un dato que falta, y cambia el primer arreglo de 3.2. ZyBigBench, hecho en ese contenedor, apunta a una pista: su `README` dice que el perfil de release con LTO no terminaba allí. **Desde el 2026-10-19 (grupo 6)** la contesta la medición de 3.2, que se queda en esta versión |
+| D5 | ¿Dónde va la etapa 4? | **Decidida por el autor el 2026-10-20:** en la v0.0.11, después de la etapa 3. Deroga lo decidido el 2026-10-19 (grupo 6), que la pasaba a la v0.0.12 porque la etapa 2 la había desplazado |
+| D6 | ¿Qué falló en el contenedor de 4 GB? | No es una decisión sino un dato que falta, y cambia el primer arreglo de 3.2. ZyBigBench, hecho en ese contenedor, apunta a una pista: su `README` dice que el perfil de release con LTO no terminaba allí. **Desde el 2026-10-19 (grupo 6)** la contesta la medición de 3.2, que es el primer trabajo de la etapa 3 en esta versión (2026-10-20) |
 | D7 | PERF-07: el error que sustituye al aborto, ¿se captura con `!?`, y de qué familia es? | **Decidida por el autor el 2026-10-16:** se captura con `!?`; su familia es una nueva, `##Depth`; el límite es de 10 000 llamadas activas, el mismo número en los tres motores, con la pila del programa en 512 MiB y un seguro que mira la pila que queda |
 | D8 | PERF-05 b: ¿la cadena guarda si es ASCII, o cuántos caracteres tiene? | **Decidida por el autor el 2026-10-17:** entra en la etapa 2, con Python como oráculo. Hecho como `ZYVM-028`: el texto guarda su número de caracteres, calculado la primera vez; de ahí sale si es ASCII |
 
