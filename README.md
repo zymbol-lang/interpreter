@@ -699,7 +699,7 @@ cannot be rerun, so a project earns its keep as a discovery mechanism first. Eve
 distilled into a minimal `.zy` case, a golden and a unit test, and it is that cheap layer that
 names what broke when something does.
 
-The application is not retired afterwards. Nine of the ten are registered in
+The application is not retired afterwards. Nine of the eleven are registered in
 `zyquality/project/apps.toml` and run as a gate (`gate = true`, ~60 goldens through both
 engines); `ZyFmtCheck` runs over the LDV applications **by default**, because a formatter's
 damage shows up in hand-aligned tables, five writing systems and modules importing each other,
@@ -715,7 +715,7 @@ all fixed in v0.0.8, each with its own regression test. चतुरङ्गम
 recorded at the foot of its entry. ZyBank's thirty-three closed against that same release, which
 is what an LDV log looks like once the cycle completes: closing one is a language change or a
 reasoned rejection, and neither is the application author's call. The method, its decalogue, and
-the index of the ten logs are in **`zymbol-design/LDV.md`**.
+the index of the eleven logs are in **`zymbol-design/LDV.md`**.
 
 The projects carry a second load at the same time. They are written across seven natural
 languages — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese, Sanskrit, Greek — which is what
@@ -740,6 +740,7 @@ once.
 | [ZyBank](https://github.com/zymbol-lang/ZyBank) | **v0.0.9** | Español | `std/db` in an application, money as integers with a per-currency exponent, dictionaries, configuration precedence, functions across module boundaries, keyboard input and typed fields in raw mode |
 | [GoL (Ζωή)](https://github.com/zymbol-lang/ZyGoL) | **v0.0.9** | Ελληνικά (Greek) | Conway's Game of Life with B/S rules, an application whose tests *and* their runner are Zymbol, the first suite graded on all three engines, four locales incl. Devanagari digits |
 | [ZyBF](https://github.com/zymbol-lang/ZyBF) | **v0.0.10** | Español | A mini LDV: a Brainf*** interpreter whose `.` needed an Int → Char conversion the language did not have — now `##'` — against an independent Python oracle, graded on all three engines |
+| [ZyEdit](https://github.com/zymbol-lang/ZyEdit) | **v0.0.11** | English | A terminal text editor with a desktop editor's shortcuts, opened **before** its first line: five design findings on key input, the terminal's cursor and driving a process — each with its probe and evidence in `hypotheses/` |
 
 ---
 
@@ -1278,6 +1279,30 @@ operator now opens a juxtaposed operand in an assignment too (GLB-114).
 
 ---
 
+### ZyEdit — v0.0.11 · English · opened before its first line
+
+A terminal text editor with the shortcuts of a desktop one (Ctrl+S, Ctrl+Z, Ctrl+C/V, no
+modes), opened on 2026-10-21 with **no editor code**. What it measures that no earlier project
+asked of the language:
+- text as the state itself, edited at any position;
+- the cost of an edit in the middle of a long file;
+- a byte-exact round trip of a file someone owns;
+- three units of position: the grapheme, the terminal column and the code point;
+- later, a tokenizer of its own format, a language-server client and a terminal panel.
+
+Its log opened with five **design findings** (`DIS`, `LDV.md` § 5.2). They come from probing
+`<<|` and `>>|` through a real terminal before writing the editor:
+- Home, End, Page Up/Down and Delete all arrive as `0d0`;
+- a modifier on an arrow is lost;
+- Ctrl+/ and Alt+*letter* arrive as printable characters;
+- the terminal's cursor stays hidden inside `>>|`;
+- no Zymbol program can drive another on a terminal, so the checks themselves had to be Python.
+
+Each finding keeps its probe and a dated answer in `hypotheses/`, so the same check confirms the
+fix.
+
+---
+
 ## Project Layout
 
 ```
@@ -1307,7 +1332,7 @@ interpreter/
 - `zymbol-design/USERAPPI18N.md` — Building a multilingual application: measured layout, runtime language switching, per-language entry points, and the completeness gate
 - `zymbol-design/MEMORY_MODEL.md` — Memory and scoping model: design vs implementation audit (findings MM-1 … MM-11)
 - `zymbol-design/SYMBOLS.md` — Semiotic and morphological reference: the grapheme inventory, how marks agglutinate into operators, the declared homographs and opaque signs, and the rules a new operator must satisfy
-- `zymbol-design/LDV.md` — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the ten gap logs
+- `zymbol-design/LDV.md` — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the eleven gap logs
 - [ROADMAP.md](./ROADMAP.md) — What's done, known gaps, and planned work
 - [CHANGELOG.md](./CHANGELOG.md) — Version history
 
