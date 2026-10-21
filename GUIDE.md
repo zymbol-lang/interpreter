@@ -501,8 +501,8 @@ The `#?` postfix operator returns a 3-tuple: `(type_symbol, count, display)`.
 
 | Type | `#?` result | `count` meaning |
 |------|------------|-----------------|
-| Int | `(###, N, val)` | digit count |
-| Float | `(##., N, val)` | digit count of display |
+| Int | `(###, N, val)` | characters of the display, sign included: `-3` → 2 |
+| Float | `(##., N, val)` | characters of the display, sign and point included: `-2.5` → 4 |
 | String | `(##", N, val)` | character length |
 | Char | `(##', 1, val)` | always 1 |
 | Bool | `(##?, 1, val)` | always 1 |
