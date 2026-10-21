@@ -311,51 +311,46 @@ impl Parser {
     }
 
     /// Parse unary operators: !, -, +
+    /// A unary operator and its operand, postfix included: `-v[1]` is
+    /// `-(v[1])`, `!seen$? x` is `!(seen$? x)`, `-d.k` is `-(d.k)`.
     pub(crate) fn parse_unary(&mut self) -> Result<Expr, Diagnostic> {
+        self.parse_prefixed(|p| {
+            let primary = p.parse_primary_expr()?;
+            p.parse_postfix_ops(primary)
+        })
+    }
+
+    /// Zero or more of `!`, `-`, `+`, then `operand`, which is where each
+    /// caller says what a postfix is in its context: the general one, the
+    /// structural one without `$` operations, or the one inside `>>`.
+    ///
+    /// The postfix binds tighter than the unary (GLB-145, decided by the author
+    /// on 2026-10-21). It used to be the other way round in the Rust engines:
+    /// `-v[1]` was `(-v)[1]`, which negates an array and can only fail, while
+    /// `-f()` was already `-(f())` because a call is recognised inside the
+    /// primary, and zyjs read every one of them as this does now. `^` is not
+    /// a postfix and is unchanged: `-2 ^ 2` is `(-2) ^ 2` = 4.
+    pub(crate) fn parse_prefixed(
+        &mut self,
+        operand: fn(&mut Self) -> Result<Expr, Diagnostic>,
+    ) -> Result<Expr, Diagnostic> {
         let token = self.peek().clone();
-
-        match token.kind {
-            TokenKind::Not => {
-                self.advance(); // consume !
-                let operand = self.parse_unary()?; // recursive for chained unary: !!x
-                let span = token.span.to(&operand.span());
-
-                Ok(Expr::Unary(UnaryExpr::new(
-                    zymbol_common::UnaryOp::Not,
-                    Box::new(operand),
-                    span,
-                )))
-            }
-            TokenKind::Minus => {
-                self.advance(); // consume -
-                let operand = self.parse_unary()?; // recursive for chained unary: --x
-                let span = token.span.to(&operand.span());
-
-                Ok(Expr::Unary(UnaryExpr::new(
-                    zymbol_common::UnaryOp::Neg,
-                    Box::new(operand),
-                    span,
-                )))
-            }
-            TokenKind::Plus => {
-                self.advance(); // consume +
-                let operand = self.parse_unary()?; // recursive for chained unary: ++x
-                let span = token.span.to(&operand.span());
-
-                Ok(Expr::Unary(UnaryExpr::new(
-                    zymbol_common::UnaryOp::Pos,
-                    Box::new(operand),
-                    span,
-                )))
-            }
-            _ => self.parse_primary_expr(),
-        }
+        let op = match token.kind {
+            TokenKind::Not => zymbol_common::UnaryOp::Not,
+            TokenKind::Minus => zymbol_common::UnaryOp::Neg,
+            TokenKind::Plus => zymbol_common::UnaryOp::Pos,
+            _ => return operand(self),
+        };
+        self.advance(); // consume the operator
+        let inner = self.parse_prefixed(operand)?; // chained: !!x, -+x
+        let span = token.span.to(&inner.span());
+        Ok(Expr::Unary(UnaryExpr::new(op, Box::new(inner), span)))
     }
 
     /// Parse an output item for Haskell-style output: >> expr1 expr2 ...
     ///
     /// This method handles:
-    /// - Unary operators: -95, !flag
+    /// - Unary operators: -95, !flag, +a
     /// - Primary expressions: literals, identifiers, arrays, tuples, (expr)
     /// - Postfix for identifiers: arr[0], obj.field, func()
     /// - Arithmetic, at full precedence: + - * / % ^ and a leading unary
@@ -428,29 +423,27 @@ impl Parser {
     /// Parse a power-level term for output items (highest binary precedence).
     /// Handles primary expressions, postfix ops, and ^ (right-associative).
     fn parse_output_item_term(&mut self) -> Result<Expr, Diagnostic> {
-        let token = self.peek().clone();
-
-        // A leading unary (`-5`, `!flag`, and `a * -b` in the middle of a
+        // A leading unary (`-5`, `!flag`, `+a`, and `a * -b` in the middle of a
         // product) is a *term*, not a whole argument, so `*`, `/`, `%` and `^`
-        // still apply to it afterwards.
+        // still apply to it afterwards. `+` joined `-` and `!` here for GLB-127:
+        // the unary plus reached `parse_unary` with GLB-019 and not this path,
+        // so `b = +a` worked and `>> +a` was a syntax error.
         //
         // It has to be parsed at this level rather than above because `^` is
         // handled here, and the unary binds tighter than `^` everywhere else in
         // the language: `-2 ^ 2` is `(-2) ^ 2` = 4. Parsing it one level up
         // would leave `^` to start a new output argument.
         //
-        // `parse_unary` bottoms out at `parse_primary_expr`, so a postfix
-        // operator on a negated operand is not picked up here — as it was not
-        // before. `>> -(arr$#)` is the form that works, and changing that is a
-        // precedence question of its own, not part of DI-03.
-        let mut expr = if matches!(token.kind, TokenKind::Not | TokenKind::Minus) {
-            self.parse_unary()?
-        } else {
-            // Parse primary, then postfix operations (collection ops, indexing,
+        // The operand of a unary takes its postfix first, with this context's
+        // postfix parser: `>> -v[1]` is `-(v[1])` and `>> -v$#` is `-(v$#)`,
+        // as everywhere else (GLB-145). The question DI-03 left open — it
+        // wrote `>> -(arr$#)` as the form that works — was that one.
+        let mut expr = self.parse_prefixed(|p| {
+            // Primary, then postfix operations (collection ops, indexing,
             // member access, calls)
-            let primary = self.parse_primary_expr()?;
-            self.parse_output_item_postfix(primary)?
-        };
+            let primary = p.parse_primary_expr()?;
+            p.parse_output_item_postfix(primary)
+        })?;
 
         // Handle ^ (power) — right-associative, highest binary precedence.
         // Right-recursive call so 2^3^4 = 2^(3^4).

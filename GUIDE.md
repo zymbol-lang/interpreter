@@ -1272,6 +1272,22 @@ b = 3
 Unary `+` and `-` take a number and nothing else: `+"a"` and `-"a"` are errors, not
 conversions.
 
+A unary (`-`, `+`, `!`) applies to its operand **together with** what follows the operand —
+an index, a key, a `$` operation or a call:
+
+```zymbol
+v = [4, 5]
+d = #(precio: 10)
+vistos = [3, 7]
+>> -v[1] ¶            // → -4
+>> -d.precio ¶        // → -10
+>> -v$# ¶             // → -2
+>> !vistos$? 5 ¶      // → #1
+```
+
+So `!vistos$? 5` needs no parentheses, and `(-v)[1]` is the form that negates first — an
+error on an array. `^` is not one of these: `-2 ^ 2` is `(-2) ^ 2`, 4.
+
 ### Comparison
 
 ```zymbol
