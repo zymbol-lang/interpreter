@@ -149,7 +149,7 @@ divergencias y seguirá verde. Lo mismo vale para `ZyDDT/engines.toml`. Es el fa
 `GOVERNANCE.md` describe —«nada corrió» leído como «nada falló»— con otra forma.
 
 Los 12 ficheros de la última fila, de una búsqueda textual que puede dejarse alguno:
-`ARCHITECTURE.md`, `IMPLEMENTATION.md`, `GUIDE.md`, `LLM.md`, `CHANGELOG.md`, `MANUAL.md`,
+`ARCHITECTURE.md`, `IMPLEMENTATION.md`, `GUIDE.md`, `LLM.md`, `CHANGELOG.md`, `MANUAL.md` (borrado el 2026-10-21),
 `IMPL_V007.md`, `IMPL_V0010.md` (los tres últimos son históricos y no se tocan), más
 `zymbol-design/FORMATTER_RULES.md`, `web/install.md`, `web/changelog.md` y
 `web/.well-known/agent-skills/write-zymbol/SKILL.md`. Falta sumar el `CLAUDE.md` de la raíz del
