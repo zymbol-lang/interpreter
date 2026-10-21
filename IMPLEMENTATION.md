@@ -427,11 +427,17 @@ output_item_mul =
   | output_item_mul , "*" , output_item_term
   | output_item_mul , "/" , output_item_term
   | output_item_mul , "%" , output_item_term
-  | unary_expr                (* -expr  or  !expr at item start *)
   ;
 
+(*  A unary is a term: `*`, `/`, `%` and `^` still apply after it, and its
+    operand takes the postfix first, as everywhere (GLB-145): >> -v[1] ¶  *)
 output_item_term =
-    primary_expr , [ output_item_postfix ] , [ "^" , output_item_term ]
+    output_item_unary , [ "^" , output_item_term ]
+  ;
+
+output_item_unary =
+    primary_expr , [ output_item_postfix ]
+  | ( "!" | "-" | "+" ) , output_item_unary
   ;
 
 (*
@@ -952,8 +958,9 @@ juxtapose_token =
     6.  Multiplication *  /  %
     7.  Power          ^   (right-associative)
     8.  Range          ..  (and ..  :step)
-    9.  Postfix        []  .  ()  $ops  #ops  ::
-    10. Unary          !  -  +
+    9.  Unary          !  -  +   (applies to the operand WITH its postfix:
+                                    -v[1] is -(v[1]) — GLB-145, 2026-10-21)
+    10. Postfix        []  .  ()  $ops  #ops  ::
     11. Primary        literals  identifiers  (...)  [...]  calls  lambdas  ...
 *)
 expr = pipe_expr ;
@@ -1011,8 +1018,18 @@ range_expr =
   | postfix_expr , ".." , postfix_expr , [ ":" , postfix_expr ]
   ;
 
+(*
+  A unary applies to its operand together with the operand's postfix chain
+  (GLB-145, decided 2026-10-21): -v[1] is -(v[1]), !seen$? x is !(seen$? x),
+  -d.k is -(d.k). Until then the Rust parsers read (-v)[1] — negating an array,
+  which can only fail — except for calls. `^` is not a postfix: -2 ^ 2 is
+  (-2) ^ 2 = 4. `postfix_expr` keeps its name because every production below
+  names it; it is the level that includes the unary.
+*)
+postfix_expr = unary_expr ;
+
 unary_expr =
-    primary_expr
+    operand_expr
   | "!" , unary_expr
   | "-" , unary_expr
   | "+" , unary_expr
@@ -1021,7 +1038,7 @@ unary_expr =
 (*
   Postfix chain (applied left-to-right on a primary).
 *)
-postfix_expr = unary_expr , { postfix_op } ;
+operand_expr = primary_expr , { postfix_op } ;
 
 (*
   ONE BRACKET GROUP PER ACCESS.  This production is repeatable, so the grammar
