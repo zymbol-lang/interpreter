@@ -18,7 +18,7 @@ impl<W: Write> Interpreter<W> {
         let count_val  = self.eval_expr(&op.count)?;
         let s = match &string_val {
             Value::String(s) => s.clone(),
-            Value::Char(c)   => c.to_string(),
+            Value::Char(c)   => c.to_string().into(),
             _ => return Err(RuntimeError::Generic {
                 message: format!("$* requires a string, got {}", string_val.type_label()),
                 span: op.span,
@@ -37,7 +37,7 @@ impl<W: Write> Interpreter<W> {
                 op.span,
             )),
         };
-        Ok(Value::String(s.repeat(n)))
+        Ok(Value::String(s.repeat(n).into()))
     }
 
     /// Evaluate string replace operator: string$~~[pattern:replacement] or string$~~[pattern:replacement:count]
@@ -109,7 +109,7 @@ impl<W: Write> Interpreter<W> {
                 ));
             }
             Value::String(ref p) => p.clone(),
-            Value::Char(ch) => ch.to_string(),
+            Value::Char(ch) => ch.to_string().into(),
             _ => {
                 return Err(RuntimeError::kinded(
                     "Type",
@@ -127,7 +127,7 @@ impl<W: Write> Interpreter<W> {
             None => string.replace(pattern.as_str(), &replacement),
         };
 
-        Ok(Value::String(result))
+        Ok(Value::String(result.into()))
     }
 
     /// Evaluate concat-build: base$++ item1 item2 ...
@@ -140,7 +140,7 @@ impl<W: Write> Interpreter<W> {
                 for item in &op.items {
                     let v = self.eval_expr(item)?;
                     let part = self.value_to_concat_str(&v);
-                    s.push_str(&part);
+                    s.edit().push_str(&part);
                 }
                 Ok(Value::String(s))
             }
@@ -174,13 +174,13 @@ impl<W: Write> Interpreter<W> {
         };
 
         let parts: Vec<Value> = match delimiter_value {
-            Value::Char(c) => string.split(c).map(|p| Value::String(p.to_string())).collect(),
+            Value::Char(c) => string.split(c).map(|p| Value::String(p.to_string().into())).collect(),
             Value::String(ref s) if s.is_empty() => return Err(RuntimeError::kinded(
                 "Index",
                 "$/ delimiter must not be empty",
                 op.span,
             )),
-            Value::String(ref s) => string.split(s.as_str()).map(|p| Value::String(p.to_string())).collect(),
+            Value::String(ref s) => string.split(s.as_str()).map(|p| Value::String(p.to_string().into())).collect(),
             _ => return Err(RuntimeError::kinded(
                 "Type",
                 format!("$/ delimiter must be a char or string, got {}", delimiter_value.type_label()),

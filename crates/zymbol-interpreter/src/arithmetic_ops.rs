@@ -82,14 +82,14 @@ impl<W: Write> Interpreter<W> {
         let _ = span;
         let l = self.value_to_concat_str(left);
         let r = self.value_to_concat_str(right);
-        Ok(Value::String(format!("{}{}", l, r)))
+        Ok(Value::String(format!("{}{}", l, r).into()))
     }
 
     /// The string a value contributes to a juxtaposition. Cannot fail: every
     /// value has one, and it is the one `>>` prints.
     pub(crate) fn value_to_concat_str(&self, v: &Value) -> String {
         match v {
-            Value::String(s) => s.clone(),
+            Value::String(s) => s.to_string(),
             Value::Char(c) => c.to_string(),
             Value::Int(n) => to_numeral_int(*n, self.numeral_mode),
             Value::Float(f) => to_numeral_float(*f, self.numeral_mode),
@@ -518,9 +518,9 @@ mod equality_tests {
         assert!(!eq(Value::Int(5), Value::Int(6)));
         assert!(eq(Value::Float(2.5), Value::Float(2.5)));
         assert!(eq(
-            Value::String("a".to_string()),
-            Value::String("a".to_string())
+            Value::String("a".into()),
+            Value::String("a".into())
         ));
-        assert!(!eq(Value::Int(1), Value::String("1".to_string())));
+        assert!(!eq(Value::Int(1), Value::String("1".into())));
     }
 }

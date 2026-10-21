@@ -72,7 +72,7 @@ pub(crate) fn parse_numeric_string(s: String) -> Value {
             return v;
         }
     }
-    Value::String(s)
+    Value::String(s.into())
 }
 
 /// A float already rounded or truncated, as an integer.
@@ -98,7 +98,7 @@ impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_numeric_eval(&mut self, op: &NumericEvalExpr) -> Result<Value> {
         let value = self.eval_expr(&op.expr)?;
         match value {
-            Value::String(s) => Ok(parse_numeric_string(s)),
+            Value::String(s) => Ok(parse_numeric_string(s.to_string())),
             // GAP-ZYB-012: a Char reads like the one-character string it is.
             //
             // `#|"७"|` gave 7 and `#|'७'|` gave back the glyph — the same
@@ -214,7 +214,7 @@ impl<W: Write> Interpreter<W> {
             // Code points, as `$#` counts them and as the VM and the browser
             // engine answer `#?`. It was bytes: `"vacía"#?` said 6 here and 5
             // in the other two engines (found by BUG-GOL-015).
-            Value::String(s) => s.chars().count() as i64,
+            Value::String(s) => s.char_len() as i64,
             Value::Char(_) | Value::Bool(_) => 1,
             Value::Array(arr) => arr.len() as i64,
             Value::Tuple(tup) => tup.len() as i64,
@@ -226,7 +226,7 @@ impl<W: Write> Interpreter<W> {
 
         // Return tuple: (type_symbol, count, value)
         Ok(Value::tuple(vec![
-            Value::String(type_symbol),
+            Value::String(type_symbol.into()),
             Value::Int(count),
             value,
         ]))
@@ -323,7 +323,7 @@ impl<W: Write> Interpreter<W> {
         Ok(Value::String(crate::numeral_mode::map_numeral_number(
             formatted,
             self.numeral_mode,
-        )))
+        ).into()))
     }
 
     /// Evaluate base conversion expression: 0x|expr| or 0b|expr| or 0o|expr| or 0d|expr|
@@ -346,7 +346,7 @@ impl<W: Write> Interpreter<W> {
                     BasePrefix::Decimal => format!("0d{:04}", code),
                     BasePrefix::Hex => format!("0x{:04X}", code),
                 };
-                Ok(Value::String(formatted))
+                Ok(Value::String(formatted.into()))
             }
 
             // Case 2: int → string (format integer in specified base)
@@ -358,7 +358,7 @@ impl<W: Write> Interpreter<W> {
                     BasePrefix::Decimal => 10,
                     BasePrefix::Hex => 16,
                 };
-                Ok(Value::String(zymbol_common::num::base_string(n, radix)))
+                Ok(Value::String(zymbol_common::num::base_string(n, radix).into()))
             }
 
             // Case 3: text → char (parse string as number in base, create char)

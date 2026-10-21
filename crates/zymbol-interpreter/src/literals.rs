@@ -15,10 +15,10 @@ impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_literal(&mut self, lit: &LiteralExpr) -> Result<Value> {
         Ok(match &lit.value {
             // Plain string — never interpolated; sentinels → literal braces
-            Literal::String(s) => Value::String(s.replace('\x01', "{").replace('\x02', "}")),
+            Literal::String(s) => Value::String(s.replace('\x01', "{").replace('\x02', "}").into()),
             // Interpolated string — resolve {var} at runtime, then restore escaped braces
             Literal::InterpolatedString(s) => {
-                Value::String(self.interpolate_string(s, &lit.span)?.replace('\x01', "{").replace('\x02', "}"))
+                Value::String(self.interpolate_string(s, &lit.span)?.replace('\x01', "{").replace('\x02', "}").into())
             }
             // `##_` — the absence of a value, written.
             Literal::Unit => Value::Unit,

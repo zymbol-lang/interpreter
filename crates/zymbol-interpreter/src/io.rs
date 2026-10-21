@@ -495,7 +495,7 @@ fn describe_input_cast(cast: &InputCast) -> String {
 /// cannot type what the program just showed them.
 fn validate_input(s: &str, cast: &InputCast) -> std::result::Result<Value, String> {
     match cast {
-        InputCast::String => Ok(Value::String(s.to_string())),
+        InputCast::String => Ok(Value::String(s.to_string().into())),
         InputCast::Numeric => Ok(parse_numeric_string(s.to_string())),
         InputCast::Float => ascii_digits(s).parse::<f64>().map(Value::Float).map_err(|_| describe_input_cast(cast)),
         InputCast::Decimal { total, decimals } => validate_decimal(&ascii_digits(s), *total, *decimals)
@@ -506,7 +506,7 @@ fn validate_input(s: &str, cast: &InputCast) -> std::result::Result<Value, Strin
             .ok_or_else(|| describe_input_cast(cast)),
         InputCast::Text { max } => {
             let too_long = matches!(max, Some(n) if s.chars().count() > *n as usize);
-            if too_long { Err(describe_input_cast(cast)) } else { Ok(Value::String(s.to_string())) }
+            if too_long { Err(describe_input_cast(cast)) } else { Ok(Value::String(s.to_string().into())) }
         }
         InputCast::Char => {
             let mut it = s.chars();

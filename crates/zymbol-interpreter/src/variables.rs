@@ -57,7 +57,7 @@ fn hot_neutral_from_value(value: &Expr, name: &str) -> Value {
             }
             Value::Int(0)
         }
-        Expr::Binary(bin) if bin.op == BinaryOp::Concat => Value::String(String::new()),
+        Expr::Binary(bin) if bin.op == BinaryOp::Concat => Value::String(String::new().into()),
         Expr::Binary(bin)
             if matches!(bin.op, BinaryOp::Mul | BinaryOp::Div) =>
         {
@@ -231,7 +231,7 @@ impl<W: Write> Interpreter<W> {
                 // Char element → init to "" (String); anything else → init to [] (Array)
                 if (ident.hot || ident.pre_hot) && self.get_variable(&assign.name).is_none() {
                     let neutral = if matches!(element, Value::Char(_)) {
-                        Value::String(String::new())
+                        Value::String(String::new().into())
                     } else {
                         Value::array(Vec::new())
                     };
@@ -291,7 +291,7 @@ impl<W: Write> Interpreter<W> {
             Expr::MemberAccess(ma) if !ma.is_module_access && is_named(name, &ma.object) => {
                 let read = self.receiver_read_first(name, &[&op.value]);
                 let new_value = self.eval_expr(&op.value)?;
-                let key = Value::String(ma.field.clone());
+                let key = Value::String(ma.field.clone().into());
                 self.edit_receiver_done(name, read, &ma.object, |c| {
                     Self::update_in(c, key, new_value, op.span)
                 })
@@ -351,7 +351,7 @@ impl<W: Write> Interpreter<W> {
             let span = op.span;
             return self.edit_receiver_done(name, read, &op.base, |c| match c {
                 Value::String(s) => {
-                    s.push_str(&pieces);
+                    s.edit().push_str(&pieces);
                     Ok(())
                 }
                 Value::Array(arr) => {
@@ -406,7 +406,7 @@ impl<W: Write> Interpreter<W> {
                     // that is already there, when it is one.
                     let piece = self.value_to_concat_str(&rhs_val);
                     if let Some(Value::String(curr)) = self.get_variable_mut(name) {
-                        curr.push_str(&piece);
+                        curr.edit().push_str(&piece);
                         return Ok(true);
                     }
                 } else {

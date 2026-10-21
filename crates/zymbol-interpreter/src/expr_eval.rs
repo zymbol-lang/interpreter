@@ -39,7 +39,7 @@ impl<W: Write> Interpreter<W> {
             // from being.
             Value::NamedTuple(fields) => Ok(fields
                 .iter()
-                .map(|(k, _)| Value::String(k.clone()))
+                .map(|(k, _)| Value::String(k.clone().into()))
                 .collect()),
             // A positional tuple is walked too (decision 21): the type
             // system is dynamic and `#?` validates each element, so
@@ -199,7 +199,7 @@ impl<W: Write> Interpreter<W> {
             if let Value::NamedTuple(fields) = v {
                 return Ok(fields
                     .iter()
-                    .map(|(k, val)| Value::tuple(vec![Value::String(k.clone()), val.clone()]))
+                    .map(|(k, val)| Value::tuple(vec![Value::String(k.clone().into()), val.clone()]))
                     .collect());
             }
         }
@@ -315,7 +315,7 @@ impl<W: Write> Interpreter<W> {
         // any key, which is what JSON needs — `d["mi clave"]` cannot be written
         // any other way.
         if let (Value::NamedTuple(fields), Value::String(key)) = (collection, index_value) {
-            if let Some(v) = fields.get(key) {
+            if let Some(v) = fields.get(key.as_str()) {
                 return Ok(Some(v));
             }
             let available: Vec<String> = fields.keys().cloned().collect();
@@ -437,13 +437,15 @@ impl<W: Write> Interpreter<W> {
         match collection {
             Value::String(s) => {
                 // String indexing returns a char — found where it is, not
-                // by copying the text into a Vec<char> first (GLB-130).
+                // by copying the text into a Vec<char> first (GLB-130), and
+                // from the text's kept count and nearest crumb, not by walking
+                // it from the start (GLB-139).
                 // `index_ref` rejected every other index kind before this point.
                 let Value::Int(index) = index_value else { unreachable!() };
-                let len = zymbol_common::text::char_len(s);
+                let len = s.char_len();
                 match Self::resolve_index(*index, len, span)? {
                     Some(i) => Ok(Value::Char(
-                        zymbol_common::text::char_range(s, i, i + 1).chars().next()
+                        s.char_at(i)
                             .expect("resolve_index answered a position inside the text"),
                     )),
                     None => Err(RuntimeError::Generic {
