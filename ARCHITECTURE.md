@@ -598,8 +598,7 @@ engines reach the same 708. Against the browser engine alone the pair agrees on 
 19 in the difference being the files `corpus.toml` excuses (`std/db` is ODBC, `<\ cmd \>`
 has no browser equivalent, TUI needs a real TTY, and the 6 excused for every engine) —
 excused, not divergent. Agreement on a corpus is not the whole question: ZyDDT's matrix
-asks the engines 1 705 declared cells: 1 704 agree and one is KNOWN, held for the open
-finding GLB-127.
+asks the engines 1 722 declared cells (2026-10-21), and all three agree on every one.
 
 **No corpus file carries an in-file skip marker.** `@vm-skip` was one of five incompatible
 exclusion mechanisms that `zyquality/corpus.toml` replaced; nothing reads it any more.
