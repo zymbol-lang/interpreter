@@ -524,7 +524,7 @@ See `zymbol-design/I18N.md` for the full three-layer pattern.
 
 ## Architecture
 
-The interpreter is a Rust workspace of 19 crates:
+The interpreter is a Rust workspace of 20 crates:
 
 ```
 Foundation:   zymbol-span  zymbol-error  zymbol-common  zymbol-intrinsics
@@ -594,7 +594,7 @@ make -C ../zyquality
 ```
 
 ```bash
-# Unit tests (all 19 crates) — unaffected, these live inside the crates
+# Unit tests (all 20 crates) — unaffected, these live inside the crates
 cargo test
 
 # Tree-walker vs VM parity          → zyq consensus --engines zytw,zyvm
@@ -621,30 +621,32 @@ Or ask the whole question at once, from the zyquality checkout:
 ./zyq suite     # selftest + audit + reject + goldens + consensus, one verdict
 ```
 
-Current status (v0.0.10 branch — 0.0.9 is the latest published release).
-**Re-measured 2026-10-11**, every figure below on the same tree, with `./zyq suite`
+Current status (v0.0.11 branch — 0.0.10 is the latest published release).
+**Re-measured 2026-10-20**, every figure below on the same tree, with `./zyq suite`
 reporting **all gates pass**. Re-derive a count in a fresh clone before quoting it in
 release notes — that is the rule that came out of the 544/536 correction:
 
-- **1065 tests** across the 19 crates via `cargo test --workspace` — 0 failed, 4 ignored.
-- Corpus: **683 `.zy`**, 677 with a golden, 6 excused for every engine by a written reason
+- **1076 tests** across the 20 crates via `cargo test --workspace` — 0 failed, 4 ignored.
+- Corpus: **714 `.zy`**, 708 with a golden, 6 excused for every engine by a written reason
   in `corpus.toml`. `zyq audit` reports no hygiene problems.
-- Tree-walker vs VM: **677 agree, 0 diverge**.
-- All three engines: **677 agree, 0 diverge**. Against the browser engine alone,
-  **664 agree, 0 diverge** — the 19 in the difference are excused in `corpus.toml`
+- Tree-walker vs VM: **708 agree, 0 diverge**.
+- All three engines: **708 agree, 0 diverge**. Against the browser engine alone,
+  **695 agree, 0 diverge** — the 19 in the difference are excused in `corpus.toml`
   (`std/db` is ODBC, `<\ cmd \>` has no browser equivalent, TUI needs a real TTY, and the
   6 excused for every engine).
-- Goldens: **647 of 647 match via `run`, 0 stale**; **30 of 30 via `check`**.
-- `zyq reject`: **55 forms refused in every engine**, 0 accepted anywhere.
-- Formatter properties: **733 PASS / 0 FAIL** over 781 files, 48 skipped — P1–P4 all zero.
+- Goldens: **677 of 677 match via `run`, 0 stale**; **31 of 31 via `check`**.
+- `zyq reject`: **57 forms refused in every engine**, 0 accepted anywhere.
+- Formatter properties: **764 PASS / 0 FAIL** over 812 files, 48 skipped — P1–P4 all zero.
 - Benchmarks: **16/16 within tolerance** of the recorded baseline, no regressions.
-- LSP against `zymbol check`: 683 files, 14 disagreements, **0 outside the baseline**.
-- ZyDDT: **46 axes, 1 704 cells, all agree** — 171 of them checked against an
-  implementation that is not ours — and **3 findings open** (GLB-127, ZYVM-022, GLB-128 — each named, none a regression), 227 closed. The 29 premises
-  of `zymbol-design/PREMISES.md` each have a cell or are declared checked by review.
-- `LLM.md` behind **88 probes**, each quoting the sentence it stands behind; `GUIDE.md`
-  **130 of 130** executable examples; `zyquality/cost/` **15 cases**, every ratio within
-  its declared limit.
+- LSP against `zymbol check`: 714 files, 14 disagreements, **0 outside the baseline**.
+- ZyDDT: **46 axes, 1 705 cells, 1 704 agree and 1 KNOWN** (the cell that holds GLB-127) —
+  171 of them checked against an implementation that is not ours — and **3 findings open**
+  (GLB-127, GLB-139, ZYTW-016 — each named and held by a cell or a cost case, none a
+  regression), 261 closed. The 29 premises of `zymbol-design/PREMISES.md` each have a cell or
+  are declared checked by review.
+- `LLM.md` behind **89 probes**, each quoting the sentence it stands behind; `GUIDE.md`
+  **130 of 130** executable examples; `zyquality/cost/` **25 cases**, every ratio within
+  its declared limit or KNOWN under an open finding.
 
 `ZYMBOL_BIN=/usr/bin/zymbol` still points the suite at an installed package
 rather than the build tree. `VM_COMPARE_EXCLUDE` is gone — exclusions are
@@ -1280,7 +1282,7 @@ operator now opens a juxtaposed operand in an assignment too (GLB-114).
 
 ```
 interpreter/
-├── Cargo.toml           # Workspace (19 crates)
+├── Cargo.toml           # Workspace (20 crates)
 ├── zymbol-lang.ebnf     # Formal grammar (EBNF, v3.1.0)
 ├── install-zymbol.sh    # Install script
 ├── crates/              # Rust source crates
