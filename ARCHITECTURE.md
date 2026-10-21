@@ -185,7 +185,8 @@ Walks the AST directly and evaluates it. It was the default execution mode until
 ```rust
 enum Value {
     Int(i64), Float(f64), Char(char), Bool(bool),
-    String(String),
+    String(Text),             // zymbol_common::text: shared, with its character
+                              // count and a crumb every 64 (ZYTW-016, GLB-139)
     Array(Rc<Vec<Value>>),                  // shared; copied when written
     Tuple(Rc<Vec<Value>>),
     NamedTuple(Rc<Vec<(String, Value)>>),

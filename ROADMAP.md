@@ -6,10 +6,10 @@
 > for 2026-11-01; the plan and its progress are in `ROADMAP_V0011_ES.md`.
 > Validation (measured 2026-10-20 on the `v0.0.11` branch): **714 corpus files, 708
 > agreeing, 0 diverging** across all three engines; **1076 unit tests**, 0 failed;
-> **1 722 ZyDDT cells** (2026-10-21), all agreeing, none KNOWN; **266 findings closed, 2 open**
-> (GLB-139, `s[i]` and a slice walk the text; ZYTW-016, reading a text variable copies it in
-> the tree-walker — both declared debt of this release, held by `zyquality/cost/`);
-> `zyq suite` reports **all gates pass**.
+> **1 722 ZyDDT cells** (2026-10-21), all agreeing, none KNOWN; **268 findings closed, none
+> open** — the last two, GLB-139 and ZYTW-016 (a text read by position, and copied by every
+> read, in the tree-walker; GLB-139 in zyjs too), were fixed that day; `zyq suite` reports
+> **all gates pass**, with no `cost` case KNOWN.
 > **0.0.10 is the latest published release.**
 >
 > Previously: **v0.0.10 (released 2026-10-12)** — a *measurement* release: nothing in it was

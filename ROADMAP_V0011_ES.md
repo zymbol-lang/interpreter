@@ -339,7 +339,7 @@ Por el camino salieron tres cosas más, todas archivadas:
   errores en los tres motores. Y `zyquality/messages/reach.py` corría `run` y `run --vm`, que desde la etapa 1 eran
   los dos la VM.
 - **`ZYTW-016`**, abierto como deuda declarada: leer una variable de texto la copia en el tree-walker. Es la parte de
-  PERF-05 b que este documento ya decía que se archivaría así.
+  PERF-05 b que este documento ya decía que se archivaría así. **Corregido el 2026-10-21** con `GLB-139` (grupo 1).
 
 **PERF-03, corregido** como `GLB-132`, en los tres motores. En Rust el diccionario es un `IndexMap`
 (`zymbol_common::Dict`); en `zymbol.js`, un índice de claves y la escritura en el sitio que ZYJS-014 dio a los
@@ -517,7 +517,7 @@ puerta entera.
 
 | Grupo | Temas | Se implementa | Se cierra como deuda de la v0.0.11 | Estado |
 |---|---|---|---|---|
-| 1. Leer un texto por posición | `GLB-139`, `ZYTW-016` | Migas en la VM | `GLB-139` en el tree-walker y en zyjs; `ZYTW-016` | **Hecho** (2026-10-19) |
+| 1. Leer un texto por posición | `GLB-139`, `ZYTW-016` | Migas en la VM; y el 2026-10-21, por nueva decisión del autor, el tree-walker (texto compartido con migas) y zyjs | — (era `GLB-139` en el tree-walker y en zyjs, y `ZYTW-016`) | **Hecho** (2026-10-19 la VM; 2026-10-21 el resto) |
 | 2. Editar una colección sin copiarla | `GLB-140`, `ZYJS-068` | `GLB-140` en el tree-walker y en zyjs; `ZYJS-068` | — | **Hecho** (2026-10-19), y dos más que salieron: `ZYTW-018`, `GLB-141` |
 | 3. La memoria de los motores | `Value` del tree-walker (120 bytes), `ZYVM-022` | `FunctionValue` y `ErrorValue` en caja; `ZYVM-022` opción A, medida antes | `ZYVM-022` si cuesta más de un 2 % de pasos | **Hecho** (2026-10-19): `ZYTW-019`, y `ZYVM-022` corregida (+0,05 % de pasos) |
 | 4. El binario y su distribución | `GLB-134`, D4 | D4; medir musl en el `HEAD` y, si hace falta, `mimalloc` | — | **Hecho** (2026-10-19); quedan los documentos de `web/`, que cambian en la release |
@@ -544,10 +544,13 @@ El control es el mismo programa con `"a"`: plano en los dos motores de Rust. Con
   una posición, el byte donde empieza cada carácter 64; `s[i]` y un corte saltan a la miga anterior. 128 000 «ñ»:
   941 → 39 ms. Descartadas: recordar la última posición (deja cuadrático el acceso hacia atrás o al azar) y un texto de
   ancho fijo como el de Python (rehace `ZyStr`).
-- **Tree-walker — deuda.** Arreglarlo pide que su texto deje de ser un `String` que se copia en cada lectura
-  (`ZYTW-016`); llevar `ZyStr` a `zymbol-common` cerraría los dos, y es el cambio más grande de esta lista.
-- **zyjs — deuda.** Lo pequeño sería guardar `[...v]` en el valor la primera vez (zyjs nunca cambia un texto en el
-  sitio); el motor se sustituye en la etapa 4.
+- **Tree-walker — deuda el 2026-10-19; corregido el 2026-10-21.** Arreglarlo pedía que su texto dejara de ser un
+  `String` que se copia en cada lectura (`ZYTW-016`). El autor lo decidió de nuevo el 2026-10-21 (salida B): el texto es
+  un `Text` de `zymbol-common`, compartido, con su recuento y sus migas, construidas con las mismas funciones que la VM.
+  32 000 «ñ»: 718 → 36 ms.
+- **zyjs — deuda el 2026-10-19; corregido el 2026-10-21.** Un texto guarda sus caracteres la primera vez que se le
+  piden (zyjs nunca cambia un texto en el sitio). La razón para dejarlo, que el motor se sustituía en la etapa 4, dejó
+  de valer con la etapa 4 en pausa. 32 000 «ñ»: 9 438 → 537 ms.
 
 Lo sujetan `growth/index-a-text` y `growth/slice-a-text` (este, por reloj otra vez en la VM) de `zyquality/cost/`, y
 `zyquality/corpus/strings/34_position_crumbs.zy`.
