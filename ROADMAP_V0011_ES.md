@@ -469,7 +469,7 @@ salida depende de la semilla. `gap.py`: `dict_lookup` ×1,3 → **×1,0**, `dict
 | Id | Qué es | Estado |
 |---|---|---|
 | ZYVM-022 | El valor que devuelve una llamada sobrevive en su registro temporal: la VM tiene dos arrays donde el tree-walker tiene uno (1,79× de memoria, medido en la v0.0.10) | Abierto, con celda `KNOWN` en `zyquality/cost/` |
-| GLB-127 | `>> +a` lo rechazan `zytw` y `zyvm` y `zyjs` lo acepta | Abierto; no es de rendimiento, se hereda |
+| GLB-127 | `>> +a` lo rechazan `zytw` y `zyvm` y `zyjs` lo acepta | Corregido el 2026-10-21 en el parser; no era de rendimiento. Destapó GLB-144 y GLB-145 (corregidos el mismo día; GLB-145 por decisión del autor, opción A) |
 
 Lo que se abrió después, el 2026-10-19 —`GLB-139`, `GLB-140`, `ZYJS-068`— y el destino de cada tema abierto están en
 «Plan de cierre — lo que queda, por grupos», más abajo.
