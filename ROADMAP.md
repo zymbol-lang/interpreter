@@ -1,18 +1,25 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **v0.0.10 (in development)** — a *measurement* release: nothing in it was
+> Current status: **v0.0.11 (in development)** — an *optimization* release: the register VM
+> is the default engine, and what each operation costs is measured and brought down — time
+> and memory, against Python as the reference and without changing the language. Planned
+> for 2026-11-01; the plan and its progress are in `ROADMAP_V0011_ES.md`.
+> Validation (measured 2026-10-20 on the `v0.0.11` branch): **714 corpus files, 708
+> agreeing, 0 diverging** across all three engines; **1076 unit tests**, 0 failed;
+> **1 705 ZyDDT cells**, 1 704 agreeing and 1 KNOWN; **261 findings closed, 3 open**
+> (GLB-127, `>> +a`; GLB-139, `s[i]` and a slice walk the text; ZYTW-016, reading a text
+> variable copies it in the tree-walker); `zyq suite` reports **all gates pass**.
+> **0.0.10 is the latest published release.**
+>
+> Previously: **v0.0.10 (released 2026-10-12)** — a *measurement* release: nothing in it was
 > planned as a feature, it is what a systematic question finds when it is asked some 1 700
 > times of three engines. The design became source (`zymbol-design/PREMISES.md`, 29
 > premises, each crossed with its cells), ZyDDT's matrix filed some 200 findings against
 > the engines and they are closed, a function sees only its parameters again (MEM-2), a
 > condition is a Bool and nothing else, and a performance sweep
 > found one shape four times — *a collection with two owners is copied by its first edit* —
-> and removed it. See `IMPL_V0010.md`.
-> Validation (measured 2026-10-11): **683 corpus files, 677 agreeing, 0 diverging** across
-> all three engines; **1065 unit tests**, 0 failed; **1 704 ZyDDT cells**, all agreeing;
-> **227 findings closed, 3 open** (ZYVM-022, a memory debt declared below; GLB-127, `>> +a`; GLB-128, the CI's environment); `zyq suite`
-> reports **all gates pass**. **0.0.9 is the latest published release**; every figure on
-> this page is measured on the `v0.0.10` branch.
+> and removed it. See `IMPL_V0010.md`. At its release (measured 2026-10-11): 683 corpus
+> files, 677 agreeing, 0 diverging; 1065 unit tests; 1 704 ZyDDT cells, all agreeing.
 >
 > Previously: **v0.0.9 (released 2026-09-09)** — a *decision* release: rules that existed
 > in the prose and in no engine, or in three engines three ways, decided once and enforced
@@ -121,20 +128,21 @@
 
 | Suite | Status |
 |-------|--------|
-| Unit + integration (`cargo test`) | ✅ 1065 passed, 0 failed, 4 ignored |
-| TW/VM consensus (`zyq consensus --engines zytw,zyvm`) | ✅ 677 of 683 agree, 0 diverge (6 excused for every engine by a reason in `corpus.toml`) |
-| Three-engine consensus (`zyq consensus`) | ✅ 677 agree, 0 diverge — the browser engine included |
-| Golden files (`zyq expect`) | ✅ 647/647 via `run`, **0 stale** · 30/30 via `check` |
-| Rejection corpus (`zyq reject`) | ✅ 55 forms, all refused in every engine |
-| Formatter property suite (`zyq suite --only fmt`) | ✅ 733 PASS / 48 SKIP / 0 FAIL over 781 files, P1–P4 all zero, no regressions vs. baseline |
-| JS mirror parity (`zyq consensus --engines zytw,zyjs`) | ✅ 664 of 683 agree, **0 diverge** — the 19 excused in `corpus.toml` (`std/db`, `<\ cmd \>`, TUI, and the 6 excused for every engine) |
+| Unit + integration (`cargo test`) | ✅ 1076 passed, 0 failed, 4 ignored |
+| TW/VM consensus (`zyq consensus --engines zytw,zyvm`) | ✅ 708 of 714 agree, 0 diverge (6 excused for every engine by a reason in `corpus.toml`) |
+| Three-engine consensus (`zyq consensus`) | ✅ 708 agree, 0 diverge — the browser engine included |
+| Golden files (`zyq expect`) | ✅ 677/677 via `run`, **0 stale** · 31/31 via `check` |
+| Rejection corpus (`zyq reject`) | ✅ 57 forms, all refused in every engine |
+| Formatter property suite (`zyq suite --only fmt`) | ✅ 764 PASS / 48 SKIP / 0 FAIL over 812 files, P1–P4 all zero, no regressions vs. baseline |
+| JS mirror parity (`zyq consensus --engines zytw,zyjs`) | ✅ 695 of 714 agree, **0 diverge** — the 19 excused in `corpus.toml` (`std/db`, `<\ cmd \>`, TUI, and the 6 excused for every engine) |
 | Benchmark gate | ✅ 16/16 within tolerance, no performance regressions |
-| RosettaStone i18n suite (105 languages) | ✅ PASS |
+| RosettaStone i18n suite (105 languages, in `zyq suite --only web`'s example consensus) | ✅ PASS |
 
 The whole question at once: `cd ../zyquality && ./zyq suite` — **all gates pass** as of
-2026-10-11. Three layers that did not exist at v0.0.9 are in it: ZyDDT's matrix (46 axes,
-1 704 cells, 171 checked against an implementation that is not ours), the 88 probes behind
-`LLM.md`, and the cost gate (15 cases, 60 of its assertions counted with `--count`).
+2026-10-20. Three layers that did not exist at v0.0.9 are in it: ZyDDT's matrix (46 axes,
+1 705 cells, 171 checked against an implementation that is not ours), the 89 probes behind
+`LLM.md`, and the cost gate (25 cases, every ratio within its limit or KNOWN under an open
+finding).
 
 ---
 
@@ -174,7 +182,12 @@ They are documented in the manual as known limitations.
 | `arithmetic on non-numeric` for string `/` split | Analyzer cannot distinguish `/` operators by context |
 | ~~`type mismatch` for `arr[i] = val`~~ | **Moot since v0.0.9** — indexed assignment was withdrawn, so there is nothing to model: the form is refused in all three engines |
 
-### Auto-free debt — inherited from v0.0.8, re-measured 2026-10-11, still undecided
+### Auto-free debt — inherited from v0.0.8; the first closed 2026-10-19, the second left by recommendation
+
+> **2026-10-20:** ZYVM-022 is **fixed** (2026-10-19, group 3 of the v0.0.11 closing plan in
+> `ROADMAP_V0011_ES.md`: release at statement end only what can be a collection). `autofree/call-result`
+> in `zyquality/cost` passes at 0.96 on the VM and 0.99 on the tree-walker, no longer KNOWN. The
+> text below is the state as of 2026-10-11, kept because it is the reason the fix was asked for.
 
 Both were recorded in `IMPL_V008.md` § B as "known and accepted, not regressions", with
 the note that they *should be decided explicitly before v0.0.9 rather than inherited
@@ -261,8 +274,8 @@ worse than no line: it sends projects to the tree-walker by default, which is ex
 zy-GO did before HLZ-008 was found.
 
 - ~~**Module system in VM**~~ — HLZ-008, HLZ-009, HLZ-010, MM-10 and MM-11 closed the known
-  divergences. The TW/VM consensus reports **677 of 683** corpus files byte-identical under
-  both engines (2026-10-11), `zyquality/corpus/modules_scope/` included. **No corpus file
+  divergences. The TW/VM consensus reports **708 of 714** corpus files byte-identical under
+  both engines (2026-10-20), `zyquality/corpus/modules_scope/` included. **No corpus file
   carries an in-file skip marker**: `@vm-skip` was retired along with the four other
   exclusion mechanisms `zyquality/corpus.toml` replaced, and every exclusion now names the
   engine, the tag and the reason in that one file.
@@ -273,11 +286,10 @@ zy-GO did before HLZ-008 was found.
   precision kinds.
 - CLI args capture (`><`) also has parity, despite older tables marking it VM-unsupported.
 
-Remaining VM-side debt is not a parity gap but a memory one: auto-free clears a named
-variable's register, while the value a call returns survives in a temporary register until
-something reuses it (ZYVM-022 — 1.79× in the VM against 1.00 in the tree-walker,
-re-measured 2026-10-11). Closing it is a register-allocator change. See
-§ "Auto-free debt" above, and [IMPL_V008.md](IMPL_V008.md) § B for where it began.
+The VM-side memory debt that used to be listed here — the value a call returns surviving in a
+temporary register until something reused it (ZYVM-022, 1.79× in the VM against 1.00 in the
+tree-walker on 2026-10-11) — was fixed on 2026-10-19 and is held by `autofree/call-result`
+(0.96). See § "Auto-free debt" above, and [IMPL_V008.md](IMPL_V008.md) § B for where it began.
 
 ### Medium Term
 

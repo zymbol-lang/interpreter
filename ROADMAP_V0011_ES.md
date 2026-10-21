@@ -1,7 +1,7 @@
 # Mapa de ruta — v0.0.11: la VM es el motor, y lo que cuesta cada cosa
 
-> **Estado: abierta.** La rama `v0.0.11` existe desde el 2026-10-12 y lleva un solo commit propio,
-> el de versión (`62baa56`). **La etapa 1 está implementada** (2026-10-13) salvo el sondeo de las
+> **Estado: abierta.** La rama `v0.0.11` existe desde el 2026-10-12; su primer commit fue el de
+> versión (`62baa56`). **La etapa 1 está implementada** (2026-10-13) salvo el sondeo de las
 > cinco zonas: ver «Avance» dentro de ella. **La etapa 2 tiene lista de trabajos y arnés de medición**
 > (2026-10-14), y las cinco correcciones de la lista hechas: PERF-06, PERF-04, PERF-05 a, PERF-03 y PERF-07
 > (2026-10-16, `ZYVM-023`, `ZYVM-025`, `GLB-130`, `GLB-132` y `GLB-133`). Quedan PERF-05 b (aplazada, D8) y PERF-08

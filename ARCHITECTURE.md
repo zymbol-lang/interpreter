@@ -3,7 +3,7 @@
 ## Overview
 
 Zymbol-Lang is a minimalist symbolic programming language with no words in its grammar. This document
-describes the architecture of its Rust implementation: a workspace of 19 crates organized
+describes the architecture of its Rust implementation: a workspace of 20 crates organized
 by compilation phase, execution mode, and tooling.
 
 The interpreter supports two independent execution strategies:
@@ -349,10 +349,13 @@ writes in place (GLB-117).
 - Edits are atomic and validate before they take the value, so a write to a module's state
   has one owner and costs one element, not the collection (ZYVM-003, ZYVM-013)
 
-**What is not optimized, and is written down**: a temporary register keeps whatever its last
-user left until something reuses it, so the value a call returns and the caller uses once is
-alive while the next call builds its own (ZYVM-022; see the auto-free note under *Feature
-Parity*).
+**A call's result is let go when its statement ends** (ZYVM-022, fixed 2026-10-19): the
+compiler notes the register a `Call`, `CallDynamic` or `CallBuiltin` writes, takes it off the
+list when an arithmetic instruction reads it (the register then holds a number), and
+`release_temps` clears what is left at the end of the statement. Before, a temporary kept
+whatever its last user left until something reused it, so the value a call returned and the
+caller used once was alive while the next call built its own (see the auto-free note under
+*Feature Parity*).
 
 **Stdlib builtins**: `stdlib_builtins.rs` dispatches `std/*` module calls by numeric
 builtin id resolved at compile time (math 0–, random 100–, json 200–, io 300–,
@@ -587,30 +590,31 @@ embeds the interpreter, `package` produces a `.zyp` archive of source that still
 | Int → Char cast (`##'expr`) | ✓ | ✓ |
 | Virtual screen (`--keys`) and counters (`--count`) | ✓ | ✓ |
 
-Measured 2026-10-11 on v0.0.10: `zyq consensus --engines zytw,zyvm` (what
-`tests/scripts/vm_compare.sh` now delegates to) reports **677 of 683 corpus files agreeing
+Measured 2026-10-20 on the v0.0.11 branch: `zyq consensus --engines zytw,zyvm` (what
+`tests/scripts/vm_compare.sh` now delegates to) reports **708 of 714 corpus files agreeing
 and 0 diverging**, the other 6 excused for every engine by a reason declared in
 `zyquality/corpus.toml`. Adding `zyjs` does not change the agreement count — all three
-engines reach the same 677. Against the browser engine alone the pair agrees on 664, the
+engines reach the same 708. Against the browser engine alone the pair agrees on 695, the
 19 in the difference being the files `corpus.toml` excuses (`std/db` is ODBC, `<\ cmd \>`
 has no browser equivalent, TUI needs a real TTY, and the 6 excused for every engine) —
 excused, not divergent. Agreement on a corpus is not the whole question: ZyDDT's matrix
-asks the engines 1 704 declared cells and every one agrees.
+asks the engines 1 705 declared cells: 1 704 agree and one is KNOWN, held for the open
+finding GLB-127.
 
 **No corpus file carries an in-file skip marker.** `@vm-skip` was one of five incompatible
 exclusion mechanisms that `zyquality/corpus.toml` replaced; nothing reads it any more.
 Every exclusion is declared there, naming the engine, a tag and a required reason — an
 exclusion nobody justified cannot be told from a bug somebody hid.
 
-**Auto-free note**: both engines implement it, and for a named variable they agree (two arrays
-used in sequence cost 1.00 of one, in both). The VM's relative win is smaller for one shape:
-`emit_auto_free` clears the *named* variable's register, but the value a call returns and the
-caller uses once stays in a temporary register until something reuses it, so two such calls
-in sequence cost 1.79× one in the VM against 1.00 in the tree-walker (ZYVM-022, re-measured
-2026-10-11 after ZYVM-010 — which made temporaries reusable and did not clear them). The VM
-still uses about six times less memory per array. Closing the gap is a register-allocator
-change, not an analysis change, and it is the author's to decide; the cost case
-`autofree/call-result` in `zyquality/cost` holds it.
+**Auto-free note**: both engines implement it, and they agree — for a named variable (two
+arrays used in sequence cost 1.00 of one, in both) and, since 2026-10-19, for the value a call
+returns and the caller uses once. That second shape cost 1.79× one in the VM against 1.00 in
+the tree-walker on 2026-10-11 (ZYVM-022: `emit_auto_free` cleared the *named* variable's
+register, and the call's result stayed in a temporary until something reused it). The fix
+clears, at the end of the statement, only the call results that may be a collection — +0.05 %
+of the steps of `zyquality/bench/big` where clearing every temporary cost +18.7 %. The cost case
+`autofree/call-result` in `zyquality/cost` holds it: 0.96 on the VM, 0.99 on the tree-walker
+(2026-10-20). The VM still uses about six times less memory per array.
 
 ---
 
