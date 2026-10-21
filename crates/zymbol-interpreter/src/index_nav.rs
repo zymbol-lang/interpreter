@@ -282,10 +282,11 @@ fn descend(
             op_span,
         )),
         Value::String(s) => {
-            // The character where it is, not the text copied to find it (GLB-130).
-            let len = zymbol_common::text::char_len(&s);
+            // The character where it is, not the text copied to find it
+            // (GLB-130), nor walked to from the start (GLB-139).
+            let len = s.char_len();
             let i = resolve_index(index, len, op_span, "string")?;
-            Ok(Value::String(zymbol_common::text::char_range(&s, i, i + 1).to_string()))
+            Ok(Value::String(s.char_range(i, i + 1).into()))
         }
         other => Err(RuntimeError::kinded(
             "Type",

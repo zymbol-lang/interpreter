@@ -115,7 +115,7 @@ where
 
 fn take_string(v: Option<Value>, what: &str, span: Span) -> Result<String> {
     match v {
-        Some(Value::String(s)) => Ok(s),
+        Some(Value::String(s)) => Ok(s.to_string()),
         _ => Err(type_err(format!("db: expected String {}", what), span)),
     }
 }
@@ -150,7 +150,7 @@ fn bind_params(params: Vec<Value>, span: Span) -> Result<Vec<Box<dyn InputParame
             Value::Float(f) => Box::new(f.into_parameter()),
             // SPRE encodes booleans as integers; bind 0/1.
             Value::Bool(b) => Box::new((if b { 1i64 } else { 0i64 }).into_parameter()),
-            Value::String(s) => Box::new(s.into_parameter()),
+            Value::String(s) => Box::new(s.into_string().into_parameter()),
             Value::Char(c) => Box::new(c.to_string().into_parameter()),
             // NULL of (nominally) text type — drivers coerce as needed.
             Value::Unit => Box::new(Option::<String>::None.into_parameter()),
@@ -194,12 +194,12 @@ fn cell_from_text(text: String, dt: &DataType) -> Value {
             .ok()
             .filter(|n| num::in_int_range(*n))
             .map(Value::Int)
-            .unwrap_or(Value::String(text)),
+            .unwrap_or(Value::String(text.into())),
         DataType::Real | DataType::Double | DataType::Float { .. } => {
-            text.parse::<f64>().map(Value::Float).unwrap_or(Value::String(text))
+            text.parse::<f64>().map(Value::Float).unwrap_or(Value::String(text.into()))
         }
         // DECIMAL/NUMERIC stay String (lossless, money-safe); dates/text stay String.
-        _ => Value::String(text),
+        _ => Value::String(text.into()),
     }
 }
 
@@ -237,7 +237,7 @@ fn rows_from_cursor(
                 if !not_null {
                     Value::Unit
                 } else {
-                    Value::String(base64::engine::general_purpose::STANDARD.encode(&buf))
+                    Value::String(base64::engine::general_purpose::STANDARD.encode(&buf).into())
                 }
             } else {
                 buf.clear();
@@ -408,7 +408,7 @@ fn db_tx(args: Vec<Value>, span: Span) -> Result<Value> {
                     _ => return Err(type_err("db::tx: each statement is (String sql, Array params)", span)),
                 };
                 let params = take_params(p.next(), span)?;
-                prepared.push((sql, bind_params(params, span)?));
+                prepared.push((sql.to_string(), bind_params(params, span)?));
             }
             _ => return Err(type_err("db::tx: each statement must be a (sql, params) tuple", span)),
         }

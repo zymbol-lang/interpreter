@@ -58,7 +58,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(ref arr) => Ok(Value::Int(arr.len() as i64)),
             Value::Tuple(ref tup) => Ok(Value::Int(tup.len() as i64)),
             Value::NamedTuple(ref fields) => Ok(Value::Int(fields.len() as i64)),
-            Value::String(ref s) => Ok(Value::Int(if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 })),
+            Value::String(ref s) => Ok(Value::Int(s.char_len() as i64)),
             _ => Err(RuntimeError::kinded(
                 "Type",
                 format!(
@@ -100,8 +100,8 @@ impl<W: Write> Interpreter<W> {
             )),
             Value::String(s) => {
                 match element {
-                    Value::Char(c) => s.push(c),
-                    Value::String(ref suffix) => s.push_str(suffix),
+                    Value::Char(c) => s.edit().push(c),
+                    Value::String(ref suffix) => s.edit().push_str(suffix),
                     _ => return Err(RuntimeError::kinded(
                         "Type",
                         format!("$+ on string requires char or string element, got {}", element.type_label()),
@@ -141,7 +141,7 @@ impl<W: Write> Interpreter<W> {
             (&mut *collection, &index_value)
         {
             // By hash, and `shift_remove` so the rest keep their order (GLB-132).
-            match fields.get_index_of(key) {
+            match fields.get_index_of(key.as_str()) {
                 Some(i) => { zymbol_common::count::make_mut_dict(fields).shift_remove_index(i); }
                 None => {
                     let available: Vec<String> = fields.keys().cloned().collect();
@@ -307,7 +307,7 @@ impl<W: Write> Interpreter<W> {
                         op.span,
                     )),
                 };
-                Ok(Value::Bool(fields.contains_key(&key)))
+                Ok(Value::Bool(fields.contains_key(key.as_str())))
             }
             Value::String(ref s) => {
                 // Check if string contains character or substring
@@ -402,7 +402,7 @@ impl<W: Write> Interpreter<W> {
                     &mut zymbol_common::count::make_mut(tup)[i]
                 }
                 (Value::NamedTuple(fields), Value::String(key)) => zymbol_common::count::make_mut_dict(fields)
-                    .get_mut(key)
+                    .get_mut(key.as_str())
                     .expect("checked by deep_path_in_place"),
                 _ => unreachable!("deep_path_in_place checked every step"),
             };
@@ -419,9 +419,9 @@ impl<W: Write> Interpreter<W> {
             // A key that is not there is added, as `set_at_step` does.
             (Value::NamedTuple(fields), Value::String(key)) => {
                 let m = zymbol_common::count::make_mut_dict(fields);
-                match m.get_mut(key) {
+                match m.get_mut(key.as_str()) {
                     Some(f) => *f = new_val,
-                    None => { m.insert(key.clone(), new_val); }
+                    None => { m.insert(key.to_string(), new_val); }
                 }
             }
             _ => unreachable!("deep_path_in_place checked the last step"),
@@ -464,7 +464,7 @@ impl<W: Write> Interpreter<W> {
             }
             Expr::MemberAccess(ma) if !ma.is_module_access => {
                 let c = self.eval_expr(&ma.object)?;
-                (c, Value::String(ma.field.clone()))
+                (c, Value::String(ma.field.clone().into()))
             }
             _ => {
                 return Err(RuntimeError::Generic {
@@ -597,7 +597,7 @@ impl<W: Write> Interpreter<W> {
                 for (n, c) in chars.drain(..).enumerate() {
                     if n == i { out.push_str(&piece); } else { out.push(c); }
                 }
-                *st = out;
+                *st = out.into();
                 Ok(())
             }
             Value::NamedTuple(fields) => {
@@ -617,7 +617,7 @@ impl<W: Write> Interpreter<W> {
                     )),
                     Value::String(name) => {
                         // By hash (GLB-132): a key that is there keeps its place.
-                        if let Some(field_value) = zymbol_common::count::make_mut_dict(fields).get_mut(&name) {
+                        if let Some(field_value) = zymbol_common::count::make_mut_dict(fields).get_mut(name.as_str()) {
                             *field_value = new_value;
                             return Ok(());
                         }
@@ -634,7 +634,7 @@ impl<W: Write> Interpreter<W> {
                         //
                         // Without this, a JSON built piece by piece — the normal
                         // case — could not be built at all.
-                        zymbol_common::count::make_mut_dict(fields).insert(name.clone(), new_value);
+                        zymbol_common::count::make_mut_dict(fields).insert(name.to_string(), new_value);
                         Ok(())
                     }
                     // Any other kind of index is the same mistake, told in the
@@ -670,7 +670,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(arr) => arr.len(),
             Value::Tuple(tup) => tup.len(),
             Value::NamedTuple(fields) => fields.len(),
-            Value::String(s) => zymbol_common::text::char_len(s),
+            Value::String(s) => s.char_len(),
             _ => {
                 return Err(RuntimeError::kinded(
                     "Type",
@@ -809,10 +809,10 @@ impl<W: Write> Interpreter<W> {
                 // Positions `lo_pos` down to `hi_pos`: the range read backwards,
                 // borrowed — never the whole text copied to cut it (GLB-130).
                 Value::String(st) => Ok(Value::String(
-                    zymbol_common::text::char_range(&st, (hi_pos - 1) as usize, lo_pos as usize)
+                    st.char_range((hi_pos - 1) as usize, lo_pos as usize)
                         .chars()
                         .rev()
-                        .collect::<String>(),
+                        .collect::<String>().into(),
                 )),
                 Value::NamedTuple(fields) => Err(RuntimeError::kinded(
                     "Type",
@@ -862,9 +862,9 @@ impl<W: Write> Interpreter<W> {
             )),
             // The piece, borrowed and then copied — not the whole text into a
             // `Vec<char>` first, which made a slice cost what the text was
-            // long (GLB-130).
+            // long (GLB-130), and found from the nearest crumb (GLB-139).
             Value::String(s) => Ok(Value::String(
-                zymbol_common::text::char_range(&s, start as usize, end as usize).to_string(),
+                s.char_range(start as usize, end as usize).into(),
             )),
             _ => unreachable!(), // Already checked above
         }
@@ -921,7 +921,7 @@ impl<W: Write> Interpreter<W> {
             Value::Tuple(tup) => Some(tup.as_ref().clone()),
             Value::String(s) => Some(s.chars().map(Value::Char).collect()),
             Value::NamedTuple(fields) => {
-                Some(fields.iter().map(|(k, _)| Value::String(k.clone())).collect())
+                Some(fields.iter().map(|(k, _)| Value::String(k.clone().into())).collect())
             }
             _ => None,
         }
@@ -1345,7 +1345,7 @@ impl<W: Write> Interpreter<W> {
                         op.span,
                     )),
                 };
-                Ok(Value::String(result))
+                Ok(Value::String(result.into()))
             }
             _ => Err(RuntimeError::kinded(
                 "Type",
@@ -1363,7 +1363,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(a) => a.len(),
             Value::Tuple(t) => t.len(),
             Value::NamedTuple(f) => f.len(),
-            Value::String(s) => s.chars().count(),
+            Value::String(s) => s.char_len(),
             _ => return Err(RuntimeError::kinded(
                 "Type",
                 format!("$-[..] requires an array, tuple, or string, got {}", collection.type_label()),
@@ -1592,7 +1592,7 @@ fn deep_path_in_place(col: &Value, inner: &[Value], last: &Value) -> bool {
                 Some(i) => &tup[i],
                 None => return false,
             },
-            (Value::NamedTuple(fields), Value::String(key)) => match fields.get(key) {
+            (Value::NamedTuple(fields), Value::String(key)) => match fields.get(key.as_str()) {
                 Some(v) => v,
                 None => return false,
             },
@@ -1654,7 +1654,7 @@ fn deep_update_value(
 /// 1-based position on anything else.
 fn get_at_step(col: &Value, step: &Value, span: zymbol_span::Span) -> Result<Value> {
     if let (Value::NamedTuple(fields), Value::String(key)) = (col, step) {
-        return match fields.get(key) {
+        return match fields.get(key.as_str()) {
             Some(v) => Ok(v.clone()),
             None => {
                 let available: Vec<String> = fields.keys().cloned().collect();
@@ -1690,9 +1690,9 @@ fn set_at_step(col: Value, step: &Value, new_val: Value, span: zymbol_span::Span
     if let (Value::NamedTuple(_), Value::String(key)) = (&col, step) {
         let Value::NamedTuple(mut fields) = col else { unreachable!() };
         let m = zymbol_common::count::make_mut_dict(&mut fields);
-        match m.get_mut(key) {
+        match m.get_mut(key.as_str()) {
             Some(f) => *f = new_val,
-            None => { m.insert(key.clone(), new_val); }
+            None => { m.insert(key.to_string(), new_val); }
         }
         return Ok(Value::NamedTuple(fields));
     }

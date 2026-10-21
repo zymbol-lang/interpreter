@@ -45,7 +45,7 @@ fn parse_headers(arg: Option<Value>, fname: &str, span: Span) -> Result<Vec<(Str
             for item in crate::own_elements(items) {
                 match item {
                     Value::Tuple(pair) if pair.len() == 2 => match (&pair[0], &pair[1]) {
-                        (Value::String(k), Value::String(v)) => out.push((k.clone(), v.clone())),
+                        (Value::String(k), Value::String(v)) => out.push((k.to_string(), v.to_string())),
                         _ => return Err(bad()),
                     },
                     _ => return Err(bad()),
@@ -63,7 +63,7 @@ fn response_to_value(
 ) -> Value {
     match resp {
         Ok(mut resp) => match resp.body_mut().read_to_string() {
-            Ok(body) => Value::String(body),
+            Ok(body) => Value::String(body.into()),
             Err(e) => net_error(e.to_string()),
         },
         Err(e) => net_error(e.to_string()),
@@ -81,7 +81,7 @@ fn net_get(args: Vec<Value>, span: Span) -> Result<Value> {
         }),
     };
     let headers = parse_headers(it.next(), "net::get", span)?;
-    let mut req = ureq::get(&url);
+    let mut req = ureq::get(url.as_str());
     for (k, v) in &headers {
         req = req.header(k, v);
     }
@@ -94,7 +94,7 @@ fn net_post(args: Vec<Value>, span: Span) -> Result<Value> {
     match (it.next(), it.next()) {
         (Some(Value::String(url)), Some(Value::String(body))) => {
             let headers = parse_headers(it.next(), "net::post", span)?;
-            let mut req = ureq::post(&url).header("Content-Type", "text/plain");
+            let mut req = ureq::post(url.as_str()).header("Content-Type", "text/plain");
             for (k, v) in &headers {
                 req = req.header(k, v);
             }
@@ -113,7 +113,7 @@ fn net_post_json(args: Vec<Value>, span: Span) -> Result<Value> {
     match (it.next(), it.next()) {
         (Some(Value::String(url)), Some(Value::String(body))) => {
             let headers = parse_headers(it.next(), "net::post_json", span)?;
-            let mut req = ureq::post(&url).header("Content-Type", "application/json");
+            let mut req = ureq::post(url.as_str()).header("Content-Type", "application/json");
             for (k, v) in &headers {
                 req = req.header(k, v);
             }
@@ -129,7 +129,7 @@ fn net_post_json(args: Vec<Value>, span: Span) -> Result<Value> {
 /// net::head("url") -> Bool  (#1 if reachable, #0 on error)
 fn net_head(args: Vec<Value>, span: Span) -> Result<Value> {
     match args.into_iter().next() {
-        Some(Value::String(url)) => Ok(Value::Bool(ureq::head(&url).call().is_ok())),
+        Some(Value::String(url)) => Ok(Value::Bool(ureq::head(url.as_str()).call().is_ok())),
         _ => Err(RuntimeError::Generic {
             message: "net::head: expected String url".into(),
             span,

@@ -58,7 +58,7 @@ impl<W: Write> Interpreter<W> {
             // reporting a failure and crashing are two things, and GLB-017 I
             // decided the second.
             return match runner(&file_path, &execute.args) {
-                Ok((printed, 0)) => Ok(Value::String(printed)),
+                Ok((printed, 0)) => Ok(Value::String(printed.into())),
                 Ok((printed, code)) => Ok(Value::error(crate::ErrorValue::new(
                     "IO",
                     zymbol_common::shell::exit_failure_message(Some(code), &printed),
@@ -125,7 +125,7 @@ impl<W: Write> Interpreter<W> {
             // Convert Value array to String array for set_cli_args
             let args_strings: Vec<String> = cli_args.iter()
                 .filter_map(|v| match v {
-                    Value::String(s) => Some(s.clone()),
+                    Value::String(s) => Some(s.to_string()),
                     _ => None,
                 })
                 .collect();
@@ -150,7 +150,7 @@ impl<W: Write> Interpreter<W> {
         // Convert captured output to string
         let output_str = String::from_utf8_lossy(&buffer).to_string();
 
-        Ok(Value::String(output_str))
+        Ok(Value::String(output_str.into()))
     }
 
     /// Evaluate bash execute expression: <\ command \>
@@ -209,12 +209,12 @@ impl<W: Write> Interpreter<W> {
         // Strip trailing newline (consistent with shell command substitution $(...) behavior)
         let result = result.trim_end_matches('\n').to_string();
 
-        Ok(Value::String(result))
+        Ok(Value::String(result.into()))
     }
 
     fn value_to_bash_str(value: &Value) -> Result<String> {
         match value {
-            Value::String(s) => Ok(s.clone()),
+            Value::String(s) => Ok(s.to_string()),
             Value::Int(n) => Ok(n.to_string()),
             Value::Float(f) => Ok(f.to_string()),
             Value::Bool(b) => Ok(if *b { "#1" } else { "#0" }.to_string()),

@@ -173,10 +173,10 @@ impl<W: Write> Interpreter<W> {
                 if (ident.hot || ident.pre_hot) && self.get_variable(&ident.name).is_none() {
                     let right_val = self.eval_expr(&binary.right)?;
                     let neutral = if binary.op == BinaryOp::Concat {
-                        Value::String(String::new())
+                        Value::String(String::new().into())
                     } else {
                         match &right_val {
-                            Value::String(_) => Value::String(String::new()),
+                            Value::String(_) => Value::String(String::new().into()),
                             Value::Float(_)  => Value::Float(0.0),
                             _                => Value::Int(0),
                         }

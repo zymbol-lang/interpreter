@@ -99,7 +99,7 @@ fn time_now(_args: Vec<Value>, _span: Span) -> Result<Value> {
 fn time_today(args: Vec<Value>, span: Span) -> Result<Value> {
     let zone = trailing_zone(&args, 0).map_err(|_| hard("today", "an optional zone String", span))?;
     Ok(match t::call_today(zone) {
-        Ok(s) => Value::String(s),
+        Ok(s) => Value::String(s.into()),
         Err(e) => soft(e),
     })
 }
@@ -145,7 +145,7 @@ fn time_format(args: Vec<Value>, span: Span) -> Result<Value> {
     let pattern = as_text(args.get(1)).ok_or_else(|| hard("format", expected, span))?;
     let zone = trailing_zone(&args, 2).map_err(|_| hard("format", expected, span))?;
     Ok(match t::call_format(epoch, pattern, zone) {
-        Ok(s) => Value::String(s),
+        Ok(s) => Value::String(s.into()),
         Err(e) => soft(e),
     })
 }
@@ -216,7 +216,7 @@ mod tests {
     }
 
     fn s(text: &str) -> Value {
-        Value::String(text.to_string())
+        Value::String(text.into())
     }
 
     #[test]

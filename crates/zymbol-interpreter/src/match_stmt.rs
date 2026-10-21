@@ -15,7 +15,7 @@ use std::io::Write;
 #[inline(always)]
 fn literal_to_value(lit: &Literal) -> Value {
     match lit {
-        Literal::String(s) | Literal::InterpolatedString(s) => Value::String(s.replace('\x01', "{").replace('\x02', "}")),
+        Literal::String(s) | Literal::InterpolatedString(s) => Value::String(s.replace('\x01', "{").replace('\x02', "}").into()),
         Literal::Int(n)    => Value::Int(*n),
         Literal::Float(f)  => Value::Float(*f),
         Literal::Char(c)   => Value::Char(*c),
@@ -51,7 +51,7 @@ impl<W: Write> Interpreter<W> {
                     let bound = case.pattern.bound_name();
                     if let (Some(name), Value::Error(e)) = (bound, &scrutinee_value) {
                         self.push_scope();
-                        self.set_variable(name, Value::String(e.message.clone()));
+                        self.set_variable(name, Value::String(e.message.clone().into()));
                     }
                     let outcome = self.eval_match_arm(case);
                     if bound.is_some() {
@@ -103,7 +103,7 @@ impl<W: Write> Interpreter<W> {
             Pattern::Literal(lit, _) => {
                 // Check if literal equals value
                 let pattern_value = match lit {
-                    Literal::String(s) | Literal::InterpolatedString(s) => Value::String(s.replace('\x01', "{").replace('\x02', "}")),
+                    Literal::String(s) | Literal::InterpolatedString(s) => Value::String(s.replace('\x01', "{").replace('\x02', "}").into()),
                     Literal::Int(n) => Value::Int(*n),
                     Literal::Float(f) => Value::Float(*f),
                     Literal::Char(c) => Value::Char(*c),

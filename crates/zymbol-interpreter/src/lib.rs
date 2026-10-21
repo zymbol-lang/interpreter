@@ -350,13 +350,17 @@ pub(crate) fn type_symbol_of(value: &Value) -> String {
 /// reaches the same place by a third route — it shares the JavaScript array and
 /// rebuilds it on write (`deepUpdateValue`).
 ///
-/// `String` is deliberately NOT behind an `Rc` here. The VM has `ZyStr` for it
-/// (7 bytes inline, `Rc<String>` above that), which is unsafe code earning its
-/// keep in a bytecode loop; a string clone is one allocation, not one per
-/// element, so the tree-walker pays a bounded price and keeps the simple type.
+/// `String` holds a `Text` (`zymbol_common::text`): shared behind an `Rc`, with
+/// its character count and a crumb every 64 characters. It was a plain `String`,
+/// on the argument that a clone is one allocation and not one per element — but
+/// a clone is the whole text, and reading a variable cloned it: a loop of `s$#`
+/// moved 128 MB where the VM moved 2.6 (ZYTW-016), and a loop of `s[i]` over a
+/// text that is not ASCII walked it from the start each time (GLB-139). Both
+/// corrected on 2026-10-21, by the author's decision; the VM's `ZyStr` is the
+/// same model with an inline form and unsafe code this engine does not need.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    String(String),
+    String(zymbol_common::text::Text),
     Int(i64),
     Float(f64),
     Char(char),
@@ -556,7 +560,7 @@ impl Value {
             }
         }
         match self {
-            Value::String(s) => s.clone(),
+            Value::String(s) => s.to_string(),
             Value::Int(n) => numeral_mode::to_numeral_int(*n, block_base),
             Value::Float(f) => numeral_mode::to_numeral_float(*f, block_base),
             Value::Char(c) => c.to_string(),
@@ -1668,7 +1672,7 @@ impl<W: Write> Interpreter<W> {
     pub fn set_cli_args(&mut self, args: Vec<String>) {
         // Convert strings to Value::String
         let args_values: Vec<Value> = args.into_iter()
-            .map(Value::String)
+            .map(|a| Value::String(a.into()))
             .collect();
         self.cli_args = Some(args_values);
     }
@@ -2619,7 +2623,7 @@ mod error_handling_tests {
         let int = Value::Int(42);
         assert!(!int.is_error());
 
-        let string = Value::String("hello".to_string());
+        let string = Value::String("hello".into());
         assert!(!string.is_error());
     }
 
@@ -3146,11 +3150,13 @@ mod error_handling_tests {
     /// Every value pays the size of the largest variant. A `FunctionValue`
     /// inline made it 120 bytes: an array of two million integers took 236 MiB
     /// where the VM's took 38, and removing the first element moved seven times
-    /// the memory (ZYTW-019). Boxed, the largest is a `String`, and the tag
-    /// lives in a niche of its capacity: a value is 24 bytes.
+    /// the memory (ZYTW-019). Boxed, the largest was a `String`, 24 bytes. The
+    /// text is a shared `Text` since 2026-10-21 (ZYTW-016, GLB-139): every
+    /// variant is now at most one word beside the tag, and a value is 16 bytes,
+    /// as the VM's is.
     #[test]
-    fn a_value_is_as_large_as_a_string() {
-        assert_eq!(std::mem::size_of::<Value>(), std::mem::size_of::<String>());
-        assert_eq!(std::mem::size_of::<Value>(), 24);
+    fn a_value_is_as_large_as_a_pointer_and_its_tag() {
+        assert_eq!(std::mem::size_of::<zymbol_common::text::Text>(), std::mem::size_of::<usize>());
+        assert_eq!(std::mem::size_of::<Value>(), 16);
     }
 }

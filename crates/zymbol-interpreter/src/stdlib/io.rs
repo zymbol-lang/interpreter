@@ -24,7 +24,7 @@ use zymbol_span::Span;
 fn io_read(args: Vec<Value>, span: Span) -> Result<Value> {
     match args.into_iter().next() {
         Some(Value::String(path)) => match std::fs::read_to_string(&path) {
-            Ok(content) => Ok(Value::String(content)),
+            Ok(content) => Ok(Value::String(content.into())),
             Err(e) => Ok(Value::error(ErrorValue::io(e.to_string()))),
         },
         _ => Err(RuntimeError::Generic {
@@ -112,7 +112,7 @@ fn io_list(args: Vec<Value>, span: Span) -> Result<Value> {
             Ok(entries) => {
                 let mut names = Vec::new();
                 for entry in entries.flatten() {
-                    names.push(Value::String(entry.file_name().to_string_lossy().into_owned()));
+                    names.push(Value::String(entry.file_name().to_string_lossy().into_owned().into()));
                 }
                 Ok(Value::array(names))
             }

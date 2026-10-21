@@ -70,9 +70,9 @@ struct Heap {
 
 const UNKNOWN: usize = usize::MAX;
 
-/// One crumb every this many characters: a byte offset (8 bytes) per 64
-/// characters, and a walk of at most 63 to reach any position.
-const CRUMB_EVERY: usize = 64;
+// One crumb every `zymbol_common::text::CRUMB_EVERY` characters: the
+// constant, the crumbs and the walk from one are shared with the
+// tree-walker's `Text`.
 
 impl Heap {
     #[inline]
@@ -188,20 +188,16 @@ impl ZyStr {
             return i;
         }
         let s = self.as_str();
-        let (from, skip) = if self.is_inline() {
-            (0, i)
-        } else {
-            // SAFETY: pointer from Rc::into_raw, alive while self is alive.
-            let heap = unsafe { &*self.heap_ptr() };
-            let crumbs = heap.crumbs.get_or_init(|| {
-                Box::new(heap.s.char_indices().step_by(CRUMB_EVERY).map(|(b, _)| b).collect())
-            });
-            (crumbs[i / CRUMB_EVERY], i % CRUMB_EVERY)
-        };
-        match s[from..].char_indices().nth(skip) {
-            Some((b, _)) => from + b,
-            None => s.len(),
+        if self.is_inline() {
+            return match s.char_indices().nth(i) {
+                Some((b, _)) => b,
+                None => s.len(),
+            };
         }
+        // SAFETY: pointer from Rc::into_raw, alive while self is alive.
+        let heap = unsafe { &*self.heap_ptr() };
+        let crumbs = heap.crumbs.get_or_init(|| Box::new(zymbol_common::text::crumbs_of(&heap.s)));
+        zymbol_common::text::byte_from_crumb(s, crumbs, i)
     }
 
     /// Whether the two hold the same heap buffer — `Rc::ptr_eq` for a string.
