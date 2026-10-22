@@ -25,6 +25,7 @@
 //! should eventually grow an `include = ["data/**/*.json"]` glob list for exactly that case.
 
 mod closure;
+mod effects;
 mod error;
 mod manifest;
 mod path_safety;
@@ -32,6 +33,7 @@ mod reader;
 mod writer;
 
 pub use closure::{compute_closure, ClosureResult, PackageWarning, PackagedFile, WarningKind};
+pub use effects::{effects_of, parse_effects, Effect, EffectReport, EffectUse};
 pub use error::PackageError;
 pub use manifest::{EngineMode, Manifest, PackageMeta, ScriptEntry};
 pub use reader::{open_zyp, Package};

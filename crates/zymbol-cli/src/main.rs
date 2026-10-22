@@ -19,7 +19,8 @@ use zymbol_span::SourceMap;
 use zymbol_standalone::StandaloneBuilder;
 use zymbol_vm::VM;
 use zymbol_package::{
-    compute_closure, open_zyp, write_zyp, EngineMode, Manifest, PackageError, PackageMeta, ScriptEntry,
+    compute_closure, effects_of, open_zyp, parse_effects, write_zyp, Effect, EffectReport, EngineMode,
+    Manifest, PackageError, PackageMeta, ScriptEntry,
 };
 
 #[derive(Parser)]
@@ -77,6 +78,15 @@ enum Commands {
         #[arg(long)]
         count: bool,
 
+        /// Refuse the program, before any of it runs, if anything it can reach uses one of
+        /// these effects: io, net, db, time, random (the `std/` modules), shell (`<\ \>`),
+        /// sub (`</ />`), stdin (`<<`, `<<|`) and argv (`><`). Comma-separated, or the flag
+        /// repeated. Every file the entry imports or runs is read first, so an effect hidden
+        /// in a module or a sub-script is refused too; a file that cannot be read is refused,
+        /// since nothing can say what it would do. See `zymbol check --effects`.
+        #[arg(long, value_name = "EFFECTS")]
+        deny: Vec<String>,
+
         /// Arguments to pass to the script
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -130,6 +140,12 @@ enum Commands {
     Check {
         /// Path to the .z file to check
         file: PathBuf,
+
+        /// Also list the program's effect surface: every use of io, net, db, time, random,
+        /// shell, sub, stdin and argv in every file it can reach, with file and line —
+        /// what `zymbol run --deny` decides on.
+        #[arg(long)]
+        effects: bool,
     },
 
     /// Format Zymbol source code
@@ -233,15 +249,27 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { file, vm, tw, script, keep_temp, keys, count, args } => {
+        Commands::Run { file, vm, tw, script, keep_temp, keys, count, deny, args } => {
             COUNT.store(count, std::sync::atomic::Ordering::Relaxed);
-            on_program_stack(move || run_file(file, args, vm, tw, script, keep_temp, keys))
+            let deny = match parse_effects(&deny) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("error: --deny: {}", e);
+                    std::process::exit(2);
+                }
+            };
+            on_program_stack(move || run_file(file, args, vm, tw, script, keep_temp, keys, deny))
         }
         Commands::Build { file, output, release } => build_file(file, output, release),
         Commands::Package { path, output, scripts, name, version, dry_run } => {
             package_cmd(path, output, scripts, name, version, dry_run)
         }
-        Commands::Check { file } => check_file(file),
+        Commands::Check { file, effects } => {
+            if effects {
+                print_effects(&file)?;
+            }
+            check_file(file)
+        }
         Commands::Fmt { file, write, check, indent } => format_file(file, write, check, indent),
         // On the program's stack too: the REPL runs the tree-walker, whose
         // 10 000 calls the depth limit allows do not fit in 8 MiB (GLB-133).
@@ -323,6 +351,7 @@ fn run_file(
     script: Option<String>,
     keep_temp: bool,
     keys_file: Option<PathBuf>,
+    deny: Vec<Effect>,
 ) -> Result<()> {
     let keys = match keys_file {
         None => None,
@@ -339,7 +368,11 @@ fn run_file(
         }
     };
     if is_zyp(&path) {
-        return run_zyp(path, args, use_vm, use_tw, script, keep_temp, keys);
+        return run_zyp(path, args, use_vm, use_tw, script, keep_temp, keys, deny);
+    }
+    // Named from where the user is, as they typed the entry; outside it, in full.
+    if let Some(code) = refuse_denied(&path, &deny, Path::new("."), None)? {
+        std::process::exit(code);
     }
     // The VM is the engine unless the tree-walker is asked for by name. `--vm`
     // decides nothing for a plain file: `--tw` conflicts with it, so it can only
@@ -373,6 +406,7 @@ fn run_zyp(
     script: Option<String>,
     keep_temp: bool,
     keys: Option<zymbol_common::vscreen::KeyScript>,
+    deny: Vec<Effect>,
 ) -> Result<()> {
     // No `.with_context("failed to open …")` here: every PackageError already names the
     // package and says what was wrong with it, so adding a wrapper only stacks a second
@@ -411,6 +445,14 @@ fn run_zyp(
     let entry_abs = pkg.script_abs_path(temp.path(), &entry_name, &entry_path)?;
     let display_name = format!("{}!{}", path.display(), entry_path);
 
+    // Read from the extraction, before anything runs; named inside the package.
+    let shown = format!("{}!", path.display());
+    // `src/` is where a package keeps its tree, and not part of a file's name in it.
+    if let Some(code) = refuse_denied(&entry_abs, &deny, &temp.path().join("src"), Some(&shown))? {
+        drop(temp);
+        std::process::exit(code);
+    }
+
     let code = run_file_inner(&entry_abs, RunOpts { display_name: Some(display_name), args, use_vm, keys })?;
 
     if keep_temp {
@@ -428,6 +470,75 @@ fn run_zyp(
     }
 
     std::process::exit(code);
+}
+
+/// A file of the surface, as the user knows it: relative to `base` (the current directory,
+/// or a package's extracted tree) and, for a package, after its name; in full when it is
+/// not under `base`.
+fn shown_path(file: &Path, base: &Path, prefix: Option<&str>) -> String {
+    let base_abs = std::path::absolute(base).unwrap_or_else(|_| base.to_path_buf());
+    let rel = file
+        .strip_prefix(&base_abs)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| file.display().to_string());
+    format!("{}{}", prefix.unwrap_or(""), rel)
+}
+
+/// The surface, one use a line: effect, where, and how it is written.
+fn effect_lines(report: &EffectReport, only: Option<&[Effect]>, base: &Path, prefix: Option<&str>) -> Vec<String> {
+    let uses: Vec<_> = report.uses.iter().filter(|u| only.is_none_or(|d| d.contains(&u.effect))).collect();
+    let width = uses.iter().map(|u| shown_path(&u.file, base, prefix).len() + 1 + u.line.to_string().len()).max().unwrap_or(0);
+    uses.iter()
+        .map(|u| {
+            let at = format!("{}:{}", shown_path(&u.file, base, prefix), u.line);
+            format!("  {:<7} {:<width$}  {}", u.effect.name(), at, u.effect.mark())
+        })
+        .collect()
+}
+
+/// `zymbol run --deny`: the program's surface read before anything runs, and the
+/// program refused — `Some(exit code)` — when it uses a denied effect, or when part of
+/// it cannot be read (G1, decided 2026-10-21).
+fn refuse_denied(entry: &Path, deny: &[Effect], base: &Path, prefix: Option<&str>) -> Result<Option<i32>> {
+    if deny.is_empty() {
+        return Ok(None);
+    }
+    let report = effects_of(entry).with_context(|| format!("--deny: cannot read {}", entry.display()))?;
+    let names = deny.iter().map(|e| e.name()).collect::<Vec<_>>().join(",");
+    if report.denied(deny).next().is_some() {
+        eprintln!("error: --deny {} refuses this program — nothing ran", names);
+        for line in effect_lines(&report, Some(deny), base, prefix) {
+            eprintln!("{}", line);
+        }
+        return Ok(Some(1));
+    }
+    if !report.unverified.is_empty() {
+        eprintln!("error: --deny {} cannot verify this program — nothing ran", names);
+        for (file, why) in &report.unverified {
+            eprintln!("  {}  {}", shown_path(file, base, prefix), why);
+        }
+        return Ok(Some(1));
+    }
+    Ok(None)
+}
+
+/// `zymbol check --effects`: the surface `--deny` decides on.
+fn print_effects(path: &Path) -> Result<()> {
+    let report = effects_of(path).with_context(|| format!("failed to read file: {}", path.display()))?;
+    let base = Path::new(".");
+    let name = path.display().to_string();
+    if report.uses.is_empty() && report.unverified.is_empty() {
+        println!("effects of {}: none", name);
+    } else {
+        println!("effects of {}:", name);
+        for line in effect_lines(&report, None, base, None) {
+            println!("{}", line);
+        }
+        for (file, why) in &report.unverified {
+            println!("  ?       {}  not verified — {}", shown_path(file, base, None), why);
+        }
+    }
+    Ok(())
 }
 
 /// `</ />` in the register VM shells out to `zymbol run <path>` in a child process (rather
