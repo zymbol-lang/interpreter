@@ -362,8 +362,10 @@ are still open: `AGENTIC.md`.
 
 Not guaranteed — do not assume these:
 
-- **No capability enforcement and no shell quoting.** `<\ "{cmd}" \>`
-  interpolates a runtime string straight into `sh -c`.
+- **No shell quoting, and capabilities only when asked.** `<\ "{cmd}" \>`
+  interpolates a runtime string straight into `sh -c`. Nothing restricts a program
+  unless it is run with `zymbol run --deny net,shell,…`, which refuses it before any of it
+  runs (`zymbol check --effects` lists what it uses).
 - **No termination bound.** A tail recursion and `@ { }` run until something
   outside kills them. **A recursion that is not a tail call stops at 10 000 active calls**
   with a `##Depth` error that `!?` catches (v0.0.11).

@@ -123,6 +123,16 @@ Auditing what a program may do is a `grep` over a closed list, not a
 flow-sensitive analysis. Combined with §3, the audit is complete: no gate can be
 reached through a name computed at runtime.
 
+Since 2026-10-21 (G1) the audit is a command and the list can be enforced. `zymbol check
+--effects file.zy` prints every use of a gate in every file the program can reach, with
+file and line. `zymbol run --deny net,shell file.zy` reads that surface **before running
+anything** and refuses the program if it uses a denied gate — in the entry, in a module it
+imports or in a sub-script it runs — and also if part of it cannot be read, since nothing
+can say what an unread file would do. The names are `io`, `net`, `db`, `time`, `random`,
+`shell` (`<\ \>`), `sub` (`</ />`), `stdin` (`<<`, `<<|`) and `argv` (`><`). Without
+`--deny` nothing is restricted. It is static because §3 makes it possible: one check in
+the CLI serves both Rust engines; the browser engine has no command line to ask it from.
+
 ## 5. Memory isolation
 
 > Measures: **MEM-2, MEM-3, MEM-6, COL-6.**
@@ -281,18 +291,18 @@ real working directory.
 
 ## 12. What the language does not guarantee
 
-Six gaps **open** as of 2026-10-11 (`G1`–`G5` and `G8`), one closed (`G10`), one
-withdrawn and two superseded by premises. `G1`, `G2` and `G3` are not implementation gaps at all — they are
-design decisions nobody has taken, and they are the reason `AGT-4` claims
-auditability and not enforceability: none is decided, and none should be
-read as accepted. Each is a decision — implement, deprecate, or dismiss with a
+Five gaps **open** (`G2`–`G5` and `G8`), two closed (`G10` on 2026-10-11, `G1` on
+2026-10-21), one withdrawn and two superseded by premises. `G2` and `G3` are not implementation gaps at all — they are
+design decisions nobody has taken: none is decided, and none should be
+read as accepted. `G1` was the third, and the reason `AGT-4` claimed auditability and not
+enforceability; it was decided and implemented on 2026-10-21 (`--deny`, §4). Each is a decision — implement, deprecate, or dismiss with a
 written reason — and a dismissal with its reason is worth as much here as an
 implementation, because a rule whose reason has been deleted is
 indistinguishable from one nobody can justify.
 
 | # | Gap | Status |
 |---|---|---|
-| G1 | **No capability control.** `std/net`, `std/io`, `std/db` and `<\ \>` are unrestricted. `zymbol run` offers no `--deny-net`/`--deny-io`, and `zyp.toml` does not declare required effects. §4 makes the surface *auditable*; nothing makes it *enforceable*. *Re-measured 2026-10-11 on 0.0.10, all three engines:* `io::write`, `io::read`, `io::delete`, `<\ "echo …" \>` and `net::head` all run unrestricted; `zymbol run --help` has no capability flag; a `zyp.toml` has `name`, `version`, `engine`, `mode`, `desc` and its `[[script]]` entries, and no effects. | open |
+| G1 | **No capability control.** `std/net`, `std/io`, `std/db` and `<\ \>` are unrestricted. `zymbol run` offers no `--deny-net`/`--deny-io`, and `zyp.toml` does not declare required effects. §4 makes the surface *auditable*; nothing makes it *enforceable*. *Re-measured 2026-10-11 on 0.0.10, all three engines:* `io::write`, `io::read`, `io::delete`, `<\ "echo …" \>` and `net::head` all run unrestricted; `zymbol run --help` has no capability flag; a `zyp.toml` has `name`, `version`, `engine`, `mode`, `desc` and its `[[script]]` entries, and no effects. **Closed 2026-10-21** — decided by the author, option A of four (B: also declare effects in `zyp.toml`; C: deny by default; D: dismiss, keeping AGT-4 at "auditable"), and implemented the same day: `zymbol run --deny <effects>` refuses a program **before running any of it** when anything it can reach uses a denied gate, naming file and line, or when part of it cannot be read; `zymbol check --effects` lists the surface (§4). Measured on a program whose network use is in an imported module and whose shell use is in a sub-script, both engines and a `.zyp`: refused with exit 1, and the file its first line writes is never written. Held by `crates/zymbol-cli/tests/cli_deny.rs` (7 tests, run by the Gate's `cargo test`) and the `effects` tests of `zymbol-package`. Not covered: the browser engine, which has no command line; and declaring effects in a package, option B, left for later. | closed |
 | G2 | **Shell injection.** `<\ "{cmd}" \>` interpolates without quoting or escaping: a string built at runtime becomes a command. *Re-measured 2026-10-11 over eight kinds of value* interpolated into `<\ "echo [{v}]" \>` (`zytw` and `zyvm` agree on all; `zyjs` refuses every shell command): a `String` holding `$(echo PWNED)` is executed, and a `Char` `;` splits the command (`##IO(exit 127: …)`); an `Int`, a `Float`, a Bool (`#1`) and a `String` with a space are inert; an Array, a Tuple and a Dictionary reach the shell as `[1, 2]`, `(1, 2)` and `#(a: 1)` — a glob or a syntax error. New since 0.0.9: a failing command is a soft `##IO` that carries its exit status, so the *breakage* is loud; the *injection* is not. | open |
 | G3 | **No termination bound** — in the Rust engines. An infinite loop (`@ { }`) and a tail recursion (`f(n) { <~ f(n + 1) }`) run until an external timeout. A non-tail recursion (`<~ 1 + f(n + 1)`) does not: since v0.0.11 the call that would make more than 10 000 calls active at once is a `##Depth` error, in the three engines, that `!?` catches (D7, GLB-133). Until then `zytw` aborted the process when its stack was gone (`fatal runtime error: stack overflow`) and `zyvm` grew its value stack until an allocation failed. A generated program that does not terminate hangs, or kills, whatever runs it. **The browser engine does have a budget, and this row said it did not:** as the playground runs it, `@ { }` stops after 100 000 iterations and a recursion after 2 000 000 steps, each with a `Runtime error`; `web/tests/run_one.mjs` lifts both limits so that `zyq` grades it on the same programs as the Rust engines, which is why a probe taken through it saw none. *Re-measured 2026-10-11.* | open |
 | G4 | **Use-after-destruction is runtime-only.** `zymbol check` reports "No errors or warnings" on a program that `\`-destroys a variable and then reads it, at file level and inside a function alike. | open |
@@ -355,13 +365,15 @@ Nothing in the corpus writes `? arr {`, so `zyq consensus` never asked.
 
 ```bash
 zymbol check file.zy      # parse + semantics, follows imports, reports where from
+zymbol check --effects file.zy   # every gate it can reach, with file and line (§4)
+zymbol run --deny net,shell file.zy   # refused before running if it reaches one
 zymbol fmt file.zy --write
 zymbol run file.zy        # register VM (the default)
 zymbol run --tw file.zy   # tree-walker — run both; a difference is a bug in one of them
 cd zyquality && ./zyq suite    # the whole gate, one verdict
 ```
 
-Reviewing generated Zymbol, in order: the `<#` lines say what can run (§3); a
-`grep` over the gate list says what it can touch (§4); the `<~` marks say what
+Reviewing generated Zymbol, in order: the `<#` lines say what can run (§3);
+`check --effects` says what it can touch, and `--deny` holds it to that (§4); the `<~` marks say what
 it changes (§6); `check` says whether it is well-formed. Nothing in §12 is
 covered by any of those four steps.
