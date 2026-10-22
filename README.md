@@ -166,6 +166,12 @@ zymbol repl
 # Check syntax without running
 zymbol check program.zy
 
+# What it can touch: io, net, db, time, random, shell, sub, stdin, argv — file and line
+zymbol check --effects program.zy
+
+# Refuse it, before anything runs, if anything it reaches uses a denied effect
+zymbol run --deny net,shell program.zy
+
 # Format code
 zymbol fmt program.zy --write
 
