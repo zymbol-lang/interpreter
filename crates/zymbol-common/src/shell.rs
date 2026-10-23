@@ -97,6 +97,65 @@ pub fn shell_command(script: &str) -> Result<Command, ShellNotFound> {
     Ok(cmd)
 }
 
+/// Set by `zymbol run --timeout` (G3): every command `<\ \>` starts from then on
+/// is registered while it runs, in a process group of its own on Unix, so that
+/// the stopper can end it and whatever it started — a pipeline, a `sleep` —
+/// instead of leaving them orphaned when the program is stopped.
+static TRACKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Set by the stopper before it ends the running commands: the program thread a
+/// killed command would release must not go on to its next statement — it
+/// printed `##IO(terminated by a signal)` after the stop notice.
+static STOPPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static RUNNING: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+/// Register the commands started from now on (`--timeout`).
+pub fn track_commands() {
+    TRACKED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Run a command made by [`shell_command`] and collect its output — what both
+/// engines do for `<\ \>`. As `Command::output`, stdin is closed; when the
+/// commands are tracked it is also registered for [`stop_running_commands`].
+pub fn run_command(cmd: &mut Command) -> std::io::Result<std::process::Output> {
+    if !TRACKED.load(std::sync::atomic::Ordering::SeqCst) {
+        return cmd.output();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    use std::process::Stdio;
+    let child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let id = child.id();
+    if let Ok(mut r) = RUNNING.lock() {
+        r.push(id);
+    }
+    let out = child.wait_with_output();
+    if STOPPING.load(std::sync::atomic::Ordering::SeqCst) {
+        // The program is being stopped: wait here for the process to end.
+        loop {
+            std::thread::park();
+        }
+    }
+    if let Ok(mut r) = RUNNING.lock() {
+        r.retain(|&p| p != id);
+    }
+    out
+}
+
+/// End every registered command that is still running, and what it started.
+pub fn stop_running_commands() {
+    STOPPING.store(true, std::sync::atomic::Ordering::SeqCst);
+    let ids: Vec<u32> = RUNNING.lock().map(|r| r.clone()).unwrap_or_default();
+    for id in ids {
+        #[cfg(unix)]
+        let _ = Command::new("kill").arg("-KILL").arg(format!("-{id}")).status();
+        #[cfg(windows)]
+        let _ = Command::new("taskkill").args(["/T", "/F", "/PID", &id.to_string()]).status();
+    }
+}
+
 /// `text` as exactly one word of the shell's language: what a value placed in
 /// `<\ … \>` becomes (`AGENTIC.md` G2, decided by the author on 2026-10-21). The
 /// text written in the command is the command; a value is data, and it was pasted in

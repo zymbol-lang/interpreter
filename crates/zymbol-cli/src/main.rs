@@ -87,6 +87,14 @@ enum Commands {
         #[arg(long, value_name = "EFFECTS")]
         deny: Vec<String>,
 
+        /// Stop the program after this many seconds of wall-clock time — a loop, a
+        /// recursion, a wait or a blocked command alike — with exit status 124, as
+        /// coreutils' `timeout` does. Commands `<\ \>` started and still running are
+        /// ended with it. The program cannot catch it: the limit belongs to whoever
+        /// runs it. Without it nothing is limited.
+        #[arg(long, value_name = "SECONDS")]
+        timeout: Option<f64>,
+
         /// Arguments to pass to the script
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -249,8 +257,15 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { file, vm, tw, script, keep_temp, keys, count, deny, args } => {
+        Commands::Run { file, vm, tw, script, keep_temp, keys, count, deny, timeout, args } => {
             COUNT.store(count, std::sync::atomic::Ordering::Relaxed);
+            if let Some(secs) = timeout {
+                if !(secs.is_finite() && secs > 0.0) {
+                    eprintln!("error: --timeout: {} is not a number of seconds greater than 0", secs);
+                    std::process::exit(2);
+                }
+                arm_timeout(secs);
+            }
             let deny = match parse_effects(&deny) {
                 Ok(d) => d,
                 Err(e) => {
@@ -435,6 +450,9 @@ fn run_zyp(
         .with_context(|| "failed to create a temp directory to extract the package into")?;
     pkg.extract_to(temp.path())
         .with_context(|| format!("failed to extract {}", path.display()))?;
+    if let Ok(mut e) = EXTRACTION.lock() {
+        *e = Some(temp.path().to_path_buf());
+    }
 
     if use_vm {
         // Only needed for the VM path: </ /> compiles to a shelled-out `zymbol run <path>`
@@ -470,6 +488,35 @@ fn run_zyp(
     }
 
     std::process::exit(code);
+}
+
+/// A `.zyp`'s extraction directory, for `--timeout` to remove: the process exits
+/// from the stopper's thread, and no destructor runs.
+static EXTRACTION: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// `zymbol run --timeout` (G3, decided by the author on 2026-10-22): a thread
+/// that stops the program after `secs` of wall-clock time. It ends the commands
+/// `<\ \>` left running, puts the terminal back if a `>>|` block is open, removes
+/// a package's extraction, and exits with 124.
+fn arm_timeout(secs: f64) {
+    zymbol_common::shell::track_commands();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs_f64(secs));
+        zymbol_common::shell::stop_running_commands();
+        if zymbol_common::screen::is_open() {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::terminal::LeaveAlternateScreen,
+                crossterm::cursor::Show
+            );
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+        if let Ok(Some(dir)) = EXTRACTION.lock().map(|d| d.clone()) {
+            let _ = fs::remove_dir_all(dir);
+        }
+        eprintln!("error: stopped after {} s (--timeout) — the program had not finished", secs);
+        std::process::exit(124);
+    });
 }
 
 /// A file of the surface, as the user knows it: relative to `base` (the current directory,

@@ -28,6 +28,8 @@ zymbol-repl = { workspace = true, optional = true }
 zymbol-package.workspace = true
 zymbol-lsp = { path = "../zymbol-lsp", optional = true }
 clap.workspace = true
+# To put the terminal back when --timeout stops a program inside `>>|` (G3).
+crossterm.workspace = true
 anyhow.workspace = true
 tempfile.workspace = true
 tokio = { version = "1", features = ["full"], optional = true }

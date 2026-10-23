@@ -30,6 +30,7 @@ impl Drop for TuiGuard {
             crossterm::terminal::LeaveAlternateScreen,
             crossterm::cursor::Show);
         let _ = crossterm::terminal::disable_raw_mode();
+        zymbol_common::screen::closed();
     }
 }
 
@@ -170,6 +171,7 @@ impl Terminal for NativeTerminal {
             return Err(format!("failed to enter alternate screen: {}", e));
         }
         self.tui_stack.push(TuiGuard);
+        zymbol_common::screen::opened();
         Ok(false)
     }
 

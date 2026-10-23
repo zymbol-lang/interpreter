@@ -703,7 +703,7 @@ fn shell_words(v: &Value, out: &mut Vec<String>) {
 fn run_in_shell(cmd: &str) -> Result<std::process::Output, VmError> {
     let mut shell =
         zymbol_common::shell::shell_command(cmd).map_err(|e| VmError::Generic(e.to_string()))?;
-    shell.output().map_err(|e| {
+    zymbol_common::shell::run_command(&mut shell).map_err(|e| {
         VmError::Generic(format!(
             "failed to run `{}`: {}",
             shell.get_program().to_string_lossy(),
