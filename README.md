@@ -172,6 +172,9 @@ zymbol check --effects program.zy
 # Refuse it, before anything runs, if anything it reaches uses a denied effect
 zymbol run --deny net,shell program.zy
 
+# Stop it after 10 seconds whatever it is doing (exit status 124)
+zymbol run --timeout 10 program.zy
+
 # Format code
 zymbol fmt program.zy --write
 
