@@ -367,9 +367,10 @@ Not guaranteed — do not assume these:
   (`zymbol check --effects` lists what it uses). In `<\ \>` the text you write is the
   command and every value is one quoted word (v0.0.11): never put quotes around a value
   yourself — `<\ "test -f " ruta \>`, not `<\ "test -f '" ruta "'" \>`.
-- **No termination bound.** A tail recursion and `@ { }` run until something
-  outside kills them. **A recursion that is not a tail call stops at 10 000 active calls**
-  with a `##Depth` error that `!?` catches (v0.0.11).
+- **No termination bound unless asked.** A tail recursion and `@ { }` run until
+  something stops them — `zymbol run --timeout 10` does, after 10 s of wall-clock time,
+  with status 124 that `!?` cannot catch. **A recursion that is not a tail call stops at
+  10 000 active calls** with a `##Depth` error that `!?` catches (v0.0.11).
 - **`check` does not catch everything it looks like it should**: use after `\`
   and a non-exhaustive `??` are runtime-only.
 
