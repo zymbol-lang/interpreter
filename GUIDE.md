@@ -5434,6 +5434,29 @@ result = <\ "echo 'scale=2; 355/113' | bc" \>
 > **Note**: Trailing `\n` is stripped automatically (consistent with shell `$(...)` substitution).
 > Internal newlines are preserved. Add `¶` explicitly when needed.
 
+**What you write is the command; a value is data** (v0.0.11). The text written in
+`<\ … \>` goes to the shell as it is — pipes, redirections, quotes and all. Every
+value placed in it, side by side or as `{name}`, reaches the shell as **exactly one
+word**, quoted: a space, a `'`, a `;` or a `$( )` inside it is text, not syntax.
+
+```zymbol
+v = "x; echo INYECTADO"
+>> <\ "echo [" v "]" \> ¶              // → [x; echo INYECTADO]
+nombre = "mi informe.txt"
+>> <\ "printf '%s|' " nombre \> ¶      // → mi informe.txt|
+>> <\ "printf '%s|' {nombre}" \> ¶     // → mi informe.txt|
+```
+
+So never put quotes around a value yourself: `<\ "test -f " ruta \>`, not
+`<\ "test -f '" ruta "'" \>` — the value already arrives quoted, and the quotes written
+around it would make a different word. Before v0.0.11 a value was pasted in as it was:
+`v` above ran a second command, `nombre` became two arguments, and a `'` in a value
+broke every command that quoted it by hand (`interpreter/AGENTIC.md`, G2). A value only
+the program builds is still data — to run a command assembled at run time, write the
+parts that are command in the literal. Through `cmd.exe` (Windows with no POSIX shell),
+a value holding `"`, `%` or a line break cannot be passed as one word and gives a soft
+`##IO` error instead of running.
+
 **A command that fails is an error value.** A status other than 0 gives a soft
 `##IO` error whose message starts with the status — `exit 3`, then `: ` and what
 the command said (its stderr, or its stdout when it wrote nothing to stderr). A
@@ -5455,16 +5478,18 @@ is not set, a `grep` that finds nothing — is tested with `$!` where it used to
 tested for `""`. Before v0.0.10 a failed command and one that printed nothing were
 the same empty string (GAP-GOL-011).
 
-A **collection** placed in the command becomes shell words: its elements joined
-with spaces, at any depth — not its display form, whose `(`, `[` and `#` the
-shell would read as syntax or as a comment. A **function** cannot be placed in a
-command at all, not even inside a collection:
+A **collection** placed in the command becomes shell words: one per element, at
+any depth, each quoted — not its display form, whose `(`, `[` and `#` the shell
+would read as syntax or as a comment. A **function** cannot be placed in a command
+at all, not even inside a collection:
 
 ```zymbol
 files = ["a.txt", "b.txt"]
 >> <\ "echo " files \> ¶        // → a.txt b.txt
 pair = (3, "x")
 >> <\ "echo " pair \> ¶         // → 3 x
+partes = ["uno dos", "tres"]
+>> <\ "printf '%s|' " partes \> ¶   // → uno dos|tres|
 ```
 
 ### Execute Script `</ file.zy />`
