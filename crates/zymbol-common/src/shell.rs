@@ -97,6 +97,50 @@ pub fn shell_command(script: &str) -> Result<Command, ShellNotFound> {
     Ok(cmd)
 }
 
+/// `text` as exactly one word of the shell's language: what a value placed in
+/// `<\ … \>` becomes (`AGENTIC.md` G2, decided by the author on 2026-10-21). The
+/// text written in the command is the command; a value is data, and it was pasted in
+/// as it was — `"x; echo INYECTADO"` ran a second command, a value with a space
+/// became two arguments, and the single quotes programs put around a value by hand
+/// broke on the first `'` inside it. Both engines build every value's words with
+/// this one function.
+///
+/// For `cmd.exe` a value holding `"`, `%` or a line break is refused rather than
+/// quoted: inside double quotes `cmd` still expands `%name%`, and there is no escape
+/// for `"` that every program it starts reads back the same way.
+pub fn quote_word(text: &str) -> Result<String, String> {
+    let kind = shell().map(|(_, kind)| kind).unwrap_or(ShellKind::Posix);
+    quote_word_for(text, kind)
+}
+
+/// [`quote_word`] for a given shell — the tests ask both without a Windows box.
+pub fn quote_word_for(text: &str, kind: ShellKind) -> Result<String, String> {
+    match kind {
+        ShellKind::Posix => {
+            // A word of only these bytes means the same quoted or not, and reads
+            // better in a process list. `=` is not one of them: `X=1` alone is an
+            // assignment, not a word.
+            let plain = !text.is_empty()
+                && text.bytes().all(|b| b.is_ascii_alphanumeric() || b"_./:@%+,-".contains(&b));
+            if plain {
+                Ok(text.to_string())
+            } else {
+                Ok(format!("'{}'", text.replace('\'', "'\\''")))
+            }
+        }
+        ShellKind::WindowsCmd => {
+            if text.contains(['"', '%', '\n', '\r']) {
+                Err(format!(
+                    "{:?} cannot be passed to cmd.exe as one word: it holds \", % or a line break",
+                    text
+                ))
+            } else {
+                Ok(format!("\"{}\"", text))
+            }
+        }
+    }
+}
+
 /// Put the shell's own directory on the child's `PATH`.
 ///
 /// Finding `sh.exe` is only half of running a POSIX command. Git for Windows keeps
@@ -242,6 +286,38 @@ fn which_on_path(program: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_value_is_one_posix_word_whatever_it_holds() {
+        let q = |t: &str| quote_word_for(t, ShellKind::Posix).unwrap();
+        assert_eq!(q("data.txt"), "data.txt");
+        assert_eq!(q("-la"), "-la");
+        assert_eq!(q("mi informe.txt"), "'mi informe.txt'");
+        assert_eq!(q("x; echo INYECTADO"), "'x; echo INYECTADO'");
+        assert_eq!(q("it's"), "'it'\\''s'");
+        assert_eq!(q("$(id)"), "'$(id)'");
+        assert_eq!(q("X=1"), "'X=1'");
+        assert_eq!(q(""), "''");
+        // What sh reads back is the text, byte for byte.
+        for t in ["it's", "a b", "x; echo no", "$(id) `id` \\n", "'", "", "ñandú \"q\""] {
+            let out = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("printf %s {}", q(t)))
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8(out.stdout).unwrap(), t, "{t:?}");
+        }
+    }
+
+    #[test]
+    fn cmd_refuses_what_it_cannot_quote() {
+        let q = |t: &str| quote_word_for(t, ShellKind::WindowsCmd);
+        assert_eq!(q("mi informe.txt").unwrap(), "\"mi informe.txt\"");
+        assert_eq!(q("a & b").unwrap(), "\"a & b\"");
+        assert!(q("%PATH%").is_err());
+        assert!(q("say \"hi\"").is_err());
+        assert!(q("a\nb").is_err());
+    }
+
     use super::*;
 
     #[test]

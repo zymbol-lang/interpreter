@@ -32,6 +32,21 @@ impl<W: Write> Interpreter<W> {
     /// Expand `{var}` placeholders in a string using the current scope.
     fn interpolate_string(&mut self, s: &str, span: &Span) -> Result<String> {
         let mut result = String::with_capacity(s.len());
+        for piece in self.interpolation_pieces(s, span)? {
+            match piece {
+                Piece::Text(t) => result.push_str(&t),
+                Piece::Value(v) => result.push_str(&self.format_value(&v)),
+            }
+        }
+        Ok(result)
+    }
+
+    /// The pieces of an interpolated string: the text as written, and the value of
+    /// each `{var}`. `<\ \>` needs them apart — the text is the command and each
+    /// value one quoted word (G2) — and everything else joins them.
+    pub(crate) fn interpolation_pieces(&mut self, s: &str, span: &Span) -> Result<Vec<Piece>> {
+        let mut pieces = Vec::new();
+        let mut result = String::with_capacity(s.len());
         let chars: Vec<char> = s.chars().collect();
         let mut i = 0;
         while i < chars.len() {
@@ -53,12 +68,14 @@ impl<W: Write> Interpreter<W> {
                     // A variable, or a named function read as a value — what
                     // `var_name` alone evaluates to (GLB-018 H: `{f}` printed
                     // itself here while `>> f` printed <funct/1>).
-                    let maybe_display = self.get_variable(&var_name).cloned()
+                    let maybe_value = self.get_variable(&var_name).cloned()
                         .or_else(|| self.functions.get(&var_name)
-                            .map(|def| Value::function(self.func_def_to_value(def))))
-                        .map(|v| self.format_value(&v));
-                    if let Some(display) = maybe_display {
-                        result.push_str(&display);
+                            .map(|def| Value::function(self.func_def_to_value(def))));
+                    if let Some(value) = maybe_value {
+                        if !result.is_empty() {
+                            pieces.push(Piece::Text(std::mem::take(&mut result)));
+                        }
+                        pieces.push(Piece::Value(value));
                     } else {
                         // Auto-free is invisible by design: a missing variable
                         // that the last-use schedule destroyed means the
@@ -88,6 +105,15 @@ impl<W: Write> Interpreter<W> {
                 i += 1;
             }
         }
-        Ok(result)
+        if !result.is_empty() {
+            pieces.push(Piece::Text(result));
+        }
+        Ok(pieces)
     }
+}
+
+/// A piece of an interpolated string: `Interpreter::interpolation_pieces`.
+pub(crate) enum Piece {
+    Text(String),
+    Value(Value),
 }

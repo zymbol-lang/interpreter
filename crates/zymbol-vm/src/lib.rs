@@ -689,15 +689,14 @@ fn holds_function(v: &Value) -> bool {
 /// joined with spaces, at any depth — shell words, the tree-walker's
 /// `value_to_bash_str`. Its display form (`[1, 2]`, `(3, x)`, `#(…)`) is shell
 /// syntax or a comment to `sh` (GLB-017 G).
-fn shell_text(v: &Value) -> String {
+/// The words of a value placed in a command: one for a scalar, one per element of
+/// a collection at any depth — not its display, whose `(`, `[` and `#` the shell
+/// would read as syntax (G2: each is then quoted).
+fn shell_words(v: &Value, out: &mut Vec<String>) {
     match v {
-        Value::Array(items) | Value::Tuple(items) => {
-            items.iter().map(shell_text).collect::<Vec<_>>().join(" ")
-        }
-        Value::NamedTuple(fields) => {
-            fields.iter().map(|(_, v)| shell_text(v)).collect::<Vec<_>>().join(" ")
-        }
-        other => other.to_string_repr(),
+        Value::Array(items) | Value::Tuple(items) => items.iter().for_each(|i| shell_words(i, out)),
+        Value::NamedTuple(fields) => fields.iter().for_each(|(_, i)| shell_words(i, out)),
+        other => out.push(other.to_string_repr()),
     }
 }
 
@@ -4672,12 +4671,32 @@ impl<W: Write> VM<W> {
                             "cannot use function in bash command interpolation".to_string()
                         ));
                     }
+                    // The text as written is the command; each value, its quoted
+                    // words (G2). One the shell cannot take as a word (`cmd.exe`
+                    // and a `%`) is a soft ##IO, and nothing runs.
                     let mut cmd = String::new();
+                    let mut refused = None;
                     for part in parts {
                         match part {
                             BuildPart::Lit(idx) => cmd.push_str(&program.string_pool[*idx as usize]),
-                            BuildPart::Reg(r) => cmd.push_str(&shell_text(rreg!(*r))),
+                            BuildPart::Reg(r) => {
+                                let mut words = Vec::new();
+                                shell_words(rreg!(*r), &mut words);
+                                let mut quoted = Vec::with_capacity(words.len());
+                                for w in &words {
+                                    match zymbol_common::shell::quote_word(w) {
+                                        Ok(q) => quoted.push(q),
+                                        Err(msg) => { refused = Some(msg); break; }
+                                    }
+                                }
+                                cmd.push_str(&quoted.join(" "));
+                            }
                         }
+                        if refused.is_some() { break; }
+                    }
+                    if let Some(msg) = refused {
+                        wreg!(dst, Value::Error(ZyStr::new(format!("##IO({})", msg))));
+                        continue;
                     }
                     let out = match run_in_shell(&cmd) { Ok(o) => o, Err(e) => raise!(e.into()) };
                     // A status other than 0 is a soft ##IO error (GAP-GOL-011, D2).
