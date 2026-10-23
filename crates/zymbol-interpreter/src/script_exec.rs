@@ -209,7 +209,7 @@ impl<W: Write> Interpreter<W> {
                 span: bash.span,
             }
         })?;
-        let output = shell.output().map_err(|e| RuntimeError::Generic {
+        let output = zymbol_common::shell::run_command(&mut shell).map_err(|e| RuntimeError::Generic {
             message: format!(
                 "failed to run `{}`: {}",
                 shell.get_program().to_string_lossy(),

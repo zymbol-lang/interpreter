@@ -16,6 +16,7 @@ pub mod count;
 pub mod depth;
 pub mod errkind;
 pub mod num;
+pub mod screen;
 pub mod shell;
 pub mod stdlib;
 pub mod text;

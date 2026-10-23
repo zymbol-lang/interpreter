@@ -398,10 +398,12 @@ impl<W: Write> Interpreter<W> {
                 message: format!("failed to enter alternate screen: {}", e), span: tb.span,
             })?;
         self.tui_depth += 1;
+        zymbol_common::screen::opened();
         let result = self.execute_block(&tb.body);
         self.tui_depth -= 1;
         let _ = execute!(std::io::stdout(), terminal::LeaveAlternateScreen, cursor::Show);
         let _ = terminal::disable_raw_mode();
+        zymbol_common::screen::closed();
         result
     }
 }
