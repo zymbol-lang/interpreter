@@ -4958,6 +4958,30 @@ impl Compiler {
         span: zymbol_span::Span,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
+        let parts = self.interpolation_parts(s, span, ctx)?;
+        if parts.len() == 1 {
+            if let BuildPart::Lit(idx) = &parts[0] {
+                let dst = ctx.alloc_temp()?;
+                ctx.emit(Instruction::LoadStr(dst, *idx));
+                ctx.set_reg_type(dst, StaticType::String);
+                return Ok(dst);
+            }
+        }
+        let dst = ctx.alloc_temp()?;
+        ctx.emit(Instruction::BuildStr(dst, parts));
+        ctx.set_reg_type(dst, StaticType::String);
+        Ok(dst)
+    }
+
+    /// The pieces of an interpolated string: `Lit` for the text as written, `Reg`
+    /// for each `{var}`. `BuildStr` joins them; `BashExec` keeps them apart, the
+    /// text being the command and each value one quoted word (G2).
+    fn interpolation_parts(
+        &mut self,
+        s: &str,
+        span: zymbol_span::Span,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Vec<BuildPart>, CompileError> {
         // Parse `{...}` patterns
         let mut parts: Vec<BuildPart> = Vec::new();
         let mut current_lit = String::new();
@@ -5051,19 +5075,7 @@ impl Compiler {
             let idx = self.intern_string(&resolved);
             parts.push(BuildPart::Lit(idx));
         }
-
-        if parts.len() == 1 {
-            if let BuildPart::Lit(idx) = &parts[0] {
-                let dst = ctx.alloc_temp()?;
-                ctx.emit(Instruction::LoadStr(dst, *idx));
-                ctx.set_reg_type(dst, StaticType::String);
-                return Ok(dst);
-            }
-        }
-        let dst = ctx.alloc_temp()?;
-        ctx.emit(Instruction::BuildStr(dst, parts));
-        ctx.set_reg_type(dst, StaticType::String);
-        Ok(dst)
+        Ok(parts)
     }
 
     // ── 4C: For-each over arrays ─────────────────────────────────────────────
@@ -5375,9 +5387,32 @@ impl Compiler {
         be: &zymbol_ast::BashExecExpr,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
-        // Compile each arg to a register; VM concatenates them to build the command string
+        // The text written in the command is `Lit` and goes to the shell as it is;
+        // every value is a `Reg`, which the VM turns into quoted words (G2, decided
+        // by the author on 2026-10-21). Everything used to be a `Reg`, pasted in.
         let mut parts: Vec<BuildPart> = Vec::new();
         for arg in &be.args {
+            if let Expr::Literal(lit) = arg {
+                match &lit.value {
+                    Literal::String(s) => {
+                        let idx = self.intern_string(&s.replace('\x01', "{").replace('\x02', "}"));
+                        parts.push(BuildPart::Lit(idx));
+                        continue;
+                    }
+                    // A character written in the command is written text too.
+                    Literal::Char(c) => {
+                        let idx = self.intern_string(&c.to_string());
+                        parts.push(BuildPart::Lit(idx));
+                        continue;
+                    }
+                    Literal::InterpolatedString(s) => {
+                        let pieces = self.interpolation_parts(s, lit.span, ctx)?;
+                        parts.extend(pieces);
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
             let r = self.compile_expr(arg, ctx)?;
             parts.push(BuildPart::Reg(r));
         }
