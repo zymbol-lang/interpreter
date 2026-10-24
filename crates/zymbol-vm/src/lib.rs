@@ -3276,6 +3276,13 @@ impl<W: Write> VM<W> {
                     };
                     if v >= lo && v <= hi { ip = label as usize; }
                 }
+                &Instruction::MatchCharRange(reg, lo, hi, label) => {
+                    let c = match rreg!(reg) {
+                        Value::Char(c) => *c,
+                        _ => raise!(VmError::TypeMsg("range pattern type mismatch".to_string())),
+                    };
+                    if c >= lo && c <= hi { ip = label as usize; }
+                }
                 &Instruction::MatchStr(reg, idx, label) => {
                     let s = &program.string_pool[idx as usize];
                     if let Value::String(v) = rreg!(reg) {

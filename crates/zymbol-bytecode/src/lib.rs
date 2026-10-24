@@ -319,6 +319,9 @@ pub enum Instruction {
     // ── Pattern match ─────────────────────────────────────────────────────
     MatchInt(Reg, i64, Label),
     MatchRange(Reg, i64, i64, Label),
+    /// `'a'..'m' =>`: a Char in the range, inclusive; anything else is the
+    /// tree-walker's `range pattern type mismatch` (ZYVM-032).
+    MatchCharRange(Reg, char, char, Label),
     MatchStr(Reg, StrIdx, Label),
     MatchBool(Reg, bool, Label),
 

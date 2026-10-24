@@ -4107,6 +4107,17 @@ impl Compiler {
                     skips.push(skip_patch);
                 }
                 Pattern::Range(start, end_expr, _) => {
+                    // A Char range, `'a'..'m'`: the tree-walker's other kind of
+                    // range. This arm refused to compile it as "non-int", so a
+                    // program both other engines ran did not start (ZYVM-032).
+                    if let (Expr::Literal(l1), Expr::Literal(l2)) = (start.unwrap_group(), end_expr.unwrap_group()) {
+                        if let (Literal::Char(lo), Literal::Char(hi)) = (&l1.value, &l2.value) {
+                            let body_label = (ctx.current_label() + 2) as Label;
+                            ctx.emit(Instruction::MatchCharRange(r_sub, *lo, *hi, body_label));
+                            skips.push(ctx.emit_jump_placeholder());
+                            return Ok((skips, to_body));
+                        }
+                    }
                     // Range pattern: lo..hi
                     let lo = if let Expr::Literal(l) = start.unwrap_group() {
                         if let Literal::Int(n) = l.value { n }
@@ -5964,6 +5975,7 @@ fn eliminate_dead_code(
             // Match instructions: fall-through (no match) AND target (match)
             Instruction::MatchInt(_, _, target)
             | Instruction::MatchRange(_, _, _, target)
+            | Instruction::MatchCharRange(_, _, _, target)
             | Instruction::MatchStr(_, _, target) => {
                 worklist.push(*target as usize);
                 worklist.push(ip + 1);
@@ -6031,6 +6043,7 @@ fn eliminate_dead_code(
             Instruction::IterStep(i, n, t) => Instruction::IterStep(i, n, remap(t)),
             Instruction::MatchInt(r, v, t)     => Instruction::MatchInt(r, v, remap(t)),
             Instruction::MatchRange(r, lo, hi, t) => Instruction::MatchRange(r, lo, hi, remap(t)),
+            Instruction::MatchCharRange(r, lo, hi, t) => Instruction::MatchCharRange(r, lo, hi, remap(t)),
             Instruction::MatchStr(r, s, t)     => Instruction::MatchStr(r, s, remap(t)),
             Instruction::TryBegin(t, r)        => Instruction::TryBegin(remap(t), r),
             other => other,
@@ -6243,6 +6256,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::RangeStep(c, e, s, f, _) => { upd(*c); upd(*e); upd(*s); upd(*f); }
             Instruction::IterStep(i, n, _) => { upd(*i); upd(*n); }
             Instruction::MatchInt(r, _, _) | Instruction::MatchRange(r, _, _, _)
+            | Instruction::MatchCharRange(r, _, _, _)
             | Instruction::MatchStr(r, _, _) | Instruction::MatchBool(r, _, _) => upd(*r),
             Instruction::Call(d, _, args) => { upd(*d); for &a in args { upd(a); } }
             Instruction::TailCall(_, args) => { for &a in args { upd(a); } }
