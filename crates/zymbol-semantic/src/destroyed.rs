@@ -17,6 +17,8 @@
 //!   branch that can reach the next statement; a missing `_` branch is the path
 //!   that skipped them all.
 //! - A loop may not run, so after it a name is destroyed only if it already was.
+//!   Inside its body, a name the body assigns anywhere is not certain either: a
+//!   later turn reads what the turn before gave back (GLB-147).
 //! - After `<~`, `@!` or `@>` the rest of the block cannot run: no warning there.
 //! - Each function starts empty: its body runs when it is called, not where it is
 //!   written.
@@ -191,19 +193,6 @@ impl Pass {
                 if let Some(it) = &l.iterable {
                     self.expr(it, &st);
                 }
-                let mut inner = st.clone();
-                if let Some(v) = &l.iterator_var {
-                    inner.revive(v);
-                }
-                if let Some(p) = &l.iterator_pattern {
-                    for n in bound(p) {
-                        inner.revive(&n);
-                    }
-                }
-                self.block(&l.body.statements, Some(inner));
-                // It may not have run, and `@!` may leave it half way: only what
-                // was destroyed before it, and that nothing in it assigns, is
-                // destroyed for certain after it.
                 // The loop's own variable is assigned too, and outlives the loop
                 // (`\ n` then `@ n:1..3 { }` leaves `n` at 3).
                 let mut assigned = assigned_in(&l.body.statements);
@@ -213,6 +202,16 @@ impl Pass {
                 if let Some(p) = &l.iterator_pattern {
                     assigned.extend(bound(p));
                 }
+                // A turn after the first starts where the last one ended: what
+                // the body assigns anywhere in it is alive there, in the scope
+                // `\` took it from (GLB-147), and a read of it before the
+                // assignment is not certain to fail.
+                let mut inner = st.clone();
+                inner.0.retain(|(n, _)| !assigned.contains(n));
+                self.block(&l.body.statements, Some(inner));
+                // It may not have run, and `@!` may leave it half way: only what
+                // was destroyed before it, and that nothing in it assigns, is
+                // destroyed for certain after it.
                 st.0.retain(|(n, _)| !assigned.contains(n));
                 return Some(st);
             }
@@ -419,6 +418,9 @@ mod tests {
         assert!(warned("x = 5\n\\ x\nx = 3\n>> x ¶\n").is_empty());
         assert!(warned("x = 5\n\\ x\nn = 0\n@ n < 2 {\n    n = n + 1\n    x = n\n}\n>> x ¶\n").is_empty());
         assert!(warned("x = 5\n\\ x\n@ x:1..3 { }\n>> x ¶\n").is_empty());
+        // Read before the body assigns it: a later turn finds the earlier turn's
+        // value, given back to the file (GLB-147).
+        assert!(warned("x = 5\n\\ x\n@ i:1..3 {\n    ? i > 1 { >> x ¶ }\n    x = i\n}\n").is_empty());
         // A lambda's parameter, and a `\` on a function (refused, destroys nothing).
         assert!(warned("x = 5\n\\ x\nf = (x) -> x + 1\n>> f(2) ¶\n").is_empty());
         assert!(warned("f() { <~ 1 }\n\\ f\n>> f() ¶\n").is_empty());

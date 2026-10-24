@@ -827,8 +827,10 @@ pub struct Interpreter<W: Write> {
     /// Auto-free (v0.0.8): top-level statement index → variables to destroy
     /// after that statement (last-use analysis, computed in `execute()`)
     destruction_schedule: HashMap<usize, Vec<String>>,
-    /// Dead variables: variables that have been destroyed (for use-after-free detection)
-    dead_variables: HashSet<String>,
+    /// Dead variables: variables that have been destroyed (for use-after-free
+    /// detection), each with the index in `scope_stack` of the scope `\` took
+    /// it from — where an assignment gives it back (GLB-147)
+    dead_variables: HashMap<String, usize>,
     /// Short-circuit flag: true if any const (:=) has been declared in this interpreter session
     has_any_const: bool,
     /// QW6: fast check — true if control_flow != None (avoids enum PartialEq on hot path)
@@ -971,6 +973,12 @@ impl<W: Write> Interpreter<W> {
                 map.clear();
                 if self.scope_map_pool.len() < 128 { self.scope_map_pool.push(map); }
             }
+            // A name destroyed in the scope that just ended died with it: its
+            // place is gone, and a later scope at the same depth is not it.
+            if !self.dead_variables.is_empty() {
+                let len = self.scope_stack.len();
+                self.dead_variables.retain(|_, i| *i < len);
+            }
             if let Some(mut s) = self.mutable_vars_stack.pop() {
                 s.clear();
                 if self.mut_set_pool.len() < 128 { self.mut_set_pool.push(s); }
@@ -1100,10 +1108,14 @@ impl<W: Write> Interpreter<W> {
     /// B9: zero allocation on the UPDATE path (hot path).
     #[inline(always)]
     fn set_variable(&mut self, name: &str, value: Value) {
-        // A new assignment after explicit destruction (`\var`) resurrects the variable.
-        if !self.dead_variables.is_empty() {
-            self.dead_variables.remove(name);
-        }
+        // A new assignment after explicit destruction (`\var`) resurrects the
+        // variable — in the scope `\` took it from, not in the block that
+        // assigns it (GLB-147, decided 2026-10-23: `\` keeps the name's place).
+        let revive_at = if !self.dead_variables.is_empty() {
+            self.dead_variables.remove(name)
+        } else {
+            None
+        };
         if !self.auto_dead_variables.is_empty() {
             self.auto_dead_variables.remove(name);
         }
@@ -1117,7 +1129,19 @@ impl<W: Write> Interpreter<W> {
                 return;
             }
         }
-        // Not in view anywhere. If it is a variable of the module that a `\`
+        // Not in view anywhere. A name a `\` of this frame ended goes back to
+        // the scope it was taken from: a block assigning it modifies that one
+        // name, as it would have before the `\` (MEM-6, MEM-7).
+        if let Some(i) = revive_at {
+            if i < self.scope_stack.len() {
+                if at_depth_zero && i == 0 {
+                    mirror_file_var(&mut self.file_vars, name, &value);
+                }
+                self.scope_stack[i].insert(name.to_string(), value);
+                return;
+            }
+        }
+        // If it is a variable of the module that a `\`
         // ended, assigning it gives it back to the MODULE — a local of that
         // name would leave the module without its variable for good.
         if !self.module_dead.is_empty() && self.module_dead.remove(name) {
@@ -1392,7 +1416,7 @@ pub(crate) struct SavedCallState {
     module_scope: bool,
     has_any_const: bool,
     loop_scope_depths: Vec<usize>,
-    dead_variables: HashSet<String>,
+    dead_variables: HashMap<String, usize>,
     auto_dead_variables: HashSet<String>,
     pub(crate) current_module_path: Option<PathBuf>,
     /// The caller's open `!?` blocks. A frame starts with none of its own: the
@@ -1434,7 +1458,7 @@ impl Interpreter<std::io::Stdout> {
             cli_args: None,
             subscript_runner: None,
             destruction_schedule: HashMap::new(),
-            dead_variables: HashSet::new(),
+            dead_variables: HashMap::new(),
             has_any_const: false,
             has_control_flow: false,
             scope_map_pool: Vec::new(),
@@ -1494,7 +1518,7 @@ impl<W: Write> Interpreter<W> {
             cli_args: None,
             subscript_runner: None,
             destruction_schedule: HashMap::new(),
-            dead_variables: HashSet::new(),
+            dead_variables: HashMap::new(),
             has_any_const: false,
             has_control_flow: false,
             scope_map_pool: Vec::new(),
@@ -1564,10 +1588,10 @@ impl<W: Write> Interpreter<W> {
         }
         // Remove from all scopes (search from innermost to outermost)
         let base = self.frame_base();
-        for scope in self.scope_stack[base..].iter_mut().rev() {
+        for (i, scope) in self.scope_stack.iter_mut().enumerate().skip(base).rev() {
             if scope.remove(var_name).is_some() {
-                // Found and removed - mark as dead
-                self.dead_variables.insert(var_name.to_string());
+                // Found and removed - mark as dead, and remember where it lived
+                self.dead_variables.insert(var_name.to_string(), i);
                 return Ok(());
             }
         }
@@ -1591,7 +1615,7 @@ impl<W: Write> Interpreter<W> {
                 ));
             }
         }
-        if self.dead_variables.contains(var_name) {
+        if self.dead_variables.contains_key(var_name) {
             return Err(RuntimeError::kinded(
                 "_",
                 format!(
@@ -1633,7 +1657,7 @@ impl<W: Write> Interpreter<W> {
         {
             return Ok(());
         }
-        if self.dead_variables.contains(var_name) || self.is_dead_module_state(var_name) {
+        if self.dead_variables.contains_key(var_name) || self.is_dead_module_state(var_name) {
             return Err(RuntimeError::kinded(
                 "_",
                 format!(

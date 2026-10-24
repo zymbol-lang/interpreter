@@ -62,7 +62,7 @@ impl<W: Write> Interpreter<W> {
                     // A name destroyed with `\` is refused here as it is when
                     // read on its own; it used to stay in the text as `{x}`
                     // (GLB-025).
-                    if self.dead_variables.contains(&var_name) || self.is_dead_module_state(&var_name) {
+                    if self.dead_variables.contains_key(&var_name) || self.is_dead_module_state(&var_name) {
                         self.check_variable_alive(&var_name, span)?;
                     }
                     // A variable, or a named function read as a value — what
