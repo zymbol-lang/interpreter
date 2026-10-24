@@ -789,6 +789,8 @@ fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &m
     let mut phase_warnings: Vec<Diagnostic> = type_checker.get_warnings().to_vec();
     phase_warnings.extend(zymbol_semantic::check_unused_imports(&tokens_for_stdlib, &program.imports));
     phase_warnings.extend(zymbol_semantic::check_unreachable(&program));
+    // A read `\` has certainly destroyed (G4): warned, still run.
+    phase_warnings.extend(zymbol_semantic::check_destroyed_reads(&program));
 
     // Type errors are fatal - stop execution. The phase's warnings go out
     // first: `check` reports them next to the errors and the browser engine
@@ -1684,6 +1686,7 @@ fn check_source(
     // cannot run (HLZ-016), counted and printed with the type warnings.
     let mut unused_imports = zymbol_semantic::check_unused_imports(&tokens_for_stdlib, &program.imports);
     unused_imports.extend(zymbol_semantic::check_unreachable(&program));
+    unused_imports.extend(zymbol_semantic::check_destroyed_reads(&program));
     for diag in type_checker.get_warnings().iter().chain(unused_imports.iter()) {
         if !report_warnings {
             continue;
