@@ -1770,6 +1770,11 @@ expression` — whether the `??` gives a value (`r = ?? n { … }`) or is writte
 statement. It is never a silent empty value, and the program does not go on to the next
 line. When every value must land somewhere, end with `_ => …`.
 
+Since v0.0.11 `zymbol check` — and `run`, before running — **warns** about a `??` with no
+`_` arm, unless its arms cover every value anyway: a Bool with both `#1` and `#0`, or two
+comparisons against constants that leave no number out (`< 0` with `>= 0`). The warning does
+not change what runs: the error above is still the error, and `!?` still catches it.
+
 > **⚠ Not implemented**: Identifier binding in patterns (`n => n * 2`).
 
 ---
