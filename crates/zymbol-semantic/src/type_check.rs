@@ -2868,9 +2868,12 @@ impl TypeChecker {
             }
 
             Pattern::Comparison(_, expr, span) => {
-                // Comparison patterns work on scalars and strings
+                // Comparison patterns work on scalars and strings. `Number` is
+                // one of them — Int or Float, not yet decided — and refusing
+                // it refused `?? x { < 0 => … }` on any parameter used in
+                // arithmetic (GLB-149).
                 if !matches!(scrutinee_type,
-                    ZymbolType::Int | ZymbolType::Float | ZymbolType::Char |
+                    ZymbolType::Int | ZymbolType::Float | ZymbolType::Number | ZymbolType::Char |
                     ZymbolType::String | ZymbolType::Any | ZymbolType::Unknown)
                 {
                     self.errors.push(
