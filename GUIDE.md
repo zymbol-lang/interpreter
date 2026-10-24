@@ -1644,6 +1644,16 @@ members, `M::name(…)` and `M.NAME`.
 - **Array scrutinee** → structural match (length + element-by-element)
 - **Scalar scrutinee** → containment: does the scalar appear in the literal list?
 
+An element is `_`, a value, a name whose value is compared, a nested list pattern, **a range
+or a comparison** — and each means what the same pattern means in an arm (v0.0.11). So
+`[1..5, 7]` against a scalar is `1..5 || 7`, and against an array it tests one element each:
+
+```zymbol
+>> ?? 4 { [1..2, 4..6] => "in"  _ => "out" } ¶        // → in
+>> ?? [3, 9] { [1..5, > 8] => "fits"  _ => "no" } ¶   // → fits
+>> ?? [9] { [1..5] => "fits"  _ => "no" } ¶           // → no
+```
+
 ```zymbol
 // Scalar containment
 n = 3
