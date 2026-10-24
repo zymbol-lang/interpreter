@@ -10,11 +10,15 @@
 //!   post_json(url, body[, headers[, seconds]]) -> String | Error    POST application/json, returns body
 //!   head(url[, seconds])                       -> Bool               #1 if reachable (2xx), else #0
 //!
-//! `seconds` is a time limit for the whole request, an Int or a Float above
-//! zero (ZethyCLI G1, decided by the author on 2026-10-24): past it the answer
-//! is a soft `##Network(timeout: no answer within N s)`, and `head` is `#0`.
-//! Without it a request waits as long as the server takes — a server that
-//! accepts and never answers held all three engines past two minutes.
+//!   timeout(seconds)                           -> Int | Float        the limit it replaces
+//!
+//! `seconds` is a time limit for the whole request, an Int or a Float, `0` or
+//! more, `0` being none (ZethyCLI G1, decided by the author on 2026-10-24): past
+//! it the answer is a soft `##Network(timeout: no answer within N s)`, and `head`
+//! is `#0`. A request without its own takes the process's, set by `timeout`, and
+//! without either it waits as long as the server takes — a server that accepts
+//! and never answers held all three engines past two minutes. The rules are
+//! `zymbol_common::net`, shared with the VM.
 //!
 //! The optional `headers` argument is an Array of 2-element `(String, String)`
 //! tuples — e.g. `[("x-api-key", key), ("anthropic-version", "2023-06-01")]`.
@@ -63,17 +67,41 @@ fn parse_headers(arg: Option<Value>, fname: &str, span: Span) -> Result<Vec<(Str
     }
 }
 
-/// The optional time limit after the headers, in seconds (ZethyCLI G1).
-fn parse_limit(arg: Option<Value>, fname: &str, span: Span) -> Result<Option<f64>> {
+use zymbol_common::net::Limit;
+
+/// A time limit as the program wrote it: seconds, an Int or a Float, `0` or
+/// more (ZethyCLI G1).
+fn limit_of(arg: Value, fname: &str, span: Span) -> Result<Limit> {
     match arg {
-        None => Ok(None),
-        Some(Value::Int(n)) if n > 0 => Ok(Some(n as f64)),
-        Some(Value::Float(f)) if f > 0.0 && f.is_finite() => Ok(Some(f)),
-        Some(_) => Err(RuntimeError::Generic {
+        Value::Int(n) if n >= 0 => Ok(Limit::Int(n)),
+        Value::Float(f) if f >= 0.0 && f.is_finite() => Ok(Limit::Float(f)),
+        _ => Err(RuntimeError::Generic {
             message: zymbol_common::net::bad_limit_message(fname),
             span,
         }),
     }
+}
+
+/// The seconds this request waits: the limit after its headers when it gave
+/// one (`0` is none), the process's otherwise (`net::timeout`), `None` for none.
+fn parse_limit(arg: Option<Value>, fname: &str, span: Span) -> Result<Option<f64>> {
+    let own = arg.map(|v| limit_of(v, fname, span)).transpose()?;
+    Ok(zymbol_common::net::effective(own))
+}
+
+/// net::timeout(seconds) -> the limit it replaces (0 when there was none)
+fn net_timeout(args: Vec<Value>, span: Span) -> Result<Value> {
+    let limit = match args.into_iter().next() {
+        Some(v) => limit_of(v, "net::timeout", span)?,
+        None => return Err(RuntimeError::Generic {
+            message: zymbol_common::net::bad_limit_message("net::timeout"),
+            span,
+        }),
+    };
+    Ok(match zymbol_common::net::set_default(limit) {
+        Limit::Int(n) => Value::Int(n),
+        Limit::Float(f) => Value::Float(f),
+    })
 }
 
 /// A request with the time limit applied, when there is one.
@@ -193,6 +221,7 @@ pub(crate) fn register() -> HashMap<String, Rc<FunctionDef>> {
     native!("post",      -1, net_post);
     native!("post_json", -1, net_post_json);
     native!("head",      -1, net_head);
+    native!("timeout",    1, net_timeout);
 
     m
 }

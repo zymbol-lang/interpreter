@@ -666,6 +666,7 @@ pub mod builtins {
     pub const NET_POST:      u16 = 401;
     pub const NET_POST_JSON: u16 = 402;
     pub const NET_HEAD:      u16 = 403;
+    pub const NET_TIMEOUT:   u16 = 404;
     // std/db functions (vendor-neutral via ODBC)
     pub const DB_CONNECT:      u16 = 500;
     pub const DB_DISCONNECT:   u16 = 501;

@@ -113,7 +113,7 @@ pub const MODULES: &[StdModule] = &[
     },
     StdModule {
         path: "std/net",
-        functions: &[f("get", -1), f("post", -1), f("post_json", -1), f("head", -1)],
+        functions: &[f("get", -1), f("post", -1), f("post_json", -1), f("head", -1), f("timeout", 1)],
         constants: &[],
         feature_gated: true,
     },

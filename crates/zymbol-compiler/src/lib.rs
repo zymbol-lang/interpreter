@@ -6180,6 +6180,7 @@ pub fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16
             ("post",      B::NET_POST),
             ("post_json", B::NET_POST_JSON),
             ("head",      B::NET_HEAD),
+            ("timeout",   B::NET_TIMEOUT),
         ]),
         "std/term" => Some(vec![
             ("width",     B::TERM_WIDTH),

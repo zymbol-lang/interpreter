@@ -1,6 +1,8 @@
 //! A time limit on a `std/net` request (ZethyCLI G1, decided by the author on
-//! 2026-10-24, option A): `net::get(url, headers, seconds)`, the same after the
-//! headers of `post` and `post_json`, and `net::head(url, seconds)`.
+//! 2026-10-24): `net::get(url, headers, seconds)`, the same after the headers of
+//! `post` and `post_json`, and `net::head(url, seconds)` — and, for every
+//! request that gives none, the process's own, `net::timeout(seconds)`, which
+//! returns the one it replaces. `0` is no limit, in a call and in `timeout`.
 //!
 //! What these assert is the consequence: against a server that accepts and never
 //! answers, the program comes back — within the limit, not when something outside
@@ -81,6 +83,46 @@ fn a_mute_server_gives_a_soft_network_error_within_the_limit() {
             .stdout(contains("#0\nsigue"));
         // 1 + 0.5 + 1 seconds of limits, and a margin for a loaded machine.
         assert!(took < Duration::from_secs(12), "tw={tw}: took {took:?}, the limits were not applied");
+    }
+}
+
+#[test]
+fn the_process_limit_reaches_every_request_and_a_call_overrides_it() {
+    let mute = mute_server();
+    let quick = quick_server();
+    // A module sets the limit; the importer's request takes it. `0` in a call
+    // is no limit even then, and `timeout` hands back what it replaced.
+    let src = format!(
+        "<# std/net => net\n\
+         <# ./lib/red => red\n\
+         >> red::preparar() ¶\n\
+         r = net::get(\"http://127.0.0.1:{mute}/\")\n\
+         >> r ¶\n\
+         >> net::get(\"http://127.0.0.1:{quick}/\", [], 0) ¶\n\
+         >> net::head(\"http://127.0.0.1:{mute}/\") ¶\n\
+         >> net::timeout(0) \" \" net::timeout(0) ¶\n"
+    );
+    for tw in [false, true] {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("main.zy"), &src).unwrap();
+        std::fs::create_dir_all(d.path().join("lib")).unwrap();
+        std::fs::write(
+            d.path().join("lib/red.zy"),
+            "# red {\n    <# std/net => net\n    #> { preparar }\n    preparar() { <~ net::timeout(1) }\n}\n",
+        )
+        .unwrap();
+        let mut cmd = zymbol();
+        cmd.current_dir(d.path()).arg("run");
+        if tw {
+            cmd.arg("--tw");
+        }
+        let started = Instant::now();
+        cmd.timeout(Duration::from_secs(30))
+            .arg("main.zy")
+            .assert()
+            .success()
+            .stdout(contains("0\n##Network(timeout: no answer within 1 s)\nhola\n#0\n1 0"));
+        assert!(started.elapsed() < Duration::from_secs(10), "tw={tw}: the process limit was not applied");
     }
 }
 

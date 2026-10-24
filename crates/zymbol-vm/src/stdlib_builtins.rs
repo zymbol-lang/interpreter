@@ -519,15 +519,35 @@ fn response_to_value(resp: Result<String, HttpError>) -> Result<Value, String> {
     }
 }
 
-/// The optional time limit after the headers, in seconds: an Int or a Float
-/// above zero (ZethyCLI G1). Absent, the request waits as long as it takes.
-fn parse_limit(arg: Option<Value>, fname: &str) -> Result<Option<f64>, String> {
+use zymbol_common::net::Limit;
+
+/// A time limit as the program wrote it: seconds, an Int or a Float, `0` or
+/// more (ZethyCLI G1).
+fn limit_of(arg: Value, fname: &str) -> Result<Limit, String> {
     match arg {
-        None => Ok(None),
-        Some(Value::Int(n)) if n > 0 => Ok(Some(n as f64)),
-        Some(Value::Float(f)) if f > 0.0 && f.is_finite() => Ok(Some(f)),
-        Some(_) => Err(zymbol_common::net::bad_limit_message(fname)),
+        Value::Int(n) if n >= 0 => Ok(Limit::Int(n)),
+        Value::Float(f) if f >= 0.0 && f.is_finite() => Ok(Limit::Float(f)),
+        _ => Err(zymbol_common::net::bad_limit_message(fname)),
     }
+}
+
+/// The seconds this request waits: the limit after its headers when it gave
+/// one (`0` is none), the process's otherwise (`net::timeout`), `None` for none.
+fn parse_limit(arg: Option<Value>, fname: &str) -> Result<Option<f64>, String> {
+    let own = arg.map(|v| limit_of(v, fname)).transpose()?;
+    Ok(zymbol_common::net::effective(own))
+}
+
+/// `net::timeout(s)`: the process's limit from now on, and the one it replaces.
+fn net_timeout(args: Vec<Value>) -> Result<Value, String> {
+    let limit = match args.into_iter().next() {
+        Some(v) => limit_of(v, "net::timeout")?,
+        None => return Err(zymbol_common::net::bad_limit_message("net::timeout")),
+    };
+    Ok(match zymbol_common::net::set_default(limit) {
+        Limit::Int(n) => Value::Int(n),
+        Limit::Float(f) => Value::Float(f),
+    })
 }
 
 fn net_get(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
@@ -576,6 +596,7 @@ fn net_dispatch(builtin_id: u16, args: Vec<Value>, host: &mut dyn Host) -> Resul
         B::NET_POST      => net_post_as(args, host, "net::post", "text/plain"),
         B::NET_POST_JSON => net_post_as(args, host, "net::post_json", "application/json"),
         B::NET_HEAD      => net_head(args, host),
+        B::NET_TIMEOUT   => net_timeout(args),
         other => Err(format!("unknown net builtin id {}", other)),
     }
 }
@@ -840,7 +861,7 @@ pub fn call(builtin_id: u16, args: Vec<Value>, host: &mut dyn Host) -> Result<Va
         B::TIME_FORMAT    => time_format(args, host),
         B::TIME_ADD       => time_add(args, host),
         B::TIME_DIFF      => time_diff(args, host),
-        id if (B::NET_GET..=B::NET_HEAD).contains(&id) => net_dispatch(id, args, host),
+        id if (B::NET_GET..=B::NET_TIMEOUT).contains(&id) => net_dispatch(id, args, host),
         id if (B::DB_CONNECT..=B::DB_TABLE_EXISTS).contains(&id) => host.db(id, args),
         other => Err(format!("unknown builtin id {}", other)),
     }
