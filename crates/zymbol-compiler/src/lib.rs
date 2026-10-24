@@ -6148,6 +6148,7 @@ pub fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16
             ("entero",   B::RAND_ENTERO),
             ("rango",    B::RAND_RANGO),
             ("peso_f64", B::RAND_PESO_F64),
+            ("semilla",  B::RAND_SEMILLA),
         ]),
         "std/json" => Some(vec![
             ("decode",     B::JSON_DECODE),

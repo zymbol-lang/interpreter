@@ -87,7 +87,7 @@ pub const MODULES: &[StdModule] = &[
     },
     StdModule {
         path: "std/random",
-        functions: &[f("entero", 2), f("rango", 1), f("peso_f64", 0)],
+        functions: &[f("entero", 2), f("rango", 1), f("peso_f64", 0), f("semilla", 1)],
         constants: &[],
         feature_gated: false,
     },

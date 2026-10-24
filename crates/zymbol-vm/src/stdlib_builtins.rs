@@ -204,40 +204,14 @@ fn math_round(args: Vec<Value>) -> Result<Value, String> {
 
 // ── std/random ────────────────────────────────────────────────────────────────
 
-use std::cell::Cell;
-
-thread_local! {
-    static STATE:  Cell<[u64; 4]> = const { Cell::new([0u64; 4]) };
-    static SEEDED: Cell<bool>     = const { Cell::new(false) };
-}
-
-fn xoshiro_next(host: &mut dyn Host) -> u64 {
-    STATE.with(|s| {
-        let mut st = s.get();
-        if !SEEDED.with(|b| b.get()) {
-            let ns = host.entropy();
-            st = [
-                ns ^ 0xdead_beef,
-                ns.wrapping_mul(6_364_136_223_846_793_005),
-                ns ^ 0x00c0_ffee,
-                ns.wrapping_add(1_442_695_040_888_963_407),
-            ];
-            SEEDED.with(|b| b.set(true));
-        }
-        let result = st[0].wrapping_add(st[3]).rotate_left(23).wrapping_add(st[0]);
-        let t = st[1] << 17;
-        st[2] ^= st[0]; st[3] ^= st[1]; st[1] ^= st[2]; st[0] ^= st[3];
-        st[2] ^= t; st[3] = st[3].rotate_left(45);
-        s.set(st);
-        result
-    })
-}
+// The generator is `zymbol_intrinsics::random`, shared with the tree-walker so
+// that one seed gives one sequence (G8); the host only supplies the first seed
+// of a process that never called `semilla`.
 
 fn rand_entero(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     match (args.first(), args.get(1)) {
         (Some(Value::Int(lo)), Some(Value::Int(hi))) if hi >= lo => {
-            let range = (hi - lo + 1) as u64;
-            Ok(Value::Int(*lo + (xoshiro_next(host) % range) as i64))
+            Ok(Value::Int(zymbol_intrinsics::random::entero(*lo, *hi, || host.entropy())))
         }
         _ => Err("random::entero: expected (###, ###) with max >= min".into()),
     }
@@ -246,14 +220,24 @@ fn rand_entero(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
 fn rand_rango(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     match args.first() {
         Some(Value::Int(n)) if *n > 0 => {
-            Ok(Value::Int((xoshiro_next(host) % (*n as u64)) as i64))
+            Ok(Value::Int(zymbol_intrinsics::random::rango(*n, || host.entropy())))
         }
         _ => Err("random::rango: expected positive ###".into()),
     }
 }
 
 fn rand_peso_f64(_args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
-    Ok(Value::Float(((xoshiro_next(host) % 201) as f64 - 100.0) / 1000.0))
+    Ok(Value::Float(zymbol_intrinsics::random::peso_f64(|| host.entropy())))
+}
+
+fn rand_semilla(args: Vec<Value>) -> Result<Value, String> {
+    match args.first() {
+        Some(Value::Int(n)) => {
+            zymbol_intrinsics::random::seed(*n);
+            Ok(Value::Unit)
+        }
+        _ => Err("random::semilla: expected ###".into()),
+    }
 }
 
 // ── std/json ───────────────────────────────────────────────────────────────────
@@ -819,6 +803,7 @@ pub fn call(builtin_id: u16, args: Vec<Value>, host: &mut dyn Host) -> Result<Va
         B::RAND_ENTERO   => rand_entero(args, host),
         B::RAND_RANGO    => rand_rango(args, host),
         B::RAND_PESO_F64 => rand_peso_f64(args, host),
+        B::RAND_SEMILLA  => rand_semilla(args),
         B::JSON_DECODE   => json_decode(args),
         B::JSON_DECODE_MAP => json_decode_map(args),
         B::JSON_ENCODE   => json_encode(args),
