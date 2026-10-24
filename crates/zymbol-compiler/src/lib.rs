@@ -2065,6 +2065,19 @@ impl Compiler {
         Ok((ctx.alloc_reg(name)?, None))
     }
 
+    /// What a binding does once its register holds the value — an iterator
+    /// each turn, a destructured name: the module's slot gets it, and a name a
+    /// `\` ended lives again, as `compile_assignment` does for `=`. Without the
+    /// second half `\ x` then `@ x:1..3 { }` left `x` destroyed (GLB-147).
+    fn finish_binding(&mut self, name: &str, reg: Reg, slot: Option<u16>, ctx: &mut FunctionCtx) {
+        if let Some(g) = slot {
+            ctx.emit(Instruction::StoreGlobal(g, reg));
+        }
+        if self.destroyed_locally(name, ctx) && ctx.get_reg(name).ok() == Some(reg) {
+            ctx.emit(Instruction::Revive(reg));
+        }
+    }
+
     fn compile_destructure_assign(
         &mut self,
         d: &DestructureAssign,
@@ -2115,9 +2128,7 @@ impl Compiler {
                                     ctx.emit(Instruction::ArrayGet(dst, r_rhs, r_idx));
                                 }
                             }
-                            if let Some(g) = slot {
-                                ctx.emit(Instruction::StoreGlobal(g, dst));
-                            }
+                            self.finish_binding(name, dst, slot, ctx);
                             idx += 1;
                         }
                         DestructureItem::Rest(name) => {
@@ -2125,9 +2136,7 @@ impl Compiler {
                             ctx.emit(Instruction::DestructureRest(
                                 dst, r_rhs, (idx + 1) as u32, trailing as u32,
                             ));
-                            if let Some(g) = slot {
-                                ctx.emit(Instruction::StoreGlobal(g, dst));
-                            }
+                            self.finish_binding(name, dst, slot, ctx);
                             idx += 1;
                         }
                         DestructureItem::Ignore => {
@@ -2145,9 +2154,7 @@ impl Compiler {
                     let field_idx = self.intern_string(field);
                     let (dst, slot) = self.binding_target(var_name, ctx)?;
                     ctx.emit(Instruction::NamedTupleGet(dst, r_rhs, field_idx));
-                    if let Some(g) = slot {
-                        ctx.emit(Instruction::StoreGlobal(g, dst));
-                    }
+                    self.finish_binding(var_name, dst, slot, ctx);
                 }
             }
         }
@@ -2552,9 +2559,7 @@ impl Compiler {
 
         // Publish the counter into the named iterator variable (L24)
         ctx.emit(Instruction::CopyReg(r_i, r_cnt));
-        if let Some(g) = i_slot {
-            ctx.emit(Instruction::StoreGlobal(g, r_i));
-        }
+        self.finish_binding(iter_var, r_i, i_slot, ctx);
 
         self.compile_block(&lp.body, ctx)?;
 
@@ -5161,9 +5166,7 @@ impl Compiler {
             // scanned the text from the start on every turn (ZYVM-025).
             let r_cur = r_cursor.expect("the string path sets its cursor");
             ctx.emit(Instruction::StrCharNext(r_item, r_coll, r_cur));
-            if let Some(g) = item_slot {
-                ctx.emit(Instruction::StoreGlobal(g, r_item));
-            }
+            self.finish_binding(iter_var, r_item, item_slot, ctx);
             self.compile_block(&lp.body, ctx)?;
             let inc_label = ctx.current_label();
             ctx.emit(Instruction::IterStep(r_idx, r_len, body_label));
@@ -5174,9 +5177,7 @@ impl Compiler {
             for pos in lctx.continue_patches { ctx.patch_jump(pos, inc_label); }
         } else {
             ctx.emit(Instruction::ArrayGet(r_item, r_coll, r_idx));
-            if let Some(g) = item_slot {
-                ctx.emit(Instruction::StoreGlobal(g, r_item));
-            }
+            self.finish_binding(iter_var, r_item, item_slot, ctx);
             self.compile_block(&lp.body, ctx)?;
             let inc_label = ctx.current_label();
             ctx.emit(Instruction::IterStep(r_idx, r_len, body_label));
