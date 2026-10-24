@@ -1060,7 +1060,7 @@ The complete life of a variable, as implemented in both engines (v0.0.8):
 | Block death | Enclosing block ends | Scope popped; block-local variables released |
 | Frame death | Function returns | The whole call frame is released |
 | **Auto-free** | **Right after the statement containing its last use** | Last-use analysis releases the value early — see below |
-| Explicit death | `\ var` | Immediate destruction; reassignment resurrects the name |
+| Explicit death | `\ var` | Immediate destruction; reassignment resurrects the name, where `\` took it from |
 | Program end | Last statement | Everything remaining is released |
 
 **Automatic destruction at last use (auto-free)** — since v0.0.8, both engines
@@ -1082,6 +1082,19 @@ as before.
 > `\` is a lifetime error. Auto-free never produces that error in a correct
 > program — if you ever see `internal: use after auto-destruction`, it is an
 > interpreter bug: please report it.
+
+**Reassigning a destroyed name** gives it back to the scope `\` took it from,
+from whichever block the assignment is in — a `?`, a loop's body, a loop's own
+variable, a destructuring (v0.0.11). A block that does not run, or a loop that
+turns zero times, gives nothing back; a lambda or a function writes only its own
+names, so it gives back nothing of the file's.
+
+```zymbol
+x = 5
+\ x
+@ i:1..3 { x = i * 10 }
+>> x ¶           // → 30
+```
 
 > **A module's variable** follows the same rule, and it is the module's that
 > ends: after `\ c` in one function of a module, every function of that module
