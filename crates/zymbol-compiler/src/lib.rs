@@ -4243,7 +4243,23 @@ impl Compiler {
                                     Err(e) => return Err(e),
                                 }
                             }
-                            _ => {}
+                            // A range, a comparison or a list inside the list is
+                            // tested on its element as the same pattern is in an
+                            // arm, as the tree-walker does (GLB-148). They fell to
+                            // an empty arm here and passed, so `[9]` matched
+                            // `[1..5]` and `[[9, 2]]` matched `[[1, _]]`.
+                            other => {
+                                let r_idx = ctx.alloc_temp()?;
+                                ctx.emit(Instruction::LoadInt(r_idx, (i + 1) as i64));
+                                let r_elem = ctx.alloc_temp()?;
+                                ctx.emit(Instruction::ArrayGet(r_elem, r_sub, r_idx));
+                                let (sub_skips, sub_to_body) = self.emit_pattern_test(other, r_elem, ctx)?;
+                                struct_skip_patches.extend(sub_skips);
+                                let next_elem = ctx.current_label();
+                                for p in sub_to_body {
+                                    ctx.patch_jump(p, next_elem);
+                                }
+                            }
                         }
                     }
                     // Structural matched — jump to body (placeholder, patched after body label)
@@ -4293,7 +4309,34 @@ impl Compiler {
                                     _ => {}
                                 }
                             }
-                            _ => {}
+                            // A name is its value, compared (DM-26), as in the
+                            // structural path: here it never matched, so
+                            // `?? 3 { [a] => … }` with `a = 3` took the `_`.
+                            Pattern::Ident(name, span) => {
+                                match self.compile_ident_pattern_test(name, *span, r_sub, ctx) {
+                                    Ok(r_cmp) => {
+                                        jump_to_body_patches.push(ctx.emit(Instruction::JumpIf(r_cmp, 0)));
+                                    }
+                                    Err(CompileError::UndefinedVariable(n)) => {
+                                        let idx = self.intern_string(&format!(
+                                            "undefined variable '{}' in match pattern", n));
+                                        ctx.emit(Instruction::RaiseError(idx));
+                                    }
+                                    Err(e) => return Err(e),
+                                }
+                            }
+                            // A range, a comparison or a nested list: the scalar is
+                            // tested as the same pattern tests it in an arm
+                            // (GLB-148). They never matched here.
+                            other => {
+                                let (sub_skips, sub_to_body) = self.emit_pattern_test(other, r_sub, ctx)?;
+                                jump_to_body_patches.extend(sub_to_body);
+                                jump_to_body_patches.push(ctx.emit_jump_placeholder());
+                                let next_elem = ctx.current_label();
+                                for p in sub_skips {
+                                    ctx.patch_jump(p, next_elem);
+                                }
+                            }
                         }
                     }
                     // No containment match → skip to next case
