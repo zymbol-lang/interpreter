@@ -4414,13 +4414,29 @@ the i18n pattern with no special handling:
 | Module | Functions | Since |
 |--------|-----------|-------|
 | `std/math` | `sqrt` `exp` `ln` `log` `pow` `abs` `ceil` `floor` `round` `min` `max` `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `sinh` `cosh` `tanh` `sigmoid` · constants `PI`, `E` | v0.0.6 |
-| `std/random` | `entero` `rango` `peso_f64` | v0.0.6 |
+| `std/random` | `entero` `rango` `peso_f64` · `semilla` (v0.0.11) | v0.0.6 |
 | `std/json` | `decode(text)` `decode_map(text, map)` `encode(value)` | v0.0.7 |
 | `std/io` | `read` `write` `append` `exists` `delete` `list` `mkdir` | v0.0.7 |
 | `std/net` | `get` `post` `post_json` `head` | v0.0.7 |
 | `std/db` | `connect` `disconnect` `exec` `query` `query_one` `query_value` `tx` `begin` `commit` `rollback` `savepoint` `release` `rollback_to` `exec_script` `table_exists` | v0.0.7 |
 | `std/term` | `width` `pad_left` `pad_right` `center` `truncate` | v0.0.8 |
 | `std/time` | `now` `today` `parts` `of` `format` `add` `diff` | v0.0.9 |
+
+**`std/random` — a seed repeats a run.** `entero(lo, hi)` is an Int in `[lo, hi]`,
+`rango(n)` one in `[0, n)`, `peso_f64()` a Float in `[-0.1, 0.1]`. Unseeded, a run draws a
+different sequence each time. `semilla(n)` fixes it from that point: the same seed gives the
+same numbers on every run **and in every engine** — the tree-walker, the VM and the
+playground (v0.0.11). To replay a run, print the seed it used and pass it back as an
+argument. The seed belongs to the process, as the numeral mode does: a module that calls
+`semilla` fixes the sequence of whoever imports it too.
+
+```zymbol
+<# std/random => azar
+azar::semilla(2026)
+>> azar::entero(1, 6) " " azar::entero(1, 6) " " azar::entero(1, 6) ¶   // → 4 2 2
+azar::semilla(2026)
+>> azar::entero(1, 6) " " azar::entero(1, 6) " " azar::entero(1, 6) ¶   // → 4 2 2
+```
 
 **`std/term` — display width in terminal columns.** `width` counts **columns**, not
 graphemes: CJK ideographs, kana, hangul and most emoji take two columns each, so a
