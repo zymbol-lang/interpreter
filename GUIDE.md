@@ -4417,7 +4417,7 @@ the i18n pattern with no special handling:
 | `std/random` | `entero` `rango` `peso_f64` · `semilla` (v0.0.11) | v0.0.6 |
 | `std/json` | `decode(text)` `decode_map(text, map)` `encode(value)` | v0.0.7 |
 | `std/io` | `read` `write` `append` `exists` `delete` `list` `mkdir` | v0.0.7 |
-| `std/net` | `get` `post` `post_json` `head` | v0.0.7 |
+| `std/net` | `get` `post` `post_json` `head` · `timeout` (v0.0.11) | v0.0.7 |
 | `std/db` | `connect` `disconnect` `exec` `query` `query_one` `query_value` `tx` `begin` `commit` `rollback` `savepoint` `release` `rollback_to` `exec_script` `table_exists` | v0.0.7 |
 | `std/term` | `width` `pad_left` `pad_right` `center` `truncate` | v0.0.8 |
 | `std/time` | `now` `today` `parts` `of` `format` `add` `diff` | v0.0.9 |
@@ -4562,12 +4562,25 @@ txt = io::read("no-existe.txt")
 
 `std/net` is synchronous (no async). `get`/`post`/`post_json` accept an optional trailing
 `headers` argument — an array of 2-element `(String, String)` tuples — to reach authenticated
-APIs. After the headers comes an optional **time limit** in seconds, an Int or a Float above
-zero (v0.0.11); `head` takes it as its second argument. A request that has not finished by
+APIs. After the headers comes an optional **time limit** in seconds, an Int or a Float, `0`
+or more (v0.0.11); `head` takes it as its second argument. A request that has not finished by
 then is a soft `##Network(timeout: no answer within N s)` — `head` is `#0` — and the program
-goes on. Without it, a request waits as long as the server takes, so give one to every call
-whose server may not answer: `net::get(url, [], 5)` checks a service, while a long call
-(a model generating text) can do without one. JSON object ↔ **dictionary** `#(…)` (key order preserved), JSON array ↔ `Array`, null ↔ `Unit`.
+goes on. A request that gives no limit takes the process's own, set by `net::timeout(s)`;
+`0` is no limit, in a call (whatever the process's) and in `timeout`. Without either, a
+request waits as long as the server takes. `timeout` returns the limit it replaces (`0` when
+there was none), so a module that needs another one for a while can put the old one back:
+
+```zymbol
+<# std/net => net
+net::timeout(10)                         // every request below waits at most 10 s…
+vivo = net::head(url, 2)                 // …but this one, 2 s
+texto = net::post_json(url, cuerpo, [], 0)  // and this one, as long as it takes
+antes = net::timeout(30)                 // 30 s for a while
+net::timeout(antes)                      // and back to 10
+```
+
+The limit is the process's, as `random::semilla` is: a module that sets it sets it for
+whoever imports it too. JSON object ↔ **dictionary** `#(…)` (key order preserved), JSON array ↔ `Array`, null ↔ `Unit`.
 
 > When writing JSON **literals** in source, escape `{` as `\{` (an unescaped `{` starts string
 > interpolation). JSON read from a file or the network needs no escaping.

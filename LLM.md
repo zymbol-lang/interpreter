@@ -290,7 +290,7 @@ layer (`_j::decode => decodificar`).
 Stdlib (same module system, native): `std/math` (`sqrt exp ln log pow abs ceil floor round
 min max sin cos tan asin acos atan atan2 sinh cosh tanh sigmoid`, `PI` `E`) · `std/random`
 (`entero rango peso_f64 semilla`) · `std/json` (`decode decode_map encode`) · `std/io` (`read write
-append exists delete list mkdir`) · `std/net` (`get post post_json head`) · `std/db`
+append exists delete list mkdir`) · `std/net` (`get post post_json head timeout`) · `std/db`
 (`connect exec query query_one query_value tx begin commit rollback …`) · `std/term`
 (`width pad_left pad_right center truncate` — **display columns**, not graphemes: CJK and
 most emoji are 2 columns, so lay TUI out with `t::width`, never `$#`) · `std/time`
