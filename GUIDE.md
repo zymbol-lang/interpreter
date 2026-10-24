@@ -4562,7 +4562,12 @@ txt = io::read("no-existe.txt")
 
 `std/net` is synchronous (no async). `get`/`post`/`post_json` accept an optional trailing
 `headers` argument — an array of 2-element `(String, String)` tuples — to reach authenticated
-APIs. JSON object ↔ **dictionary** `#(…)` (key order preserved), JSON array ↔ `Array`, null ↔ `Unit`.
+APIs. After the headers comes an optional **time limit** in seconds, an Int or a Float above
+zero (v0.0.11); `head` takes it as its second argument. A request that has not finished by
+then is a soft `##Network(timeout: no answer within N s)` — `head` is `#0` — and the program
+goes on. Without it, a request waits as long as the server takes, so give one to every call
+whose server may not answer: `net::get(url, [], 5)` checks a service, while a long call
+(a model generating text) can do without one. JSON object ↔ **dictionary** `#(…)` (key order preserved), JSON array ↔ `Array`, null ↔ `Unit`.
 
 > When writing JSON **literals** in source, escape `{` as `\{` (an unescaped `{` starts string
 > interpolation). JSON read from a file or the network needs no escaping.
