@@ -15,6 +15,7 @@
 pub mod count;
 pub mod depth;
 pub mod errkind;
+pub mod net;
 pub mod num;
 pub mod screen;
 pub mod shell;

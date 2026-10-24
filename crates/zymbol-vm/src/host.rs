@@ -84,6 +84,8 @@ pub struct HttpRequest<'a> {
     pub headers: &'a [(String, String)],
     /// `(content type, body)` for a POST.
     pub body: Option<(&'a str, &'a str)>,
+    /// The time limit the program gave, in seconds; `None` is none (ZethyCLI G1).
+    pub timeout: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,7 +122,7 @@ pub trait Host {
     /// `net::get`, `net::post`, `net::post_json`: the response body.
     fn http(&mut self, request: HttpRequest<'_>) -> Result<String, HttpError>;
     /// `net::head`: whether the URL answered with a success.
-    fn http_head(&mut self, url: &str) -> Result<bool, HttpError>;
+    fn http_head(&mut self, url: &str, timeout: Option<f64>) -> Result<bool, HttpError>;
     /// A `std/db` builtin, by its id in `zymbol_bytecode::builtins`. `Err` is a
     /// hard error; a database's own failure is a soft `##DB` value in `Ok`.
     fn db(&mut self, builtin_id: u16, args: Vec<Value>) -> Result<Value, String>;
@@ -149,7 +151,7 @@ impl Host for BasicHost {
     fn http(&mut self, _request: HttpRequest<'_>) -> Result<String, HttpError> {
         Err(HttpError::Unavailable(NET_UNAVAILABLE.to_string()))
     }
-    fn http_head(&mut self, _url: &str) -> Result<bool, HttpError> {
+    fn http_head(&mut self, _url: &str, _timeout: Option<f64>) -> Result<bool, HttpError> {
         Err(HttpError::Unavailable(NET_UNAVAILABLE.to_string()))
     }
     fn db(&mut self, _builtin_id: u16, _args: Vec<Value>) -> Result<Value, String> {

@@ -519,6 +519,17 @@ fn response_to_value(resp: Result<String, HttpError>) -> Result<Value, String> {
     }
 }
 
+/// The optional time limit after the headers, in seconds: an Int or a Float
+/// above zero (ZethyCLI G1). Absent, the request waits as long as it takes.
+fn parse_limit(arg: Option<Value>, fname: &str) -> Result<Option<f64>, String> {
+    match arg {
+        None => Ok(None),
+        Some(Value::Int(n)) if n > 0 => Ok(Some(n as f64)),
+        Some(Value::Float(f)) if f > 0.0 && f.is_finite() => Ok(Some(f)),
+        Some(_) => Err(zymbol_common::net::bad_limit_message(fname)),
+    }
+}
+
 fn net_get(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     let mut it = args.into_iter();
     let url = match it.next() {
@@ -526,8 +537,9 @@ fn net_get(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
         _ => return Err("net::get: expected String url".into()),
     };
     let headers = parse_headers(it.next(), "net::get")?;
+    let timeout = parse_limit(it.next(), "net::get")?;
     response_to_value(host.http(HttpRequest {
-        method: HttpMethod::Get, url: url.as_str(), headers: &headers, body: None,
+        method: HttpMethod::Get, url: url.as_str(), headers: &headers, body: None, timeout,
     }))
 }
 
@@ -536,9 +548,10 @@ fn net_post_as(args: Vec<Value>, host: &mut dyn Host, fname: &str, content_type:
     match (it.next(), it.next()) {
         (Some(Value::String(url)), Some(Value::String(body))) => {
             let headers = parse_headers(it.next(), fname)?;
+            let timeout = parse_limit(it.next(), fname)?;
             response_to_value(host.http(HttpRequest {
                 method: HttpMethod::Post, url: url.as_str(), headers: &headers,
-                body: Some((content_type, body.as_str())),
+                body: Some((content_type, body.as_str())), timeout,
             }))
         }
         _ => Err(format!("{}: expected (String, String)", fname)),
@@ -546,8 +559,9 @@ fn net_post_as(args: Vec<Value>, host: &mut dyn Host, fname: &str, content_type:
 }
 
 fn net_head(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
-    match args.into_iter().next() {
-        Some(Value::String(url)) => match host.http_head(url.as_str()) {
+    let mut it = args.into_iter();
+    match it.next() {
+        Some(Value::String(url)) => match host.http_head(url.as_str(), parse_limit(it.next(), "net::head")?) {
             Ok(b) => Ok(Value::Bool(b)),
             Err(HttpError::Network(_)) => Ok(Value::Bool(false)),
             Err(HttpError::Unavailable(e)) => Err(e),

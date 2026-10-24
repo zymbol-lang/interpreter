@@ -5,10 +5,16 @@
 //! they can be caught with try-catch. A wrong argument type is a programmer error
 //! and aborts with a hard `RuntimeError`.
 //!
-//!   get(url[, headers])             -> String | Error    HTTP GET, returns body
-//!   post(url, body[, headers])      -> String | Error    POST text/plain, returns body
-//!   post_json(url, body[, headers]) -> String | Error    POST application/json, returns body
-//!   head(url)                       -> Bool               #1 if reachable (2xx), else #0
+//!   get(url[, headers[, seconds]])             -> String | Error    HTTP GET, returns body
+//!   post(url, body[, headers[, seconds]])      -> String | Error    POST text/plain, returns body
+//!   post_json(url, body[, headers[, seconds]]) -> String | Error    POST application/json, returns body
+//!   head(url[, seconds])                       -> Bool               #1 if reachable (2xx), else #0
+//!
+//! `seconds` is a time limit for the whole request, an Int or a Float above
+//! zero (ZethyCLI G1, decided by the author on 2026-10-24): past it the answer
+//! is a soft `##Network(timeout: no answer within N s)`, and `head` is `#0`.
+//! Without it a request waits as long as the server takes — a server that
+//! accepts and never answers held all three engines past two minutes.
 //!
 //! The optional `headers` argument is an Array of 2-element `(String, String)`
 //! tuples — e.g. `[("x-api-key", key), ("anthropic-version", "2023-06-01")]`.
@@ -57,16 +63,40 @@ fn parse_headers(arg: Option<Value>, fname: &str, span: Span) -> Result<Vec<(Str
     }
 }
 
+/// The optional time limit after the headers, in seconds (ZethyCLI G1).
+fn parse_limit(arg: Option<Value>, fname: &str, span: Span) -> Result<Option<f64>> {
+    match arg {
+        None => Ok(None),
+        Some(Value::Int(n)) if n > 0 => Ok(Some(n as f64)),
+        Some(Value::Float(f)) if f > 0.0 && f.is_finite() => Ok(Some(f)),
+        Some(_) => Err(RuntimeError::Generic {
+            message: zymbol_common::net::bad_limit_message(fname),
+            span,
+        }),
+    }
+}
+
+/// A request with the time limit applied, when there is one.
+fn limited<B>(req: ureq::RequestBuilder<B>, limit: Option<f64>) -> ureq::RequestBuilder<B> {
+    req.config().timeout_global(limit.map(std::time::Duration::from_secs_f64)).build()
+}
+
 /// Convert a ureq response into a Zymbol value (body String, or soft Network error).
+/// Out of time, the words every engine uses (ZethyCLI G1).
 fn response_to_value(
     resp: std::result::Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+    limit: Option<f64>,
 ) -> Value {
+    let said = |e: ureq::Error| match (e, limit) {
+        (ureq::Error::Timeout(_), Some(s)) => zymbol_common::net::timeout_message(s),
+        (e, _) => e.to_string(),
+    };
     match resp {
         Ok(mut resp) => match resp.body_mut().read_to_string() {
             Ok(body) => Value::String(body.into()),
-            Err(e) => net_error(e.to_string()),
+            Err(e) => net_error(said(e)),
         },
-        Err(e) => net_error(e.to_string()),
+        Err(e) => net_error(said(e)),
     }
 }
 
@@ -81,11 +111,12 @@ fn net_get(args: Vec<Value>, span: Span) -> Result<Value> {
         }),
     };
     let headers = parse_headers(it.next(), "net::get", span)?;
-    let mut req = ureq::get(url.as_str());
+    let limit = parse_limit(it.next(), "net::get", span)?;
+    let mut req = limited(ureq::get(url.as_str()), limit);
     for (k, v) in &headers {
         req = req.header(k, v);
     }
-    Ok(response_to_value(req.call()))
+    Ok(response_to_value(req.call(), limit))
 }
 
 /// net::post("url", "body"[, headers]) -> String | Error  (Content-Type: text/plain)
@@ -94,11 +125,12 @@ fn net_post(args: Vec<Value>, span: Span) -> Result<Value> {
     match (it.next(), it.next()) {
         (Some(Value::String(url)), Some(Value::String(body))) => {
             let headers = parse_headers(it.next(), "net::post", span)?;
-            let mut req = ureq::post(url.as_str()).header("Content-Type", "text/plain");
+            let limit = parse_limit(it.next(), "net::post", span)?;
+            let mut req = limited(ureq::post(url.as_str()), limit).header("Content-Type", "text/plain");
             for (k, v) in &headers {
                 req = req.header(k, v);
             }
-            Ok(response_to_value(req.send(body.as_str())))
+            Ok(response_to_value(req.send(body.as_str()), limit))
         }
         _ => Err(RuntimeError::Generic {
             message: "net::post: expected (String, String)".into(),
@@ -113,11 +145,12 @@ fn net_post_json(args: Vec<Value>, span: Span) -> Result<Value> {
     match (it.next(), it.next()) {
         (Some(Value::String(url)), Some(Value::String(body))) => {
             let headers = parse_headers(it.next(), "net::post_json", span)?;
-            let mut req = ureq::post(url.as_str()).header("Content-Type", "application/json");
+            let limit = parse_limit(it.next(), "net::post_json", span)?;
+            let mut req = limited(ureq::post(url.as_str()), limit).header("Content-Type", "application/json");
             for (k, v) in &headers {
                 req = req.header(k, v);
             }
-            Ok(response_to_value(req.send(body.as_str())))
+            Ok(response_to_value(req.send(body.as_str()), limit))
         }
         _ => Err(RuntimeError::Generic {
             message: "net::post_json: expected (String, String)".into(),
@@ -126,10 +159,14 @@ fn net_post_json(args: Vec<Value>, span: Span) -> Result<Value> {
     }
 }
 
-/// net::head("url") -> Bool  (#1 if reachable, #0 on error)
+/// net::head("url"[, seconds]) -> Bool  (#1 if reachable, #0 on error or out of time)
 fn net_head(args: Vec<Value>, span: Span) -> Result<Value> {
-    match args.into_iter().next() {
-        Some(Value::String(url)) => Ok(Value::Bool(ureq::head(url.as_str()).call().is_ok())),
+    let mut it = args.into_iter();
+    match it.next() {
+        Some(Value::String(url)) => {
+            let limit = parse_limit(it.next(), "net::head", span)?;
+            Ok(Value::Bool(limited(ureq::head(url.as_str()), limit).call().is_ok()))
+        }
         _ => Err(RuntimeError::Generic {
             message: "net::head: expected String url".into(),
             span,
@@ -150,11 +187,12 @@ pub(crate) fn register() -> HashMap<String, Rc<FunctionDef>> {
         };
     }
 
-    // arity -1 (variadic): get/post/post_json take an optional trailing headers arg.
+    // arity -1 (variadic): get/post/post_json take optional headers and a time
+    // limit after them, head a time limit (ZethyCLI G1).
     native!("get",       -1, net_get);
     native!("post",      -1, net_post);
     native!("post_json", -1, net_post_json);
-    native!("head",       1, net_head);
+    native!("head",      -1, net_head);
 
     m
 }

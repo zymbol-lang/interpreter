@@ -270,9 +270,10 @@ impl host::Host for NativeHost {
 
     #[cfg(feature = "http")]
     fn http(&mut self, request: HttpRequest<'_>) -> Result<String, HttpError> {
+        let limit = request.timeout.map(std::time::Duration::from_secs_f64);
         let resp = match (request.method, request.body) {
             (host::HttpMethod::Get, _) => {
-                let mut req = ureq::get(request.url);
+                let mut req = ureq::get(request.url).config().timeout_global(limit).build();
                 for (k, v) in request.headers {
                     req = req.header(k, v);
                 }
@@ -280,16 +281,22 @@ impl host::Host for NativeHost {
             }
             (host::HttpMethod::Post, body) => {
                 let (content_type, body) = body.unwrap_or(("text/plain", ""));
-                let mut req = ureq::post(request.url).header("Content-Type", content_type);
+                let mut req = ureq::post(request.url).config().timeout_global(limit).build()
+                    .header("Content-Type", content_type);
                 for (k, v) in request.headers {
                     req = req.header(k, v);
                 }
                 req.send(body)
             }
         };
+        // Out of time, in the words every engine uses (ZethyCLI G1).
+        let said = |e: ureq::Error| match (e, request.timeout) {
+            (ureq::Error::Timeout(_), Some(s)) => zymbol_common::net::timeout_message(s),
+            (e, _) => e.to_string(),
+        };
         match resp {
-            Ok(mut resp) => resp.body_mut().read_to_string().map_err(|e| HttpError::Network(e.to_string())),
-            Err(e) => Err(HttpError::Network(e.to_string())),
+            Ok(mut resp) => resp.body_mut().read_to_string().map_err(|e| HttpError::Network(said(e))),
+            Err(e) => Err(HttpError::Network(said(e))),
         }
     }
 
@@ -299,12 +306,13 @@ impl host::Host for NativeHost {
     }
 
     #[cfg(feature = "http")]
-    fn http_head(&mut self, url: &str) -> Result<bool, HttpError> {
-        Ok(ureq::head(url).call().is_ok())
+    fn http_head(&mut self, url: &str, timeout: Option<f64>) -> Result<bool, HttpError> {
+        let limit = timeout.map(std::time::Duration::from_secs_f64);
+        Ok(ureq::head(url).config().timeout_global(limit).build().call().is_ok())
     }
 
     #[cfg(not(feature = "http"))]
-    fn http_head(&mut self, _url: &str) -> Result<bool, HttpError> {
+    fn http_head(&mut self, _url: &str, _timeout: Option<f64>) -> Result<bool, HttpError> {
         Err(HttpError::Unavailable(host::NET_UNAVAILABLE.to_string()))
     }
 
