@@ -17,6 +17,7 @@ mod modules;
 mod stdlib_access;
 mod unused_imports;
 mod destroyed;
+mod match_coverage;
 mod unreachable;
 mod variable_analysis;
 mod cfg;
@@ -36,6 +37,7 @@ pub use stdlib_access::check_stdlib_access;
 pub use unused_imports::check_unused_imports;
 pub use unreachable::check_unreachable;
 pub use destroyed::check_destroyed_reads;
+pub use match_coverage::check_match_coverage;
 pub use variable_analysis::{VariableAnalyzer, VariableInfo, VariableDiagnostic, Severity};
 pub use cfg::{ControlFlowGraph, CfgNode, CfgEdge, EdgeCondition, NodeId};
 pub use def_use::{
