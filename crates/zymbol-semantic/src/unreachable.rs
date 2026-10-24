@@ -52,12 +52,12 @@ const HELP_AFTER_EXIT: &str = "delete it, or move it above the exit";
 const HELP_CONSTANT: &str = "remove the dead code, or make the condition depend on something that can change";
 
 #[derive(Clone, Copy, PartialEq)]
-enum Const {
+pub(crate) enum Const {
     Bool(bool),
     Num(f64),
 }
 
-fn fold(e: &Expr) -> Option<Const> {
+pub(crate) fn fold(e: &Expr) -> Option<Const> {
     match e {
         Expr::Literal(lit) => match lit.value {
             Literal::Bool(b) => Some(Const::Bool(b)),
