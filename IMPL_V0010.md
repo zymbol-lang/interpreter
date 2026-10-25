@@ -2,8 +2,9 @@
 
 > **Status: released as v0.0.10 on 2026-10-12.** Part I is what landed, Part II what had to close before
 > the tag and how each row closed, and Part III what the launch itself found.
-> `Cargo.toml` reads `0.0.10` and the installed binary answers `zymbol 0.0.10`. Part I is
-> what has landed, Part II is what remains before the tag.
+> `Cargo.toml` read `0.0.10` and the installed binary answered `zymbol 0.0.10`. *(Until
+> 2026-10-25 this block also said "Part II is what remains before the tag" — true when it was
+> written on 2026-10-11, and contradicted by its own first line once the tag existed.)*
 >
 > **This plan was written on 2026-10-11 and then acted on the same day.** Its first
 > draft listed five debts in § E. Working through them closed all five, took five

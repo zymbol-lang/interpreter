@@ -4,11 +4,11 @@
 > is the default engine, and what each operation costs is measured and brought down — time
 > and memory, against Python as the reference and without changing the language. Planned
 > for 2026-11-01; the plan and its progress are in `ROADMAP_V0011_ES.md`.
-> Validation (measured 2026-10-20 on the `v0.0.11` branch): **714 corpus files, 708
-> agreeing, 0 diverging** across all three engines; **1076 unit tests**, 0 failed;
-> **1 722 ZyDDT cells** (2026-10-21), all agreeing, none KNOWN; **268 findings closed, none
-> open** — the last two, GLB-139 and ZYTW-016 (a text read by position, and copied by every
-> read, in the tree-walker; GLB-139 in zyjs too), were fixed that day; `zyq suite` reports
+> Validation (measured 2026-10-25 on the `v0.0.11` branch, `b2a14b0`): **714 corpus files, 708
+> agreeing, 0 diverging** across all three engines; **1110 unit tests**, 0 failed;
+> **1 765 ZyDDT cells**, all agreeing, none KNOWN; **274 findings closed, none
+> open** — the most recent, GLB-147 to GLB-149, ZYVM-032, ZYJS-070 and ZYJS-071, were found
+> and fixed on 2026-10-23 and 2026-10-24 by the probes behind AGENTIC.md G4 and G5; `zyq suite` reports
 > **all gates pass**, with no `cost` case KNOWN.
 > **0.0.10 is the latest published release.**
 >
@@ -129,7 +129,7 @@
 
 | Suite | Status |
 |-------|--------|
-| Unit + integration (`cargo test`) | ✅ 1076 passed, 0 failed, 4 ignored |
+| Unit + integration (`cargo test`) | ✅ 1110 passed, 0 failed, 4 ignored |
 | TW/VM consensus (`zyq consensus --engines zytw,zyvm`) | ✅ 708 of 714 agree, 0 diverge (6 excused for every engine by a reason in `corpus.toml`) |
 | Three-engine consensus (`zyq consensus`) | ✅ 708 agree, 0 diverge — the browser engine included |
 | Golden files (`zyq expect`) | ✅ 677/677 via `run`, **0 stale** · 31/31 via `check` |
@@ -140,8 +140,8 @@
 | RosettaStone i18n suite (105 languages, in `zyq suite --only web`'s example consensus) | ✅ PASS |
 
 The whole question at once: `cd ../zyquality && ./zyq suite` — **all gates pass** as of
-2026-10-20. Three layers that did not exist at v0.0.9 are in it: ZyDDT's matrix (46 axes,
-1 705 cells, 171 checked against an implementation that is not ours), the 89 probes behind
+2026-10-25. Three layers that did not exist at v0.0.9 are in it: ZyDDT's matrix (46 axes,
+1 765 cells, 194 checked against an implementation that is not ours), the 89 probes behind
 `LLM.md`, and the cost gate (25 cases, every ratio within its limit or KNOWN under an open
 finding).
 
@@ -276,7 +276,7 @@ zy-GO did before HLZ-008 was found.
 
 - ~~**Module system in VM**~~ — HLZ-008, HLZ-009, HLZ-010, MM-10 and MM-11 closed the known
   divergences. The TW/VM consensus reports **708 of 714** corpus files byte-identical under
-  both engines (2026-10-20), `zyquality/corpus/modules_scope/` included. **No corpus file
+  both engines (2026-10-25), `zyquality/corpus/modules_scope/` included. **No corpus file
   carries an in-file skip marker**: `@vm-skip` was retired along with the four other
   exclusion mechanisms `zyquality/corpus.toml` replaced, and every exclusion now names the
   engine, the tag and the reason in that one file.

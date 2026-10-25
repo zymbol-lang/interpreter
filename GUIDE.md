@@ -4,10 +4,26 @@
 > `zymbol run` (register VM, the default since v0.0.11) and `zymbol run --tw` (tree-walker).
 > If a construct is not documented here, it may not be implemented.
 
-**Interpreter version**: v0.0.10
+**Interpreter version**: v0.0.11
 **Test coverage**: every annotated example below is executed by `zyquality/docs/guide_verify.py`.
 The language itself is graded on the corpus by `zyq suite`, where `zyquality/corpus.toml` — not a
 marker inside the file — says which engine may be judged on which file, and why not.
+
+**New in v0.0.11**: the register VM is the default engine, and `--tw` asks for the tree-walker
+([§1](#1-running-programs)); `zymbol run --deny` refuses a program that can reach a denied effect
+before any of it runs, `zymbol check --effects` lists that surface, and `zymbol run --timeout`
+stops a program after so many seconds ([§1](#1-running-programs)); a value placed in `<\ … \>`
+reaches the shell as one quoted word ([§19](#19-shell-integration)); `zymbol check` warns about a
+read that `\ x` has certainly destroyed ([Variable Lifecycle](#variable-lifecycle)) and about a
+`??` that may find no arm ([When no arm matches](#when-no-arm-matches)); a range or a comparison
+inside a list pattern means what it means in an arm ([List Patterns](#list-patterns)); a unary
+applies to its operand with its postfix, so `-v[1]` is `-(v[1])` ([Arithmetic](#arithmetic));
+more than 10 000 active calls is a catchable `##Depth` ([§16](#16-error-handling));
+`random::semilla(n)` repeats a run, and `std/net` takes a time limit per request and per process
+([§17](#standard-library-modules-std)); a dictionary literal that writes a key twice is refused
+([§12b](#12b-dictionaries)); and a negative integer written in a base carries its sign in front,
+`-0x00FF` ([§18b](#18b-numeral-modes)). The rest of the release is speed and memory: what each
+operation costs, measured and brought down, without changing what a program means.
 
 **New in v0.0.10**: `##Kind("…")` builds an error value and `##Kind(m) =>` reads its message
 back ([§7](#error-patterns--kindm), [§16](#16-error-handling)); `##'expr` turns an Int code point
@@ -173,7 +189,7 @@ zymbol run --help
 
 Both modes produce **identical output** on the full parity suite
 (`zyq consensus --engines zytw,zyvm` in `zyquality/`, which `tests/scripts/vm_compare.sh`
-wraps; of 666 corpus files 660 agree and **0 diverge** as of 2026-09-04, the remaining 6 excused
+wraps; of 714 corpus files 708 agree and **0 diverge** as of 2026-10-25, the remaining 6 excused
 for every engine by a reason in `corpus.toml`).
 
 **What a program cost — `zymbol run --count`.** After the program ends, one line on
@@ -197,6 +213,30 @@ something is linear is to run it at two sizes and divide — ×4 the input and �
 steps is linear, ×16 is quadratic. `steps` alone would miss the commonest cause:
 writing into a shared collection is one step at any size, and it is `copied` and `bytes`
 that grow. `zyquality/cost/` asserts these ratios for the cases it holds.
+
+**What a program may do, and for how long — `--deny`, `check --effects`, `--timeout`**
+(v0.0.11). Nothing is limited unless whoever runs the program asks:
+
+```bash
+zymbol check --effects programa.zy      # every effect it can reach, with file and line
+zymbol run --deny net,shell programa.zy # refused before any of it runs if it reaches one
+zymbol run --timeout 10 programa.zy     # stopped after 10 s of wall clock, exit status 124
+```
+
+```text
+$ zymbol check --effects programa.zy
+effects of programa.zy:
+  net     programa.zy:1  <# std/net
+  shell   programa.zy:2  <\ … \>
+```
+
+The effects are `io`, `net`, `db`, `time`, `random` (the `std/` modules), `shell` (`<\ \>`),
+`sub` (`</ />`), `stdin` (`<<`, `<<|`) and `argv` (`><`). `--deny` reads every file the entry
+imports or runs before deciding, so an effect hidden in a module or a sub-script is refused
+too, and a file it cannot read is refused, since nothing can say what it would do.
+`--timeout` stops a loop, a recursion, a wait or a blocked command alike, ends the commands
+`<\ \>` started with it, and cannot be caught by the program: the limit belongs to whoever
+runs it.
 
 **Diagnostic tiers.** The same analyzers back every entry point, with one
 deliberate difference in coverage:
@@ -681,7 +721,8 @@ Both engines (tree-walker and `--vm`) validate identically. A leading sign is al
 `><` works in all three engines (tree-walker, `--vm` and the browser engine).
 
 **Where `zymbol run`'s own options stop.** The options of `run` itself — `--vm`,
-`--tw`, `--script`, `--keep-temp` and `-h`/`--help` — are recognised after the
+`--tw`, `--script`, `--keep-temp`, `--keys`, `--count`, `--deny`, `--timeout` and
+`-h`/`--help` — are recognised after the
 file name until the first argument that is not one of them; from there on,
 everything goes to the program. A bare `--` ends them explicitly:
 
@@ -1082,6 +1123,18 @@ as before.
 > `\` is a lifetime error. Auto-free never produces that error in a correct
 > program — if you ever see `internal: use after auto-destruction`, it is an
 > interpreter bug: please report it.
+
+**A read that `\` has certainly destroyed is warned before it runs** (v0.0.11). Where
+every path to a read goes through `\ x` with no new assignment of `x` in between,
+`zymbol check` — and `run`, before running, in both engines and in the editor — says so:
+
+```text
+warning: 'x' is read after '\ x' destroyed it (line 2)
+  = help: this read fails when it runs — move the destruction after it, or remove it
+```
+
+It is a warning and not an error: the read is still a run-time error when it runs, and
+`!?` still catches it, so a read in a branch that never runs costs nothing (`MEM-8`).
 
 **Reassigning a destroyed name** gives it back to the scope `\` took it from,
 from whichever block the assignment is in — a `?`, a loop's body, a loop's own
@@ -3506,7 +3559,10 @@ not be, since it would have to be the empty tuple as well.
 > other mutable and addressed by key. The mark says which is meant before the reader
 > reaches the colon.
 
-It is addressed **by key, and only by key**.
+It is addressed **by key, and only by key**. A literal that writes the same key twice is
+refused before the program runs (v0.0.11) — `#(a: 1, a: 2)` says *key 'a' appears twice in
+the dictionary* — because one of the two values would be lost without a word
+(`zymbol-design/COLLECTIONS.md` § 5).
 
 ### Reading
 

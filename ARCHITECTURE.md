@@ -246,7 +246,7 @@ struct Interpreter {
 ### Register VM Execution
 
 #### `zymbol-bytecode`
-Instruction set definition: 171 instruction variants (counted 2026-10-17); the table names the
+Instruction set definition: 172 instruction variants (counted 2026-10-25); the table names the
 ones a reader meets first.
 
 | Category | Instructions |
@@ -591,7 +591,7 @@ embeds the interpreter, `package` produces a `.zyp` archive of source that still
 | Int → Char cast (`##'expr`) | ✓ | ✓ |
 | Virtual screen (`--keys`) and counters (`--count`) | ✓ | ✓ |
 
-Measured 2026-10-20 on the v0.0.11 branch: `zyq consensus --engines zytw,zyvm` (what
+Measured 2026-10-25 on the v0.0.11 branch: `zyq consensus --engines zytw,zyvm` (what
 `tests/scripts/vm_compare.sh` now delegates to) reports **708 of 714 corpus files agreeing
 and 0 diverging**, the other 6 excused for every engine by a reason declared in
 `zyquality/corpus.toml`. Adding `zyjs` does not change the agreement count — all three
@@ -599,7 +599,7 @@ engines reach the same 708. Against the browser engine alone the pair agrees on 
 19 in the difference being the files `corpus.toml` excuses (`std/db` is ODBC, `<\ cmd \>`
 has no browser equivalent, TUI needs a real TTY, and the 6 excused for every engine) —
 excused, not divergent. Agreement on a corpus is not the whole question: ZyDDT's matrix
-asks the engines 1 722 declared cells (2026-10-21), and all three agree on every one.
+asks the engines 1 765 declared cells (2026-10-25), and all three agree on every one.
 
 **No corpus file carries an in-file skip marker.** `@vm-skip` was one of five incompatible
 exclusion mechanisms that `zyquality/corpus.toml` replaced; nothing reads it any more.

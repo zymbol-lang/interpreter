@@ -5,8 +5,11 @@
 > `zyvm`, `zyjs` — unless a line says otherwise. It describes what the engines
 > do; it does not decide anything.
 >
-> **§ 12 is re-measured against `zymbol 0.0.10` (2026-10-11); §§ 1–11 are not.**
-> Every open row was probed again, over kinds of value and not one representative:
+> **§ 12 was re-measured against `zymbol 0.0.10` (2026-10-11); §§ 1–11 were not.**
+> **Every gap it then held open was decided by the author and closed on the `v0.0.11`
+> branch between 2026-10-21 and 2026-10-24**, each row saying how and with what it was
+> verified; those closing measurements are against `zymbol 0.0.11`.
+> On 2026-10-11 every open row was probed again, over kinds of value and not one representative:
 > G1, G2, G4, G5 and G8 stand, G10 was closed that day, and **G3 was wrong as
 > written** — the browser engine has a budget, and the Rust engines do not run an
 > infinite recursion "until a timeout" but abort the process. The measurement, row
@@ -291,8 +294,8 @@ real working directory.
 
 ## 12. What the language does not guarantee
 
-Two gaps **open** (`G5` and `G8`), five closed (`G10` on 2026-10-11, `G1` on
-2026-10-21, `G2` and `G3` on 2026-10-22, `G4` on 2026-10-23), one withdrawn and two
+**No gap open.** Seven closed (`G10` on 2026-10-11, `G1` on 2026-10-21, `G2` and `G3` on
+2026-10-22, `G4` on 2026-10-23, `G5` and `G8` on 2026-10-24), one withdrawn and two
 superseded by premises.
 `G1`, `G2` and `G3` were not implementation gaps at all but design decisions nobody had
 taken: `G1` was the reason `AGT-4` claimed auditability and not enforceability, decided
