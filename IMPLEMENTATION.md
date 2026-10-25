@@ -2,7 +2,7 @@
 
 Internal reference for contributors and tooling authors: EBNF grammar, feature coverage, and execution model details.
 
-**Interpreter version**: v0.0.9
+**Interpreter version**: v0.0.11
 
 See also: [GUIDE.md](GUIDE.md) — language guide for users  
 See also: [REFERENCE.md](REFERENCE.md) — limitations and symbol table
@@ -16,7 +16,7 @@ Zymbol has two execution strategies that produce identical output for all suppor
 | Mode | Invocation | Description |
 |------|-----------|-------------|
 | Tree-walker | `zymbol run --tw file.zy` | Walks the AST directly. Supports all language features. The default until v0.0.11, and the REPL's only engine. |
-| Register VM | `zymbol run file.zy` | The default since v0.0.11 (`--vm` is still accepted). Compiles to bytecode first, then executes. Faster by a factor that depends on the workload — 1.4–6× on the microbenchmarks, 11–13× on an alpha-beta search; quote the workload, never a single number, and re-measure rather than copy one (ARCHITECTURE.md — that search read 42–46× until the tree-walker stopped copying aggregates it had no reason to copy). Module system support reached parity with the tree-walker in v0.0.8 (see REFERENCE.md L23 and `tests/scripts/vm_compare.sh` → `zyq consensus --engines zytw,zyvm`, 660/666 agreeing with 0 divergences as of 2026-09-07). Argument-count mismatches are rejected by semantic analysis before either engine starts; the compiler's own call-site check is a backstop for API callers that skip that analysis (REFERENCE.md L28). Default engine for `.zyp` packages. |
+| Register VM | `zymbol run file.zy` | The default since v0.0.11 (`--vm` is still accepted). Compiles to bytecode first, then executes. Faster by a factor that depends on the workload — 1.4–6× on the microbenchmarks, 11–13× on an alpha-beta search; quote the workload, never a single number, and re-measure rather than copy one (ARCHITECTURE.md — that search read 42–46× until the tree-walker stopped copying aggregates it had no reason to copy). Module system support reached parity with the tree-walker in v0.0.8 (see REFERENCE.md L23 and `tests/scripts/vm_compare.sh` → `zyq consensus --engines zytw,zyvm`, 708/714 agreeing with 0 divergences as of 2026-10-25). Argument-count mismatches are rejected by semantic analysis before either engine starts; the compiler's own call-site check is a backstop for API callers that skip that analysis (REFERENCE.md L28). Default engine for `.zyp` packages. |
 
 All examples in GUIDE.md are verified against both modes. A feature listed as "TW only" in the coverage table below is not yet supported by the VM.
 
@@ -111,10 +111,13 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 | `std/math`, `std/random` | ✅ | ✅ | v0.0.6 — native stdlib via `<# std/<name> => alias` |
 | `std/json`, `std/io`, `std/net` | ✅ | ✅ | v0.0.7 — soft `##Parse`/`##IO`/`##Network` errors |
 | `std/db` (ODBC, vendor-neutral) | ✅ | ✅ | v0.0.7 — soft `##DB` errors; builtin ids 500–514 |
+| `std/random` seed `random::semilla(n)` | ✅ | ✅ | v0.0.11 — the same seed gives the same sequence in all three engines (AGENTIC.md G8) |
+| `std/net` time limit (`net::get(url, [], s)`, `net::timeout(s)`) | ✅ | ✅ | v0.0.11 — per request, and the process's own; `0` is none (ZethyCLI G1) |
+| Call depth limit `##Depth` | ✅ | ✅ | v0.0.11 — more than 10 000 active calls is a catchable error; a tail call does not count (GLB-133) |
 | `std/term` (terminal display metrics) | ✅ | ✅ | v0.0.8 — `width`/`pad_*`/`center`/`truncate`; columns via `unicode-width`; builtin ids 600–604 |
 | Static undefined-function detection at `check` time | ✅ | — | v0.0.7 — semantic phase (`zymbol-semantic/type_check.rs`) |
 | Static argument-count check, all call forms | ✅ | — | v0.0.8 — `f()`, `alias::f()` and `std::f()` alike, fatal before execution; arity table from `zymbol-semantic/call_arity.rs` (REFERENCE.md L28) |
-| Auto-free (destruction at last use) | ✅ | ✅ | v0.0.8 — `zymbol-semantic/last_use.rs`; TW frees per statement, VM emits `LoadUnit` (temporaries not yet covered) |
+| Auto-free (destruction at last use) | ✅ | ✅ | v0.0.8 — `zymbol-semantic/last_use.rs`; TW frees per statement, VM emits `LoadUnit`; since v0.0.11 the VM also lets go of a call's result when its statement ends (ZYVM-022) |
 | `.zyp` packages (`zymbol package`, `zymbol run pkg.zyp`) | ✅ | ✅ | v0.0.8 — CLI/format feature, no grammar surface; VM is the default engine for a `.zyp` |
 | `do-while ~>` (post-cond loop) | ❌ | ❌ | **Dismissed 2026-06-12** — infinite loop + `@!` is the idiom; `~>` stays unoccupied |
 
@@ -122,10 +125,10 @@ The authoritative formal grammar is in [`zymbol-lang.ebnf`](zymbol-lang.ebnf) an
 
 ## Appendix A. Normative EBNF Grammar
 
-Source file: [`zymbol-lang.ebnf`](zymbol-lang.ebnf) — version 3.4.0, sprint v0.0.7 with three v0.0.9 correction passes and one for v0.0.10 (2026-10-11: the forms that release added, each probed in all three engines), the last of which probed every rule it touched against the installed binary.
+Source file: [`zymbol-lang.ebnf`](zymbol-lang.ebnf) — version 3.4.0, sprint v0.0.7 with three v0.0.9 correction passes, one for v0.0.10 (2026-10-11: the forms that release added, each probed in all three engines) and one for v0.0.11 (2026-10-21: a unary applies to its operand with its postfix, GLB-145), the v0.0.10 one of which probed every rule it touched against the installed binary.
 
 The canonical grammar is maintained in `zymbol-lang.ebnf`; the copy below is reproduced
-**verbatim** from that file (synced 2026-10-11). If they ever diverge, the file wins.
+**verbatim** from that file (synced 2026-10-25). If they ever diverge, the file wins.
 
 ```ebnf
 (*
@@ -135,6 +138,8 @@ The canonical grammar is maintained in `zymbol-lang.ebnf`; the copy below is rep
   Sprint:     v0.0.7, with three v0.0.9 correction passes
               (2026-08-09 targeted; 2026-09-07 collections; 2026-09-07 verified)
               and one for v0.0.10 (2026-10-11, the forms that release added)
+              and one for v0.0.11 (2026-10-21, a unary takes its operand's
+              postfix: GLB-145)
   Test counts: authoritative via the test suite, not this header.
     Three-engine consensus:  cd ../zyquality && ./zyq suite
     Unit tests:              cargo test
