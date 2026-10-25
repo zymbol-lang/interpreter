@@ -1,17 +1,32 @@
 # Mapa de ruta — v0.0.11: la VM es el motor, y lo que cuesta cada cosa
 
-> **Estado: abierta.** La rama `v0.0.11` existe desde el 2026-10-12; su primer commit fue el de
-> versión (`62baa56`). **La etapa 1 está implementada** (2026-10-13) salvo el sondeo de las
-> cinco zonas: ver «Avance» dentro de ella. **La etapa 2 tiene lista de trabajos y arnés de medición**
-> (2026-10-14), y las cinco correcciones de la lista hechas: PERF-06, PERF-04, PERF-05 a, PERF-03 y PERF-07
-> (2026-10-16, `ZYVM-023`, `ZYVM-025`, `GLB-130`, `GLB-132` y `GLB-133`). Quedan PERF-05 b (aplazada, D8) y PERF-08
-> (reproducir primero). Ver «Avance» dentro de ella. De las etapas 3 y 4 no hay nada hecho.
+> **Estado: abierta, con todo el trabajo hecho salvo lo que el autor sacó de ella** (revisado el 2026-10-25). La rama
+> `v0.0.11` existe desde el 2026-10-12; su primer commit fue el de versión (`62baa56`). **Etapa 1:** hecha el 2026-10-13,
+> y el sondeo de las cinco zonas el 2026-10-16. **Etapa 2:** las siete correcciones de la lista hechas — PERF-06, PERF-04,
+> PERF-05 a, PERF-03 y PERF-07 el 2026-10-16 (`ZYVM-023`, `ZYVM-025`, `GLB-130`, `GLB-132`, `GLB-133`), PERF-05 b el
+> 2026-10-17 (`ZYVM-028`, D8) y PERF-08 el 2026-10-19 (`GLB-134`). **Etapa 3:** 3.1, 3.2 y 3.4 hechas; 3.3 fuera de la
+> versión. **Etapa 4:** en pausa. Queda escribir `IMPL_V0011.md` y la sección `[0.0.11]` del CHANGELOG, en borrador
+> desde el 2026-10-25.
+>
+> *Hasta el 2026-10-25 este párrafo decía que faltaba el sondeo de las cinco zonas, que quedaban PERF-05 b y PERF-08 y
+> que de las etapas 3 y 4 no había nada hecho: era el estado del 2026-10-16.*
 >
 > **Plan de cierre (2026-10-19):** lo que queda va en seis grupos, aprobados por el autor con la opción recomendada de
 > cada uno; ver «Plan de cierre — lo que queda, por grupos». Los grupos 1 a 5 están hechos.
 >
-> **Avance del 2026-10-20:** 3.2 (forma A), 3.1 (forma B) y 3.4 (forma A) hechas; 3.3 aplazada por el autor, que la
-> retoma quizá el 2026-10-23; la etapa 4, en pausa entera. De paso: `ZYVM-031`, `GLB-142` y `GLB-143`, corregidos.
+> **Avance del 2026-10-20:** 3.2 (forma A), 3.1 (forma B) y 3.4 (forma A) hechas; 3.3 aplazada por el autor; la etapa 4,
+> en pausa entera. De paso: `ZYVM-031`, `GLB-142` y `GLB-143`, corregidos.
+>
+> **Del 2026-10-21 al 2026-10-24, fuera de las etapas:** las brechas de `AGENTIC.md` § 12 que seguían abiertas, cada una
+> decidida por el autor y cerrada el mismo día — G1 (`zymbol run --deny`, `zymbol check --effects`), G2 (un valor en
+> `<\ \>` es una palabra entrecomillada), G3 (`zymbol run --timeout`), G4 (aviso de lectura tras `\ x`), G5 (aviso de
+> `??` sin brazo seguro) y G8 (`random::semilla(n)`); y ZethyCLI G1 (`std/net` con límite de tiempo, por petición y del
+> proceso con `net::timeout(s)`). Las sondas de G4 y G5 encontraron y corrigieron `GLB-147` a `GLB-149`, `ZYVM-032`,
+> `ZYJS-070` y `ZYJS-071`; `GLB-127`, que destapó `GLB-144` a `GLB-146`, se corrigió el 2026-10-21 con los tres. Medido el 2026-10-25 en `b2a14b0`: `zyq suite` da *all gates pass* y ningún hallazgo queda abierto.
+>
+> **Alcance cerrado por el autor el 2026-10-24:** de lo que quedaba por decidir sólo entró ZethyCLI G1; lo demás, y
+> cualquier hallazgo nuevo, va a la v0.0.12 salvo que bloquee la salida (`ZyDDT/PENDIENTES.md` § 2). **El 2026-10-25 el
+> autor sacó la 3.3 (`.zyb`) de la v0.0.11:** pasa a la v0.0.12 con ese mismo alcance.
 >
 > **Alcance y fecha (decisión del autor, 2026-10-20):** las etapas 3 (3.1 a 3.4) y 4 (`zyvm.js`) **entran en la v0.0.11**,
 > empezando por 3.2. Esto deroga lo que el grupo 6 y D5 decidieron el 2026-10-19, que las pasaban a la v0.0.12. La v0.0.11
@@ -877,7 +892,8 @@ módulo una vez por importador). Las preguntas de arriba: el formato necesitarí
 hace falta mientras esté en pausa, y un motor wasm puede llevar el compilador, que ya compila a wasm.
 
 **Decidido por el autor el 2026-10-20: se aplaza**, ni ahora ni a la v0.0.12: el autor la retoma, quizá, el viernes
-2026-10-23. Las opciones que quedan sobre la mesa: un `.zyb` explícito (`zymbol compile`, ~1,5 días), una caché automática
+2026-10-23. **Cambiado por el autor el 2026-10-25: sale de la v0.0.11 y pasa a la v0.0.12**, por el cierre de alcance
+del 2026-10-24; no se retomó el 2026-10-23. Las opciones que quedan sobre la mesa: un `.zyb` explícito (`zymbol compile`, ~1,5 días), una caché automática
 al estilo de `__pycache__` (~2–3 días) o desestimarlo.
 
 ### 3.4 WebAssembly

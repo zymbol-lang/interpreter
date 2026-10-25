@@ -7,6 +7,144 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
+## [0.0.11] — unreleased
+
+> **Draft of 2026-10-25**, written from the 103 commits on the `v0.0.11` branch up to
+> `b2a14b0`. It is completed and dated the day before the tag, as `[0.0.10]` was; until then
+> a line here may still move. Release planned for 2026-11-01.
+
+An **optimization** release. The register VM is the default engine, and what each
+operation costs was measured — against Python as the reference, and in units a machine does
+not change (`--count`, `zyquality/cost/`) — and brought down without changing what a
+program means. Late in the branch the safeguards `interpreter/AGENTIC.md` § 12 still held
+open were each decided by the author and implemented: an agent's program can now be refused
+before it runs, stopped after a time, and given values that never become shell syntax.
+
+Each entry names the finding it comes from, in `ZyDDT/HALLAZGOS/` (`GLB-…` in `GLOBAL.md`,
+`ZYTW-…`, `ZYVM-…`, `ZYJS-…` in the engine's file); `G1`…`G8` are the rows of
+`AGENTIC.md` § 12; `PERF-…` is `zyquality/bench/big/HALLAZGOS.md`; `D1`…`D8` and the stages
+3.1–3.4 are `ROADMAP_V0011_ES.md`. `IMPL_V0011.md` is the account of the release.
+
+### Changed — rules a program can break on
+
+- **`zymbol run` runs the register VM.** `--tw` asks for the tree-walker; `--vm` is still
+  accepted and changes nothing (D3). The REPL stays on the tree-walker (D2). Stage 1.
+- **A value placed in `<\ … \>` reaches the shell as one quoted word** (G2). What is written
+  in the command goes to the shell as it is; every value, side by side or as `{v}`, is one
+  word (a collection, one per element). A program that put quotes around a value by hand now
+  passes those quotes along: write `<\ "test -f " ruta \>`, not `<\ "test -f '" ruta "'" \>`.
+  Through `cmd.exe`, a value holding `"`, `%` or a line break is a soft `##IO`.
+- **A unary applies to its operand with its postfix**: `-v[1]` is `-(v[1])`, `!seen$? x` is
+  `!(seen$? x)`. The Rust parsers read `(-v)[1]`, negating an array (GLB-145). `>> +a` is
+  accepted at the start of an output item, as `zyjs` already did (GLB-127).
+- **A dictionary literal that writes a key twice is refused** before the program runs —
+  `key 'a' appears twice in the dictionary` (GLB-131; `zymbol-design/COLLECTIONS.md` § 5).
+- **More than 10 000 active calls is a `##Depth` error** that `!?` catches, the same number
+  in every engine; a tail call does not count (D7, GLB-133, ZYTW-017). Until now a deep
+  recursion aborted the process with `stack overflow` and no Zymbol error.
+- **A negative integer written in a base carries its sign in front**: `0x|(0 - 255)|` is
+  `-0x00FF`, as Python's `hex(-255)`. The Rust engines printed an `i64`'s two's complement
+  (GLB-136).
+- **`>>` takes an interpolated string as a string literal**, so operators and postfixes apply
+  to it: `"a{x}"$#` parses (GLB-144).
+- **The count of `#?` on a number is the length of its display**, sign and point included:
+  `-2.5` is 4. `zyjs` changes; the Rust engines already counted so (GLB-146).
+- **Reassigning a name `\` destroyed gives it back where `\` took it from**, from any block
+  of its strong environment — a `?`, a loop's body or variable, a destructuring (GLB-147).
+- **A range or a comparison inside a list pattern means what it means in an arm**:
+  `[1..5] =>` against `[3]` matches. The three engines gave three answers (GLB-148).
+- **A comparison pattern accepts a Number scrutinee** in `check` (GLB-149).
+
+### Added
+
+- **`zymbol run --deny <effects>`** refuses a program, before any of it runs, if anything it
+  can reach — every module it imports and every file it runs — uses a denied effect: `io`,
+  `net`, `db`, `time`, `random`, `shell`, `sub`, `stdin`, `argv`. **`zymbol check --effects`**
+  lists that surface with file and line (G1).
+- **`zymbol run --timeout <s>`** stops a program after so many seconds of wall clock, with
+  exit status 124, and ends the commands `<\ \>` started (G3).
+- **`random::semilla(n)`** fixes `std/random`'s generator from that point: the same seed
+  gives the same sequence in all three engines (G8).
+- **A time limit for `std/net`**: per request (`net::get(url, [], 5)`, `net::head(url, 5)`)
+  and for the process (`net::timeout(s)`, which returns the previous limit; `0` is none).
+  ZethyCLI G1.
+- **Two warnings of `zymbol check`** (and of `run`, before running, and the editor): a read
+  that `\ x` has certainly destroyed (G4), and a `??` with no `_` arm that is not provably
+  complete (G5). The run-time errors stay; `!?` still catches them.
+- A warning where an edit starts a line inside a `>>`, which makes it an output item
+  (GLB-137).
+- **The compact build** — `cargo build --release -p zymbol-cli --no-default-features` leaves
+  out `zymbol lsp`, `zymbol repl` and `std/net`: 100 crates instead of 210, 6.6 MB instead of
+  12.3 (measured 2026-10-20). `lsp`, `repl` and `http` are features, on by default (3.2).
+
+### Changed — building
+
+- **`std/db` is no longer a default feature**: `cargo build --release --features db` turns it
+  on. Every Linux and macOS release was already built without it; the Windows release keeps
+  it (D4). A binary without it answers `module not found: std/db`.
+- **The VM's terminal and host are traits** (`zymbol_vm::host`); `zymbol-host` is the native
+  one, and `zymbol-vm` depends on no system library (3.1). The compiler and the VM build for
+  `wasm32`, and the gate checks that they do (3.4).
+- The static Linux binary (musl) allocates with mimalloc, tuned not to hoard: musl's own
+  malloc made it 17× slower than the `.deb` at building a text in v0.0.10 (PERF-08, GLB-134).
+
+### Performance
+
+What grew with the size of the input and should not have, each held now by a ratio in
+`zyquality/cost/`:
+
+- Building a text with `s = s x y` appends in place in the VM (PERF-06, ZYVM-023).
+- `@ ch:texto` walks a text with a byte cursor (PERF-04, ZYVM-024, ZYVM-025).
+- A slice of a text copies the piece, not the text, through either instruction that slices it
+  (PERF-05 a, GLB-130, ZYVM-026); a text keeps its
+  character count, so `s$#`, `s[i]` and a slice stop walking it (PERF-05 b, D8, ZYVM-028); a
+  text that is not ASCII finds a position from a crumb every 64 characters in the VM and the
+  tree-walker, and from its characters in `zyjs` (GLB-139, ZYTW-016).
+- The dictionary is an `IndexMap` and finds a key by hash (PERF-03, GLB-132), hashed with
+  foldhash, seeded at random per process; it keeps insertion order, so no output depends on
+  the seed.
+- `m[i>j]$~ v` writes the path where it is, not into a copy of the receiver, in the
+  tree-walker and `zyjs` (GLB-140); `m$+ [literal]` no longer copies its receiver in `zyjs`
+  (ZYJS-068).
+- The tree-walker's `Value` is 24 bytes instead of 120 (ZYTW-019).
+- The VM lets go of a call's result when its statement ends: two such calls in a row no
+  longer cost twice the memory (ZYVM-022).
+- The VM's dispatch: a counted loop and a for-each end each pass in one instruction
+  (`RangeStep`, ZYVM-029; `IterStep`); calls push their frame inline, a direct call needs no
+  stack check, a tail call inside a module is one (ZYVM-027), `$>`, `$|` and `$<` call their
+  lambda on the VM's frames, and `$^` evaluates a comparator that only compares its
+  parameters without a call.
+- `zymbol check` parses a module once, not once per importer (GLB-143), and a re-export
+  layer parses its source once, not once per name (GLB-142).
+
+### Fixed
+
+- The VM compiles a Char range as a `??` pattern (ZYVM-032); every element of a list pattern
+  is tested as in an arm (GLB-148).
+- `@ <expr>` reads its specifier once: a call in the condition ran one extra time in both
+  Rust engines (GLB-135).
+- A path that goes on past an absent key is `##Key` in the VM, as reading it is (GLB-141);
+  the last step of a path into a dictionary adds its key in the tree-walker (ZYTW-018).
+- `$[i:n]` refuses in the count's words in the tree-walker (GLB-129).
+- `zymbol fmt` is idempotent again on a `??` inside an expression (GLB-138).
+- `zymbol build`'s executable gets the compiler's `std/net` and `std/db` (ZYVM-031).
+- `zyjs` reads a `??` pattern as a pattern, not an expression, and checks its type against
+  the subject's (ZYJS-070, ZYJS-071).
+
+### Removed
+
+- `interpreter/MANUAL.md`, a v0.0.4 snapshot frozen since v0.0.5 (2026-10-21). The history
+  of the language is this file and git.
+
+### Documentation
+
+- GUIDE, REFERENCE and IMPLEMENTATION at v0.0.11; GUIDE § 1 describes `--deny`,
+  `check --effects` and `--timeout`. The canonical `zymbol-lang.ebnf` carries GLB-145's
+  grammar, which on 2026-10-21 reached only its copy in IMPLEMENTATION.md.
+- `AGENTIC.md` § 12: no gap open.
+
+---
+
 ## [0.0.10] — 2026-10-12
 
 A **measurement** release. On 2026-09-12 the documents that say what the language
