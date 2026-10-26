@@ -76,6 +76,9 @@ indexmap = "2.2"
 # The hasher of `zymbol_common::Dict` (2026-10-18): already in the lock
 # through hashbrown, so it brings in no new crate.
 foldhash = "0.1.5"
+# `kill(2)` for `zymbol run --timeout` (GLB-150): already in the lock, so it
+# brings in no new crate.
+libc = "0.2"
 
 # Serialization (for bytecode)
 # bincode stays on 1.x deliberately: 2.x/3.x changes the wire format, and the

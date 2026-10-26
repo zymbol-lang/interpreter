@@ -73,6 +73,24 @@ fn a_running_shell_command_ends_with_the_program() {
     }
 }
 
+/// GLB-150: ending the commands ends their own process group and nothing else.
+/// Through `/usr/bin/kill`, procps-ng 3.3 read `kill -KILL -17` as `kill(-1)` and
+/// killed every process of the user — on GitHub's Ubuntu 22.04 runner, the
+/// runner's agent with it, so this job died for an hour with no log.
+#[cfg(unix)]
+#[test]
+fn ending_a_command_spares_every_other_process() {
+    let mut witness = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+    for engine in ["--vm", "--tw"] {
+        let d = tempfile::tempdir().unwrap();
+        stopped_in(d.path(), "r = <\\ \"sleep 5\" \\>\n>> r ¶\n", engine);
+    }
+    let alive = witness.try_wait().unwrap().is_none();
+    let _ = witness.kill();
+    let _ = witness.wait();
+    assert!(alive, "a process outside the command's group was killed");
+}
+
 fn stopped_in(dir: &Path, src: &str, engine: &str) {
     let p = program(dir, src);
     zymbol()

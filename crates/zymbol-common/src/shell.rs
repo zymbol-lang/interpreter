@@ -149,8 +149,21 @@ pub fn stop_running_commands() {
     STOPPING.store(true, std::sync::atomic::Ordering::SeqCst);
     let ids: Vec<u32> = RUNNING.lock().map(|r| r.clone()).unwrap_or_default();
     for id in ids {
+        // The system call, not `/usr/bin/kill`: procps-ng 3.3 (Ubuntu 22.04,
+        // Debian 11 and 12) reads `kill -KILL -17` as `kill(-1)` — every process
+        // of the user, a CI runner's agent included (GLB-150). Each command is the
+        // leader of its own group (`process_group(0)` above), so `-id` is that
+        // group and nothing else. A pgid of 0 or 1 would be our own group or
+        // every process, so it is never signalled.
         #[cfg(unix)]
-        let _ = Command::new("kill").arg("-KILL").arg(format!("-{id}")).status();
+        if let Ok(pgid) = libc::pid_t::try_from(id)
+            && pgid > 1
+        {
+            // SAFETY: kill(2) takes plain integers and touches no memory of ours.
+            unsafe {
+                libc::kill(-pgid, libc::SIGKILL);
+            }
+        }
         #[cfg(windows)]
         let _ = Command::new("taskkill").args(["/T", "/F", "/PID", &id.to_string()]).status();
     }
