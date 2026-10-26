@@ -128,6 +128,9 @@ What grew with the size of the input and should not have, each held now by a rat
 - `$[i:n]` refuses in the count's words in the tree-walker (GLB-129).
 - `zymbol fmt` is idempotent again on a `??` inside an expression (GLB-138).
 - `zymbol build`'s executable gets the compiler's `std/net` and `std/db` (ZYVM-031).
+- `zymbol run --timeout` ends the commands it stops with `kill(2)` on their own process group.
+  It called `/usr/bin/kill`, which procps-ng 3.3 (Ubuntu 22.04, Debian 11 and 12) reads as
+  `kill(-1)`: every process of the user died with the program (GLB-150).
 - `zyjs` reads a `??` pattern as a pattern, not an expression, and checks its type against
   the subject's (ZYJS-070, ZYJS-071).
 

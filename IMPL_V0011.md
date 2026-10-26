@@ -94,6 +94,11 @@ JavaScript would not be needed.
 | ZethyCLI G1 | option A, widened | `std/net` with a time limit per request and per process (`net::timeout(s)`) |
 
 Their probes found GLB-147, GLB-148, GLB-149, ZYVM-032, ZYJS-070 and ZYJS-071, all fixed.
+G3 itself carried GLB-150, found on 2026-10-25 and fixed that day: `--timeout` ended the
+commands through `/usr/bin/kill`, which on Ubuntu 22.04 (procps-ng 3.3) reads `kill -KILL -17`
+as `kill(-1)` and kills every process of the user. GitHub's Gate had been red on every push
+since G3, its runner's agent killed mid-test with no log; it is the system call now, and a test
+keeps a process outside the command's group alive.
 On 2026-10-21, GLB-127 (`>> +a`) was fixed in the parser and uncovered GLB-144, GLB-145
 (a unary takes its operand's postfix: `-v[1]` is `-(v[1])`) and GLB-146, fixed the same day.
 
@@ -116,7 +121,7 @@ entered; everything else, and any new finding, goes to v0.0.12 unless it blocks 
 
 ```bash
 cargo build --release --features db
-cargo test --release --features db              # 1110 passed, 0 failed, 4 ignored
+cargo test --release --features db              # 1111 passed, 0 failed, 4 ignored
 cd ../zyquality && make && ./zyq suite          # all gates pass, 11 min 56 s
 ```
 
@@ -140,7 +145,7 @@ cd ../zyquality && make && ./zyq suite          # all gates pass, 11 min 56 s
 | `reach` | 696 diagnostics defined in the gated layers: 527 provoked, 169 not — nothing new unprovoked |
 | `bench` | 16 PASS, 0 FAIL, 0 NEW |
 | `bigbench` | 16 of 16 programs agree with Python |
-| `zyddt` | 46 axes, **1 765 cells, all agree, none known**, 194 checked against an oracle that is not ours · 12 pins, all agree · findings: **0 open**, 274 closed |
+| `zyddt` | 46 axes, **1 765 cells, all agree, none known**, 194 checked against an oracle that is not ours · 12 pins, all agree · findings: **0 open**, 275 closed |
 | `zyddt premises` | 29 declared · 0 with no cell · 7 by review · 1 held elsewhere |
 | `cost` | 25 cases: **every ratio within its declared limit**, none KNOWN |
 | `course` | the course imports the playground's highlighter; no copy |

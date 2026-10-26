@@ -5,10 +5,11 @@
 > and memory, against Python as the reference and without changing the language. Planned
 > for 2026-11-01; the plan and its progress are in `ROADMAP_V0011_ES.md`.
 > Validation (measured 2026-10-25 on the `v0.0.11` branch, `b2a14b0`): **714 corpus files, 708
-> agreeing, 0 diverging** across all three engines; **1110 unit tests**, 0 failed;
-> **1 765 ZyDDT cells**, all agreeing, none KNOWN; **274 findings closed, none
+> agreeing, 0 diverging** across all three engines; **1111 unit tests**, 0 failed;
+> **1 765 ZyDDT cells**, all agreeing, none KNOWN; **275 findings closed, none
 > open** — the most recent, GLB-147 to GLB-149, ZYVM-032, ZYJS-070 and ZYJS-071, were found
-> and fixed on 2026-10-23 and 2026-10-24 by the probes behind AGENTIC.md G4 and G5; `zyq suite` reports
+> and fixed on 2026-10-23 and 2026-10-24 by the probes behind AGENTIC.md G4 and G5, and
+> GLB-150 (`--timeout` killed every process of the user on Ubuntu 22.04) on 2026-10-25; `zyq suite` reports
 > **all gates pass**, with no `cost` case KNOWN.
 > **0.0.10 is the latest published release.**
 >
@@ -129,7 +130,7 @@
 
 | Suite | Status |
 |-------|--------|
-| Unit + integration (`cargo test`) | ✅ 1110 passed, 0 failed, 4 ignored |
+| Unit + integration (`cargo test`) | ✅ 1111 passed, 0 failed, 4 ignored |
 | TW/VM consensus (`zyq consensus --engines zytw,zyvm`) | ✅ 708 of 714 agree, 0 diverge (6 excused for every engine by a reason in `corpus.toml`) |
 | Three-engine consensus (`zyq consensus`) | ✅ 708 agree, 0 diverge — the browser engine included |
 | Golden files (`zyq expect`) | ✅ 677/677 via `run`, **0 stale** · 31/31 via `check` |

@@ -635,7 +635,7 @@ Current status (v0.0.11 branch — 0.0.10 is the latest published release).
 reporting **all gates pass**. Re-derive a count in a fresh clone before quoting it in
 release notes — that is the rule that came out of the 544/536 correction:
 
-- **1110 tests** across the 20 crates via `cargo test --release --features db` — 0 failed, 4 ignored.
+- **1111 tests** across the 20 crates via `cargo test --release --features db` — 0 failed, 4 ignored.
 - Corpus: **714 `.zy`**, 708 with a golden, 6 excused for every engine by a written reason
   in `corpus.toml`. `zyq audit` reports no hygiene problems.
 - Tree-walker vs VM: **708 agree, 0 diverge**.
@@ -649,7 +649,7 @@ release notes — that is the rule that came out of the 544/536 correction:
 - Benchmarks: **16/16 within tolerance** of the recorded baseline, no regressions.
 - LSP against `zymbol check`: 714 files, 14 disagreements, **0 outside the baseline**.
 - ZyDDT: **46 axes, 1 765 cells, all agree, none KNOWN** — 194 of them checked
-  against an implementation that is not ours — and **no finding open**, 274 closed. The 29 premises of `zymbol-design/PREMISES.md` each have a cell or
+  against an implementation that is not ours — and **no finding open**, 275 closed. The 29 premises of `zymbol-design/PREMISES.md` each have a cell or
   are declared checked by review.
 - `LLM.md` behind **89 probes**, each quoting the sentence it stands behind; `GUIDE.md`
   **135 of 135** executable examples; `zyquality/cost/` **25 cases**, every ratio within
