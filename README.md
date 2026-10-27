@@ -706,7 +706,7 @@ cannot be rerun, so a project earns its keep as a discovery mechanism first. Eve
 distilled into a minimal `.zy` case, a golden and a unit test, and it is that cheap layer that
 names what broke when something does.
 
-The application is not retired afterwards. Nine of the eleven are registered in
+The application is not retired afterwards. Ten of the eleven are registered in
 `zyquality/project/apps.toml` and run as a gate (`gate = true`, ~60 goldens through both
 engines); `ZyFmtCheck` runs over the LDV applications **by default**, because a formatter's
 damage shows up in hand-aligned tables, five writing systems and modules importing each other,
@@ -747,7 +747,7 @@ once.
 | [ZyBank](https://github.com/zymbol-lang/ZyBank) | **v0.0.9** | Español | `std/db` in an application, money as integers with a per-currency exponent, dictionaries, configuration precedence, functions across module boundaries, keyboard input and typed fields in raw mode |
 | [GoL (Ζωή)](https://github.com/zymbol-lang/ZyGoL) | **v0.0.9** | Ελληνικά (Greek) | Conway's Game of Life with B/S rules, an application whose tests *and* their runner are Zymbol, the first suite graded on all three engines, four locales incl. Devanagari digits |
 | [ZyBF](https://github.com/zymbol-lang/ZyBF) | **v0.0.10** | Español | A mini LDV: a Brainf*** interpreter whose `.` needed an Int → Char conversion the language did not have — now `##'` — against an independent Python oracle, graded on all three engines |
-| [ZyEdit](https://github.com/zymbol-lang/ZyEdit) | **v0.0.11** | English | A terminal text editor with a desktop editor's shortcuts, opened **before** its first line: five design findings on key input, the terminal's cursor and driving a process — each with its probe and evidence in `hypotheses/` |
+| [ZyEdit](https://github.com/zymbol-lang/ZyEdit) | **v0.0.11** | English | A terminal text editor with a desktop editor's shortcuts, opened **before** its first line with five design findings on key input, the terminal's cursor and driving a process; its first two stages (editing, undo, selection, search, several buffers) then added nine more, on grapheme clusters, bytes, resizing and the cost of an edit — each with a program that reproduces it, nine of the fourteen with a check and dated evidence in `hypotheses/` |
 
 ---
 
@@ -1289,8 +1289,9 @@ operator now opens a juxtaposed operand in an assignment too (GLB-114).
 ### ZyEdit — v0.0.11 · English · opened before its first line
 
 A terminal text editor with the shortcuts of a desktop one (Ctrl+S, Ctrl+Z, Ctrl+C/V, no
-modes), opened on 2026-10-21 with **no editor code**. What it measures that no earlier project
-asked of the language:
+modes), opened on 2026-10-21 with **no editor code**. Its first two stages were written on
+2026-10-26 and 27: editing, several buffers, undo/redo, a selection with an internal clipboard,
+find and replace. What it measures that no earlier project asked of the language:
 - text as the state itself, edited at any position;
 - the cost of an edit in the middle of a long file;
 - a byte-exact round trip of a file someone owns;
@@ -1307,6 +1308,12 @@ Its log opened with five **design findings** (`DIS`, `LDV.md` § 5.2). They come
 
 Each finding keeps its probe and a dated answer in `hypotheses/`, so the same check confirms the
 fix.
+
+Writing the editor added nine more, fourteen in all, every one open for v0.0.12. Among them:
+the language has no grapheme segmentation and no case conversion, a file that is not valid
+UTF-8 cannot be read, a waiting `<<|` is not told the window changed size, inserting into
+the middle of an array (`a$+[i] v`) or removing a range costs the whole array in both Rust
+engines, and the browser engine reads `"\r"` in a string as `r`.
 
 ---
 
