@@ -747,7 +747,7 @@ once.
 | [ZyBank](https://github.com/zymbol-lang/ZyBank) | **v0.0.9** | Español | `std/db` in an application, money as integers with a per-currency exponent, dictionaries, configuration precedence, functions across module boundaries, keyboard input and typed fields in raw mode |
 | [GoL (Ζωή)](https://github.com/zymbol-lang/ZyGoL) | **v0.0.9** | Ελληνικά (Greek) | Conway's Game of Life with B/S rules, an application whose tests *and* their runner are Zymbol, the first suite graded on all three engines, four locales incl. Devanagari digits |
 | [ZyBF](https://github.com/zymbol-lang/ZyBF) | **v0.0.10** | Español | A mini LDV: a Brainf*** interpreter whose `.` needed an Int → Char conversion the language did not have — now `##'` — against an independent Python oracle, graded on all three engines |
-| [ZyEdit](https://github.com/zymbol-lang/ZyEdit) | **v0.0.11** | English | A terminal text editor with a desktop editor's shortcuts, opened **before** its first line with five design findings on key input, the terminal's cursor and driving a process; its first two stages (editing, undo, selection, search, several buffers) then added nine more, on grapheme clusters, bytes, resizing and the cost of an edit — each with a program that reproduces it, nine of the fourteen with a check and dated evidence in `hypotheses/` |
+| [ZyEdit](https://github.com/zymbol-lang/ZyEdit) | **v0.0.11** | English | A terminal text editor with a desktop editor's shortcuts, opened **before** its first line with five design findings on key input, the terminal's cursor and driving a process; its first two stages (editing, undo, selection, search, several buffers) then added ten more, on grapheme clusters, bytes, resizing, the cost of an edit and showing a screen at once — each with a program that reproduces it, ten of the fifteen with a check and dated evidence in `hypotheses/` |
 
 ---
 
@@ -1309,11 +1309,13 @@ Its log opened with five **design findings** (`DIS`, `LDV.md` § 5.2). They come
 Each finding keeps its probe and a dated answer in `hypotheses/`, so the same check confirms the
 fix.
 
-Writing the editor added nine more, fourteen in all, every one open for v0.0.12. Among them:
-the language has no grapheme segmentation and no case conversion, a file that is not valid
-UTF-8 cannot be read, a waiting `<<|` is not told the window changed size, inserting into
-the middle of an array (`a$+[i] v`) or removing a range costs the whole array in both Rust
-engines, and the browser engine reads `"\r"` in a string as `r`.
+Writing the editor added nine more and using it one, fifteen in all, every one open for
+v0.0.12. Among them: the language has no grapheme segmentation and no case conversion, a
+file that is not valid UTF-8 cannot be read, a waiting `<<|` is not told the window changed
+size, inserting into the middle of an array (`a$+[i] v`) or removing a range costs the whole
+array in both Rust engines, the browser engine reads `"\r"` in a string as `r`, and a screen
+cannot be shown at once: each `>>~` reaches the terminal on its own, so a redraw is seen
+while it is drawn.
 
 ---
 

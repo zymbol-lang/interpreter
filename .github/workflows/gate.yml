@@ -173,6 +173,7 @@ jobs:
           clone ZyBank          ZyBank
           clone ZyGoL           GoL
           clone ZyBF            ZyBrainfuck
+          clone ZyEdit          ZyEdit
 
           # The design, which is source: `zyddt premises` crosses PREMISES.md
           # with the cells in both directions, and without it that check does
