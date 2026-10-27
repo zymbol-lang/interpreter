@@ -6,7 +6,7 @@
 //! - Newline: write newline to output
 
 use std::io::Write;
-use zymbol_ast::{ClearScreen, Input, InputCast, InputPrompt, KeyInput, Newline, Output, OutputPos, TuiBlock};
+use zymbol_ast::{ClearScreen, Expr, Input, InputCast, InputPrompt, KeyInput, Newline, Output, OutputPos, TuiBlock};
 use zymbol_span::Span;
 use zymbol_lexer::StringPart;
 use crate::data_ops::{ascii_digits, parse_numeric_string};
@@ -236,8 +236,6 @@ impl<W: Write> Interpreter<W> {
     /// Positioned output: >>~ (fila, col, BKS, fg, bg) > items
     /// Sparse syntax: >>~(,,,15,0)> — None slot = do not touch that parameter.
     pub(crate) fn execute_output_pos(&mut self, op: &OutputPos) -> Result<()> {
-        use crossterm::{execute, cursor, style};
-
         // Mode: single-slot variable → dense tuple evaluated at runtime
         if op.slots.len() == 1 {
             if let Some(expr) = &op.slots[0] {
@@ -246,15 +244,12 @@ impl<W: Write> Interpreter<W> {
                     let get_int = |i: usize| -> Option<i64> {
                         match items.get(i) { Some(Value::Int(n)) => Some(*n), _ => None }
                     };
-                    if let (Some(r), Some(c)) = (get_int(0), get_int(1)) {
-                        if let Some(h) = self.headless.as_mut() {
-                            h.screen.move_to(r, c);
-                        } else {
-                            execute!(std::io::stdout(), cursor::MoveTo(c as u16 - 1, r as u16 - 1))
-                                .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
-                        }
-                    }
+                    let at = match (get_int(0), get_int(1)) {
+                        (Some(r), Some(c)) => Some((r, c)),
+                        _ => None,
+                    };
                     if self.headless.is_some() {
+                        if let (Some((r, c)), Some(h)) = (at, self.headless.as_mut()) { h.screen.move_to(r, c); }
                         for item in &op.items {
                             let v = self.eval_expr(item)?;
                             let s = self.format_value(&v);
@@ -262,27 +257,9 @@ impl<W: Write> Interpreter<W> {
                         }
                         return Ok(());
                     }
-                    let bks = get_int(2).unwrap_or(0);
-                    let mut styled = false;
-                    if bks & 1 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Bold)).ok();       styled = true; }
-                    if bks & 2 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Italic)).ok();     styled = true; }
-                    if bks & 4 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Underlined)).ok(); styled = true; }
-                    let mut colored = false;
-                    if let Some(fg) = get_int(3) {
-                        execute!(std::io::stdout(), style::SetForegroundColor(style::Color::AnsiValue(fg as u8))).ok();
-                        colored = true;
-                    }
-                    if let Some(bg) = get_int(4) {
-                        execute!(std::io::stdout(), style::SetBackgroundColor(style::Color::AnsiValue(bg as u8))).ok();
-                        colored = true;
-                    }
-                    for item in &op.items {
-                        let v = self.eval_expr(item)?;
-                        print!("{}", self.format_value(&v));
-                    }
-                    if styled || colored { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Reset)).ok(); }
-                    std::io::stdout().flush().ok();
-                    return Ok(());
+                    let text = self.positioned_text(&op.items)?;
+                    return emit_positioned(at, get_int(2).unwrap_or(0), get_int(3), get_int(4), &text)
+                        .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span });
                 }
             }
         }
@@ -326,37 +303,24 @@ impl<W: Write> Interpreter<W> {
             return Ok(());
         }
 
-        if let (Some(r), Some(c)) = (get(0), get(1)) {
-            execute!(std::io::stdout(), cursor::MoveTo(c as u16 - 1, r as u16 - 1))
-                .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
-        }
+        let at = match (get(0), get(1)) {
+            (Some(r), Some(c)) => Some((r, c)),
+            _ => None,
+        };
+        let text = self.positioned_text(&op.items)?;
+        emit_positioned(at, get(2).unwrap_or(0), get(3), get(4), &text)
+            .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })
+    }
 
-        let bks = get(2).unwrap_or(0);
-        let mut styled = false;
-        if bks & 1 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Bold)).ok();       styled = true; }
-        if bks & 2 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Italic)).ok();     styled = true; }
-        if bks & 4 != 0 { execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Underlined)).ok(); styled = true; }
-
-        let mut colored = false;
-        if let Some(fg) = get(3) {
-            execute!(std::io::stdout(), style::SetForegroundColor(style::Color::AnsiValue(fg as u8))).ok();
-            colored = true;
+    /// The items of a `>>~`, evaluated and joined before anything is written — as the VM
+    /// does, which compiles them to one string before it moves the cursor.
+    fn positioned_text(&mut self, items: &[Expr]) -> Result<String> {
+        let mut text = String::new();
+        for item in items {
+            let v = self.eval_expr(item)?;
+            text.push_str(&self.format_value(&v));
         }
-        if let Some(bg) = get(4) {
-            execute!(std::io::stdout(), style::SetBackgroundColor(style::Color::AnsiValue(bg as u8))).ok();
-            colored = true;
-        }
-
-        for expr in &op.items {
-            let v = self.eval_expr(expr)?;
-            print!("{}", self.format_value(&v));
-        }
-
-        if styled || colored {
-            execute!(std::io::stdout(), style::SetAttribute(style::Attribute::Reset)).ok();
-        }
-        std::io::stdout().flush().ok();
-        Ok(())
+        Ok(text)
     }
 
     /// TUI block: >>| { } — alternate screen + raw mode
@@ -406,6 +370,31 @@ impl<W: Write> Interpreter<W> {
         zymbol_common::screen::closed();
         result
     }
+}
+
+/// One `>>~` on the real terminal: the move, the style, the text and the reset are
+/// queued into one buffer and reach the terminal in a single write.
+///
+/// Each piece used to be an `execute!` of its own, and every `execute!` flushes, so one
+/// `>>~` with colours was four writes and the terminal was free to show every state in
+/// between — a redraw was seen while it was drawn (GAP-ZYE-015, ZyEdit/HALLAZGOS.md). The
+/// VM's host writes the same bytes the same way; the two must stay alike.
+fn emit_positioned(at: Option<(i64, i64)>, bks: i64, fg: Option<i64>, bg: Option<i64>, text: &str) -> std::io::Result<()> {
+    use crossterm::{queue, cursor, style};
+    let mut buf: Vec<u8> = Vec::new();
+    if let Some((r, c)) = at { queue!(buf, cursor::MoveTo(c as u16 - 1, r as u16 - 1))?; }
+    if bks & 1 != 0 { queue!(buf, style::SetAttribute(style::Attribute::Bold))?; }
+    if bks & 2 != 0 { queue!(buf, style::SetAttribute(style::Attribute::Italic))?; }
+    if bks & 4 != 0 { queue!(buf, style::SetAttribute(style::Attribute::Underlined))?; }
+    if let Some(fg) = fg { queue!(buf, style::SetForegroundColor(style::Color::AnsiValue(fg as u8)))?; }
+    if let Some(bg) = bg { queue!(buf, style::SetBackgroundColor(style::Color::AnsiValue(bg as u8)))?; }
+    buf.extend_from_slice(text.as_bytes());
+    if bks & 7 != 0 || fg.is_some() || bg.is_some() {
+        queue!(buf, style::SetAttribute(style::Attribute::Reset))?;
+    }
+    let mut out = std::io::stdout();
+    out.write_all(&buf)?;
+    out.flush()
 }
 
 /// Is this a key going *down*, as opposed to coming back up?

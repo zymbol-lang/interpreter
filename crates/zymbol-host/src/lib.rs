@@ -120,34 +120,27 @@ impl Terminal for NativeTerminal {
         host::stdout_hint(hint);
     }
 
+    /// One `>>~`: the move, the style, the text and the reset are queued into one buffer
+    /// and reach the terminal in a single write. Each used to be an `execute!` of its own,
+    /// and every `execute!` flushes, so the terminal was free to show every state in
+    /// between (GAP-ZYE-015, ZyEdit/HALLAZGOS.md). The tree-walker's `emit_positioned`
+    /// writes the same bytes the same way; the two must stay alike.
     fn print_at(&mut self, at: Option<(u16, u16)>, style: Style, text: &str) {
-        if let Some((r, c)) = at {
-            crossterm::execute!(std::io::stdout(),
-                crossterm::cursor::MoveTo(c - 1, r - 1)).ok();
+        use crossterm::{cursor, queue, style as st};
+        let mut buf: Vec<u8> = Vec::new();
+        if let Some((r, c)) = at { queue!(buf, cursor::MoveTo(c - 1, r - 1)).ok(); }
+        if style.bold      { queue!(buf, st::SetAttribute(st::Attribute::Bold)).ok(); }
+        if style.italic    { queue!(buf, st::SetAttribute(st::Attribute::Italic)).ok(); }
+        if style.underline { queue!(buf, st::SetAttribute(st::Attribute::Underlined)).ok(); }
+        if let Some(fg) = style.fg { queue!(buf, st::SetForegroundColor(st::Color::AnsiValue(fg))).ok(); }
+        if let Some(bg) = style.bg { queue!(buf, st::SetBackgroundColor(st::Color::AnsiValue(bg))).ok(); }
+        buf.extend_from_slice(text.as_bytes());
+        if style.bold || style.italic || style.underline || style.fg.is_some() || style.bg.is_some() {
+            queue!(buf, st::SetAttribute(st::Attribute::Reset)).ok();
         }
-        let mut styled = false;
-        if style.bold      { crossterm::execute!(std::io::stdout(), crossterm::style::SetAttribute(crossterm::style::Attribute::Bold)).ok();       styled = true; }
-        if style.italic    { crossterm::execute!(std::io::stdout(), crossterm::style::SetAttribute(crossterm::style::Attribute::Italic)).ok();     styled = true; }
-        if style.underline { crossterm::execute!(std::io::stdout(), crossterm::style::SetAttribute(crossterm::style::Attribute::Underlined)).ok(); styled = true; }
-        let mut colored = false;
-        if let Some(fg) = style.fg {
-            crossterm::execute!(std::io::stdout(),
-                crossterm::style::SetForegroundColor(
-                    crossterm::style::Color::AnsiValue(fg))).ok();
-            colored = true;
-        }
-        if let Some(bg) = style.bg {
-            crossterm::execute!(std::io::stdout(),
-                crossterm::style::SetBackgroundColor(
-                    crossterm::style::Color::AnsiValue(bg))).ok();
-            colored = true;
-        }
-        print!("{}", text);
-        if styled || colored {
-            crossterm::execute!(std::io::stdout(),
-                crossterm::style::SetAttribute(crossterm::style::Attribute::Reset)).ok();
-        }
-        std::io::stdout().flush().ok();
+        let mut out = std::io::stdout();
+        out.write_all(&buf).ok();
+        out.flush().ok();
     }
 
     fn enter_tui(&mut self) -> Result<bool, String> {

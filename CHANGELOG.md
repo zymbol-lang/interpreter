@@ -116,6 +116,12 @@ What grew with the size of the input and should not have, each held now by a rat
   parameters without a call.
 - `zymbol check` parses a module once, not once per importer (GLB-143), and a re-export
   layer parses its source once, not once per name (GLB-142).
+- A `>>~` reaches the terminal in one write, in both engines: the move, the style, the text
+  and the reset used to be an `execute!` each, and each one flushed, so a colored `>>~` was
+  four writes and the terminal showed the states in between. The bytes are the same; a clear
+  and 23 rows go from 93 writes to 24 (GAP-ZYE-015, `ZyEdit/HALLAZGOS.md`; a screen still
+  cannot be shown at once, which is v0.0.12's). The tree-walker now evaluates a `>>~`'s items
+  before it writes anything, as the VM always did.
 
 ### Fixed
 
