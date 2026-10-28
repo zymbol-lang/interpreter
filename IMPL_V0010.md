@@ -71,7 +71,7 @@ contradiction.
 
 IMPL_V009 § 10 is titled *"A named function captures the file's variables"* and records
 that as shipped. **MEM-2 reverses it**: a variable is visible only inside its own scope,
-and a named function sees its parameters and nothing else (`031148e`, 2026-09-13). The
+and a named function sees its parameters and nothing else (`d9e2e54`, 2026-09-13). The
 v0.0.9 behaviour was the retirement, on 2026-08-24, of an isolation the language had had
 before; v0.0.10 restores it, and for a stated reason — both ways of reaching a body,
 calling it and taking it as a value, now behave alike.
@@ -81,7 +81,7 @@ from a named function: all four were corpus files testing that very rule, and **
 in the nine applications**.
 
 The lambda took one more day. It first got a *warning* where the function got an error,
-and that asymmetry was withdrawn the next morning (`6c23097`, MEM-6): a lambda is a
+and that asymmetry was withdrawn the next morning (`d552bfe`, MEM-6): a lambda is a
 **light** environment that opens no boundary of its own, so it reads whatever its
 enclosing scope holds — the file at file level, the function's locals inside a function —
 and inherits the isolation rather than being excepted from it. The strong reading would
@@ -251,7 +251,7 @@ aligning on them would have spread the defect to two more engines (GLB-047).
 
 ## 5. The VM has one dispatch loop
 
-`cfcf2f2`. The largest single change to an engine in the release, and two findings.
+`11f8255`. The largest single change to an engine in the release, and two findings.
 
 **GLB-010.** The VM kept one handler per frame and no notion of an error still pending.
 So a `!?` could not nest, a `:!` filter that did not match *swallowed* the error, a `:>`
@@ -305,7 +305,7 @@ when **every** path requires it; the right side of `&&` and `||` does not bind o
 
 ## 8. An error is a value you can build — from GoL
 
-`1e1a2d1`, each of the three decided before it was built.
+`59b11be`, each of the three decided before it was built.
 
 - **`##Kind("message")`** builds a soft error value: the spelling an error prints as, and
   the kind a `:!` matches. The kind is any name in any script.
@@ -319,12 +319,12 @@ A soft error is a value: the documents stopped promising that a `:!` catches one
 
 ## 9. Subscripts, and a screen without a terminal
 
-**In-process** (GLB-017 I, `77aa0c9`). The VM had run `zymbol run "<path>"` through `sh`:
+**In-process** (GLB-017 I, `ff4efbd`). The VM had run `zymbol run "<path>"` through `sh`:
 the first `zymbol` on the `PATH`, always the tree-walker, and a `"` in the path got out of
 its quotes. Both engines now run a subscript in this process, down the road `zymbol run`
 takes, in the caller's engine. A standalone executable, which has no runner, refuses one.
 
-**Its own arguments** (`e572147`). `</ app.zy -L es --list />`: the words after the path
+**Its own arguments** (`0c552d3`). `</ app.zy -L es --list />`: the words after the path
 are the subscript's command line, literal like the path — so `zymbol package` and AGT-3
 still read the reachable program without running it.
 
@@ -380,14 +380,14 @@ found one shape four times: **a collection with two owners is copied by its firs
   caller's variable and the parameter were two owners while the call lasted. It is now the
   caller's variable, **lent**: 2 000 calls of `put(t<~, i, v) { t[i]$~ v }` over 16 000
   elements went from 2 808 M instructions to 55 M in the tree-walker and from 1 204 M to
-  19 M in the VM (commit `3186680`). Three answers depended on the copy and each was
+  19 M in the VM (commit `7eec22a`). Three answers depended on the copy and each was
   decided: what the function wrote before failing **stays written**; one variable cannot
   be two output arguments of one call (static, `'e' is given to 'h' as an output argument
   twice`); module state passed to a function of its own module is still copied.
-- **The mirror of file variables** (`af025e0`). Both engines kept a second copy of every
+- **The mirror of file variables** (`98a9e28`). Both engines kept a second copy of every
   file-level variable so a function could read it — which, since MEM-2, it cannot. Only
   what a function can still reach is mirrored.
-- **Module state in the tree-walker** (ZYTW-010, `13b394b`). A module frame was handed a
+- **Module state in the tree-walker** (ZYTW-010, `7775311`). A module frame was handed a
   copy of each variable it names and compared them all on the way out. Now the module's
   table *is* the frame's outermost scope, moved and never copied: 12 000 calls writing one
   cell of a 12 000-cell table went from 1 930 ms to 27 ms, and the growth ratio from 13.76
@@ -539,7 +539,7 @@ LLM, a normative grammar wrong in both directions).
 | Git | **21 repositories**: 20 on `v0.0.10` and ZyBF on `main`. The work of 2026-10-11 is committed in `interpreter/`, `web/`, `zyquality/` and `ZyDDT/`, one commit per finding and per repository as the branch has gone so far; a file that held pieces of several findings was committed piece by piece, and every intermediate state of `interpreter/` was compiled before it was committed. Pushing, tagging and merging are the release itself and are not done. `.github/` and `packaging/` are identical between `main` and `v0.0.10`, so the workflow definitions the release event reads are already the right ones — the order in `agents/release_merge.md` (merge **before** publishing) is still the order |
 | Installers | ✅ `packaging/verify/run-local.sh --scope full` on 2026-10-12: **41/41**, with the corpus run against the *installed* binary — 677 of 683 identical under both engines. The `.rpm`, `.pkg.tar.zst`, musl and aarch64 packages are still published unverified (`release_installers.md`, "What is still not verified") |
 | Windows `.msi` | Signing is manual in the SignPath portal; the Windows job fails by design until it is done |
-| The cost of `--count` | ✅ **Re-measured 2026-10-12**, in CPU instructions, on four builds of one HEAD (`d736ae6`, HEAD, HEAD without the counting allocator, HEAD with the counters as no-ops), median of seven: tree-walker **+2.01 %** (`bench_recursion`), +1.57 % (`stress`), +1.31 % (`bench_match`) against `d736ae6`, about 70 % of it the counting allocator, which follows the allocations — **4.2 per call in the tree-walker, 0.0 in the VM**; VM −1.1 % to +1.7 %, where only the step counter pays. The first measurement's "~15 per call" was wrong, and its no-op comparator predated the `?` fix. **Decided by the author: it stays compiled in.** `JumpIfNotCond` costs nothing |
+| The cost of `--count` | ✅ **Re-measured 2026-10-12**, in CPU instructions, on four builds of one HEAD (`0a8d29e`, HEAD, HEAD without the counting allocator, HEAD with the counters as no-ops), median of seven: tree-walker **+2.01 %** (`bench_recursion`), +1.57 % (`stress`), +1.31 % (`bench_match`) against `0a8d29e`, about 70 % of it the counting allocator, which follows the allocations — **4.2 per call in the tree-walker, 0.0 in the VM**; VM −1.1 % to +1.7 %, where only the step counter pays. The first measurement's "~15 per call" was wrong, and its no-op comparator predated the `?` fix. **Decided by the author: it stays compiled in.** `JumpIfNotCond` costs nothing |
 | zyjs and `--count` | ✅ **Decided 2026-10-12: nothing.** Its steps read ×4.00 on the program whose time is already ×6 (the copy), so a half line would not see what the harness exists to see; the clock asks it in 9 of the 15 cost cases and caught ZYJS-014 |
 | Toolchain | Still no `rust-toolchain.toml`: `cargo fmt --check` and `clippy -D warnings` are red by version, not by debt. Do not run `cargo fmt` to "fix" it before the tag |
 
@@ -594,9 +594,9 @@ declared. It does not mean correct: an axis nobody declared has no row above.*
 
 ## Verification
 
-Measured 2026-10-11 on branch `v0.0.10`, on the tree described in § 13 — `d736ae6` plus
+Measured 2026-10-11 on branch `v0.0.10`, on the tree described in § 13 — `0a8d29e` plus
 that day's changes in `interpreter/`, `web/`, `zyquality/` and `ZyDDT/` — against a
-release build of it. The same run on `d736ae6` alone, that morning,
+release build of it. The same run on `0a8d29e` alone, that morning,
 also reported *all gates pass*; the two differ by exactly what § 13 added.
 
 ```bash

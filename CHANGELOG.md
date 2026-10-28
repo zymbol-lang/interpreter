@@ -10,7 +10,7 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 ## [0.0.11] — unreleased
 
 > **Draft of 2026-10-25**, written from the 103 commits on the `v0.0.11` branch up to
-> `b2a14b0`. It is completed and dated the day before the tag, as `[0.0.10]` was; until then
+> `11d121d`. It is completed and dated the day before the tag, as `[0.0.10]` was; until then
 > a line here may still move. Release planned for 2026-11-01.
 
 An **optimization** release. The register VM is the default engine, and what each

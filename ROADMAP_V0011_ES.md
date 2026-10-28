@@ -1,7 +1,7 @@
 # Mapa de ruta — v0.0.11: la VM es el motor, y lo que cuesta cada cosa
 
 > **Estado: abierta, con todo el trabajo hecho salvo lo que el autor sacó de ella** (revisado el 2026-10-25). La rama
-> `v0.0.11` existe desde el 2026-10-12; su primer commit fue el de versión (`62baa56`). **Etapa 1:** hecha el 2026-10-13,
+> `v0.0.11` existe desde el 2026-10-12; su primer commit fue el de versión (`b7923c4`). **Etapa 1:** hecha el 2026-10-13,
 > y el sondeo de las cinco zonas el 2026-10-16. **Etapa 2:** las siete correcciones de la lista hechas — PERF-06, PERF-04,
 > PERF-05 a, PERF-03 y PERF-07 el 2026-10-16 (`ZYVM-023`, `ZYVM-025`, `GLB-130`, `GLB-132`, `GLB-133`), PERF-05 b el
 > 2026-10-17 (`ZYVM-028`, D8) y PERF-08 el 2026-10-19 (`GLB-134`). **Etapa 3:** 3.1, 3.2 y 3.4 hechas; 3.3 fuera de la
@@ -22,7 +22,7 @@
 > `<\ \>` es una palabra entrecomillada), G3 (`zymbol run --timeout`), G4 (aviso de lectura tras `\ x`), G5 (aviso de
 > `??` sin brazo seguro) y G8 (`random::semilla(n)`); y ZethyCLI G1 (`std/net` con límite de tiempo, por petición y del
 > proceso con `net::timeout(s)`). Las sondas de G4 y G5 encontraron y corrigieron `GLB-147` a `GLB-149`, `ZYVM-032`,
-> `ZYJS-070` y `ZYJS-071`; `GLB-127`, que destapó `GLB-144` a `GLB-146`, se corrigió el 2026-10-21 con los tres. Medido el 2026-10-25 en `b2a14b0`: `zyq suite` da *all gates pass* y ningún hallazgo queda abierto.
+> `ZYJS-070` y `ZYJS-071`; `GLB-127`, que destapó `GLB-144` a `GLB-146`, se corrigió el 2026-10-21 con los tres. Medido el 2026-10-25 en `11d121d`: `zyq suite` da *all gates pass* y ningún hallazgo queda abierto.
 >
 > **Alcance cerrado por el autor el 2026-10-24:** de lo que quedaba por decidir sólo entró ZethyCLI G1; lo demás, y
 > cualquier hallazgo nuevo, va a la v0.0.12 salvo que bloquee la salida (`ZyDDT/PENDIENTES.md` § 2). **El 2026-10-25 el
@@ -237,7 +237,7 @@ crecimiento** — la misma operación a n, 2n, 4n y 8n — en vez de por tiempo 
 ocho (PERF-01 a PERF-08); el 2026-10-14 se trajo a `zyquality/bench/big/` y se volvió a medir sobre
 esta rama con los instrumentos del proyecto.
 
-PERF-01 y PERF-02 ya estaban corregidos (`ee48143`, ZYVM-013, 2026-10-10). Los otros seis siguen
+PERF-01 y PERF-02 ya estaban corregidos (`176ad28`, ZYVM-013, 2026-10-10). Los otros seis siguen
 vivos. Las recomendaciones de abajo se incorporaron al plan por decisión del autor el 2026-10-14; cada
 una se archiva como hallazgo antes de tocar código.
 
@@ -729,7 +729,7 @@ Es el requisito de 3.2 y de 3.4, y define el contrato que tendrá que cumplir la
 
 #### Evaluación — 2026-10-20
 
-Medido sobre `17bfdb8` con `cargo check --target wasm32-unknown-unknown`: span, common, lexer, ast, parser, semantic,
+Medido sobre `5176b3b` con `cargo check --target wasm32-unknown-unknown`: span, common, lexer, ast, parser, semantic,
 bytecode, intrinsics y compiler **ya compilan**; `zymbol-vm` y `zymbol-interpreter` fallan dentro de `crossterm`, y sólo
 ahí —`ureq` y `odbc-api` ya no entran sin features desde 3.2—. rustc se detiene en ese crate, así que el código propio de
 la VM no quedó comprobado. Dos cosas más compilan para wasm pero fallan al ejecutarse: `SystemTime::now` aborta y `std::fs`
@@ -742,23 +742,23 @@ guardas `if self.headless` en siete instrucciones (`ClearScreen`, `QueryTerminal
 **Decidido por el autor el 2026-10-20: forma B.** Una interfaz `Host` sólo para la VM —terminal, reloj, red y base de
 datos— con dos implementaciones: la nativa (`crossterm`, `ureq`, `odbc-api`) y la virtual de `--keys`, que sustituye las
 guardas. El tree-walker no cambia: no es parte del núcleo de la tabla de arriba, ni va a WebAssembly. `>>` sigue fuera de
-la interfaz, para no tocar el camino caliente. Se verifica contra `17bfdb8` con la puerta entera, la suite `tui`, los pasos
+la interfaz, para no tocar el camino caliente. Se verifica contra `5176b3b` con la puerta entera, la suite `tui`, los pasos
 de `--count`, `ab.py` alternado y `ZYMBOL_POISON_TEMPS=1`, y la CI pasa a comprobar `cargo check -p zymbol-vm --target
 wasm32-unknown-unknown` (el primer paso de 3.4). Descartadas: la misma interfaz en los dos motores con la implementación
 compartida (A: el doble de trabajo, y el consenso dejaría de ver un fallo del anfitrión que los dos compartieran) y una
 feature `term` sin interfaz (C: el motor de 3.4 se quedaría sin TUI ni entrada).
 
-**Hecho el 2026-10-20** (`interpreter` `11f5c5d` y `b0ba2d0`, `zyquality` `0a8c0ad`). `zymbol_vm::host` tiene dos
+**Hecho el 2026-10-20** (`interpreter` `b9ff52c` y `78cdef6`, `zyquality` `b9c1200`). `zymbol_vm::host` tiene dos
 interfaces y no una, porque `--keys` cambia la terminal y nada más: `Terminal` (las siete primitivas, `@~`, `<<`) y `Host`
 (el reloj, la semilla de `std/random`, `std/net`, `std/db`). `zymbol-vm` ya no depende de `crossterm`, `ureq` ni ODBC: sus
 implementaciones nativas se movieron sin cambios al crate nuevo `zymbol-host` (`NativeTerminal`, `NativeHost`, con `http` y
 `db` como features). La de `--keys` es `host::Headless` y sustituye las 19 guardas; una VM a la que nadie da otra tiene
 `BasicTerminal` y `BasicHost`. El reloj de `std/time` pasa por `zymbol_intrinsics::time::Clock`, con las funciones de
-siempre para el tree-walker y variantes `_with` para la VM. Contra `11f5c5d`, los dos binarios con `-p zymbol-cli --features
+siempre para el tree-walker y variantes `_with` para la VM. Contra `b9ff52c`, los dos binarios con `-p zymbol-cli --features
 db`: el corpus da el mismo código de salida, la misma salida y los mismos pasos, llamadas y copias en los dos motores —salvo
 los dos ficheros ENVIRONMENT, que cambian de una corrida a otra—, con una asignación de 24 bytes más en la VM (la terminal
 nativa en su caja); `ab.py`, mismos pasos y CPU de la VM entre ×0,89 y ×1,05. Salió de paso `ZYVM-031`: el ejecutable de
-`zymbol build` había perdido `std/net` y `std/db` con D4 y con 3.2, y se corrigió antes (`7dd33bb`).
+`zymbol build` había perdido `std/net` y `std/db` con D4 y con 3.2, y se corrigió antes (`1f2b7fd`).
 
 **Lo que encontró para 3.4:** con la terminal fuera, `cargo check -p zymbol-vm --target wasm32-unknown-unknown` sólo falla
 en una aserción de `ZyStr`, «ZyStr requires a 64-bit platform». Con ella relajada a 32 bits —en una prueba que no se
@@ -785,7 +785,7 @@ arranque del binario, es D4. Ver D6.
 
 #### Medición — 2026-10-20
 
-Sobre `6666f8f`, rustc 1.99.1. Un prototipo desechable (fuera de la rama, en `target/w32/`) puso `lsp`, `repl` y `http`
+Sobre `37f5c04`, rustc 1.99.1. Un prototipo desechable (fuera de la rama, en `target/w32/`) puso `lsp`, `repl` y `http`
 como features del CLI y `http` en la VM y el tree-walker; `crossterm` se queda, porque la TUI es parte del lenguaje. Cada
 cifra sale de una compilación limpia, `cargo build --release --offline -p zymbol-cli`, dentro de un cgroup
 (`systemd-run --user --scope -p MemoryMax=… -p MemorySwapMax=0`): la memoria es el `memory.peak` del cgroup —lo que ve el
@@ -868,7 +868,7 @@ Sirve además para otra cosa: un `.zyb` generado por Rust es el oráculo de la V
 
 El ejecutable de `zymbol build --release` ya es un `.zyb` sin fichero: lleva el `CompiledProgram` en `bincode` y arranca
 sin lexer, parser, semántico ni compilador. Lo que un `.zyb` ahorraría es, como mucho, lo que separa `zymbol run x.zy` de
-ese ejecutable. Medido sobre `c64c8cd`, alternados, CPU, mediana de 60 rondas; los siete dan la misma salida de las dos
+ese ejecutable. Medido sobre `b6a9b64`, alternados, CPU, mediana de 60 rondas; los siete dan la misma salida de las dos
 maneras:
 
 | Programa | Bytecode | `zymbol run` | Ejecutable | Ahorro |
@@ -886,7 +886,7 @@ medidor por fases en un mismo proceso suma unos 5,6 ms de front-end en frío par
 es el tamaño del binario, 1,1 ms en el programa de una línea— no está localizado.
 
 Al medir salieron dos hallazgos: **`GLB-142`** (una capa de reexportación hacía parsear su módulo de origen una vez por
-nombre; `api試験` pasó de 51 a 13 ms en `zymbol run`, corregido en `c64c8cd`) y **`GLB-143`** (`zymbol check` parsea un
+nombre; `api試験` pasó de 51 a 13 ms en `zymbol run`, corregido en `b6a9b64`) y **`GLB-143`** (`zymbol check` parsea un
 módulo una vez por importador). Las preguntas de arriba: el formato necesitaría versión en la cabecera y rechazar otra;
 `</ fichero.zy />` seguiría compilando al vuelo, con el `.zy` al lado; `.zyp` no cambia; y como oráculo de la etapa 4 no
 hace falta mientras esté en pausa, y un motor wasm puede llevar el compilador, que ya compila a wasm.
@@ -947,7 +947,7 @@ navegadores y Node, y el único que Rust estable compila (`wasm64-unknown-unknow
 recompilando `std`). Las pruebas sobre `wasm64` quedan para después, por decisión del autor. Descartadas por ahora: un
 motor provisional `zywasm` en el consenso (B, ~2–3 días) y aplazar.
 
-**Hecho el 2026-10-20** (`interpreter` `dd311b1`, `zyquality` `3f9bbd5`). La aserción de `ZyStr` admite punteros de 4
+**Hecho el 2026-10-20** (`interpreter` `23167fb`, `zyquality` `79bf23c`). La aserción de `ZyStr` admite punteros de 4
 bytes, su comentario dice por qué el byte 7 no choca, y la prueba de tamaños habla en palabras (8 y 40 en 64 bits, 4 y 20
 en wasm32). Ejecutadas en `wasm32-wasip1` con el WASI de Node, pasan las pruebas del núcleo —vm 14, intrinsics 16, lexer
 191, parser 58, common 37, semantic 75—, salvo las que lanzan un proceso o escriben un fichero temporal, que allí no pueden

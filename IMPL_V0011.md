@@ -1,7 +1,7 @@
 # Implementation Plan — v0.0.11: the VM is the engine, and what each thing costs
 
 > **Status: draft, not released.** Written on 2026-10-25 from the `v0.0.11` branch at
-> `b2a14b0`, the day the documents were audited against the implementation. The release is
+> `11d121d`, the day the documents were audited against the implementation. The release is
 > planned for **2026-11-01** (at the latest 2026-11-11). Part I is what has landed, Part II
 > what remains before the tag. When the tag exists, this block says so and names it.
 >
@@ -11,7 +11,7 @@
 > two disagree about what was decided, the plan is right; about what the branch holds, the
 > branch is.
 >
-> **Every gate figure below was measured on 2026-10-25**, on `b2a14b0`, against a release
+> **Every gate figure below was measured on 2026-10-25**, on `11d121d`, against a release
 > build with `--features db`. Figures from earlier days carry their date.
 
 ---
@@ -65,7 +65,7 @@ only if it paid: `RangeStep` (ZYVM-029) and `IterStep`, calls that push their fr
 no stack check on a direct call, a tail call inside a module (ZYVM-027), `$>`/`$|`/`$<` on
 the VM's own frames, `$^` with a comparator that only compares its parameters evaluated
 without a call. One was built, measured worse and not kept: `$^` without re-entry for every
-comparator (`b227120`).
+comparator (`38147b6`).
 
 ### Stage 3 — four evaluations (2026-10-20)
 

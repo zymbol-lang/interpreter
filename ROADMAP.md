@@ -4,7 +4,7 @@
 > is the default engine, and what each operation costs is measured and brought down — time
 > and memory, against Python as the reference and without changing the language. Planned
 > for 2026-11-01; the plan and its progress are in `ROADMAP_V0011_ES.md`.
-> Validation (measured 2026-10-25 on the `v0.0.11` branch, `b2a14b0`): **714 corpus files, 708
+> Validation (measured 2026-10-25 on the `v0.0.11` branch, `11d121d`): **714 corpus files, 708
 > agreeing, 0 diverging** across all three engines; **1111 unit tests**, 0 failed;
 > **1 765 ZyDDT cells**, all agreeing, none KNOWN; **275 findings closed, none
 > open** — the most recent, GLB-147 to GLB-149, ZYVM-032, ZYJS-070 and ZYJS-071, were found

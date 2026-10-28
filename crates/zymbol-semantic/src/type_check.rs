@@ -1225,7 +1225,7 @@ impl TypeChecker {
     /// only in the main scope, and a function body is a different scope. Values
     /// cross that boundary as parameters (MEM-5), never by being in view.
     ///
-    /// The rule held until 2026-08-24, when `fbccc8e` retired it to resolve
+    /// The rule held until 2026-08-24, when `5f74974` retired it to resolve
     /// ZyBank's `ERROR-ZYB-002` — the same body behaved differently depending on
     /// how it was reached, and of the two ways to make that coherent (isolate
     /// both paths, or capture in both) the second was taken. `GUIDE.md` § 10b,

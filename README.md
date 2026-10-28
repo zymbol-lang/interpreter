@@ -631,7 +631,7 @@ Or ask the whole question at once, from the zyquality checkout:
 ```
 
 Current status (v0.0.11 branch — 0.0.10 is the latest published release).
-**Re-measured 2026-10-25** at `b2a14b0`, every figure below on the same tree, with `./zyq suite`
+**Re-measured 2026-10-25** at `11d121d`, every figure below on the same tree, with `./zyq suite`
 reporting **all gates pass**. Re-derive a count in a fresh clone before quoting it in
 release notes — that is the rule that came out of the 544/536 correction:
 
