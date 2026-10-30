@@ -13,8 +13,8 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 > `11d121d`. It is completed and dated the day before the tag, as `[0.0.10]` was; until then
 > a line here may still move. Release planned for 2026-11-01.
 
-An **optimization** release. The register VM is the default engine, and what each
-operation costs was measured — against Python as the reference, and in units a machine does
+An **optimization** release. The register VM is the default engine — in the CLI, and in the
+playground through a JavaScript port of it — and what each operation costs was measured — against Python as the reference, and in units a machine does
 not change (`--count`, `zyquality/cost/`) — and brought down without changing what a
 program means. Late in the branch the safeguards `interpreter/AGENTIC.md` § 12 still held
 open were each decided by the author and implemented: an agent's program can now be refused
@@ -57,6 +57,15 @@ Each entry names the finding it comes from, in `ZyDDT/HALLAZGOS/` (`GLB-…` in 
 
 ### Added
 
+- **The playground runs the register VM** (`zymbol_vm.js`, decided by the author on
+  2026-10-30). The program is checked as before, then compiled by a JavaScript port of
+  `zymbol-compiler` to the VM's bytecode — the bytecode the Rust compiler builds, compared
+  instruction for instruction over the corpus, the example pool and the applications — and
+  run by a JavaScript port of `zymbol-vm`. The tree-walker, `zymbol.js`, stays one click
+  away: a `VM · TW` picker beside ▶ Run, remembered per browser, `?engine=vm|tw` in the
+  address. While a program runs, ▶ Run is ■ Stop: the VM has no step ceiling, and hands the
+  page back between slices of work. The gate grades it as a fourth engine, `zyjsvm`, with
+  the browser's exclusions. The evidence and the tools are in `web/zymbol_vm/`.
 - **`zymbol run --deny <effects>`** refuses a program, before any of it runs, if anything it
   can reach — every module it imports and every file it runs — uses a denied effect: `io`,
   `net`, `db`, `time`, `random`, `shell`, `sub`, `stdin`, `argv`. **`zymbol check --effects`**
@@ -139,6 +148,20 @@ What grew with the size of the input and should not have, each held now by a rat
   `kill(-1)`: every process of the user died with the program (GLB-150).
 - `zyjs` reads a `??` pattern as a pattern, not an expression, and checks its type against
   the subject's (ZYJS-070, ZYJS-071).
+- `zyjs` accepts a lone `\\` as a statement, as both Rust engines do (BUG-VMJS-003); reads
+  `"\r"` in a text as a carriage return, not the letter `r` (BUG-ZYE-013); and runs a module
+  whose function uses an import alias's name as a local — GoL did not start in the browser
+  (BUG-VMJS-006). The three are in `web/zymbol_vm/HALLAZGOS.md` and ZyEdit's.
+
+### Known issues
+
+Found by the JavaScript port of the compiler, open in the Rust VM for v0.0.12 and already
+corrected in `zymbol_vm.js` (`web/zymbol_vm/HALLAZGOS.md`):
+
+- After a block that creates variables, a runtime error can cite the line after its own: the
+  bytecode's source table loses an entry per variable the block ends (BUG-VMJS-004).
+- `(f() + 0.5) + 1` calls `f` twice: a left operand typed Float or String is compiled again
+  when the immediate form does not apply (BUG-VMJS-005).
 
 ### Removed
 
