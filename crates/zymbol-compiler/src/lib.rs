@@ -407,7 +407,9 @@ impl FunctionCtx {
             .filter_map(|name| self.register_map.get(name).map(|&r| (name.clone(), r)))
             .collect();
         for (name, reg) in to_reset {
-            self.instructions.push(Instruction::LoadUnit(reg));
+            // Through `emit`, so `src` keeps one position per instruction: a bare
+            // push shifted every later position by one (BUG-VMJS-004).
+            self.emit(Instruction::LoadUnit(reg));
             self.register_map.remove(&name);
             self.hot_vars.remove(&name);
             self.postfix_hot_vars.remove(&name);
@@ -424,7 +426,7 @@ impl FunctionCtx {
             .map(|(n, &r)| (n.clone(), r))
             .collect();
         for (name, reg) in new_vars {
-            self.instructions.push(Instruction::LoadUnit(reg));
+            self.emit(Instruction::LoadUnit(reg));  // BUG-VMJS-004, as above
             self.register_map.remove(&name);
         }
     }
@@ -3241,6 +3243,11 @@ impl Compiler {
             | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow
             | BinaryOp::Eq | BinaryOp::Neq
             | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge);
+        // The left operand, when the fast path compiled it and then gave up on it
+        // (a Float or a String). The general path takes it from here instead of
+        // compiling it again: twice compiled is twice run, and `(f() + 0.5) + 1`
+        // called `f` twice (BUG-VMJS-005).
+        let mut left_done: Option<Reg> = None;
         if let (true, Expr::Literal(lit)) = (imm_op, bin.right.unwrap_group()) {
             if let Literal::Int(imm) = lit.value {
                 if (i32::MIN as i64..=i32::MAX as i64).contains(&imm) {
@@ -3279,6 +3286,7 @@ impl Compiler {
                         ctx.emit(instr);
                         return Ok(dst2);
                     }
+                    left_done = Some(r_l);
                 }
             }
         }
@@ -3291,7 +3299,9 @@ impl Compiler {
         // `0`, giving `0xxx` where the tree-walker gives `xxx`. The neutral is a
         // property of the operator, and the operator is only known here.
         // GLB-002; the assignment path already knew (`hot_neutral_instr`).
-        let r_l = if bin.op == BinaryOp::Concat {
+        let r_l = if let Some(r) = left_done {
+            r
+        } else if bin.op == BinaryOp::Concat {
             match bin.left.unwrap_group() {
                 Expr::Identifier(id)
                     if (id.hot || id.pre_hot) && ctx.get_reg(&id.name).is_err() =>

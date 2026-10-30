@@ -152,16 +152,16 @@ What grew with the size of the input and should not have, each held now by a rat
   `"\r"` in a text as a carriage return, not the letter `r` (BUG-ZYE-013); and runs a module
   whose function uses an import alias's name as a local — GoL did not start in the browser
   (BUG-VMJS-006). The three are in `web/zymbol_vm/HALLAZGOS.md` and ZyEdit's.
-
-### Known issues
-
-Found by the JavaScript port of the compiler, open in the Rust VM for v0.0.12 and already
-corrected in `zymbol_vm.js` (`web/zymbol_vm/HALLAZGOS.md`):
-
-- After a block that creates variables, a runtime error can cite the line after its own: the
-  bytecode's source table loses an entry per variable the block ends (BUG-VMJS-004).
-- `(f() + 0.5) + 1` calls `f` twice: a left operand typed Float or String is compiled again
-  when the immediate form does not apply (BUG-VMJS-005).
+- Three defects of the Rust engines that the JavaScript port of the compiler found, now
+  corrected the way `zymbol_vm.js` corrects them, so both compilers build the same bytecode
+  (`web/zymbol_vm/HALLAZGOS.md`):
+  - `s$- "abc"` on a text shorter than the pattern panicked both Rust engines with exit
+    code 101, which `!?` cannot catch; the text now comes back as it was (BUG-VMJS-002).
+  - After a block that creates variables, a runtime error in the VM could cite the line
+    after its own: clearing the block's variables skipped the bytecode's source table,
+    which lost an entry per variable (BUG-VMJS-004).
+  - `(f() + 0.5) + 1` called `f` twice in the VM: a left operand typed Float or String was
+    compiled again when the immediate form did not apply (BUG-VMJS-005).
 
 ### Removed
 

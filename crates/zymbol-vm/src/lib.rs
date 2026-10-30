@@ -3026,10 +3026,11 @@ impl<W: Write> VM<W> {
                                     let s = rc_s.as_str();
                                     let pc: Vec<char> = p.chars().collect();
                                     let sc: Vec<char> = s.chars().collect();
-                                    if pc.is_empty() { s.to_string() } else {
+                                    // A pattern longer than the text is not in it (BUG-VMJS-002).
+                                    if pc.is_empty() || pc.len() > sc.len() { s.to_string() } else {
                                         let mut found = false;
                                         let mut out = sc.clone();
-                                        for i in 0..=sc.len().saturating_sub(pc.len()) {
+                                        for i in 0..=sc.len() - pc.len() {
                                             if sc[i..i+pc.len()] == pc[..] {
                                                 out.drain(i..i+pc.len()); found = true; break;
                                             }

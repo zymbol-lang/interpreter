@@ -1281,8 +1281,12 @@ impl<W: Write> Interpreter<W> {
                     }
                     Value::String(ref pattern) => {
                         let pattern_chars: Vec<char> = pattern.chars().collect();
-                        if pattern_chars.is_empty() { return Ok(Value::String(s)); }
-                        for i in 0..=(chars.len().saturating_sub(pattern_chars.len())) {
+                        // A pattern longer than the text is not in it: the range below
+                        // saturated to `0..=0` and sliced past the end (BUG-VMJS-002).
+                        if pattern_chars.is_empty() || pattern_chars.len() > chars.len() {
+                            return Ok(Value::String(s));
+                        }
+                        for i in 0..=(chars.len() - pattern_chars.len()) {
                             if chars[i..i + pattern_chars.len()] == pattern_chars[..] {
                                 let mut out = chars.clone();
                                 out.drain(i..i + pattern_chars.len());
