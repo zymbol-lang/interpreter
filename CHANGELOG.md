@@ -7,11 +7,7 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
-## [0.0.11] — unreleased
-
-> **Draft of 2026-10-25**, written from the 103 commits on the `v0.0.11` branch up to
-> `11d121d`. It is completed and dated the day before the tag, as `[0.0.10]` was; until then
-> a line here may still move. Release planned for 2026-11-01.
+## [0.0.11] — 2026-11-01
 
 An **optimization** release. The register VM is the default engine — in the CLI, and in the
 playground through a JavaScript port of it — and what each operation costs was measured — against Python as the reference, and in units a machine does
@@ -24,6 +20,12 @@ Each entry names the finding it comes from, in `ZyDDT/HALLAZGOS/` (`GLB-…` in 
 `ZYTW-…`, `ZYVM-…`, `ZYJS-…` in the engine's file); `G1`…`G8` are the rows of
 `AGENTIC.md` § 12; `PERF-…` is `zyquality/bench/big/HALLAZGOS.md`; `D1`…`D8` and the stages
 3.1–3.4 are `ROADMAP_V0011_ES.md`. `IMPL_V0011.md` is the account of the release.
+
+### Known issues
+
+What is still open at this tag is listed in one place,
+[`ZyDDT/PENDIENTES.md`](https://github.com/zymbol-lang/ZyDDT/blob/v0.0.11/PENDIENTES.md)
+(in Spanish), each row pointing at the record it comes from.
 
 ### Changed — rules a program can break on
 
@@ -96,6 +98,10 @@ Each entry names the finding it comes from, in `ZyDDT/HALLAZGOS/` (`GLB-…` in 
   `wasm32`, and the gate checks that they do (3.4).
 - The static Linux binary (musl) allocates with mimalloc, tuned not to hoard: musl's own
   malloc made it 17× slower than the `.deb` at building a text in v0.0.10 (PERF-08, GLB-134).
+- **The release has 16 files, not 17**: `SHA256_aarch64_linux.txt` is gone. A second
+  workflow built the aarch64 static binary again and published a checksum the binary left
+  on the release did not match; its checksum is the one in `SHA256SUMS_aarch64_linux.txt`,
+  as the other Linux files' are (GLB-151).
 
 ### Performance
 
