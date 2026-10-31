@@ -1,17 +1,16 @@
 # Zymbol-Lang — Roadmap
 
-> Current status: **v0.0.11 (in development)** — an *optimization* release: the register VM
-> is the default engine, and what each operation costs is measured and brought down — time
-> and memory, against Python as the reference and without changing the language. Planned
-> for 2026-11-01; the plan and its progress are in `ROADMAP_V0011_ES.md`.
-> Validation (measured 2026-10-25 on the `v0.0.11` branch, `11d121d`): **714 corpus files, 708
-> agreeing, 0 diverging** across all three engines; **1111 unit tests**, 0 failed;
-> **1 765 ZyDDT cells**, all agreeing, none KNOWN; **275 findings closed, none
-> open** — the most recent, GLB-147 to GLB-149, ZYVM-032, ZYJS-070 and ZYJS-071, were found
-> and fixed on 2026-10-23 and 2026-10-24 by the probes behind AGENTIC.md G4 and G5, and
-> GLB-150 (`--timeout` killed every process of the user on Ubuntu 22.04) on 2026-10-25; `zyq suite` reports
-> **all gates pass**, with no `cost` case KNOWN.
-> **0.0.10 is the latest published release.**
+> Current status: **v0.0.11 (released 2026-11-01)** — an *optimization* release: the register
+> VM is the default engine, in the CLI and in the playground through a JavaScript port of it,
+> and what each operation costs is measured and brought down — time and memory, against
+> Python as the reference and without changing the language. The plan and its progress are
+> in `ROADMAP_V0011_ES.md`, the account in `IMPL_V0011.md`.
+> Validation (measured 2026-10-31 in a fresh clone of the `v0.0.11` branches, `5a95444`):
+> **722 corpus files, 716 agreeing, 0 diverging** across all four engines; **1111 unit
+> tests**, 0 failed; **1 768 ZyDDT cells**, all agreeing, none KNOWN; **277 findings closed,
+> none open** — the most recent, GLB-151, found by rehearsing the release workflows on
+> 2026-10-31; `zyq suite` reports **all gates pass**, with no `cost` case KNOWN. What is
+> still open is listed in `ZyDDT/PENDIENTES.md`.
 >
 > Previously: **v0.0.10 (released 2026-10-12)** — a *measurement* release: nothing in it was
 > planned as a feature, it is what a systematic question finds when it is asked some 1 700
