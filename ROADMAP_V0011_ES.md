@@ -1,15 +1,18 @@
 # Mapa de ruta — v0.0.11: la VM es el motor, y lo que cuesta cada cosa
 
-> **Estado: abierta, con todo el trabajo hecho salvo lo que el autor sacó de ella** (revisado el 2026-10-25). La rama
+> **Estado: abierta, con todo el trabajo hecho salvo lo que el autor sacó de ella** (revisado el 2026-10-31). La rama
 > `v0.0.11` existe desde el 2026-10-12; su primer commit fue el de versión (`b7923c4`). **Etapa 1:** hecha el 2026-10-13,
 > y el sondeo de las cinco zonas el 2026-10-16. **Etapa 2:** las siete correcciones de la lista hechas — PERF-06, PERF-04,
 > PERF-05 a, PERF-03 y PERF-07 el 2026-10-16 (`ZYVM-023`, `ZYVM-025`, `GLB-130`, `GLB-132`, `GLB-133`), PERF-05 b el
 > 2026-10-17 (`ZYVM-028`, D8) y PERF-08 el 2026-10-19 (`GLB-134`). **Etapa 3:** 3.1, 3.2 y 3.4 hechas; 3.3 fuera de la
-> versión. **Etapa 4:** en pausa. Queda escribir `IMPL_V0011.md` y la sección `[0.0.11]` del CHANGELOG, en borrador
-> desde el 2026-10-25.
+> versión. **Etapa 4:** en pausa desde el 2026-10-20 y **retomada por el autor como excepción al alcance**: el 2026-10-30
+> entró `zymbol_vm.js` como motor por defecto del playground, por merge de la rama `Zymbol_VM.js` de `web` (`171fa07`),
+> con el tree-walker `zymbol.js` a un clic; ver `IMPL_V0011.md` § Stage 4 y `web/zymbol_vm/`. `IMPL_V0011.md` y la
+> sección `[0.0.11]` del CHANGELOG, en borrador desde el 2026-10-25, se completan el 2026-10-31.
 >
 > *Hasta el 2026-10-25 este párrafo decía que faltaba el sondeo de las cinco zonas, que quedaban PERF-05 b y PERF-08 y
-> que de las etapas 3 y 4 no había nada hecho: era el estado del 2026-10-16.*
+> que de las etapas 3 y 4 no había nada hecho: era el estado del 2026-10-16. Hasta el 2026-10-31 decía «Etapa 4: en
+> pausa», que dejó de ser cierto el 2026-10-30.*
 >
 > **Plan de cierre (2026-10-19):** lo que queda va en seis grupos, aprobados por el autor con la opción recomendada de
 > cada uno; ver «Plan de cierre — lo que queda, por grupos». Los grupos 1 a 5 están hechos.

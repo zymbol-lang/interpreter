@@ -1,9 +1,10 @@
 # Implementation Plan — v0.0.11: the VM is the engine, and what each thing costs
 
-> **Status: draft, not released.** Written on 2026-10-25 from the `v0.0.11` branch at
-> `11d121d`, the day the documents were audited against the implementation. The release is
-> planned for **2026-11-01** (at the latest 2026-11-11). Part I is what has landed, Part II
-> what remains before the tag. When the tag exists, this block says so and names it.
+> **Status: ready for the tag, not released.** Drafted on 2026-10-25 from the `v0.0.11`
+> branch at `11d121d`, the day the documents were audited against the implementation, and
+> completed on 2026-10-31 at `5a95444`. The release is dated **2026-11-01**. Part I is what
+> has landed, Part II what remains before the tag. When the tag exists, this block says so
+> and names it.
 >
 > **The plan is `ROADMAP_V0011_ES.md`** (in Spanish, the author's working language for it):
 > its stages, the author's decisions D1–D8, the measurements behind each one. This document
@@ -11,8 +12,10 @@
 > two disagree about what was decided, the plan is right; about what the branch holds, the
 > branch is.
 >
-> **Every gate figure below was measured on 2026-10-25**, on `11d121d`, against a release
-> build with `--features db`. Figures from earlier days carry their date.
+> **Every gate figure below was measured on 2026-10-31 in a fresh clone** of the `v0.0.11`
+> branch of each of the seventeen repositories the Gate checks out (`interpreter` at
+> `5a95444`), against a release build with `--features db`. Figures from earlier days carry
+> their date.
 
 ---
 
@@ -76,10 +79,23 @@ comparator (`38147b6`).
 | 3.3 | `.zyb`, Zymbol Binary | **out of v0.0.11** (author, 2026-10-25), to v0.0.12. Measuring it found GLB-142 and GLB-143, both fixed |
 | 3.4 | WebAssembly | **form A**, done: `ZyStr` takes 32-bit pointers; the compiler and the VM build for `wasm32`, and CI checks it. WebAssembly stays an optional engine, never the web's |
 
-### Stage 4 — the browser VM (`zyvm.js`)
+### Stage 4 — the browser VM (`zymbol_vm.js`)
 
 **Paused whole** by the author on 2026-10-20: if 3.4's engine works out, a new VM in
-JavaScript would not be needed.
+JavaScript would not be needed. On 2026-10-29 the author asked for it again, on a branch of
+its own (`web`'s `Zymbol_VM.js`) and on one condition — evidence that it could be the
+playground's engine — and on 2026-10-30 took it into v0.0.11 as the playground's default,
+an exception to the scope closed on 2026-10-24. It entered by merge (`web` `171fa07`).
+
+It is not a new VM written in JavaScript. `web/src/zymbol/vm/compiler.js` ports
+`zymbol-compiler` function by function, and is held to the Rust compiler's own output: the
+same bytecode over the corpus (637 of 637 programs, the 16 refusals alike), the example
+pool (321 of 321) and every runnable program of the applications (`compile_diff.mjs`). The
+tree-walker, `zymbol.js`, stays one click away (`VM · TW`, `?engine=vm|tw`), and the gate
+grades the port as a fourth engine, `zyjsvm`. The port found three defects of the Rust
+engines (BUG-VMJS-002, -004, -005), corrected in both compilers on 2026-10-30
+(`interpreter` `5a95444`) so that the two build the same bytecode with no compatibility
+option. The evidence and the tools are `web/zymbol_vm/` (`VIABILITY.md`, `HALLAZGOS.md`).
 
 ### The safeguards of `AGENTIC.md` § 12 (2026-10-21 to 2026-10-24)
 
@@ -108,44 +124,46 @@ entered; everything else, and any new finding, goes to v0.0.12 unless it blocks 
 
 ## Part II — What remains before the tag
 
-| | What | State on 2026-10-25 |
+| | What | State on 2026-10-31 |
 |---|---|---|
-| CHANGELOG | `[0.0.11]` completed and dated | draft written 2026-10-25 |
-| This document | Part I checked against the branch, Verification re-run on the tagged tree | draft |
-| Installers | `packaging/verify/run-local.sh --scope full`, every installer against the installed binary | not run on this branch yet |
-| Sister repositories | merged before publishing — the release reads its workflows from the default branch | — |
-| User documents | review markers (`> **Revisado para …`) name v0.0.8 in 53 documents, v0.0.9 in one, v0.0.5 in `manual_en.md`; none v0.0.10. Each needs its content read before it is stamped | not started; the author's call whether before the tag |
-| `zymbol.js` | its header's version log stops at v0.0.8 | not decided |
+| CHANGELOG | `[0.0.11]` completed and dated | dated 2026-11-01. It lists no known issues: one line links `ZyDDT/PENDIENTES.md` at the tag (the author, 2026-10-31) |
+| This document | Part I checked against the branch, Verification re-run | Stage 4 rewritten for `zymbol_vm.js`; Verification re-run in a fresh clone on 2026-10-31 |
+| Installers | `packaging/verify/run-local.sh --scope full`, every installer against the installed binary | **PASS 44/44** on 2026-10-31. The release workflows rehearsed the same day from the branch against a draft release: Linux (both architectures, the `.deb` verified), macOS (both) and the aarch64 static binary built; Windows built the `.msi` and stopped at the signature, as it must. The rehearsal found GLB-151, fixed |
+| The static binary | GLB-134, measured on what ships | on the rehearsal's binaries: static/`.deb` ×0.996 over the 16 programs, ×1.086 at most, steps identical. Repeated on the release's own files |
+| Sister repositories | merged before publishing — the release reads its workflows from the default branch, and the `.deb` gate clones `zyquality`'s | order: the siblings, then the interpreter, then `web` once the release exists (`agents/release_merge.md`) |
+| User documents | review markers (`> **Revisado para …`) name v0.0.5 to v0.0.10 in 53 documents, 43 of them lessons of `aprende_zymbol` | **deferred to v0.0.12** by the author on 2026-10-31: each has to be read before it is stamped |
+| `zymbol.js` | its header's version log stops at v0.0.8 | deferred with the markers; its parity paragraph is re-measured for v0.0.11 |
 
 ## Verification
 
 ```bash
 cargo build --release --features db
 cargo test --release --features db              # 1111 passed, 0 failed, 4 ignored
-cd ../zyquality && make && ./zyq suite          # all gates pass, 11 min 56 s
+cd ../vscode && npm ci                          # the Gate does it: ZyDDT's tmgrammar surface needs it
+cd ../zyquality && make && ./zyq suite          # all gates pass
 ```
 
 | Suite | Result |
 |-------|--------|
-| `zyq consensus` | 714 files × 3 engines: **708 agree, 0 diverge**, 6 with too few engines |
-| `zyq consensus --engines zytw,zyjs` | 714 files: 695 agree, **0 diverge**, 19 excused in `corpus.toml` |
-| `zyq expect` | 677 goldens via `run`: 677 match, **0 stale**, 0 unchecked · 31 via `check`: 31 match |
-| `zyq reject` | 57 forms × 3 engines: **57 refused everywhere**, 0 accepted somewhere |
-| `zyq audit` | 714 `.zy` · 708 with goldens · 6 consensus-only · 6 excused for every engine |
+| `zyq consensus` | 722 files × 4 engines (`zytw`, `zyvm`, `zyjs`, `zyjsvm`): **716 agree, 0 diverge**, 6 with too few engines |
+| `zyq consensus --engines zytw,zyjs` | 722 files: 703 agree, **0 diverge**, 19 excused in `corpus.toml` — the same for `zytw,zyjsvm` |
+| `zyq expect` | 685 goldens via `run`: 685 match, **0 stale**, 0 unchecked · 31 via `check`: 31 match |
+| `zyq reject` | 57 forms × 4 engines: **57 refused everywhere**, 0 accepted somewhere |
+| `zyq audit` | 722 `.zy` · 716 with goldens · 6 consensus-only · 6 excused for every engine |
 | `zyq selftest` | 56 checks, all passed |
-| `fmt` | 812 files: 764 PASS, **0 FAIL**, 48 SKIP · P1–P4 all zero |
-| `fmtcheck` | 9 LDV applications formatted, **suite unchanged** in every one · 5 pins hold |
+| `fmt` | 820 files: 772 PASS, **0 FAIL**, 48 SKIP · P1–P4 all zero |
+| `fmtcheck` | 10 LDV applications formatted, **suite unchanged** in every one · 5 pins hold |
 | `tui` | 3 cases × 2 engines: 3 agree, 0 diverge |
 | `guide` | 248 blocks, 135 tested: **135 PASS**, 0 FAIL |
 | `llm` | **89 probes PASS**, 0 FAIL · 27 of 27 rules and bullets of `LLM.md` covered |
-| `lsp` | 714 files · 14 disagreements, **0 outside the baseline** |
-| `project` | 9 LDV applications: **every golden holds**, `zytw` and `zyvm` agree on every one |
+| `lsp` | 722 files · 14 disagreements, **0 outside the baseline** |
+| `project` | 10 LDV applications: **every golden holds**, `zytw` and `zyvm` agree on every one |
 | `addressing` | 24 cells: **24 hold**, 0 do not |
 | `messages` | Rust 955 · zyjs 570 · nothing new on the shared surface (baseline 211 of 436) |
 | `reach` | 696 diagnostics defined in the gated layers: 527 provoked, 169 not — nothing new unprovoked |
 | `bench` | 16 PASS, 0 FAIL, 0 NEW |
 | `bigbench` | 16 of 16 programs agree with Python |
-| `zyddt` | 46 axes, **1 765 cells, all agree, none known**, 194 checked against an oracle that is not ours · 12 pins, all agree · findings: **0 open**, 275 closed |
+| `zyddt` | 46 axes, **1 768 cells, all agree, none known**, 194 checked against an oracle that is not ours · 12 pins, all agree · findings: **0 open**, 276 closed — 277 with GLB-151, filed after the clone was measured |
 | `zyddt premises` | 29 declared · 0 with no cell · 7 by review · 1 held elsewhere |
 | `cost` | 25 cases: **every ratio within its declared limit**, none KNOWN |
 | `course` | the course imports the playground's highlighter; no copy |
