@@ -7,7 +7,12 @@ pub type Label = u32;
 pub type FuncIdx = u32;
 pub type StrIdx = u32;
 
+/// `repr(u8)`: the variant is a byte of its own at the start. Without it the
+/// compiler hid it in a niche of a `Vec` capacity, and the dispatch loop of the
+/// VM rebuilt it — a `movabs`, a `xor` and a `cmov` — on every instruction it
+/// ran (2026-10-17).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[repr(u8)]
 pub enum Instruction {
     // ── Literals ──────────────────────────────────────────────────────────
     LoadInt(Reg, i64),
@@ -77,10 +82,11 @@ pub enum Instruction {
     /// Emitted before every for-each loop to convert strings to char arrays once
     /// (O(N)), avoiding the O(N²) pattern of ArrayGet on String per iteration.
     StrChars(Reg, Reg),
-    /// dst = str[idx] → Char  (0-based, no allocation).
-    /// ASCII fast path: O(1) byte lookup. Unicode fallback: O(N) chars().nth().
-    /// Used by the string-specific for-each loop to avoid StrChars allocations.
-    StrCharAt(Reg, Reg, Reg),
+    /// (dst, str, cursor): dst = the Char that starts at byte offset `cursor`
+    /// of `str`, and `cursor` moves past it. O(1), no allocation. The
+    /// string-specific for-each loop walks its text with it; finding the i-th
+    /// character on every turn instead made the walk quadratic (ZYVM-025).
+    StrCharNext(Reg, Reg, Reg),
     /// dst = str$??pat → Array<Int>  — all char-indices where pat is found
     StrFindPos(Reg, Reg, Reg),
     /// dst = str$++[pos:text] → String  — insert text at char position
@@ -125,6 +131,21 @@ pub enum Instruction {
     /// `JumpIfNot` read an Array as true where the tree-walker read it as
     /// false, and neither is an answer the language gives.
     JumpIfNotCond(Reg, Label),
+    /// The end of one pass of a counted loop (`@ i:a..b:s`, `@ n`), in one
+    /// dispatch (2026-10-17): (counter, end, step, forward, body). Moves the
+    /// hidden counter one step — up when `forward` is `#1`, down otherwise —
+    /// and jumps back to the body while it is still within the inclusive
+    /// bound; past it, falls through out of the loop. The step that would
+    /// leave the bound is never stored, so a range that ends at the largest
+    /// integer does not overflow on its way out (ZYVM-029). It replaced seven
+    /// dispatches per pass: the direction was asked twice on every one.
+    RangeStep(Reg, Reg, Reg, Reg, Label),
+    /// The end of one pass of a for-each, in one dispatch (2026-10-17):
+    /// (index, length, body). The 1-based index moves on and the loop goes back
+    /// to the body while it is still within the length; past it, falls through
+    /// out of the loop. The test at the top of every pass, and its jump back,
+    /// were four dispatches.
+    IterStep(Reg, Reg, Label),
 
     // ── Functions ─────────────────────────────────────────────────────────
     Call(Reg, FuncIdx, Vec<Reg>),
@@ -173,12 +194,22 @@ pub enum Instruction {
     /// the count, not an end.
     ArraySliceCount(Reg, Reg, Reg),
     StrSliceCount(Reg, Reg, Reg),
-    /// HOF: dst = arr.map(lambda_reg)
-    ArrayMap(Reg, Reg, Reg),
-    /// HOF: dst = arr.filter(lambda_reg)
-    ArrayFilter(Reg, Reg, Reg),
-    /// HOF: dst = arr.reduce(init_reg, lambda_reg)
-    ArrayReduce(Reg, Reg, Reg, Reg),
+    /// `$>`, `$|` and `$<` run on the VM's own frames instead of re-entering
+    /// its loop from Rust for every element, as `ArrayMap`/`ArrayFilter`/
+    /// `ArrayReduce` did (2026-10-17). (dst, collection, callable, kind — 0
+    /// map, 1 filter, 2 reduce): checks the callable and the collection, in
+    /// the order and the words those used, and writes the items to walk as an
+    /// array.
+    HofItems(Reg, Reg, Reg, u8),
+    /// One turn of `$>`/`$|`/`$<`, in one dispatch: (kind, items, idx, acc,
+    /// out, keep, callable). Gathers what the previous call returned (into the
+    /// results, or the kept element, or the accumulator), and either calls the
+    /// lambda on the next item — leaving ITSELF as the place to return to, so
+    /// the callee's `Return` runs it again — or, past the last item, falls
+    /// through to the next instruction.
+    HofNext(u8, Reg, Reg, Reg, Reg, Reg, Reg),
+    /// (dst, collection walked, results): the results in the collection's shape.
+    HofRebuild(Reg, Reg, Reg),
     /// Fused: dst = (str $/ sep)$#  — count parts, zero Vec<Value> (via intrinsics::split::count)
     StrSplitCount(Reg, Reg, Reg),
     /// Fused: dst = (str $/ sep) $> fn  — no intermediate Vec<Value>
@@ -288,6 +319,9 @@ pub enum Instruction {
     // ── Pattern match ─────────────────────────────────────────────────────
     MatchInt(Reg, i64, Label),
     MatchRange(Reg, i64, i64, Label),
+    /// `'a'..'m' =>`: a Char in the range, inclusive; anything else is the
+    /// tree-walker's `range pattern type mismatch` (ZYVM-032).
+    MatchCharRange(Reg, char, char, Label),
     MatchStr(Reg, StrIdx, Label),
     MatchBool(Reg, bool, Label),
 
@@ -456,6 +490,12 @@ pub enum Instruction {
     /// refusal has to be spelled in the tree-walker's exact words, and a
     /// register has no name.
     DeepSetInPlace(Reg, Reg, Reg, StrIdx),
+    /// `DeepSet` of a path of one step, the step in a register of its own:
+    /// `(dst_root, index, val)`. `v[i]$~ x` and `d.k$~ x` built a one-element
+    /// array on the heap for every edit to carry the step (2026-10-17).
+    SetOne(Reg, Reg, Reg),
+    /// `DeepSetInPlace` of a path of one step: `(dst_root, index, val, target_name)`.
+    SetOneInPlace(Reg, Reg, Reg, StrIdx),
 
     /// `(dst, src)` — normalise an iterable for a `@ (a, b):x` loop.
     ///
@@ -608,6 +648,7 @@ pub mod builtins {
     pub const RAND_ENTERO:   u16 = 100;
     pub const RAND_RANGO:    u16 = 101;
     pub const RAND_PESO_F64: u16 = 102;
+    pub const RAND_SEMILLA:  u16 = 103;
     // std/json functions
     pub const JSON_DECODE:     u16 = 200;
     pub const JSON_ENCODE:     u16 = 201;
@@ -625,6 +666,7 @@ pub mod builtins {
     pub const NET_POST:      u16 = 401;
     pub const NET_POST_JSON: u16 = 402;
     pub const NET_HEAD:      u16 = 403;
+    pub const NET_TIMEOUT:   u16 = 404;
     // std/db functions (vendor-neutral via ODBC)
     pub const DB_CONNECT:      u16 = 500;
     pub const DB_DISCONNECT:   u16 = 501;

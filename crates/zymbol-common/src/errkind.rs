@@ -16,13 +16,16 @@
 //! the fragility is in one place: a message that starts to mention "index" moves
 //! family. The order matters and is the tree-walker's.
 
-/// The family of an error that carries only a message: `"Range"`, `"Key"`,
-/// `"Index"`, `"Type"`, `"Div"`, `"Parse"`, or `"_"` for none of them.
+/// The family of an error that carries only a message: `"Depth"`, `"Range"`,
+/// `"Key"`, `"Index"`, `"Type"`, `"Div"`, `"Parse"`, or `"_"` for none of them.
 pub fn error_kind_of_message(message: &str) -> &'static str {
     let m = message.to_lowercase();
+    // First: too many calls active at once is a ##Depth (D7, GLB-133).
+    if m.starts_with("call depth exceeded") {
+        "Depth"
     // Before the rest: an integer that left its range is a ##Range whatever
     // else the message happens to mention.
-    if m.contains("overflow") || m.contains("out of range") {
+    } else if m.contains("overflow") || m.contains("out of range") {
         "Range"
     // Before the index branch: a missing key is a ##Key even though the reader
     // reached it through the index syntax `d["k"]` (decision 10).
@@ -47,6 +50,7 @@ mod tests {
 
     #[test]
     fn each_family_by_its_words() {
+        assert_eq!(kind(&crate::depth::exceeded_message()), "Depth");
         assert_eq!(kind("integer overflow: 9 * 9"), "Range");
         assert_eq!(kind("no key 'x' in dictionary — it is empty"), "Key");
         assert_eq!(kind("array index out of bounds: index 9"), "Index");

@@ -209,6 +209,17 @@ struct FunctionCtx {
     /// Names some `\` in this body ends. Their destruction is tracked at run
     /// time, and reading one checks it (ZYVM-005).
     destroyable: HashSet<String>,
+    /// Temporaries a call has written its result into and nothing has shown
+    /// to be a number since (ZYVM-022). `release_temps` clears them when their
+    /// statement ends: a result used once and dropped — `big()$#` — stayed
+    /// alive in its register until another temporary reused it, so two such
+    /// calls in a row held two arrays where the tree-walker holds one. An
+    /// arithmetic instruction that reads one takes it out: if it ran, what
+    /// the register holds is a number, and clearing it would be a step for
+    /// nothing — `acc + classify(i)` paid one a turn. Clearing every
+    /// temporary of unknown type cost 18.7 % of the steps of `bench/big`;
+    /// this costs 0.05 %.
+    call_results: HashSet<Reg>,
 }
 
 impl FunctionCtx {
@@ -221,6 +232,7 @@ impl FunctionCtx {
             state_temps: Vec::new(),
             postfix_hot_vars: HashSet::new(),
             destroyable: HashSet::new(),
+            call_results: HashSet::new(),
             reg_types: Vec::new(),
             next_reg: 0,
             live_temps: Vec::new(),
@@ -308,6 +320,9 @@ impl FunctionCtx {
             }
             if self.poison_temps {
                 self.emit(Instruction::LoadInt(r, POISON));
+            } else if self.call_results.remove(&r) {
+                // A call's result, perhaps a collection: let it go now.
+                self.emit(Instruction::LoadUnit(r));
             }
             self.free_temps.push(r);
         }
@@ -322,6 +337,23 @@ impl FunctionCtx {
     }
 
     fn emit(&mut self, instr: Instruction) -> usize {
+        match &instr {
+            Instruction::Call(d, ..) | Instruction::CallDynamic(d, ..) | Instruction::CallBuiltin(d, ..) => {
+                self.call_results.insert(*d);
+            }
+            Instruction::AddInt(_, a, b) | Instruction::SubInt(_, a, b) | Instruction::MulInt(_, a, b)
+            | Instruction::DivInt(_, a, b) | Instruction::ModInt(_, a, b) | Instruction::PowInt(_, a, b)
+            | Instruction::AddFloat(_, a, b) | Instruction::SubFloat(_, a, b) | Instruction::MulFloat(_, a, b)
+            | Instruction::DivFloat(_, a, b) | Instruction::PowFloat(_, a, b) => {
+                self.call_results.remove(a);
+                self.call_results.remove(b);
+            }
+            Instruction::NegInt(_, a) | Instruction::NegFloat(_, a)
+            | Instruction::AddIntImm(_, a, _) | Instruction::SubIntImm(_, a, _) | Instruction::MulIntImm(_, a, _) => {
+                self.call_results.remove(a);
+            }
+            _ => {}
+        }
         let pos = self.instructions.len();
         self.instructions.push(instr);
         self.src.push(self.cur_src);
@@ -375,7 +407,9 @@ impl FunctionCtx {
             .filter_map(|name| self.register_map.get(name).map(|&r| (name.clone(), r)))
             .collect();
         for (name, reg) in to_reset {
-            self.instructions.push(Instruction::LoadUnit(reg));
+            // Through `emit`, so `src` keeps one position per instruction: a bare
+            // push shifted every later position by one (BUG-VMJS-004).
+            self.emit(Instruction::LoadUnit(reg));
             self.register_map.remove(&name);
             self.hot_vars.remove(&name);
             self.postfix_hot_vars.remove(&name);
@@ -392,7 +426,7 @@ impl FunctionCtx {
             .map(|(n, &r)| (n.clone(), r))
             .collect();
         for (name, reg) in new_vars {
-            self.instructions.push(Instruction::LoadUnit(reg));
+            self.emit(Instruction::LoadUnit(reg));  // BUG-VMJS-004, as above
             self.register_map.remove(&name);
         }
     }
@@ -419,7 +453,7 @@ impl FunctionCtx {
         let old_num_registers = self.next_reg;
         self.emit(Instruction::Halt);
         let (instructions, src, num_registers) =
-            eliminate_dead_code(self.instructions, self.src, old_num_registers);
+            eliminate_dead_code(self.instructions, self.src, old_num_registers, num_params);
         Chunk {
             name: self.name,
             instructions,
@@ -834,13 +868,13 @@ impl Compiler {
                 return Ok(());
             }
 
-            // A stdlib path that has no entries here (`std/db` in a build without
-            // the `db` feature, or a typo like `std/mth`) has no file to fall back
-            // to: `resolve_from` returns None for stdlib paths by contract. Report
-            // it now, exactly as the tree-walker does in load_stdlib_module — the
-            // fallthrough below reported `std/db.zy`, and the two engines then
-            // disagreed on every `<# std/db` in a --no-default-features binary,
-            // which is what ships in the Linux packages.
+            // A stdlib path that has no entries here (`std/db` or `std/net` in a
+            // build without the `db` or `http` feature, or a typo like `std/mth`)
+            // has no file to fall back to: `resolve_from` returns None for stdlib
+            // paths by contract. Report it now, exactly as the tree-walker does in
+            // load_stdlib_module — the fallthrough below reported `std/db.zy`, and
+            // the two engines then disagreed on every `<# std/db` in a binary
+            // without `db`, which is what ships in the Linux packages.
             return Err(CompileError::ModuleNotFound(module_key));
         }
 
@@ -1406,7 +1440,14 @@ impl Compiler {
                         if let Expr::FunctionCall(call) = val.unwrap_group() {
                             if let Expr::Identifier(id) = call.callable.unwrap_group() {
                                 if id.name == ctx.name {
-                                    if let Some(&func_idx) = self.function_index.get(&id.name) {
+                                    // Resolved as `compile_call` resolves it: a
+                                    // module's own function is in `module_scope`,
+                                    // and looking only in `function_index` made a
+                                    // tail call in a module never one — the
+                                    // tree-walker's was (ZYVM-027).
+                                    if let Some(&func_idx) = self.function_index.get(&id.name)
+                                        .or_else(|| self.module_scope.get(&id.name))
+                                    {
                                         let mut arg_regs = Vec::with_capacity(call.arguments.len());
                                         for arg in &call.arguments {
                                             arg_regs.push(self.compile_expr(arg, ctx)?);
@@ -1840,6 +1881,55 @@ impl Compiler {
                     return Ok(());
                 }
             }
+            // `s = s x y` adds to the end of a text. `ConcatStr` grows its left
+            // operand's buffer only when its destination IS that operand; sent
+            // to a fresh temporary and copied back, every append copied the
+            // whole text, and building one cost the square of its length
+            // (ZYVM-023). The chain is `((s x) y)`: its leftmost leaf is the
+            // receiver, and the rest are appended to it one by one.
+            Expr::Binary(bin) if bin.op == BinaryOp::Concat => {
+                let mut parts: Vec<&Expr> = Vec::new();
+                let mut root: &Expr = value.unwrap_group();
+                while let Expr::Binary(b) = root {
+                    if b.op != BinaryOp::Concat {
+                        break;
+                    }
+                    parts.push(&b.right);
+                    root = b.left.unwrap_group();
+                }
+                parts.reverse();
+                match receiver_of(root) {
+                    Receiver::Own(mirror) => {
+                        let reg = ctx.get_reg(name)?;
+                        let part_regs = self.compile_concat_parts(&parts, reg, ctx)?;
+                        if let Some(g) = mirror {
+                            ctx.emit(Instruction::DetachGlobal(g, reg));
+                        }
+                        for r in part_regs {
+                            ctx.emit(Instruction::ConcatStr(reg, reg, r));
+                        }
+                        if let Some(g) = mirror {
+                            ctx.emit(Instruction::StoreGlobal(g, reg));
+                        }
+                        ctx.set_reg_type(reg, StaticType::String);
+                        return Ok(());
+                    }
+                    Receiver::State(g) => {
+                        let t = self.compile_expr(root, ctx)?;
+                        let part_regs = self.compile_concat_parts(&parts, t, ctx)?;
+                        let mut keep = vec![t];
+                        keep.extend(&part_regs);
+                        Self::release_state_temps(g, &keep, ctx);
+                        ctx.emit(Instruction::DetachGlobal(g, t));
+                        for r in part_regs {
+                            ctx.emit(Instruction::ConcatStr(t, t, r));
+                        }
+                        ctx.emit(Instruction::StoreGlobal(g, t));
+                        return Ok(());
+                    }
+                    Receiver::Copy => {}
+                }
+            }
             _ => {}
         }
         // Optimise: arr = arr$+ elem → ArrayPush in-place (O(1), no clone).
@@ -1879,7 +1969,7 @@ impl Compiler {
             }
             _ => self.compile_expr(value, ctx)?,
         };
-        self.store_to_name(name, src, ctx)
+        self.store_to_name_with(name, src, ends_in_one_instruction(value), ctx)
     }
 
     /// `name = <src>`: where a value that is already in a register goes when a
@@ -1887,6 +1977,17 @@ impl Compiler {
     /// (written back from the file body), or a local register. Shared by `=` and
     /// by the `##Kind(m) =>` arm binding, which is a birth like any other.
     fn store_to_name(&mut self, name: &str, src: Reg, ctx: &mut FunctionCtx)
+        -> Result<(), CompileError>
+    {
+        self.store_to_name_with(name, src, false, ctx)
+    }
+
+    /// `store_to_name`, told whether the value was computed by the last
+    /// instruction emitted and nothing can jump past it (`retarget`). Then a
+    /// local's value is written by that instruction itself instead of into a
+    /// temporary that a `CopyReg` copies — one dispatch less for every such
+    /// `x = expr` (2026-10-17).
+    fn store_to_name_with(&mut self, name: &str, src: Reg, retarget: bool, ctx: &mut FunctionCtx)
         -> Result<(), CompileError>
     {
         let src_ty = ctx.get_reg_type(src);
@@ -1923,7 +2024,14 @@ impl Compiler {
             ctx.set_reg_type(dst, src_ty);
         }
         if src != dst {
-            ctx.emit(Instruction::CopyReg(dst, src));
+            // Only a temporary: a register some name holds is that name's
+            // value, and writing over its producer would change the name.
+            let src_is_temp = !ctx.register_map.values().any(|&r| r == src);
+            let retargeted = retarget && src_is_temp
+                && ctx.instructions.last_mut().is_some_and(|ins| retarget_dst(ins, src, dst));
+            if !retargeted {
+                ctx.emit(Instruction::CopyReg(dst, src));
+            }
         }
         Ok(())
     }
@@ -1957,6 +2065,19 @@ impl Compiler {
             }
         }
         Ok((ctx.alloc_reg(name)?, None))
+    }
+
+    /// What a binding does once its register holds the value — an iterator
+    /// each turn, a destructured name: the module's slot gets it, and a name a
+    /// `\` ended lives again, as `compile_assignment` does for `=`. Without the
+    /// second half `\ x` then `@ x:1..3 { }` left `x` destroyed (GLB-147).
+    fn finish_binding(&mut self, name: &str, reg: Reg, slot: Option<u16>, ctx: &mut FunctionCtx) {
+        if let Some(g) = slot {
+            ctx.emit(Instruction::StoreGlobal(g, reg));
+        }
+        if self.destroyed_locally(name, ctx) && ctx.get_reg(name).ok() == Some(reg) {
+            ctx.emit(Instruction::Revive(reg));
+        }
     }
 
     fn compile_destructure_assign(
@@ -2009,9 +2130,7 @@ impl Compiler {
                                     ctx.emit(Instruction::ArrayGet(dst, r_rhs, r_idx));
                                 }
                             }
-                            if let Some(g) = slot {
-                                ctx.emit(Instruction::StoreGlobal(g, dst));
-                            }
+                            self.finish_binding(name, dst, slot, ctx);
                             idx += 1;
                         }
                         DestructureItem::Rest(name) => {
@@ -2019,9 +2138,7 @@ impl Compiler {
                             ctx.emit(Instruction::DestructureRest(
                                 dst, r_rhs, (idx + 1) as u32, trailing as u32,
                             ));
-                            if let Some(g) = slot {
-                                ctx.emit(Instruction::StoreGlobal(g, dst));
-                            }
+                            self.finish_binding(name, dst, slot, ctx);
                             idx += 1;
                         }
                         DestructureItem::Ignore => {
@@ -2039,9 +2156,7 @@ impl Compiler {
                     let field_idx = self.intern_string(field);
                     let (dst, slot) = self.binding_target(var_name, ctx)?;
                     ctx.emit(Instruction::NamedTupleGet(dst, r_rhs, field_idx));
-                    if let Some(g) = slot {
-                        ctx.emit(Instruction::StoreGlobal(g, dst));
-                    }
+                    self.finish_binding(var_name, dst, slot, ctx);
                 }
             }
         }
@@ -2191,30 +2306,27 @@ impl Compiler {
             return Ok(());
         }
 
-        // Compile as: r_i = 0; while r_i < n { body; r_i++ }
+        // Compile as: r_i = 0; do { body } while ++r_i <= n - 1 — `n` is at
+        // least 1, so the first pass needs no test.
         let r_i = ctx.alloc_temp()?;
         let r_end = ctx.alloc_temp()?;
-        let r_cmp = ctx.alloc_temp()?;
+        let r_fwd = ctx.alloc_temp()?;
         let r_one = ctx.alloc_temp()?;
         ctx.emit(Instruction::LoadInt(r_i, 0));
         ctx.emit(Instruction::LoadInt(r_end, n - 1));
         ctx.emit(Instruction::LoadInt(r_one, 1));
+        ctx.emit(Instruction::LoadBool(r_fwd, true));
 
         let pre_loop_hot = ctx.hot_vars.clone();
-        let loop_start = ctx.current_label();
+        let body_label = ctx.current_label();
         ctx.loop_stack.push(LoopCtx { break_patches: Vec::new(), continue_patches: Vec::new(), label: lp.label.clone(), try_depth: ctx.try_stack.len() });
-
-        ctx.emit(Instruction::CmpGt(r_cmp, r_i, r_end));
-        let exit_jump = ctx.emit(Instruction::JumpIf(r_cmp, 0));
 
         self.compile_block(&lp.body, ctx)?;
 
         let inc_label = ctx.current_label();
-        ctx.emit(Instruction::AddInt(r_i, r_i, r_one));
-        ctx.emit(Instruction::Jump(loop_start));
+        ctx.emit(Instruction::RangeStep(r_i, r_end, r_one, r_fwd, body_label));
 
         let loop_end = ctx.current_label();
-        ctx.patch_jump(exit_jump, loop_end);
 
         let lctx = ctx.loop_stack.pop().unwrap();
         for pos in lctx.break_patches { ctx.patch_jump(pos, loop_end); }
@@ -2243,9 +2355,12 @@ impl Compiler {
         let r_is_times = ctx.alloc_temp()?;
         let r_i = ctx.alloc_temp()?;
         let r_cmp = ctx.alloc_temp()?;
+        let r_zero = ctx.alloc_temp()?;
+        let r_cond_val = ctx.alloc_temp()?;
         ctx.emit(Instruction::CopyReg(r_n, r_first));
         ctx.emit(Instruction::IsInt(r_is_times, r_n));
         ctx.emit(Instruction::LoadInt(r_i, 0));
+        ctx.emit(Instruction::LoadInt(r_zero, 0));
 
         let pre_loop_hot = ctx.hot_vars.clone();
         let loop_start = ctx.current_label();
@@ -2261,10 +2376,24 @@ impl Compiler {
         // that is neither a count nor a condition raises here rather than being
         // read through truthiness — this is also what catches it on the first
         // pass, since a non-Int specifier always arrives down this path.
+        //
+        // The first pass tests the value already evaluated to tell the two
+        // kinds apart: evaluating the specifier again ran its calls one extra
+        // time — `@ s() && c < 2 { … }` called `s` four times where it is
+        // checked three (GLB-135). `r_i` counts the passes on this path too.
         let while_label = ctx.current_label();
+        ctx.emit(Instruction::CmpEq(r_cmp, r_i, r_zero));
+        let not_first = ctx.emit_jump_if_not_placeholder(r_cmp);
+        ctx.emit(Instruction::CopyReg(r_cond_val, r_n));
+        let to_check = ctx.emit(Instruction::Jump(0));
+        let eval_label = ctx.current_label();
         let r_cond = self.compile_expr(cond_expr, ctx)?;
+        ctx.emit(Instruction::CopyReg(r_cond_val, r_cond));
+        let check_label = ctx.current_label();
+        ctx.patch_jump(not_first, eval_label);
+        ctx.patch_jump(to_check, check_label);
         let r_checked = ctx.alloc_temp()?;
-        ctx.emit(Instruction::AsLoopCond(r_checked, r_cond));
+        ctx.emit(Instruction::AsLoopCond(r_checked, r_cond_val));
         let exit_while = ctx.emit(Instruction::JumpIfNot(r_checked, 0));
 
         let body_label = ctx.current_label();
@@ -2372,7 +2501,7 @@ impl Compiler {
         };
 
         // Allocate registers: r_i (named iterator), r_cnt (hidden counter),
-        // r_end (inclusive bound), r_cmp, r_step, r_fwd.
+        // r_end (inclusive bound), r_step, r_fwd.
         // L24/MM-11 (tree-walker parity): the loop advances a HIDDEN counter and
         // copies it into the named variable at the top of each iteration — so
         // the leftover value after the loop is the last executed one (never the
@@ -2381,7 +2510,6 @@ impl Compiler {
         let (r_i, i_slot) = self.binding_target(iter_var, ctx)?;
         let r_cnt = ctx.alloc_temp()?;
         let r_end = ctx.alloc_temp()?;
-        let r_cmp = ctx.alloc_temp()?;
         let r_step = ctx.alloc_temp()?;
         let r_fwd = ctx.alloc_temp()?; // Bool: true = forward, false = reverse
 
@@ -2418,10 +2546,11 @@ impl Compiler {
         // Detect direction: r_fwd = (r_cnt <= r_end)  → Bool
         ctx.emit(Instruction::CmpLe(r_fwd, r_cnt, r_end));
 
-        // Loop header: check exit condition using conditional branches
-        // Range is INCLUSIVE: @ i:0..N → 0,1,...,N
+        // Range is INCLUSIVE and its direction is read from its bounds, so
+        // the first pass always runs — `start` is within `start..end` either
+        // way — and the only test is `RangeStep`'s, at the end of each pass.
         let pre_loop_hot = ctx.hot_vars.clone();
-        let loop_start = ctx.current_label();
+        let body_label = ctx.current_label();
 
         ctx.loop_stack.push(LoopCtx {
             break_patches: Vec::new(),
@@ -2430,52 +2559,20 @@ impl Compiler {
             try_depth: ctx.try_stack.len(),
         });
 
-        // Exit check:
-        //   if r_fwd → exit when r_cnt > r_end
-        //   else     → exit when r_cnt < r_end
-        // JumpIfNot r_fwd, check_rev
-        let fwd_branch_patch = ctx.emit(Instruction::JumpIfNot(r_fwd, 0));
-        // Forward path: exit if r_cnt > r_end
-        ctx.emit(Instruction::CmpGt(r_cmp, r_cnt, r_end));
-        let fwd_exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
-        let skip_rev_patch = ctx.emit(Instruction::Jump(0)); // skip over reverse check
-        // Reverse path:
-        let check_rev_label = ctx.current_label();
-        ctx.patch_jump(fwd_branch_patch, check_rev_label);
-        ctx.emit(Instruction::CmpLt(r_cmp, r_cnt, r_end));
-        let rev_exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
-        let body_label = ctx.current_label();
-        ctx.patch_jump(skip_rev_patch, body_label);
-
         // Publish the counter into the named iterator variable (L24)
         ctx.emit(Instruction::CopyReg(r_i, r_cnt));
-        if let Some(g) = i_slot {
-            ctx.emit(Instruction::StoreGlobal(g, r_i));
-        }
+        self.finish_binding(iter_var, r_i, i_slot, ctx);
 
         self.compile_block(&lp.body, ctx)?;
 
         // continue label = start of increment, so @> increments before re-checking
         let inc_label = ctx.current_label();
 
-        // Increment/decrement the hidden counter:
-        //   if r_fwd → r_cnt = r_cnt + r_step
-        //   else     → r_cnt = r_cnt - r_step
-        let inc_fwd_patch = ctx.emit(Instruction::JumpIfNot(r_fwd, 0));
-        ctx.emit(Instruction::AddInt(r_cnt, r_cnt, r_step));
-        let skip_sub_patch = ctx.emit(Instruction::Jump(0));
-        let do_sub_label = ctx.current_label();
-        ctx.patch_jump(inc_fwd_patch, do_sub_label);
-        ctx.emit(Instruction::SubInt(r_cnt, r_cnt, r_step));
-        let after_inc_label = ctx.current_label();
-        ctx.patch_jump(skip_sub_patch, after_inc_label);
-
-        // Back to loop_start
-        ctx.emit(Instruction::Jump(loop_start));
+        // Advance the hidden counter, up or down, and go round again while
+        // it is within the bound.
+        ctx.emit(Instruction::RangeStep(r_cnt, r_end, r_step, r_fwd, body_label));
 
         let loop_end = ctx.current_label();
-        ctx.patch_jump(fwd_exit_patch, loop_end);
-        ctx.patch_jump(rev_exit_patch, loop_end);
 
         let lctx = ctx.loop_stack.pop().unwrap();
         for pos in lctx.break_patches {
@@ -3146,6 +3243,11 @@ impl Compiler {
             | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow
             | BinaryOp::Eq | BinaryOp::Neq
             | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge);
+        // The left operand, when the fast path compiled it and then gave up on it
+        // (a Float or a String). The general path takes it from here instead of
+        // compiling it again: twice compiled is twice run, and `(f() + 0.5) + 1`
+        // called `f` twice (BUG-VMJS-005).
+        let mut left_done: Option<Reg> = None;
         if let (true, Expr::Literal(lit)) = (imm_op, bin.right.unwrap_group()) {
             if let Literal::Int(imm) = lit.value {
                 if (i32::MIN as i64..=i32::MAX as i64).contains(&imm) {
@@ -3184,6 +3286,7 @@ impl Compiler {
                         ctx.emit(instr);
                         return Ok(dst2);
                     }
+                    left_done = Some(r_l);
                 }
             }
         }
@@ -3196,7 +3299,9 @@ impl Compiler {
         // `0`, giving `0xxx` where the tree-walker gives `xxx`. The neutral is a
         // property of the operator, and the operator is only known here.
         // GLB-002; the assignment path already knew (`hot_neutral_instr`).
-        let r_l = if bin.op == BinaryOp::Concat {
+        let r_l = if let Some(r) = left_done {
+            r
+        } else if bin.op == BinaryOp::Concat {
             match bin.left.unwrap_group() {
                 Expr::Identifier(id)
                     if (id.hot || id.pre_hot) && ctx.get_reg(&id.name).is_err() =>
@@ -4012,6 +4117,17 @@ impl Compiler {
                     skips.push(skip_patch);
                 }
                 Pattern::Range(start, end_expr, _) => {
+                    // A Char range, `'a'..'m'`: the tree-walker's other kind of
+                    // range. This arm refused to compile it as "non-int", so a
+                    // program both other engines ran did not start (ZYVM-032).
+                    if let (Expr::Literal(l1), Expr::Literal(l2)) = (start.unwrap_group(), end_expr.unwrap_group()) {
+                        if let (Literal::Char(lo), Literal::Char(hi)) = (&l1.value, &l2.value) {
+                            let body_label = (ctx.current_label() + 2) as Label;
+                            ctx.emit(Instruction::MatchCharRange(r_sub, *lo, *hi, body_label));
+                            skips.push(ctx.emit_jump_placeholder());
+                            return Ok((skips, to_body));
+                        }
+                    }
                     // Range pattern: lo..hi
                     let lo = if let Expr::Literal(l) = start.unwrap_group() {
                         if let Literal::Int(n) = l.value { n }
@@ -4137,7 +4253,23 @@ impl Compiler {
                                     Err(e) => return Err(e),
                                 }
                             }
-                            _ => {}
+                            // A range, a comparison or a list inside the list is
+                            // tested on its element as the same pattern is in an
+                            // arm, as the tree-walker does (GLB-148). They fell to
+                            // an empty arm here and passed, so `[9]` matched
+                            // `[1..5]` and `[[9, 2]]` matched `[[1, _]]`.
+                            other => {
+                                let r_idx = ctx.alloc_temp()?;
+                                ctx.emit(Instruction::LoadInt(r_idx, (i + 1) as i64));
+                                let r_elem = ctx.alloc_temp()?;
+                                ctx.emit(Instruction::ArrayGet(r_elem, r_sub, r_idx));
+                                let (sub_skips, sub_to_body) = self.emit_pattern_test(other, r_elem, ctx)?;
+                                struct_skip_patches.extend(sub_skips);
+                                let next_elem = ctx.current_label();
+                                for p in sub_to_body {
+                                    ctx.patch_jump(p, next_elem);
+                                }
+                            }
                         }
                     }
                     // Structural matched — jump to body (placeholder, patched after body label)
@@ -4187,7 +4319,34 @@ impl Compiler {
                                     _ => {}
                                 }
                             }
-                            _ => {}
+                            // A name is its value, compared (DM-26), as in the
+                            // structural path: here it never matched, so
+                            // `?? 3 { [a] => … }` with `a = 3` took the `_`.
+                            Pattern::Ident(name, span) => {
+                                match self.compile_ident_pattern_test(name, *span, r_sub, ctx) {
+                                    Ok(r_cmp) => {
+                                        jump_to_body_patches.push(ctx.emit(Instruction::JumpIf(r_cmp, 0)));
+                                    }
+                                    Err(CompileError::UndefinedVariable(n)) => {
+                                        let idx = self.intern_string(&format!(
+                                            "undefined variable '{}' in match pattern", n));
+                                        ctx.emit(Instruction::RaiseError(idx));
+                                    }
+                                    Err(e) => return Err(e),
+                                }
+                            }
+                            // A range, a comparison or a nested list: the scalar is
+                            // tested as the same pattern tests it in an arm
+                            // (GLB-148). They never matched here.
+                            other => {
+                                let (sub_skips, sub_to_body) = self.emit_pattern_test(other, r_sub, ctx)?;
+                                jump_to_body_patches.extend(sub_to_body);
+                                jump_to_body_patches.push(ctx.emit_jump_placeholder());
+                                let next_elem = ctx.current_label();
+                                for p in sub_skips {
+                                    ctx.patch_jump(p, next_elem);
+                                }
+                            }
                         }
                     }
                     // No containment match → skip to next case
@@ -4352,6 +4511,31 @@ impl Compiler {
 
     /// Clear the temporaries this statement loaded module state `g` into, except
     /// the ones the edit about to run reads. See `FunctionCtx::state_temps`.
+    /// The operands appended to a text by `s = s x y`, every one of them
+    /// evaluated before the first append writes `recv`: left to right, `y` sees
+    /// the `s` the statement started with. An operand that IS the receiver's
+    /// register is copied out first, or `s = s "-" s` would append the text it
+    /// had already grown.
+    fn compile_concat_parts(
+        &mut self,
+        parts: &[&Expr],
+        recv: Reg,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Vec<Reg>, CompileError> {
+        let mut regs = Vec::with_capacity(parts.len());
+        for part in parts {
+            let r = self.compile_expr(part, ctx)?;
+            if r == recv {
+                let t = ctx.alloc_temp()?;
+                ctx.emit(Instruction::CopyReg(t, recv));
+                regs.push(t);
+            } else {
+                regs.push(r);
+            }
+        }
+        Ok(regs)
+    }
+
     fn release_state_temps(g: u16, keep: &[Reg], ctx: &mut FunctionCtx) {
         let stale: Vec<Reg> = ctx.state_temps.iter()
             .filter(|&&(slot, reg)| slot == g && !keep.contains(&reg))
@@ -4415,6 +4599,11 @@ impl Compiler {
             Some(idx) => Instruction::DeepSetInPlace(dst, path, val, idx),
             None => Instruction::DeepSet(dst, path, val),
         };
+        // One step: the same write, the step in its own register.
+        let set_one = move |dst, step, val| match target {
+            Some(idx) => Instruction::SetOneInPlace(dst, step, val, idx),
+            None => Instruction::SetOne(dst, step, val),
+        };
         match cu.target.unwrap_group() {
             // Single-level: arr[i]$~ val, t[i]$~ val, nt["field"]$~ val.
             // Routed through DeepSet (not ArraySet) because $~ is the functional
@@ -4424,15 +4613,12 @@ impl Compiler {
                 // Same evaluation order as the tree-walker: collection, index, value
                 let r_arr = self.compile_expr(&idx_expr.array, ctx)?;
                 let r_idx = self.compile_expr(&idx_expr.index, ctx)?;
-                let r_path = ctx.alloc_temp()?;
-                ctx.emit(Instruction::NewArray(r_path));
-                ctx.emit(Instruction::ArrayPush(r_path, r_idx));
                 let r_val = self.compile_expr(&cu.value, ctx)?;
                 if let Receiver::State(g) = receiver {
-                    Self::release_state_temps(g, &[r_arr, r_path, r_val], ctx);
+                    Self::release_state_temps(g, &[r_arr, r_idx, r_val], ctx);
                 }
                 let dst = land(ctx, r_arr)?;
-                ctx.emit(deep_set(dst, r_path, r_val));
+                ctx.emit(set_one(dst, r_idx, r_val));
                 Ok(dst)
             }
             // Deep: arr[i>j>…]$~ val
@@ -4471,15 +4657,12 @@ impl Compiler {
                 let r_key = ctx.alloc_temp()?;
                 let key_idx = self.intern_string(&ma.field);
                 ctx.emit(Instruction::LoadStr(r_key, key_idx));
-                let r_path = ctx.alloc_temp()?;
-                ctx.emit(Instruction::NewArray(r_path));
-                ctx.emit(Instruction::ArrayPush(r_path, r_key));
                 let r_val = self.compile_expr(&cu.value, ctx)?;
                 if let Receiver::State(g) = receiver {
-                    Self::release_state_temps(g, &[r_obj, r_path, r_val], ctx);
+                    Self::release_state_temps(g, &[r_obj, r_key, r_val], ctx);
                 }
                 let dst = land(ctx, r_obj)?;
-                ctx.emit(deep_set(dst, r_path, r_val));
+                ctx.emit(set_one(dst, r_key, r_val));
                 Ok(dst)
             }
             _ => Err(CompileError::Unsupported("collection update on non-index expr".into())),
@@ -4628,11 +4811,7 @@ impl Compiler {
             ctx.emit(Instruction::StrSplitMap(dst, r_str, r_sep, r_fn));
             return Ok(dst);
         }
-        let r_arr = self.compile_expr(&cm.collection, ctx)?;
-        let r_fn  = self.compile_expr(&cm.lambda, ctx)?;
-        let dst   = ctx.alloc_temp()?;
-        ctx.emit(Instruction::ArrayMap(dst, r_arr, r_fn));
-        Ok(dst)
+        self.compile_hof_loop(0, &cm.collection, None, &cm.lambda, ctx)
     }
 
     fn compile_collection_filter(
@@ -4649,11 +4828,7 @@ impl Compiler {
             ctx.emit(Instruction::StrSplitFilter(dst, r_str, r_sep, r_fn));
             return Ok(dst);
         }
-        let r_arr = self.compile_expr(&cf.collection, ctx)?;
-        let r_fn  = self.compile_expr(&cf.lambda, ctx)?;
-        let dst   = ctx.alloc_temp()?;
-        ctx.emit(Instruction::ArrayFilter(dst, r_arr, r_fn));
-        Ok(dst)
+        self.compile_hof_loop(1, &cf.collection, None, &cf.lambda, ctx)
     }
 
     fn compile_collection_reduce(
@@ -4671,11 +4846,57 @@ impl Compiler {
             ctx.emit(Instruction::StrSplitReduce(dst, r_str, r_sep, r_init, r_fn));
             return Ok(dst);
         }
-        let r_arr  = self.compile_expr(&cr.collection, ctx)?;
-        let r_init = self.compile_expr(&cr.initial, ctx)?;
-        let r_fn   = self.compile_expr(&cr.lambda, ctx)?;
-        let dst    = ctx.alloc_temp()?;
-        ctx.emit(Instruction::ArrayReduce(dst, r_arr, r_init, r_fn));
+        self.compile_hof_loop(2, &cr.collection, Some(&cr.initial), &cr.lambda, ctx)
+    }
+
+    /// `$>` (kind 0), `$|` (1) and `$<` (2) on the VM's own frames: one
+    /// `HofNext` per element calls the lambda as `CallDynamic` would, and the
+    /// lambda's `Return` comes back to it. They used to be `ArrayMap`/
+    /// `ArrayFilter`/`ArrayReduce`, which re-entered the VM's loop from Rust
+    /// through `call_callable` for every element (2026-10-17). The operands are
+    /// evaluated in the same order as before — the collection, the initial
+    /// value, the lambda — and `HofItems` checks them in the same order and
+    /// words.
+    fn compile_hof_loop(
+        &mut self,
+        kind: u8,
+        collection: &Expr,
+        initial: Option<&Expr>,
+        lambda: &Expr,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Reg, CompileError> {
+        let r_coll = self.compile_expr(collection, ctx)?;
+        let r_init = match initial {
+            Some(e) => Some(self.compile_expr(e, ctx)?),
+            None => None,
+        };
+        let r_fn = self.compile_expr(lambda, ctx)?;
+        let r_items = ctx.alloc_temp()?;
+        ctx.emit(Instruction::HofItems(r_items, r_coll, r_fn, kind));
+        let r_i = ctx.alloc_temp()?;
+        ctx.emit(Instruction::LoadInt(r_i, 0));
+        let r_out = ctx.alloc_temp()?;
+        let r_keep = ctx.alloc_temp()?;
+        // The results of `$>`/`$|`, or the accumulator of `$<`.
+        let r_acc = ctx.alloc_temp()?;
+        match r_init {
+            Some(init) => { ctx.emit(Instruction::CopyReg(r_acc, init)); }
+            None => { ctx.emit(Instruction::NewArray(r_acc)); }
+        }
+        // Runs once per item and once more past the last: each call returns to
+        // it, and it falls through when the items are done.
+        ctx.emit(Instruction::HofNext(kind, r_items, r_i, r_acc, r_out, r_keep, r_fn));
+        // Nothing of the loop outlives it in a register.
+        ctx.emit(Instruction::LoadUnit(r_out));
+        ctx.emit(Instruction::LoadUnit(r_keep));
+        ctx.emit(Instruction::LoadUnit(r_items));
+
+        let dst = ctx.alloc_temp()?;
+        if kind == 2 {
+            ctx.emit(Instruction::MoveReg(dst, r_acc));
+        } else {
+            ctx.emit(Instruction::HofRebuild(dst, r_coll, r_acc));
+        }
         Ok(dst)
     }
 
@@ -4806,6 +5027,30 @@ impl Compiler {
         span: zymbol_span::Span,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
+        let parts = self.interpolation_parts(s, span, ctx)?;
+        if parts.len() == 1 {
+            if let BuildPart::Lit(idx) = &parts[0] {
+                let dst = ctx.alloc_temp()?;
+                ctx.emit(Instruction::LoadStr(dst, *idx));
+                ctx.set_reg_type(dst, StaticType::String);
+                return Ok(dst);
+            }
+        }
+        let dst = ctx.alloc_temp()?;
+        ctx.emit(Instruction::BuildStr(dst, parts));
+        ctx.set_reg_type(dst, StaticType::String);
+        Ok(dst)
+    }
+
+    /// The pieces of an interpolated string: `Lit` for the text as written, `Reg`
+    /// for each `{var}`. `BuildStr` joins them; `BashExec` keeps them apart, the
+    /// text being the command and each value one quoted word (G2).
+    fn interpolation_parts(
+        &mut self,
+        s: &str,
+        span: zymbol_span::Span,
+        ctx: &mut FunctionCtx,
+    ) -> Result<Vec<BuildPart>, CompileError> {
         // Parse `{...}` patterns
         let mut parts: Vec<BuildPart> = Vec::new();
         let mut current_lit = String::new();
@@ -4899,19 +5144,7 @@ impl Compiler {
             let idx = self.intern_string(&resolved);
             parts.push(BuildPart::Lit(idx));
         }
-
-        if parts.len() == 1 {
-            if let BuildPart::Lit(idx) = &parts[0] {
-                let dst = ctx.alloc_temp()?;
-                ctx.emit(Instruction::LoadStr(dst, *idx));
-                ctx.set_reg_type(dst, StaticType::String);
-                return Ok(dst);
-            }
-        }
-        let dst = ctx.alloc_temp()?;
-        ctx.emit(Instruction::BuildStr(dst, parts));
-        ctx.set_reg_type(dst, StaticType::String);
-        Ok(dst)
+        Ok(parts)
     }
 
     // ── 4C: For-each over arrays ─────────────────────────────────────────────
@@ -4932,12 +5165,28 @@ impl Compiler {
         let (r_item, item_slot) = self.binding_target(iter_var, ctx)?;
         let r_cmp = ctx.alloc_temp()?;
 
+        let mut r_cursor = None;
         if coll_is_string {
-            // String-specific path: StrLen + StrCharAt, 0-based index.
+            // String-specific path: StrLen + StrCharNext, 0-based index, and a
+            // byte cursor that StrCharNext moves past each character.
             // Avoids StrChars Vec<Value::Char> allocation — critical when this
             // loop appears inside another loop (N outer × O(len) allocs otherwise).
+            //
+            // Over a register of the loop's own, like the generic path below:
+            // when the iterable is a bare name `r_coll` IS the variable, and a
+            // body that rewrote it was walked over the new text, with the
+            // length of the old one — past its end every turn gave '\0'
+            // (ZYVM-024). The copy is one reference count.
+            let r_snap = ctx.alloc_temp()?;
+            ctx.emit(Instruction::CopyReg(r_snap, r_coll));
+            r_coll = r_snap;
             ctx.emit(Instruction::StrLen(r_len, r_coll));
-            ctx.emit(Instruction::LoadInt(r_idx, 0));
+            // 1-based, as the generic path: the index only counts the turns
+            // here, and `IterStep` is one rule for both.
+            ctx.emit(Instruction::LoadInt(r_idx, 1));
+            let r_cur = ctx.alloc_temp()?;
+            ctx.emit(Instruction::LoadInt(r_cur, 0));
+            r_cursor = Some(r_cur);
         } else {
             // Generic path: StrChars normalises the collection once — O(1) for an
             // array, String→Array<Char>, and dictionary→array of KEYS.
@@ -4963,11 +5212,12 @@ impl Compiler {
             ctx.emit(Instruction::LoadInt(r_idx, 1));  // 1-based: start at 1
         }
 
-        let r_one = ctx.alloc_temp()?;
-        ctx.emit(Instruction::LoadInt(r_one, 1));
-
         let pre_loop_hot = ctx.hot_vars.clone();
-        let loop_start = ctx.current_label();
+        // Tested once on the way in — an empty collection runs nothing — and
+        // after that by `IterStep`, at the end of each pass.
+        ctx.emit(Instruction::CmpGt(r_cmp, r_idx, r_len));
+        let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
+        let body_label = ctx.current_label();
         ctx.loop_stack.push(LoopCtx {
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
@@ -4976,34 +5226,25 @@ impl Compiler {
         });
 
         if coll_is_string {
-            // Exit if r_idx >= r_len (0-based: indices 0..len)
-            ctx.emit(Instruction::CmpGe(r_cmp, r_idx, r_len));
-            let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
-            ctx.emit(Instruction::StrCharAt(r_item, r_coll, r_idx));
-            if let Some(g) = item_slot {
-                ctx.emit(Instruction::StoreGlobal(g, r_item));
-            }
+            // The character at the cursor, not the r_idx-th one: finding it
+            // scanned the text from the start on every turn (ZYVM-025).
+            let r_cur = r_cursor.expect("the string path sets its cursor");
+            ctx.emit(Instruction::StrCharNext(r_item, r_coll, r_cur));
+            self.finish_binding(iter_var, r_item, item_slot, ctx);
             self.compile_block(&lp.body, ctx)?;
             let inc_label = ctx.current_label();
-            ctx.emit(Instruction::AddIntImm(r_idx, r_idx, 1));
-            ctx.emit(Instruction::Jump(loop_start));
+            ctx.emit(Instruction::IterStep(r_idx, r_len, body_label));
             let loop_end = ctx.current_label();
             ctx.patch_jump(exit_patch, loop_end);
             let lctx = ctx.loop_stack.pop().unwrap();
             for pos in lctx.break_patches    { ctx.patch_jump(pos, loop_end); }
             for pos in lctx.continue_patches { ctx.patch_jump(pos, inc_label); }
         } else {
-            // Exit if r_idx > r_len (1-based: indices 1..=len)
-            ctx.emit(Instruction::CmpGt(r_cmp, r_idx, r_len));
-            let exit_patch = ctx.emit(Instruction::JumpIf(r_cmp, 0));
             ctx.emit(Instruction::ArrayGet(r_item, r_coll, r_idx));
-            if let Some(g) = item_slot {
-                ctx.emit(Instruction::StoreGlobal(g, r_item));
-            }
+            self.finish_binding(iter_var, r_item, item_slot, ctx);
             self.compile_block(&lp.body, ctx)?;
             let inc_label = ctx.current_label();
-            ctx.emit(Instruction::AddInt(r_idx, r_idx, r_one));
-            ctx.emit(Instruction::Jump(loop_start));
+            ctx.emit(Instruction::IterStep(r_idx, r_len, body_label));
             let loop_end = ctx.current_label();
             ctx.patch_jump(exit_patch, loop_end);
             let lctx = ctx.loop_stack.pop().unwrap();
@@ -5211,9 +5452,32 @@ impl Compiler {
         be: &zymbol_ast::BashExecExpr,
         ctx: &mut FunctionCtx,
     ) -> Result<Reg, CompileError> {
-        // Compile each arg to a register; VM concatenates them to build the command string
+        // The text written in the command is `Lit` and goes to the shell as it is;
+        // every value is a `Reg`, which the VM turns into quoted words (G2, decided
+        // by the author on 2026-10-21). Everything used to be a `Reg`, pasted in.
         let mut parts: Vec<BuildPart> = Vec::new();
         for arg in &be.args {
+            if let Expr::Literal(lit) = arg {
+                match &lit.value {
+                    Literal::String(s) => {
+                        let idx = self.intern_string(&s.replace('\x01', "{").replace('\x02', "}"));
+                        parts.push(BuildPart::Lit(idx));
+                        continue;
+                    }
+                    // A character written in the command is written text too.
+                    Literal::Char(c) => {
+                        let idx = self.intern_string(&c.to_string());
+                        parts.push(BuildPart::Lit(idx));
+                        continue;
+                    }
+                    Literal::InterpolatedString(s) => {
+                        let pieces = self.interpolation_parts(s, lit.span, ctx)?;
+                        parts.extend(pieces);
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
             let r = self.compile_expr(arg, ctx)?;
             parts.push(BuildPart::Reg(r));
         }
@@ -5735,6 +5999,7 @@ fn eliminate_dead_code(
     instructions: Vec<Instruction>,
     src: Vec<SrcPos>,
     old_num_regs: u16,
+    num_params: u16,
 ) -> (Vec<Instruction>, Vec<SrcPos>, u16) {
     let n = instructions.len();
     if n == 0 { return (instructions, src, old_num_regs); }
@@ -5754,13 +6019,16 @@ fn eliminate_dead_code(
             }
             // Conditional jumps: fall-through AND target
             Instruction::JumpIf(_, target) | Instruction::JumpIfNot(_, target)
-            | Instruction::JumpIfNotCond(_, target) => {
+            | Instruction::JumpIfNotCond(_, target)
+            | Instruction::RangeStep(_, _, _, _, target)
+            | Instruction::IterStep(_, _, target) => {
                 worklist.push(*target as usize);
                 worklist.push(ip + 1);
             }
             // Match instructions: fall-through (no match) AND target (match)
             Instruction::MatchInt(_, _, target)
             | Instruction::MatchRange(_, _, _, target)
+            | Instruction::MatchCharRange(_, _, _, target)
             | Instruction::MatchStr(_, _, target) => {
                 worklist.push(*target as usize);
                 worklist.push(ip + 1);
@@ -5777,12 +6045,32 @@ fn eliminate_dead_code(
         }
     }
 
+    // A `LoadUnit` right before the `Return` that ends the frame does nothing
+    // the `Return` does not: the frame is let go entire in the same dispatch.
+    // They are the auto-free of the last use (v0.0.8), and in a small function
+    // they were most of what it ran — in `tak`, two of the five dispatches of
+    // the base case (2026-10-17). Never the register being returned, and
+    // never an output parameter's, which the auto-free does not touch.
+    for i in (0..n).rev() {
+        if let Instruction::LoadUnit(r) = &instructions[i] {
+            let mut j = i + 1;
+            while let Some(Instruction::LoadUnit(_)) = instructions.get(j) { j += 1; }
+            if let Some(Instruction::Return(ret)) = instructions.get(j) {
+                if ret != r {
+                    reachable[i] = false;
+                }
+            }
+        }
+    }
+
     // Quick exit: if everything is reachable, skip transformation
     if reachable.iter().all(|&r| r) {
         return (instructions, src, old_num_regs);
     }
 
     // --- Pass 2: build old-IP → new-IP mapping ---
+    // A dropped instruction maps to the next one kept, so a jump to it lands
+    // where it would have fallen through.
     let mut ip_map = vec![0u32; n + 1];
     let mut new_ip = 0u32;
     for i in 0..n {
@@ -5804,8 +6092,11 @@ fn eliminate_dead_code(
             Instruction::JumpIf(r, t)          => Instruction::JumpIf(r, remap(t)),
             Instruction::JumpIfNot(r, t)       => Instruction::JumpIfNot(r, remap(t)),
             Instruction::JumpIfNotCond(r, t)   => Instruction::JumpIfNotCond(r, remap(t)),
+            Instruction::RangeStep(c, e, s, f, t) => Instruction::RangeStep(c, e, s, f, remap(t)),
+            Instruction::IterStep(i, n, t) => Instruction::IterStep(i, n, remap(t)),
             Instruction::MatchInt(r, v, t)     => Instruction::MatchInt(r, v, remap(t)),
             Instruction::MatchRange(r, lo, hi, t) => Instruction::MatchRange(r, lo, hi, remap(t)),
+            Instruction::MatchCharRange(r, lo, hi, t) => Instruction::MatchCharRange(r, lo, hi, remap(t)),
             Instruction::MatchStr(r, s, t)     => Instruction::MatchStr(r, s, remap(t)),
             Instruction::TryBegin(t, r)        => Instruction::TryBegin(remap(t), r),
             other => other,
@@ -5823,7 +6114,10 @@ fn eliminate_dead_code(
 
     // --- Pass 4: recalculate num_registers from surviving instructions ---
     let max_reg = max_reg_used(&new_instructions);
-    let num_registers = max_reg.map(|r| r + 1).unwrap_or(0).max(old_num_regs.min(1));
+    // Never fewer than the parameters: a call writes every argument into the
+    // frame without a bounds check, and a parameter no instruction reads is
+    // still written (ZYVM-030).
+    let num_registers = max_reg.map(|r| r + 1).unwrap_or(0).max(old_num_regs.min(1)).max(num_params);
 
     (new_instructions, new_src, num_registers)
 }
@@ -5864,6 +6158,7 @@ pub fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16
             ("entero",   B::RAND_ENTERO),
             ("rango",    B::RAND_RANGO),
             ("peso_f64", B::RAND_PESO_F64),
+            ("semilla",  B::RAND_SEMILLA),
         ]),
         "std/json" => Some(vec![
             ("decode",     B::JSON_DECODE),
@@ -5888,11 +6183,14 @@ pub fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16
             ("add",    B::TIME_ADD),
             ("diff",   B::TIME_DIFF),
         ]),
+        // Without the `http` feature: module-not-found, as for `std/db` below.
+        #[cfg(feature = "http")]
         "std/net" => Some(vec![
             ("get",       B::NET_GET),
             ("post",      B::NET_POST),
             ("post_json", B::NET_POST_JSON),
             ("head",      B::NET_HEAD),
+            ("timeout",   B::NET_TIMEOUT),
         ]),
         "std/term" => Some(vec![
             ("width",     B::TERM_WIDTH),
@@ -5926,6 +6224,55 @@ pub fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16
 }
 
 /// Return the highest register index referenced in `instructions`, if any.
+/// Whether the code an expression compiles to ENDS with the one instruction
+/// that writes its value, with no jump that lands after it: true for the
+/// shapes whose last step is their own operator — a literal, arithmetic or a
+/// comparison (not `&&`/`||`, which branch), a read by index or by name, a
+/// length, a slice. A conditional, a match or a `??` end in jumps.
+fn ends_in_one_instruction(e: &Expr) -> bool {
+    match e.unwrap_group() {
+        Expr::Literal(_) => true,
+        Expr::Binary(b) => !matches!(b.op, BinaryOp::And | BinaryOp::Or | BinaryOp::Pipe
+            | BinaryOp::Comma | BinaryOp::Range | BinaryOp::Concat),
+        Expr::Unary(_) => true,
+        Expr::Index(_) => true,
+        Expr::MemberAccess(ma) => !ma.is_module_access,
+        Expr::CollectionLength(_) => true,
+        Expr::CollectionSlice(_) => true,
+        _ => false,
+    }
+}
+
+/// Make `ins` write `to` where it writes `from`, if it is one of the
+/// instructions that read every operand before writing their destination —
+/// which each of these arms of the VM does (`wreg!` last). Anything else is
+/// left alone and the caller copies.
+fn retarget_dst(ins: &mut Instruction, from: Reg, to: Reg) -> bool {
+    use Instruction as I;
+    let d = match ins {
+        I::LoadInt(d, _) | I::LoadFloat(d, _) | I::LoadBool(d, _) | I::LoadStr(d, _)
+        | I::LoadChar(d, _) | I::LoadUnit(d)
+        | I::AddInt(d, _, _) | I::SubInt(d, _, _) | I::MulInt(d, _, _) | I::DivInt(d, _, _)
+        | I::ModInt(d, _, _) | I::PowInt(d, _, _) | I::NegInt(d, _)
+        | I::AddIntImm(d, _, _) | I::SubIntImm(d, _, _) | I::MulIntImm(d, _, _)
+        | I::CmpEqImm(d, _, _) | I::CmpNeImm(d, _, _) | I::CmpLtImm(d, _, _)
+        | I::CmpLeImm(d, _, _) | I::CmpGtImm(d, _, _) | I::CmpGeImm(d, _, _)
+        | I::AddFloat(d, _, _) | I::SubFloat(d, _, _) | I::MulFloat(d, _, _)
+        | I::DivFloat(d, _, _) | I::PowFloat(d, _, _) | I::NegFloat(d, _)
+        | I::CmpEq(d, _, _) | I::CmpNe(d, _, _) | I::CmpLt(d, _, _) | I::CmpLe(d, _, _)
+        | I::CmpGt(d, _, _) | I::CmpGe(d, _, _) | I::Not(d, _)
+        | I::StrLen(d, _) | I::StrSlice(d, _, _) | I::StrSliceCount(d, _, _)
+        | I::ArrayGet(d, _, _) | I::ArrayLen(d, _) | I::ArraySlice(d, _, _)
+        | I::ArraySliceCount(d, _, _) | I::NamedTupleGet(d, _, _) => d,
+        _ => return false,
+    };
+    if *d != from {
+        return false;
+    }
+    *d = to;
+    true
+}
+
 fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
     let mut max: Option<u16> = None;
     let mut upd = |r: u16| { max = Some(max.map_or(r, |m: u16| m.max(r))); };
@@ -5961,17 +6308,23 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::Return(r) | Instruction::Print(r)
             | Instruction::JumpIf(r, _) | Instruction::JumpIfNot(r, _)
             | Instruction::JumpIfNotCond(r, _) => upd(*r),
+            Instruction::RangeStep(c, e, s, f, _) => { upd(*c); upd(*e); upd(*s); upd(*f); }
+            Instruction::IterStep(i, n, _) => { upd(*i); upd(*n); }
             Instruction::MatchInt(r, _, _) | Instruction::MatchRange(r, _, _, _)
+            | Instruction::MatchCharRange(r, _, _, _)
             | Instruction::MatchStr(r, _, _) | Instruction::MatchBool(r, _, _) => upd(*r),
             Instruction::Call(d, _, args) => { upd(*d); for &a in args { upd(a); } }
             Instruction::TailCall(_, args) => { for &a in args { upd(a); } }
             Instruction::CallDynamic(d, f, args) => { upd(*d); upd(*f); for &a in args { upd(a); } }
+            Instruction::HofItems(d, c, f, _) | Instruction::HofRebuild(d, c, f) => { upd(*d); upd(*c); upd(*f); }
+            Instruction::HofNext(_, a, b, c, d, e, f) => { upd(*a); upd(*b); upd(*c); upd(*d); upd(*e); upd(*f); }
             Instruction::MakeClosure(d, _, caps) => { upd(*d); for &c in caps { upd(c); } }
             Instruction::NewArray(d) => upd(*d),
             Instruction::ArrayPush(a, e) => { upd(*a); upd(*e); }
             Instruction::ArrayGet(d, a, i) | Instruction::ArraySet(d, a, i)
             | Instruction::DeepSet(d, a, i) => { upd(*d); upd(*a); upd(*i); }
             Instruction::DeepSetInPlace(d, a, i, _) => { upd(*d); upd(*a); upd(*i); }
+            Instruction::SetOne(d, a, i) | Instruction::SetOneInPlace(d, a, i, _) => { upd(*d); upd(*a); upd(*i); }
             Instruction::AssertMutable(r, _) => { upd(*r); }
             Instruction::IterPairs(d, s) => { upd(*d); upd(*s); }
             Instruction::DestructureRest(d, s, _, _) => { upd(*d); upd(*s); }
@@ -5992,8 +6345,6 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             | Instruction::CheckAlive(s, _) | Instruction::Revive(s) => upd(*s),
             Instruction::LoopBoundsCheck(a, b) | Instruction::NavStepCheck(a, b) => { upd(*a); upd(*b); }
             Instruction::DestructureAbsorb(d, s, _) => { upd(*d); upd(*s); }
-            Instruction::ArrayMap(d, a, f) | Instruction::ArrayFilter(d, a, f) => { upd(*d); upd(*a); upd(*f); }
-            Instruction::ArrayReduce(d, a, i, f) => { upd(*d); upd(*a); upd(*i); upd(*f); }
             Instruction::ArraySort(d, a, _, f) => { upd(*d); upd(*a); if *f != u16::MAX { upd(*f); } }
             Instruction::StrSplitCount(d, s, p) => { upd(*d); upd(*s); upd(*p); }
             Instruction::StrSplitMap(d, s, p, f) | Instruction::StrSplitFilter(d, s, p, f) => { upd(*d); upd(*s); upd(*p); upd(*f); }
@@ -6002,7 +6353,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::StrRepeat(d, s, n) => { upd(*d); upd(*s); upd(*n); }
             Instruction::StrSplit(d, s, p) | Instruction::StrContains(d, s, p)
             | Instruction::StrSlice(d, s, p) | Instruction::StrFindPos(d, s, p)
-            | Instruction::ConcatStr(d, s, p) | Instruction::StrCharAt(d, s, p) => { upd(*d); upd(*s); upd(*p); }
+            | Instruction::ConcatStr(d, s, p) | Instruction::StrCharNext(d, s, p) => { upd(*d); upd(*s); upd(*p); }
             Instruction::ConcatBuild(d, b, items) => { upd(*d); upd(*b); for &i in items { upd(i); } }
             Instruction::StrInsert(d, s, p, t) | Instruction::StrRemove(d, s, p, t)
             | Instruction::StrReplace(d, s, p, t) => { upd(*d); upd(*s); upd(*p); upd(*t); }

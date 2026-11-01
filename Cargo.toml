@@ -21,10 +21,11 @@ members = [
     "crates/zymbol-compiler",
     "crates/zymbol-intrinsics",
     "crates/zymbol-package",
+    "crates/zymbol-host",
 ]
 
 [workspace.package]
-version = "0.0.10"
+version = "0.0.11"
 edition = "2024"
 rust-version = "1.85"
 license = "AGPL-3.0-only"
@@ -50,6 +51,7 @@ zymbol-analyzer = { path = "crates/zymbol-analyzer" }
 zymbol-formatter = { path = "crates/zymbol-formatter" }
 zymbol-repl = { path = "crates/zymbol-repl" }
 zymbol-package = { path = "crates/zymbol-package" }
+zymbol-host = { path = "crates/zymbol-host", default-features = false }
 
 # Unicode handling
 unicode-segmentation = "1.12"
@@ -71,6 +73,12 @@ owo-colors = "4.0"
 
 # Data structures
 indexmap = "2.2"
+# The hasher of `zymbol_common::Dict` (2026-10-18): already in the lock
+# through hashbrown, so it brings in no new crate.
+foldhash = "0.1.5"
+# `kill(2)` for `zymbol run --timeout` (GLB-150): already in the lock, so it
+# brings in no new crate.
+libc = "0.2"
 
 # Serialization (for bytecode)
 # bincode stays on 1.x deliberately: 2.x/3.x changes the wire format, and the

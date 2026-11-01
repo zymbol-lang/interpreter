@@ -57,7 +57,7 @@ fn hot_neutral_from_value(value: &Expr, name: &str) -> Value {
             }
             Value::Int(0)
         }
-        Expr::Binary(bin) if bin.op == BinaryOp::Concat => Value::String(String::new()),
+        Expr::Binary(bin) if bin.op == BinaryOp::Concat => Value::String(String::new().into()),
         Expr::Binary(bin)
             if matches!(bin.op, BinaryOp::Mul | BinaryOp::Div) =>
         {
@@ -231,7 +231,7 @@ impl<W: Write> Interpreter<W> {
                 // Char element → init to "" (String); anything else → init to [] (Array)
                 if (ident.hot || ident.pre_hot) && self.get_variable(&assign.name).is_none() {
                     let neutral = if matches!(element, Value::Char(_)) {
-                        Value::String(String::new())
+                        Value::String(String::new().into())
                     } else {
                         Value::array(Vec::new())
                     };
@@ -266,8 +266,11 @@ impl<W: Write> Interpreter<W> {
     }
 
     /// `arr[i]$~ v`, `d["k"]$~ v` and `d.k$~ v`: one element written in place,
-    /// whatever the collection. The deep form, `m[i>j]$~ v`, takes the general
-    /// path — it evaluates each operand once too.
+    /// whatever the collection. The deep form, `m[i>j]$~ v` — and what the
+    /// parser rewrites into it, `d.x["y"]$~ v` and `d.x$+ 3` — is written in
+    /// place too (GLB-140): it took the general path, which read the receiver
+    /// as a second owner and copied the outer collection on every edit. A path
+    /// with a range in it still takes the general path, which refuses it.
     ///
     /// A positional tuple reaches this only as `t = t[i]$~ v`, the functional
     /// form bound back to its own name, which derives a tuple like
@@ -288,9 +291,26 @@ impl<W: Write> Interpreter<W> {
             Expr::MemberAccess(ma) if !ma.is_module_access && is_named(name, &ma.object) => {
                 let read = self.receiver_read_first(name, &[&op.value]);
                 let new_value = self.eval_expr(&op.value)?;
-                let key = Value::String(ma.field.clone());
+                let key = Value::String(ma.field.clone().into());
                 self.edit_receiver_done(name, read, &ma.object, |c| {
                     Self::update_in(c, key, new_value, op.span)
+                })
+            }
+            // Left to right, as the general path: the receiver, then the
+            // steps, then the value. Only a receiver in view: one that is not
+            // has its error said by the general path, before any operand runs.
+            Expr::DeepIndex(di)
+                if is_named(name, &di.array)
+                    && di.path.steps.iter().all(|step| step.range_end.is_none())
+                    && self.get_variable(name).is_some() =>
+            {
+                let mut operands: Vec<&Expr> = di.path.steps.iter().map(|step| &*step.index).collect();
+                operands.push(&op.value);
+                let read = self.receiver_read_first(name, &operands);
+                let indices = self.eval_nav_steps(di, op.span)?;
+                let new_value = self.eval_expr(&op.value)?;
+                self.edit_receiver_done(name, read, &di.array, |c| {
+                    Self::deep_update_in(c, &indices, new_value, op.span)
                 })
             }
             _ => Ok(false),
@@ -331,7 +351,7 @@ impl<W: Write> Interpreter<W> {
             let span = op.span;
             return self.edit_receiver_done(name, read, &op.base, |c| match c {
                 Value::String(s) => {
-                    s.push_str(&pieces);
+                    s.edit().push_str(&pieces);
                     Ok(())
                 }
                 Value::Array(arr) => {
@@ -386,7 +406,7 @@ impl<W: Write> Interpreter<W> {
                     // that is already there, when it is one.
                     let piece = self.value_to_concat_str(&rhs_val);
                     if let Some(Value::String(curr)) = self.get_variable_mut(name) {
-                        curr.push_str(&piece);
+                        curr.edit().push_str(&piece);
                         return Ok(true);
                     }
                 } else {

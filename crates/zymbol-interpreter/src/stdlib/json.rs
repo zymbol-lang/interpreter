@@ -39,12 +39,12 @@ fn json_to_value(v: serde_json::Value) -> Value {
                 None => Value::Float(n.as_f64().unwrap_or(f64::NAN)),
             }
         }
-        serde_json::Value::String(s) => Value::String(s),
+        serde_json::Value::String(s) => Value::String(s.into()),
         serde_json::Value::Array(arr) => {
             Value::array(arr.into_iter().map(json_to_value).collect())
         }
         serde_json::Value::Object(map) => Value::named_tuple(
-            map.into_iter().map(|(k, v)| (k, json_to_value(v))).collect(),
+            map.into_iter().map(|(k, v)| (k, json_to_value(v))),
         ),
     }
 }
@@ -57,7 +57,7 @@ fn value_to_json(v: Value) -> serde_json::Value {
         Value::Bool(b) => serde_json::Value::Bool(b),
         Value::Int(i) => serde_json::json!(i),
         Value::Float(f) => serde_json::json!(f),
-        Value::String(s) => serde_json::Value::String(s),
+        Value::String(s) => serde_json::Value::String(s.to_string()),
         Value::Char(c) => serde_json::Value::String(c.to_string()),
         Value::Array(arr) => {
             serde_json::Value::Array(crate::own_elements(arr).into_iter().map(value_to_json).collect())
@@ -77,7 +77,7 @@ fn json_decode(args: Vec<Value>, span: Span) -> Result<Value> {
     match args.into_iter().next() {
         Some(Value::String(text)) => match serde_json::from_str::<serde_json::Value>(&text) {
             Ok(v) => Ok(json_to_value(v)),
-            Err(e) => Ok(Value::Error(ErrorValue::parse(e.to_string()))),
+            Err(e) => Ok(Value::error(ErrorValue::parse(e.to_string()))),
         },
         _ => Err(RuntimeError::Generic {
             message: "json::decode: expected String".into(),
@@ -97,7 +97,7 @@ fn build_rename_map(map: Value, span: Span) -> Result<HashMap<String, String>> {
             for (src, dst) in crate::own_fields(pairs) {
                 match dst {
                     Value::String(name) => {
-                        table.insert(src, name);
+                        table.insert(src, name.to_string());
                     }
                     _ => {
                         return Err(RuntimeError::Generic {
@@ -129,8 +129,7 @@ fn rekey(value: Value, table: &HashMap<String, String>) -> Value {
                 .map(|(k, v)| {
                     let new_key = table.get(&k).cloned().unwrap_or(k);
                     (new_key, rekey(v, table))
-                })
-                .collect(),
+                }),
         ),
         Value::Array(items) => Value::array(crate::own_elements(items).into_iter().map(|v| rekey(v, table)).collect()),
         Value::Tuple(items) => Value::tuple(crate::own_elements(items).into_iter().map(|v| rekey(v, table)).collect()),
@@ -155,7 +154,7 @@ fn json_decode_map(args: Vec<Value>, span: Span) -> Result<Value> {
     let table = build_rename_map(it.next().unwrap_or(Value::Unit), span)?;
     match serde_json::from_str::<serde_json::Value>(&text) {
         Ok(v) => Ok(rekey(json_to_value(v), &table)),
-        Err(e) => Ok(Value::Error(ErrorValue::parse(e.to_string()))),
+        Err(e) => Ok(Value::error(ErrorValue::parse(e.to_string()))),
     }
 }
 
@@ -164,8 +163,8 @@ fn json_encode(args: Vec<Value>, _span: Span) -> Result<Value> {
     // Arity is validated by the dispatcher; one argument is guaranteed here.
     let value = args.into_iter().next().unwrap_or(Value::Unit);
     match serde_json::to_string(&value_to_json(value)) {
-        Ok(s) => Ok(Value::String(s)),
-        Err(e) => Ok(Value::Error(ErrorValue::parse(e.to_string()))),
+        Ok(s) => Ok(Value::String(s.into())),
+        Err(e) => Ok(Value::error(ErrorValue::parse(e.to_string()))),
     }
 }
 

@@ -1,0 +1,29 @@
+[package]
+name = "zymbol-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The native host of the Zymbol register VM: terminal, network and database"
+
+# What the VM asks of the machine it runs on (ROADMAP_V0011_ES.md § 3.1): the
+# VM depends on none of this, so it builds for a target with no terminal, no
+# sockets and no ODBC, and whoever embeds it hands it a host.
+[dependencies]
+zymbol-vm.workspace = true
+zymbol-bytecode.workspace = true
+zymbol-common.workspace = true
+zymbol-intrinsics.workspace = true
+crossterm = { workspace = true }
+ureq = { workspace = true, optional = true }
+odbc-api = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+once_cell = { workspace = true, optional = true }
+
+[features]
+default = []
+# std/net through ureq (rustls, ring). Without it, `Host::http` answers that
+# the build has no HTTP — unreachable, since the compiler without `http`
+# refuses `<# std/net`.
+http = ["dep:ureq"]
+# std/db through ODBC: the binary then needs libodbc to start.
+db = ["dep:odbc-api", "dep:base64", "dep:once_cell"]

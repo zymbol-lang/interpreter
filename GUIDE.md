@@ -1,13 +1,29 @@
 # Zymbol-Lang — Language Guide
 
 > **Authoritative reference** — all examples verified empirically on both execution modes:
-> `zymbol run` (tree-walker) and `zymbol run --vm` (register VM).
+> `zymbol run` (register VM, the default since v0.0.11) and `zymbol run --tw` (tree-walker).
 > If a construct is not documented here, it may not be implemented.
 
-**Interpreter version**: v0.0.10
+**Interpreter version**: v0.0.11
 **Test coverage**: every annotated example below is executed by `zyquality/docs/guide_verify.py`.
 The language itself is graded on the corpus by `zyq suite`, where `zyquality/corpus.toml` — not a
 marker inside the file — says which engine may be judged on which file, and why not.
+
+**New in v0.0.11**: the register VM is the default engine, and `--tw` asks for the tree-walker
+([§1](#1-running-programs)); `zymbol run --deny` refuses a program that can reach a denied effect
+before any of it runs, `zymbol check --effects` lists that surface, and `zymbol run --timeout`
+stops a program after so many seconds ([§1](#1-running-programs)); a value placed in `<\ … \>`
+reaches the shell as one quoted word ([§19](#19-shell-integration)); `zymbol check` warns about a
+read that `\ x` has certainly destroyed ([Variable Lifecycle](#variable-lifecycle)) and about a
+`??` that may find no arm ([When no arm matches](#when-no-arm-matches)); a range or a comparison
+inside a list pattern means what it means in an arm ([List Patterns](#list-patterns)); a unary
+applies to its operand with its postfix, so `-v[1]` is `-(v[1])` ([Arithmetic](#arithmetic));
+more than 10 000 active calls is a catchable `##Depth` ([§16](#16-error-handling));
+`random::semilla(n)` repeats a run, and `std/net` takes a time limit per request and per process
+([§17](#standard-library-modules-std)); a dictionary literal that writes a key twice is refused
+([§12b](#12b-dictionaries)); and a negative integer written in a base carries its sign in front,
+`-0x00FF` ([§18b](#18b-numeral-modes)). The rest of the release is speed and memory: what each
+operation costs, measured and brought down, without changing what a program means.
 
 **New in v0.0.10**: `##Kind("…")` builds an error value and `##Kind(m) =>` reads its message
 back ([§7](#error-patterns--kindm), [§16](#16-error-handling)); `##'expr` turns an Int code point
@@ -157,8 +173,8 @@ The 69 Unicode digit scripts (`#०९#` Devanagari, `#٠٩#` Arabic-Indic, `#�
 ## 1. Running Programs
 
 ```bash
-zymbol run program.zy              # tree-walker (canonical, best error messages)
-zymbol run --vm program.zy         # register VM (faster for compute-heavy programs)
+zymbol run program.zy              # register VM (the default since v0.0.11)
+zymbol run --tw program.zy         # tree-walker (canonical, best error messages)
 
 zymbol --help
 zymbol run --help
@@ -166,14 +182,14 @@ zymbol run --help
 
 **When to use each mode:**
 - **Tree-walker**: canonical behavior, descriptive error messages, debugging
-- **VM**: production. There is no single speedup factor — 1.4–6× the tree-walker on the
+- **VM**: the default, and production. There is no single speedup factor — 1.4–6× the tree-walker on the
   `zyquality/bench/` microbenchmarks, 4.1× on a 19×19 go game and 11–13× on Chaturanga's
   alpha-beta search, where per-frame and per-scope cost dominates. Quote the workload, and
   re-measure before quoting: these are the interpreter of the day.
 
 Both modes produce **identical output** on the full parity suite
 (`zyq consensus --engines zytw,zyvm` in `zyquality/`, which `tests/scripts/vm_compare.sh`
-wraps; of 666 corpus files 660 agree and **0 diverge** as of 2026-09-04, the remaining 6 excused
+wraps; of 714 corpus files 708 agree and **0 diverge** as of 2026-10-25, the remaining 6 excused
 for every engine by a reason in `corpus.toml`).
 
 **What a program cost — `zymbol run --count`.** After the program ends, one line on
@@ -197,6 +213,30 @@ something is linear is to run it at two sizes and divide — ×4 the input and �
 steps is linear, ×16 is quadratic. `steps` alone would miss the commonest cause:
 writing into a shared collection is one step at any size, and it is `copied` and `bytes`
 that grow. `zyquality/cost/` asserts these ratios for the cases it holds.
+
+**What a program may do, and for how long — `--deny`, `check --effects`, `--timeout`**
+(v0.0.11). Nothing is limited unless whoever runs the program asks:
+
+```bash
+zymbol check --effects programa.zy      # every effect it can reach, with file and line
+zymbol run --deny net,shell programa.zy # refused before any of it runs if it reaches one
+zymbol run --timeout 10 programa.zy     # stopped after 10 s of wall clock, exit status 124
+```
+
+```text
+$ zymbol check --effects programa.zy
+effects of programa.zy:
+  net     programa.zy:1  <# std/net
+  shell   programa.zy:2  <\ … \>
+```
+
+The effects are `io`, `net`, `db`, `time`, `random` (the `std/` modules), `shell` (`<\ \>`),
+`sub` (`</ />`), `stdin` (`<<`, `<<|`) and `argv` (`><`). `--deny` reads every file the entry
+imports or runs before deciding, so an effect hidden in a module or a sub-script is refused
+too, and a file it cannot read is refused, since nothing can say what it would do.
+`--timeout` stops a loop, a recursion, a wait or a blocked command alike, ends the commands
+`<\ \>` started with it, and cannot be caught by the program: the limit belongs to whoever
+runs it.
 
 **Diagnostic tiers.** The same analyzers back every entry point, with one
 deliberate difference in coverage:
@@ -501,8 +541,8 @@ The `#?` postfix operator returns a 3-tuple: `(type_symbol, count, display)`.
 
 | Type | `#?` result | `count` meaning |
 |------|------------|-----------------|
-| Int | `(###, N, val)` | digit count |
-| Float | `(##., N, val)` | digit count of display |
+| Int | `(###, N, val)` | characters of the display, sign included: `-3` → 2 |
+| Float | `(##., N, val)` | characters of the display, sign and point included: `-2.5` → 4 |
 | String | `(##", N, val)` | character length |
 | Char | `(##', 1, val)` | always 1 |
 | Bool | `(##?, 1, val)` | always 1 |
@@ -619,6 +659,12 @@ anything over the line, and always work.
 > `>> "Score: " -95 ¶` is `"Score: " - 95` — arithmetic on a string, which is an error, not
 > two items. Write `>> "Score: " (-95) ¶`.
 
+> **Trap**: a line break does **not** end `>>` — it ends at `¶`, `\\`, `}`, `;`, another `>>`, a
+> statement keyword or an assignment, so one output may run over several lines. An **edit** that
+> starts the next line is therefore an item of the output: after `>> "a"`, a line `d["z"]$~ 2`
+> prints the dictionary the edit would build and leaves `d` as it was. `zymbol check` warns —
+> *this line continues the `>>` above* (v0.0.11). End the output with `¶` first.
+
 ### Newline
 
 ```zymbol
@@ -675,7 +721,8 @@ Both engines (tree-walker and `--vm`) validate identically. A leading sign is al
 `><` works in all three engines (tree-walker, `--vm` and the browser engine).
 
 **Where `zymbol run`'s own options stop.** The options of `run` itself — `--vm`,
-`--tw`, `--script`, `--keep-temp` and `-h`/`--help` — are recognised after the
+`--tw`, `--script`, `--keep-temp`, `--keys`, `--count`, `--deny`, `--timeout` and
+`-h`/`--help` — are recognised after the
 file name until the first argument that is not one of them; from there on,
 everything goes to the program. A bare `--` ends them explicitly:
 
@@ -731,7 +778,8 @@ zymbol run cuenta.zy && echo "ok"     # the `&&` now means something
 ## 3b. TUI Primitives
 
 Terminal control operators for building interactive terminal UIs.
-Some TUI primitives are tree-walker only; see the per-primitive notes below for VM support status.
+Both engines run every primitive below, and run it the same way: the `tui` suite of
+`zyquality/` drives them through a real terminal and holds the two to one output.
 
 > Most TUI primitives require an enclosing `>>| { }` block (raw mode + alternate screen).
 > `>>!` and `>>?` work standalone. `<<|` and `<<|?` require raw mode provided by `>>|`.
@@ -1053,7 +1101,7 @@ The complete life of a variable, as implemented in both engines (v0.0.8):
 | Block death | Enclosing block ends | Scope popped; block-local variables released |
 | Frame death | Function returns | The whole call frame is released |
 | **Auto-free** | **Right after the statement containing its last use** | Last-use analysis releases the value early — see below |
-| Explicit death | `\ var` | Immediate destruction; reassignment resurrects the name |
+| Explicit death | `\ var` | Immediate destruction; reassignment resurrects the name, where `\` took it from |
 | Program end | Last statement | Everything remaining is released |
 
 **Automatic destruction at last use (auto-free)** — since v0.0.8, both engines
@@ -1075,6 +1123,31 @@ as before.
 > `\` is a lifetime error. Auto-free never produces that error in a correct
 > program — if you ever see `internal: use after auto-destruction`, it is an
 > interpreter bug: please report it.
+
+**A read that `\` has certainly destroyed is warned before it runs** (v0.0.11). Where
+every path to a read goes through `\ x` with no new assignment of `x` in between,
+`zymbol check` — and `run`, before running, in both engines and in the editor — says so:
+
+```text
+warning: 'x' is read after '\ x' destroyed it (line 2)
+  = help: this read fails when it runs — move the destruction after it, or remove it
+```
+
+It is a warning and not an error: the read is still a run-time error when it runs, and
+`!?` still catches it, so a read in a branch that never runs costs nothing (`MEM-8`).
+
+**Reassigning a destroyed name** gives it back to the scope `\` took it from,
+from whichever block the assignment is in — a `?`, a loop's body, a loop's own
+variable, a destructuring (v0.0.11). A block that does not run, or a loop that
+turns zero times, gives nothing back; a lambda or a function writes only its own
+names, so it gives back nothing of the file's.
+
+```zymbol
+x = 5
+\ x
+@ i:1..3 { x = i * 10 }
+>> x ¶           // → 30
+```
 
 > **A module's variable** follows the same rule, and it is the module's that
 > ends: after `\ c` in one function of a module, every function of that module
@@ -1264,6 +1337,22 @@ b = 3
 
 Unary `+` and `-` take a number and nothing else: `+"a"` and `-"a"` are errors, not
 conversions.
+
+A unary (`-`, `+`, `!`) applies to its operand **together with** what follows the operand —
+an index, a key, a `$` operation or a call:
+
+```zymbol
+v = [4, 5]
+d = #(precio: 10)
+vistos = [3, 7]
+>> -v[1] ¶            // → -4
+>> -d.precio ¶        // → -10
+>> -v$# ¶             // → -2
+>> !vistos$? 5 ¶      // → #1
+```
+
+So `!vistos$? 5` needs no parentheses, and `(-v)[1]` is the form that negates first — an
+error on an array. `^` is not one of these: `-2 ^ 2` is `(-2) ^ 2`, 4.
 
 ### Comparison
 
@@ -1608,6 +1697,16 @@ members, `M::name(…)` and `M.NAME`.
 - **Array scrutinee** → structural match (length + element-by-element)
 - **Scalar scrutinee** → containment: does the scalar appear in the literal list?
 
+An element is `_`, a value, a name whose value is compared, a nested list pattern, **a range
+or a comparison** — and each means what the same pattern means in an arm (v0.0.11). So
+`[1..5, 7]` against a scalar is `1..5 || 7`, and against an array it tests one element each:
+
+```zymbol
+>> ?? 4 { [1..2, 4..6] => "in"  _ => "out" } ¶        // → in
+>> ?? [3, 9] { [1..5, > 8] => "fits"  _ => "no" } ¶   // → fits
+>> ?? [9] { [1..5] => "fits"  _ => "no" } ¶           // → no
+```
+
 ```zymbol
 // Scalar containment
 n = 3
@@ -1733,6 +1832,11 @@ A value no arm matches is an **error**, `Runtime error: no pattern matched in ma
 expression` — whether the `??` gives a value (`r = ?? n { … }`) or is written as a
 statement. It is never a silent empty value, and the program does not go on to the next
 line. When every value must land somewhere, end with `_ => …`.
+
+Since v0.0.11 `zymbol check` — and `run`, before running — **warns** about a `??` with no
+`_` arm, unless its arms cover every value anyway: a Bool with both `#1` and `#0`, or two
+comparisons against constants that leave no number out (`< 0` with `>= 0`). The warning does
+not change what runs: the error above is still the error, and `!?` still catches it.
 
 > **⚠ Not implemented**: Identifier binding in patterns (`n => n * 2`).
 
@@ -3455,7 +3559,10 @@ not be, since it would have to be the empty tuple as well.
 > other mutable and addressed by key. The mark says which is meant before the reader
 > reaches the colon.
 
-It is addressed **by key, and only by key**.
+It is addressed **by key, and only by key**. A literal that writes the same key twice is
+refused before the program runs (v0.0.11) — `#(a: 1, a: 2)` says *key 'a' appears twice in
+the dictionary* — because one of the two values would be lost without a word
+(`zymbol-design/COLLECTIONS.md` § 5).
 
 ### Reading
 
@@ -3926,11 +4033,12 @@ r6 = 7 |> (x -> x * factor)
 | `##Network` | Network errors |
 | `##DB` | Database errors (`std/db`) |
 | `##Time` | A date that does not exist, an unknown zone or unit (`std/time`) |
+| `##Depth` | More than 10 000 calls active at once (v0.0.11) — a tail call does not count |
 | `##_` | Generic catch-all |
 
 `##Div` to `##Type` come from the operation that fails. `##Parse` to `##Time` are
 also the kinds of the soft error values the standard modules return, tested with
-`$!`. These are the eleven kinds an engine produces; the parser accepts any name
+`$!`. `##Depth` comes from the call that would go one past the limit. These are the twelve kinds an engine produces; the parser accepts any name
 after `##`, and a name that is not one of them simply never matches.
 
 ```zymbol
@@ -4362,13 +4470,29 @@ the i18n pattern with no special handling:
 | Module | Functions | Since |
 |--------|-----------|-------|
 | `std/math` | `sqrt` `exp` `ln` `log` `pow` `abs` `ceil` `floor` `round` `min` `max` `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `sinh` `cosh` `tanh` `sigmoid` · constants `PI`, `E` | v0.0.6 |
-| `std/random` | `entero` `rango` `peso_f64` | v0.0.6 |
+| `std/random` | `entero` `rango` `peso_f64` · `semilla` (v0.0.11) | v0.0.6 |
 | `std/json` | `decode(text)` `decode_map(text, map)` `encode(value)` | v0.0.7 |
 | `std/io` | `read` `write` `append` `exists` `delete` `list` `mkdir` | v0.0.7 |
-| `std/net` | `get` `post` `post_json` `head` | v0.0.7 |
+| `std/net` | `get` `post` `post_json` `head` · `timeout` (v0.0.11) | v0.0.7 |
 | `std/db` | `connect` `disconnect` `exec` `query` `query_one` `query_value` `tx` `begin` `commit` `rollback` `savepoint` `release` `rollback_to` `exec_script` `table_exists` | v0.0.7 |
 | `std/term` | `width` `pad_left` `pad_right` `center` `truncate` | v0.0.8 |
 | `std/time` | `now` `today` `parts` `of` `format` `add` `diff` | v0.0.9 |
+
+**`std/random` — a seed repeats a run.** `entero(lo, hi)` is an Int in `[lo, hi]`,
+`rango(n)` one in `[0, n)`, `peso_f64()` a Float in `[-0.1, 0.1]`. Unseeded, a run draws a
+different sequence each time. `semilla(n)` fixes it from that point: the same seed gives the
+same numbers on every run **and in every engine** — the tree-walker, the VM and the
+playground (v0.0.11). To replay a run, print the seed it used and pass it back as an
+argument. The seed belongs to the process, as the numeral mode does: a module that calls
+`semilla` fixes the sequence of whoever imports it too.
+
+```zymbol
+<# std/random => azar
+azar::semilla(2026)
+>> azar::entero(1, 6) " " azar::entero(1, 6) " " azar::entero(1, 6) ¶   // → 4 2 2
+azar::semilla(2026)
+>> azar::entero(1, 6) " " azar::entero(1, 6) " " azar::entero(1, 6) ¶   // → 4 2 2
+```
 
 **`std/term` — display width in terminal columns.** `width` counts **columns**, not
 graphemes: CJK ideographs, kana, hangul and most emoji take two columns each, so a
@@ -4494,7 +4618,25 @@ txt = io::read("no-existe.txt")
 
 `std/net` is synchronous (no async). `get`/`post`/`post_json` accept an optional trailing
 `headers` argument — an array of 2-element `(String, String)` tuples — to reach authenticated
-APIs. JSON object ↔ **dictionary** `#(…)` (key order preserved), JSON array ↔ `Array`, null ↔ `Unit`.
+APIs. After the headers comes an optional **time limit** in seconds, an Int or a Float, `0`
+or more (v0.0.11); `head` takes it as its second argument. A request that has not finished by
+then is a soft `##Network(timeout: no answer within N s)` — `head` is `#0` — and the program
+goes on. A request that gives no limit takes the process's own, set by `net::timeout(s)`;
+`0` is no limit, in a call (whatever the process's) and in `timeout`. Without either, a
+request waits as long as the server takes. `timeout` returns the limit it replaces (`0` when
+there was none), so a module that needs another one for a while can put the old one back:
+
+```zymbol
+<# std/net => net
+net::timeout(10)                         // every request below waits at most 10 s…
+vivo = net::head(url, 2)                 // …but this one, 2 s
+texto = net::post_json(url, cuerpo, [], 0)  // and this one, as long as it takes
+antes = net::timeout(30)                 // 30 s for a while
+net::timeout(antes)                      // and back to 10
+```
+
+The limit is the process's, as `random::semilla` is: a module that sets it sets it for
+whoever imports it too. JSON object ↔ **dictionary** `#(…)` (key order preserved), JSON array ↔ `Array`, null ↔ `Unit`.
 
 > When writing JSON **literals** in source, escape `{` as `\{` (an unescaped `{` starts string
 > interpolation). JSON read from a file or the network needs no escaping.
@@ -4979,6 +5121,7 @@ hex = 0x|255|    // Int → hex string → "0x00FF"
 bin = 0b|65|     // Int → binary string → "0b1000001"
 oct = 0o|8|      // Int → octal string → "0o10"
 dec = 0d|255|    // Int → decimal string → "0d0255"
+neg = 0x|(0 - 255)|  // a negative one: the sign in front → "-0x00FF" (v0.0.11)
 ```
 
 ---
@@ -5409,6 +5552,29 @@ result = <\ "echo 'scale=2; 355/113' | bc" \>
 > **Note**: Trailing `\n` is stripped automatically (consistent with shell `$(...)` substitution).
 > Internal newlines are preserved. Add `¶` explicitly when needed.
 
+**What you write is the command; a value is data** (v0.0.11). The text written in
+`<\ … \>` goes to the shell as it is — pipes, redirections, quotes and all. Every
+value placed in it, side by side or as `{name}`, reaches the shell as **exactly one
+word**, quoted: a space, a `'`, a `;` or a `$( )` inside it is text, not syntax.
+
+```zymbol
+v = "x; echo INYECTADO"
+>> <\ "echo [" v "]" \> ¶              // → [x; echo INYECTADO]
+nombre = "mi informe.txt"
+>> <\ "printf '%s|' " nombre \> ¶      // → mi informe.txt|
+>> <\ "printf '%s|' {nombre}" \> ¶     // → mi informe.txt|
+```
+
+So never put quotes around a value yourself: `<\ "test -f " ruta \>`, not
+`<\ "test -f '" ruta "'" \>` — the value already arrives quoted, and the quotes written
+around it would make a different word. Before v0.0.11 a value was pasted in as it was:
+`v` above ran a second command, `nombre` became two arguments, and a `'` in a value
+broke every command that quoted it by hand (`interpreter/AGENTIC.md`, G2). A value only
+the program builds is still data — to run a command assembled at run time, write the
+parts that are command in the literal. Through `cmd.exe` (Windows with no POSIX shell),
+a value holding `"`, `%` or a line break cannot be passed as one word and gives a soft
+`##IO` error instead of running.
+
 **A command that fails is an error value.** A status other than 0 gives a soft
 `##IO` error whose message starts with the status — `exit 3`, then `: ` and what
 the command said (its stderr, or its stdout when it wrote nothing to stderr). A
@@ -5430,16 +5596,18 @@ is not set, a `grep` that finds nothing — is tested with `$!` where it used to
 tested for `""`. Before v0.0.10 a failed command and one that printed nothing were
 the same empty string (GAP-GOL-011).
 
-A **collection** placed in the command becomes shell words: its elements joined
-with spaces, at any depth — not its display form, whose `(`, `[` and `#` the
-shell would read as syntax or as a comment. A **function** cannot be placed in a
-command at all, not even inside a collection:
+A **collection** placed in the command becomes shell words: one per element, at
+any depth, each quoted — not its display form, whose `(`, `[` and `#` the shell
+would read as syntax or as a comment. A **function** cannot be placed in a command
+at all, not even inside a collection:
 
 ```zymbol
 files = ["a.txt", "b.txt"]
 >> <\ "echo " files \> ¶        // → a.txt b.txt
 pair = (3, "x")
 >> <\ "echo " pair \> ¶         // → 3 x
+partes = ["uno dos", "tres"]
+>> <\ "printf '%s|' " partes \> ¶   // → uno dos|tres|
 ```
 
 ### Execute Script `</ file.zy />`

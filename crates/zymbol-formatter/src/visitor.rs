@@ -1649,6 +1649,11 @@ impl<'a> FormatVisitor<'a> {
         self.output.open_brace();
         self.output.newline();
         self.output.indent();
+        // The arms are measured from the `{`, as a block's statements are. A
+        // `??` inside an expression still held the line where the statement
+        // BEFORE it ended, so its first arm read as preceded by a blank line
+        // the second time the file was formatted — `fmt(fmt(x)) != fmt(x)`.
+        self.last_src_line = self.last_src_line.max(match_expr.scrutinee.span().end.line);
 
         for case in &match_expr.cases {
             self.flush_comments_before(case.span.start.line);

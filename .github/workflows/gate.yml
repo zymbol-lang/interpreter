@@ -41,6 +41,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       - uses: actions/cache@v4
         with:
@@ -62,8 +64,28 @@ jobs:
       # builds as well as for this job. That is a decision about the project,
       # not about this workflow.
 
-      - name: Build (release, as packaged)
-        run: cargo build --release
+      # `--features db`: std/db is off by default since v0.0.11 (D4), and the
+      # gate is what tests it — against the SQLite driver installed below. A
+      # build without it answers `module not found: std/db`, so forgetting the
+      # flag fails the std/db files instead of skipping them.
+      - name: Build (release, with std/db)
+        run: cargo build --release --features db
+
+      # The compact build (ROADMAP_V0011_ES.md § 3.2): no LSP, no REPL, no
+      # std/net, for containers too small for the full one. Nothing else in
+      # this workflow builds without the default features, so this is what
+      # notices a `use` of zymbol_lsp, zymbol_repl or ureq that a feature does
+      # not guard.
+      - name: The compact build compiles
+        run: cargo check -p zymbol-cli --no-default-features --all-targets
+
+      # The core builds for the WebAssembly browsers run (ROADMAP_V0011_ES.md
+      # § 3.4, decided 2026-10-20): the VM depends on no system library since
+      # 3.1, and ZyStr takes 32-bit pointers since 3.4. This is what notices a
+      # crossterm, a socket or a 64-bit assumption coming back. No engine is
+      # published from it.
+      - name: The VM builds for wasm32
+        run: cargo check -p zymbol-compiler -p zymbol-vm --target wasm32-unknown-unknown
 
       # `cargo test` is not self-contained, on purpose: zymbol-analyzer's
       # diagnostic tests read their fixtures out of the corpus, so that the
@@ -81,7 +103,7 @@ jobs:
       - name: Unit and integration tests
         env:
           ZYQUALITY_DIR: ${{ runner.temp }}/zyquality
-        run: cargo test --workspace --release
+        run: cargo test --workspace --release --features db
 
   gate:
     name: ZyQuality + ZyFmtCheck + ZyDDT
@@ -151,6 +173,7 @@ jobs:
           clone ZyBank          ZyBank
           clone ZyGoL           GoL
           clone ZyBF            ZyBrainfuck
+          clone ZyEdit          ZyEdit
 
           # The design, which is source: `zyddt premises` crosses PREMISES.md
           # with the cells in both directions, and without it that check does
@@ -232,7 +255,8 @@ jobs:
 
       - name: Build the interpreter
         working-directory: interpreter
-        run: cargo build --release
+        # With std/db, which this job tests: see the build step above (D4).
+        run: cargo build --release --features db
 
       - name: The VS Code grammar's tokeniser
         # tmgrammar_scopes.mjs tokenises with real vscode-textmate over

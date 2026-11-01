@@ -102,28 +102,28 @@ fn term_width(args: Vec<Value>, span: Span) -> Result<Value> {
 
 fn term_pad_left(args: Vec<Value>, span: Span) -> Result<Value> {
     match (args.first(), args.get(1)) {
-        (Some(Value::String(s)), Some(Value::Int(n))) => Ok(Value::String(pad(s, *n, true))),
+        (Some(Value::String(s)), Some(Value::Int(n))) => Ok(Value::String(pad(s, *n, true).into())),
         _ => Err(err_pad("pad_left", span)),
     }
 }
 
 fn term_pad_right(args: Vec<Value>, span: Span) -> Result<Value> {
     match (args.first(), args.get(1)) {
-        (Some(Value::String(s)), Some(Value::Int(n))) => Ok(Value::String(pad(s, *n, false))),
+        (Some(Value::String(s)), Some(Value::Int(n))) => Ok(Value::String(pad(s, *n, false).into())),
         _ => Err(err_pad("pad_right", span)),
     }
 }
 
 fn term_center(args: Vec<Value>, span: Span) -> Result<Value> {
     match (args.first(), args.get(1)) {
-        (Some(Value::String(s)), Some(Value::Int(n))) => Ok(Value::String(center(s, *n))),
+        (Some(Value::String(s)), Some(Value::Int(n))) => Ok(Value::String(center(s, *n).into())),
         _ => Err(err_pad("center", span)),
     }
 }
 
 fn term_truncate(args: Vec<Value>, span: Span) -> Result<Value> {
     match (args.first(), args.get(1)) {
-        (Some(Value::String(s)), Some(Value::Int(n))) => Ok(Value::String(truncate(s, *n))),
+        (Some(Value::String(s)), Some(Value::Int(n))) => Ok(Value::String(truncate(s, *n).into())),
         _ => Err(err_pad("truncate", span)),
     }
 }
@@ -159,7 +159,7 @@ mod tests {
         assert_eq!(width_of(&Value::String("abc".into())), Some(3));
         assert_eq!(width_of(&Value::String("手番".into())), Some(4)); // 2 wide glyphs
         assert_eq!(width_of(&Value::String("go碁🌑".into())), Some(6)); // 1+1+2+2
-        assert_eq!(width_of(&Value::String(String::new())), Some(0));
+        assert_eq!(width_of(&Value::String(String::new().into())), Some(0));
         assert_eq!(width_of(&Value::Char('あ')), Some(2));
         assert_eq!(width_of(&Value::Char('A')), Some(1));
         assert_eq!(width_of(&Value::Int(9)), None);

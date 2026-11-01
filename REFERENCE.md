@@ -2,7 +2,7 @@
 
 Complete lookup reference: known limitations, error taxonomy, and symbol table.
 
-**Interpreter version**: v0.0.10
+**Interpreter version**: v0.0.11
 
 See also: [GUIDE.md](GUIDE.md) — full language guide with examples  
 See also: [IMPLEMENTATION.md](IMPLEMENTATION.md) — EBNF grammar and internals
@@ -279,9 +279,17 @@ reports **`module not found: std/db`**.
 Where `std/db` IS available:
 
 - **Windows prebuilt binaries** — ODBC is part of the OS (`odbc32.dll`).
-- **Any source build** — `cargo build --release` (the `db` feature is on by default).
+- **A source build with the feature** — `cargo build --release --features db`.
   Build-time prereq: `unixodbc-dev`; runtime prereq: `unixodbc` + the engine's ODBC
-  driver. To reproduce the prebuilt behavior use `--no-default-features`.
+  driver. Until v0.0.10 the feature was on by default, so a plain `cargo build
+  --release` made a binary that needed `libodbc.so.2` and `libltdl.so.7` to start at
+  all; since v0.0.11 it is off (decision D4) and a plain build is what the prebuilt
+  Linux and macOS binaries are.
+
+The compact build (`cargo build --release -p zymbol-cli --no-default-features`, since
+v0.0.11) leaves out `std/net` the same way — `module not found: std/net` in both
+engines — together with `zymbol lsp` and `zymbol repl`, which answer that the binary
+was built without them. See `ROADMAP_V0011_ES.md` § 3.2 for what it saves.
 
 ### ~~L18 — `x°`/`°x` inside a function called from a `@` loop panics~~ Fixed in v0.0.8
 
@@ -1564,6 +1572,7 @@ Related operators:
 - Division by zero: `x / 0`; modulo by zero: `x % 0`
 - Integer overflow: any result outside ±(2⁵³ − 1) — see [Numeric limits](#numeric-limits)
 - Dictionary key not found: `d.nonexistent` — `##Key`
+- More than 10 000 calls active at once — `##Depth` (below)
 
 Runtime errors carry a **kind** (e.g., `##Index`, `##Div`, `##Type`, `##Range`, `##Key`) and a **message** string. The value in `_err` has the format `##Kind(message)`. The `#?` type symbol of an error value is the kind itself — `(##Index, N, ...)` — there is no generic error type symbol.
 
@@ -1735,6 +1744,28 @@ It is Python's `KeyError`, not JavaScript's `undefined`, and it is coherent with
 `a[0]`, which is also an error rather than a silently wrong answer. It is what
 makes `d$? "clave"` necessary: a dictionary built piece by piece has to be
 askable before it is read.
+
+`##Depth` (v0.0.11) is raised by the call that would make more than **10 000** calls
+active at once — of a function or a lambda, direct or through `$>`, `$|`, `$<` and `$^` —
+the same number in the three engines, so a deep program answers the same everywhere. It
+is caught like any other error:
+
+```text
+f(n) {
+    ? n == 0 { <~ 0 }
+    <~ 1 + f(n - 1)
+}
+>> f(9999) ¶                                  // 9999 — 10 000 calls, the last allowed
+!? { >> f(10000) ¶ } :! ##Depth { >> _err ¶ }  // ##Depth(call depth exceeded: more than 10000 calls active at once)
+```
+
+A **tail call** does not count: `<~ f(…)` to the function itself, with no `!?` of that
+function open around it — in its body, its `:!` or its `:>` — takes the place of the call
+that made it, so `<~ f(n - 1)` loops for as long as it is asked to. A call to another
+function in tail position (`par` → `impar`) counts. Until v0.0.11 there was no number: a
+deep recursion ran until the Rust stack was gone and the process aborted with
+`stack overflow` and no Zymbol error, near 9 000 levels in the tree-walker and near 2 500
+through `$>` in the VM (D7, GLB-133).
 
 `std/term` (v0.0.8) has no soft-error channel: its five functions are pure measurements
 over a string and cannot fail environmentally.

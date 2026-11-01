@@ -506,7 +506,7 @@ Run: rustup target add x86_64-pc-windows-gnu"
         info "  Compiling zymbol.exe for Windows..."
         cd "${INTERP_DIR}"
         CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER="x86_64-w64-mingw32-gcc" \
-            cargo build --release --target x86_64-pc-windows-gnu
+            cargo build --release --features db --target x86_64-pc-windows-gnu  # std/db on Windows (D4)
         cd "${REPO_ROOT}"
     fi
 
@@ -580,7 +580,7 @@ build_windows_msi_package() {
         info "  Compiling zymbol.exe for Windows..."
         cd "${INTERP_DIR}"
         CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER="x86_64-w64-mingw32-gcc" \
-            cargo build --release --target x86_64-pc-windows-gnu
+            cargo build --release --features db --target x86_64-pc-windows-gnu  # std/db on Windows (D4)
         cd "${REPO_ROOT}"
     fi
 

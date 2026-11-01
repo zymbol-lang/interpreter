@@ -287,6 +287,11 @@ impl ErrorValue {
     pub fn key(message: impl Into<String>) -> Self {
         Self::new("Key", message)
     }
+
+    /// Create a Depth error — too many calls active at once (D7, GLB-133).
+    pub fn depth(message: impl Into<String>) -> Self {
+        Self::new("Depth", message)
+    }
 }
 
 /// The type symbol a value carries, before any refinement.
@@ -345,24 +350,46 @@ pub(crate) fn type_symbol_of(value: &Value) -> String {
 /// reaches the same place by a third route — it shares the JavaScript array and
 /// rebuilds it on write (`deepUpdateValue`).
 ///
-/// `String` is deliberately NOT behind an `Rc` here. The VM has `ZyStr` for it
-/// (7 bytes inline, `Rc<String>` above that), which is unsafe code earning its
-/// keep in a bytecode loop; a string clone is one allocation, not one per
-/// element, so the tree-walker pays a bounded price and keeps the simple type.
+/// `String` holds a `Text` (`zymbol_common::text`): shared behind an `Rc`, with
+/// its character count and a crumb every 64 characters. It was a plain `String`,
+/// on the argument that a clone is one allocation and not one per element — but
+/// a clone is the whole text, and reading a variable cloned it: a loop of `s$#`
+/// moved 128 MB where the VM moved 2.6 (ZYTW-016), and a loop of `s[i]` over a
+/// text that is not ASCII walked it from the start each time (GLB-139). Both
+/// corrected on 2026-10-21, by the author's decision; the VM's `ZyStr` is the
+/// same model with an inline form and unsafe code this engine does not need.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    String(String),
+    String(zymbol_common::text::Text),
     Int(i64),
     Float(f64),
     Char(char),
     Bool(bool),
     Array(Rc<Vec<Value>>),
     Tuple(Rc<Vec<Value>>),
-    NamedTuple(Rc<Vec<(String, Value)>>),  // (field_name, value) pairs
-    Function(FunctionValue),
+    /// The dictionary, `#(…)`: keys in insertion order, found by hash (GLB-132).
+    NamedTuple(Rc<zymbol_common::Dict<Value>>),
+    /// Boxed, as `Error` is: inline, a `FunctionValue` (120 bytes) made every
+    /// value that size — an array of integers took 120 bytes an element, and
+    /// shifting one moved seven times what the VM's 16-byte value moves.
+    Function(Box<FunctionValue>),
     /// Error value for try-catch error handling
-    Error(ErrorValue),
+    Error(Box<ErrorValue>),
     Unit,
+}
+
+impl Value {
+    /// `Value::Error`, boxed.
+    #[inline]
+    pub fn error(e: ErrorValue) -> Self {
+        Value::Error(Box::new(e))
+    }
+
+    /// `Value::Function`, boxed.
+    #[inline]
+    pub fn function(f: FunctionValue) -> Self {
+        Value::Function(Box::new(f))
+    }
 }
 
 /// Keep `Interpreter::file_vars` in step with a write to a file-level variable.
@@ -478,7 +505,7 @@ pub(crate) fn own_elements(rc: Rc<Vec<Value>>) -> Vec<Value> {
 
 /// `own_elements` for a dictionary's `(key, value)` pairs.
 #[inline]
-pub(crate) fn own_fields(rc: Rc<Vec<(String, Value)>>) -> Vec<(String, Value)> {
+pub(crate) fn own_fields(rc: Rc<zymbol_common::Dict<Value>>) -> zymbol_common::Dict<Value> {
     Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone())
 }
 
@@ -498,8 +525,12 @@ impl Value {
 
     /// Build a dictionary (named tuple), from its `(key, value)` pairs in order.
     #[inline]
-    pub fn named_tuple(fields: Vec<(String, Value)>) -> Value {
-        Value::NamedTuple(Rc::new(fields))
+    ///
+    /// The parser refuses a key written twice (GLB-131); a key that still
+    /// arrives twice — two columns of one name, two keys renamed alike — keeps
+    /// the place of the first and the value of the last.
+    pub fn named_tuple(fields: impl IntoIterator<Item = (String, Value)>) -> Value {
+        Value::NamedTuple(Rc::new(fields.into_iter().collect()))
     }
 
     /// Convert value to displayable string, in ASCII numerals.
@@ -529,7 +560,7 @@ impl Value {
             }
         }
         match self {
-            Value::String(s) => s.clone(),
+            Value::String(s) => s.to_string(),
             Value::Int(n) => numeral_mode::to_numeral_int(*n, block_base),
             Value::Float(f) => numeral_mode::to_numeral_float(*f, block_base),
             Value::Char(c) => c.to_string(),
@@ -796,8 +827,10 @@ pub struct Interpreter<W: Write> {
     /// Auto-free (v0.0.8): top-level statement index → variables to destroy
     /// after that statement (last-use analysis, computed in `execute()`)
     destruction_schedule: HashMap<usize, Vec<String>>,
-    /// Dead variables: variables that have been destroyed (for use-after-free detection)
-    dead_variables: HashSet<String>,
+    /// Dead variables: variables that have been destroyed (for use-after-free
+    /// detection), each with the index in `scope_stack` of the scope `\` took
+    /// it from — where an assignment gives it back (GLB-147)
+    dead_variables: HashMap<String, usize>,
     /// Short-circuit flag: true if any const (:=) has been declared in this interpreter session
     has_any_const: bool,
     /// QW6: fast check — true if control_flow != None (avoids enum PartialEq on hot path)
@@ -866,6 +899,9 @@ pub struct Interpreter<W: Write> {
     /// MM-9: call-frame depth — 0 while executing top-level statements.
     /// Distinguishes the root scope from a function frame's bottom scope.
     call_depth: usize,
+    /// Calls active at once, every one: `call_depth` skips a lambda that does
+    /// not take the call state. Bounded by `depth::MAX_ACTIVE_CALLS` (GLB-133).
+    pub(crate) active_calls: usize,
     /// The file body's variables, reachable at any call depth.
     ///
     /// A named function CAPTURES what its body reads from the scope it was
@@ -936,6 +972,12 @@ impl<W: Write> Interpreter<W> {
             if let Some(mut map) = self.scope_stack.pop() {
                 map.clear();
                 if self.scope_map_pool.len() < 128 { self.scope_map_pool.push(map); }
+            }
+            // A name destroyed in the scope that just ended died with it: its
+            // place is gone, and a later scope at the same depth is not it.
+            if !self.dead_variables.is_empty() {
+                let len = self.scope_stack.len();
+                self.dead_variables.retain(|_, i| *i < len);
             }
             if let Some(mut s) = self.mutable_vars_stack.pop() {
                 s.clear();
@@ -1066,10 +1108,14 @@ impl<W: Write> Interpreter<W> {
     /// B9: zero allocation on the UPDATE path (hot path).
     #[inline(always)]
     fn set_variable(&mut self, name: &str, value: Value) {
-        // A new assignment after explicit destruction (`\var`) resurrects the variable.
-        if !self.dead_variables.is_empty() {
-            self.dead_variables.remove(name);
-        }
+        // A new assignment after explicit destruction (`\var`) resurrects the
+        // variable — in the scope `\` took it from, not in the block that
+        // assigns it (GLB-147, decided 2026-10-23: `\` keeps the name's place).
+        let revive_at = if !self.dead_variables.is_empty() {
+            self.dead_variables.remove(name)
+        } else {
+            None
+        };
         if !self.auto_dead_variables.is_empty() {
             self.auto_dead_variables.remove(name);
         }
@@ -1083,7 +1129,19 @@ impl<W: Write> Interpreter<W> {
                 return;
             }
         }
-        // Not in view anywhere. If it is a variable of the module that a `\`
+        // Not in view anywhere. A name a `\` of this frame ended goes back to
+        // the scope it was taken from: a block assigning it modifies that one
+        // name, as it would have before the `\` (MEM-6, MEM-7).
+        if let Some(i) = revive_at {
+            if i < self.scope_stack.len() {
+                if at_depth_zero && i == 0 {
+                    mirror_file_var(&mut self.file_vars, name, &value);
+                }
+                self.scope_stack[i].insert(name.to_string(), value);
+                return;
+            }
+        }
+        // If it is a variable of the module that a `\`
         // ended, assigning it gives it back to the MODULE — a local of that
         // name would leave the module without its variable for good.
         if !self.module_dead.is_empty() && self.module_dead.remove(name) {
@@ -1234,6 +1292,7 @@ impl<W: Write> Interpreter<W> {
             auto_dead_variables: std::mem::take(&mut self.auto_dead_variables),
             // MM-2: module context is frame-local.
             current_module_path: self.current_module_path.take(),
+            try_depth: std::mem::replace(&mut self.try_depth, 0),
         };
         self.call_depth += 1;
         // B10: reuse pooled Vec for scope_stack
@@ -1265,6 +1324,7 @@ impl<W: Write> Interpreter<W> {
         self.dead_variables = saved.dead_variables;            // MM-3
         self.auto_dead_variables = saved.auto_dead_variables;  // auto-free
         self.current_module_path = saved.current_module_path;  // MM-2
+        self.try_depth = saved.try_depth;                      // ZYTW-017
         self.call_depth = self.call_depth.saturating_sub(1);
 
         // Pool scope_stack components
@@ -1356,9 +1416,14 @@ pub(crate) struct SavedCallState {
     module_scope: bool,
     has_any_const: bool,
     loop_scope_depths: Vec<usize>,
-    dead_variables: HashSet<String>,
+    dead_variables: HashMap<String, usize>,
     auto_dead_variables: HashSet<String>,
     pub(crate) current_module_path: Option<PathBuf>,
+    /// The caller's open `!?` blocks. A frame starts with none of its own: the
+    /// caller's handler is not armed inside the callee's frame, and counting it
+    /// there turned off the tail call of every function called from inside a
+    /// `!?` — which the VM, deciding per function, kept (ZYTW-017).
+    try_depth: u8,
 }
 
 fn default_input_fn() -> Box<dyn FnMut() -> std::io::Result<String>> {
@@ -1393,7 +1458,7 @@ impl Interpreter<std::io::Stdout> {
             cli_args: None,
             subscript_runner: None,
             destruction_schedule: HashMap::new(),
-            dead_variables: HashSet::new(),
+            dead_variables: HashMap::new(),
             has_any_const: false,
             has_control_flow: false,
             scope_map_pool: Vec::new(),
@@ -1415,6 +1480,7 @@ impl Interpreter<std::io::Stdout> {
             global_consts: HashMap::new(),
             current_module_path: None,
             call_depth: 0,
+            active_calls: 0,
             auto_dead_variables: HashSet::new(),
             auto_free_excluded: Rc::new(HashSet::new()),
         }
@@ -1452,7 +1518,7 @@ impl<W: Write> Interpreter<W> {
             cli_args: None,
             subscript_runner: None,
             destruction_schedule: HashMap::new(),
-            dead_variables: HashSet::new(),
+            dead_variables: HashMap::new(),
             has_any_const: false,
             has_control_flow: false,
             scope_map_pool: Vec::new(),
@@ -1474,6 +1540,7 @@ impl<W: Write> Interpreter<W> {
             global_consts: HashMap::new(),
             current_module_path: None,
             call_depth: 0,
+            active_calls: 0,
             auto_dead_variables: HashSet::new(),
             auto_free_excluded: Rc::new(HashSet::new()),
         }
@@ -1521,10 +1588,10 @@ impl<W: Write> Interpreter<W> {
         }
         // Remove from all scopes (search from innermost to outermost)
         let base = self.frame_base();
-        for scope in self.scope_stack[base..].iter_mut().rev() {
+        for (i, scope) in self.scope_stack.iter_mut().enumerate().skip(base).rev() {
             if scope.remove(var_name).is_some() {
-                // Found and removed - mark as dead
-                self.dead_variables.insert(var_name.to_string());
+                // Found and removed - mark as dead, and remember where it lived
+                self.dead_variables.insert(var_name.to_string(), i);
                 return Ok(());
             }
         }
@@ -1548,7 +1615,7 @@ impl<W: Write> Interpreter<W> {
                 ));
             }
         }
-        if self.dead_variables.contains(var_name) {
+        if self.dead_variables.contains_key(var_name) {
             return Err(RuntimeError::kinded(
                 "_",
                 format!(
@@ -1590,7 +1657,7 @@ impl<W: Write> Interpreter<W> {
         {
             return Ok(());
         }
-        if self.dead_variables.contains(var_name) || self.is_dead_module_state(var_name) {
+        if self.dead_variables.contains_key(var_name) || self.is_dead_module_state(var_name) {
             return Err(RuntimeError::kinded(
                 "_",
                 format!(
@@ -1629,7 +1696,7 @@ impl<W: Write> Interpreter<W> {
     pub fn set_cli_args(&mut self, args: Vec<String>) {
         // Convert strings to Value::String
         let args_values: Vec<Value> = args.into_iter()
-            .map(Value::String)
+            .map(|a| Value::String(a.into()))
             .collect();
         self.cli_args = Some(args_values);
     }
@@ -1662,6 +1729,7 @@ impl<W: Write> Interpreter<W> {
         self.global_consts.clear();
         self.current_module_path = None;
         self.call_depth = 0;
+        self.active_calls = 0;
         self.auto_dead_variables.clear();
         self.destruction_schedule.clear();
         self.auto_free_excluded = Rc::new(HashSet::new());
@@ -2142,7 +2210,7 @@ impl<W: Write> Interpreter<W> {
                 self.bind_positional(items, elements, true);
             }
             DestructurePattern::NamedTuple(fields) => {
-                let pairs: &Vec<(String, Value)> = match &rhs {
+                let pairs: &zymbol_common::Dict<Value> = match &rhs {
                     Value::NamedTuple(p) => p,
                     _ => return Err(RuntimeError::Generic {
                         message: format!(
@@ -2157,10 +2225,9 @@ impl<W: Write> Interpreter<W> {
                     // Unit: binding nothing made `#(zzz: n) = d` succeed with `n`
                     // empty and exit 0, which is the very answer decision 10 exists
                     // to refuse. The register VM already raised here.
-                    let Some(val) = pairs.iter().find(|(k, _)| k == field).map(|(_, v)| v.clone())
+                    let Some(val) = pairs.get(field).cloned()
                     else {
-                        let available: Vec<String> =
-                            pairs.iter().map(|(k, _)| k.clone()).collect();
+                        let available: Vec<String> = pairs.keys().cloned().collect();
                         return Err(RuntimeError::kinded(
                             "Key",
                             crate::variables::missing_key_msg(field, &available),
@@ -2285,7 +2352,7 @@ impl<W: Write> Interpreter<W> {
                 // (GAP-GOL-003). The analyser refuses a message whose type it
                 // knows is not text; this is the case it could not know.
                 match self.eval_expr(&e.message)? {
-                    Value::String(m) => Ok(Value::Error(ErrorValue::new(e.kind.clone(), m))),
+                    Value::String(m) => Ok(Value::error(ErrorValue::new(e.kind.clone(), m))),
                     other => Err(RuntimeError::kinded(
                         "Type",
                         format!("an error's message is a String, got {}", other.type_label()),
@@ -2361,7 +2428,13 @@ impl<W: Write> Interpreter<W> {
                     // against REFERENCE.md ("always executes, regardless of
                     // error"), the browser engine, and every language with the
                     // construct.
-                    if let Err(e) = self.execute_catch_block(clause, err_val) {
+                    // Still inside the `!?` for the tail call, as the VM's
+                    // `try_stack` has it: a `<~ f()` here owes the `:>`
+                    // (ZYTW-017).
+                    self.try_depth += 1;
+                    let caught = self.execute_catch_block(clause, err_val);
+                    self.try_depth -= 1;
+                    if let Err(e) = caught {
                         self.unwind_scopes_to(scope_depth, loop_depth);
                         pending = Some((e, self.cur_stmt_line));
                     }
@@ -2384,7 +2457,9 @@ impl<W: Write> Interpreter<W> {
         if let Some(ref finally) = try_stmt.finally_clause {
             let pending_flow = std::mem::replace(&mut self.control_flow, ControlFlow::None);
             let pending_flag = std::mem::replace(&mut self.has_control_flow, false);
+            self.try_depth += 1;
             let finally_result = self.execute_block(&finally.block);
+            self.try_depth -= 1;
             // BUG-ZYB-011: a `:>` is cleanup, and cleanup does not decide what
             // the function returns. A `<~` written inside it is discarded, and
             // the return the try block was carrying continues — which is what
@@ -2432,7 +2507,7 @@ impl<W: Write> Interpreter<W> {
             // the rule the other two engines already follow.
             RuntimeError::Kinded { kind, inner } => {
                 let m = inner.to_string();
-                Value::Error(match *kind {
+                Value::error(match *kind {
                     "Range" => ErrorValue::range(m),
                     "Key" => ErrorValue::key(m),
                     "Index" => ErrorValue::index(m),
@@ -2445,10 +2520,10 @@ impl<W: Write> Interpreter<W> {
                 })
             }
             RuntimeError::Io(io_err) => {
-                Value::Error(ErrorValue::io(io_err.to_string()))
+                Value::error(ErrorValue::io(io_err.to_string()))
             }
             // Never caught: `execute_statement` takes it first (GLB-107).
-            RuntimeError::Unwind => Value::Error(ErrorValue::generic(error.to_string())),
+            RuntimeError::Unwind => Value::error(ErrorValue::generic(error.to_string())),
             // A located error is a `Generic` that learned where it happened —
             // `!?` classifies it by exactly the same text, so attaching a file
             // never moves an error from one `##` family to another.
@@ -2456,30 +2531,31 @@ impl<W: Write> Interpreter<W> {
                 // The family is read from the words, by the rule both Rust
                 // engines share (`zymbol_common::errkind`, GLB-010).
                 let m = message.clone();
-                Value::Error(match zymbol_common::errkind::error_kind_of_message(message) {
+                Value::error(match zymbol_common::errkind::error_kind_of_message(message) {
                     "Range" => ErrorValue::range(m),
                     "Key" => ErrorValue::key(m),
                     "Index" => ErrorValue::index(m),
                     "Type" => ErrorValue::type_error(m),
                     "Div" => ErrorValue::div(m),
                     "Parse" => ErrorValue::parse(m),
+                    "Depth" => ErrorValue::depth(m),
                     _ => ErrorValue::generic(m),
                 })
             }
             RuntimeError::ModuleNotFound { path } => {
-                Value::Error(ErrorValue::io(format!("module not found: {}", path)))
+                Value::error(ErrorValue::io(format!("module not found: {}", path)))
             }
             RuntimeError::CircularDependency => {
-                Value::Error(ErrorValue::generic("circular dependency detected"))
+                Value::error(ErrorValue::generic("circular dependency detected"))
             }
             RuntimeError::CircularImport { module } => {
-                Value::Error(ErrorValue::generic(format!(
+                Value::error(ErrorValue::generic(format!(
                     "E004: Circular import detected: module '{}' is already being loaded",
                     module
                 )))
             }
             RuntimeError::ParseError(msg) => {
-                Value::Error(ErrorValue::parse(msg.clone()))
+                Value::error(ErrorValue::parse(msg.clone()))
             }
         }
     }
@@ -2565,19 +2641,19 @@ mod error_handling_tests {
 
     #[test]
     fn test_value_is_error() {
-        let error = Value::Error(ErrorValue::generic("test"));
+        let error = Value::error(ErrorValue::generic("test"));
         assert!(error.is_error());
 
         let int = Value::Int(42);
         assert!(!int.is_error());
 
-        let string = Value::String("hello".to_string());
+        let string = Value::String("hello".into());
         assert!(!string.is_error());
     }
 
     #[test]
     fn test_value_as_error() {
-        let error = Value::Error(ErrorValue::io("test"));
+        let error = Value::error(ErrorValue::io("test"));
         assert!(error.as_error().is_some());
         assert_eq!(error.as_error().unwrap().error_type, "IO");
 
@@ -2587,10 +2663,10 @@ mod error_handling_tests {
 
     #[test]
     fn test_error_display_string() {
-        let error = Value::Error(ErrorValue::new("IO", "file not found"));
+        let error = Value::error(ErrorValue::new("IO", "file not found"));
         assert_eq!(error.to_display_string(), "##IO(file not found)");
 
-        let generic = Value::Error(ErrorValue::generic("unknown error"));
+        let generic = Value::error(ErrorValue::generic("unknown error"));
         assert_eq!(generic.to_display_string(), "##_(unknown error)");
     }
 
@@ -2740,8 +2816,8 @@ mod error_handling_tests {
             dummy_span,
         );
 
-        let io_error = Value::Error(ErrorValue::io("test"));
-        let generic_error = Value::Error(ErrorValue::generic("test"));
+        let io_error = Value::error(ErrorValue::io("test"));
+        let generic_error = Value::error(ErrorValue::generic("test"));
 
         assert!(interp.catch_matches(&catch, &io_error));
         assert!(interp.catch_matches(&catch, &generic_error));
@@ -2765,8 +2841,8 @@ mod error_handling_tests {
             dummy_span,
         );
 
-        let io_error = Value::Error(ErrorValue::io("test"));
-        let generic_error = Value::Error(ErrorValue::generic("test"));
+        let io_error = Value::error(ErrorValue::io("test"));
+        let generic_error = Value::error(ErrorValue::generic("test"));
 
         assert!(interp.catch_matches(&io_catch, &io_error));
         assert!(!interp.catch_matches(&io_catch, &generic_error));
@@ -2790,8 +2866,8 @@ mod error_handling_tests {
             dummy_span,
         );
 
-        let io_error = Value::Error(ErrorValue::io("test"));
-        let div_error = Value::Error(ErrorValue::div("test"));
+        let io_error = Value::error(ErrorValue::io("test"));
+        let div_error = Value::error(ErrorValue::div("test"));
 
         assert!(interp.catch_matches(&wildcard_catch, &io_error));
         assert!(interp.catch_matches(&wildcard_catch, &div_error));
@@ -3093,5 +3169,18 @@ mod error_handling_tests {
         let (output, result) = parse_and_run(code);
         assert!(result.is_ok());
         assert_eq!(String::from_utf8_lossy(&output), "1\nerror 2\nno error\n");
+    }
+
+    /// Every value pays the size of the largest variant. A `FunctionValue`
+    /// inline made it 120 bytes: an array of two million integers took 236 MiB
+    /// where the VM's took 38, and removing the first element moved seven times
+    /// the memory (ZYTW-019). Boxed, the largest was a `String`, 24 bytes. The
+    /// text is a shared `Text` since 2026-10-21 (ZYTW-016, GLB-139): every
+    /// variant is now at most one word beside the tag, and a value is 16 bytes,
+    /// as the VM's is.
+    #[test]
+    fn a_value_is_as_large_as_a_pointer_and_its_tag() {
+        assert_eq!(std::mem::size_of::<zymbol_common::text::Text>(), std::mem::size_of::<usize>());
+        assert_eq!(std::mem::size_of::<Value>(), 16);
     }
 }

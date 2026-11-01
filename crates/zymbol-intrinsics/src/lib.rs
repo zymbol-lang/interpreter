@@ -20,8 +20,13 @@
 //! agreeing about leap years by inspection the way they are kept agreeing about
 //! `std/term`. It carries the crate's only dependency, for reading the machine's
 //! own time zone.
+//!
+//! [`random`] joined for the same reason as [`time`]: `random::semilla(n)` has to
+//! give the same sequence in every engine, and two copies of a generator agree
+//! only until one of them is touched.
 
 pub mod split;
 pub mod search;
 pub mod transform;
 pub mod time;
+pub mod random;

@@ -97,6 +97,122 @@ pub fn shell_command(script: &str) -> Result<Command, ShellNotFound> {
     Ok(cmd)
 }
 
+/// Set by `zymbol run --timeout` (G3): every command `<\ \>` starts from then on
+/// is registered while it runs, in a process group of its own on Unix, so that
+/// the stopper can end it and whatever it started — a pipeline, a `sleep` —
+/// instead of leaving them orphaned when the program is stopped.
+static TRACKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Set by the stopper before it ends the running commands: the program thread a
+/// killed command would release must not go on to its next statement — it
+/// printed `##IO(terminated by a signal)` after the stop notice.
+static STOPPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static RUNNING: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+/// Register the commands started from now on (`--timeout`).
+pub fn track_commands() {
+    TRACKED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Run a command made by [`shell_command`] and collect its output — what both
+/// engines do for `<\ \>`. As `Command::output`, stdin is closed; when the
+/// commands are tracked it is also registered for [`stop_running_commands`].
+pub fn run_command(cmd: &mut Command) -> std::io::Result<std::process::Output> {
+    if !TRACKED.load(std::sync::atomic::Ordering::SeqCst) {
+        return cmd.output();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    use std::process::Stdio;
+    let child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let id = child.id();
+    if let Ok(mut r) = RUNNING.lock() {
+        r.push(id);
+    }
+    let out = child.wait_with_output();
+    if STOPPING.load(std::sync::atomic::Ordering::SeqCst) {
+        // The program is being stopped: wait here for the process to end.
+        loop {
+            std::thread::park();
+        }
+    }
+    if let Ok(mut r) = RUNNING.lock() {
+        r.retain(|&p| p != id);
+    }
+    out
+}
+
+/// End every registered command that is still running, and what it started.
+pub fn stop_running_commands() {
+    STOPPING.store(true, std::sync::atomic::Ordering::SeqCst);
+    let ids: Vec<u32> = RUNNING.lock().map(|r| r.clone()).unwrap_or_default();
+    for id in ids {
+        // The system call, not `/usr/bin/kill`: procps-ng 3.3 (Ubuntu 22.04,
+        // Debian 11 and 12) reads `kill -KILL -17` as `kill(-1)` — every process
+        // of the user, a CI runner's agent included (GLB-150). Each command is the
+        // leader of its own group (`process_group(0)` above), so `-id` is that
+        // group and nothing else. A pgid of 0 or 1 would be our own group or
+        // every process, so it is never signalled.
+        #[cfg(unix)]
+        if let Ok(pgid) = libc::pid_t::try_from(id)
+            && pgid > 1
+        {
+            // SAFETY: kill(2) takes plain integers and touches no memory of ours.
+            unsafe {
+                libc::kill(-pgid, libc::SIGKILL);
+            }
+        }
+        #[cfg(windows)]
+        let _ = Command::new("taskkill").args(["/T", "/F", "/PID", &id.to_string()]).status();
+    }
+}
+
+/// `text` as exactly one word of the shell's language: what a value placed in
+/// `<\ … \>` becomes (`AGENTIC.md` G2, decided by the author on 2026-10-21). The
+/// text written in the command is the command; a value is data, and it was pasted in
+/// as it was — `"x; echo INYECTADO"` ran a second command, a value with a space
+/// became two arguments, and the single quotes programs put around a value by hand
+/// broke on the first `'` inside it. Both engines build every value's words with
+/// this one function.
+///
+/// For `cmd.exe` a value holding `"`, `%` or a line break is refused rather than
+/// quoted: inside double quotes `cmd` still expands `%name%`, and there is no escape
+/// for `"` that every program it starts reads back the same way.
+pub fn quote_word(text: &str) -> Result<String, String> {
+    let kind = shell().map(|(_, kind)| kind).unwrap_or(ShellKind::Posix);
+    quote_word_for(text, kind)
+}
+
+/// [`quote_word`] for a given shell — the tests ask both without a Windows box.
+pub fn quote_word_for(text: &str, kind: ShellKind) -> Result<String, String> {
+    match kind {
+        ShellKind::Posix => {
+            // A word of only these bytes means the same quoted or not, and reads
+            // better in a process list. `=` is not one of them: `X=1` alone is an
+            // assignment, not a word.
+            let plain = !text.is_empty()
+                && text.bytes().all(|b| b.is_ascii_alphanumeric() || b"_./:@%+,-".contains(&b));
+            if plain {
+                Ok(text.to_string())
+            } else {
+                Ok(format!("'{}'", text.replace('\'', "'\\''")))
+            }
+        }
+        ShellKind::WindowsCmd => {
+            if text.contains(['"', '%', '\n', '\r']) {
+                Err(format!(
+                    "{:?} cannot be passed to cmd.exe as one word: it holds \", % or a line break",
+                    text
+                ))
+            } else {
+                Ok(format!("\"{}\"", text))
+            }
+        }
+    }
+}
+
 /// Put the shell's own directory on the child's `PATH`.
 ///
 /// Finding `sh.exe` is only half of running a POSIX command. Git for Windows keeps
@@ -242,6 +358,38 @@ fn which_on_path(program: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_value_is_one_posix_word_whatever_it_holds() {
+        let q = |t: &str| quote_word_for(t, ShellKind::Posix).unwrap();
+        assert_eq!(q("data.txt"), "data.txt");
+        assert_eq!(q("-la"), "-la");
+        assert_eq!(q("mi informe.txt"), "'mi informe.txt'");
+        assert_eq!(q("x; echo INYECTADO"), "'x; echo INYECTADO'");
+        assert_eq!(q("it's"), "'it'\\''s'");
+        assert_eq!(q("$(id)"), "'$(id)'");
+        assert_eq!(q("X=1"), "'X=1'");
+        assert_eq!(q(""), "''");
+        // What sh reads back is the text, byte for byte.
+        for t in ["it's", "a b", "x; echo no", "$(id) `id` \\n", "'", "", "ñandú \"q\""] {
+            let out = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("printf %s {}", q(t)))
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8(out.stdout).unwrap(), t, "{t:?}");
+        }
+    }
+
+    #[test]
+    fn cmd_refuses_what_it_cannot_quote() {
+        let q = |t: &str| quote_word_for(t, ShellKind::WindowsCmd);
+        assert_eq!(q("mi informe.txt").unwrap(), "\"mi informe.txt\"");
+        assert_eq!(q("a & b").unwrap(), "\"a & b\"");
+        assert!(q("%PATH%").is_err());
+        assert!(q("say \"hi\"").is_err());
+        assert!(q("a\nb").is_err());
+    }
+
     use super::*;
 
     #[test]

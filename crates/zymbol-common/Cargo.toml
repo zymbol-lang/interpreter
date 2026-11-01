@@ -7,6 +7,11 @@ description = "Common types and utilities for Zymbol-Lang"
 
 [dependencies]
 indexmap.workspace = true
+foldhash.workspace = true
 # For `vscreen`: a frame is laid out in columns as a terminal lays it out.
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
+
+# `--timeout` ends a command's process group with kill(2), not /usr/bin/kill (GLB-150).
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

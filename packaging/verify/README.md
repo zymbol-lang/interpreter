@@ -98,12 +98,15 @@ binary, which depends on no glibc at all.
 
 ### Why the linkage check exists
 
-`control.in` declares only `libc6`. A binary built with default features links
+`control.in` declares only `libc6`. A binary built with `--features db` links
 `libodbc.so.2` and `libltdl.so.7` for `std/db`, neither of which a pristine
 Debian ships and neither of which the package declares — it would install fine
-and then fail to start. That is why every release build passes
-`--no-default-features`, and section 4 is what stops someone from quietly
-dropping that flag: anything outside `libc / libm / libgcc / libdl / libpthread
+and then fail to start. Since v0.0.11 `db` is not a default feature (D4), so every release build
+uses the default features — `lsp`, `repl` and `http` — and nothing else. It
+used to pass `--no-default-features` to drop `db`; since 3.2 that flag is the
+compact build, without the LSP, the REPL or std/net, which is not what a
+package ships. Section 4 is
+what stops someone from quietly turning the feature on: anything outside `libc / libm / libgcc / libdl / libpthread
 / librt / vdso / ld-linux` fails the release.
 
 ### The corpus is not in this repository

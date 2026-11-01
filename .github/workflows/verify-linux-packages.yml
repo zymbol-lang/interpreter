@@ -58,8 +58,8 @@ jobs:
           path: packaging/dist
 
       # Standalone runs have no upstream build to inherit, so reproduce what
-      # release-linux.yml does: --no-default-features (std/db links libodbc,
-      # which the package does not declare) and --no-timestamp (release naming).
+      # release-linux.yml does: the default features (std/db, which links libodbc
+      # and which the package does not declare, is not one of them) and --no-timestamp (release naming).
       - name: Install Rust stable
         if: inputs.artifact == ''
         uses: dtolnay/rust-toolchain@stable
@@ -79,7 +79,7 @@ jobs:
       - name: Build binary and .deb
         if: inputs.artifact == ''
         run: |
-          cargo build --release --no-default-features --target x86_64-unknown-linux-gnu
+          cargo build --release --target x86_64-unknown-linux-gnu
           mkdir -p target/release
           cp target/x86_64-unknown-linux-gnu/release/zymbol target/release/zymbol
           bash packaging/build-packages.sh \

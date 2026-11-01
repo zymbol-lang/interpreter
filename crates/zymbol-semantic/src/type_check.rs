@@ -1225,7 +1225,7 @@ impl TypeChecker {
     /// only in the main scope, and a function body is a different scope. Values
     /// cross that boundary as parameters (MEM-5), never by being in view.
     ///
-    /// The rule held until 2026-08-24, when `fbccc8e` retired it to resolve
+    /// The rule held until 2026-08-24, when `5f74974` retired it to resolve
     /// ZyBank's `ERROR-ZYB-002` — the same body behaved differently depending on
     /// how it was reached, and of the two ways to make that coherent (isolate
     /// both paths, or capture in both) the second was taken. `GUIDE.md` § 10b,
@@ -1528,6 +1528,41 @@ impl TypeChecker {
             }
 
             Statement::Output(output) => {
+                // An edit that starts a line inside a `>>` is printed, not made
+                // (GLB-137, decided by the author 2026-10-16). A line break
+                // does not end an output — 181 programs of the workspace spread
+                // one over several lines — so `>> "a"⏎d["z"]$~ 2` prints the
+                // dictionary the edit would build and leaves `d` as it was,
+                // where a reader sees a statement of its own.
+                let mut prev_line = output.span.start.line;
+                for expr in &output.exprs {
+                    let span = expr.span();
+                    let is_edit = matches!(
+                        expr.unwrap_group(),
+                        Expr::CollectionUpdate(_)
+                            | Expr::CollectionAppend(_)
+                            | Expr::CollectionInsert(_)
+                            | Expr::CollectionRemoveValue(_)
+                            | Expr::CollectionRemoveAll(_)
+                            | Expr::CollectionRemoveAt(_)
+                            | Expr::CollectionRemoveRange(_)
+                            | Expr::CollectionSortAsc(_)
+                            | Expr::CollectionSortDesc(_)
+                            | Expr::CollectionSortCustom(_)
+                            | Expr::ConcatBuild(_)
+                    );
+                    if is_edit && span.start.line > prev_line {
+                        self.warnings.push(
+                            Diagnostic::warning(
+                                "this line continues the `>>` above: an edit here is printed, \
+                                 not made — end the output with ¶ to make it a statement"
+                                    .to_string(),
+                            )
+                            .with_span(span),
+                        );
+                    }
+                    prev_line = span.end.line;
+                }
                 for expr in &output.exprs {
                     // Hot/pre_hot identifiers in output context are always wrong:
                     // `°` marks initialization, but >> is a read operation.
@@ -2833,9 +2868,12 @@ impl TypeChecker {
             }
 
             Pattern::Comparison(_, expr, span) => {
-                // Comparison patterns work on scalars and strings
+                // Comparison patterns work on scalars and strings. `Number` is
+                // one of them — Int or Float, not yet decided — and refusing
+                // it refused `?? x { < 0 => … }` on any parameter used in
+                // arithmetic (GLB-149).
                 if !matches!(scrutinee_type,
-                    ZymbolType::Int | ZymbolType::Float | ZymbolType::Char |
+                    ZymbolType::Int | ZymbolType::Float | ZymbolType::Number | ZymbolType::Char |
                     ZymbolType::String | ZymbolType::Any | ZymbolType::Unknown)
                 {
                     self.errors.push(

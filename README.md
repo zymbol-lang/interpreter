@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.0.10-informational?style=flat-square"/>
+  <img src="https://img.shields.io/badge/version-v0.0.11-informational?style=flat-square"/>
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square"/>
   <img src="https://img.shields.io/badge/status-active-brightgreen?style=flat-square"/>
@@ -139,6 +139,11 @@ cd interpreter
 
 # Build release binary
 cargo build --release
+# …with std/db (ODBC), which needs unixODBC to build and to run
+cargo build --release --features db
+# …or the compact build, for small machines: no `zymbol lsp`, no `zymbol repl`
+# and no std/net, in half the time and 60 % of the memory
+cargo build --release -p zymbol-cli --no-default-features
 
 # Install to PATH
 cp target/release/zymbol ~/.local/bin/
@@ -149,17 +154,26 @@ bash install-zymbol.sh
 ### Run
 
 ```bash
-# Tree-walker (default, best error messages)
+# Register VM (the default since v0.0.11)
 zymbol run hello.zy
 
-# Register VM (faster for compute-heavy programs)
-zymbol run --vm hello.zy
+# Tree-walker
+zymbol run --tw hello.zy
 
 # Interactive REPL
 zymbol repl
 
 # Check syntax without running
 zymbol check program.zy
+
+# What it can touch: io, net, db, time, random, shell, sub, stdin, argv — file and line
+zymbol check --effects program.zy
+
+# Refuse it, before anything runs, if anything it reaches uses a denied effect
+zymbol run --deny net,shell program.zy
+
+# Stop it after 10 seconds whatever it is doing (exit status 124)
+zymbol run --timeout 10 program.zy
 
 # Format code
 zymbol fmt program.zy --write
@@ -519,7 +533,7 @@ See `zymbol-design/I18N.md` for the full three-layer pattern.
 
 ## Architecture
 
-The interpreter is a Rust workspace of 19 crates:
+The interpreter is a Rust workspace of 20 crates:
 
 ```
 Foundation:   zymbol-span  zymbol-error  zymbol-common  zymbol-intrinsics
@@ -589,7 +603,7 @@ make -C ../zyquality
 ```
 
 ```bash
-# Unit tests (all 19 crates) — unaffected, these live inside the crates
+# Unit tests (all 20 crates) — unaffected, these live inside the crates
 cargo test
 
 # Tree-walker vs VM parity          → zyq consensus --engines zytw,zyvm
@@ -616,30 +630,32 @@ Or ask the whole question at once, from the zyquality checkout:
 ./zyq suite     # selftest + audit + reject + goldens + consensus, one verdict
 ```
 
-Current status (v0.0.10 branch — 0.0.9 is the latest published release).
-**Re-measured 2026-10-11**, every figure below on the same tree, with `./zyq suite`
-reporting **all gates pass**. Re-derive a count in a fresh clone before quoting it in
-release notes — that is the rule that came out of the 544/536 correction:
+Current status (v0.0.11, released 2026-11-01).
+**Re-measured 2026-10-31 in a fresh clone** of the `v0.0.11` branches, `interpreter` at
+`5a95444`, with `./zyq suite` reporting **all gates pass**. Re-derive a count in a fresh
+clone before quoting it in release notes — that is the rule that came out of the 544/536
+correction:
 
-- **1065 tests** across the 19 crates via `cargo test --workspace` — 0 failed, 4 ignored.
-- Corpus: **683 `.zy`**, 677 with a golden, 6 excused for every engine by a written reason
+- **1111 tests** across the 20 crates via `cargo test --release --features db` — 0 failed, 4 ignored.
+- Corpus: **722 `.zy`**, 716 with a golden, 6 excused for every engine by a written reason
   in `corpus.toml`. `zyq audit` reports no hygiene problems.
-- Tree-walker vs VM: **677 agree, 0 diverge**.
-- All three engines: **677 agree, 0 diverge**. Against the browser engine alone,
-  **664 agree, 0 diverge** — the 19 in the difference are excused in `corpus.toml`
+- Tree-walker vs VM: **716 agree, 0 diverge**.
+- All four engines — the two Rust ones and the playground's two, `zymbol.js` and
+  `zymbol_vm.js`: **716 agree, 0 diverge**. Against either browser engine alone,
+  **703 agree, 0 diverge** — the 19 in the difference are excused in `corpus.toml`
   (`std/db` is ODBC, `<\ cmd \>` has no browser equivalent, TUI needs a real TTY, and the
   6 excused for every engine).
-- Goldens: **647 of 647 match via `run`, 0 stale**; **30 of 30 via `check`**.
-- `zyq reject`: **55 forms refused in every engine**, 0 accepted anywhere.
-- Formatter properties: **733 PASS / 0 FAIL** over 781 files, 48 skipped — P1–P4 all zero.
+- Goldens: **685 of 685 match via `run`, 0 stale**; **31 of 31 via `check`**.
+- `zyq reject`: **57 forms refused in every engine**, 0 accepted anywhere.
+- Formatter properties: **772 PASS / 0 FAIL** over 820 files, 48 skipped — P1–P4 all zero.
 - Benchmarks: **16/16 within tolerance** of the recorded baseline, no regressions.
-- LSP against `zymbol check`: 683 files, 14 disagreements, **0 outside the baseline**.
-- ZyDDT: **46 axes, 1 704 cells, all agree** — 171 of them checked against an
-  implementation that is not ours — and **3 findings open** (GLB-127, ZYVM-022, GLB-128 — each named, none a regression), 227 closed. The 29 premises
-  of `zymbol-design/PREMISES.md` each have a cell or are declared checked by review.
-- `LLM.md` behind **88 probes**, each quoting the sentence it stands behind; `GUIDE.md`
-  **130 of 130** executable examples; `zyquality/cost/` **15 cases**, every ratio within
-  its declared limit.
+- LSP against `zymbol check`: 722 files, 14 disagreements, **0 outside the baseline**.
+- ZyDDT: **46 axes, 1 768 cells, all agree, none KNOWN** — 194 of them checked
+  against an implementation that is not ours — and **no finding open**, 277 closed. The 29 premises of `zymbol-design/PREMISES.md` each have a cell or
+  are declared checked by review.
+- `LLM.md` behind **89 probes**, each quoting the sentence it stands behind; `GUIDE.md`
+  **135 of 135** executable examples; `zyquality/cost/` **25 cases**, every ratio within
+  its declared limit and none KNOWN.
 
 `ZYMBOL_BIN=/usr/bin/zymbol` still points the suite at an installed package
 rather than the build tree. `VM_COMPARE_EXCLUDE` is gone — exclusions are
@@ -692,7 +708,7 @@ cannot be rerun, so a project earns its keep as a discovery mechanism first. Eve
 distilled into a minimal `.zy` case, a golden and a unit test, and it is that cheap layer that
 names what broke when something does.
 
-The application is not retired afterwards. Nine of the ten are registered in
+The application is not retired afterwards. Ten of the eleven are registered in
 `zyquality/project/apps.toml` and run as a gate (`gate = true`, ~60 goldens through both
 engines); `ZyFmtCheck` runs over the LDV applications **by default**, because a formatter's
 damage shows up in hand-aligned tables, five writing systems and modules importing each other,
@@ -708,7 +724,7 @@ all fixed in v0.0.8, each with its own regression test. चतुरङ्गम
 recorded at the foot of its entry. ZyBank's thirty-three closed against that same release, which
 is what an LDV log looks like once the cycle completes: closing one is a language change or a
 reasoned rejection, and neither is the application author's call. The method, its decalogue, and
-the index of the ten logs are in **`zymbol-design/LDV.md`**.
+the index of the eleven logs are in **`zymbol-design/LDV.md`**.
 
 The projects carry a second load at the same time. They are written across seven natural
 languages — English, Mandarin Chinese, Spanish, Klingon pIqaD, Japanese, Sanskrit, Greek — which is what
@@ -733,6 +749,7 @@ once.
 | [ZyBank](https://github.com/zymbol-lang/ZyBank) | **v0.0.9** | Español | `std/db` in an application, money as integers with a per-currency exponent, dictionaries, configuration precedence, functions across module boundaries, keyboard input and typed fields in raw mode |
 | [GoL (Ζωή)](https://github.com/zymbol-lang/ZyGoL) | **v0.0.9** | Ελληνικά (Greek) | Conway's Game of Life with B/S rules, an application whose tests *and* their runner are Zymbol, the first suite graded on all three engines, four locales incl. Devanagari digits |
 | [ZyBF](https://github.com/zymbol-lang/ZyBF) | **v0.0.10** | Español | A mini LDV: a Brainf*** interpreter whose `.` needed an Int → Char conversion the language did not have — now `##'` — against an independent Python oracle, graded on all three engines |
+| [ZyEdit](https://github.com/zymbol-lang/ZyEdit) | **v0.0.11** | English | A terminal text editor with a desktop editor's shortcuts, opened **before** its first line with five design findings on key input, the terminal's cursor and driving a process; its first two stages (editing, undo, selection, search, several buffers) then added ten more, on grapheme clusters, bytes, resizing, the cost of an edit and showing a screen at once — each with a program that reproduces it, ten of the fifteen with a check and dated evidence in `hypotheses/` |
 
 ---
 
@@ -1271,11 +1288,44 @@ operator now opens a juxtaposed operand in an assignment too (GLB-114).
 
 ---
 
+### ZyEdit — v0.0.11 · English · opened before its first line
+
+A terminal text editor with the shortcuts of a desktop one (Ctrl+S, Ctrl+Z, Ctrl+C/V, no
+modes), opened on 2026-10-21 with **no editor code**. Its first two stages were written on
+2026-10-26 and 27: editing, several buffers, undo/redo, a selection with an internal clipboard,
+find and replace. What it measures that no earlier project asked of the language:
+- text as the state itself, edited at any position;
+- the cost of an edit in the middle of a long file;
+- a byte-exact round trip of a file someone owns;
+- three units of position: the grapheme, the terminal column and the code point;
+- later, a tokenizer of its own format, a language-server client and a terminal panel.
+
+Its log opened with five **design findings** (`DIS`, `LDV.md` § 5.2). They come from probing
+`<<|` and `>>|` through a real terminal before writing the editor:
+- Home, End, Page Up/Down and Delete all arrive as `0d0`;
+- a modifier on an arrow is lost;
+- Ctrl+/ and Alt+*letter* arrive as printable characters;
+- the terminal's cursor stays hidden inside `>>|`;
+- no Zymbol program can drive another on a terminal, so the checks themselves had to be Python.
+
+Each finding keeps its probe and a dated answer in `hypotheses/`, so the same check confirms the
+fix.
+
+Writing the editor added nine more and using it one, fifteen in all, every one open for
+v0.0.12. Among them: the language has no grapheme segmentation and no case conversion, a
+file that is not valid UTF-8 cannot be read, a waiting `<<|` is not told the window changed
+size, inserting into the middle of an array (`a$+[i] v`) or removing a range costs the whole
+array in both Rust engines, the browser engine reads `"\r"` in a string as `r`, and a screen
+cannot be shown at once: each `>>~` reaches the terminal on its own, so a redraw is seen
+while it is drawn.
+
+---
+
 ## Project Layout
 
 ```
 interpreter/
-├── Cargo.toml           # Workspace (19 crates)
+├── Cargo.toml           # Workspace (20 crates)
 ├── zymbol-lang.ebnf     # Formal grammar (EBNF, v3.1.0)
 ├── install-zymbol.sh    # Install script
 ├── crates/              # Rust source crates
@@ -1300,7 +1350,7 @@ interpreter/
 - `zymbol-design/USERAPPI18N.md` — Building a multilingual application: measured layout, runtime language switching, per-language entry points, and the completeness gate
 - `zymbol-design/MEMORY_MODEL.md` — Memory and scoping model: design vs implementation audit (findings MM-1 … MM-11)
 - `zymbol-design/SYMBOLS.md` — Semiotic and morphological reference: the grapheme inventory, how marks agglutinate into operators, the declared homographs and opaque signs, and the rules a new operator must satisfy
-- `zymbol-design/LDV.md` — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the ten gap logs
+- `zymbol-design/LDV.md` — Language-Driven Validation: the method behind the validation projects, its decalogue, why validation is not verification, and the index of the eleven gap logs
 - [ROADMAP.md](./ROADMAP.md) — What's done, known gaps, and planned work
 - [CHANGELOG.md](./CHANGELOG.md) — Version history
 

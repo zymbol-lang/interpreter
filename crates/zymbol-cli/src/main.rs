@@ -12,13 +12,15 @@ use zymbol_formatter::{format_with_config, FormatterConfig};
 use zymbol_interpreter::Interpreter;
 use zymbol_lexer::Lexer;
 use zymbol_parser::Parser as ZParser;
+#[cfg(feature = "repl")]
 use zymbol_repl::Repl;
 use zymbol_semantic::{VariableAnalyzer, TypeChecker, ControlFlowGraph, DefUseAnalyzer, AmbiguityReason, ModuleAnalyzer};
 use zymbol_span::SourceMap;
 use zymbol_standalone::StandaloneBuilder;
 use zymbol_vm::VM;
 use zymbol_package::{
-    compute_closure, open_zyp, write_zyp, EngineMode, Manifest, PackageError, PackageMeta, ScriptEntry,
+    compute_closure, effects_of, open_zyp, parse_effects, write_zyp, Effect, EffectReport, EngineMode,
+    Manifest, PackageError, PackageMeta, ScriptEntry,
 };
 
 #[derive(Parser)]
@@ -32,21 +34,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run a Zymbol program with interpreter — a .zy file directly, or a .zyp package
+    /// Run a Zymbol program — a .zy file directly, or a .zyp package — on the register VM
     Run {
         /// Path to the .zy file, or a .zyp package, to run
         file: PathBuf,
 
-        /// Execute using the register VM (experimental, Sprint 4). For a .zyp package this
-        /// is already the default unless its manifest says `mode = "tw"`; the flag exists
-        /// mainly to override that.
-        #[arg(long, help = "Execute using the register VM (experimental)")]
+        /// Execute using the register VM. It is the default engine since v0.0.11, so for
+        /// a plain .zy file the flag changes nothing and is kept because scripts written
+        /// before then spell it. For a .zyp package it overrides a manifest that says
+        /// `mode = "tw"`.
+        #[arg(long, help = "Execute using the register VM (the default)")]
         vm: bool,
 
-        /// Force the tree-walking interpreter. For a plain .zy file this is already the
-        /// default (only useful to make that explicit); for a .zyp package it overrides
-        /// both `--vm` and the manifest's `mode`.
-        #[arg(long, conflicts_with = "vm")]
+        /// Execute using the tree-walking interpreter instead of the register VM. For a
+        /// .zyp package it overrides the manifest's `mode` as well.
+        #[arg(long, conflicts_with = "vm", help = "Execute using the tree-walking interpreter")]
         tw: bool,
 
         /// Which [[script]] of a .zyp package to run (default: the one marked
@@ -75,6 +77,23 @@ enum Commands {
         /// elements duplicated because a collection being written was shared.
         #[arg(long)]
         count: bool,
+
+        /// Refuse the program, before any of it runs, if anything it can reach uses one of
+        /// these effects: io, net, db, time, random (the `std/` modules), shell (`<\ \>`),
+        /// sub (`</ />`), stdin (`<<`, `<<|`) and argv (`><`). Comma-separated, or the flag
+        /// repeated. Every file the entry imports or runs is read first, so an effect hidden
+        /// in a module or a sub-script is refused too; a file that cannot be read is refused,
+        /// since nothing can say what it would do. See `zymbol check --effects`.
+        #[arg(long, value_name = "EFFECTS")]
+        deny: Vec<String>,
+
+        /// Stop the program after this many seconds of wall-clock time — a loop, a
+        /// recursion, a wait or a blocked command alike — with exit status 124, as
+        /// coreutils' `timeout` does. Commands `<\ \>` started and still running are
+        /// ended with it. The program cannot catch it: the limit belongs to whoever
+        /// runs it. Without it nothing is limited.
+        #[arg(long, value_name = "SECONDS")]
+        timeout: Option<f64>,
 
         /// Arguments to pass to the script
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -129,6 +148,12 @@ enum Commands {
     Check {
         /// Path to the .z file to check
         file: PathBuf,
+
+        /// Also list the program's effect surface: every use of io, net, db, time, random,
+        /// shell, sub, stdin and argv in every file it can reach, with file and line —
+        /// what `zymbol run --deny` decides on.
+        #[arg(long)]
+        effects: bool,
     },
 
     /// Format Zymbol source code
@@ -163,7 +188,40 @@ enum Commands {
 /// Set by `zymbol run --count`.
 static COUNT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// The system allocator, counting what it is asked for (`zymbol run --count`).
+/// The allocator underneath the counter: the system's, except in the static
+/// musl binary, where it is mimalloc. musl's malloc is slow at what an
+/// interpreter does most — growing and freeing blocks of every size — and it
+/// made `s = s "x"` 2.1 times slower than glibc's, interpolation 1.5 (GLB-134).
+#[cfg(target_env = "musl")]
+static INNER: mimalloc::MiMalloc = mimalloc::MiMalloc;
+#[cfg(not(target_env = "musl"))]
+static INNER: std::alloc::System = std::alloc::System;
+
+/// mimalloc as it comes keeps memory: it commits a whole arena up front and
+/// gives freed pages back a second later, and a program that grows a text
+/// peaked at twice what glibc's malloc needs (21 MiB against 11). Committing on
+/// demand and a 4 MiB first arena take the start back to glibc's (10.8 MiB);
+/// purging after 20 ms takes most of the rest. Purging at once went further
+/// and cost the time back: `hof_chain`, which frees and remakes arrays of
+/// 100 000 in a loop, ran 1.22 times glibc's; at 20 ms, 1.04 (GLB-134).
+///
+/// The ids are the positions in `mi_option_e` of the mimalloc v3 that
+/// libmimalloc-sys 0.1.49 bundles (`Cargo.lock`); the crate names only some of
+/// them. Its own constants for the ones it names — `reserve_os_memory` 9,
+/// `use_numa_nodes` 16, `max_errors` 19 — are where this count was checked.
+#[cfg(target_env = "musl")]
+fn tune_allocator() {
+    const ARENA_EAGER_COMMIT: libmimalloc_sys::mi_option_t = 4;
+    const PURGE_DELAY: libmimalloc_sys::mi_option_t = 15;
+    const ARENA_RESERVE_KIB: libmimalloc_sys::mi_option_t = 23;
+    unsafe {
+        libmimalloc_sys::mi_option_set(ARENA_EAGER_COMMIT, 0);
+        libmimalloc_sys::mi_option_set(PURGE_DELAY, 20);
+        libmimalloc_sys::mi_option_set(ARENA_RESERVE_KIB, 4096);
+    }
+}
+
+/// The allocator, counting what it is asked for (`zymbol run --count`).
 ///
 /// Two thread-local increments per request and nothing else: the counters have
 /// constant initializers and no destructors, so reading them here cannot
@@ -173,20 +231,20 @@ struct CountingAllocator;
 unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
         zymbol_common::count::alloc(layout.size());
-        unsafe { std::alloc::System.alloc(layout) }
+        unsafe { std::alloc::GlobalAlloc::alloc(&INNER, layout) }
     }
     unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
         zymbol_common::count::alloc(layout.size());
-        unsafe { std::alloc::System.alloc_zeroed(layout) }
+        unsafe { std::alloc::GlobalAlloc::alloc_zeroed(&INNER, layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
         // A growth is a request for the new size: that is what a `Vec` that
         // doubles costs, whether or not the block could be extended in place.
         zymbol_common::count::alloc(new_size);
-        unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
+        unsafe { std::alloc::GlobalAlloc::realloc(&INNER, ptr, layout, new_size) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
-        unsafe { std::alloc::System.dealloc(ptr, layout) }
+        unsafe { std::alloc::GlobalAlloc::dealloc(&INNER, ptr, layout) }
     }
 }
 
@@ -194,55 +252,95 @@ unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 fn main() -> Result<()> {
+    #[cfg(target_env = "musl")]
+    tune_allocator();
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { file, vm, tw, script, keep_temp, keys, count, args } => {
+        Commands::Run { file, vm, tw, script, keep_temp, keys, count, deny, timeout, args } => {
             COUNT.store(count, std::sync::atomic::Ordering::Relaxed);
-            on_program_stack(move || run_file(file, args, vm, tw, script, keep_temp, keys))
+            if let Some(secs) = timeout {
+                if !(secs.is_finite() && secs > 0.0) {
+                    eprintln!("error: --timeout: {} is not a number of seconds greater than 0", secs);
+                    std::process::exit(2);
+                }
+                arm_timeout(secs);
+            }
+            let deny = match parse_effects(&deny) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("error: --deny: {}", e);
+                    std::process::exit(2);
+                }
+            };
+            on_program_stack(move || run_file(file, args, vm, tw, script, keep_temp, keys, deny))
         }
         Commands::Build { file, output, release } => build_file(file, output, release),
         Commands::Package { path, output, scripts, name, version, dry_run } => {
             package_cmd(path, output, scripts, name, version, dry_run)
         }
-        Commands::Check { file } => check_file(file),
+        Commands::Check { file, effects } => {
+            if effects {
+                print_effects(&file)?;
+            }
+            check_file(file)
+        }
         Commands::Fmt { file, write, check, indent } => format_file(file, write, check, indent),
-        Commands::Repl => start_repl(),
+        // On the program's stack too: the REPL runs the tree-walker, whose
+        // 10 000 calls the depth limit allows do not fit in 8 MiB (GLB-133).
+        Commands::Repl => on_program_stack(start_repl),
         Commands::Lsp { .. } => start_lsp(),
     }
 }
 
-/// The stack a program runs on: 64 MiB, against the 8 MiB of the main thread.
+/// The stack a program runs on: `zymbol_common::depth::PROGRAM_STACK`, against
+/// the 8 MiB of the main thread.
 ///
 /// Both engines recurse in Rust where a Zymbol program recurses through
 /// something that is not a plain call — every frame of the tree-walker, and in
 /// the register VM every function a higher-order operator calls, which runs the
 /// dispatch loop again (ZYVM-004). On the main thread's 8 MiB that was 1 099
 /// levels of plain recursion in the tree-walker and 593 through `$>` in the VM,
-/// and the next one aborted the process with no Zymbol error at all. The size is
-/// reserved, not committed: a program that does not recurse does not pay it.
-const PROGRAM_STACK: usize = 64 * 1024 * 1024;
-
+/// and the next one aborted the process with no Zymbol error at all. 64 MiB
+/// moved the abort to near 9 000 and 2 500; since D7 (GLB-133) a counter stops
+/// a program at 10 000 active calls with a `##Depth` error, and the stack is
+/// sized for that counter to come first. Reserved, not committed: a program
+/// that does not recurse does not pay it.
 fn on_program_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     std::thread::Builder::new()
         .name("zymbol-program".into())
-        .stack_size(PROGRAM_STACK)
-        .spawn(f)
+        .stack_size(zymbol_common::depth::PROGRAM_STACK)
+        .spawn(move || {
+            zymbol_common::depth::mark_stack_base(zymbol_common::depth::PROGRAM_STACK);
+            f()
+        })
         .expect("could not start the thread a program runs on")
         .join()
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }
 
+#[cfg(feature = "repl")]
 fn start_repl() -> Result<()> {
     let mut repl = Repl::new();
     repl.start().map_err(|e| anyhow::anyhow!("REPL error: {}", e))
 }
 
+#[cfg(not(feature = "repl"))]
+fn start_repl() -> Result<()> {
+    anyhow::bail!("this zymbol was built without the REPL (the `repl` feature)")
+}
+
+#[cfg(feature = "lsp")]
 fn start_lsp() -> Result<()> {
     tokio::runtime::Runtime::new()
         .map_err(|e| anyhow::anyhow!("failed to create tokio runtime: {}", e))?
         .block_on(zymbol_lsp::run());
     Ok(())
+}
+
+#[cfg(not(feature = "lsp"))]
+fn start_lsp() -> Result<()> {
+    anyhow::bail!("this zymbol was built without the language server (the `lsp` feature)")
 }
 
 /// Options for [`run_file_inner`]. Kept separate from the plain `run_file(path, args, vm)`
@@ -268,6 +366,7 @@ fn run_file(
     script: Option<String>,
     keep_temp: bool,
     keys_file: Option<PathBuf>,
+    deny: Vec<Effect>,
 ) -> Result<()> {
     let keys = match keys_file {
         None => None,
@@ -284,9 +383,16 @@ fn run_file(
         }
     };
     if is_zyp(&path) {
-        return run_zyp(path, args, use_vm, use_tw, script, keep_temp, keys);
+        return run_zyp(path, args, use_vm, use_tw, script, keep_temp, keys, deny);
     }
-    let code = run_file_inner(&path, RunOpts { display_name: None, args, use_vm, keys })?;
+    // Named from where the user is, as they typed the entry; outside it, in full.
+    if let Some(code) = refuse_denied(&path, &deny, Path::new("."), None)? {
+        std::process::exit(code);
+    }
+    // The VM is the engine unless the tree-walker is asked for by name. `--vm`
+    // decides nothing for a plain file: `--tw` conflicts with it, so it can only
+    // repeat the default.
+    let code = run_file_inner(&path, RunOpts { display_name: None, args, use_vm: !use_tw, keys })?;
     std::process::exit(code);
 }
 
@@ -315,6 +421,7 @@ fn run_zyp(
     script: Option<String>,
     keep_temp: bool,
     keys: Option<zymbol_common::vscreen::KeyScript>,
+    deny: Vec<Effect>,
 ) -> Result<()> {
     // No `.with_context("failed to open …")` here: every PackageError already names the
     // package and says what was wrong with it, so adding a wrapper only stacks a second
@@ -327,9 +434,8 @@ fn run_zyp(
     let entry = pkg.manifest.resolve_script(script.as_deref())?;
     let (entry_name, entry_path) = (entry.name.clone(), entry.path.clone());
 
-    // Precedence: --tw > --vm > manifest's `mode` > Vm (the .zyp default; see the `Run`
-    // command's doc comment for why plain .zy files keep defaulting to the tree-walker
-    // instead).
+    // Precedence: --tw > --vm > manifest's `mode` > Vm. A plain .zy file has no
+    // manifest, so for it this is --tw > Vm (`run_file`).
     let use_vm = if force_tw {
         false
     } else if force_vm {
@@ -344,6 +450,9 @@ fn run_zyp(
         .with_context(|| "failed to create a temp directory to extract the package into")?;
     pkg.extract_to(temp.path())
         .with_context(|| format!("failed to extract {}", path.display()))?;
+    if let Ok(mut e) = EXTRACTION.lock() {
+        *e = Some(temp.path().to_path_buf());
+    }
 
     if use_vm {
         // Only needed for the VM path: </ /> compiles to a shelled-out `zymbol run <path>`
@@ -353,6 +462,14 @@ fn run_zyp(
 
     let entry_abs = pkg.script_abs_path(temp.path(), &entry_name, &entry_path)?;
     let display_name = format!("{}!{}", path.display(), entry_path);
+
+    // Read from the extraction, before anything runs; named inside the package.
+    let shown = format!("{}!", path.display());
+    // `src/` is where a package keeps its tree, and not part of a file's name in it.
+    if let Some(code) = refuse_denied(&entry_abs, &deny, &temp.path().join("src"), Some(&shown))? {
+        drop(temp);
+        std::process::exit(code);
+    }
 
     let code = run_file_inner(&entry_abs, RunOpts { display_name: Some(display_name), args, use_vm, keys })?;
 
@@ -371,6 +488,104 @@ fn run_zyp(
     }
 
     std::process::exit(code);
+}
+
+/// A `.zyp`'s extraction directory, for `--timeout` to remove: the process exits
+/// from the stopper's thread, and no destructor runs.
+static EXTRACTION: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// `zymbol run --timeout` (G3, decided by the author on 2026-10-22): a thread
+/// that stops the program after `secs` of wall-clock time. It ends the commands
+/// `<\ \>` left running, puts the terminal back if a `>>|` block is open, removes
+/// a package's extraction, and exits with 124.
+fn arm_timeout(secs: f64) {
+    zymbol_common::shell::track_commands();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs_f64(secs));
+        zymbol_common::shell::stop_running_commands();
+        if zymbol_common::screen::is_open() {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::terminal::LeaveAlternateScreen,
+                crossterm::cursor::Show
+            );
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+        if let Ok(Some(dir)) = EXTRACTION.lock().map(|d| d.clone()) {
+            let _ = fs::remove_dir_all(dir);
+        }
+        eprintln!("error: stopped after {} s (--timeout) — the program had not finished", secs);
+        std::process::exit(124);
+    });
+}
+
+/// A file of the surface, as the user knows it: relative to `base` (the current directory,
+/// or a package's extracted tree) and, for a package, after its name; in full when it is
+/// not under `base`.
+fn shown_path(file: &Path, base: &Path, prefix: Option<&str>) -> String {
+    let base_abs = std::path::absolute(base).unwrap_or_else(|_| base.to_path_buf());
+    let rel = file
+        .strip_prefix(&base_abs)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| file.display().to_string());
+    format!("{}{}", prefix.unwrap_or(""), rel)
+}
+
+/// The surface, one use a line: effect, where, and how it is written.
+fn effect_lines(report: &EffectReport, only: Option<&[Effect]>, base: &Path, prefix: Option<&str>) -> Vec<String> {
+    let uses: Vec<_> = report.uses.iter().filter(|u| only.is_none_or(|d| d.contains(&u.effect))).collect();
+    let width = uses.iter().map(|u| shown_path(&u.file, base, prefix).len() + 1 + u.line.to_string().len()).max().unwrap_or(0);
+    uses.iter()
+        .map(|u| {
+            let at = format!("{}:{}", shown_path(&u.file, base, prefix), u.line);
+            format!("  {:<7} {:<width$}  {}", u.effect.name(), at, u.effect.mark())
+        })
+        .collect()
+}
+
+/// `zymbol run --deny`: the program's surface read before anything runs, and the
+/// program refused — `Some(exit code)` — when it uses a denied effect, or when part of
+/// it cannot be read (G1, decided 2026-10-21).
+fn refuse_denied(entry: &Path, deny: &[Effect], base: &Path, prefix: Option<&str>) -> Result<Option<i32>> {
+    if deny.is_empty() {
+        return Ok(None);
+    }
+    let report = effects_of(entry).with_context(|| format!("--deny: cannot read {}", entry.display()))?;
+    let names = deny.iter().map(|e| e.name()).collect::<Vec<_>>().join(",");
+    if report.denied(deny).next().is_some() {
+        eprintln!("error: --deny {} refuses this program — nothing ran", names);
+        for line in effect_lines(&report, Some(deny), base, prefix) {
+            eprintln!("{}", line);
+        }
+        return Ok(Some(1));
+    }
+    if !report.unverified.is_empty() {
+        eprintln!("error: --deny {} cannot verify this program — nothing ran", names);
+        for (file, why) in &report.unverified {
+            eprintln!("  {}  {}", shown_path(file, base, prefix), why);
+        }
+        return Ok(Some(1));
+    }
+    Ok(None)
+}
+
+/// `zymbol check --effects`: the surface `--deny` decides on.
+fn print_effects(path: &Path) -> Result<()> {
+    let report = effects_of(path).with_context(|| format!("failed to read file: {}", path.display()))?;
+    let base = Path::new(".");
+    let name = path.display().to_string();
+    if report.uses.is_empty() && report.unverified.is_empty() {
+        println!("effects of {}: none", name);
+    } else {
+        println!("effects of {}:", name);
+        for line in effect_lines(&report, None, base, None) {
+            println!("{}", line);
+        }
+        for (file, why) in &report.unverified {
+            println!("  ?       {}  not verified — {}", shown_path(file, base, None), why);
+        }
+    }
+    Ok(())
 }
 
 /// `</ />` in the register VM shells out to `zymbol run <path>` in a child process (rather
@@ -554,15 +769,16 @@ fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &m
     // to be fatal for `alias::func(...)` exactly as it already was for a bare
     // `func(...)`. Without it `run` would reject one and execute the other.
     let mut type_checker = TypeChecker::new();
-    type_checker.set_module_arities(zymbol_semantic::module_arities(
+    let mut tables = zymbol_semantic::ModuleTables::new();
+    type_checker.set_module_arities(tables.arities(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
-    type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+    type_checker.set_module_out_slots(tables.out_slots(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
-    type_checker.set_module_exports(zymbol_semantic::module_exports(
+    type_checker.set_module_exports(tables.exports(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
@@ -573,6 +789,10 @@ fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &m
     let mut phase_warnings: Vec<Diagnostic> = type_checker.get_warnings().to_vec();
     phase_warnings.extend(zymbol_semantic::check_unused_imports(&tokens_for_stdlib, &program.imports));
     phase_warnings.extend(zymbol_semantic::check_unreachable(&program));
+    // A read `\` has certainly destroyed (G4): warned, still run.
+    phase_warnings.extend(zymbol_semantic::check_destroyed_reads(&program));
+    // A `??` that may find no arm (G5): warned, still run.
+    phase_warnings.extend(zymbol_semantic::check_match_coverage(&program));
 
     // Type errors are fatal - stop execution. The phase's warnings go out
     // first: `check` reports them next to the errors and the browser engine
@@ -675,6 +895,8 @@ fn run_program<O: std::io::Write>(path: &Path, opts: RunOpts, out: O, report: &m
             }
         };
         let mut vm = VM::new(out);
+        vm.set_terminal(Box::new(zymbol_host::NativeTerminal::new()));
+        vm.set_host(Box::new(zymbol_host::NativeHost::new()));
         vm.set_cli_args(args.clone());
         vm.set_subscript_runner(subscript_runner(true, args.clone()));
         if let Some(k) = keys.clone() {
@@ -910,15 +1132,16 @@ fn build_file(path: PathBuf, output: Option<PathBuf>, release: bool) -> Result<(
 
     // Run type checking, with the same arity table `run` and `check` use.
     let mut type_checker = TypeChecker::new();
-    type_checker.set_module_arities(zymbol_semantic::module_arities(
+    let mut tables = zymbol_semantic::ModuleTables::new();
+    type_checker.set_module_arities(tables.arities(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
-    type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+    type_checker.set_module_out_slots(tables.out_slots(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
-    type_checker.set_module_exports(zymbol_semantic::module_exports(
+    type_checker.set_module_exports(tables.exports(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
@@ -1265,7 +1488,10 @@ fn check_file(path: PathBuf) -> Result<()> {
         .with_context(|| format!("failed to read file: {}", path.display()))?;
 
     let mut source_map = SourceMap::new();
-    let entry = check_source(&path, &source, &mut source_map, true)?;
+    // One for the whole check: a module is parsed once, not once per file
+    // that imports it (GLB-143).
+    let mut tables = zymbol_semantic::ModuleTables::new();
+    let entry = check_source(&path, &source, &mut source_map, &mut tables, true)?;
     let mut has_errors = entry.has_errors;
 
     // Walk the import graph depth-first so a cycle can be reported with the
@@ -1293,7 +1519,7 @@ fn check_file(path: PathBuf) -> Result<()> {
             }
         };
 
-        let module = check_source(&module_path, &module_source, &mut source_map, false)?;
+        let module = check_source(&module_path, &module_source, &mut source_map, &mut tables, false)?;
         if module.has_errors {
             eprintln!(
                 "  = note: reached from {} ({}:{})",
@@ -1332,6 +1558,7 @@ fn check_source(
     path: &Path,
     source: &str,
     source_map: &mut SourceMap,
+    tables: &mut zymbol_semantic::ModuleTables,
     report_warnings: bool,
 ) -> Result<FileCheck> {
     let file_id = source_map.add_file(display_path(path), source.to_string());
@@ -1431,15 +1658,15 @@ fn check_source(
     // a wrong count there only ever failed at runtime, on whichever branch
     // happened to make the call.
     let mut type_checker = TypeChecker::new();
-    type_checker.set_module_arities(zymbol_semantic::module_arities(
+    type_checker.set_module_arities(tables.arities(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
-    type_checker.set_module_out_slots(zymbol_semantic::module_out_slots(
+    type_checker.set_module_out_slots(tables.out_slots(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
-    type_checker.set_module_exports(zymbol_semantic::module_exports(
+    type_checker.set_module_exports(tables.exports(
         &program.imports,
         path.parent().unwrap_or(std::path::Path::new(".")),
     ));
@@ -1461,6 +1688,8 @@ fn check_source(
     // cannot run (HLZ-016), counted and printed with the type warnings.
     let mut unused_imports = zymbol_semantic::check_unused_imports(&tokens_for_stdlib, &program.imports);
     unused_imports.extend(zymbol_semantic::check_unreachable(&program));
+    unused_imports.extend(zymbol_semantic::check_destroyed_reads(&program));
+    unused_imports.extend(zymbol_semantic::check_match_coverage(&program));
     for diag in type_checker.get_warnings().iter().chain(unused_imports.iter()) {
         if !report_warnings {
             continue;

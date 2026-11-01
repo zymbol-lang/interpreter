@@ -924,8 +924,18 @@ impl Parser {
     /// Stops before any `$X` collection operator.
     /// Used as the argument parser for binary collection ops so that
     /// `arr$+ 4$+ 5` chains as `(arr$+ 4)$+ 5` instead of `arr$+(4$+5)`.
+    ///
+    /// A leading unary takes the structural postfix with it: `arr$+ -v[1]`
+    /// appends `-(v[1])` (GLB-145).
     pub(crate) fn parse_postfix_structural(&mut self) -> Result<Expr, Diagnostic> {
-        let mut expr = self.parse_unary()?;
+        self.parse_prefixed(|p| {
+            let primary = p.parse_primary_expr()?;
+            p.parse_structural_ops(primary)
+        })
+    }
+
+    /// The structural postfix of `parse_postfix_structural`: `[]`, `.`, `()`.
+    fn parse_structural_ops(&mut self, mut expr: Expr) -> Result<Expr, Diagnostic> {
         loop {
             match self.peek().kind {
                 TokenKind::LBracket => {
@@ -1000,10 +1010,15 @@ impl Parser {
     }
 
     /// Parse postfix expressions (indexing, member access, function calls)
-    /// Also handles unary operators (-x, !x, +x)
+    /// Also handles unary operators (-x, !x, +x), which apply to the operand
+    /// with its postfix: `-v[1]` is `-(v[1])` (GLB-145)
     pub(crate) fn parse_postfix(&mut self) -> Result<Expr, Diagnostic> {
-        let mut expr = self.parse_unary()?;
+        self.parse_unary()
+    }
 
+    /// Every postfix operation on `expr`: indexing, member access, calls, and
+    /// the `$` and `#?` operators.
+    pub(crate) fn parse_postfix_ops(&mut self, mut expr: Expr) -> Result<Expr, Diagnostic> {
         // The two loops below alternate: a `(` on the same line after a `$`
         // operation is a call on its result, as it already was inside `>>` and
         // in zyjs — the statement used to end there in an assignment, and
@@ -1258,8 +1273,9 @@ impl Parser {
                 }
             }
             _ => {
-                // For other cases, use normal unary parsing
-                self.parse_unary()?
+                // For other cases, a unary over a bare primary: the postfix,
+                // without calls, is the loop below (a callable is never negated)
+                self.parse_prefixed(|p| p.parse_primary_expr())?
             }
         };
 

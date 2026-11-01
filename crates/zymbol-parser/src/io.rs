@@ -6,10 +6,9 @@
 //! - Newline statements: ¶ OR \\
 //! - CLI args capture: >< variable
 
-use zymbol_ast::{ClearScreen, CliArgsCaptureStmt, Expr, Input, InputCast, InputPrompt, KeyInput, LiteralExpr, Newline, Output, OutputPos, TuiBlock};
-use zymbol_common::Literal;
+use zymbol_ast::{ClearScreen, CliArgsCaptureStmt, Expr, Input, InputCast, InputPrompt, KeyInput, Newline, Output, OutputPos, TuiBlock};
 use zymbol_error::Diagnostic;
-use zymbol_lexer::{StringPart, TokenKind};
+use zymbol_lexer::TokenKind;
 use crate::{Parser, Statement};
 
 impl Parser {
@@ -197,46 +196,22 @@ impl Parser {
             return Ok(Statement::Output(Output::new(exprs, start_span)));
         }
 
-        // Helper to expand interpolated strings or parse expression
-        // Uses parse_postfix() instead of parse_expr() to support Haskell-style:
-        // >> "Score: " -95 ¶  -> outputs "Score: -95" (two items)
-        // For binary operations, use parentheses: >> "Result: " (1 + 2) ¶
+        // Every item goes through parse_output_item(), interpolated strings
+        // included. They used to be taken here, before it, as a literal of
+        // their own, which skipped the operators and the postfix that a plain
+        // string gets: `>> "a{x}" -1` printed `a3-1` where `>> "a3" -1` is the
+        // documented arithmetic error, and `"a{x}"$#` was a syntax error
+        // (GLB-144). The primary parser builds the same InterpolatedString
+        // literal, so the formatter still reprints what the user wrote.
+        //
+        // parse_output_item() handles Haskell-style output:
+        // - Unary: -95, !flag, +x
+        // - Primary: literals, identifiers, arrays, tuples, (expr)
+        // - Postfix for identifiers: arr[0], obj.field, func()
+        // - Postfix on a literal too: `"abc"[1]`, `"abc"$#` — so `"text" [1,2,3]`
+        //   is an index, not two items; `"text" ([1,2,3])` is two
         let parse_expr_with_interpolation = |parser: &mut Parser| -> Result<Vec<Expr>, Diagnostic> {
-            let token = parser.peek().clone();
-
-            match &token.kind {
-                TokenKind::StringInterpolated(parts) => {
-                    // Keep the interpolated string as ONE literal (same as in
-                    // expression context, lib.rs primary parsing) so the
-                    // formatter can reprint exactly what the user wrote. The
-                    // interpreter/VM resolve `{var}` at runtime and produce
-                    // the same concatenation the old per-part expansion did.
-                    parser.advance(); // consume interpolated string
-                    let mut reconstructed = String::new();
-                    for part in parts {
-                        match part {
-                            StringPart::Text(t) => reconstructed.push_str(t),
-                            StringPart::Variable(v) => {
-                                reconstructed.push('{');
-                                reconstructed.push_str(v);
-                                reconstructed.push('}');
-                            }
-                        }
-                    }
-                    Ok(vec![Expr::Literal(LiteralExpr::new(
-                        Literal::InterpolatedString(reconstructed),
-                        token.span,
-                    ))])
-                }
-                _ => {
-                    // Use parse_output_item() to handle Haskell-style output:
-                    // - Unary: -95, !flag, +x
-                    // - Primary: literals, identifiers, arrays, tuples, (expr)
-                    // - Postfix for identifiers: arr[0], obj.field, func()
-                    // - But NOT postfix for literals: "text" [1,2,3] is two items
-                    Ok(vec![parser.parse_output_item()?])
-                }
-            }
+            Ok(vec![parser.parse_output_item()?])
         };
 
         // Parse at least one expression (or expand interpolation)

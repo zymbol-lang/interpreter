@@ -15,10 +15,10 @@ impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_literal(&mut self, lit: &LiteralExpr) -> Result<Value> {
         Ok(match &lit.value {
             // Plain string — never interpolated; sentinels → literal braces
-            Literal::String(s) => Value::String(s.replace('\x01', "{").replace('\x02', "}")),
+            Literal::String(s) => Value::String(s.replace('\x01', "{").replace('\x02', "}").into()),
             // Interpolated string — resolve {var} at runtime, then restore escaped braces
             Literal::InterpolatedString(s) => {
-                Value::String(self.interpolate_string(s, &lit.span)?.replace('\x01', "{").replace('\x02', "}"))
+                Value::String(self.interpolate_string(s, &lit.span)?.replace('\x01', "{").replace('\x02', "}").into())
             }
             // `##_` — the absence of a value, written.
             Literal::Unit => Value::Unit,
@@ -31,6 +31,21 @@ impl<W: Write> Interpreter<W> {
 
     /// Expand `{var}` placeholders in a string using the current scope.
     fn interpolate_string(&mut self, s: &str, span: &Span) -> Result<String> {
+        let mut result = String::with_capacity(s.len());
+        for piece in self.interpolation_pieces(s, span)? {
+            match piece {
+                Piece::Text(t) => result.push_str(&t),
+                Piece::Value(v) => result.push_str(&self.format_value(&v)),
+            }
+        }
+        Ok(result)
+    }
+
+    /// The pieces of an interpolated string: the text as written, and the value of
+    /// each `{var}`. `<\ \>` needs them apart — the text is the command and each
+    /// value one quoted word (G2) — and everything else joins them.
+    pub(crate) fn interpolation_pieces(&mut self, s: &str, span: &Span) -> Result<Vec<Piece>> {
+        let mut pieces = Vec::new();
         let mut result = String::with_capacity(s.len());
         let chars: Vec<char> = s.chars().collect();
         let mut i = 0;
@@ -47,18 +62,20 @@ impl<W: Write> Interpreter<W> {
                     // A name destroyed with `\` is refused here as it is when
                     // read on its own; it used to stay in the text as `{x}`
                     // (GLB-025).
-                    if self.dead_variables.contains(&var_name) || self.is_dead_module_state(&var_name) {
+                    if self.dead_variables.contains_key(&var_name) || self.is_dead_module_state(&var_name) {
                         self.check_variable_alive(&var_name, span)?;
                     }
                     // A variable, or a named function read as a value — what
                     // `var_name` alone evaluates to (GLB-018 H: `{f}` printed
                     // itself here while `>> f` printed <funct/1>).
-                    let maybe_display = self.get_variable(&var_name).cloned()
+                    let maybe_value = self.get_variable(&var_name).cloned()
                         .or_else(|| self.functions.get(&var_name)
-                            .map(|def| Value::Function(self.func_def_to_value(def))))
-                        .map(|v| self.format_value(&v));
-                    if let Some(display) = maybe_display {
-                        result.push_str(&display);
+                            .map(|def| Value::function(self.func_def_to_value(def))));
+                    if let Some(value) = maybe_value {
+                        if !result.is_empty() {
+                            pieces.push(Piece::Text(std::mem::take(&mut result)));
+                        }
+                        pieces.push(Piece::Value(value));
                     } else {
                         // Auto-free is invisible by design: a missing variable
                         // that the last-use schedule destroyed means the
@@ -88,6 +105,15 @@ impl<W: Write> Interpreter<W> {
                 i += 1;
             }
         }
-        Ok(result)
+        if !result.is_empty() {
+            pieces.push(Piece::Text(result));
+        }
+        Ok(pieces)
     }
+}
+
+/// A piece of an interpolated string: `Interpreter::interpolation_pieces`.
+pub(crate) enum Piece {
+    Text(String),
+    Value(Value),
 }

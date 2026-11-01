@@ -6,7 +6,8 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use zymbol_ast::{BashExecExpr, ExecuteExpr};
+use zymbol_ast::{BashExecExpr, ExecuteExpr, Expr};
+use zymbol_common::Literal;
 use zymbol_lexer::Lexer;
 use zymbol_parser::Parser;
 use zymbol_span::{FileId, Position, Span};
@@ -58,8 +59,8 @@ impl<W: Write> Interpreter<W> {
             // reporting a failure and crashing are two things, and GLB-017 I
             // decided the second.
             return match runner(&file_path, &execute.args) {
-                Ok((printed, 0)) => Ok(Value::String(printed)),
-                Ok((printed, code)) => Ok(Value::Error(crate::ErrorValue::new(
+                Ok((printed, 0)) => Ok(Value::String(printed.into())),
+                Ok((printed, code)) => Ok(Value::error(crate::ErrorValue::new(
                     "IO",
                     zymbol_common::shell::exit_failure_message(Some(code), &printed),
                 ))),
@@ -125,7 +126,7 @@ impl<W: Write> Interpreter<W> {
             // Convert Value array to String array for set_cli_args
             let args_strings: Vec<String> = cli_args.iter()
                 .filter_map(|v| match v {
-                    Value::String(s) => Some(s.clone()),
+                    Value::String(s) => Some(s.to_string()),
                     _ => None,
                 })
                 .collect();
@@ -150,7 +151,7 @@ impl<W: Write> Interpreter<W> {
         // Convert captured output to string
         let output_str = String::from_utf8_lossy(&buffer).to_string();
 
-        Ok(Value::String(output_str))
+        Ok(Value::String(output_str.into()))
     }
 
     /// Evaluate bash execute expression: <\ command \>
@@ -158,12 +159,46 @@ impl<W: Write> Interpreter<W> {
     /// Each arg is evaluated as a Zymbol expression; results are concatenated to form the command.
     /// No implicit separator — use char/string literals for spacing: <\ "ls" ' ' dir \>
     pub(crate) fn eval_bash_exec(&mut self, bash: &BashExecExpr) -> Result<Value> {
-        // Evaluate all args and concatenate to build the shell command
+        // The text written in the command is the command; every value placed in it
+        // is data — one quoted shell word, one per element for a collection (G2,
+        // decided by the author on 2026-10-21). A value used to be pasted in as it
+        // was: `"x; echo INYECTADO"` ran a second command.
         let mut command = String::new();
         for arg in &bash.args {
+            if let Expr::Literal(lit) = arg {
+                match &lit.value {
+                    Literal::String(s) => {
+                        command.push_str(&s.replace('\x01', "{").replace('\x02', "}"));
+                        continue;
+                    }
+                    // A character written in the command is written text too:
+                    // `<\ cmd ' ' "hola" \>` puts a space there, not a quoted one.
+                    Literal::Char(c) => {
+                        command.push(*c);
+                        continue;
+                    }
+                    Literal::InterpolatedString(s) => {
+                        for piece in self.interpolation_pieces(s, &lit.span)? {
+                            match piece {
+                                crate::literals::Piece::Text(t) => {
+                                    command.push_str(&t.replace('\x01', "{").replace('\x02', "}"))
+                                }
+                                crate::literals::Piece::Value(v) => {
+                                    if let Err(refused) = Self::push_bash_words(&mut command, &v)? {
+                                        return Ok(refused);
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
             let value = self.eval_expr(arg)?;
-            let s = Self::value_to_bash_str(&value)?;
-            command.push_str(&s);
+            if let Err(refused) = Self::push_bash_words(&mut command, &value)? {
+                return Ok(refused);
+            }
         }
 
         // Execute the shell command — see zymbol_common::shell for which shell that
@@ -174,7 +209,7 @@ impl<W: Write> Interpreter<W> {
                 span: bash.span,
             }
         })?;
-        let output = shell.output().map_err(|e| RuntimeError::Generic {
+        let output = zymbol_common::shell::run_command(&mut shell).map_err(|e| RuntimeError::Generic {
             message: format!(
                 "failed to run `{}`: {}",
                 shell.get_program().to_string_lossy(),
@@ -188,7 +223,7 @@ impl<W: Write> Interpreter<W> {
         // empty string, and nothing could tell them apart.
         if !output.status.success() {
             let said = zymbol_common::shell::failure_text(&output);
-            return Ok(Value::Error(crate::ErrorValue::new(
+            return Ok(Value::error(crate::ErrorValue::new(
                 "IO",
                 zymbol_common::shell::exit_failure_message(output.status.code(), &said),
             )));
@@ -209,12 +244,49 @@ impl<W: Write> Interpreter<W> {
         // Strip trailing newline (consistent with shell command substitution $(...) behavior)
         let result = result.trim_end_matches('\n').to_string();
 
-        Ok(Value::String(result))
+        Ok(Value::String(result.into()))
+    }
+
+    /// A value placed in a command: its words, each quoted, joined by a space. A
+    /// value the shell cannot take as one word (`cmd.exe` and a `%`) is a soft
+    /// `##IO` instead, and the command does not run.
+    fn push_bash_words(command: &mut String, value: &Value) -> Result<std::result::Result<(), Value>> {
+        let mut words = Vec::new();
+        Self::bash_words(value, &mut words)?;
+        let mut quoted = Vec::with_capacity(words.len());
+        for w in &words {
+            match zymbol_common::shell::quote_word(w) {
+                Ok(q) => quoted.push(q),
+                Err(msg) => return Ok(Err(Value::error(crate::ErrorValue::new("IO", msg)))),
+            }
+        }
+        command.push_str(&quoted.join(" "));
+        Ok(Ok(()))
+    }
+
+    /// The words of a value: one for a scalar, one per element of a collection, at
+    /// any depth — not its display, whose `(`, `[` and `#` the shell would read as
+    /// syntax or as a comment.
+    fn bash_words(value: &Value, out: &mut Vec<String>) -> Result<()> {
+        match value {
+            Value::Array(items) | Value::Tuple(items) => {
+                for v in items.iter() {
+                    Self::bash_words(v, out)?;
+                }
+            }
+            Value::NamedTuple(fields) => {
+                for (_, v) in fields.iter() {
+                    Self::bash_words(v, out)?;
+                }
+            }
+            other => out.push(Self::value_to_bash_str(other)?),
+        }
+        Ok(())
     }
 
     fn value_to_bash_str(value: &Value) -> Result<String> {
         match value {
-            Value::String(s) => Ok(s.clone()),
+            Value::String(s) => Ok(s.to_string()),
             Value::Int(n) => Ok(n.to_string()),
             Value::Float(f) => Ok(f.to_string()),
             Value::Bool(b) => Ok(if *b { "#1" } else { "#0" }.to_string()),

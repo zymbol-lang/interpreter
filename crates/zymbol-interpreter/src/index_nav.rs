@@ -221,10 +221,10 @@ impl<W: Write> Interpreter<W> {
 /// Descend into a dictionary by KEY — the String half of a navigation step.
 fn descend_key(collection: Value, key: &str, op_span: zymbol_span::Span) -> Result<Value> {
     match collection {
-        Value::NamedTuple(fields) => match fields.iter().find(|(k, _)| k == key) {
-            Some((_, v)) => Ok(v.clone()),
+        Value::NamedTuple(fields) => match fields.get(key) {
+            Some(v) => Ok(v.clone()),
             None => {
-                let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                let available: Vec<String> = fields.keys().cloned().collect();
                 Err(RuntimeError::kinded(
                     "Key",
                     crate::variables::missing_key_msg(key, &available),
@@ -282,10 +282,11 @@ fn descend(
             op_span,
         )),
         Value::String(s) => {
-            let chars: Vec<char> = s.chars().collect();
-            let len = chars.len();
+            // The character where it is, not the text copied to find it
+            // (GLB-130), nor walked to from the start (GLB-139).
+            let len = s.char_len();
             let i = resolve_index(index, len, op_span, "string")?;
-            Ok(Value::String(chars[i].to_string()))
+            Ok(Value::String(s.char_range(i, i + 1).into()))
         }
         other => Err(RuntimeError::kinded(
             "Type",

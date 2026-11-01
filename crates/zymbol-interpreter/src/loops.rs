@@ -236,14 +236,14 @@ impl<W: Write> Interpreter<W> {
                             if self.handle_loop_control(&loop_stmt.label) { break; }
                         }
                     }
-                    Value::Bool(_) => {
-                        // WHILE loop: re-evaluate condition each iteration
+                    Value::Bool(first) => {
+                        // WHILE loop. The value read to tell the two kinds apart
+                        // IS the first check: evaluating the condition again ran
+                        // its calls one extra time — `@ s() && c < 2 { … }`
+                        // called `s` four times where it is checked three
+                        // (GLB-135). Re-evaluated after each turn.
+                        let mut keep_going = first;
                         loop {
-                            let condition = self.eval_expr(condition_expr)?;
-                            let Value::Bool(keep_going) = condition else {
-                                return Err(loop_specifier_error(&condition, condition_expr.span()));
-                            };
-
                             if !keep_going { break; }
 
                             if needs_scope {
@@ -252,6 +252,12 @@ impl<W: Write> Interpreter<W> {
                                 self.execute_block_no_scope(&loop_stmt.body)?;
                             }
                             if self.handle_loop_control(&loop_stmt.label) { break; }
+
+                            let condition = self.eval_expr(condition_expr)?;
+                            let Value::Bool(next) = condition else {
+                                return Err(loop_specifier_error(&condition, condition_expr.span()));
+                            };
+                            keep_going = next;
                         }
                     }
                     other => {

@@ -1,10 +1,10 @@
-# Zymbol for LLMs — v0.0.10
+# Zymbol for LLMs — v0.0.11
 
 Dense, executable-verified brief. Every rule of § 1 and every bullet of § 12 stands
 behind a probe that runs in all three engines, and so do most sentences in between:
 `zyquality/docs/llm_verify.py` (`zyq suite --only llm`) runs them against the binary and
 fails when one stops holding, when a quoted sentence is edited away, or when a rule is
-added with nothing that runs. Last green against `zymbol 0.0.10`. Canonical sources: `GUIDE.md` (tutorial), `REFERENCE.md` (limits + full
+added with nothing that runs. Last green against `zymbol 0.0.11`. Canonical sources: `GUIDE.md` (tutorial), `REFERENCE.md` (limits + full
 symbol table), `SYMBOLS.md` (why each mark has its shape), `AGENTIC.md` (what
 holds, and what does not, when the code is generated rather than written).
 
@@ -13,9 +13,9 @@ holds, and what does not, when the code is generated rather than written).
 (Spanish, 日本語, العربية, pIqaD, emoji). `//` is the only comment form.
 
 ```bash
-zymbol run f.zy        # tree-walker (default)   zymbol check f.zy   # parse+semantic, follows imports
-zymbol run --vm f.zy   # register VM             zymbol fmt f.zy --write
-zymbol run app.zyp     # .zyp bundle (--vm default)   zymbol repl
+zymbol run f.zy        # register VM (default)   zymbol check f.zy   # parse+semantic, follows imports
+zymbol run --tw f.zy   # tree-walker             zymbol fmt f.zy --write
+zymbol run app.zyp     # .zyp bundle (VM too)    zymbol repl
 ```
 
 Three engines must agree: `zytw` (Rust tree-walker), `zyvm` (Rust register VM),
@@ -289,8 +289,8 @@ layer (`_j::decode => decodificar`).
 
 Stdlib (same module system, native): `std/math` (`sqrt exp ln log pow abs ceil floor round
 min max sin cos tan asin acos atan atan2 sinh cosh tanh sigmoid`, `PI` `E`) · `std/random`
-(`entero rango peso_f64`) · `std/json` (`decode decode_map encode`) · `std/io` (`read write
-append exists delete list mkdir`) · `std/net` (`get post post_json head`) · `std/db`
+(`entero rango peso_f64 semilla`) · `std/json` (`decode decode_map encode`) · `std/io` (`read write
+append exists delete list mkdir`) · `std/net` (`get post post_json head timeout`) · `std/db`
 (`connect exec query query_one query_value tx begin commit rollback …`) · `std/term`
 (`width pad_left pad_right center truncate` — **display columns**, not graphemes: CJK and
 most emoji are 2 columns, so lay TUI out with `t::width`, never `$#`) · `std/time`
@@ -362,12 +362,19 @@ are still open: `AGENTIC.md`.
 
 Not guaranteed — do not assume these:
 
-- **No capability enforcement and no shell quoting.** `<\ "{cmd}" \>`
-  interpolates a runtime string straight into `sh -c`.
-- **No termination bound.** Infinite recursion and `@ { }` run until something
-  outside kills them.
-- **`check` does not catch everything it looks like it should**: use after `\`
-  and a non-exhaustive `??` are runtime-only.
+- **Capabilities only when asked.** Nothing restricts a program unless it is run with
+  `zymbol run --deny net,shell,…`, which refuses it before any of it runs
+  (`zymbol check --effects` lists what it uses). In `<\ \>` the text you write is the
+  command and every value is one quoted word (v0.0.11): never put quotes around a value
+  yourself — `<\ "test -f " ruta \>`, not `<\ "test -f '" ruta "'" \>`.
+- **No termination bound unless asked.** A tail recursion and `@ { }` run until
+  something stops them — `zymbol run --timeout 10` does, after 10 s of wall-clock time,
+  with status 124 that `!?` cannot catch. **A recursion that is not a tail call stops at
+  10 000 active calls** with a `##Depth` error that `!?` catches (v0.0.11).
+- **`check` does not catch everything it looks like it should**: a non-exhaustive `??`
+  is runtime-only, and a use after `\` is an error only when it runs — `check` warns where
+  every path to the read goes through the `\` (v0.0.11), and says nothing where the `\`
+  is in a branch that may not run.
 
 ---
 

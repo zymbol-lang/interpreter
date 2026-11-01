@@ -39,7 +39,7 @@ impl<W: Write> Interpreter<W> {
             // from being.
             Value::NamedTuple(fields) => Ok(fields
                 .iter()
-                .map(|(k, _)| Value::String(k.clone()))
+                .map(|(k, _)| Value::String(k.clone().into()))
                 .collect()),
             // A positional tuple is walked too (decision 21): the type
             // system is dynamic and `#?` validates each element, so
@@ -67,7 +67,7 @@ impl<W: Write> Interpreter<W> {
         // Not in scope — check if it's a named function used as a first-class value.
         // Captures the current scope at point of use (Opción A).
         if let Some(func_def) = self.functions.get(&ident.name) {
-            return Ok(Value::Function(self.func_def_to_value(func_def)));
+            return Ok(Value::function(self.func_def_to_value(func_def)));
         }
 
         Err(RuntimeError::Generic {
@@ -129,10 +129,10 @@ impl<W: Write> Interpreter<W> {
         if let Expr::Identifier(id) = member.object.unwrap_group() {
             self.check_variable_alive(&id.name, &id.span)?;
             if let Some(Value::NamedTuple(fields)) = self.get_variable(&id.name) {
-                if let Some((_, v)) = fields.iter().find(|(k, _)| k == &member.field) {
+                if let Some(v) = fields.get(&member.field) {
                     return Ok(v.clone());
                 }
-                let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                let available: Vec<String> = fields.keys().cloned().collect();
                 return Err(RuntimeError::kinded(
                     "Key",
                     crate::variables::missing_key_msg(&member.field, &available),
@@ -147,11 +147,9 @@ impl<W: Write> Interpreter<W> {
 
         match object {
             Value::NamedTuple(fields) => {
-                // Search for field by name
-                for (field_name, field_value) in fields.iter() {
-                    if field_name == &member.field {
-                        return Ok(field_value.clone());
-                    }
+                // By hash, not by walking the pairs (GLB-132).
+                if let Some(v) = fields.get(&member.field) {
+                    return Ok(v.clone());
                 }
                 // Field not found
                 let available_fields: Vec<String> = fields.iter()
@@ -201,7 +199,7 @@ impl<W: Write> Interpreter<W> {
             if let Value::NamedTuple(fields) = v {
                 return Ok(fields
                     .iter()
-                    .map(|(k, val)| Value::tuple(vec![Value::String(k.clone()), val.clone()]))
+                    .map(|(k, val)| Value::tuple(vec![Value::String(k.clone().into()), val.clone()]))
                     .collect());
             }
         }
@@ -317,10 +315,10 @@ impl<W: Write> Interpreter<W> {
         // any key, which is what JSON needs — `d["mi clave"]` cannot be written
         // any other way.
         if let (Value::NamedTuple(fields), Value::String(key)) = (collection, index_value) {
-            if let Some((_, v)) = fields.iter().find(|(k, _)| k == key) {
+            if let Some(v) = fields.get(key.as_str()) {
                 return Ok(Some(v));
             }
-            let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+            let available: Vec<String> = fields.keys().cloned().collect();
             return Err(RuntimeError::kinded(
                 "Key",
                 crate::variables::missing_key_msg(key, &available),
@@ -409,7 +407,7 @@ impl<W: Write> Interpreter<W> {
                 // the tuple.
                 let len = fields.len();
                 match Self::resolve_index(index, len, span)? {
-                    Some(i) => Ok(Some(&fields[i].1)),
+                    Some(i) => Ok(Some(&fields[i])),
                     None => Err(RuntimeError::Generic {
                         message: format!(
                             "named tuple index out of bounds: index {} for tuple of length {}",
@@ -438,13 +436,18 @@ impl<W: Write> Interpreter<W> {
 
         match collection {
             Value::String(s) => {
-                // String indexing returns a char
-                let chars: Vec<char> = s.chars().collect();
+                // String indexing returns a char — found where it is, not
+                // by copying the text into a Vec<char> first (GLB-130), and
+                // from the text's kept count and nearest crumb, not by walking
+                // it from the start (GLB-139).
                 // `index_ref` rejected every other index kind before this point.
                 let Value::Int(index) = index_value else { unreachable!() };
-                let len = chars.len();
+                let len = s.char_len();
                 match Self::resolve_index(*index, len, span)? {
-                    Some(i) => Ok(Value::Char(chars[i])),
+                    Some(i) => Ok(Value::Char(
+                        s.char_at(i)
+                            .expect("resolve_index answered a position inside the text"),
+                    )),
                     None => Err(RuntimeError::Generic {
                         message: format!(
                             "string index out of bounds: index {} for string of length {}",

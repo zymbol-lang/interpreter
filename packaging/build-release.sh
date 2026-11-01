@@ -2,11 +2,13 @@
 # build-release.sh — Linux-only release build
 # Produces canonically-named Linux packages for the web install page.
 #
-# Windows (exe/msi), macOS (aarch64/x86_64), and aarch64 static musl are
-# built automatically by GitHub Actions on release publish:
+# Windows (msi), macOS (aarch64/x86_64), and every Linux package and static
+# musl binary, both architectures, are built by GitHub Actions on release publish:
 #   .github/workflows/release-windows.yml
 #   .github/workflows/release-macos.yml
-#   .github/workflows/release-aarch64-static.yml
+#   .github/workflows/release-linux.yml
+# (release-aarch64-static.yml built the aarch64 static binary a second time and
+# published a checksum the release's file did not match; retired 2026-10-31, GLB-151.)
 #
 # Usage: bash packaging/build-release.sh [--skip-static]
 # Run from interpreter/ (workspace root).
@@ -65,7 +67,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # Linux aarch64 — deb, rpm, pkg.tar.zst (cross-compile with aarch64-linux-gnu-gcc)
-# aarch64 static musl is handled by GitHub Actions (release-aarch64-static.yml)
+# aarch64 static musl is handled by GitHub Actions (release-linux.yml)
 # ---------------------------------------------------------------------------
 info "=== Linux aarch64 packages (deb, rpm, pkg.tar.zst — cross-compile) ==="
 bash "${SCRIPT}" --no-timestamp --formats deb,rpm,arch --arch aarch64

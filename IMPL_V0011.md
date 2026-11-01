@@ -1,0 +1,178 @@
+# Implementation Plan — v0.0.11: the VM is the engine, and what each thing costs
+
+> **Status: ready for the tag, not released.** Drafted on 2026-10-25 from the `v0.0.11`
+> branch at `11d121d`, the day the documents were audited against the implementation, and
+> completed on 2026-10-31 at `5a95444`. The release is dated **2026-11-01**. Part I is what
+> has landed, Part II what remains before the tag. When the tag exists, this block says so
+> and names it.
+>
+> **The plan is `ROADMAP_V0011_ES.md`** (in Spanish, the author's working language for it):
+> its stages, the author's decisions D1–D8, the measurements behind each one. This document
+> is the account of what came of it, with the same skeleton as `IMPL_V0010.md`. Where the
+> two disagree about what was decided, the plan is right; about what the branch holds, the
+> branch is.
+>
+> **Every gate figure below was measured on 2026-10-31 in a fresh clone** of the `v0.0.11`
+> branch of each of the seventeen repositories the Gate checks out (`interpreter` at
+> `5a95444`), against a release build with `--features db`. Figures from earlier days carry
+> their date.
+
+---
+
+## What kind of release this is
+
+An **optimization** release, defined by the author on 2026-10-13 as "the optimization of the
+language's time and resources". The register VM became the default engine; what grew with
+the size of the input and should not have was measured against Python as the reference and
+brought down, without changing what a program means; and the interpreter was split so that
+a binary can be built without what it does not use.
+
+Late in the branch — 2026-10-21 to 2026-10-24 — the rows of `AGENTIC.md` § 12 that were still
+open were each decided by the author and implemented the same day. That part changes what a
+program may do, and it is listed apart in the CHANGELOG under *Changed — rules a program can
+break on* and *Added*.
+
+## Part I — What landed
+
+### Stage 1 — the VM is the default engine (2026-10-13)
+
+`zymbol run file.zy` runs the register VM; `--tw` asks for the tree-walker, `--vm` is accepted
+and changes nothing (D3), the REPL stays on the tree-walker (D2). Both `engines.toml` name
+`--tw` for `zytw`, in the same change — without it the gate would have compared the VM with
+itself and stayed green. The five-zone probe the plan asked for before the change was done
+on 2026-10-16.
+
+### Stage 2 — what grew with n (2026-10-16 to 2026-10-19)
+
+The seven rows of the plan's list, from `zyquality/bench/big/HALLAZGOS.md` (PERF-01…08,
+re-measured against the v0.0.10 release binaries):
+
+| Row | What it was | Fixed by |
+|---|---|---|
+| PERF-06 | building a text with `s = s x y` copied it whole | ZYVM-023 |
+| PERF-04 | `@ ch:texto` was quadratic in the VM | ZYVM-024, ZYVM-025 |
+| PERF-05 a | a slice of a text copied the text | GLB-130, ZYVM-026 |
+| PERF-03 | a dictionary key was found by walking the keys | GLB-132 (`IndexMap`, foldhash) |
+| PERF-07 | a deep recursion aborted the process | GLB-133, D7 (`##Depth` at 10 000) |
+| PERF-05 b | `s$#`, `s[i]` walked the text | ZYVM-028, D8 |
+| PERF-08 | the static musl binary was slower | GLB-134 (mimalloc, tuned) |
+
+The closing plan of 2026-10-19 then took what the review of those rows found, in five
+groups: GLB-139 and ZYTW-016 (a text read by position), GLB-140 and ZYJS-068 (an edit that
+copied its receiver), ZYTW-019 (the tree-walker's `Value`, 120 → 24 bytes) and ZYVM-022 (a
+call's result kept alive), D4 (`std/db` off by default) and GLB-134, and the documents. On
+the way: GLB-141, ZYTW-018.
+
+The VM's dispatch was reworked alongside, each change measured in instructions and kept
+only if it paid: `RangeStep` (ZYVM-029) and `IterStep`, calls that push their frame inline,
+no stack check on a direct call, a tail call inside a module (ZYVM-027), `$>`/`$|`/`$<` on
+the VM's own frames, `$^` with a comparator that only compares its parameters evaluated
+without a call. One was built, measured worse and not kept: `$^` without re-entry for every
+comparator (`38147b6`).
+
+### Stage 3 — four evaluations (2026-10-20)
+
+| | Evaluation | Decision |
+|---|---|---|
+| 3.1 | separate the components | **form B**, done: the VM's terminal and host are traits (`zymbol_vm::host`), `zymbol-host` the native one; `zymbol-vm` depends on no system library |
+| 3.2 | an ultra-compact engine | **form A**, done: `lsp`, `repl` and `http` are features, on by default; the compact build is 100 crates and 6.6 MB against 210 and 12.3 |
+| 3.3 | `.zyb`, Zymbol Binary | **out of v0.0.11** (author, 2026-10-25), to v0.0.12. Measuring it found GLB-142 and GLB-143, both fixed |
+| 3.4 | WebAssembly | **form A**, done: `ZyStr` takes 32-bit pointers; the compiler and the VM build for `wasm32`, and CI checks it. WebAssembly stays an optional engine, never the web's |
+
+### Stage 4 — the browser VM (`zymbol_vm.js`)
+
+**Paused whole** by the author on 2026-10-20: if 3.4's engine works out, a new VM in
+JavaScript would not be needed. On 2026-10-29 the author asked for it again, on a branch of
+its own (`web`'s `Zymbol_VM.js`) and on one condition — evidence that it could be the
+playground's engine — and on 2026-10-30 took it into v0.0.11 as the playground's default,
+an exception to the scope closed on 2026-10-24. It entered by merge (`web` `171fa07`).
+
+It is not a new VM written in JavaScript. `web/src/zymbol/vm/compiler.js` ports
+`zymbol-compiler` function by function, and is held to the Rust compiler's own output: the
+same bytecode over the corpus (637 of 637 programs, the 16 refusals alike), the example
+pool (321 of 321) and every runnable program of the applications (`compile_diff.mjs`). The
+tree-walker, `zymbol.js`, stays one click away (`VM · TW`, `?engine=vm|tw`), and the gate
+grades the port as a fourth engine, `zyjsvm`. The port found three defects of the Rust
+engines (BUG-VMJS-002, -004, -005), corrected in both compilers on 2026-10-30
+(`interpreter` `5a95444`) so that the two build the same bytecode with no compatibility
+option. The evidence and the tools are `web/zymbol_vm/` (`VIABILITY.md`, `HALLAZGOS.md`).
+
+### The safeguards of `AGENTIC.md` § 12 (2026-10-21 to 2026-10-24)
+
+| Row | Decision of the author | What it is now |
+|---|---|---|
+| G1 | option A of four | `zymbol run --deny <effects>`, `zymbol check --effects` |
+| G2 | option A of four | a value in `<\ \>` is one quoted word |
+| G3 | option A of four | `zymbol run --timeout <s>`, exit 124 |
+| G4 | option A of four | a warning for a read `\ x` has certainly destroyed |
+| G5 | option A of four | a warning for a `??` that may find no arm |
+| G8 | option A of four | `random::semilla(n)`, the same sequence in the three engines |
+| ZethyCLI G1 | option A, widened | `std/net` with a time limit per request and per process (`net::timeout(s)`) |
+
+Their probes found GLB-147, GLB-148, GLB-149, ZYVM-032, ZYJS-070 and ZYJS-071, all fixed.
+G3 itself carried GLB-150, found on 2026-10-25 and fixed that day: `--timeout` ended the
+commands through `/usr/bin/kill`, which on Ubuntu 22.04 (procps-ng 3.3) reads `kill -KILL -17`
+as `kill(-1)` and kills every process of the user. GitHub's Gate had been red on every push
+since G3, its runner's agent killed mid-test with no log; it is the system call now, and a test
+keeps a process outside the command's group alive.
+On 2026-10-21, GLB-127 (`>> +a`) was fixed in the parser and uncovered GLB-144, GLB-145
+(a unary takes its operand's postfix: `-v[1]` is `-(v[1])`) and GLB-146, fixed the same day.
+
+On 2026-10-24 the author closed the scope: of what was left to decide, only ZethyCLI G1
+entered; everything else, and any new finding, goes to v0.0.12 unless it blocks the release
+(`ZyDDT/PENDIENTES.md` § 2).
+
+## Part II — What remains before the tag
+
+| | What | State on 2026-10-31 |
+|---|---|---|
+| CHANGELOG | `[0.0.11]` completed and dated | dated 2026-11-01. It lists no known issues: one line links `ZyDDT/PENDIENTES.md` at the tag (the author, 2026-10-31) |
+| This document | Part I checked against the branch, Verification re-run | Stage 4 rewritten for `zymbol_vm.js`; Verification re-run in a fresh clone on 2026-10-31 |
+| Installers | `packaging/verify/run-local.sh --scope full`, every installer against the installed binary | **PASS 44/44** on 2026-10-31. The release workflows rehearsed the same day from the branch against a draft release: Linux (both architectures, the `.deb` verified), macOS (both) and the aarch64 static binary built; Windows built the `.msi` and stopped at the signature, as it must. The rehearsal found GLB-151, fixed |
+| The static binary | GLB-134, measured on what ships | on the rehearsal's binaries: static/`.deb` ×0.996 over the 16 programs, ×1.086 at most, steps identical. Repeated on the release's own files |
+| Sister repositories | merged before publishing — the release reads its workflows from the default branch, and the `.deb` gate clones `zyquality`'s | order: the siblings, then the interpreter, then `web` once the release exists (`agents/release_merge.md`) |
+| User documents | review markers (`> **Revisado para …`) name v0.0.5 to v0.0.10 in 53 documents, 43 of them lessons of `aprende_zymbol` | **deferred to v0.0.12** by the author on 2026-10-31: each has to be read before it is stamped |
+| `zymbol.js` | its header's version log stops at v0.0.8 | deferred with the markers; its parity paragraph is re-measured for v0.0.11 |
+
+## Verification
+
+```bash
+cargo build --release --features db
+cargo test --release --features db              # 1111 passed, 0 failed, 4 ignored
+cd ../vscode && npm ci                          # the Gate does it: ZyDDT's tmgrammar surface needs it
+cd ../zyquality && make && ./zyq suite          # all gates pass
+```
+
+| Suite | Result |
+|-------|--------|
+| `zyq consensus` | 722 files × 4 engines (`zytw`, `zyvm`, `zyjs`, `zyjsvm`): **716 agree, 0 diverge**, 6 with too few engines |
+| `zyq consensus --engines zytw,zyjs` | 722 files: 703 agree, **0 diverge**, 19 excused in `corpus.toml` — the same for `zytw,zyjsvm` |
+| `zyq expect` | 685 goldens via `run`: 685 match, **0 stale**, 0 unchecked · 31 via `check`: 31 match |
+| `zyq reject` | 57 forms × 4 engines: **57 refused everywhere**, 0 accepted somewhere |
+| `zyq audit` | 722 `.zy` · 716 with goldens · 6 consensus-only · 6 excused for every engine |
+| `zyq selftest` | 56 checks, all passed |
+| `fmt` | 820 files: 772 PASS, **0 FAIL**, 48 SKIP · P1–P4 all zero |
+| `fmtcheck` | 10 LDV applications formatted, **suite unchanged** in every one · 5 pins hold |
+| `tui` | 3 cases × 2 engines: 3 agree, 0 diverge |
+| `guide` | 248 blocks, 135 tested: **135 PASS**, 0 FAIL |
+| `llm` | **89 probes PASS**, 0 FAIL · 27 of 27 rules and bullets of `LLM.md` covered |
+| `lsp` | 722 files · 14 disagreements, **0 outside the baseline** |
+| `project` | 10 LDV applications: **every golden holds**, `zytw` and `zyvm` agree on every one |
+| `addressing` | 24 cells: **24 hold**, 0 do not |
+| `messages` | Rust 955 · zyjs 570 · nothing new on the shared surface (baseline 211 of 436) |
+| `reach` | 696 diagnostics defined in the gated layers: 527 provoked, 169 not — nothing new unprovoked |
+| `bench` | 16 PASS, 0 FAIL, 0 NEW |
+| `bigbench` | 16 of 16 programs agree with Python |
+| `zyddt` | 46 axes, **1 768 cells, all agree, none known**, 194 checked against an oracle that is not ours · 12 pins, all agree · findings: **0 open**, 276 closed — 277 with GLB-151, filed after the clone was measured |
+| `zyddt premises` | 29 declared · 0 with no cell · 7 by review · 1 held elsewhere |
+| `cost` | 25 cases: **every ratio within its declared limit**, none KNOWN |
+| `course` | the course imports the playground's highlighter; no copy |
+| `web` | 17 suites pass · example pool 332 files: 216 agree, **0 diverge** |
+
+The instruction set has 172 variants (`MatchCharRange`, ZYVM-032, is the last).
+
+---
+
+*Authorship and use of AI: this document follows the convention of `README.md` § Authorship &
+AI Collaboration. Decisions about the language are the author's; the measurements and the
+writing are engineering work assisted by Claude Code under the author's direction.*

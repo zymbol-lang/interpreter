@@ -21,8 +21,8 @@ fn module_is_built(module: &stdlib::StdModule) -> bool {
     if !module.feature_gated {
         return true;
     }
-    // std/db is the only gated module; the engines simply do not answer for it
-    // when built without the feature.
+    // std/db (`db`) and std/net (`http`) are the gated modules; the engines
+    // simply do not answer for them when built without the feature.
     zymbol_interpreter::stdlib_registered_names(module.path).is_some()
 }
 

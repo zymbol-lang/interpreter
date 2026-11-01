@@ -53,6 +53,8 @@
 //! a module file; a package whose entry point can't run isn't "permissive", it's broken.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+
+use crate::effects::{Effect, EffectReport, EffectUse};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -85,6 +87,8 @@ pub struct ClosureResult {
     pub root: PathBuf,
     pub files: Vec<PackagedFile>,
     pub warnings: Vec<PackageWarning>,
+    /// Every use of an AGT-4 gate in the packaged files (`effects.rs`).
+    pub effects: Vec<EffectUse>,
 }
 
 #[derive(Debug, Clone)]
@@ -250,6 +254,7 @@ pub fn compute_closure(entries: &[PathBuf]) -> std::io::Result<ClosureResult> {
     // canonical path (identity/dedup key only, never used for naming) -> visit record.
     let mut visited: HashMap<PathBuf, Visited> = HashMap::new();
     let mut warnings: Vec<PackageWarning> = Vec::new();
+    let mut effects: Vec<EffectUse> = Vec::new();
 
     for entry in entries {
         let abs_entry = lexical_absolute(entry)?;
@@ -257,11 +262,13 @@ pub fn compute_closure(entries: &[PathBuf]) -> std::io::Result<ClosureResult> {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
-        walk_entry(&abs_entry, &script_base, &mut visited, &mut warnings);
+        walk_entry(&abs_entry, &script_base, &mut visited, &mut warnings, Walk::Package, &mut effects);
     }
+    effects.sort();
+    effects.dedup();
 
     if visited.is_empty() {
-        return Ok(ClosureResult { root: PathBuf::from("."), files: Vec::new(), warnings });
+        return Ok(ClosureResult { root: PathBuf::from("."), files: Vec::new(), warnings, effects });
     }
 
     let root = common_ancestor(visited.values().filter_map(|v| v.abs.parent()));
@@ -337,7 +344,41 @@ pub fn compute_closure(entries: &[PathBuf]) -> std::io::Result<ClosureResult> {
         warnings.push(PackageWarning { file: PathBuf::new(), kind: WarningKind::Unreached(unreached) });
     }
 
-    Ok(ClosureResult { root, files, warnings })
+    Ok(ClosureResult { root, files, warnings, effects })
+}
+
+/// What a walk is for. Packaging collects the files to ship, and is permissive about
+/// what it cannot ship; the effect surface (`effects.rs`) must read every file that can
+/// run, so it follows an absolute import and resolves a `</ />` from every script
+/// directory that reaches it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Walk {
+    Package,
+    Effects,
+}
+
+/// The effect surface of one entry file: `effects::effects_of`.
+pub(crate) fn walk_for_effects(entry: &Path) -> std::io::Result<EffectReport> {
+    let abs_entry = lexical_absolute(entry)?;
+    let script_base = abs_entry.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let mut visited: HashMap<PathBuf, Visited> = HashMap::new();
+    let mut warnings: Vec<PackageWarning> = Vec::new();
+    let mut uses: Vec<EffectUse> = Vec::new();
+    walk_entry(&abs_entry, &script_base, &mut visited, &mut warnings, Walk::Effects, &mut uses);
+    uses.sort();
+    uses.dedup();
+    let mut unverified: Vec<(PathBuf, String)> = warnings
+        .into_iter()
+        .filter_map(|w| match w.kind {
+            WarningKind::ModuleNotFound { module } => Some((w.file, format!("module not found: {module}"))),
+            WarningKind::ParseError { detail } => Some((w.file, format!("does not parse: {detail}"))),
+            WarningKind::ExecuteMissing { path } => Some((w.file, format!("`</ {path} />` not found"))),
+            _ => None,
+        })
+        .collect();
+    unverified.sort();
+    unverified.dedup();
+    Ok(EffectReport { uses, unverified })
 }
 
 fn walk_entry(
@@ -345,14 +386,35 @@ fn walk_entry(
     entry_script_base: &Path,
     visited: &mut HashMap<PathBuf, Visited>,
     warnings: &mut Vec<PackageWarning>,
+    walk: Walk,
+    effects: &mut Vec<EffectUse>,
 ) {
     // (abs path to visit, script_base to resolve any </ /> inside it against)
     let mut queue: VecDeque<(PathBuf, PathBuf)> = VecDeque::new();
     queue.push_back((entry_abs.to_path_buf(), entry_script_base.to_path_buf()));
+    // A file holding `</ />` and every script directory it has been resolved from — the
+    // effect walk resolves it again from each new one (W004 says why they differ).
+    let mut execute_bases: HashSet<(PathBuf, PathBuf)> = HashSet::new();
 
     while let Some((abs, script_base)) = queue.pop_front() {
         let canonical = abs.canonicalize().unwrap_or_else(|_| abs.clone());
         if let Some(existing) = visited.get(&canonical) {
+            if walk == Walk::Effects
+                && existing.has_execute
+                && execute_bases.insert((canonical.clone(), script_base.clone()))
+            {
+                if let Ok(source) = fs::read_to_string(&abs) {
+                    let (tokens, _) = Lexer::new(&source, FileId(0)).tokenize();
+                    for tok in &tokens {
+                        if let TokenKind::ExecuteCommand(raw) = &tok.kind {
+                            let (raw_path, _, _) = zymbol_common::shell::split_execute(raw);
+                            if !raw_path.is_empty() {
+                                handle_execute(&abs, &script_base, &raw_path, &mut queue, warnings);
+                            }
+                        }
+                    }
+                }
+            }
             if existing.abs != abs {
                 warnings.push(PackageWarning {
                     file: abs.clone(),
@@ -387,6 +449,9 @@ fn walk_entry(
         // still scanned below even for a file with e.g. an unterminated string elsewhere.
 
         let has_execute = tokens.iter().any(|t| matches!(t.kind, TokenKind::ExecuteCommand(_)));
+        if has_execute {
+            execute_bases.insert((canonical.clone(), script_base.clone()));
+        }
         visited.insert(
             canonical,
             Visited { abs: abs.clone(), script_base: script_base.clone(), has_execute },
@@ -394,9 +459,14 @@ fn walk_entry(
 
         let file_dir = abs.parent().unwrap_or(Path::new("."));
 
+        // `script_base.join("./x.zy")` keeps the `./`; the surface names a file once.
+        let shown = lexical_absolute(&abs).unwrap_or_else(|_| abs.clone());
+        let mut used = |effect: Effect, line: u32| effects.push(EffectUse { file: shown.clone(), line, effect });
         for tok in &tokens {
+            let line = tok.span.start.line;
             match &tok.kind {
                 TokenKind::ExecuteCommand(raw) => {
+                    used(Effect::Sub, line);
                     // The first word is the file; the rest are its arguments (D10).
                     let (raw_path, _, _) = zymbol_common::shell::split_execute(raw);
                     if raw_path.is_empty() {
@@ -405,8 +475,11 @@ fn walk_entry(
                     handle_execute(&abs, &script_base, &raw_path, &mut queue, warnings);
                 }
                 TokenKind::BashOpen => {
+                    used(Effect::Shell, line);
                     warnings.push(PackageWarning { file: abs.clone(), kind: WarningKind::BashExec });
                 }
+                TokenKind::Input | TokenKind::KeyBlock | TokenKind::KeyNonBlock => used(Effect::Stdin, line),
+                TokenKind::CliArgsCapture => used(Effect::Argv, line),
                 _ => {}
             }
         }
@@ -426,7 +499,11 @@ fn walk_entry(
 
         for import in &program.imports {
             if import.path.is_stdlib() {
-                if import.path.components.join("/") == "std/db" {
+                let std_path = import.path.components.join("/");
+                if let Some(effect) = Effect::of_stdlib(&std_path) {
+                    used(effect, import.span.start.line);
+                }
+                if std_path == "std/db" {
                     warnings.push(PackageWarning { file: abs.clone(), kind: WarningKind::StdDb });
                 }
                 continue;
@@ -436,7 +513,10 @@ fn walk_entry(
                     file: abs.clone(),
                     kind: WarningKind::AbsoluteImport { components: import.path.components.join("/") },
                 });
-                continue;
+                // Packaging cannot ship it; the effect surface must still read it.
+                if walk == Walk::Package {
+                    continue;
+                }
             }
             match import.path.resolve_from(file_dir) {
                 // Imports inherit the *containing file's* directory for further resolution,

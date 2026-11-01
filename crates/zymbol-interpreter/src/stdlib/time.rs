@@ -40,7 +40,7 @@ use zymbol_span::Span;
 
 /// A soft `##Time`: the call was well formed and the data was not.
 fn soft(message: String) -> Value {
-    Value::Error(ErrorValue::new("Time", message))
+    Value::error(ErrorValue::new("Time", message))
 }
 
 /// A hard error: this call could not be made at all.
@@ -84,8 +84,7 @@ fn parts_value(p: &t::Parts) -> Value {
     Value::named_tuple(
         t::parts_fields(p)
             .into_iter()
-            .map(|(k, v)| (k.to_string(), Value::Int(v)))
-            .collect(),
+            .map(|(k, v)| (k.to_string(), Value::Int(v))),
     )
 }
 
@@ -100,7 +99,7 @@ fn time_now(_args: Vec<Value>, _span: Span) -> Result<Value> {
 fn time_today(args: Vec<Value>, span: Span) -> Result<Value> {
     let zone = trailing_zone(&args, 0).map_err(|_| hard("today", "an optional zone String", span))?;
     Ok(match t::call_today(zone) {
-        Ok(s) => Value::String(s),
+        Ok(s) => Value::String(s.into()),
         Err(e) => soft(e),
     })
 }
@@ -146,7 +145,7 @@ fn time_format(args: Vec<Value>, span: Span) -> Result<Value> {
     let pattern = as_text(args.get(1)).ok_or_else(|| hard("format", expected, span))?;
     let zone = trailing_zone(&args, 2).map_err(|_| hard("format", expected, span))?;
     Ok(match t::call_format(epoch, pattern, zone) {
-        Ok(s) => Value::String(s),
+        Ok(s) => Value::String(s.into()),
         Err(e) => soft(e),
     })
 }
@@ -217,7 +216,7 @@ mod tests {
     }
 
     fn s(text: &str) -> Value {
-        Value::String(text.to_string())
+        Value::String(text.into())
     }
 
     #[test]
@@ -251,8 +250,8 @@ mod tests {
                     names,
                     ["year", "month", "day", "hour", "minute", "second", "millisecond", "weekday", "offset"]
                 );
-                assert_eq!(fields[0].1, Value::Int(2026));
-                assert_eq!(fields[7].1, Value::Int(7)); // a Sunday
+                assert_eq!(fields[0], Value::Int(2026));
+                assert_eq!(fields[7], Value::Int(7)); // a Sunday
             }
             other => panic!("expected a dictionary, got {other:?}"),
         }

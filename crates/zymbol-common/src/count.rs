@@ -69,6 +69,16 @@ pub fn make_mut<T: Clone>(rc: &mut Rc<Vec<T>>) -> &mut Vec<T> {
     Rc::make_mut(rc)
 }
 
+/// `make_mut` for a dictionary, counted the same way: a write to one with
+/// another owner copies every pair.
+#[inline]
+pub fn make_mut_dict<V: Clone>(rc: &mut Rc<crate::Dict<V>>) -> &mut crate::Dict<V> {
+    if Rc::strong_count(rc) != 1 || Rc::weak_count(rc) != 0 {
+        copied(rc.len());
+    }
+    Rc::make_mut(rc)
+}
+
 /// The five counters at one moment.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Counts {

@@ -20,7 +20,7 @@ use zymbol_ast::{
     CollectionAppendExpr, CollectionContainsExpr, CollectionFindAllExpr,
     CollectionInsertExpr, CollectionLengthExpr,
     CollectionRemoveAllExpr, CollectionRemoveAtExpr, CollectionRemoveRangeExpr,
-    CollectionRemoveValueExpr, CollectionSliceExpr, CollectionUpdateExpr, Expr,
+    CollectionRemoveValueExpr, CollectionSliceExpr, CollectionUpdateExpr, DeepIndexExpr, Expr,
 };
 use crate::{Interpreter, Result, RuntimeError, Value};
 use std::io::Write;
@@ -58,7 +58,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(ref arr) => Ok(Value::Int(arr.len() as i64)),
             Value::Tuple(ref tup) => Ok(Value::Int(tup.len() as i64)),
             Value::NamedTuple(ref fields) => Ok(Value::Int(fields.len() as i64)),
-            Value::String(ref s) => Ok(Value::Int(if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 })),
+            Value::String(ref s) => Ok(Value::Int(s.char_len() as i64)),
             _ => Err(RuntimeError::kinded(
                 "Type",
                 format!(
@@ -100,8 +100,8 @@ impl<W: Write> Interpreter<W> {
             )),
             Value::String(s) => {
                 match element {
-                    Value::Char(c) => s.push(c),
-                    Value::String(ref suffix) => s.push_str(suffix),
+                    Value::Char(c) => s.edit().push(c),
+                    Value::String(ref suffix) => s.edit().push_str(suffix),
                     _ => return Err(RuntimeError::kinded(
                         "Type",
                         format!("$+ on string requires char or string element, got {}", element.type_label()),
@@ -140,10 +140,11 @@ impl<W: Write> Interpreter<W> {
         if let (Value::NamedTuple(fields), Value::String(key)) =
             (&mut *collection, &index_value)
         {
-            match fields.iter().position(|(k, _)| k == key) {
-                Some(i) => { zymbol_common::count::make_mut(fields).remove(i); }
+            // By hash, and `shift_remove` so the rest keep their order (GLB-132).
+            match fields.get_index_of(key.as_str()) {
+                Some(i) => { zymbol_common::count::make_mut_dict(fields).shift_remove_index(i); }
                 None => {
-                    let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                    let available: Vec<String> = fields.keys().cloned().collect();
                     return Err(RuntimeError::kinded(
                         "Key",
                         crate::variables::missing_key_msg(key, &available),
@@ -235,7 +236,7 @@ impl<W: Write> Interpreter<W> {
                         span: span,
                     });
                 }
-                zymbol_common::count::make_mut(fields).remove(i as usize);
+                zymbol_common::count::make_mut_dict(fields).shift_remove_index(i as usize);
                 Ok(())
             }
             Value::String(s) => {
@@ -306,7 +307,7 @@ impl<W: Write> Interpreter<W> {
                         op.span,
                     )),
                 };
-                Ok(Value::Bool(fields.iter().any(|(k, _)| *k == key)))
+                Ok(Value::Bool(fields.contains_key(key.as_str())))
             }
             Value::String(ref s) => {
                 // Check if string contains character or substring
@@ -342,6 +343,92 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
+    /// The steps of `m[i>j>…]`, left to right. A step is an ordinary
+    /// expression, and its VALUE says how to address: Int → position, String →
+    /// dictionary key. Same rule as `d[clave]`, one level down.
+    pub(crate) fn eval_nav_steps(&mut self, di: &DeepIndexExpr, span: zymbol_span::Span) -> Result<Vec<Value>> {
+        let mut indices: Vec<Value> = Vec::with_capacity(di.path.steps.len());
+        for step in &di.path.steps {
+            match self.eval_expr(&step.index)? {
+                v @ (Value::Int(_) | Value::String(_)) => indices.push(v),
+                other => return Err(RuntimeError::kinded(
+                    "Type",
+                    format!(
+                        "a navigation step is a position (Int) or a dictionary key (String), got {}",
+                        other.type_label()
+                    ),
+                    span,
+                )),
+            }
+        }
+        Ok(indices)
+    }
+
+    /// `m[i>j>…]$~ v` on `m` where it lives — the receiver of the statement,
+    /// handed over by `assign_update` (GLB-140). The path is checked first,
+    /// reading and copying nothing; a path of arrays, tuples and dictionaries
+    /// whose every step is there is then written level by level, each level
+    /// copied only if somebody else holds it. Anything else — a text on the
+    /// way, a step that is not there, a position into a dictionary — goes the
+    /// way it always went, `deep_update_value` on a copy, so it fails with the
+    /// same words, and a refusal leaves `col` as it was.
+    ///
+    /// It used to go that way every time: the receiver was read as a second
+    /// owner of its `Rc`, and every edit copied the outer collection whole.
+    pub(crate) fn deep_update_in(
+        col: &mut Value,
+        indices: &[Value],
+        new_val: Value,
+        span: zymbol_span::Span,
+    ) -> Result<()> {
+        let Some((last, inner)) = indices.split_last() else {
+            *col = new_val;
+            return Ok(());
+        };
+        if !deep_path_in_place(col, inner, last) {
+            let updated = deep_update_value(col.clone(), indices, new_val, span)?;
+            *col = updated;
+            return Ok(());
+        }
+        let mut at = col;
+        for step in inner {
+            at = match (at, step) {
+                (Value::Array(arr), Value::Int(n)) => {
+                    let i = position(*n, arr.len()).expect("checked by deep_path_in_place");
+                    &mut zymbol_common::count::make_mut(arr)[i]
+                }
+                (Value::Tuple(tup), Value::Int(n)) => {
+                    let i = position(*n, tup.len()).expect("checked by deep_path_in_place");
+                    &mut zymbol_common::count::make_mut(tup)[i]
+                }
+                (Value::NamedTuple(fields), Value::String(key)) => zymbol_common::count::make_mut_dict(fields)
+                    .get_mut(key.as_str())
+                    .expect("checked by deep_path_in_place"),
+                _ => unreachable!("deep_path_in_place checked every step"),
+            };
+        }
+        match (at, last) {
+            (Value::Array(arr), Value::Int(n)) => {
+                let i = position(*n, arr.len()).expect("checked by deep_path_in_place");
+                zymbol_common::count::make_mut(arr)[i] = new_val;
+            }
+            (Value::Tuple(tup), Value::Int(n)) => {
+                let i = position(*n, tup.len()).expect("checked by deep_path_in_place");
+                zymbol_common::count::make_mut(tup)[i] = new_val;
+            }
+            // A key that is not there is added, as `set_at_step` does.
+            (Value::NamedTuple(fields), Value::String(key)) => {
+                let m = zymbol_common::count::make_mut_dict(fields);
+                match m.get_mut(key.as_str()) {
+                    Some(f) => *f = new_val,
+                    None => { m.insert(key.to_string(), new_val); }
+                }
+            }
+            _ => unreachable!("deep_path_in_place checked the last step"),
+        }
+        Ok(())
+    }
+
     /// Evaluate collection update operator: collection[index]$~ value
     pub(crate) fn eval_collection_update(&mut self, op: &CollectionUpdateExpr) -> Result<Value> {
         // Deep update path: arr[i>j>k]$~ val
@@ -357,23 +444,7 @@ impl<W: Write> Interpreter<W> {
             // so a step that wrote it had its write edited instead of
             // overwritten (GLB-115).
             let root = self.eval_expr(&di.array)?;
-            // A step is an ordinary expression, and its VALUE says how to
-            // address: Int → position, String → dictionary key. Same rule as
-            // `d[clave]`, one level down.
-            let mut indices: Vec<Value> = Vec::with_capacity(di.path.steps.len());
-            for step in &di.path.steps {
-                match self.eval_expr(&step.index)? {
-                    v @ (Value::Int(_) | Value::String(_)) => indices.push(v),
-                    other => return Err(RuntimeError::kinded(
-                        "Type",
-                        format!(
-                            "a navigation step is a position (Int) or a dictionary key (String), got {}",
-                            other.type_label()
-                        ),
-                        op.span,
-                    )),
-                }
-            }
+            let indices = self.eval_nav_steps(di, op.span)?;
             let new_val = self.eval_expr(&op.value)?;
             return deep_update_value(root, &indices, new_val, op.span);
         }
@@ -393,7 +464,7 @@ impl<W: Write> Interpreter<W> {
             }
             Expr::MemberAccess(ma) if !ma.is_module_access => {
                 let c = self.eval_expr(&ma.object)?;
-                (c, Value::String(ma.field.clone()))
+                (c, Value::String(ma.field.clone().into()))
             }
             _ => {
                 return Err(RuntimeError::Generic {
@@ -526,7 +597,7 @@ impl<W: Write> Interpreter<W> {
                 for (n, c) in chars.drain(..).enumerate() {
                     if n == i { out.push_str(&piece); } else { out.push(c); }
                 }
-                *st = out;
+                *st = out.into();
                 Ok(())
             }
             Value::NamedTuple(fields) => {
@@ -545,11 +616,10 @@ impl<W: Write> Interpreter<W> {
                         span,
                     )),
                     Value::String(name) => {
-                        for (field_name, field_value) in zymbol_common::count::make_mut(fields).iter_mut() {
-                            if *field_name == name {
-                                *field_value = new_value;
-                                return Ok(());
-                            }
+                        // By hash (GLB-132): a key that is there keeps its place.
+                        if let Some(field_value) = zymbol_common::count::make_mut_dict(fields).get_mut(name.as_str()) {
+                            *field_value = new_value;
+                            return Ok(());
                         }
                         // A key that is not there gets ADDED — `forma/diccionarios.zy`
                         // § 3, and it is what `d[k] = v` does in Python.
@@ -564,7 +634,7 @@ impl<W: Write> Interpreter<W> {
                         //
                         // Without this, a JSON built piece by piece — the normal
                         // case — could not be built at all.
-                        zymbol_common::count::make_mut(fields).push((name.clone(), new_value));
+                        zymbol_common::count::make_mut_dict(fields).insert(name.to_string(), new_value);
                         Ok(())
                     }
                     // Any other kind of index is the same mistake, told in the
@@ -600,7 +670,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(arr) => arr.len(),
             Value::Tuple(tup) => tup.len(),
             Value::NamedTuple(fields) => fields.len(),
-            Value::String(s) => s.chars().count(),
+            Value::String(s) => s.char_len(),
             _ => {
                 return Err(RuntimeError::kinded(
                     "Type",
@@ -638,7 +708,13 @@ impl<W: Write> Interpreter<W> {
                 _ => {
                     return Err(RuntimeError::kinded(
                         "Type",
-                        format!("slice end must be an integer, got {}", end_value.type_label()),
+                        // The count form names its count: `$[2:2.0]` has no
+                        // end in it (GLB-129, the rule GLB-047 gave `$-[i:n]`).
+                        if op.count_based {
+                            format!("slice count must be an integer, got {}", end_value.type_label())
+                        } else {
+                            format!("slice end must be an integer, got {}", end_value.type_label())
+                        },
                         op.span,
                     ))
                 }
@@ -653,6 +729,18 @@ impl<W: Write> Interpreter<W> {
         // cannot be greater than end (1)" — two numbers that are not in their
         // program, and a relation about the wrong values (GLB-047).
         let (written_start, written_end) = (start, raw_end);
+
+        // A count never reverses, and a negative one is refused as what it is
+        // — before the bounds, as the VM's `count_span` does. It used to fall
+        // through to "slice start (2) cannot be greater than end (-1)", a
+        // relation about an end nobody wrote, in no family (GLB-129).
+        if op.count_based && raw_end < 0 {
+            return Err(RuntimeError::kinded(
+                "Index",
+                format!("slice count must be non-negative, got {}", raw_end),
+                op.span,
+            ));
+        }
 
         // Normalize indices (1-based: positive i maps to internal i-1; 0 = default start)
         let start = if start == 0 {
@@ -679,10 +767,19 @@ impl<W: Write> Interpreter<W> {
         // Validate indices
         if start < 0 || end < 0 || start > length as i64 || end > length as i64 {
             return Err(RuntimeError::Generic {
-                message: format!(
-                    "slice indices out of bounds: [{}..{}] for collection of length {}",
-                    written_start, written_end, length
-                ),
+                // Spelled as the reader spelled it: a count is `[i:n]`
+                // (GLB-129, GLB-047's rule on the form it had not reached).
+                message: if op.count_based {
+                    format!(
+                        "slice indices out of bounds: [{}:{}] for collection of length {}",
+                        written_start, written_end, length
+                    )
+                } else {
+                    format!(
+                        "slice indices out of bounds: [{}..{}] for collection of length {}",
+                        written_start, written_end, length
+                    )
+                },
                 span: op.span,
             });
         }
@@ -709,12 +806,14 @@ impl<W: Write> Interpreter<W> {
             return match collection {
                 Value::Array(arr) => Ok(Value::array(take(&arr))),
                 Value::Tuple(tup) => Ok(Value::tuple(take(&tup))),
-                Value::String(st) => {
-                    let chars: Vec<char> = st.chars().collect();
-                    Ok(Value::String(
-                        (hi_pos..=lo_pos).rev().map(|p| chars[(p - 1) as usize]).collect::<String>().into(),
-                    ))
-                }
+                // Positions `lo_pos` down to `hi_pos`: the range read backwards,
+                // borrowed — never the whole text copied to cut it (GLB-130).
+                Value::String(st) => Ok(Value::String(
+                    st.char_range((hi_pos - 1) as usize, lo_pos as usize)
+                        .chars()
+                        .rev()
+                        .collect::<String>().into(),
+                )),
                 Value::NamedTuple(fields) => Err(RuntimeError::kinded(
                     "Type",
                     dict_not_positional("d$[a..b]", fields.first().map(|(k, _)| k.as_str())),
@@ -761,13 +860,12 @@ impl<W: Write> Interpreter<W> {
                 dict_not_positional("d$[a..b]", fields.first().map(|(k, _)| k.as_str())),
                 op.span,
             )),
-            Value::String(s) => {
-                // Convert string to chars, slice, then back to string
-                let chars: Vec<char> = s.chars().collect();
-                let sliced_chars = &chars[(start as usize)..(end as usize)];
-                let slice: String = sliced_chars.iter().collect();
-                Ok(Value::String(slice))
-            }
+            // The piece, borrowed and then copied — not the whole text into a
+            // `Vec<char>` first, which made a slice cost what the text was
+            // long (GLB-130), and found from the nearest crumb (GLB-139).
+            Value::String(s) => Ok(Value::String(
+                s.char_range(start as usize, end as usize).into(),
+            )),
             _ => unreachable!(), // Already checked above
         }
     }
@@ -823,7 +921,7 @@ impl<W: Write> Interpreter<W> {
             Value::Tuple(tup) => Some(tup.as_ref().clone()),
             Value::String(s) => Some(s.chars().map(Value::Char).collect()),
             Value::NamedTuple(fields) => {
-                Some(fields.iter().map(|(k, _)| Value::String(k.clone())).collect())
+                Some(fields.iter().map(|(k, _)| Value::String(k.clone().into())).collect())
             }
             _ => None,
         }
@@ -959,7 +1057,7 @@ impl<W: Write> Interpreter<W> {
     /// anything else is a `##Type` (GLB-024 — no truthiness stands in for one).
     fn sort_comparator_says(
         &mut self,
-        func: &crate::FunctionValue,
+        func: &Box<crate::FunctionValue>,
         a: Value,
         b: Value,
         span: zymbol_span::Span,
@@ -978,7 +1076,7 @@ impl<W: Write> Interpreter<W> {
     /// the comparator says it does not AND says the right one does (GLB-073).
     fn sort_takes_left(
         &mut self,
-        func: &crate::FunctionValue,
+        func: &Box<crate::FunctionValue>,
         left: &Value,
         right: &Value,
         span: zymbol_span::Span,
@@ -1165,7 +1263,7 @@ impl<W: Write> Interpreter<W> {
             }
             Value::NamedTuple(mut fields) => {
                 if let Some(pos) = fields.iter().position(|(_, v)| self.values_equal(v, &value)) {
-                    zymbol_common::count::make_mut(&mut fields).remove(pos);
+                    zymbol_common::count::make_mut_dict(&mut fields).shift_remove_index(pos);
                 }
                 Ok(Value::NamedTuple(fields))
             }
@@ -1183,8 +1281,12 @@ impl<W: Write> Interpreter<W> {
                     }
                     Value::String(ref pattern) => {
                         let pattern_chars: Vec<char> = pattern.chars().collect();
-                        if pattern_chars.is_empty() { return Ok(Value::String(s)); }
-                        for i in 0..=(chars.len().saturating_sub(pattern_chars.len())) {
+                        // A pattern longer than the text is not in it: the range below
+                        // saturated to `0..=0` and sliced past the end (BUG-VMJS-002).
+                        if pattern_chars.is_empty() || pattern_chars.len() > chars.len() {
+                            return Ok(Value::String(s));
+                        }
+                        for i in 0..=(chars.len() - pattern_chars.len()) {
                             if chars[i..i + pattern_chars.len()] == pattern_chars[..] {
                                 let mut out = chars.clone();
                                 out.drain(i..i + pattern_chars.len());
@@ -1229,7 +1331,7 @@ impl<W: Write> Interpreter<W> {
                 Ok(Value::tuple(result))
             }
             Value::NamedTuple(fields) => {
-                let result: Vec<(String, Value)> = crate::own_fields(fields).into_iter()
+                let result: zymbol_common::Dict<Value> = crate::own_fields(fields).into_iter()
                     .filter(|(_, v)| !self.values_equal(v, &value))
                     .collect();
                 Ok(Value::named_tuple(result))
@@ -1247,7 +1349,7 @@ impl<W: Write> Interpreter<W> {
                         op.span,
                     )),
                 };
-                Ok(Value::String(result))
+                Ok(Value::String(result.into()))
             }
             _ => Err(RuntimeError::kinded(
                 "Type",
@@ -1265,7 +1367,7 @@ impl<W: Write> Interpreter<W> {
             Value::Array(a) => a.len(),
             Value::Tuple(t) => t.len(),
             Value::NamedTuple(f) => f.len(),
-            Value::String(s) => s.chars().count(),
+            Value::String(s) => s.char_len(),
             _ => return Err(RuntimeError::kinded(
                 "Type",
                 format!("$-[..] requires an array, tuple, or string, got {}", collection.type_label()),
@@ -1477,6 +1579,48 @@ fn natural_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     }
 }
 
+/// Whether `deep_update_in` can write this path where it is: every step before
+/// the last lands on an element that is there, through an array, a tuple or a
+/// dictionary, and the last one addresses an element of an array or a tuple
+/// that is there, or a key of a dictionary — which is added if it is not. Any
+/// other shape is `deep_update_value`'s, errors included.
+fn deep_path_in_place(col: &Value, inner: &[Value], last: &Value) -> bool {
+    let mut at = col;
+    for step in inner {
+        at = match (at, step) {
+            (Value::Array(arr), Value::Int(n)) => match position(*n, arr.len()) {
+                Some(i) => &arr[i],
+                None => return false,
+            },
+            (Value::Tuple(tup), Value::Int(n)) => match position(*n, tup.len()) {
+                Some(i) => &tup[i],
+                None => return false,
+            },
+            (Value::NamedTuple(fields), Value::String(key)) => match fields.get(key.as_str()) {
+                Some(v) => v,
+                None => return false,
+            },
+            _ => return false,
+        };
+    }
+    match (at, last) {
+        (Value::Array(arr), Value::Int(n)) => position(*n, arr.len()).is_some(),
+        (Value::Tuple(tup), Value::Int(n)) => position(*n, tup.len()).is_some(),
+        (Value::NamedTuple(_), Value::String(_)) => true,
+        _ => false,
+    }
+}
+
+/// A 1-based (or negative) position, 0-based, when it is inside `len` — the
+/// question `resolve_idx` answers, without the error it builds.
+fn position(index: i64, len: usize) -> Option<usize> {
+    if index == 0 {
+        return None;
+    }
+    let i = if index < 0 { len as i64 + index } else { index - 1 };
+    (i >= 0 && (i as usize) < len).then_some(i as usize)
+}
+
 /// Perform a pure functional deep update: set the element at `indices` path to `new_val`.
 /// Called by eval_collection_update for `arr[i>j>k]$~ val`.
 fn deep_update_value(
@@ -1499,6 +1643,12 @@ fn deep_update_value(
             span,
         ));
     }
+    // The last step into a dictionary writes its key whether or not it is
+    // there, as `d["k"]$~ v` does: reading it first made an absent key fail
+    // instead of being added — in the tree-walker only (ZYTW-018).
+    if indices.len() == 1 && matches!((&col, idx), (Value::NamedTuple(_), Value::String(_))) {
+        return set_at_step(col, idx, new_val, span);
+    }
     let sub = get_at_step(&col, idx, span)?;
     let updated_sub = deep_update_value(sub, &indices[1..], new_val, span)?;
     set_at_step(col, idx, updated_sub, span)
@@ -1508,10 +1658,10 @@ fn deep_update_value(
 /// 1-based position on anything else.
 fn get_at_step(col: &Value, step: &Value, span: zymbol_span::Span) -> Result<Value> {
     if let (Value::NamedTuple(fields), Value::String(key)) = (col, step) {
-        return match fields.iter().find(|(k, _)| k == key) {
-            Some((_, v)) => Ok(v.clone()),
+        return match fields.get(key.as_str()) {
+            Some(v) => Ok(v.clone()),
             None => {
-                let available: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+                let available: Vec<String> = fields.keys().cloned().collect();
                 Err(RuntimeError::kinded(
                     "Key",
                     crate::variables::missing_key_msg(key, &available),
@@ -1539,10 +1689,14 @@ fn get_at_step(col: &Value, step: &Value, span: zymbol_span::Span) -> Result<Val
 /// Replace the element a navigation step addresses. Adds the key when it is not
 /// there, exactly as the single-level `d["k"]$~ v` does.
 fn set_at_step(col: Value, step: &Value, new_val: Value, span: zymbol_span::Span) -> Result<Value> {
-    if let (Value::NamedTuple(mut fields), Value::String(key)) = (col.clone(), step) {
-        match zymbol_common::count::make_mut(&mut fields).iter_mut().find(|(k, _)| k == key) {
-            Some(f) => f.1 = new_val,
-            None => zymbol_common::count::make_mut(&mut fields).push((key.clone(), new_val)),
+    // By hash, and on `col` itself: it cloned `col` first, so the write had a
+    // second owner and copied the whole dictionary every time (GLB-132).
+    if let (Value::NamedTuple(_), Value::String(key)) = (&col, step) {
+        let Value::NamedTuple(mut fields) = col else { unreachable!() };
+        let m = zymbol_common::count::make_mut_dict(&mut fields);
+        match m.get_mut(key.as_str()) {
+            Some(f) => *f = new_val,
+            None => { m.insert(key.to_string(), new_val); }
         }
         return Ok(Value::NamedTuple(fields));
     }
@@ -1573,7 +1727,7 @@ fn get_at_idx(col: &Value, index: i64, span: zymbol_span::Span) -> Result<Value>
     let (len, get_fn): (usize, Box<dyn Fn(usize) -> Value>) = match col {
         Value::Array(arr)  => (arr.len(), Box::new(|i| arr[i].clone())),
         Value::Tuple(tup)  => (tup.len(), Box::new(|i| tup[i].clone())),
-        Value::NamedTuple(fields) => (fields.len(), Box::new(|i| fields[i].1.clone())),
+        Value::NamedTuple(fields) => (fields.len(), Box::new(|i| fields[i].clone())),
         // A string IS an array of characters and is walked like one
         // (decided 2026-09-22): a step into it yields the character there.
         Value::String(st) => {
@@ -1612,7 +1766,7 @@ fn set_at_idx(col: Value, index: i64, new_val: Value, span: zymbol_span::Span) -
         Value::NamedTuple(mut fields) => {
             let len = fields.len();
             let i = resolve_idx(index, len, span, "named tuple")?;
-            zymbol_common::count::make_mut(&mut fields)[i].1 = new_val;
+            zymbol_common::count::make_mut_dict(&mut fields)[i] = new_val;
             Ok(Value::NamedTuple(fields))
         }
         // The write half of the same rule. Only a char or a string goes in,
