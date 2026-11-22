@@ -296,6 +296,15 @@ tree-walker on 2026-10-11) — was fixed on 2026-10-19 and is held by `autofree/
 
 #### Bytecode File Format (`.zyb`)
 
+> **Dismissed by the author on 2026-11-22** (v0.0.12, decision D-06; it had been deferred
+> twice, from v0.0.11 stage 3.3). Measured on 2026-10-20 (`ROADMAP_V0011_ES.md` § 3.3): the
+> most a `.zyb` can save is what separates `zymbol run x.zy` from the executable of
+> `zymbol build --release`, which already carries the bytecode and starts without the front
+> end — 1 to 15 ms on GO's and Chaturanga's tests. As the oracle of the browser VM it is not
+> needed either: `web/zymbol_vm/tests/compile_diff.mjs` already proves `zymbol_vm.js`'s
+> bytecode identical to Rust's. Reopen it if an engine that only executes, with no front end,
+> is ever asked for. The text below is the proposal as it stood, kept as the reason.
+
 Introduce a first-class bytecode format so compiled programs can be distributed and
 executed independently of the source code and compilation pipeline.
 
