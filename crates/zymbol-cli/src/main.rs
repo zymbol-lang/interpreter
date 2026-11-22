@@ -23,10 +23,16 @@ use zymbol_package::{
     Manifest, PackageError, PackageMeta, ScriptEntry,
 };
 
+// `--version` prints the release's public stage after the version: "(alpha)".
+// A label, never part of the semver version (decision D-01, v0.0.12): with
+// `0.0.12-alpha` as the crate version every existing `.zyp` would stop running,
+// because a pre-release only satisfies a requirement that names the same
+// `0.0.12-…` — `engine = ">=0.0.11"` evaluates to false. Scripts that read
+// `--version` look for the version as a substring, so the suffix is safe.
 #[derive(Parser)]
 #[command(name = "zymbol")]
 #[command(about = "Zymbol-Lang compiler and interpreter", long_about = None)]
-#[command(version)]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (alpha)"))]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
