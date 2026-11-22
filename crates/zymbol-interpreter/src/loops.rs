@@ -97,6 +97,9 @@ impl<W: Write> Interpreter<W> {
         // Under --keys a delay paces nothing anyone watches; the key script's
         // WAIT counts polls, not milliseconds (D11).
         if self.headless.is_none() {
+            // A wait: the terminal gets the frame — `@~ 0` is how a program
+            // says "show it now" (GAP-ZYE-015, D-09).
+            self.show_frame();
             std::thread::sleep(std::time::Duration::from_millis(ms));
         }
         Ok(())

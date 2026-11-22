@@ -41,23 +41,50 @@ pub struct NativeTerminal {
     /// live as long as the TUI they opened — across every nested run of the
     /// VM's loop.
     tui_stack: Vec<TuiGuard>,
+    /// What the open `>>|` has drawn since the program last waited
+    /// (GAP-ZYE-015): shown by `zymbol_common::screen::show` at `<<|`, `<<|?`,
+    /// `@~`, `<<` and the end of the block. Always empty outside `>>|`.
+    frame: Vec<u8>,
 }
 
 impl NativeTerminal {
     pub fn new() -> Self {
         Self::default()
     }
+
+    fn in_tui(&self) -> bool {
+        !self.tui_stack.is_empty()
+    }
+
+    /// Inside `>>|`, into the frame; outside it, straight to the terminal.
+    fn draw(&mut self, bytes: &[u8]) {
+        if self.in_tui() {
+            zymbol_common::screen::put(&mut self.frame, bytes);
+        } else {
+            let mut out = std::io::stdout();
+            out.write_all(bytes).ok();
+            out.flush().ok();
+        }
+    }
+
+    /// The program waits: the terminal gets the frame.
+    fn show(&mut self) {
+        zymbol_common::screen::show(&mut self.frame);
+    }
 }
 
 impl Terminal for NativeTerminal {
     fn sleep(&mut self, ms: u64) {
+        self.show();
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }
 
     fn clear(&mut self) {
-        crossterm::execute!(std::io::stdout(),
+        let mut buf: Vec<u8> = Vec::new();
+        crossterm::queue!(buf,
             crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
             crossterm::cursor::MoveTo(0, 0)).ok();
+        self.draw(&buf);
     }
 
     fn size(&mut self) -> (u16, u16) {
@@ -66,6 +93,7 @@ impl Terminal for NativeTerminal {
 
     fn read_key(&mut self, blocking: bool, _out: &mut dyn Write) -> Result<char, TerminalError> {
         use crossterm::event::{self, Event};
+        self.show();
         if blocking {
             loop {
                 match event::read() {
@@ -96,7 +124,8 @@ impl Terminal for NativeTerminal {
     }
 
     fn read_line(&mut self, prompt: Option<&str>) -> Result<String, String> {
-        let in_tui = !self.tui_stack.is_empty();
+        let in_tui = self.in_tui();
+        self.show();
         if let Some(p) = prompt {
             print!("{}", p);
             std::io::stdout().flush().ok();
@@ -120,9 +149,9 @@ impl Terminal for NativeTerminal {
         host::stdout_hint(hint);
     }
 
-    /// One `>>~`: the move, the style, the text and the reset are queued into one buffer
-    /// and reach the terminal in a single write. Each used to be an `execute!` of its own,
-    /// and every `execute!` flushes, so the terminal was free to show every state in
+    /// One `>>~`: the move, the style, the text and the reset, as one piece. Inside `>>|`
+    /// it joins the frame; outside, it is one write. Each used to be an `execute!` of its
+    /// own, and every `execute!` flushes, so the terminal was free to show every state in
     /// between (GAP-ZYE-015, ZyEdit/HALLAZGOS.md). The tree-walker's `emit_positioned`
     /// writes the same bytes the same way; the two must stay alike.
     fn print_at(&mut self, at: Option<(u16, u16)>, style: Style, text: &str) {
@@ -138,11 +167,11 @@ impl Terminal for NativeTerminal {
         if style.bold || style.italic || style.underline || style.fg.is_some() || style.bg.is_some() {
             queue!(buf, st::SetAttribute(st::Attribute::Reset)).ok();
         }
-        let mut out = std::io::stdout();
-        out.write_all(&buf).ok();
-        out.flush().ok();
+        self.draw(&buf);
     }
 
+    /// `Ok(true)`: a `>>` inside the block comes to [`Terminal::write`], so that it
+    /// joins the frame in the order it was written.
     fn enter_tui(&mut self) -> Result<bool, String> {
         // The language's words when there is no terminal, as in the
         // tree-walker and zyjs (P4-3 E5, 2026-09-26).
@@ -152,6 +181,8 @@ impl Terminal for NativeTerminal {
                 return Err("failed to enable raw mode: not a terminal".to_string());
             }
         }
+        // A `>>|` inside another: what the outer one drew is shown first.
+        self.show();
         if let Err(e) = crossterm::terminal::enable_raw_mode() {
             return Err(format!("failed to enable raw mode: {}", e));
         }
@@ -165,19 +196,30 @@ impl Terminal for NativeTerminal {
         }
         self.tui_stack.push(TuiGuard);
         zymbol_common::screen::opened();
-        Ok(false)
+        Ok(true)
     }
 
     /// Pop the guard — its Drop performs cleanup. If the VM's `ExitTui` is
     /// skipped (`@:label!`, an error), the guard is dropped by `release`.
     fn exit_tui(&mut self, _out: &mut dyn Write) -> std::io::Result<()> {
+        self.show();
         self.tui_stack.pop();
         Ok(())
     }
 
-    fn write(&mut self, _text: &str) {}
+    fn write(&mut self, text: &str) {
+        self.draw(text.as_bytes());
+    }
+
+    /// `¶` in raw mode: `\n` alone moves down without going back to the first
+    /// column, so the tree-walker has always written `\r\n` here. The VM wrote
+    /// `\n` and drew `>> … ¶` as a staircase (ZYVM-033).
+    fn newline(&mut self) {
+        self.draw(b"\r\n");
+    }
 
     fn release(&mut self) {
+        self.show();
         self.tui_stack.clear();
     }
 }

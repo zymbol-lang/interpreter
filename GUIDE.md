@@ -789,6 +789,7 @@ Both engines run every primitive below, and run it the same way: the `tui` suite
 ```zymbol
 @~ 500        // pause execution for 500 milliseconds
 @~ 1000       // 1 second
+@~ 0          // no pause at all: inside >>| it shows what was drawn (see Frames, below)
 ```
 
 ### Clear Screen — `>>!`
@@ -917,6 +918,44 @@ Enters a full-screen TUI context: alternate screen + raw mode. Cleans up on exit
 
 > `>>|` errors if the process is not attached to a TTY (e.g. redirected output).
 > Use it only for interactive programs.
+
+### Frames — when the screen shows what was drawn
+
+Inside `>>|`, what a program draws (`>>`, `¶`, `>>!`, `>>~`) does not reach the screen as it
+is written. It is kept in a **frame**, and the frame is shown when the program waits:
+
+| The program | The frame is shown |
+|---|---|
+| `<<\|` or `<<\|?` | before the key is read |
+| `<<` | before the line is read |
+| `@~ n`, `@~ 0` included | before the pause |
+| leaves `>>\|` | however it leaves: at the end, by `@!` or by an error |
+
+So a whole screen appears at once, never half drawn. That includes a redraw that starts with
+`>>!`, which would otherwise flash the cleared screen first. A terminal that understands
+synchronized update (kitty, WezTerm, foot, iTerm2, Windows Terminal) paints the frame in one go.
+Any other terminal still receives it in a single write.
+
+**Show it now: `@~ 0`.** A program that draws and then computes without waiting, such as a
+game engine choosing its move, would show its screen only once the computing is over.
+`@~ 0` is a wait of no time, so it shows the frame:
+
+```zymbol
+>>| {
+    >>~ (1, 1) > "thinking…"
+    @~ 0                         // show it now: the search below waits for nothing
+    move = search(board)
+    >>~ (2, 1) > "played " move
+    <<| k
+}
+```
+
+A game loop needs nothing extra, because it waits on every turn (`<<|?` or `@~`). A frame that
+grows past 1 MiB without the program waiting is shown anyway. That limit guards memory and is
+not something a program should rely on.
+
+> Since v0.0.12. Before that, each `>>~` reached the terminal as a write of its own, so a
+> redraw could be seen while it was being drawn (GAP-ZYE-015 in `ZyEdit/HALLAZGOS.md`).
 
 ### Testing a full-screen program — `zymbol run --keys`
 

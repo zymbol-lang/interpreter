@@ -2734,7 +2734,8 @@ impl<W: Write> VM<W> {
 
                 // ── I/O ─────────────────────────────────────────────────────
                 &Instruction::Print(reg) if self.tui_captured > 0 => {
-                    // Inside `>>|` on a terminal that draws it (--keys, D11).
+                    // Inside `>>|` on a terminal that draws it: --keys (D11), or
+                    // the native one, which keeps a frame (GAP-ZYE-015).
                     let s = self.numeral_repr(&self.value_stack[base + reg as usize]);
                     self.terminal.write(&s);
                 }
@@ -2753,7 +2754,7 @@ impl<W: Write> VM<W> {
                     }
                 }
                 Instruction::PrintNewline if self.tui_captured > 0 => {
-                    self.terminal.write("\n");
+                    self.terminal.newline();
                 }
                 Instruction::PrintNewline => {
                     writeln!(self.output)?;

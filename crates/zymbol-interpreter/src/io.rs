@@ -29,12 +29,12 @@ impl<W: Write> Interpreter<W> {
                     continue;
                 }
             }
+            // Inside `>>|`, into the frame, in the order it was written.
+            if self.tui_depth > 0 {
+                self.draw(s.as_bytes());
+                continue;
+            }
             write!(self.output, "{}", s)?;
-        }
-        // In TUI mode (raw mode active) stdout is line-buffered: text without \n stays
-        // invisible until the next flush. Force flush so >> output appears immediately.
-        if self.tui_depth > 0 {
-            self.output.flush()?;
         }
         Ok(())
     }
@@ -48,8 +48,9 @@ impl<W: Write> Interpreter<W> {
             }
         }
         // In raw mode (inside >>| TUI block) \n alone doesn't return to col 1 — need \r\n.
+        // The VM wrote \n until ZYVM-033.
         if self.tui_depth > 0 {
-            write!(self.output, "\r\n")?;
+            self.draw(b"\r\n");
         } else {
             writeln!(self.output)?;
         }
@@ -90,7 +91,13 @@ impl<W: Write> Interpreter<W> {
         // at EOF (a blank line the user typed comes back as "\n"); EOF aborts so a
         // failed constraint cannot spin forever on a closed pipe.
         loop {
-            if input.prompt.is_some() {
+            // A wait: inside `>>|` the prompt joins the frame, and the frame is shown.
+            if self.tui_depth > 0 && self.headless.is_none() {
+                if input.prompt.is_some() {
+                    self.draw(prompt_text.as_bytes());
+                }
+                self.show_frame();
+            } else if input.prompt.is_some() {
                 write!(self.output, "{}", prompt_text)?;
                 self.output.flush()?;
             }
@@ -148,11 +155,14 @@ impl<W: Write> Interpreter<W> {
             h.screen.clear();
             return Ok(());
         }
-        crossterm::execute!(
-            std::io::stdout(),
+        let mut buf: Vec<u8> = Vec::new();
+        crossterm::queue!(
+            buf,
             crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
             crossterm::cursor::MoveTo(0, 0)
-        ).map_err(|e| RuntimeError::Generic { message: e.to_string(), span: cs.span })
+        ).map_err(|e| RuntimeError::Generic { message: e.to_string(), span: cs.span })?;
+        self.draw(&buf);
+        Ok(())
     }
 
     /// Terminal size query: >>?  — returns (rows, cols)
@@ -193,6 +203,8 @@ impl<W: Write> Interpreter<W> {
             self.set_variable(&ki.variable, Value::Char(ch));
             return Ok(());
         }
+        // A wait: the terminal gets the frame.
+        self.show_frame();
         let ch = if ki.blocking {
             loop {
                 match event::read().map_err(|e| RuntimeError::Generic {
@@ -258,8 +270,10 @@ impl<W: Write> Interpreter<W> {
                         return Ok(());
                     }
                     let text = self.positioned_text(&op.items)?;
-                    return emit_positioned(at, get_int(2).unwrap_or(0), get_int(3), get_int(4), &text)
-                        .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span });
+                    let bytes = positioned(at, get_int(2).unwrap_or(0), get_int(3), get_int(4), &text)
+                        .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
+                    self.draw(&bytes);
+                    return Ok(());
                 }
             }
         }
@@ -308,8 +322,28 @@ impl<W: Write> Interpreter<W> {
             _ => None,
         };
         let text = self.positioned_text(&op.items)?;
-        emit_positioned(at, get(2).unwrap_or(0), get(3), get(4), &text)
-            .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })
+        let bytes = positioned(at, get(2).unwrap_or(0), get(3), get(4), &text)
+            .map_err(|e| RuntimeError::Generic { message: e.to_string(), span: op.span })?;
+        self.draw(&bytes);
+        Ok(())
+    }
+
+    /// Bytes for the real terminal: inside `>>|`, into the frame; outside it,
+    /// written at once, as they always were.
+    fn draw(&mut self, bytes: &[u8]) {
+        if self.tui_depth > 0 {
+            zymbol_common::screen::put(&mut self.frame, bytes);
+        } else {
+            let mut out = std::io::stdout();
+            out.write_all(bytes).ok();
+            out.flush().ok();
+        }
+    }
+
+    /// The program waits, or its `>>|` ends: the terminal gets the frame
+    /// (GAP-ZYE-015). The VM's native terminal does the same at the same points.
+    pub(crate) fn show_frame(&mut self) {
+        zymbol_common::screen::show(&mut self.frame);
     }
 
     /// The items of a `>>~`, evaluated and joined before anything is written — as the VM
@@ -354,6 +388,8 @@ impl<W: Write> Interpreter<W> {
                 });
             }
         }
+        // A `>>|` inside another: what the outer one drew is shown first.
+        self.show_frame();
         terminal::enable_raw_mode().map_err(|e| RuntimeError::Generic {
             message: format!("failed to enable raw mode: {}", e), span: tb.span,
         })?;
@@ -364,6 +400,9 @@ impl<W: Write> Interpreter<W> {
         self.tui_depth += 1;
         zymbol_common::screen::opened();
         let result = self.execute_block(&tb.body);
+        // However the block ended — normally, by `@!`, by an error — what it
+        // drew reaches the terminal before the terminal is given back.
+        self.show_frame();
         self.tui_depth -= 1;
         let _ = execute!(std::io::stdout(), terminal::LeaveAlternateScreen, cursor::Show);
         let _ = terminal::disable_raw_mode();
@@ -372,14 +411,14 @@ impl<W: Write> Interpreter<W> {
     }
 }
 
-/// One `>>~` on the real terminal: the move, the style, the text and the reset are
-/// queued into one buffer and reach the terminal in a single write.
+/// One `>>~` on the real terminal: the move, the style, the text and the reset, as one
+/// piece — into the frame inside `>>|`, one write outside it.
 ///
 /// Each piece used to be an `execute!` of its own, and every `execute!` flushes, so one
 /// `>>~` with colours was four writes and the terminal was free to show every state in
 /// between — a redraw was seen while it was drawn (GAP-ZYE-015, ZyEdit/HALLAZGOS.md). The
 /// VM's host writes the same bytes the same way; the two must stay alike.
-fn emit_positioned(at: Option<(i64, i64)>, bks: i64, fg: Option<i64>, bg: Option<i64>, text: &str) -> std::io::Result<()> {
+fn positioned(at: Option<(i64, i64)>, bks: i64, fg: Option<i64>, bg: Option<i64>, text: &str) -> std::io::Result<Vec<u8>> {
     use crossterm::{queue, cursor, style};
     let mut buf: Vec<u8> = Vec::new();
     if let Some((r, c)) = at { queue!(buf, cursor::MoveTo(c as u16 - 1, r as u16 - 1))?; }
@@ -392,9 +431,7 @@ fn emit_positioned(at: Option<(i64, i64)>, bks: i64, fg: Option<i64>, bg: Option
     if bks & 7 != 0 || fg.is_some() || bg.is_some() {
         queue!(buf, style::SetAttribute(style::Attribute::Reset))?;
     }
-    let mut out = std::io::stdout();
-    out.write_all(&buf)?;
-    out.flush()
+    Ok(buf)
 }
 
 /// Is this a key going *down*, as opposed to coming back up?

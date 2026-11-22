@@ -64,14 +64,19 @@ pub trait Terminal {
     fn input_hint(&mut self, hint: &str);
     /// `>>~`: `at` is (row, column), counted from 1, as the program wrote them.
     fn print_at(&mut self, at: Option<(u16, u16)>, style: Style, text: &str);
-    /// The start of a `>>|` block. `Ok(true)` when this terminal is virtual
-    /// and a `>>` inside the block is drawn on it with [`Terminal::write`]
-    /// instead of going to the VM's output. `Err` is raised.
+    /// The start of a `>>|` block. `Ok(true)` when a `>>` inside the block is
+    /// drawn on this terminal with [`Terminal::write`] and [`Terminal::newline`]
+    /// instead of going to the VM's output: a virtual terminal, or one that
+    /// keeps a frame (GAP-ZYE-015). `Err` is raised.
     fn enter_tui(&mut self) -> Result<bool, String>;
     /// The end of a `>>|` block.
     fn exit_tui(&mut self, out: &mut dyn Write) -> std::io::Result<()>;
     /// A `>>` inside a block that [`Terminal::enter_tui`] said it draws.
     fn write(&mut self, text: &str);
+    /// A `¶` inside such a block.
+    fn newline(&mut self) {
+        self.write("\n");
+    }
     /// The run is over, however it ended: give the terminal back.
     fn release(&mut self);
 }

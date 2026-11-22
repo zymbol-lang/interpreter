@@ -858,6 +858,10 @@ pub struct Interpreter<W: Write> {
     /// `zymbol run --keys` (D11): the screen `>>|` draws on and the keys `<<|`
     /// reads, when there is no terminal to take over. `None` is the ordinary run.
     pub(crate) headless: Option<zymbol_common::vscreen::Headless>,
+    /// What the open `>>|` has drawn on the real terminal since the program last
+    /// waited (GAP-ZYE-015): shown by `zymbol_common::screen::show` at `<<|`,
+    /// `<<|?`, `@~`, `<<` and the end of the block. Always empty outside `>>|`.
+    pub(crate) frame: Vec<u8>,
     /// TCO support: name of the currently executing function (None = not in a function).
     /// Used to detect `<~ f(same_args)` tail-call patterns.
     pub(crate) current_function: Option<String>,
@@ -1471,6 +1475,7 @@ impl Interpreter<std::io::Stdout> {
             try_depth: 0,
             tui_depth: 0,
             headless: None,
+            frame: Vec::new(),
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),
@@ -1531,6 +1536,7 @@ impl<W: Write> Interpreter<W> {
             try_depth: 0,
             tui_depth: 0,
             headless: None,
+            frame: Vec::new(),
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),

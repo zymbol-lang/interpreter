@@ -22,6 +22,14 @@ The first release announced as a **public alpha**. Its theme is the terminal and
   `["b", "A", "a", "B"]` was `[a, A, b, B]` there and `[A, B, a, b]` everywhere else — and
   compared texts with `<` by UTF-16 code unit, so `"😀" < "～"` was `#1` (D-05; BUG-TET-001,
   ZYJS-073).
+- **Inside `>>|`, the screen shows whole frames.** What a program draws (`>>`, `¶`, `>>!`,
+  `>>~`) is kept, and reaches the screen when the program waits (`<<|`, `<<|?`, `<<`, `@~`)
+  or leaves the block, in one write wrapped in synchronized update (`ESC[?2026h` …
+  `ESC[?2026l`). A redraw is no longer seen while it is drawn. `@~ 0` shows the frame now,
+  for a program that draws and then computes without waiting. GO and Chaturanga write it
+  before their engines think. In all four engines: the playground draws on an offscreen
+  canvas, because the browser painted the visible one every 16 ms while a program was still
+  computing (D-09; GAP-ZYE-015).
 - `$^+`/`$^-` do not read a numeric text as a number: `["10", "9", "100"]$^+` is
   `[10, 100, 9]`. The numeric reading of `<` is not a total order mixed with other texts
   (`"2" < "10"`, `"10" < "1a"`, `"1a" < "2"`). Convert first to sort numbers (D-07).
@@ -33,6 +41,9 @@ The first release announced as a **public alpha**. Its theme is the terminal and
   between them (arrays, tuples, dictionaries, a mixed `#[…]`) with a `##Type`
   (`$^+ cannot order Array and Array`) instead of returning them untouched. In all four
   engines (D-08; GLB-152).
+- Inside `>>|`, the VM writes `¶` as CR LF, as the tree-walker always has. It wrote LF, which
+  in raw mode moves down without going back to the first column, so `>> … ¶` came out as a
+  staircase in the default engine since v0.0.11 (ZYVM-033).
 
 - `zymbol package` warns about a `zyp.toml` key the manifest does not define (`W012`)
   instead of dropping it in silence. Chaturanga and ZyBank wrote `description`; the key is

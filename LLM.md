@@ -110,7 +110,9 @@ frames. Auto-free releases a value right after its last use — invisible, never
 TUI: `@~ 500` sleep ms · `>>!` clear · `(H,W) = >>?` size (`(24,80)` with no tty) ·
 `>>~ (row,col,BKS,fg,bg) > "text"` positioned/styled (any slot omissible: `>>~ (,,,196) > "red"`) ·
 `<<| k` blocking key · `<<|? k` polling (`'\0'` if none) · `>>| { }` alternate screen + raw
-mode (errors without a tty; `<<|` needs it). Arrows arrive as `'↑' '↓' '←' '→'`.
+mode (errors without a tty; `<<|` needs it). Arrows arrive as `'↑' '↓' '←' '→'`. Inside `>>|`
+what is drawn shows at the next wait (`<<|`, `<<|?`, `<<`, `@~`) as one frame: write `@~ 0`
+after drawing and before a long computation, or the screen appears only once it ends.
 
 Shell: `out = <\ "ls {dir}" \>` (stdout+stderr, trailing `\n` stripped).
 Sub-script: `out = </ ./sub.zy />`.
