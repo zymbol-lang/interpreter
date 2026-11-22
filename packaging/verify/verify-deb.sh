@@ -374,7 +374,10 @@ EXPECTED_RUN=$'hola\n1 2 3 \n42\n2 4 '
 # E2E suite must not be trusted — or even started — unless this is true.
 BINARY_RUNS=true
 
-RUN_TW="$("${ZYMBOL_BIN}" run "${WORK}/src/main.zy" 2>&1)"
+# `--tw` by name: since v0.0.11 the VM is the default engine, and this line,
+# written as a bare `run`, ran the VM under the label "tree-walker" — both runs of
+# this section ran the VM, and the tree-walker shipped in the package was never run.
+RUN_TW="$("${ZYMBOL_BIN}" run --tw "${WORK}/src/main.zy" 2>&1)"
 if [[ "${RUN_TW}" == "${EXPECTED_RUN}" ]]; then
     ok "run (tree-walker) produces the expected output"
 else

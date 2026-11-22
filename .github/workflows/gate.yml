@@ -96,9 +96,22 @@ jobs:
       # through. A clone of this repository alone therefore cannot run its own
       # test suite, which is worth knowing and is not something this workflow
       # should paper over.
+      # The same rule as the gate job below: THIS branch when zyquality has it,
+      # its default branch otherwise. Until v0.0.12 this step always took the
+      # default branch, so on a version branch the analyzer's fixtures were
+      # last release's corpus.
       - name: The corpus, for the analyzer's fixtures
-        run: git clone --depth 1 https://github.com/zymbol-lang/zyquality.git
-          "${{ runner.temp }}/zyquality"
+        env:
+          BRANCH: ${{ github.ref_name }}
+          DEST: ${{ runner.temp }}/zyquality
+        run: |
+          url=https://github.com/zymbol-lang/zyquality.git
+          if git clone --depth 1 --branch "$BRANCH" "$url" "$DEST" 2>/dev/null; then
+            echo "  zyquality@$BRANCH"
+          else
+            git clone --depth 1 "$url" "$DEST"
+            echo "  zyquality@(default)"
+          fi
 
       - name: Unit and integration tests
         env:
