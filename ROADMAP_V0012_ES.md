@@ -31,6 +31,9 @@ DIS-ZYE-005 bloquea las etapas 4 y 5 de ZyEdit. Lo que no es del tema entra sól
 | D-06 | 2026-11-22 | `.zyb` (3.3 de la v0.0.11, aplazada dos veces) | **Desestimado, con la razón escrita** en `ROADMAP.md` § Bytecode File Format: ahorra de 1 a 15 ms sobre `zymbol run`; `zymbol build --release` ya lleva el bytecode; como oráculo de `zymbol_vm.js` ya está `compile_diff.mjs` | `zymbol compile` explícito (~1,5 días); caché automática al estilo de `__pycache__` (~2–3 días) |
 | D-07 | 2026-11-22 | `$^+` frente a la lectura numérica de `<` (`"10" > "9"`) | **`$^+` ordena por punto de código, y se documenta.** La lectura de `<` no es un orden total: `"2" < "10"`, `"10" < "1a"` y `"1a" < "2"` son un ciclo. Para ordenar números escritos como texto, convertirlos antes. **Hecho** | `$^+` con la regla de `<` (el resultado dependería del orden de entrada); numérico sólo si todos los textos son números |
 | D-08 | 2026-11-22 | `$^+`/`$^-` sobre elementos sin orden natural | **Un `##Type`**, antes de mover nada, con una ayuda que pide un comparador, como ya hacía `<`. **Hecho** (GLB-152) | El orden lexicográfico de Python para arreglos; dejarlo y documentarlo |
+| D-09 | 2026-11-22 | La forma del «enséñalo ya» del fotograma (GAP-ZYE-015, opción 2) | **`@~ 0`: ninguna forma nueva.** Una espera de 0 ms es una espera, y vacía el fotograma por la misma regla que `<<\|`, `<<\|?`, `@~` y `<<`; GUIDE § 3b documenta el modismo. GO y Chaturanga lo escriben antes de pensar | `t::show()` en `std/term`, que hoy sólo tiene funciones puras; un símbolo nuevo (`SYMBOLS.md` § 17); un vaciado por tiempo, que no es determinista |
+| D-10 | 2026-11-22 | `engine = ">=0.0.9"` en GO, serpiente, klingon y Chaturanga | **Se queda: es verdadero.** Medido con el binario v0.0.9 de la release (suma verificada): `check` pasa en sus 65 ficheros y sus suites dan la misma salida en 0.0.9 que en 0.0.12 (21 de 21). ZyTetris pide `>=0.0.11` y falla en la 0.0.9: el suyo también es correcto | Subirlo a `>=0.0.12`, que dejaría fuera versiones en que los juegos corren |
+| D-11 | 2026-11-22 | El workflow de Windows, en rojo en cada release porque se detiene ante la firma | **La firma, «skipped».** El build y el artefacto sin firmar en verde; el job de firma sólo corre con los secretos de SignPath y, sin ellos, sale omitido; un resumen del run dice que la firma manual está pendiente | Dejarlo en rojo; verde con un `::warning::`, que dejaría salir en verde una release sin `.msi` |
 
 D-05, D-07 y D-08 se implementaron juntas el 2026-11-22: `ZyDDT/HALLAZGOS/GLOBAL.md` § GLB-152 (los cuatro motores no
 ordenaban los `Char` y devolvían intacto lo que no tiene orden) y `ZyDDT/HALLAZGOS/zyjs.md` § ZYJS-073 (`<` entre textos en
@@ -51,8 +54,8 @@ Lo comprobado el 2026-11-22 lleva esa fecha. Las filas de `ZyDDT/PENDIENTES.md` 
 | El job de pruebas unitarias de `gate.yml` clona `zyquality` sin rama | `interpreter/.github/workflows/gate.yml`, línea 100 | mecánico |
 | `verify-deb.sh` rotula su prueba «run (tree-walker)» cuando el motor por defecto es la VM | `interpreter/packaging/verify/verify-deb.sh`, líneas 379 y 381 | mecánico |
 | `zymbol package` pierde la `description` del manifiesto | `interpreter/crates/zymbol-package/` | mecánico |
-| GO, serpiente, klingon y Chaturanga piden `engine = ">=0.0.9"` en su `zyp.toml` y en su `.zyp` del playground | cada repositorio y `web/examples/games/` | por decidir: si siguen corriendo en la 0.0.9, el requisito es verdadero |
-| El workflow de Windows sale en rojo en cada release: se detiene a propósito ante la firma | `release-windows.yml` | por decidir: rojo, o aviso |
+| GO, serpiente, klingon y Chaturanga piden `engine = ">=0.0.9"` en su `zyp.toml` y en su `.zyp` del playground | cada repositorio y `web/examples/games/` | **cerrado por D-10**: es verdadero |
+| El workflow de Windows sale en rojo en cada release: se detiene a propósito ante la firma | `release-windows.yml` | **D-11**: la firma, «skipped» |
 | Las Actions avisan de que Node 20 está obsoleto (`checkout@v4`, `upload-artifact@v4`) | los workflows | mecánico |
 | Los marcadores «Revisado para» de 53 documentos y el registro de versiones de la cabecera de `zymbol.js` | `aprende_zymbol/`, `web/` | aplazados por el autor el 2026-10-31: cada documento se lee antes de marcarlo |
 
@@ -60,7 +63,7 @@ Lo comprobado el 2026-11-22 lleva esa fecha. Las filas de `ZyDDT/PENDIENTES.md` 
 
 | Id | Qué | Origen |
 |---|---|---|
-| GAP-ZYE-015 | El fotograma: la opción 2, ya decidida por el autor para esta versión | `ZyEdit/HALLAZGOS.md` |
+| GAP-ZYE-015 | El fotograma: la opción 2, ya decidida por el autor para esta versión; su «enséñalo ya» es `@~ 0` (D-09) | `ZyEdit/HALLAZGOS.md` |
 | DIS-ZYE-001 | Inicio, Fin, RePág, AvPág, Supr, F1–F12 y Shift+Tab llegan como `0d0` | `ZyEdit/HALLAZGOS.md` |
 | DIS-ZYE-002 | Shift y Ctrl sobre una flecha se pierden | `ZyEdit/HALLAZGOS.md` |
 | DIS-ZYE-003 | Ctrl+/, Ctrl+Espacio y Alt+letra llegan como un carácter imprimible | `ZyEdit/HALLAZGOS.md` |

@@ -5,7 +5,7 @@ sign repositories, not upstream artifacts) and macOS is deliberately unsigned �
 [macOS](#macos-unsigned-on-purpose) at the end.
 
 Status as of v0.0.8 (2026-08-02): **signing is manual.** The repository has no SignPath
-secrets, so `release-windows.yml` stops before signing and publishes nothing. Someone signs
+secrets, so `release-windows.yml` skips its signing job and publishes nothing. Someone signs
 the `.msi` in the SignPath portal and uploads it by hand. This document is the checklist to
 make that automatic; every step is done in the SignPath web UI unless stated otherwise.
 
@@ -33,14 +33,21 @@ sends it a signing request over an API. SignPath is one such service; Azure Arti
 2. packages it into `zymbol_lang_vX.Y.Z_x86_64_windows.msi` with WiX,
 3. copies it to the fixed name `zymbol-lang.msi` and uploads it as the GitHub artifact
    `windows-msi-unsigned`,
-4. **fails** unless `SIGNPATH_API_TOKEN` and `SIGNPATH_ORG_ID` are set,
-5. submits that artifact to SignPath and waits for the signed file,
+4. checks whether `SIGNPATH_API_TOKEN` and `SIGNPATH_ORG_ID` are set — and when they are
+   not, **skips** the signing job, publishes nothing, and writes in the run summary how to
+   sign by hand and upload,
+5. in the job `sign-and-upload`, which runs only with both secrets: submits that artifact
+   to SignPath and waits for the signed file,
 6. verifies with `Get-AuthenticodeSignature` that the file coming back is actually signed,
 7. uploads the `.msi` and its `SHA256_x86_64_windows_msi.txt` to the release.
 
 Steps 4-6 exist because of what happened in v0.0.8: the signing step carried
 `continue-on-error: true` plus an unsigned fallback, the secrets were missing, and the
-release shipped unsigned binaries behind a green checkmark.
+release shipped unsigned binaries behind a green checkmark. Until v0.0.11, step 4 *failed*
+the run instead of skipping: nothing unsigned shipped, but every release carried a red run
+that had to be known to be harmless. Since v0.0.12 (decision D-11) the missing secrets are
+a skipped job, and red means a failure again. What makes an unsigned upload impossible is
+unchanged: the upload is a step of the signing job, after step 6.
 
 The identifiers the workflow sends — change these in SignPath, or in the workflow, so that
 they match:

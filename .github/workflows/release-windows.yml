@@ -17,6 +17,10 @@ jobs:
   build-windows:
     name: Windows x86_64 installer
     runs-on: windows-latest
+    outputs:
+      signable:    ${{ steps.signable.outputs.ok }}
+      artifact-id: ${{ steps.upload-unsigned-msi.outputs.artifact-id }}
+      msi-asset:   ${{ steps.msi-name.outputs.name }}
 
     steps:
       - name: Checkout
@@ -69,6 +73,11 @@ jobs:
 
           echo "MSI_ASSET=$MSI_ASSET" >> "$GITHUB_ENV"
 
+      - name: Name the MSI for the signing job
+        id: msi-name
+        shell: bash
+        run: echo "name=${MSI_ASSET}" >> "$GITHUB_OUTPUT"
+
       - name: Rename MSI to fixed name for signing
         shell: bash
         run: cp "${MSI_ASSET}" zymbol-lang.msi
@@ -87,25 +96,51 @@ jobs:
       # published unsigned binaries instead. That is how v0.0.8 shipped: the run
       # was green, the step reported success (continue-on-error always does), and
       # the unsigned .exe and .msi sat on the release page until someone hashed
-      # them. Fail here instead, and say what to do about it.
-      - name: Require signing credentials
+      # them. So nothing unsigned is ever uploaded — but until v0.0.11 the absence
+      # of the secrets was reported as a FAILURE, and every release carried a red
+      # run that had to be known to be harmless (10-12, 10-31, 11-01). A red that
+      # means "as designed" teaches everyone to ignore red. Since v0.0.12 (D-11)
+      # the signing job below runs only when the secrets exist, shows as SKIPPED
+      # otherwise, and this summary says what to do by hand.
+      - name: Is signing possible here
+        id: signable
         shell: bash
         env:
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
           SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
         run: |
-          missing=()
-          [[ -n "${SIGNPATH_API_TOKEN}" ]] || missing+=(SIGNPATH_API_TOKEN)
-          [[ -n "${SIGNPATH_ORG_ID}" ]]    || missing+=(SIGNPATH_ORG_ID)
-          if [[ ${#missing[@]} -gt 0 ]]; then
-            echo "::error::Missing repository secret(s): ${missing[*]}"
-            echo "::error::Nothing is uploaded — this workflow does not publish unsigned Windows binaries."
-            echo "::error::Either configure the secrets (packaging/SIGNING.md), or sign by hand in the SignPath portal and upload with:"
-            echo "::error::  sha256sum -b <msi> > SHA256_x86_64_windows_msi.txt"
-            echo "::error::  gh release upload <tag> <msi> SHA256_x86_64_windows_msi.txt --clobber"
-            exit 1
+          if [[ -n "${SIGNPATH_API_TOKEN}" && -n "${SIGNPATH_ORG_ID}" ]]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          {
+            echo "## MSI built — NOT signed, NOT uploaded"
+            echo
+            echo "The SignPath secrets are not configured (\`packaging/SIGNING.md\`), so the signing job is skipped."
+            echo "This workflow never publishes an unsigned Windows binary."
+            echo
+            echo "1. Download the artifact \`windows-msi-unsigned\` from this run."
+            echo "2. Sign it in the SignPath portal."
+            echo "3. Upload it, named \`${MSI_ASSET}\`:"
+            echo
+            echo '```'
+            echo "sha256sum -b ${MSI_ASSET} > SHA256_x86_64_windows_msi.txt"
+            echo "gh release upload ${TAG} ${MSI_ASSET} SHA256_x86_64_windows_msi.txt --clobber"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::MSI built and kept as an artifact; signing skipped (no SignPath secrets) — see the run summary"
 
+  sign-and-upload:
+    name: Sign the MSI and upload it
+    needs: build-windows
+    if: needs.build-windows.outputs.signable == 'true'
+    runs-on: windows-latest
+    env:
+      MSI_ASSET: ${{ needs.build-windows.outputs.msi-asset }}
+
+    steps:
       - name: Sign MSI via SignPath
         id: sign-msi
         uses: signpath/github-action-submit-signing-request@v1
@@ -115,7 +150,7 @@ jobs:
           project-slug:                 zymbol-lang
           signing-policy-slug:          release-signing
           artifact-configuration-slug:  windows-installer
-          github-artifact-id:           ${{ steps.upload-unsigned-msi.outputs.artifact-id }}
+          github-artifact-id:           ${{ needs.build-windows.outputs.artifact-id }}
           wait-for-completion:          true
           output-artifact-directory:    signed
 
@@ -142,6 +177,7 @@ jobs:
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}   # this job has no checkout to read it from
         shell: bash
         run: |
           TAG="${{ github.event.release.tag_name || inputs.tag }}"
