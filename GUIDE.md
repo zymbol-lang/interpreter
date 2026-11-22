@@ -1378,12 +1378,18 @@ a >= b    // greater than or equal
   ```
 
   No script is privileged: whatever ASCII digits do, every other script does.
-- **Lexicographic** when both sides are non-numeric text (`"abc" < "abd"` → `#1`).
+- **By code point** when two texts are not both numbers (`"abc" < "abd"` → `#1`,
+  `"Z" < "a"` → `#1`, `"10" < "1a"` → `#1`). Not by language: `Ё` (U+0401) goes
+  before `А` (U+0410), in every engine and on every machine.
 - **An error** when a number meets text that is not a number
   (`"abc" > 5` → *cannot compare string 'abc' with integer 5*), and its kind
   is `##Parse`: reading the text as a number is what failed.
 
 Chars compare by code point and Bools order `#0 < #1`.
+
+Mixed, the two readings of a text are not a total order: `"2" < "10"` (numbers),
+`"10" < "1a"` and `"1a" < "2"` (code points) is a cycle. That is why `$^+` and
+`$^-` do not sort by this rule — see [Sort](#sort).
 
 Equality is *not* part of this rule: `==` never coerces, so `"5" == 5` is `#0`
 in every engine, and so is `"५" == 5`.
@@ -2853,12 +2859,40 @@ desc = arr$^-
 >> desc ¶   // → [9, 6, 5, 4, 3, 2, 1, 1]
 ```
 
-Works on strings too — lexicographic order:
+Works on texts and characters too — **by code point**, not by language: the same
+order in every engine and on every machine. Upper case goes before lower case, and
+`Ё` (U+0401) before `А` (U+0410):
 
 ```zymbol
 words = ["banana", "apple", "cherry", "date"]
 >> words$^+ ¶    // → [apple, banana, cherry, date]
 >> words$^- ¶    // → [date, cherry, banana, apple]
+>> ["b", "A", "a", "B"]$^+ ¶    // → [A, B, a, b]
+>> ['b', 'A', 'a']$^+ ¶         // → [A, a, b]
+```
+
+A text that is a number is still a text here: `$^+` does **not** use the numeric
+reading of `<`, because mixed with other texts that reading is not a total order
+(see [Comparison](#comparison)), and a sort over it would depend on the order its
+input came in. To order numbers, convert them first:
+
+```zymbol
+t = ["10", "9", "100"]
+>> t$^+ ¶                       // → [10, 100, 9]
+>> (t$> (s -> #|s|))$^+ ¶       // → [9, 10, 100]
+```
+
+The natural order exists between numbers (Int and Float together), between texts,
+between characters and between Bools. Anything else — arrays, tuples, dictionaries,
+or a `#[…]` that mixes kinds — is a `##Type` error, raised before anything moves,
+naming the first element and the first one that cannot meet it —
+*`$^+ cannot order Array and Array`*, with the guidance
+*`help: give the order with a comparator: $^ (a, b -> …)`* on the next line:
+
+```zymbol
+m = [[2, 0], [1, 5]]
+!? { >> m$^+ ¶ } :! ##Type { >> "refused" ¶ }   // → refused
+>> m$^ (a, b -> a[1] < b[1]) ¶                 // → [[1, 5], [2, 0]]
 ```
 
 **Custom comparator** — use `$^` (no `+`/`-`) with a two-argument lambda that returns

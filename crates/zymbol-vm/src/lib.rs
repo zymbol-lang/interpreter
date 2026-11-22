@@ -4161,7 +4161,16 @@ impl<W: Write> VM<W> {
                     };
                     let mut items = arr;
                     if func_reg == u16::MAX {
-                        // Natural order
+                        // Natural order — refused, before anything moves, when two
+                        // elements have none between them (D-08).
+                        if let Some((a, b)) = vm_natural_unordered(&items) {
+                            raise!(VmError::TypeMsg(format!(
+                                "{} cannot order {} and {}\nhelp: give the order with a comparator: $^ (a, b -> …)",
+                                if ascending { "$^+" } else { "$^-" },
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
                         items.sort_by(vm_natural_cmp);
                         if !ascending {
                             items.reverse();
@@ -5787,6 +5796,11 @@ fn vm_extract_pos(val: Value) -> (Option<u16>, Option<u16>, i64, Option<i64>, Op
     (fila, col, bks, fg, bg)
 }
 
+/// The order `$^+`/`$^-` sort in: the tree-walker's `natural_cmp`. Texts and
+/// characters by code point (D-05, v0.0.12), never by the numeric reading of
+/// `<`, which is not a total order (D-07). `Equal` for anything else is NaN
+/// only: kinds with no order between them are refused beforehand by
+/// [`vm_natural_unordered`].
 fn vm_natural_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
     match (a, b) {
         (Value::Int(x), Value::Int(y))       => x.cmp(y),
@@ -5794,7 +5808,32 @@ fn vm_natural_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::Int(x), Value::Float(y))     => (*x as f64).partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
         (Value::Float(x), Value::Int(y))     => x.partial_cmp(&(*y as f64)).unwrap_or(std::cmp::Ordering::Equal),
         (Value::String(x), Value::String(y)) => x.cmp(y),
+        (Value::Char(x), Value::Char(y))     => x.cmp(y),
         (Value::Bool(x), Value::Bool(y))     => x.cmp(y),
         _                                    => std::cmp::Ordering::Equal,
     }
+}
+
+/// The kinds `$^+`/`$^-` order among themselves: the tree-walker's `natural_kind`.
+fn vm_natural_kind(v: &Value) -> Option<u8> {
+    match v {
+        Value::Int(_) | Value::Float(_) => Some(0),
+        Value::String(_) => Some(1),
+        Value::Char(_) => Some(2),
+        Value::Bool(_) => Some(3),
+        _ => None,
+    }
+}
+
+/// The first pair with no natural order between them: the tree-walker's
+/// `natural_unordered`, pair for pair (D-08, v0.0.12).
+fn vm_natural_unordered(items: &[Value]) -> Option<(&Value, &Value)> {
+    let first = items.first()?;
+    let kind = vm_natural_kind(first);
+    for other in &items[1..] {
+        if kind.is_none() || vm_natural_kind(other) != kind {
+            return Some((first, other));
+        }
+    }
+    None
 }

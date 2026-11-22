@@ -7,6 +7,40 @@ Versioning: [Semantic Versioning](https://semver.org/) (pre-1.0 series)
 
 ---
 
+## [0.0.12] — Unreleased
+
+The first release announced as a **public alpha**. Its theme is the terminal and text
+(`ROADMAP_V0012_ES.md`).
+
+### Changed
+
+- `zymbol --version` names the release stage: `zymbol 0.0.12 (alpha)`. The stage is a
+  label, not part of the version: as `0.0.12-alpha`, no existing `.zyp` would run, since a
+  pre-release satisfies no `engine = ">=…"` requirement that does not name it (D-01).
+- **Texts and characters sort by code point in every engine**, on every machine. The
+  browser's tree-walker (`zymbol.js`) sorted `$^+`/`$^-` by the browser's language —
+  `["b", "A", "a", "B"]` was `[a, A, b, B]` there and `[A, B, a, b]` everywhere else — and
+  compared texts with `<` by UTF-16 code unit, so `"😀" < "～"` was `#1` (D-05; BUG-TET-001,
+  ZYJS-073).
+- `$^+`/`$^-` do not read a numeric text as a number: `["10", "9", "100"]$^+` is
+  `[10, 100, 9]`. The numeric reading of `<` is not a total order mixed with other texts
+  (`"2" < "10"`, `"10" < "1a"`, `"1a" < "2"`). Convert first to sort numbers (D-07).
+
+### Fixed
+
+- `$^+`/`$^-` now order characters — `['b', 'A', 'a']$^+` is `[A, a, b]`; it returned the
+  array untouched, and `$^-` reversed it — and refuse elements with no natural order
+  between them (arrays, tuples, dictionaries, a mixed `#[…]`) with a `##Type`
+  (`$^+ cannot order Array and Array`) instead of returning them untouched. In all four
+  engines (D-08; GLB-152).
+
+### Removed
+
+- The `.zyb` bytecode file is dismissed (D-06): it would save 1–15 ms over `zymbol run`,
+  and `zymbol build --release` already ships the bytecode. See `ROADMAP.md`.
+
+---
+
 ## [0.0.11] — 2026-11-01
 
 An **optimization** release. The register VM is the default engine — in the CLI, and in the

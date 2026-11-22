@@ -1143,7 +1143,20 @@ impl<W: Write> Interpreter<W> {
                     }
                     items = Rc::new(src);
                 } else {
-                    // Natural order
+                    // Natural order — refused, before anything moves, when two
+                    // elements have none between them (D-08).
+                    if let Some((a, b)) = natural_unordered(&items) {
+                        return Err(RuntimeError::kinded(
+                            "Type",
+                            format!(
+                                "{} cannot order {} and {}\nhelp: give the order with a comparator: $^ (a, b -> …)",
+                                if op.ascending { "$^+" } else { "$^-" },
+                                a.type_ident(),
+                                b.type_ident()
+                            ),
+                            op.span,
+                        ));
+                    }
                     zymbol_common::count::make_mut(&mut items).sort_by(|a, b| {
                         natural_cmp(a, b).unwrap_or(std::cmp::Ordering::Equal)
                     });
@@ -1566,7 +1579,15 @@ impl<W: Write> Interpreter<W> {
     }
 }
 
-/// Natural comparison for sort: numbers, strings, booleans.
+/// Natural comparison for sort: numbers, texts, characters, booleans.
+///
+/// Texts and characters go by code point — Rust's `str` order is UTF-8 byte
+/// order, which is code point order — in every engine and on every machine
+/// (D-05, v0.0.12). The numeric reading of `<` ("10" > "9") is deliberately
+/// not used: mixed with texts that are not numbers it is not a total order —
+/// "2" < "10", "10" < "1a" and "1a" < "2" — and a sort over it would depend on
+/// the order its input came in (D-07). `None` is NaN only: a pair of kinds with
+/// no order between them is refused beforehand by [`natural_unordered`].
 fn natural_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     match (a, b) {
         (Value::Int(x), Value::Int(y))       => Some(x.cmp(y)),
@@ -1574,9 +1595,39 @@ fn natural_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         (Value::Int(x), Value::Float(y))     => (*x as f64).partial_cmp(y),
         (Value::Float(x), Value::Int(y))     => x.partial_cmp(&(*y as f64)),
         (Value::String(x), Value::String(y)) => Some(x.cmp(y)),
+        (Value::Char(x), Value::Char(y))     => Some(x.cmp(y)),
         (Value::Bool(x), Value::Bool(y))     => Some(x.cmp(y)),
         _ => None,
     }
+}
+
+/// The kinds `$^+`/`$^-` order among themselves: numbers (Int and Float
+/// together), texts, characters, booleans. Anything else has no natural order.
+fn natural_kind(v: &Value) -> Option<u8> {
+    match v {
+        Value::Int(_) | Value::Float(_) => Some(0),
+        Value::String(_) => Some(1),
+        Value::Char(_) => Some(2),
+        Value::Bool(_) => Some(3),
+        _ => None,
+    }
+}
+
+/// The first pair of elements with no natural order between them, if any: the
+/// first element and the first one that does not share its kind, or the first
+/// two when that kind has no order at all (arrays, tuples, dictionaries…).
+/// `$^+` used to sort such a pair as equal and return the array untouched —
+/// reversed, under `$^-` — with no error (D-08, v0.0.12). The pair named is the
+/// same in every engine because it does not depend on the sorting algorithm.
+fn natural_unordered(items: &[Value]) -> Option<(&Value, &Value)> {
+    let first = items.first()?;
+    let kind = natural_kind(first);
+    for other in &items[1..] {
+        if kind.is_none() || natural_kind(other) != kind {
+            return Some((first, other));
+        }
+    }
+    None
 }
 
 /// Whether `deep_update_in` can write this path where it is: every step before
