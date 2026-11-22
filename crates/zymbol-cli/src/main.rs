@@ -1251,8 +1251,13 @@ fn package_cmd(
                     path.display(),
                 );
             }
-            Manifest::from_toml(&toml_src)
-                .with_context(|| format!("invalid manifest at {}", path.display()))?
+            let manifest = Manifest::from_toml(&toml_src)
+                .with_context(|| format!("invalid manifest at {}", path.display()))?;
+            // W012 (D-12): a key the manifest does not define used to vanish in silence.
+            for w in Manifest::unknown_keys(&toml_src) {
+                eprintln!("warning: {w}");
+            }
+            manifest
         }
         None => {
             if scripts.is_empty() {

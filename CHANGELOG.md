@@ -34,6 +34,16 @@ The first release announced as a **public alpha**. Its theme is the terminal and
   (`$^+ cannot order Array and Array`) instead of returning them untouched. In all four
   engines (D-08; GLB-152).
 
+- `zymbol package` warns about a `zyp.toml` key the manifest does not define (`W012`)
+  instead of dropping it in silence. Chaturanga and ZyBank wrote `description`; the key is
+  `desc`, and their description never reached `zyp.json` (D-12).
+- `verify-deb.sh` runs the tree-walker by name: since v0.0.11 its "tree-walker" run was the
+  VM, so the packaged tree-walker was never run. The unit-test job of `gate.yml` takes
+  `zyquality`'s branch of the same name, as the gate job does.
+- Without the SignPath secrets, the Windows release workflow builds the `.msi`, keeps it as
+  an artifact and **skips** its signing job, with the manual steps in the run summary,
+  instead of failing (D-11). Nothing unsigned is uploaded, as before.
+
 ### Removed
 
 - The `.zyb` bytecode file is dismissed (D-06): it would save 1–15 ms over `zymbol run`,

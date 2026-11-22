@@ -4832,6 +4832,7 @@ Anything that cannot be resolved statically becomes a **warning, not a failure**
 | `W009` | `std/db` imported — never packaged (the stdlib is synthetic), but it needs an ODBC driver at run time |
 | `W010` | The archive exceeds the recommended size ceiling |
 | `W011` | The same file was reached through two different lexical paths |
+| `W012` | `zyp.toml` has a key the manifest does not define — left out of `zyp.json` (the description is `desc`, not `description`) |
 
 The one **hard error** is a `[[script]]` that turns out to be a module file: a package whose
 entry point can't run isn't permissive, it's broken.

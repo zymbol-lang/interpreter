@@ -139,6 +139,12 @@ pub enum WarningKind {
     /// W011 — the same file on disk was reached through two different lexical paths (most
     /// commonly a symlink). It's packaged once, under the name it was first reached with.
     DuplicateCanonical { canonical: PathBuf, kept_as: PathBuf },
+    /// W012 — `zyp.toml` has a key the manifest does not define. It used to be dropped in
+    /// silence: Chaturanga and ZyBank wrote `description`, the manifest's key is `desc`, and
+    /// their description never reached `zyp.json` (decision D-12, v0.0.12). Raised by
+    /// [`crate::Manifest::unknown_keys`], not by [`compute_closure`]; the package is still
+    /// written — packaging is permissive.
+    UnknownManifestKey { key: String, table: String },
 }
 
 impl WarningKind {
@@ -155,6 +161,7 @@ impl WarningKind {
             WarningKind::StdDb => "W009",
             WarningKind::SizeLimit(_) => "W010",
             WarningKind::DuplicateCanonical { .. } => "W011",
+            WarningKind::UnknownManifestKey { .. } => "W012",
         }
     }
 }
@@ -221,6 +228,13 @@ impl std::fmt::Display for WarningKind {
                 kept_as.display(),
                 canonical.display()
             ),
+            WarningKind::UnknownManifestKey { key, table } => {
+                write!(f, "zyp.toml: unknown key `{key}` in {table} — not part of the manifest, and left out of zyp.json")?;
+                if key == "description" {
+                    write!(f, "\n  = help: the description is `desc`")?;
+                }
+                Ok(())
+            }
         }
     }
 }

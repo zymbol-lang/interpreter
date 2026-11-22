@@ -1811,7 +1811,7 @@ Zymbol program can catch — they occur before (or instead of) any code running.
 at manifest parse time, at extraction, and at write time.
 
 Everything the closure cannot resolve statically is a **warning**, not an error
-(`W001`–`W011`); see [GUIDE.md § Distributing a Multi-File Program](GUIDE.md#distributing-a-multi-file-program-zyp).
+(`W001`–`W012`); see [GUIDE.md § Distributing a Multi-File Program](GUIDE.md#distributing-a-multi-file-program-zyp).
 
 ---
 

@@ -445,7 +445,7 @@ Unrelated to `zymbol-standalone` above, and with no dependency on it in either d
 - `closure`: the transitive-dependency closure from the declared entry scripts, following
   module imports and `</ file.zy />` targets. Strict about what it packages (an unreachable
   `.zy` is never included) and permissive about what it can't resolve statically — absolute
-  imports, `<\ shell \>`, parse errors all become warnings `W001`–`W011`, never hard
+  imports, `<\ shell \>`, parse errors all become warnings `W001`–`W012`, never hard
   failures.
 - `reader` / `writer`: ZIP I/O. The writer is deterministic (fixed 1980-01-01 timestamps,
   fixed entry order), so the same source tree always yields a byte-identical archive.

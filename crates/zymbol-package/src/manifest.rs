@@ -84,6 +84,49 @@ impl Manifest {
         Ok(manifest)
     }
 
+    /// The keys of a `zyp.toml` that the manifest does not define, as W012 warnings, in
+    /// document order: top-level tables, then `[package]`, then each `[[script]]`.
+    ///
+    /// `serde` drops an unknown key without a word, so a misspelled one is lost — the
+    /// case that found this was `description` for `desc` (decision D-12, v0.0.12). Asked of
+    /// the text, separately from [`Self::from_toml`], so that reading a package never
+    /// depends on it: a `.zyp` written by a newer version still opens in an older one.
+    /// An unparsable document yields no warnings here; `from_toml` reports it.
+    pub fn unknown_keys(s: &str) -> Vec<crate::PackageWarning> {
+        const TOP: &[&str] = &["package", "script"];
+        const PACKAGE: &[&str] = &["name", "version", "engine", "mode", "desc", "authors", "license"];
+        const SCRIPT: &[&str] = &["name", "path", "default", "desc"];
+        let Ok(doc) = s.parse::<toml::Table>() else { return Vec::new() };
+        let mut out = Vec::new();
+        let mut warn = |key: &str, table: String| {
+            out.push(crate::PackageWarning {
+                file: std::path::PathBuf::new(),
+                kind: crate::WarningKind::UnknownManifestKey { key: key.to_string(), table },
+            })
+        };
+        for key in doc.keys().filter(|k| !TOP.contains(&k.as_str())) {
+            warn(key, "the top level".to_string());
+        }
+        if let Some(toml::Value::Table(pkg)) = doc.get("package") {
+            for key in pkg.keys().filter(|k| !PACKAGE.contains(&k.as_str())) {
+                warn(key, "[package]".to_string());
+            }
+        }
+        if let Some(toml::Value::Array(scripts)) = doc.get("script") {
+            for (i, entry) in scripts.iter().enumerate() {
+                let Some(table) = entry.as_table() else { continue };
+                let label = match table.get("name").and_then(|n| n.as_str()) {
+                    Some(name) => format!("[[script]] '{name}'"),
+                    None => format!("[[script]] #{}", i + 1),
+                };
+                for key in table.keys().filter(|k| !SCRIPT.contains(&k.as_str())) {
+                    warn(key, label.clone());
+                }
+            }
+        }
+        out
+    }
+
     fn validate(&self) -> Result<(), PackageError> {
         let mut seen = HashSet::new();
         for script in &self.scripts {
@@ -207,6 +250,43 @@ name = "囲碁"
 path = "囲碁.zy"
 desc = "日本語"
 "#;
+
+    #[test]
+    fn unknown_keys_are_named_where_they_are() {
+        // D-12: `description` was dropped in silence; every unknown key is a W012 now.
+        let src = r#"
+            stray = 1
+            [package]
+            name = "demo"
+            version = "0.1.0"
+            description = "lost"
+            [[script]]
+            name = "main"
+            path = "main.zy"
+            summary = "also lost"
+            [[script]]
+            path = "other.zy"
+            colour = "red"
+        "#;
+        let found: Vec<(String, String)> = Manifest::unknown_keys(src)
+            .into_iter()
+            .map(|w| match w.kind {
+                crate::WarningKind::UnknownManifestKey { key, table } => (key, table),
+                other => panic!("not W012: {other:?}"),
+            })
+            .collect();
+        let want = [
+            ("stray", "the top level"),
+            ("description", "[package]"),
+            ("summary", "[[script]] 'main'"),
+            ("colour", "[[script]] #2"),
+        ];
+        assert_eq!(found, want.map(|(k, t)| (k.to_string(), t.to_string())));
+        assert!(Manifest::unknown_keys(GO_TOML).is_empty());
+        let w = &Manifest::unknown_keys(src)[1];
+        assert_eq!(w.kind.code(), "W012");
+        assert!(w.to_string().contains("= help: the description is `desc`"));
+    }
 
     #[test]
     fn parses_a_well_formed_manifest() {

@@ -34,6 +34,7 @@ DIS-ZYE-005 bloquea las etapas 4 y 5 de ZyEdit. Lo que no es del tema entra sól
 | D-09 | 2026-11-22 | La forma del «enséñalo ya» del fotograma (GAP-ZYE-015, opción 2) | **`@~ 0`: ninguna forma nueva.** Una espera de 0 ms es una espera, y vacía el fotograma por la misma regla que `<<\|`, `<<\|?`, `@~` y `<<`; GUIDE § 3b documenta el modismo. GO y Chaturanga lo escriben antes de pensar | `t::show()` en `std/term`, que hoy sólo tiene funciones puras; un símbolo nuevo (`SYMBOLS.md` § 17); un vaciado por tiempo, que no es determinista |
 | D-10 | 2026-11-22 | `engine = ">=0.0.9"` en GO, serpiente, klingon y Chaturanga | **Se queda: es verdadero.** Medido con el binario v0.0.9 de la release (suma verificada): `check` pasa en sus 65 ficheros y sus suites dan la misma salida en 0.0.9 que en 0.0.12 (21 de 21). ZyTetris pide `>=0.0.11` y falla en la 0.0.9: el suyo también es correcto | Subirlo a `>=0.0.12`, que dejaría fuera versiones en que los juegos corren |
 | D-11 | 2026-11-22 | El workflow de Windows, en rojo en cada release porque se detiene ante la firma | **La firma, «skipped».** El build y el artefacto sin firmar en verde; el job de firma sólo corre con los secretos de SignPath y, sin ellos, sale omitido; un resumen del run dice que la firma manual está pendiente | Dejarlo en rojo; verde con un `::warning::`, que dejaría salir en verde una release sin `.msi` |
+| D-12 | 2026-11-22 | `zyp.toml` descartaba en silencio una clave desconocida: Chaturanga y ZyBank escribían `description` y su descripción no llegaba al `zyp.json` | **Una grafía, `desc`, y un aviso W012** para toda clave desconocida; el paquete se escribe igual. Se corrigen los dos manifiestos y se regenera `chaturanga.zyp`. **Hecho** | Aceptar `description` como alias; rechazar el paquete, que rompe la regla de que empaquetar es permisivo |
 
 D-05, D-07 y D-08 se implementaron juntas el 2026-11-22: `ZyDDT/HALLAZGOS/GLOBAL.md` § GLB-152 (los cuatro motores no
 ordenaban los `Char` y devolvían intacto lo que no tiene orden) y `ZyDDT/HALLAZGOS/zyjs.md` § ZYJS-073 (`<` entre textos en
@@ -51,11 +52,11 @@ Lo comprobado el 2026-11-22 lleva esa fecha. Las filas de `ZyDDT/PENDIENTES.md` 
 | Qué | Dónde | Decisión |
 |---|---|---|
 | El Worker de Cloudflare no está delante del sitio: `Accept: text/markdown` devuelve `text/html`, sin `Link` ni `Vary: Accept` | `web/worker/` | ninguna: lo despliega el autor (`npx wrangler deploy`) |
-| El job de pruebas unitarias de `gate.yml` clona `zyquality` sin rama | `interpreter/.github/workflows/gate.yml`, línea 100 | mecánico |
-| `verify-deb.sh` rotula su prueba «run (tree-walker)» cuando el motor por defecto es la VM | `interpreter/packaging/verify/verify-deb.sh`, líneas 379 y 381 | mecánico |
-| `zymbol package` pierde la `description` del manifiesto | `interpreter/crates/zymbol-package/` | mecánico |
+| El job de pruebas unitarias de `gate.yml` clona `zyquality` sin rama | `interpreter/.github/workflows/gate.yml`, línea 100 | **hecho** (`36aeeef`) |
+| `verify-deb.sh` rotula su prueba «run (tree-walker)» cuando el motor por defecto es la VM — y por eso las dos ejecuciones de su sección 5 probaban la VM | `interpreter/packaging/verify/verify-deb.sh`, líneas 379 y 381 | **hecho** (`36aeeef`): `run --tw` |
+| `zymbol package` pierde la `description` del manifiesto | `interpreter/crates/zymbol-package/` | **D-12**: hecho, W012 |
 | GO, serpiente, klingon y Chaturanga piden `engine = ">=0.0.9"` en su `zyp.toml` y en su `.zyp` del playground | cada repositorio y `web/examples/games/` | **cerrado por D-10**: es verdadero |
-| El workflow de Windows sale en rojo en cada release: se detiene a propósito ante la firma | `release-windows.yml` | **D-11**: la firma, «skipped» |
+| El workflow de Windows sale en rojo en cada release: se detiene a propósito ante la firma | `release-windows.yml` | **D-11**: hecho (`2a404ad`), comprobado en la ejecución 45059778904 |
 | Las Actions avisan de que Node 20 está obsoleto (`checkout@v4`, `upload-artifact@v4`) | los workflows | mecánico |
 | Los marcadores «Revisado para» de 53 documentos y el registro de versiones de la cabecera de `zymbol.js` | `aprende_zymbol/`, `web/` | aplazados por el autor el 2026-10-31: cada documento se lee antes de marcarlo |
 
