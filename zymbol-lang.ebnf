@@ -242,7 +242,7 @@ statement =
   | output_pos_stmt          (* >>~ (...) > items *)
   | clear_screen_stmt        (* >>! *)
   | input_stmt               (* << var  or  << #|var| *)
-  | key_input_stmt           (* <<| var  or  <<|? var *)
+  | key_input_stmt           (* <<| var  or  <<|? var, + optional ", mods" *)
   | cli_args_capture         (* >< var *)
   | if_stmt                  (* ? cond { } *)
   | match_stmt               (* ?? expr { } *)
@@ -391,10 +391,12 @@ prompt_string = string_literal | interpolated_string ;
 (*
   Key input: captures a single keypress.
   <<|   blocking  — waits until a key is pressed.
-  <<|?  non-blocking — returns immediately with "" if no key is queued.
+  <<|?  non-blocking — returns immediately with '\0' if no key is queued.
+  The optional second identifier receives the modifiers held, as an Int:
+  Shift = 1, Alt = 2, Ctrl = 4 (D-14). It must differ from the first.
 *)
 key_input_stmt =
-    ( "<<|" | "<<|?" ) , identifier
+    ( "<<|" | "<<|?" ) , identifier , [ "," , identifier ]
   ;
 
 (*

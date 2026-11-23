@@ -677,16 +677,18 @@ impl DefUseAnalyzer {
             Statement::ClearScreen(_) => {}
 
             Statement::KeyInput(ki) => {
-                let chain = self.chains.entry(ki.variable.clone()).or_insert_with(|| {
-                    DefUseChain::new(ki.variable.clone())
-                });
-                chain.add_definition(Definition {
-                    var_name: ki.variable.clone(),
-                    node: node_index,
-                    span: ki.span,
-                    is_underscore: ki.variable.starts_with('_'),
-                    scope_depth: self.scope_depth,
-                });
+                for name in ki.variables() {
+                    let chain = self.chains.entry(name.clone()).or_insert_with(|| {
+                        DefUseChain::new(name.clone())
+                    });
+                    chain.add_definition(Definition {
+                        var_name: name.clone(),
+                        node: node_index,
+                        span: ki.span,
+                        is_underscore: name.starts_with('_'),
+                        scope_depth: self.scope_depth,
+                    });
+                }
             }
 
             Statement::OutputPos(op) => {

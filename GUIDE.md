@@ -863,21 +863,55 @@ Special keys are mapped to single-character symbols:
 | Arrow Down | `'↓'` (U+2193) |
 | Arrow Left | `'←'` (U+2190) |
 | Arrow Right | `'→'` (U+2192) |
+| Home | `'⇱'` (U+21F1) |
+| End | `'⇲'` (U+21F2) |
+| Page Up | `'⇞'` (U+21DE) |
+| Page Down | `'⇟'` (U+21DF) |
+| Delete | `'⌦'` (U+2326) |
+| Shift+Tab | `'⇤'` (U+21E4) |
+| F1 … F12 | `'①'` … `'⑫'` (U+2460 … U+246B) |
 | Enter | `'\n'` — a line feed, even though the keyboard sends a carriage return |
 | Escape | `0d27` |
 | Tab | `0d9` |
 | Backspace | `0d127` (DEL) — what the terminal sends for that key |
 | Ctrl + *letter* | its control character: Ctrl+A is `0d1`, Ctrl+S is `0d19` |
+| Any other key with no name (Insert, media keys) | `'\0'` |
 | Other | the character as-is |
 
-> The arrows come back as the arrow glyphs themselves, not as letters. Match
-> them directly — `? k == '↑' { }` — and note that this leaves every ASCII
-> letter free for commands, uppercase included.
+> The keys that are not text come back as glyphs, not as letters. Match them
+> directly, as in `? k == '↑' { }` or `? k == '⇱' { }`. Every letter stays free
+> for commands, uppercase included.
 
-**Control keys carry no separate modifier**, because they do not need one: what
-the terminal sends for Ctrl+A *is* the byte 1, and `0d1` writes it. So a
-shortcut is an ordinary comparison, and "is this a control key" is arithmetic on
-the code point:
+**Which modifiers were held: `<<| k, m`.** A second variable receives them as
+an Int: Shift = 1, Alt = 2, Ctrl = 4, added together. `<<|? k, m` does the same,
+and with no key pending it gives `'\0'` and `0`. `<<| k` alone is unchanged.
+
+```zymbol
+>>| {
+    <<| k, m
+    ? k == '→' && m == 1 { >> "Shift+→: extend the selection" ¶ }
+    _? k == '→' && m == 4 { >> "Ctrl+→: next word" ¶ }
+    _? k == '→' { >> "→: next character" ¶ }
+}
+```
+
+Shift is reported only for keys that are not text. A capital `'A'` arrives with
+`m = 0`, because the character already says Shift was held, and Caps Lock gives
+the same `'A'`. The same goes for `'!'` and every other character Shift
+produces. Shift+Tab is `'⇤'` with `m = 1`. AltGr reaches a program as Ctrl+Alt,
+so a character typed with it (`'@'` on a Spanish keyboard) also arrives with
+`m = 0`.
+
+> Since v0.0.12. Before that, Home, End, Page Up, Page Down, Delete and the
+> function keys all arrived as `'\0'`, the same value `<<|?` gives when no key
+> was pressed, and no modifier could be read at all (DIS-ZYE-001..003 in
+> `ZyEdit/HALLAZGOS.md`; decisions D-13, D-14 and D-15).
+
+**Control keys are still their control characters.** What the terminal sends
+for Ctrl+A *is* the byte 1, and `0d1` writes it. So `<<| k` is enough for a
+shortcut, and `m` adds `4` to it when the program asks for `m`. A shortcut is an
+ordinary comparison, and "is this a control key" is arithmetic on the code
+point:
 
 ```zymbol
 <<| k
@@ -979,9 +1013,16 @@ The key file has one step per line (blank lines and `#` comments are ignored):
 | a single character | that character |
 | `SPACE` `ENTER` `ESC` `TAB` `BACKSPACE` | `' '`, `'\n'`, 27, `'\t'`, 127 — as a real keyboard gives them |
 | `UP` `DOWN` `LEFT` `RIGHT` | `↑` `↓` `←` `→` |
-| `CTRL+S` | the control character, 19 |
+| `HOME` `END` `PGUP` `PGDN` `DEL` `BACKTAB` | `⇱` `⇲` `⇞` `⇟` `⌦` `⇤` |
+| `F1` … `F12` | `①` … `⑫` |
+| `CTRL+S` | the control character, 19, with `m = 4` |
+| `SHIFT+RIGHT`, `ALT+x`, `CTRL+ALT+DEL` | the key with those modifiers in `m`. The prefixes go in any order, before any key |
 | `WAIT 10` | the next ten `<<|?` find no key — a running loop advances by polls, not by a clock |
 | `SHOW` | the current frame is written to the output — a menu the last frame no longer shows |
+
+The names and prefixes give what a real keyboard gives, through the same rule:
+`SHIFT+A` and `A` are both `'A'` with `m = 0`, and `BACKTAB` and `SHIFT+TAB` are
+both `'⇤'` with `m = 1`.
 
 A blocking `<<|` with no key left is an error (`--keys: the key script ran out
 while the program waited for a key`): in a test, a program waiting for a key

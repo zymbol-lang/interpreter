@@ -328,11 +328,13 @@ impl SymbolExtractor {
             }
 
             Statement::KeyInput(ki) => {
-                self.symbols.push(Symbol::new(
-                    ki.variable.clone(),
-                    SymbolKind::Variable,
-                    ki.span,
-                ));
+                for name in ki.variables() {
+                    self.symbols.push(Symbol::new(
+                        name.clone(),
+                        SymbolKind::Variable,
+                        ki.span,
+                    ));
+                }
             }
 
             Statement::TuiBlock(tb) => {

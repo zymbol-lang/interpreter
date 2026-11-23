@@ -2090,9 +2090,14 @@ impl TypeChecker {
             }
 
             Statement::KeyInput(ki) => {
-                // <<| var and <<|? var always produce Char
+                // <<| var and <<|? var always produce Char; the modifiers of
+                // <<| var, mods are an Int (D-14)
                 self.check_alias_name(&ki.variable, ki.span, "variable");
                 self.env.define_var(&ki.variable, ZymbolType::Char);
+                if let Some(m) = &ki.modifiers {
+                    self.check_alias_name(m, ki.span, "variable");
+                    self.env.define_var(m, ZymbolType::Int);
+                }
             }
 
             // `>>| { … }` — the alternate screen. Its body is ordinary code and
@@ -2294,10 +2299,16 @@ impl TypeChecker {
                 Statement::Loop(loop_stmt) => {
                     self.define_local_vars_from_block(&loop_stmt.body);
                 }
-                Statement::KeyInput(ki)
-                    if self.env.lookup_var(&ki.variable).is_none() => {
+                Statement::KeyInput(ki) => {
+                    if self.env.lookup_var(&ki.variable).is_none() {
                         self.env.define_var(&ki.variable, ZymbolType::Char);
                     }
+                    if let Some(m) = &ki.modifiers {
+                        if self.env.lookup_var(m).is_none() {
+                            self.env.define_var(m, ZymbolType::Int);
+                        }
+                    }
+                }
                 _ => {}
             }
         }

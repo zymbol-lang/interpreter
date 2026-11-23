@@ -710,10 +710,12 @@ impl VariableAnalyzer {
             Statement::ClearScreen(_) => {}
 
             Statement::KeyInput(ki) => {
-                if !self.reaches_existing(&ki.variable) {
-                    self.declare_variable(ki.variable.clone(), ki.span, false);
-                } else {
-                    self.assign_variable(&ki.variable, ki.span);
+                for name in ki.variables() {
+                    if !self.reaches_existing(name) {
+                        self.declare_variable(name.clone(), ki.span, false);
+                    } else {
+                        self.assign_variable(name, ki.span);
+                    }
                 }
             }
 

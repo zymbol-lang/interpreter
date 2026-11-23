@@ -204,6 +204,12 @@ mod tests {
     }
 
     #[test]
+    fn test_format_tui_block_and_key_input() {
+        let src = ">>| {\n    <<| k, m\n    <<|? p\n    >> k m p\n}\n";
+        assert_eq!(format(src).unwrap(), src);
+    }
+
+    #[test]
     fn test_format_const_decl() {
         let result = format("PI:=3.14").unwrap();
         assert_eq!(result, "PI := 3.14\n");

@@ -5043,12 +5043,22 @@ impl<W: Write> VM<W> {
                 }
 
                 &Instruction::ReadKey(dst, blocking) => {
-                    let ch = match self.terminal.read_key(blocking, &mut self.output) {
-                        Ok(c) => c,
+                    let (ch, _) = match self.terminal.read_key(blocking, &mut self.output) {
+                        Ok(k) => k,
                         Err(host::TerminalError::Raise(e)) => raise!(VmError::Generic(e)),
                         Err(host::TerminalError::Abort(e)) => return Err(VmError::Generic(e)),
                     };
                     wreg!(dst, Value::Char(ch));
+                }
+
+                &Instruction::ReadKeyMods(dst, mods_dst, blocking) => {
+                    let (ch, mods) = match self.terminal.read_key(blocking, &mut self.output) {
+                        Ok(k) => k,
+                        Err(host::TerminalError::Raise(e)) => raise!(VmError::Generic(e)),
+                        Err(host::TerminalError::Abort(e)) => return Err(VmError::Generic(e)),
+                    };
+                    wreg!(dst, Value::Char(ch));
+                    wreg!(mods_dst, Value::Int(mods));
                 }
 
                 Instruction::ReadLine(dst, prompt_reg, kind) => {

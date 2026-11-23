@@ -138,7 +138,7 @@ impl Pass {
                 }
             }
             Statement::Input(i) => st.revive(&i.variable),
-            Statement::KeyInput(k) => st.revive(&k.variable),
+            Statement::KeyInput(k) => k.variables().for_each(|n| st.revive(n)),
             Statement::CliArgsCapture(c) => st.revive(&c.variable_name),
             Statement::Output(o) => o.exprs.iter().for_each(|e| self.expr(e, &st)),
             Statement::Expr(e) => self.expr(&e.expr, &st),
@@ -297,7 +297,7 @@ fn assigned_in(stmts: &[Statement]) -> HashSet<String> {
                 out.insert(i.variable.clone());
             }
             Statement::KeyInput(k) => {
-                out.insert(k.variable.clone());
+                out.extend(k.variables().cloned());
             }
             Statement::CliArgsCapture(c) => {
                 out.insert(c.variable_name.clone());

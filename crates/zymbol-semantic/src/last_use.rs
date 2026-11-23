@@ -226,7 +226,7 @@ fn scan_stmt(stmt: &Statement, m: &mut Mentions) {
         Statement::CliArgsCapture(c) => m.mention(&c.variable_name),
         Statement::SetNumeralMode { .. } => {}
         Statement::Sleep(s) => scan_expr(&s.duration, m),
-        Statement::KeyInput(k) => m.mention(&k.variable),
+        Statement::KeyInput(k) => k.variables().for_each(|n| m.mention(n)),
         Statement::ClearScreen(_) => {}
         Statement::OutputPos(op) => {
             for slot in op.slots.iter().flatten() {
@@ -523,7 +523,7 @@ fn creations(stmt: &Statement, out: &mut Vec<String>) {
             }
         },
         Statement::Input(inp) => out.push(inp.variable.clone()),
-        Statement::KeyInput(k) => out.push(k.variable.clone()),
+        Statement::KeyInput(k) => out.extend(k.variables().cloned()),
         Statement::CliArgsCapture(c) => out.push(c.variable_name.clone()),
         _ => {}
     }

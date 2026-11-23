@@ -1629,7 +1629,13 @@ impl Compiler {
                 } else {
                     ctx.alloc_reg(&ki.variable)?
                 };
-                ctx.emit(Instruction::ReadKey(dst, ki.blocking));
+                match &ki.modifiers {
+                    None => { ctx.emit(Instruction::ReadKey(dst, ki.blocking)); }
+                    Some(m) => {
+                        let mods = if let Ok(r) = ctx.get_reg(m) { r } else { ctx.alloc_reg(m)? };
+                        ctx.emit(Instruction::ReadKeyMods(dst, mods, ki.blocking));
+                    }
+                }
                 Ok(())
             }
             Statement::OutputPos(op) => {
@@ -6389,6 +6395,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             Instruction::DestroyGlobal(_, _) => {}
             Instruction::Sleep(r) | Instruction::QueryTerminalSize(r)
             | Instruction::ReadKey(r, _) => upd(*r),
+            Instruction::ReadKeyMods(k, m, _) => { upd(*k); upd(*m); }
             Instruction::ReadLine(d, prompt_r, _) => {
                 upd(*d);
                 if let Some(r) = prompt_r { upd(*r); }

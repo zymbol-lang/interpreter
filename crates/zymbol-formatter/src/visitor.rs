@@ -438,17 +438,19 @@ impl<'a> FormatVisitor<'a> {
             }
             Statement::ClearScreen(_) => self.output.write(">>!"),
             Statement::KeyInput(ki) => {
-                if ki.blocking {
-                    self.output.write(&format!("<<| {}", ki.variable));
-                } else {
-                    self.output.write(&format!("<<|? {}", ki.variable));
+                let op = if ki.blocking { "<<|" } else { "<<|?" };
+                match &ki.modifiers {
+                    None => self.output.write(&format!("{} {}", op, ki.variable)),
+                    Some(m) => self.output.write(&format!("{} {}, {}", op, ki.variable, m)),
                 }
             }
             // Same rule as `>>`: the statement ends at the line, so nothing
             // inside it may wrap. See `no_wrap`.
             Statement::OutputPos(op) => self.format_output_pos(op),
             Statement::TuiBlock(tb) => {
-                self.output.write(">>| ");
+                // `format_block` writes the space before `{`: a trailing one
+                // here printed `>>|  {`, in every program with a TUI block.
+                self.output.write(">>|");
                 self.format_block(&tb.body);
             }
         }

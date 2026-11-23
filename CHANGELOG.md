@@ -34,6 +34,22 @@ The first release announced as a **public alpha**. Its theme is the terminal and
   `[10, 100, 9]`. The numeric reading of `<` is not a total order mixed with other texts
   (`"2" < "10"`, `"10" < "1a"`, `"1a" < "2"`). Convert first to sort numbers (D-07).
 
+### Added
+
+- **`<<| k, m` reads the modifiers held with a key** (and `<<|? k, m`): `m` is an Int, Shift
+  = 1, Alt = 2, Ctrl = 4, added together, so Shift+→ and Ctrl+→ are no longer both `→`.
+  `<<| k` alone is unchanged. Shift is not reported on text, because `'A'` already says it,
+  whatever the platform or Caps Lock, and Ctrl+Alt on a printable character is AltGr, with
+  `m = 0`. In all four engines, with a new VM instruction `ReadKeyMods` (D-14, D-15;
+  DIS-ZYE-002, DIS-ZYE-003).
+- **Home, End, Page Up, Page Down, Delete, Shift+Tab and F1–F12 arrive as glyphs** —
+  `⇱ ⇲ ⇞ ⇟ ⌦ ⇤`, `①`–`⑫` — the way the arrows do. They all arrived as `'\0'`, the value
+  `<<|?` gives when no key was pressed (D-13; DIS-ZYE-001).
+- The `--keys` script names those keys (`HOME`, `END`, `PGUP`, `PGDN`, `DEL`, `BACKTAB`,
+  `F1`…`F12`) and takes `SHIFT+`, `ALT+` and `CTRL+` in any order before any key:
+  `CTRL+ALT+DEL`, `SHIFT+RIGHT`. A key script and a real keyboard go through one rule,
+  `zymbol_common::keys`.
+
 ### Fixed
 
 - `$^+`/`$^-` now order characters — `['b', 'A', 'a']$^+` is `[A, a, b]`; it returned the
@@ -44,6 +60,12 @@ The first release announced as a **public alpha**. Its theme is the terminal and
 - Inside `>>|`, the VM writes `¶` as CR LF, as the tree-walker always has. It wrote LF, which
   in raw mode moves down without going back to the first column, so `>> … ¶` came out as a
   staircase in the default engine since v0.0.11 (ZYVM-033).
+- In the playground, Tab, Backspace and Ctrl+letter reach `<<|` as they do in a terminal
+  (`0d9`, `0d127`, the control character). They arrived as `'\0'`, `'\0'` and the letter:
+  the browser never received the v0.0.9 fix (BUG-ZYB-006). A modifier pressed on its own is
+  no longer queued as a `'\0'` key ahead of the key it belongs to (ZYJS-074).
+- `zymbol fmt` writes `>>| {` with one space; it wrote two in every program with a TUI block
+  (GLB-153).
 
 - `zymbol package` warns about a `zyp.toml` key the manifest does not define (`W012`)
   instead of dropping it in silence. Chaturanga and ZyBank wrote `description`; the key is

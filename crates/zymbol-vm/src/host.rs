@@ -54,9 +54,11 @@ pub trait Terminal {
     fn clear(&mut self);
     /// `>>?`: (columns, rows).
     fn size(&mut self) -> (u16, u16);
-    /// `<<|` (blocking) and `<<|?` (not). `out` is the VM's output, for a
-    /// terminal that reports there what the program drew.
-    fn read_key(&mut self, blocking: bool, out: &mut dyn Write) -> Result<char, TerminalError>;
+    /// `<<|` (blocking) and `<<|?` (not): the key's character and its
+    /// modifiers — Shift = 1, Alt = 2, Ctrl = 4, as `zymbol_common::keys::key`
+    /// decides them (D-14). `out` is the VM's output, for a terminal that
+    /// reports there what the program drew.
+    fn read_key(&mut self, blocking: bool, out: &mut dyn Write) -> Result<(char, i64), TerminalError>;
     /// One line for `<<`, after writing `prompt`. An empty string is the end
     /// of input; a typed blank line is `"\n"`. `Err` is raised.
     fn read_line(&mut self, prompt: Option<&str>) -> Result<String, String>;
@@ -176,7 +178,7 @@ impl Terminal for BasicTerminal {
     fn size(&mut self) -> (u16, u16) {
         (80, 24)
     }
-    fn read_key(&mut self, _blocking: bool, _out: &mut dyn Write) -> Result<char, TerminalError> {
+    fn read_key(&mut self, _blocking: bool, _out: &mut dyn Write) -> Result<(char, i64), TerminalError> {
         Err(TerminalError::Abort("no terminal to read a key from".to_string()))
     }
     fn read_line(&mut self, prompt: Option<&str>) -> Result<String, String> {
@@ -240,7 +242,7 @@ impl Terminal for Headless {
     fn size(&mut self) -> (u16, u16) {
         (zymbol_common::vscreen::COLS as u16, zymbol_common::vscreen::ROWS as u16)
     }
-    fn read_key(&mut self, blocking: bool, out: &mut dyn Write) -> Result<char, TerminalError> {
+    fn read_key(&mut self, blocking: bool, out: &mut dyn Write) -> Result<(char, i64), TerminalError> {
         let (ch, frames) = if blocking {
             self.state.read_blocking()
         } else {

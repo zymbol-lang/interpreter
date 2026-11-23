@@ -322,18 +322,38 @@ impl Parser {
         Ok(Statement::ClearScreen(ClearScreen::new(span)))
     }
 
-    /// Parse key input: <<| var (blocking) or <<|? var (non-blocking)
+    /// Parse key input: <<| var (blocking) or <<|? var (non-blocking), with an
+    /// optional second variable for the modifiers: <<| var, mods (D-14)
     pub(crate) fn parse_key_input(&mut self, blocking: bool) -> Result<Statement, Diagnostic> {
         let start_span = self.advance().span; // consume <<| or <<|?
+        let syntax = if blocking { "syntax: <<| var  or  <<| var, mods" } else { "syntax: <<|? var  or  <<|? var, mods" };
         let var_token = self.peek().clone();
         let variable = match &var_token.kind {
             TokenKind::Ident(name) => { self.advance(); name.clone() }
             _ => return Err(Diagnostic::error("expected variable name after key input operator")
                 .with_span(var_token.span)
-                .with_help(if blocking { "syntax: <<| var" } else { "syntax: <<|? var" })),
+                .with_help(syntax)),
         };
-        let span = start_span.to(&var_token.span);
-        Ok(Statement::KeyInput(KeyInput::new(variable, blocking, span)))
+        if !matches!(self.peek().kind, TokenKind::Comma) {
+            let span = start_span.to(&var_token.span);
+            return Ok(Statement::KeyInput(KeyInput::new(variable, blocking, span)));
+        }
+        self.advance(); // consume ,
+        let mods_token = self.peek().clone();
+        let modifiers = match &mods_token.kind {
+            TokenKind::Ident(name) => { self.advance(); name.clone() }
+            _ => return Err(Diagnostic::error("expected the modifiers' variable name after ','")
+                .with_span(mods_token.span)
+                .with_help(syntax)),
+        };
+        if modifiers == variable {
+            return Err(Diagnostic::error(format!(
+                "'{}' cannot receive both the key and its modifiers", variable))
+                .with_span(mods_token.span)
+                .with_help(syntax));
+        }
+        let span = start_span.to(&mods_token.span);
+        Ok(Statement::KeyInput(KeyInput::with_modifiers(variable, modifiers, blocking, span)))
     }
 
     /// Parse positioned output: >>~ (fila, col, BKS, fg, bg) > items

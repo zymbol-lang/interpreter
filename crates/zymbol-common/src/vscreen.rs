@@ -24,7 +24,8 @@ pub const COLS: usize = 80;
 /// One step of a key script.
 #[derive(Debug, Clone, PartialEq)]
 enum Step {
-    Key(char),
+    /// The character and the modifier number `<<| k, m` receives.
+    Key(char, i64),
     /// This many `<<|?` polls find no key — so a running loop advances without
     /// the script depending on a clock.
     Wait(u32),
@@ -32,6 +33,9 @@ enum Step {
     /// picker or a menu that the last frame, after it closes, no longer shows.
     Show,
 }
+
+/// A key a script delivers: its character and its modifier number.
+pub type Key = (char, i64);
 
 /// The keys a program under `--keys` receives, in order.
 ///
@@ -44,12 +48,17 @@ enum Step {
 /// q
 /// ```
 ///
-/// A line is a single character, or one of `SPACE`, `ENTER`, `ESC`, `TAB`,
-/// `BACKSPACE`, `UP`, `DOWN`, `LEFT`, `RIGHT`, `CTRL+<letter>`, `WAIT <n>`, or
-/// `SHOW` — which writes the current frame to the output when the program next
-/// asks for a key, so a test can hold a screen the last frame no longer shows.
-/// The names give the same characters `<<|` yields from a real keyboard: `↑` for
-/// UP, `'\n'` for ENTER, `0d27` for ESC, `0d127` for BACKSPACE, `0d1`… for CTRL.
+/// A line is a key, a key with modifiers, `WAIT <n>`, or `SHOW` — which writes
+/// the current frame to the output when the program next asks for a key, so a
+/// test can hold a screen the last frame no longer shows.
+///
+/// A key is a single character, or one of `SPACE`, `ENTER`, `ESC`, `TAB`,
+/// `BACKTAB`, `BACKSPACE`, `UP`, `DOWN`, `LEFT`, `RIGHT`, `HOME`, `END`, `PGUP`,
+/// `PGDN`, `DEL`, `F1`…`F12`. Any of `SHIFT+`, `ALT+`, `CTRL+` may stand before
+/// it, in any order: `CTRL+S`, `SHIFT+RIGHT`, `CTRL+ALT+DEL`. The names give
+/// what `<<|` yields from a real keyboard, through the same rule
+/// ([`crate::keys::key`]): `↑` for UP, `⇱` for HOME, `①` for F1, `'\n'` for
+/// ENTER, `0d27` for ESC, `0d127` for BACKSPACE, `0d1`… for CTRL+letter.
 #[derive(Debug, Clone, Default)]
 pub struct KeyScript {
     steps: VecDeque<Step>,
@@ -57,67 +66,64 @@ pub struct KeyScript {
 
 impl KeyScript {
     pub fn parse(text: &str) -> Result<Self, String> {
+        use crate::keys::{self, Mods};
         let mut steps = VecDeque::new();
         for (n, raw) in text.lines().enumerate() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let step = match line {
-                "SPACE" => Step::Key(' '),
-                "ENTER" => Step::Key('\n'),
-                "ESC" => Step::Key('\x1B'),
-                "TAB" => Step::Key('\t'),
-                "BACKSPACE" => Step::Key('\x7F'),
-                "UP" => Step::Key('\u{2191}'),
-                "DOWN" => Step::Key('\u{2193}'),
-                "LEFT" => Step::Key('\u{2190}'),
-                "RIGHT" => Step::Key('\u{2192}'),
-                "SHOW" => Step::Show,
-                _ if line.starts_with("WAIT ") => {
-                    let n_polls = line[5..].trim().parse::<u32>().map_err(|_| {
-                        format!("line {}: WAIT takes a whole number of polls, got '{}'", n + 1, line)
-                    })?;
-                    Step::Wait(n_polls)
+            if line == "SHOW" {
+                steps.push_back(Step::Show);
+                continue;
+            }
+            if let Some(count) = line.strip_prefix("WAIT ") {
+                let n_polls = count.trim().parse::<u32>().map_err(|_| {
+                    format!("line {}: WAIT takes a whole number of polls, got '{}'", n + 1, line)
+                })?;
+                steps.push_back(Step::Wait(n_polls));
+                continue;
+            }
+            // The prefixes, then the key. A lone `+` is the plus key, and so
+            // is the `+` after one: `SHIFT++`.
+            let mut mods = Mods::default();
+            let mut rest = line;
+            loop {
+                if let Some(r) = rest.strip_prefix("SHIFT+").filter(|r| !r.is_empty()) {
+                    mods.shift = true;
+                    rest = r;
+                } else if let Some(r) = rest.strip_prefix("ALT+").filter(|r| !r.is_empty()) {
+                    mods.alt = true;
+                    rest = r;
+                } else if let Some(r) = rest.strip_prefix("CTRL+").filter(|r| !r.is_empty()) {
+                    mods.ctrl = true;
+                    rest = r;
+                } else {
+                    break;
                 }
-                _ if line.starts_with("CTRL+") => {
-                    let rest: Vec<char> = line[5..].chars().collect();
-                    match rest.as_slice() {
-                        [c] if c.is_ascii_alphabetic() => {
-                            Step::Key((c.to_ascii_lowercase() as u8 - b'a' + 1) as char)
-                        }
-                        _ => return Err(format!("line {}: CTRL+ takes one letter, got '{}'", n + 1, line)),
-                    }
-                }
-                _ => {
-                    let mut chars = line.chars();
-                    match (chars.next(), chars.next()) {
-                        (Some(c), None) => Step::Key(c),
-                        _ => {
-                            return Err(format!(
-                                "line {}: '{}' is not one key — write one character, or SPACE, \
-                                 ENTER, ESC, TAB, BACKSPACE, UP, DOWN, LEFT, RIGHT, CTRL+X, WAIT n or SHOW",
-                                n + 1, line
-                            ))
-                        }
-                    }
-                }
-            };
-            steps.push_back(step);
+            }
+            let code = keys::named(rest).ok_or_else(|| {
+                format!(
+                    "line {}: '{}' is not one key — write one character, or SPACE, ENTER, ESC, TAB, BACKTAB, BACKSPACE, UP, DOWN, LEFT, RIGHT, HOME, END, PGUP, PGDN, DEL or F1…F12, with SHIFT+, ALT+ or CTRL+ before it if held, or WAIT n, or SHOW",
+                    n + 1, line
+                )
+            })?;
+            let (ch, m) = keys::key(code, mods);
+            steps.push_back(Step::Key(ch, m));
         }
         Ok(KeyScript { steps })
     }
 
     /// `<<|`: the next key, past any waits — a program that blocks is waiting
     /// for exactly this. `None` when the script has run out.
-    pub fn next_blocking(&mut self) -> Option<char> {
+    pub fn next_blocking(&mut self) -> Option<Key> {
         self.next_blocking_with(&mut |_| {})
     }
 
-    fn next_blocking_with(&mut self, show: &mut dyn FnMut(())) -> Option<char> {
+    fn next_blocking_with(&mut self, show: &mut dyn FnMut(())) -> Option<Key> {
         while let Some(step) = self.steps.pop_front() {
             match step {
-                Step::Key(c) => return Some(c),
+                Step::Key(c, m) => return Some((c, m)),
                 Step::Show => show(()),
                 Step::Wait(_) => {}
             }
@@ -125,16 +131,17 @@ impl KeyScript {
         None
     }
 
-    /// `<<|?`: the next key if no wait stands before it, else `'\0'` and one
-    /// poll off the wait. `'\0'` too when the script has run out.
-    pub fn next_poll(&mut self) -> char {
+    /// `<<|?`: the next key if no wait stands before it, else `'\0'` (with no
+    /// modifiers) and one poll off the wait. `'\0'` too when the script has
+    /// run out.
+    pub fn next_poll(&mut self) -> Key {
         self.next_poll_with(&mut |_| {})
     }
 
-    fn next_poll_with(&mut self, show: &mut dyn FnMut(())) -> char {
+    fn next_poll_with(&mut self, show: &mut dyn FnMut(())) -> Key {
         loop {
             match self.steps.front_mut() {
-                None => return '\0',
+                None => return ('\0', 0),
                 Some(Step::Show) => {
                     self.steps.pop_front();
                     show(());
@@ -144,12 +151,11 @@ impl KeyScript {
                 }
                 Some(Step::Wait(n)) => {
                     *n -= 1;
-                    return '\0';
+                    return ('\0', 0);
                 }
-                Some(Step::Key(c)) => {
-                    let c = *c;
+                Some(&mut Step::Key(c, m)) => {
                     self.steps.pop_front();
-                    return c;
+                    return (c, m);
                 }
             }
         }
@@ -247,7 +253,7 @@ impl Headless {
     }
 
     /// `<<|`: the next key, and the frames any `SHOW` before it asked for.
-    pub fn read_blocking(&mut self) -> (Option<char>, Vec<String>) {
+    pub fn read_blocking(&mut self) -> (Option<Key>, Vec<String>) {
         let mut shown = Vec::new();
         let screen = &self.screen;
         let key = self.keys.next_blocking_with(&mut |_| shown.push(screen.frame()));
@@ -255,7 +261,7 @@ impl Headless {
     }
 
     /// `<<|?`: the next key or `'\0'`, and the frames any `SHOW` asked for.
-    pub fn read_poll(&mut self) -> (char, Vec<String>) {
+    pub fn read_poll(&mut self) -> (Key, Vec<String>) {
         let mut shown = Vec::new();
         let screen = &self.screen;
         let key = self.keys.next_poll_with(&mut |_| shown.push(screen.frame()));
@@ -276,14 +282,32 @@ mod tests {
     #[test]
     fn script_names_and_waits() {
         let mut k = KeyScript::parse("# c\nn\nWAIT 2\nUP\nSPACE\nCTRL+S\n").unwrap();
-        assert_eq!(k.next_poll(), 'n');
-        assert_eq!(k.next_poll(), '\0');
-        assert_eq!(k.next_poll(), '\0');
-        assert_eq!(k.next_poll(), '\u{2191}');
-        assert_eq!(k.next_blocking(), Some(' '));
-        assert_eq!(k.next_blocking(), Some('\x13'));
+        assert_eq!(k.next_poll(), ('n', 0));
+        assert_eq!(k.next_poll(), ('\0', 0));
+        assert_eq!(k.next_poll(), ('\0', 0));
+        assert_eq!(k.next_poll(), ('\u{2191}', 0));
+        assert_eq!(k.next_blocking(), Some((' ', 0)));
+        assert_eq!(k.next_blocking(), Some(('\x13', 4)));
         assert_eq!(k.next_blocking(), None);
-        assert_eq!(k.next_poll(), '\0');
+        assert_eq!(k.next_poll(), ('\0', 0));
+    }
+
+    #[test]
+    fn script_modifiers_and_d13_names() {
+        let mut k = KeyScript::parse(
+            "SHIFT+RIGHT\nALT+x\nCTRL+ALT+DEL\nHOME\nF5\nSHIFT+F5\nBACKTAB\nSHIFT+TAB\nSHIFT+A\n+\nSHIFT++\n",
+        )
+        .unwrap();
+        let got: Vec<Key> = std::iter::from_fn(|| k.next_blocking()).collect();
+        assert_eq!(
+            got,
+            vec![
+                ('→', 1), ('x', 2), ('⌦', 6), ('⇱', 0), ('⑤', 0), ('⑤', 1),
+                ('⇤', 1), ('⇤', 1), ('A', 0), ('+', 0), ('+', 0),
+            ]
+        );
+        assert!(KeyScript::parse("SHIFT+\n").is_err());
+        assert!(KeyScript::parse("META+x\n").is_err());
     }
 
     #[test]
@@ -291,14 +315,14 @@ mod tests {
         let mut h = Headless::new(KeyScript::parse("SHOW\nq\n").unwrap());
         h.screen.write("menú");
         let (k, frames) = h.read_blocking();
-        assert_eq!(k, Some('q'));
+        assert_eq!(k, Some(('q', 0)));
         assert_eq!(frames, vec!["menú".to_string()]);
     }
 
     #[test]
     fn blocking_skips_waits() {
         let mut k = KeyScript::parse("WAIT 5\nq\n").unwrap();
-        assert_eq!(k.next_blocking(), Some('q'));
+        assert_eq!(k.next_blocking(), Some(('q', 0)));
     }
 
     #[test]

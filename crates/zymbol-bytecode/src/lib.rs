@@ -517,6 +517,13 @@ pub enum Instruction {
     /// spelled in the tree-walker's exact words.
     AssertMutable(Reg, StrIdx),
 
+    // ── Terminal, appended ────────────────────────────────────────────────
+    /// <<| var, mods / <<|? var, mods — read one key → Value::Char in the
+    /// first register and its modifiers (Shift 1, Alt 2, Ctrl 4) → Value::Int
+    /// in the second (D-14); blocking flag. Placed here rather than beside
+    /// `ReadKey` so that no opcode before it was renumbered.
+    ReadKeyMods(Reg, Reg, bool),
+
     // ── Halt ─────────────────────────────────────────────────────────────
     Halt,
 }

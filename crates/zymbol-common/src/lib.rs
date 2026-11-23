@@ -11,10 +11,12 @@
 //! - Which `##` family an error belongs to, read from its message (`errkind`)
 //! - A text addressed by character position without copying it (`text`)
 //! - How deep a program may call, and the stack it runs on (`depth`)
+//! - What `<<|` hands a program for a key, and its modifiers (`keys`)
 
 pub mod count;
 pub mod depth;
 pub mod errkind;
+pub mod keys;
 pub mod net;
 pub mod num;
 pub mod screen;

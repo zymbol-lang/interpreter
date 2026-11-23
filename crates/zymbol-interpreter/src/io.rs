@@ -182,14 +182,14 @@ impl<W: Write> Interpreter<W> {
         Ok(Value::tuple(vec![Value::Int(rows as i64), Value::Int(cols as i64)]))
     }
 
-    /// Blocking / non-blocking key input: <<| var  or  <<|? var
+    /// Blocking / non-blocking key input: <<| var  or  <<|? var, and the
+    /// modifiers with <<| var, mods (D-14)
     pub(crate) fn execute_key_input(&mut self, ki: &KeyInput) -> Result<()> {
         use crossterm::event::{self, Event};
         // Under --keys the keys come from the script (D11).
         if let Some(h) = self.headless.as_mut() {
-            let (ch, frames) = if ki.blocking {
-                let (k, f) = h.read_blocking();
-                (k, f)
+            let (key, frames) = if ki.blocking {
+                h.read_blocking()
             } else {
                 let (k, f) = h.read_poll();
                 (Some(k), f)
@@ -197,15 +197,15 @@ impl<W: Write> Interpreter<W> {
             for frame in frames {
                 writeln!(self.output, "{}", frame)?;
             }
-            let ch = ch.ok_or_else(|| RuntimeError::Generic {
+            let key = key.ok_or_else(|| RuntimeError::Generic {
                 message: zymbol_common::vscreen::OUT_OF_KEYS.to_string(), span: ki.span,
             })?;
-            self.set_variable(&ki.variable, Value::Char(ch));
+            self.set_key(ki, key);
             return Ok(());
         }
         // A wait: the terminal gets the frame.
         self.show_frame();
-        let ch = if ki.blocking {
+        let key = if ki.blocking {
             loop {
                 match event::read().map_err(|e| RuntimeError::Generic {
                     message: e.to_string(), span: ki.span,
@@ -228,7 +228,7 @@ impl<W: Write> Interpreter<W> {
             //
             // Draining also covers resize and focus events, which could waste a tick
             // on any platform.
-            let mut found = '\0';
+            let mut found = ('\0', 0);
             while event::poll(std::time::Duration::ZERO).unwrap_or(false) {
                 match event::read() {
                     Ok(Event::Key(key)) if is_key_press(&key) => {
@@ -241,8 +241,17 @@ impl<W: Write> Interpreter<W> {
             }
             found
         };
-        self.set_variable(&ki.variable, Value::Char(ch));
+        self.set_key(ki, key);
         Ok(())
+    }
+
+    /// The key into the first variable and, with `<<| k, m`, its modifiers
+    /// into the second.
+    fn set_key(&mut self, ki: &KeyInput, (ch, mods): (char, i64)) {
+        self.set_variable(&ki.variable, Value::Char(ch));
+        if let Some(m) = &ki.modifiers {
+            self.set_variable(m, Value::Int(mods));
+        }
     }
 
     /// Positioned output: >>~ (fila, col, BKS, fg, bg) > items
@@ -456,46 +465,37 @@ fn is_key_press(key: &crossterm::event::KeyEvent) -> bool {
 /// The tree-walker's copy; `zymbol-vm`'s `vm_map_key_code` must stay identical
 /// or the two engines disagree about the keyboard, which no pipe-based suite
 /// can see — only `zyquality/tui/run.sh`, through a real pty.
-fn map_key_code(key: &crossterm::event::KeyEvent) -> char {
-    use crossterm::event::{KeyCode::*, KeyModifiers};
-
-    // Ctrl+letter is a control character, and that is what the terminal puts on
-    // the wire: Ctrl+A is 0x01, Ctrl+S is 0x13. crossterm hands it over
-    // decoded — `Char('a')` with CONTROL set — and this function used to read
-    // the code and drop the modifiers, so Ctrl+A arrived as the letter `a`
-    // (BUG-ZYB-006). Not "the combination never arrived": it arrived wearing
-    // another key's clothes, which is worse — a Ctrl+X shortcut fired when the
-    // user typed an x into a text field, and no full-screen program could offer
-    // Ctrl+S, Ctrl+Q or Ctrl+C at all.
-    //
-    // Handing back the control character adds nothing to the language: `0d1`
-    // already writes it, and `##!t < 32` already asks the question.
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        if let Char(c) = key.code {
-            let lower = c.to_ascii_lowercase();
-            if lower.is_ascii_lowercase() {
-                return (lower as u8 - b'a' + 1) as char;
-            }
-        }
-    }
-
-    match key.code {
-        Char(c) => c,
-        Up      => '\u{2191}',
-        Down    => '\u{2193}',
-        Left    => '\u{2190}',
-        Right   => '\u{2192}',
-        Enter   => '\n',
-        Esc     => '\x1B',
-        // Tab and Backspace used to fall through to `'\0'` together, so a
-        // program could not tell them apart — harmless in a numeric field,
-        // which is why ZyBank treated both as "delete", and impossible in a
-        // form where Tab moves between fields: every jump would erase a
-        // character. Both now carry what the terminal sends for them.
-        Tab       => '\t',      // 0d9
-        Backspace => '\x7F',    // 0d127 — DEL, which is what a terminal sends
-        _         => '\0',
-    }
+fn map_key_code(key: &crossterm::event::KeyEvent) -> (char, i64) {
+    use crossterm::event::{KeyCode as K, KeyModifiers as M};
+    use zymbol_common::keys::{self, Code, Mods};
+    // What each key is, and which modifiers `m` reports, is decided once in
+    // `zymbol_common::keys` (D-13, D-14, D-15): this only names crossterm's
+    // event in its terms.
+    let code = match key.code {
+        K::Char(c) => Code::Char(c),
+        K::Up => Code::Up,
+        K::Down => Code::Down,
+        K::Left => Code::Left,
+        K::Right => Code::Right,
+        K::Enter => Code::Enter,
+        K::Esc => Code::Esc,
+        K::Tab => Code::Tab,
+        K::BackTab => Code::BackTab,
+        K::Backspace => Code::Backspace,
+        K::Home => Code::Home,
+        K::End => Code::End,
+        K::PageUp => Code::PageUp,
+        K::PageDown => Code::PageDown,
+        K::Delete => Code::Delete,
+        K::F(n) => Code::F(n),
+        _ => Code::Other,
+    };
+    let mods = Mods {
+        shift: key.modifiers.contains(M::SHIFT),
+        alt: key.modifiers.contains(M::ALT),
+        ctrl: key.modifiers.contains(M::CONTROL),
+    };
+    keys::key(code, mods)
 }
 
 

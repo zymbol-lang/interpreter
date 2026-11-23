@@ -72,10 +72,13 @@ pub struct ClearScreen {
     pub span: Span,
 }
 
-/// Key input statement: <<| var (blocking) or <<|? var (non-blocking)
+/// Key input statement: <<| var (blocking) or <<|? var (non-blocking), and
+/// `<<| var, mods` — `mods` receives the modifiers held, as an Int (D-14).
 #[derive(Debug, Clone)]
 pub struct KeyInput {
     pub variable: String,
+    /// The second variable of `<<| k, m`: Shift = 1, Alt = 2, Ctrl = 4.
+    pub modifiers: Option<String>,
     pub blocking: bool,
     pub span: Span,
 }
@@ -124,7 +127,16 @@ impl ClearScreen {
 
 impl KeyInput {
     pub fn new(variable: String, blocking: bool, span: Span) -> Self {
-        Self { variable, blocking, span }
+        Self { variable, modifiers: None, blocking, span }
+    }
+
+    pub fn with_modifiers(variable: String, modifiers: String, blocking: bool, span: Span) -> Self {
+        Self { variable, modifiers: Some(modifiers), blocking, span }
+    }
+
+    /// The variables it assigns, in order.
+    pub fn variables(&self) -> impl Iterator<Item = &String> {
+        std::iter::once(&self.variable).chain(self.modifiers.iter())
     }
 }
 
