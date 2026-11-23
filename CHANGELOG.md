@@ -45,6 +45,14 @@ The first release announced as a **public alpha**. Its theme is the terminal and
 - **Home, End, Page Up, Page Down, Delete, Shift+Tab and F1–F12 arrive as glyphs** —
   `⇱ ⇲ ⇞ ⇟ ⌦ ⇤`, `①`–`⑫` — the way the arrows do. They all arrived as `'\0'`, the value
   `<<|?` gives when no key was pressed (D-13; DIS-ZYE-001).
+- **`>>~ (row, col)` with nothing to print shows the terminal's cursor there**, and
+  `>>~ (0, 0)` hides it. `>>|` still begins with it hidden. It stays where it was put while
+  the program draws elsewhere and clears the screen: every frame ends with it back there.
+  It is the terminal's own cursor, so it blinks, keeps the shape the user chose, and a
+  screen reader follows it. A place outside the screen's numbering is a `##Range`, and the
+  form is refused outside `>>|`. Under `--keys` a frame with the cursor shown ends with a
+  line `[cursor row,col]`. In all four engines, with a new VM instruction `ShowCursor`; the
+  playground draws a blinking block over the cell (D-16; DIS-ZYE-004).
 - The `--keys` script names those keys (`HOME`, `END`, `PGUP`, `PGDN`, `DEL`, `BACKTAB`,
   `F1`…`F12`) and takes `SHIFT+`, `ALT+` and `CTRL+` in any order before any key:
   `CTRL+ALT+DEL`, `SHIFT+RIGHT`. A key script and a real keyboard go through one rule,

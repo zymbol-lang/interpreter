@@ -172,6 +172,8 @@ pub struct VirtualScreen {
     cells: Vec<Vec<String>>,
     row: usize,
     col: usize,
+    /// Where `>>~ (row, col)` showed the cursor (D-16), `None` while hidden.
+    caret: Option<(u16, u16)>,
 }
 
 impl Default for VirtualScreen {
@@ -182,12 +184,24 @@ impl Default for VirtualScreen {
 
 impl VirtualScreen {
     pub fn new() -> Self {
-        VirtualScreen { cells: vec![vec![" ".to_string(); COLS]; ROWS], row: 0, col: 0 }
+        VirtualScreen { cells: vec![vec![" ".to_string(); COLS]; ROWS], row: 0, col: 0, caret: None }
     }
 
-    /// `>>!`
-    pub fn clear(&mut self) {
+    /// `>>|` begins: an empty screen, and the cursor hidden.
+    pub fn open(&mut self) {
         *self = VirtualScreen::new();
+    }
+
+    /// `>>!`: the screen is emptied. The cursor stays shown, where it was.
+    pub fn clear(&mut self) {
+        let caret = self.caret;
+        *self = VirtualScreen::new();
+        self.caret = caret;
+    }
+
+    /// `>>~ (row, col)` with nothing to print (D-16): shown there, or hidden.
+    pub fn set_caret(&mut self, caret: Option<(u16, u16)>) {
+        self.caret = caret;
     }
 
     /// `>>~ (fila, col) >`, 1-based, clamped to the screen.
@@ -235,6 +249,12 @@ impl VirtualScreen {
             .collect();
         while rows.last().is_some_and(|r| r.is_empty()) {
             rows.pop();
+        }
+        // A cursor shown is part of what the user sees: one line after the
+        // frame says where (D-16). A frame with the cursor hidden — every
+        // frame written before v0.0.12 — has no such line.
+        if let Some((r, c)) = self.caret {
+            rows.push(format!("[cursor {},{}]", r, c));
         }
         rows.join("\n")
     }
@@ -339,5 +359,20 @@ mod tests {
         s.move_to(1, 1);
         s.write("漢x");
         assert_eq!(s.frame(), "漢x\n  ab");
+    }
+
+    #[test]
+    fn caret_is_a_line_after_the_frame_and_survives_clear() {
+        let mut s = VirtualScreen::new();
+        s.write("hello");
+        s.set_caret(Some((1, 6)));
+        assert_eq!(s.frame(), "hello\n[cursor 1,6]");
+        s.clear();
+        assert_eq!(s.frame(), "[cursor 1,6]");
+        s.set_caret(None);
+        assert_eq!(s.frame(), "");
+        s.set_caret(Some((2, 2)));
+        s.open();
+        assert_eq!(s.frame(), "");
     }
 }

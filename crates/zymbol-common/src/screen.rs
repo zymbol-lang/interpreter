@@ -59,24 +59,91 @@ pub const SYNC_END: &[u8] = b"\x1b[?2026l";
 pub const FRAME_LIMIT: usize = 1 << 20;
 
 /// Add `bytes` to `frame`, showing it first when it would pass [`FRAME_LIMIT`].
-pub fn put(frame: &mut Vec<u8>, bytes: &[u8]) {
+pub fn put(frame: &mut Vec<u8>, bytes: &[u8], caret: Option<(u16, u16)>) {
     if frame.len() + bytes.len() > FRAME_LIMIT {
-        show(frame);
+        show(frame, caret);
     }
     frame.extend_from_slice(bytes);
 }
 
 /// Write the frame to the terminal in one write, and empty it. An empty frame
 /// writes nothing — not even the synchronized-update brackets.
-pub fn show(frame: &mut Vec<u8>) {
+///
+/// `caret` is where the program asked for the terminal's cursor (D-16, see
+/// [`caret`]). Drawing moves the cursor, so a frame that ends with it shown
+/// puts it back there last; and it is hidden while the frame is painted, for
+/// the terminals that do not honour the synchronized update.
+pub fn show(frame: &mut Vec<u8>, caret: Option<(u16, u16)>) {
     if frame.is_empty() {
         return;
     }
-    let mut bytes = Vec::with_capacity(frame.len() + SYNC_BEGIN.len() + SYNC_END.len());
+    let mut bytes = Vec::with_capacity(frame.len() + SYNC_BEGIN.len() + SYNC_END.len() + 24);
     bytes.extend_from_slice(SYNC_BEGIN);
+    let back = caret.map(|_| caret_bytes(caret));
+    if back.is_some() {
+        bytes.extend_from_slice(CURSOR_HIDE);
+    }
+    // A frame that ends by placing the cursor — the `>>~ (row, col)` itself —
+    // needs it placed only once.
+    let ends_placed = back.as_ref().is_some_and(|b| frame.ends_with(b));
     bytes.append(frame);
+    if let (Some(b), false) = (back, ends_placed) {
+        bytes.extend_from_slice(&b);
+    }
     bytes.extend_from_slice(SYNC_END);
     write_terminal(&bytes);
+}
+
+// ── The cursor (DIS-ZYE-004, D-16) ───────────────────────────────────────────
+//
+// `>>|` hides the terminal's cursor: a game wants none. `>>~ (row, col)` with
+// nothing to print shows it there, and `>>~ (0, 0)` hides it again. It stays
+// where it was put until the program moves or hides it — every frame shown in
+// between ends with the cursor back at that place, whatever the frame drew
+// elsewhere. It is the terminal's own cursor, so it blinks, and has the shape,
+// the user chose, and a screen reader follows it.
+
+/// Hide the terminal's cursor (DEC private mode 25).
+pub const CURSOR_HIDE: &[u8] = b"\x1b[?25l";
+/// Show it.
+pub const CURSOR_SHOW: &[u8] = b"\x1b[?25h";
+
+/// The message of a `>>~ (row, col)` whose place is not one: rows and columns
+/// count from 1, and only `(0, 0)` means "hidden". It says "out of range", so
+/// the error is a `##Range` in every engine.
+pub const CARET_RANGE: &str =
+    "cursor position out of range: >>~ (row, col) counts both from 1, and (0, 0) hides the cursor";
+
+/// The message of a `>>~ pos` with nothing to print whose `pos` is not a
+/// place: a positional tuple of two Ints. The engine adds ", got <Type>".
+pub const CARET_SHAPE: &str = ">>~ pos with nothing to print takes the cursor's place, a tuple (row, col)";
+
+/// `>>~ (row, col)` outside `>>|`: the cursor there is the shell's.
+pub const CARET_OUTSIDE: &str =
+    ">>~ (row, col) shows the cursor of a full screen, and is written inside >>| { }";
+
+/// The place `>>~ (row, col)` asks for: `None` for `(0, 0)`, which hides the
+/// cursor, and an error for any other place outside the screen's numbering.
+pub fn caret(row: i64, col: i64) -> Result<Option<(u16, u16)>, &'static str> {
+    if row == 0 && col == 0 {
+        return Ok(None);
+    }
+    match (u16::try_from(row), u16::try_from(col)) {
+        (Ok(r), Ok(c)) if r >= 1 && c >= 1 => Ok(Some((r, c))),
+        _ => Err(CARET_RANGE),
+    }
+}
+
+/// What the terminal is sent for a cursor: moved there and shown, or hidden.
+pub fn caret_bytes(caret: Option<(u16, u16)>) -> Vec<u8> {
+    match caret {
+        None => CURSOR_HIDE.to_vec(),
+        Some((r, c)) => {
+            let mut b = format!("\x1b[{};{}H", r, c).into_bytes();
+            b.extend_from_slice(CURSOR_SHOW);
+            b
+        }
+    }
 }
 
 /// One write, past `std::io::stdout`'s line buffering: a `LineWriter` writes a
@@ -98,5 +165,26 @@ fn write_terminal(bytes: &[u8]) {
         let mut out = std::io::stdout();
         out.write_all(bytes).ok();
         out.flush().ok();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caret_counts_from_one_and_zero_zero_hides() {
+        assert_eq!(caret(1, 6), Ok(Some((1, 6))));
+        assert_eq!(caret(0, 0), Ok(None));
+        for (r, c) in [(0, 5), (5, 0), (-1, 1), (1, -1), (70000, 1)] {
+            assert_eq!(caret(r, c), Err(CARET_RANGE), "({r}, {c})");
+        }
+        assert_eq!(crate::errkind::error_kind_of_message(CARET_RANGE), "Range");
+    }
+
+    #[test]
+    fn caret_bytes_move_then_show_or_hide() {
+        assert_eq!(caret_bytes(Some((3, 10))), b"\x1b[3;10H\x1b[?25h".to_vec());
+        assert_eq!(caret_bytes(None), CURSOR_HIDE.to_vec());
     }
 }

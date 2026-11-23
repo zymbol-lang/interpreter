@@ -523,6 +523,10 @@ pub enum Instruction {
     /// in the second (D-14); blocking flag. Placed here rather than beside
     /// `ReadKey` so that no opcode before it was renumbered.
     ReadKeyMods(Reg, Reg, bool),
+    /// >>~ (row, col) / >>~ pos with nothing to print — the register holds the
+    /// place, a tuple of two Ints: the terminal's cursor is shown there, and
+    /// (0, 0) hides it (D-16). Refused outside `>>|`.
+    ShowCursor(Reg),
 
     // ── Halt ─────────────────────────────────────────────────────────────
     Halt,

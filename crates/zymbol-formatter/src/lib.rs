@@ -210,6 +210,15 @@ mod tests {
     }
 
     #[test]
+    fn test_format_cursor_has_no_gt() {
+        // D-16: `>>~ (row, col)` with nothing to print stays without `>`,
+        // which would make it a positioned output of nothing.
+        let src = ">>| {\n    >>~ (1, 1) > \"hi\"\n    >>~ (1, 3)\n    at = (2, 4)\n    >>~ at\n    >>~ (0, 0)\n}\n";
+        assert_eq!(format(src).unwrap(), src);
+        assert_eq!(format(">>|{\n>>~(1,3)\n}").unwrap(), ">>| {\n    >>~ (1, 3)\n}\n");
+    }
+
+    #[test]
     fn test_format_const_decl() {
         let result = format("PI:=3.14").unwrap();
         assert_eq!(result, "PI := 3.14\n");

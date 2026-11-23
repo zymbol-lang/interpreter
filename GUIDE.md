@@ -841,6 +841,46 @@ pos = (10, 5)
 ANSI color indices (0–255): standard 16 system colors, then 6×6×6 cube (16–231),
 then grayscale (232–255). `0` = use terminal default.
 
+### The cursor — `>>~ (row, col)` with nothing to print
+
+`>>|` hides the terminal's cursor, which is what a game wants. A program that
+edits text wants it shown where the next character will go. `>>~` with a place
+and no `> items` does that: nothing is printed, and the terminal's cursor is
+shown there. `>>~ (0, 0)` hides it again.
+
+```zymbol
+>>| {
+    >>!
+    >>~ (1, 1) > "hello"
+    >>~ (1, 6)                     // the cursor, after "hello"
+    <<| k
+    >>~ (2, 1) > "status"          // drawing elsewhere does not move it
+    <<| k
+    >>~ (0, 0)                     // hidden
+    <<| k
+}
+```
+
+It stays where it was put until the program moves or hides it. Every frame shown
+in between ends with the cursor back at that place, whatever the frame drew,
+and clearing the screen with `>>!` does not hide it. Each `>>|` begins with the
+cursor hidden. It is the terminal's own cursor, so it blinks and has the shape
+and colour the user chose, and a screen reader follows it.
+
+- The place counts rows and columns from 1, like any other `>>~`. A place
+  outside that numbering, other than `(0, 0)`, is a `##Range`. A slot that is
+  not an Int is a `##Type`.
+- The place can be held in a variable: `at = (r, c)` then `>>~ at`. It must be a
+  tuple of two Ints.
+- Only a place is accepted. `>>~ (1, 6, 1)` with nothing to print is a syntax
+  error, because a style has nothing to apply to. The empty slot of `>>~ (1,)`
+  is refused too: a cursor is never left half where it was.
+- Outside `>>|` the cursor belongs to the shell, so `>>~ (row, col)` there is an
+  error.
+
+> Since v0.0.12 (D-16). Before that, a program that wanted a cursor drew its own,
+> one cell in inverted colours (DIS-ZYE-004 in `ZyEdit/HALLAZGOS.md`).
+
 ### Key Input
 
 `<<|` reads one keypress (blocking). `<<|?` polls without blocking.
@@ -1019,6 +1059,10 @@ The key file has one step per line (blank lines and `#` comments are ignored):
 | `SHIFT+RIGHT`, `ALT+x`, `CTRL+ALT+DEL` | the key with those modifiers in `m`. The prefixes go in any order, before any key |
 | `WAIT 10` | the next ten `<<|?` find no key — a running loop advances by polls, not by a clock |
 | `SHOW` | the current frame is written to the output — a menu the last frame no longer shows |
+
+A frame with the cursor shown (`>>~ (row, col)`, above) ends with one more line
+that says where: `[cursor 1,6]`. A frame with the cursor hidden has no such
+line, which is every frame a program drew before v0.0.12.
 
 The names and prefixes give what a real keyboard gives, through the same rule:
 `SHIFT+A` and `A` are both `'A'` with `m = 0`, and `BACKTAB` and `SHIFT+TAB` are

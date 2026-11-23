@@ -466,14 +466,15 @@ impl<'a> FormatVisitor<'a> {
                 first = false;
                 if let Some(expr) = slot { self.format_expr(expr); }
             }
-            self.output.write(") >");
+            // The cursor (D-16) has no `>`: nothing is printed.
+            self.output.write(if op.caret { ")" } else { ") >" });
         } else {
             // Bare-variable form: >>~ pos > items
             self.output.write(">>~ ");
             if let Some(Some(expr)) = op.slots.first() {
                 self.format_expr(expr);
             }
-            self.output.write(" >");
+            if !op.caret { self.output.write(" >"); }
         }
         for item in &op.items {
             self.output.write(" ");

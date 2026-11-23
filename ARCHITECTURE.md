@@ -246,8 +246,8 @@ struct Interpreter {
 ### Register VM Execution
 
 #### `zymbol-bytecode`
-Instruction set definition: 173 instruction variants (counted 2026-11-22: `ReadKeyMods`, D-14,
-is the last before `Halt`); the table names the
+Instruction set definition: 174 instruction variants (counted 2026-11-23: `ReadKeyMods`, D-14,
+and `ShowCursor`, D-16, are the last before `Halt`); the table names the
 ones a reader meets first.
 
 | Category | Instructions |

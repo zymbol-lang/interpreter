@@ -66,6 +66,10 @@ pub trait Terminal {
     fn input_hint(&mut self, hint: &str);
     /// `>>~`: `at` is (row, column), counted from 1, as the program wrote them.
     fn print_at(&mut self, at: Option<(u16, u16)>, style: Style, text: &str);
+    /// `>>~ (row, col)` with nothing to print, inside `>>|` (D-16): the
+    /// terminal's cursor is shown there from now on, and every frame shown ends
+    /// with it back there; `None` hides it, which is how `>>|` begins.
+    fn set_caret(&mut self, caret: Option<(u16, u16)>);
     /// The start of a `>>|` block. `Ok(true)` when a `>>` inside the block is
     /// drawn on this terminal with [`Terminal::write`] and [`Terminal::newline`]
     /// instead of going to the VM's output: a virtual terminal, or one that
@@ -187,6 +191,7 @@ impl Terminal for BasicTerminal {
     fn input_hint(&mut self, hint: &str) {
         stdout_hint(hint);
     }
+    fn set_caret(&mut self, _caret: Option<(u16, u16)>) {}
     fn print_at(&mut self, _at: Option<(u16, u16)>, _style: Style, text: &str) {
         print!("{}", text);
         std::io::stdout().flush().ok();
@@ -260,6 +265,10 @@ impl Terminal for Headless {
     fn input_hint(&mut self, hint: &str) {
         stdout_hint(hint);
     }
+    /// The cursor is a line after the frame (D-16).
+    fn set_caret(&mut self, caret: Option<(u16, u16)>) {
+        self.state.screen.set_caret(caret);
+    }
     /// Position and text on the virtual screen; no styles.
     fn print_at(&mut self, at: Option<(u16, u16)>, _style: Style, text: &str) {
         if let Some((r, c)) = at {
@@ -269,7 +278,7 @@ impl Terminal for Headless {
     }
     /// No terminal is taken over.
     fn enter_tui(&mut self) -> Result<bool, String> {
-        self.state.screen.clear();
+        self.state.screen.open();
         Ok(true)
     }
     fn exit_tui(&mut self, out: &mut dyn Write) -> std::io::Result<()> {

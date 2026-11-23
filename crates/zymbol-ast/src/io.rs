@@ -91,6 +91,9 @@ pub struct OutputPos {
     pub items: Vec<crate::Expr>,
     /// `false` for the bare-variable form `>>~ pos > items` (no parens)
     pub parenthesized: bool,
+    /// `>>~ (row, col)` with no `>`: nothing is printed, the terminal's cursor
+    /// is shown there — or hidden, by `(0, 0)` (D-16). `items` is empty.
+    pub caret: bool,
     pub span: Span,
 }
 
@@ -142,11 +145,16 @@ impl KeyInput {
 
 impl OutputPos {
     pub fn new(slots: Vec<Option<crate::Expr>>, items: Vec<crate::Expr>, span: Span) -> Self {
-        Self { slots, items, parenthesized: true, span }
+        Self { slots, items, parenthesized: true, caret: false, span }
     }
 
     pub fn new_bare(slots: Vec<Option<crate::Expr>>, items: Vec<crate::Expr>, span: Span) -> Self {
-        Self { slots, items, parenthesized: false, span }
+        Self { slots, items, parenthesized: false, caret: false, span }
+    }
+
+    /// `>>~ (row, col)` or `>>~ pos`, with nothing to print: the cursor (D-16).
+    pub fn cursor(slots: Vec<Option<crate::Expr>>, parenthesized: bool, span: Span) -> Self {
+        Self { slots, items: Vec::new(), parenthesized, caret: true, span }
     }
 }
 

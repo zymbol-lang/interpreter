@@ -113,7 +113,10 @@ impl<W: Write> Interpreter<W> {
             }
             let line_result = (self.input_fn)();
             if self.tui_depth > 0 {
-                crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide).ok();
+                // Back where the program left it: hidden, or at its `>>~ (row, col)`.
+                let mut out = std::io::stdout();
+                out.write_all(&zymbol_common::screen::caret_bytes(self.caret)).ok();
+                out.flush().ok();
                 crossterm::terminal::enable_raw_mode().map_err(|e| RuntimeError::Generic {
                     message: format!("input: failed to restore raw mode: {}", e),
                     span: input.span,
@@ -257,6 +260,9 @@ impl<W: Write> Interpreter<W> {
     /// Positioned output: >>~ (fila, col, BKS, fg, bg) > items
     /// Sparse syntax: >>~(,,,15,0)> — None slot = do not touch that parameter.
     pub(crate) fn execute_output_pos(&mut self, op: &OutputPos) -> Result<()> {
+        if op.caret {
+            return self.execute_caret(op);
+        }
         // Mode: single-slot variable → dense tuple evaluated at runtime
         if op.slots.len() == 1 {
             if let Some(expr) = &op.slots[0] {
@@ -341,7 +347,7 @@ impl<W: Write> Interpreter<W> {
     /// written at once, as they always were.
     fn draw(&mut self, bytes: &[u8]) {
         if self.tui_depth > 0 {
-            zymbol_common::screen::put(&mut self.frame, bytes);
+            zymbol_common::screen::put(&mut self.frame, bytes, self.caret);
         } else {
             let mut out = std::io::stdout();
             out.write_all(bytes).ok();
@@ -349,10 +355,54 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
+    /// `>>~ (row, col)` with nothing to print: the terminal's cursor is shown
+    /// there, and `>>~ (0, 0)` hides it (D-16, DIS-ZYE-004). It is a place on
+    /// the full screen, so it is refused outside `>>|`, where the cursor is
+    /// the shell's. The VM's `ShowCursor` says the same, in the same words.
+    fn execute_caret(&mut self, op: &OutputPos) -> Result<()> {
+        let mut place: Vec<i64> = Vec::with_capacity(2);
+        let lone = op.slots.len() == 1;
+        for slot in op.slots.iter().flatten() {
+            let v = self.eval_expr(slot)?;
+            match (v, lone) {
+                (Value::Int(n), false) => place.push(n),
+                (Value::Tuple(ref items), true) if items.len() == 2 => {
+                    for it in items.iter() {
+                        match it {
+                            Value::Int(n) => place.push(*n),
+                            other => return Err(RuntimeError::kinded("Type",
+                                format!(">>~ slot expects Int, got {}", other.type_ident()), op.span)),
+                        }
+                    }
+                }
+                (other, true) => return Err(RuntimeError::kinded("Type",
+                    format!("{}, got {}", zymbol_common::screen::CARET_SHAPE, other.type_ident()), op.span)),
+                (other, false) => return Err(RuntimeError::kinded("Type",
+                    format!(">>~ slot expects Int, got {}", other.type_ident()), op.span)),
+            }
+        }
+        let caret = zymbol_common::screen::caret(place[0], place[1])
+            .map_err(|m| RuntimeError::kinded("Range", m.to_string(), op.span))?;
+        if self.tui_depth == 0 {
+            return Err(RuntimeError::Generic {
+                message: zymbol_common::screen::CARET_OUTSIDE.to_string(),
+                span: op.span,
+            });
+        }
+        self.caret = caret;
+        if let Some(h) = self.headless.as_mut() {
+            h.screen.set_caret(caret);
+            return Ok(());
+        }
+        let bytes = zymbol_common::screen::caret_bytes(caret);
+        self.draw(&bytes);
+        Ok(())
+    }
+
     /// The program waits, or its `>>|` ends: the terminal gets the frame
     /// (GAP-ZYE-015). The VM's native terminal does the same at the same points.
     pub(crate) fn show_frame(&mut self) {
-        zymbol_common::screen::show(&mut self.frame);
+        zymbol_common::screen::show(&mut self.frame, self.caret);
     }
 
     /// The items of a `>>~`, evaluated and joined before anything is written — as the VM
@@ -375,7 +425,7 @@ impl<W: Write> Interpreter<W> {
         // its error, and the VM, which unwinds past the end of the block, could
         // not print a frame there — the two engines must agree.
         if self.headless.is_some() {
-            if let Some(h) = self.headless.as_mut() { h.screen.clear(); }
+            if let Some(h) = self.headless.as_mut() { h.screen.open(); }
             self.tui_depth += 1;
             let result = self.execute_block(&tb.body);
             self.tui_depth -= 1;
@@ -408,10 +458,13 @@ impl<W: Write> Interpreter<W> {
             })?;
         self.tui_depth += 1;
         zymbol_common::screen::opened();
+        // A `>>|` begins with the cursor hidden; an outer one gets its own back.
+        let outer_caret = self.caret.take();
         let result = self.execute_block(&tb.body);
         // However the block ended — normally, by `@!`, by an error — what it
         // drew reaches the terminal before the terminal is given back.
         self.show_frame();
+        self.caret = outer_caret;
         self.tui_depth -= 1;
         let _ = execute!(std::io::stdout(), terminal::LeaveAlternateScreen, cursor::Show);
         let _ = terminal::disable_raw_mode();

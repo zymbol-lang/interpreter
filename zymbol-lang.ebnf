@@ -239,7 +239,7 @@ export_item =
 statement =
     output_stmt              (* >> *)
   | tui_block_stmt           (* >>| { } *)
-  | output_pos_stmt          (* >>~ (...) > items *)
+  | output_pos_stmt          (* >>~ (...) > items, or >>~ (row, col): the cursor *)
   | clear_screen_stmt        (* >>! *)
   | input_stmt               (* << var  or  << #|var| *)
   | key_input_stmt           (* <<| var  or  <<|? var, + optional ", mods" *)
@@ -337,9 +337,13 @@ tui_block_stmt = ">>|" , block ;
   The position is a sparse tuple of up to 5 optional slots.
   Absent slots are indicated by bare commas.  Items follow  > .
   Alternative form: >>~ variable > items  (variable must eval to a dense tuple).
+  With no  >  it is the cursor (D-16, v0.0.12): nothing is printed and the
+  terminal's cursor is shown at (row, col), or hidden by (0, 0). Exactly two
+  slots, both written; a variable must eval to a tuple of two Ints.
 *)
 output_pos_stmt =
     ">>~" , ( sparse_pos_tuple | identifier ) , ">" , { output_item }
+  | ">>~" , ( "(" , expression , "," , expression , ")" | identifier )
   ;
 
 sparse_pos_tuple =

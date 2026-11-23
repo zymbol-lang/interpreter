@@ -109,6 +109,7 @@ frames. Auto-free releases a value right after its last use — invisible, never
 
 TUI: `@~ 500` sleep ms · `>>!` clear · `(H,W) = >>?` size (`(24,80)` with no tty) ·
 `>>~ (row,col,BKS,fg,bg) > "text"` positioned/styled (any slot omissible: `>>~ (,,,196) > "red"`) ·
+`>>~ (row,col)` with no `>` shows the terminal's cursor there until moved, `>>~ (0,0)` hides it ·
 `<<| k` blocking key · `<<|? k` polling (`'\0'` if none) · `<<| k, m` also gives the modifiers
 as an Int (Shift 1, Alt 2, Ctrl 4; never Shift on text: `'A'` has `m = 0`) · `>>| { }` alternate
 screen + raw mode (errors without a tty; `<<|` needs it). Arrows arrive as `'↑' '↓' '←' '→'`;

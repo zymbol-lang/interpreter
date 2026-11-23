@@ -1864,6 +1864,18 @@ impl Parser {
         token
     }
 
+    /// The span of the last token consumed, comments aside.
+    pub(crate) fn last_consumed_span(&self) -> zymbol_span::Span {
+        let mut idx = self.current;
+        while idx > 0 {
+            idx -= 1;
+            if !Self::is_comment(&self.tokens[idx]) {
+                return self.tokens[idx].span;
+            }
+        }
+        self.tokens[0].span
+    }
+
     /// Check if at end of tokens
     fn is_at_end(&self) -> bool {
         matches!(self.peek().kind, TokenKind::Eof)

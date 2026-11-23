@@ -862,6 +862,9 @@ pub struct Interpreter<W: Write> {
     /// waited (GAP-ZYE-015): shown by `zymbol_common::screen::show` at `<<|`,
     /// `<<|?`, `@~`, `<<` and the end of the block. Always empty outside `>>|`.
     pub(crate) frame: Vec<u8>,
+    /// Where `>>~ (row, col)` showed the terminal's cursor in the open `>>|`
+    /// (D-16); `None` while it is hidden, which is how `>>|` begins.
+    pub(crate) caret: Option<(u16, u16)>,
     /// TCO support: name of the currently executing function (None = not in a function).
     /// Used to detect `<~ f(same_args)` tail-call patterns.
     pub(crate) current_function: Option<String>,
@@ -1476,6 +1479,7 @@ impl Interpreter<std::io::Stdout> {
             tui_depth: 0,
             headless: None,
             frame: Vec::new(),
+            caret: None,
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),
@@ -1537,6 +1541,7 @@ impl<W: Write> Interpreter<W> {
             tui_depth: 0,
             headless: None,
             frame: Vec::new(),
+            caret: None,
             current_function: None,
             tco_pending: false,
             tco_args: Vec::new(),

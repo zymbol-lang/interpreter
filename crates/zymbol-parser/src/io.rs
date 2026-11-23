@@ -358,6 +358,7 @@ impl Parser {
 
     /// Parse positioned output: >>~ (fila, col, BKS, fg, bg) > items
     /// Sparse inline: >>~(,,,15,0)> — commas as position markers, empty slot = absent
+    /// With no `>`: >>~ (fila, col) — the terminal's cursor (D-16)
     pub(crate) fn parse_output_pos(&mut self) -> Result<Statement, Diagnostic> {
         let start_span = self.advance().span; // consume >>~
 
@@ -377,9 +378,18 @@ impl Parser {
 
         let gt = self.peek().clone();
         if !matches!(gt.kind, TokenKind::Gt) {
-            return Err(Diagnostic::error("expected '>' after >>~ position")
-                .with_span(gt.span)
-                .with_help("syntax: >>~ (fila, col) > items"));
+            // Nothing to print: `>>~ (row, col)` shows the terminal's cursor
+            // there, and `>>~ (0, 0)` hides it (D-16, DIS-ZYE-004). A place is
+            // all it takes — a style or a colour has nothing to apply to.
+            let span = start_span.to(&self.last_consumed_span());
+            if parenthesized && (slots.len() != 2 || slots.iter().any(|s| s.is_none())) {
+                return Err(Diagnostic::error(
+                    "a cursor is placed by a row and a column only: >>~ (row, col)",
+                )
+                .with_span(span)
+                .with_help("to print, add '>' and what to print: >>~ (fila, col [, BKS [, fg [, bg]]]) > items"));
+            }
+            return Ok(Statement::OutputPos(OutputPos::cursor(slots, parenthesized, span)));
         }
         let gt_span = self.advance().span; // consume >
         let items = self.parse_output_items_same_line(gt_span.start.line)?;

@@ -5089,6 +5089,33 @@ impl<W: Write> VM<W> {
                     wreg!(*dst, value);
                 }
 
+                &Instruction::ShowCursor(r_pos) => {
+                    // `>>~ (row, col)` with nothing to print (D-16): in the
+                    // tree-walker's order and words — the place's shape, its
+                    // range, then whether a `>>|` is open.
+                    let place: Result<[i64; 2], String> = match rreg!(r_pos) {
+                        Value::Tuple(t) if t.len() == 2 => match (&t[0], &t[1]) {
+                            (Value::Int(r), Value::Int(c)) => Ok([*r, *c]),
+                            (Value::Int(_), other) | (other, _) => Err(format!(
+                                ">>~ slot expects Int, got {}", other.type_name())),
+                        },
+                        other => Err(format!(
+                            "{}, got {}", zymbol_common::screen::CARET_SHAPE, other.type_name())),
+                    };
+                    let place = match place {
+                        Ok(p) => p,
+                        Err(m) => raise!(VmError::TypeMsg(m)),
+                    };
+                    let caret = match zymbol_common::screen::caret(place[0], place[1]) {
+                        Ok(c) => c,
+                        Err(m) => raise!(VmError::Generic(m.to_string())),
+                    };
+                    if self.tui_open == 0 {
+                        raise!(VmError::Generic(zymbol_common::screen::CARET_OUTSIDE.to_string()));
+                    }
+                    self.terminal.set_caret(caret);
+                }
+
                 Instruction::PrintAt(r_pos, item_regs) => {
                     let pos_val = rreg!(*r_pos).clone();
                     let (fila, col, bks, fg, bg) = vm_extract_pos(pos_val);

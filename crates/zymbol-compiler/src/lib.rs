@@ -1638,6 +1638,26 @@ impl Compiler {
                 }
                 Ok(())
             }
+            Statement::OutputPos(op) if op.caret => {
+                // `>>~ (row, col)` with nothing to print: the cursor (D-16).
+                // The slots are checked as `>>~` checks them; a lone one is a
+                // place held in a variable, checked by `ShowCursor` itself.
+                let r_pos = if let [Some(lone)] = op.slots.as_slice() {
+                    self.compile_expr(lone, ctx)?
+                } else {
+                    let mut slot_regs = Vec::with_capacity(2);
+                    for slot in op.slots.iter().flatten() {
+                        let r = self.compile_expr(slot, ctx)?;
+                        ctx.emit(Instruction::OutputSlotCheck(r, false));
+                        slot_regs.push(r);
+                    }
+                    let r_pos = ctx.alloc_temp()?;
+                    ctx.emit(Instruction::MakeTuple(r_pos, slot_regs));
+                    r_pos
+                };
+                ctx.emit(Instruction::ShowCursor(r_pos));
+                Ok(())
+            }
             Statement::OutputPos(op) => {
                 // Compile each slot: None → LoadUnit, Some(expr) → compile expr
                 let mut slot_regs = Vec::with_capacity(op.slots.len());
@@ -6394,7 +6414,7 @@ fn max_reg_used(instructions: &[Instruction]) -> Option<u16> {
             // Two globals and no register: nothing to count.
             Instruction::DestroyGlobal(_, _) => {}
             Instruction::Sleep(r) | Instruction::QueryTerminalSize(r)
-            | Instruction::ReadKey(r, _) => upd(*r),
+            | Instruction::ReadKey(r, _) | Instruction::ShowCursor(r) => upd(*r),
             Instruction::ReadKeyMods(k, m, _) => { upd(*k); upd(*m); }
             Instruction::ReadLine(d, prompt_r, _) => {
                 upd(*d);

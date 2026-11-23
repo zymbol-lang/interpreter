@@ -45,6 +45,12 @@ pub struct NativeTerminal {
     /// (GAP-ZYE-015): shown by `zymbol_common::screen::show` at `<<|`, `<<|?`,
     /// `@~`, `<<` and the end of the block. Always empty outside `>>|`.
     frame: Vec<u8>,
+    /// Where `>>~ (row, col)` showed the cursor in the open `>>|` (D-16);
+    /// `None` while it is hidden, which is how `>>|` begins.
+    caret: Option<(u16, u16)>,
+    /// The cursor of each `>>|` that encloses the open one, given back when
+    /// the inner one ends.
+    outer_carets: Vec<Option<(u16, u16)>>,
 }
 
 impl NativeTerminal {
@@ -59,7 +65,7 @@ impl NativeTerminal {
     /// Inside `>>|`, into the frame; outside it, straight to the terminal.
     fn draw(&mut self, bytes: &[u8]) {
         if self.in_tui() {
-            zymbol_common::screen::put(&mut self.frame, bytes);
+            zymbol_common::screen::put(&mut self.frame, bytes, self.caret);
         } else {
             let mut out = std::io::stdout();
             out.write_all(bytes).ok();
@@ -69,7 +75,7 @@ impl NativeTerminal {
 
     /// The program waits: the terminal gets the frame.
     fn show(&mut self) {
-        zymbol_common::screen::show(&mut self.frame);
+        zymbol_common::screen::show(&mut self.frame, self.caret);
     }
 }
 
@@ -137,7 +143,10 @@ impl Terminal for NativeTerminal {
         let mut line = String::new();
         std::io::stdin().lock().read_line(&mut line).ok();
         if in_tui {
-            crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide).ok();
+            // Back where the program left it: hidden, or at its `>>~ (row, col)`.
+            let mut out = std::io::stdout();
+            out.write_all(&zymbol_common::screen::caret_bytes(self.caret)).ok();
+            out.flush().ok();
             if let Err(e) = crossterm::terminal::enable_raw_mode() {
                 return Err(format!("input: failed to restore raw mode: {}", e));
             }
@@ -154,6 +163,13 @@ impl Terminal for NativeTerminal {
     /// own, and every `execute!` flushes, so the terminal was free to show every state in
     /// between (GAP-ZYE-015, ZyEdit/HALLAZGOS.md). The tree-walker's `emit_positioned`
     /// writes the same bytes the same way; the two must stay alike.
+    /// The tree-walker's `execute_caret` sends the same bytes the same way.
+    fn set_caret(&mut self, caret: Option<(u16, u16)>) {
+        self.caret = caret;
+        let bytes = zymbol_common::screen::caret_bytes(caret);
+        self.draw(&bytes);
+    }
+
     fn print_at(&mut self, at: Option<(u16, u16)>, style: Style, text: &str) {
         use crossterm::{cursor, queue, style as st};
         let mut buf: Vec<u8> = Vec::new();
@@ -196,6 +212,7 @@ impl Terminal for NativeTerminal {
         }
         self.tui_stack.push(TuiGuard);
         zymbol_common::screen::opened();
+        self.outer_carets.push(self.caret.take());
         Ok(true)
     }
 
@@ -204,6 +221,7 @@ impl Terminal for NativeTerminal {
     fn exit_tui(&mut self, _out: &mut dyn Write) -> std::io::Result<()> {
         self.show();
         self.tui_stack.pop();
+        self.caret = self.outer_carets.pop().flatten();
         Ok(())
     }
 
@@ -221,6 +239,8 @@ impl Terminal for NativeTerminal {
     fn release(&mut self) {
         self.show();
         self.tui_stack.clear();
+        self.caret = None;
+        self.outer_carets.clear();
     }
 }
 
