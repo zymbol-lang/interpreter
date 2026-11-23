@@ -6218,6 +6218,11 @@ pub fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16
             ("head",      B::NET_HEAD),
             ("timeout",   B::NET_TIMEOUT),
         ]),
+        "std/text" => Some(vec![
+            ("upper", B::TEXT_UPPER),
+            ("lower", B::TEXT_LOWER),
+            ("fold",  B::TEXT_FOLD),
+        ]),
         "std/term" => Some(vec![
             ("width",     B::TERM_WIDTH),
             ("pad_left",  B::TERM_PAD_LEFT),

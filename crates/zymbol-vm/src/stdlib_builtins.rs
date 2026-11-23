@@ -725,6 +725,28 @@ fn time_diff(args: Vec<Value>, host: &mut dyn Host) -> Result<Value, String> {
     })
 }
 
+// ── std/text ───────────────────────────────────────────────────────────────────
+//
+// Case (D-18). The rules are `zymbol_intrinsics::text`, shared with the
+// tree-walker's `stdlib/text.rs`, whose words the error repeats.
+
+fn text_case(args: Vec<Value>, fname: &str) -> Result<Value, String> {
+    use zymbol_intrinsics::text;
+    let s = |x: String| Value::String(ZyStr::new(x));
+    match (args.first(), fname) {
+        (Some(Value::String(v)), "upper") => Ok(s(text::upper(v.as_str()))),
+        (Some(Value::String(v)), "lower") => Ok(s(text::lower(v.as_str()))),
+        (Some(Value::String(v)), _) => Ok(s(text::fold(v.as_str()))),
+        (Some(Value::Char(c)), "upper") => Ok(s(text::upper_char(*c))),
+        (Some(Value::Char(c)), "lower") => Ok(s(text::lower_char(*c))),
+        (Some(Value::Char(c)), _) => Ok(Value::Char(text::fold_char(*c))),
+        (other, _) => Err(format!(
+            "text::{fname}: argument type must be String or Char, got {}",
+            other.map(|v| v.type_label()).unwrap_or_else(|| "nothing".to_string())
+        )),
+    }
+}
+
 // ── std/term ───────────────────────────────────────────────────────────────────
 //
 // Terminal display metrics. Mirrors zymbol-interpreter/src/stdlib/term.rs.
@@ -849,6 +871,9 @@ pub fn call(builtin_id: u16, args: Vec<Value>, host: &mut dyn Host) -> Result<Va
         B::IO_DELETE     => io_delete(args),
         B::IO_LIST       => io_list(args),
         B::IO_MKDIR      => io_mkdir(args),
+        B::TEXT_UPPER     => text_case(args, "upper"),
+        B::TEXT_LOWER     => text_case(args, "lower"),
+        B::TEXT_FOLD      => text_case(args, "fold"),
         B::TERM_WIDTH     => term_width(args),
         B::TERM_PAD_LEFT  => term_pad_left(args),
         B::TERM_PAD_RIGHT => term_pad_right(args),

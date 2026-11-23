@@ -130,6 +130,13 @@ pub const MODULES: &[StdModule] = &[
         feature_gated: false,
     },
     StdModule {
+        path: "std/text",
+        // Upper case, lower case and case folding (D-18).
+        functions: &[f("upper", 1), f("lower", 1), f("fold", 1)],
+        constants: &[],
+        feature_gated: false,
+    },
+    StdModule {
         path: "std/time",
         // Everything but `now` takes an optional trailing zone, so everything
         // but `now` is variadic.

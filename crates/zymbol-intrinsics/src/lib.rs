@@ -30,3 +30,4 @@ pub mod search;
 pub mod transform;
 pub mod time;
 pub mod random;
+pub mod text;

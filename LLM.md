@@ -301,7 +301,8 @@ append exists delete list mkdir`) · `std/net` (`get post post_json head timeout
 (`connect exec query query_one query_value tx begin commit rollback …`) · `std/term`
 (`width pad_left pad_right center truncate` — **display columns**, not graphemes: CJK and
 most emoji are 2 columns, so lay TUI out with `t::width`, never `$#`) · `std/time`
-(`now today parts of format add diff`).
+(`now today parts of format add diff`) · `std/text` (`upper lower fold` — Unicode case with no
+locale; `upper`/`lower` may change the length, `ß` → `SS`; `fold` keeps it, for comparing).
 
 `std/time`: an instant is **milliseconds** since the epoch, always UTC; a date is a
 *reading* of one, so every function takes an optional trailing zone — `"UTC"` (default),

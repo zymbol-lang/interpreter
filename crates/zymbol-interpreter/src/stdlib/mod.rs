@@ -17,6 +17,7 @@ mod math;
 mod net;
 mod random;
 mod term;
+mod text;
 mod time;
 
 /// Build a `LoadedModule` for the requested stdlib path.
@@ -53,6 +54,17 @@ pub(crate) fn build_module(name: &str) -> Option<LoadedModule> {
         "std/term" => Some(LoadedModule {
             name: "std/term".to_string(),
             functions: term::register(),
+            all_functions: HashMap::new(),
+            constants: HashMap::new(),
+            all_variables: HashMap::new(),
+            import_aliases: crate::ModuleAliases::default(),
+            loaded_modules_refs: HashMap::new(),
+            const_names: std::collections::HashSet::new(),
+            dead_variables: std::collections::HashSet::new(),
+        }),
+        "std/text" => Some(LoadedModule {
+            name: "std/text".to_string(),
+            functions: text::register(),
             all_functions: HashMap::new(),
             constants: HashMap::new(),
             all_variables: HashMap::new(),

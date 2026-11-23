@@ -221,7 +221,8 @@ struct Interpreter {
 - Tail-call optimization (TCO): detects `<~ f(same_args)` and restarts without stack growth
 - Module system: file-based imports with alias resolution and circular dep detection
 - Native stdlib (`src/stdlib/`): `std/math`, `std/random` (v0.0.6); `std/json`, `std/io`,
-  `std/net`, `std/db` (v0.0.7); `std/term` (v0.0.8); `std/time` (v0.0.9). Each module registers
+  `std/net`, `std/db` (v0.0.7); `std/term` (v0.0.8); `std/time` (v0.0.9); `std/text` (v0.0.12,
+  its case rules in `zymbol-intrinsics::text`, shared with the VM). Each module registers
   `FunctionDef::Native` entries; `std/*` import paths resolve in-process (no filesystem
   lookup)
 - Auto-free (v0.0.8): a variable is destroyed right after the statement holding its last

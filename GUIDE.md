@@ -4662,6 +4662,7 @@ the i18n pattern with no special handling:
 | `std/db` | `connect` `disconnect` `exec` `query` `query_one` `query_value` `tx` `begin` `commit` `rollback` `savepoint` `release` `rollback_to` `exec_script` `table_exists` | v0.0.7 |
 | `std/term` | `width` `pad_left` `pad_right` `center` `truncate` | v0.0.8 |
 | `std/time` | `now` `today` `parts` `of` `format` `add` `diff` | v0.0.9 |
+| `std/text` | `upper` `lower` `fold` | v0.0.12 |
 
 **`std/random` — a seed repeats a run.** `entero(lo, hi)` is an Int in `[lo, hi]`,
 `rango(n)` one in `[0, n)`, `peso_f64()` a Float in `[-0.1, 0.1]`. Unseeded, a run draws a
@@ -4697,6 +4698,36 @@ right); `truncate` cuts to at most N columns without splitting a wide glyph.
 This is a **screen** metric. Operating on a string's *content* — split, slice, replace,
 repeat — stays in the language's symbols (`$/`, `$[..]`, `$~~`, `$*`); `std/term` never
 duplicates them.
+
+**`std/text` — upper case, lower case and case folding.** Case needs Unicode's tables, the
+way `width` needs its width tables, so it is a module and not a mark. The rules are
+Unicode's with no locale: a program answers the same on every machine, and in every engine,
+the playground's included.
+
+- `upper(s)` and `lower(s)` are the full mappings. They take a String or a Char and give a
+  String, whose length may change: `ß` upper-cases to `SS`. `lower` turns a capital sigma
+  into `ς` at the end of a word and into `σ` elsewhere.
+- `fold(s)` is for comparing, and keeps the length. Each code point becomes its simple
+  case folding, one code point for one, so a match found in the folded text is at the same
+  position in the original. It gives back a String for a String and a Char for a Char. `ß`
+  stays `ß` and so does not match `ss`.
+
+```zymbol
+<# std/text => tx
+>> tx::upper("straße") ¶                           // → STRASSE
+>> tx::lower("ТЕТРИС ΣΑΣ") ¶                        // → тетрис σας
+>> (tx::fold("Árbol") == tx::fold("áRBOL")) ¶       // → #1
+t = "Buscar en GRANDES textos"
+i = tx::fold(t) $?? tx::fold("grandes")
+>> i ¶                                             // → [11]
+```
+
+Anything that is not a String or a Char is a `##Type`. There is no title case and no
+locale-specific rule, such as the Turkish dotted `İ`: `upper("i")` is always `I`.
+
+> Since v0.0.12 (D-18). Before that, a program converted case by adding 32 to code
+> points one script at a time (GAP-ZYE-010 in `ZyEdit/HALLAZGOS.md`, GAP-TET-005 in
+> `ZyTetris/HALLAZGOS.md`).
 
 **`std/time` — the clock and the civil calendar.** Before v0.0.9 the only way to learn the
 date was to leave the language, `<\ "date +%F" \>`, which is absent on Windows, absent in a

@@ -1768,7 +1768,8 @@ deep recursion ran until the Rust stack was gone and the process aborted with
 through `$>` in the VM (D7, GLB-133).
 
 `std/term` (v0.0.8) has no soft-error channel: its five functions are pure measurements
-over a string and cannot fail environmentally.
+over a string and cannot fail environmentally. Neither has `std/text` (v0.0.12): case is a
+function of the text alone, and an argument that is not text is a `##Type`.
 
 `##Time` (v0.0.9) is the one soft channel that is mostly not environmental: a date arrives
 from a form, a file or a database column, and the 30th of February is *data* that a program

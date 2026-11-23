@@ -708,6 +708,10 @@ pub mod builtins {
     pub const TIME_FORMAT: u16 = 704;
     pub const TIME_ADD:    u16 = 705;
     pub const TIME_DIFF:   u16 = 706;
+    // std/text functions (case, D-18)
+    pub const TEXT_UPPER:  u16 = 800;
+    pub const TEXT_LOWER:  u16 = 801;
+    pub const TEXT_FOLD:   u16 = 802;
 }
 
 #[derive(Debug, Serialize, Deserialize)]

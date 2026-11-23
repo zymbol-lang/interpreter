@@ -36,6 +36,15 @@ The first release announced as a **public alpha**. Its theme is the terminal and
 
 ### Added
 
+- **`std/text`: `upper`, `lower` and `fold`** — upper case, lower case and case folding, by
+  Unicode's rules with no locale. `upper` and `lower` are the full mappings (`ß` → `SS`,
+  with the final sigma), take a String or a Char and give a String. `fold` keeps the length,
+  one code point for one, so a position found in folded text serves in the original; it
+  gives back the type it was given. The browser engines carry a table generated from the
+  Unicode version Rust uses (`web/src/zymbol/casemap.js`), because a browser's own
+  `toUpperCase` follows the Unicode it shipped with: Node 24 and Rust 1.100 differed on 41
+  letters (D-18; GAP-ZYE-010, GAP-TET-005).
+
 - **`<<| k, m` reads the modifiers held with a key** (and `<<|? k, m`): `m` is an Int, Shift
   = 1, Alt = 2, Ctrl = 4, added together, so Shift+→ and Ctrl+→ are no longer both `→`.
   `<<| k` alone is unchanged. Shift is not reported on text, because `'A'` already says it,
