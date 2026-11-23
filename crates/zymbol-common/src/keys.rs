@@ -19,6 +19,9 @@
 //!   as shifted, Caps Lock included, and the Windows console marks the Shift
 //!   key. Ctrl+Alt on a printable character is AltGr, which is how Windows and
 //!   browsers report it, and gives `m = 0`.
+//! - **A change of the window's size arrives as `⤢`** (D-17, 2026-11-23), with
+//!   `m = 0`, so a program waiting on `<<|` can ask `>>?` again and redraw. It
+//!   used to learn nothing until the next key (GAP-ZYE-012).
 
 /// `m`'s bits.
 pub const SHIFT: i64 = 1;
@@ -35,6 +38,8 @@ pub const PAGE_UP: char = '\u{21DE}'; // ⇞
 pub const PAGE_DOWN: char = '\u{21DF}'; // ⇟
 pub const DELETE: char = '\u{2326}'; // ⌦
 pub const BACK_TAB: char = '\u{21E4}'; // ⇤
+/// The window changed size (D-17): not a key, but what `<<|` is woken by.
+pub const RESIZE: char = '\u{2922}'; // ⤢
 /// F1; F2…F12 follow it: `①`–`⑫`.
 pub const F1: char = '\u{2460}';
 
@@ -61,6 +66,8 @@ pub enum Code {
     /// A key the language does not name (Insert, media keys, a lone Shift):
     /// `'\0'`, as before.
     Other,
+    /// The window changed size: `⤢`, never with modifiers (D-17).
+    Resize,
 }
 
 /// The modifiers held with a key.
@@ -97,6 +104,7 @@ pub fn key(code: Code, mods: Mods) -> (char, i64) {
         Code::Tab if mods.shift => (BACK_TAB, SHIFT | ctrl | alt),
         Code::BackTab => (BACK_TAB, SHIFT | ctrl | alt),
         Code::Other => ('\0', 0),
+        Code::Resize => (RESIZE, 0),
         Code::F(n) if !(1..=12).contains(&n) => ('\0', 0),
         named => {
             let ch = match named {
@@ -117,7 +125,7 @@ pub fn key(code: Code, mods: Mods) -> (char, i64) {
                 Code::PageDown => PAGE_DOWN,
                 Code::Delete => DELETE,
                 Code::F(n) => char::from_u32(F1 as u32 + n as u32 - 1).unwrap_or('\0'),
-                Code::Char(_) | Code::BackTab | Code::Other => unreachable!(),
+                Code::Char(_) | Code::BackTab | Code::Other | Code::Resize => unreachable!(),
             };
             (ch, shift | ctrl | alt)
         }
@@ -181,6 +189,7 @@ mod tests {
         assert_eq!(key(Code::F(12), NONE), ('⑫', 0));
         assert_eq!(key(Code::F(13), NONE), ('\0', 0));
         assert_eq!(key(Code::Other, SH), ('\0', 0));
+        assert_eq!(key(Code::Resize, SH), ('⤢', 0));
     }
 
     #[test]

@@ -245,7 +245,7 @@ impl Terminal for Headless {
         self.state.screen.clear();
     }
     fn size(&mut self) -> (u16, u16) {
-        (zymbol_common::vscreen::COLS as u16, zymbol_common::vscreen::ROWS as u16)
+        self.state.size_cols_rows()
     }
     fn read_key(&mut self, blocking: bool, out: &mut dyn Write) -> Result<(char, i64), TerminalError> {
         let (ch, frames) = if blocking {

@@ -16,8 +16,9 @@ use std::collections::VecDeque;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-/// The size `>>?` answers under `--keys`: the conventional terminal, the same
-/// fallback the engines already give when there is no terminal to ask.
+/// The size `>>?` answers under `--keys` until a `RESIZE` step changes it: the
+/// conventional terminal, the same fallback the engines already give when
+/// there is no terminal to ask.
 pub const ROWS: usize = 24;
 pub const COLS: usize = 80;
 
@@ -32,6 +33,9 @@ enum Step {
     /// Write the screen as it stands to the output, then go on: the frame of a
     /// picker or a menu that the last frame, after it closes, no longer shows.
     Show,
+    /// The window becomes this many rows and columns, and `<<|` receives `⤢`
+    /// (D-17).
+    Resize(u16, u16),
 }
 
 /// A key a script delivers: its character and its modifier number.
@@ -48,9 +52,11 @@ pub type Key = (char, i64);
 /// q
 /// ```
 ///
-/// A line is a key, a key with modifiers, `WAIT <n>`, or `SHOW` — which writes
+/// A line is a key, a key with modifiers, `WAIT <n>`, `SHOW` — which writes
 /// the current frame to the output when the program next asks for a key, so a
-/// test can hold a screen the last frame no longer shows.
+/// test can hold a screen the last frame no longer shows — or `RESIZE <rows>
+/// <cols>`, the window changing size: the screen takes the new size, `>>?`
+/// answers it, and `<<|` receives `⤢` (D-17).
 ///
 /// A key is a single character, or one of `SPACE`, `ENTER`, `ESC`, `TAB`,
 /// `BACKTAB`, `BACKSPACE`, `UP`, `DOWN`, `LEFT`, `RIGHT`, `HOME`, `END`, `PGUP`,
@@ -62,6 +68,8 @@ pub type Key = (char, i64);
 #[derive(Debug, Clone, Default)]
 pub struct KeyScript {
     steps: VecDeque<Step>,
+    /// The size a `RESIZE` just delivered as `⤢`, for the screen to take.
+    resized: Option<(u16, u16)>,
 }
 
 impl KeyScript {
@@ -75,6 +83,22 @@ impl KeyScript {
             }
             if line == "SHOW" {
                 steps.push_back(Step::Show);
+                continue;
+            }
+            if let Some(size) = line.strip_prefix("RESIZE ") {
+                let parts: Vec<Option<u16>> = size
+                    .split_whitespace()
+                    .map(|p| p.parse::<u16>().ok().filter(|n| *n >= 1))
+                    .collect();
+                match parts.as_slice() {
+                    [Some(r), Some(c)] => steps.push_back(Step::Resize(*r, *c)),
+                    _ => {
+                        return Err(format!(
+                            "line {}: RESIZE takes the new rows and columns, two whole numbers from 1, got '{}'",
+                            n + 1, line
+                        ))
+                    }
+                }
                 continue;
             }
             if let Some(count) = line.strip_prefix("WAIT ") {
@@ -104,14 +128,14 @@ impl KeyScript {
             }
             let code = keys::named(rest).ok_or_else(|| {
                 format!(
-                    "line {}: '{}' is not one key — write one character, or SPACE, ENTER, ESC, TAB, BACKTAB, BACKSPACE, UP, DOWN, LEFT, RIGHT, HOME, END, PGUP, PGDN, DEL or F1…F12, with SHIFT+, ALT+ or CTRL+ before it if held, or WAIT n, or SHOW",
+                    "line {}: '{}' is not one key — write one character, or SPACE, ENTER, ESC, TAB, BACKTAB, BACKSPACE, UP, DOWN, LEFT, RIGHT, HOME, END, PGUP, PGDN, DEL or F1…F12, with SHIFT+, ALT+ or CTRL+ before it if held, or WAIT n, SHOW or RESIZE rows cols",
                     n + 1, line
                 )
             })?;
             let (ch, m) = keys::key(code, mods);
             steps.push_back(Step::Key(ch, m));
         }
-        Ok(KeyScript { steps })
+        Ok(KeyScript { steps, resized: None })
     }
 
     /// `<<|`: the next key, past any waits — a program that blocks is waiting
@@ -124,6 +148,10 @@ impl KeyScript {
         while let Some(step) = self.steps.pop_front() {
             match step {
                 Step::Key(c, m) => return Some((c, m)),
+                Step::Resize(r, c) => {
+                    self.resized = Some((r, c));
+                    return Some((crate::keys::RESIZE, 0));
+                }
                 Step::Show => show(()),
                 Step::Wait(_) => {}
             }
@@ -157,6 +185,11 @@ impl KeyScript {
                     self.steps.pop_front();
                     return (c, m);
                 }
+                Some(&mut Step::Resize(r, c)) => {
+                    self.steps.pop_front();
+                    self.resized = Some((r, c));
+                    return (crate::keys::RESIZE, 0);
+                }
             }
         }
     }
@@ -170,6 +203,8 @@ impl KeyScript {
 #[derive(Debug, Clone)]
 pub struct VirtualScreen {
     cells: Vec<Vec<String>>,
+    rows: usize,
+    cols: usize,
     row: usize,
     col: usize,
     /// Where `>>~ (row, col)` showed the cursor (D-16), `None` while hidden.
@@ -184,19 +219,43 @@ impl Default for VirtualScreen {
 
 impl VirtualScreen {
     pub fn new() -> Self {
-        VirtualScreen { cells: vec![vec![" ".to_string(); COLS]; ROWS], row: 0, col: 0, caret: None }
+        Self::sized(ROWS, COLS)
     }
 
-    /// `>>|` begins: an empty screen, and the cursor hidden.
+    fn sized(rows: usize, cols: usize) -> Self {
+        VirtualScreen { cells: vec![vec![" ".to_string(); cols]; rows], rows, cols, row: 0, col: 0, caret: None }
+    }
+
+    /// What `>>?` answers: (rows, columns).
+    pub fn size(&self) -> (usize, usize) {
+        (self.rows, self.cols)
+    }
+
+    /// `>>|` begins: an empty screen, and the cursor hidden. The size is the
+    /// window's, so it stays.
     pub fn open(&mut self) {
-        *self = VirtualScreen::new();
+        *self = Self::sized(self.rows, self.cols);
     }
 
     /// `>>!`: the screen is emptied. The cursor stays shown, where it was.
     pub fn clear(&mut self) {
         let caret = self.caret;
-        *self = VirtualScreen::new();
+        *self = Self::sized(self.rows, self.cols);
         self.caret = caret;
+    }
+
+    /// The window changed size (D-17): what was drawn keeps its place, and
+    /// what no longer fits is cut, as on a terminal's alternate screen.
+    pub fn resize(&mut self, rows: usize, cols: usize) {
+        let (rows, cols) = (rows.max(1), cols.max(1));
+        self.cells.resize(rows, vec![" ".to_string(); cols]);
+        for r in &mut self.cells {
+            r.resize(cols, " ".to_string());
+        }
+        self.rows = rows;
+        self.cols = cols;
+        self.row = self.row.min(rows - 1);
+        self.col = self.col.min(cols);
     }
 
     /// `>>~ (row, col)` with nothing to print (D-16): shown there, or hidden.
@@ -206,8 +265,8 @@ impl VirtualScreen {
 
     /// `>>~ (fila, col) >`, 1-based, clamped to the screen.
     pub fn move_to(&mut self, row: i64, col: i64) {
-        self.row = (row.max(1) as usize - 1).min(ROWS - 1);
-        self.col = (col.max(1) as usize - 1).min(COLS);
+        self.row = (row.max(1) as usize - 1).min(self.rows - 1);
+        self.col = (col.max(1) as usize - 1).min(self.cols);
     }
 
     /// Text at the cursor. A newline goes to the start of the next row; what
@@ -217,7 +276,7 @@ impl VirtualScreen {
         for g in text.graphemes(true) {
             match g {
                 "\n" | "\r\n" => {
-                    self.row = (self.row + 1).min(ROWS - 1);
+                    self.row = (self.row + 1).min(self.rows - 1);
                     self.col = 0;
                 }
                 "\r" => self.col = 0,
@@ -226,7 +285,7 @@ impl VirtualScreen {
                     if w == 0 {
                         continue;
                     }
-                    if self.col + w > COLS {
+                    if self.col + w > self.cols {
                         continue;
                     }
                     self.cells[self.row][self.col] = g.to_string();
@@ -277,6 +336,7 @@ impl Headless {
         let mut shown = Vec::new();
         let screen = &self.screen;
         let key = self.keys.next_blocking_with(&mut |_| shown.push(screen.frame()));
+        self.take_resize();
         (key, shown)
     }
 
@@ -285,7 +345,21 @@ impl Headless {
         let mut shown = Vec::new();
         let screen = &self.screen;
         let key = self.keys.next_poll_with(&mut |_| shown.push(screen.frame()));
+        self.take_resize();
         (key, shown)
+    }
+
+    /// A `RESIZE` the key just read came from: the screen takes its size.
+    fn take_resize(&mut self) {
+        if let Some((r, c)) = self.keys.resized.take() {
+            self.screen.resize(r as usize, c as usize);
+        }
+    }
+
+    /// What `>>?` answers under `--keys`: (columns, rows), the VM's order.
+    pub fn size_cols_rows(&self) -> (u16, u16) {
+        let (r, c) = self.screen.size();
+        (c as u16, r as u16)
     }
 }
 
@@ -359,6 +433,22 @@ mod tests {
         s.move_to(1, 1);
         s.write("漢x");
         assert_eq!(s.frame(), "漢x\n  ab");
+    }
+
+    #[test]
+    fn resize_is_a_key_and_a_new_size() {
+        let mut h = Headless::new(KeyScript::parse("a\nRESIZE 10 20\nb").unwrap());
+        h.screen.write("0123456789012345678901234");
+        assert_eq!(h.read_blocking().0, Some(('a', 0)));
+        assert_eq!(h.size_cols_rows(), (80, 24));
+        assert_eq!(h.read_poll().0, ('⤢', 0));
+        assert_eq!(h.size_cols_rows(), (20, 10));
+        assert_eq!(h.screen.frame(), "01234567890123456789");
+        h.screen.open();
+        assert_eq!(h.screen.size(), (10, 20));
+        for bad in ["RESIZE 0 5", "RESIZE 5", "RESIZE a b", "RESIZE 5 5 5", "RESIZE 70000 5"] {
+            assert!(KeyScript::parse(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

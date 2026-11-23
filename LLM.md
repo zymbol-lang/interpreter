@@ -114,7 +114,8 @@ TUI: `@~ 500` sleep ms · `>>!` clear · `(H,W) = >>?` size (`(24,80)` with no t
 as an Int (Shift 1, Alt 2, Ctrl 4; never Shift on text: `'A'` has `m = 0`) · `>>| { }` alternate
 screen + raw mode (errors without a tty; `<<|` needs it). Arrows arrive as `'↑' '↓' '←' '→'`;
 Home End PgUp PgDn Del Shift+Tab as `'⇱' '⇲' '⇞' '⇟' '⌦' '⇤'`; F1–F12 as `'①'`–`'⑫'`;
-Ctrl+letter as its control character (Ctrl+S is `0d19`). Inside `>>|`
+Ctrl+letter as its control character (Ctrl+S is `0d19`); a window resize wakes `<<|` with `'⤢'`
+(ask `>>?` again and redraw). Inside `>>|`
 what is drawn shows at the next wait (`<<|`, `<<|?`, `<<`, `@~`) as one frame: write `@~ 0`
 after drawing and before a long computation, or the screen appears only once it ends.
 

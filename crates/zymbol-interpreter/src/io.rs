@@ -177,8 +177,8 @@ impl<W: Write> Interpreter<W> {
     /// returned a size under the other; identical in a real terminal, so the
     /// parity suite never saw it until it ran inside a container.
     pub(crate) fn eval_terminal_size(&mut self, _span: Span) -> Result<Value> {
-        let (cols, rows) = if self.headless.is_some() {
-            (zymbol_common::vscreen::COLS as u16, zymbol_common::vscreen::ROWS as u16)
+        let (cols, rows) = if let Some(h) = self.headless.as_ref() {
+            h.size_cols_rows()
         } else {
             crossterm::terminal::size().unwrap_or((80, 24))
         };
@@ -214,6 +214,8 @@ impl<W: Write> Interpreter<W> {
                     message: e.to_string(), span: ki.span,
                 })? {
                     Event::Key(key) if is_key_press(&key) => break map_key_code(&key),
+                    // The window changed size: `⤢` (D-17, GAP-ZYE-012).
+                    Event::Resize(..) => break resized(),
                     _ => continue,
                 }
             }
@@ -229,13 +231,17 @@ impl<W: Write> Interpreter<W> {
             // lag whether the tick is 40 ms or 160 ms, which is what gives it away as
             // a queue and not a timing problem.
             //
-            // Draining also covers resize and focus events, which could waste a tick
-            // on any platform.
+            // Draining also covers focus events, which could waste a tick on any
+            // platform. A resize is not drained: it is `⤢` (D-17).
             let mut found = ('\0', 0);
             while event::poll(std::time::Duration::ZERO).unwrap_or(false) {
                 match event::read() {
                     Ok(Event::Key(key)) if is_key_press(&key) => {
                         found = map_key_code(&key);
+                        break;
+                    }
+                    Ok(Event::Resize(..)) => {
+                        found = resized();
                         break;
                     }
                     Ok(_) => continue,
@@ -494,6 +500,13 @@ fn positioned(at: Option<(i64, i64)>, bks: i64, fg: Option<i64>, bg: Option<i64>
         queue!(buf, style::SetAttribute(style::Attribute::Reset))?;
     }
     Ok(buf)
+}
+
+/// What `<<|` hands a program when the window changed size: `⤢`, with no
+/// modifiers (D-17). The VM's host gives the same, from the same rule.
+fn resized() -> (char, i64) {
+    use zymbol_common::keys::{self, Code, Mods};
+    keys::key(Code::Resize, Mods::default())
 }
 
 /// Is this a key going *down*, as opposed to coming back up?

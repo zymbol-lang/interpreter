@@ -53,6 +53,11 @@ The first release announced as a **public alpha**. Its theme is the terminal and
   form is refused outside `>>|`. Under `--keys` a frame with the cursor shown ends with a
   line `[cursor row,col]`. In all four engines, with a new VM instruction `ShowCursor`; the
   playground draws a blinking block over the cell (D-16; DIS-ZYE-004).
+- **A change of the window's size wakes `<<|` with `'⤢'`** (U+2922, `m = 0`), and `<<|?`
+  returns it too, so a program asks `>>?` again and redraws. It learned nothing until the
+  next key, and an editor had to poll. The playground sends it when its panel changes
+  size, keeping what was drawn, and `--keys` gains the step `RESIZE rows cols` (D-17;
+  GAP-ZYE-012).
 - The `--keys` script names those keys (`HOME`, `END`, `PGUP`, `PGDN`, `DEL`, `BACKTAB`,
   `F1`…`F12`) and takes `SHIFT+`, `ALT+` and `CTRL+` in any order before any key:
   `CTRL+ALT+DEL`, `SHIFT+RIGHT`. A key script and a real keyboard go through one rule,

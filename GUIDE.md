@@ -916,6 +916,7 @@ Special keys are mapped to single-character symbols:
 | Backspace | `0d127` (DEL) — what the terminal sends for that key |
 | Ctrl + *letter* | its control character: Ctrl+A is `0d1`, Ctrl+S is `0d19` |
 | Any other key with no name (Insert, media keys) | `'\0'` |
+| The window changed size (not a key) | `'⤢'` (U+2922), with `m = 0` — see below |
 | Other | the character as-is |
 
 > The keys that are not text come back as glyphs, not as letters. Match them
@@ -946,6 +947,31 @@ so a character typed with it (`'@'` on a Spanish keyboard) also arrives with
 > function keys all arrived as `'\0'`, the same value `<<|?` gives when no key
 > was pressed, and no modifier could be read at all (DIS-ZYE-001..003 in
 > `ZyEdit/HALLAZGOS.md`; decisions D-13, D-14 and D-15).
+
+**The window changed size: `'⤢'`.** A program waiting on `<<|` or polling with
+`<<|?` receives `'⤢'` when the terminal's window, or the playground's panel,
+changes size. It is not a key: it is the program's cue to ask `>>?` again and
+redraw. Before it was read, the screen has already taken the new size: what was
+drawn keeps its place, and what no longer fits is cut.
+
+```zymbol
+>>| {
+    @ {
+        (h, w) = >>?
+        dibujar(h, w)
+        <<| k, m
+        ? k == '⤢' { @> }              // redraw at the new size
+        ? k == 'q' { @! }
+    }
+}
+```
+
+A program that does not look for `'⤢'` treats it as any key it does not know:
+a "press any key" screen also goes on when the window is resized.
+
+> Since v0.0.12 (D-17). Before that a program blocked in `<<|` learned nothing
+> until the next key, so an editor had to poll `<<|?` and compare `>>?` every few
+> milliseconds (GAP-ZYE-012 in `ZyEdit/HALLAZGOS.md`).
 
 **Control keys are still their control characters.** What the terminal sends
 for Ctrl+A *is* the byte 1, and `0d1` writes it. So `<<| k` is enough for a
@@ -1039,8 +1065,8 @@ A full-screen program can be run with no terminal at all, from a script of keys:
 zymbol run app.zy --keys app.keys
 ```
 
-`>>|` then draws on a virtual screen of 24 rows by 80 columns instead of taking
-over the terminal, `>>?` answers `(24, 80)`, `<<|` and `<<|?` read the keys from
+`>>|` then draws on a virtual screen of 24 rows by 80 columns (until a `RESIZE`
+step changes it) instead of taking over the terminal, `>>?` answers `(24, 80)`, `<<|` and `<<|?` read the keys from
 the file, `@~` does not wait, and when the block ends its **last frame** is
 written to the output as plain text — styles and colours dropped, columns as a
 terminal lays them out. So the screen can be held in a golden, and a test can
@@ -1059,6 +1085,7 @@ The key file has one step per line (blank lines and `#` comments are ignored):
 | `SHIFT+RIGHT`, `ALT+x`, `CTRL+ALT+DEL` | the key with those modifiers in `m`. The prefixes go in any order, before any key |
 | `WAIT 10` | the next ten `<<|?` find no key — a running loop advances by polls, not by a clock |
 | `SHOW` | the current frame is written to the output — a menu the last frame no longer shows |
+| `RESIZE 10 30` | the window becomes 10 rows by 30 columns: the screen takes that size, `>>?` answers it, and `<<|` receives `'⤢'` |
 
 A frame with the cursor shown (`>>~ (row, col)`, above) ends with one more line
 that says where: `[cursor 1,6]`. A frame with the cursor hidden has no such

@@ -106,6 +106,8 @@ impl Terminal for NativeTerminal {
                     Ok(Event::Key(key)) if is_key_press(&key) => {
                         return Ok(map_key_code(&key))
                     }
+                    // The window changed size: `⤢` (D-17, GAP-ZYE-012).
+                    Ok(Event::Resize(..)) => return Ok(resized()),
                     Ok(_) => continue,
                     Err(e) => return Err(TerminalError::Abort(e.to_string())),
                 }
@@ -120,6 +122,10 @@ impl Terminal for NativeTerminal {
             match event::read() {
                 Ok(Event::Key(key)) if is_key_press(&key) => {
                     found = map_key_code(&key);
+                    break;
+                }
+                Ok(Event::Resize(..)) => {
+                    found = resized();
                     break;
                 }
                 Ok(_) => continue,
@@ -242,6 +248,12 @@ impl Terminal for NativeTerminal {
         self.caret = None;
         self.outer_carets.clear();
     }
+}
+
+/// `⤢`: the window changed size (D-17); the tree-walker's `resized`.
+fn resized() -> (char, i64) {
+    use zymbol_common::keys::{self, Code, Mods};
+    keys::key(Code::Resize, Mods::default())
 }
 
 /// Is this a key going *down*, as opposed to coming back up?
