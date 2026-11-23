@@ -36,6 +36,12 @@ The first release announced as a **public alpha**. Its theme is the terminal and
 
 ### Added
 
+- **`std/text`: `graphemes(s)`** cuts a text into its extended grapheme clusters (UAX #29)
+  and gives an Array of Strings, one each: what a reader takes for one letter, `e` + U+0301,
+  a flag, a family joined by U+200D. A Char stays one code point. The browser engines use
+  a table generated from Unicode 17, the version of the Rust engines' `unicode-segmentation`,
+  which passes that version's `GraphemeBreakTest.txt`; zyjs's `std/term` cuts by it too,
+  instead of the browser's `Intl.Segmenter` (D-19; GAP-ZYE-007).
 - **`std/text`: `upper`, `lower` and `fold`** — upper case, lower case and case folding, by
   Unicode's rules with no locale. `upper` and `lower` are the full mappings (`ß` → `SS`,
   with the final sigma), take a String or a Char and give a String. `fold` keeps the length,

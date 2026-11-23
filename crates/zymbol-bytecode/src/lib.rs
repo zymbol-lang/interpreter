@@ -712,6 +712,7 @@ pub mod builtins {
     pub const TEXT_UPPER:  u16 = 800;
     pub const TEXT_LOWER:  u16 = 801;
     pub const TEXT_FOLD:   u16 = 802;
+    pub const TEXT_GRAPHEMES: u16 = 803;
 }
 
 #[derive(Debug, Serialize, Deserialize)]

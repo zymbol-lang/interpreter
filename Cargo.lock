@@ -3644,6 +3644,7 @@ name = "zymbol-intrinsics"
 version = "0.0.12"
 dependencies = [
  "time",
+ "unicode-segmentation",
 ]
 
 [[package]]

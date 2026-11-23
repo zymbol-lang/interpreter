@@ -12,3 +12,6 @@ description = "Pure-Rust string and collection intrinsics for Zymbol-Lang VM —
 # is the whole reason this dependency exists, and the civil calendar itself is
 # hand-written so the two Rust engines and the JavaScript one give one answer.
 time = { version = "0.3", default-features = false, features = ["std", "local-offset"] }
+# `std/text`'s graphemes (D-19): UAX #29, the same crate `std/term` already measures
+# with, so the clusters it cuts and the widths it reports are of one Unicode version.
+unicode-segmentation.workspace = true

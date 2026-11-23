@@ -6222,6 +6222,7 @@ pub fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16
             ("upper", B::TEXT_UPPER),
             ("lower", B::TEXT_LOWER),
             ("fold",  B::TEXT_FOLD),
+            ("graphemes", B::TEXT_GRAPHEMES),
         ]),
         "std/term" => Some(vec![
             ("width",     B::TERM_WIDTH),

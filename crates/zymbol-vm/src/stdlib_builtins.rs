@@ -740,11 +740,28 @@ fn text_case(args: Vec<Value>, fname: &str) -> Result<Value, String> {
         (Some(Value::Char(c)), "upper") => Ok(s(text::upper_char(*c))),
         (Some(Value::Char(c)), "lower") => Ok(s(text::lower_char(*c))),
         (Some(Value::Char(c)), _) => Ok(Value::Char(text::fold_char(*c))),
-        (other, _) => Err(format!(
-            "text::{fname}: argument type must be String or Char, got {}",
-            other.map(|v| v.type_label()).unwrap_or_else(|| "nothing".to_string())
-        )),
+        (other, _) => Err(text_wrong_type(fname, other)),
     }
+}
+
+/// The words of every std/text refusal: the tree-walker's `stdlib/text.rs`
+/// `wrong_type`, a `##Type` named by the type.
+fn text_wrong_type(fname: &str, got: Option<&Value>) -> String {
+    format!(
+        "text::{fname}: argument type must be String or Char, got {}",
+        got.map(|v| v.type_label()).unwrap_or_else(|| "nothing".to_string())
+    )
+}
+
+/// `graphemes(s)`: an Array of Strings, one extended grapheme cluster each (D-19).
+fn text_graphemes(args: Vec<Value>) -> Result<Value, String> {
+    let parts: Vec<Value> = match args.first() {
+        Some(Value::String(v)) => zymbol_intrinsics::text::graphemes(v.as_str())
+            .into_iter().map(|g| Value::String(ZyStr::from_str_ref(g))).collect(),
+        Some(Value::Char(c)) => vec![Value::String(ZyStr::new(c.to_string()))],
+        other => return Err(text_wrong_type("graphemes", other)),
+    };
+    Ok(Value::Array(Rc::new(parts)))
 }
 
 // ── std/term ───────────────────────────────────────────────────────────────────
@@ -874,6 +891,7 @@ pub fn call(builtin_id: u16, args: Vec<Value>, host: &mut dyn Host) -> Result<Va
         B::TEXT_UPPER     => text_case(args, "upper"),
         B::TEXT_LOWER     => text_case(args, "lower"),
         B::TEXT_FOLD      => text_case(args, "fold"),
+        B::TEXT_GRAPHEMES => text_graphemes(args),
         B::TERM_WIDTH     => term_width(args),
         B::TERM_PAD_LEFT  => term_pad_left(args),
         B::TERM_PAD_RIGHT => term_pad_right(args),

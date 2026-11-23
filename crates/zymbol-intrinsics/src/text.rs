@@ -18,6 +18,11 @@
 //!   position in the original, which is what a search that highlights needs.
 //!   `ß` therefore stays `ß` and does not match `ss`.
 //!
+//! - [`graphemes`] cuts a text into its extended grapheme clusters (UAX #29,
+//!   D-19): what a reader takes for one letter, `e` + U+0301, a flag, a family
+//!   joined by U+200D. A `Char` stays one code point; this is how to see the
+//!   clusters.
+//!
 //! The browser engines carry a table generated from these functions
 //! (`web/src/zymbol/casemap.js`), because a browser's own `toUpperCase` follows
 //! whatever Unicode version it shipped with: Node 24 and Rust 1.100 differed on
@@ -100,6 +105,17 @@ pub fn fold(s: &str) -> String {
     s.chars().map(fold_char).collect()
 }
 
+/// The extended grapheme clusters of a text, in order (UAX #29). The rules are
+/// `unicode-segmentation`'s, of `UNICODE_VERSION_GRAPHEMES`: the browser engines
+/// follow the same version's tables, and both pass its `GraphemeBreakTest.txt`.
+pub fn graphemes(s: &str) -> Vec<&str> {
+    use unicode_segmentation::UnicodeSegmentation;
+    s.graphemes(true).collect()
+}
+
+/// The Unicode version of [`graphemes`]' rules.
+pub const UNICODE_VERSION_GRAPHEMES: (u64, u64, u64) = unicode_segmentation::UNICODE_VERSION;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +145,16 @@ mod tests {
         assert_eq!(fold_char('ꭰ'), 'Ꭰ');
         assert_eq!(fold_char('Ꭰ'), 'Ꭰ');
         assert_eq!(fold_char('7'), '7');
+    }
+
+    #[test]
+    fn graphemes_are_what_a_reader_takes_for_one() {
+        let family = "👨\u{200D}👩\u{200D}👧";
+        let s = format!("{family} e\u{301}🇪🇸👍🏽");
+        assert_eq!(graphemes(&s), vec![family, " ", "e\u{301}", "🇪🇸", "👍🏽"]);
+        assert_eq!(graphemes("한국"), vec!["한", "국"]);
+        assert_eq!(graphemes("\u{1100}\u{1161}\u{11A8}"), vec!["\u{1100}\u{1161}\u{11A8}"]);
+        assert_eq!(graphemes("\r\n"), vec!["\r\n"]);
+        assert!(graphemes("").is_empty());
     }
 }

@@ -4662,7 +4662,7 @@ the i18n pattern with no special handling:
 | `std/db` | `connect` `disconnect` `exec` `query` `query_one` `query_value` `tx` `begin` `commit` `rollback` `savepoint` `release` `rollback_to` `exec_script` `table_exists` | v0.0.7 |
 | `std/term` | `width` `pad_left` `pad_right` `center` `truncate` | v0.0.8 |
 | `std/time` | `now` `today` `parts` `of` `format` `add` `diff` | v0.0.9 |
-| `std/text` | `upper` `lower` `fold` | v0.0.12 |
+| `std/text` | `upper` `lower` `fold` `graphemes` | v0.0.12 |
 
 **`std/random` — a seed repeats a run.** `entero(lo, hi)` is an Int in `[lo, hi]`,
 `rango(n)` one in `[0, n)`, `peso_f64()` a Float in `[-0.1, 0.1]`. Unseeded, a run draws a
@@ -4724,6 +4724,24 @@ i = tx::fold(t) $?? tx::fold("grandes")
 
 Anything that is not a String or a Char is a `##Type`. There is no title case and no
 locale-specific rule, such as the Turkish dotted `İ`: `upper("i")` is always `I`.
+
+**`graphemes(s)` — what a reader takes for one letter.** A `Char` is one code point, so
+`$#` counts code points: `é` written as `e` + U+0301 is 2, a flag is 2, a family joined by
+U+200D is 5. `graphemes` cuts a text into its extended grapheme clusters (Unicode's UAX
+#29) and gives them as an Array of Strings, one cluster each. Counting them is `$#` of the
+array, the third is `[3]`, and an editor moves and deletes over its elements.
+
+```zymbol
+<# std/text => tx
+bandera = ##'127466 ##'127480                       // 🇪🇸, two code points
+texto = "a" bandera "b"
+g = tx::graphemes(texto)
+>> texto$# " " g$# ¶                               // → 4 3
+>> g[2] ¶                                          // → 🇪🇸
+```
+
+A Char gives an array of one. The clusters follow the same Unicode version as `std/term`'s
+`width` and `truncate`, so a cut and a measurement agree.
 
 > Since v0.0.12 (D-18). Before that, a program converted case by adding 32 to code
 > points one script at a time (GAP-ZYE-010 in `ZyEdit/HALLAZGOS.md`, GAP-TET-005 in

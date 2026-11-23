@@ -5,6 +5,8 @@
 //!
 //! - `upper(s)` and `lower(s)` take a String or a Char and give a String: the
 //!   upper case of `'ß'` is `"SS"`, two characters.
+//! - `graphemes(s)` takes a String or a Char and gives an Array of Strings, one
+//!   extended grapheme cluster each (D-19).
 //! - `fold(s)` gives back what it was given — a String for a String, a Char for
 //!   a Char — because it maps one code point to one.
 //!
@@ -44,6 +46,16 @@ fn text_lower(args: Vec<Value>, span: Span) -> Result<Value> {
     }
 }
 
+/// `graphemes(s)`: an Array of Strings, one cluster each (D-19).
+fn text_graphemes(args: Vec<Value>, span: Span) -> Result<Value> {
+    let parts: Vec<Value> = match args.first() {
+        Some(Value::String(s)) => text::graphemes(s).into_iter().map(|g| Value::String(g.into())).collect(),
+        Some(Value::Char(c)) => vec![Value::String(c.to_string().into())],
+        _ => return Err(err("graphemes", &args, span)),
+    };
+    Ok(Value::array(parts))
+}
+
 fn text_fold(args: Vec<Value>, span: Span) -> Result<Value> {
     match args.first() {
         Some(Value::String(s)) => Ok(Value::String(text::fold(s).into())),
@@ -64,5 +76,6 @@ pub(crate) fn register() -> HashMap<String, Rc<FunctionDef>> {
     native!("upper", 1, text_upper);
     native!("lower", 1, text_lower);
     native!("fold",  1, text_fold);
+    native!("graphemes", 1, text_graphemes);
     m
 }
