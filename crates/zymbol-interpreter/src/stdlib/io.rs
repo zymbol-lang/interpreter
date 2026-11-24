@@ -11,6 +11,8 @@
 //!   delete(path)       -> Unit | Error    (file or directory)
 //!   list(dir)          -> Array<String> | Error
 //!   mkdir(path)        -> Unit | Error    (creates parent directories)
+//!   read_bytes(path)   -> String | Error  (one Char 0x00–0xFF per byte, D-22)
+//!   write_bytes(path, bytes) -> Unit | Error  (a Char past 0xFF is ##Range)
 //!
 //! For localized names, use the i18n three-layer pattern to re-export under the
 //! target language's names (e.g. Spanish: leer, escribir, agregar, existe, …).
@@ -139,6 +141,43 @@ fn io_mkdir(args: Vec<Value>, span: Span) -> Result<Value> {
     }
 }
 
+/// io::read_bytes("path") -> String | Error — one Char 0x00–0xFF per byte, so
+/// a file that is not UTF-8 can be read and written back as it was (D-22).
+fn io_read_bytes(args: Vec<Value>, span: Span) -> Result<Value> {
+    match args.into_iter().next() {
+        Some(Value::String(path)) => match std::fs::read(&path) {
+            Ok(bytes) => Ok(Value::String(zymbol_intrinsics::bytes::text_of(&bytes).into())),
+            Err(e) => Ok(Value::error(ErrorValue::io(e.to_string()))),
+        },
+        _ => Err(RuntimeError::Generic {
+            message: "io::read_bytes: expected String path".into(),
+            span,
+        }),
+    }
+}
+
+/// io::write_bytes("path", bytes) -> Unit | Error — each Char as one byte; a
+/// Char past 0xFF is no byte, a `##Range`, and the file is not touched.
+fn io_write_bytes(args: Vec<Value>, span: Span) -> Result<Value> {
+    let mut it = args.into_iter();
+    match (it.next(), it.next()) {
+        (Some(Value::String(path)), Some(Value::String(text))) => {
+            let bytes = zymbol_intrinsics::bytes::bytes_of(&text).map_err(|c| RuntimeError::Generic {
+                message: zymbol_intrinsics::bytes::not_a_byte(c),
+                span,
+            })?;
+            match std::fs::write(&path, bytes) {
+                Ok(_) => Ok(Value::Unit),
+                Err(e) => Ok(Value::error(ErrorValue::io(e.to_string()))),
+            }
+        }
+        _ => Err(RuntimeError::Generic {
+            message: "io::write_bytes: expected (String, String)".into(),
+            span,
+        }),
+    }
+}
+
 // --- Registry -------------------------------------------------------------
 
 pub(crate) fn register() -> HashMap<String, Rc<FunctionDef>> {
@@ -159,6 +198,8 @@ pub(crate) fn register() -> HashMap<String, Rc<FunctionDef>> {
     native!("delete", 1, io_delete);
     native!("list",   1, io_list);
     native!("mkdir",  1, io_mkdir);
+    native!("read_bytes",  1, io_read_bytes);
+    native!("write_bytes", 2, io_write_bytes);
 
     m
 }

@@ -36,6 +36,14 @@ The first release announced as a **public alpha**. Its theme is the terminal and
 
 ### Added
 
+- **`std/io`: `read_bytes` and `write_bytes`** (D-22; GAP-ZYE-006). A file that is not UTF-8
+  — a Latin-1 text, a binary, a log with a broken line — can be read and written back as it
+  was. `read_bytes(path)` gives a String with one Char per byte, `0x00`–`0xFF`, and
+  `write_bytes(path, bytes)` writes each back as that byte; a Char past `0xFF` is a
+  `##Range` and the file is not touched. No bytes type: a byte is the Char of its code, as
+  `0x01` and `##'n` already write one — the way ZyBF's tape was settled (GLB-109). `read`
+  still fails closed on bytes that are not UTF-8. In the playground the per-run file system
+  holds either a text or bytes, and `read` of bytes that are not UTF-8 fails as in Rust.
 - **The editor warns about two names that look the same** (D-21; GAP-TET-004). The Latin
   `a` and the Cyrillic `а` are two valid names and two variables; when two names of one
   file have the same confusable skeleton (UTS #39) and are not the same name, the language

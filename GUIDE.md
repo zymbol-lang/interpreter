@@ -4679,7 +4679,7 @@ the i18n pattern with no special handling:
 | `std/math` | `sqrt` `exp` `ln` `log` `pow` `abs` `ceil` `floor` `round` `min` `max` `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `sinh` `cosh` `tanh` `sigmoid` · constants `PI`, `E` | v0.0.6 |
 | `std/random` | `entero` `rango` `peso_f64` · `semilla` (v0.0.11) | v0.0.6 |
 | `std/json` | `decode(text)` `decode_map(text, map)` `encode(value)` | v0.0.7 |
-| `std/io` | `read` `write` `append` `exists` `delete` `list` `mkdir` | v0.0.7 |
+| `std/io` | `read` `write` `append` `exists` `delete` `list` `mkdir` · `read_bytes` `write_bytes` (v0.0.12) | v0.0.7 |
 | `std/net` | `get` `post` `post_json` `head` · `timeout` (v0.0.11) | v0.0.7 |
 | `std/db` | `connect` `disconnect` `exec` `query` `query_one` `query_value` `tx` `begin` `commit` `rollback` `savepoint` `release` `rollback_to` `exec_script` `table_exists` | v0.0.7 |
 | `std/term` | `width` `pad_left` `pad_right` `center` `truncate` | v0.0.8 |
@@ -4855,6 +4855,29 @@ mal = t::of(2026, 2, 30)
 `"local"` is the only part that asks the machine anything, and it is read **at the
 instant** rather than once, so a date in January and one in July get their own offsets.
 Where the zone cannot be determined it returns a soft error instead of guessing.
+
+**`std/io` — a file's bytes.** `read` gives a text and fails, softly, on a file that is not
+UTF-8: `##IO(stream did not contain valid UTF-8)`. `read_bytes(path)` reads any file: it gives
+a String with **one Char per byte**, from `0x00` to `0xFF`, and `write_bytes(path, bytes)`
+writes each Char back as that byte, so the round trip returns the file as it was (v0.0.12,
+D-22). There is no bytes type because none is needed: a byte is the Char of its code, the way
+the language already writes one — `0x01` is the byte Ctrl+A sends, `##'n` builds one from a
+number and `##!c` reads it back. Everything a text does works on it: `$#` counts bytes, `b[i]`
+is one, `b[i] == 0xFF` compares it, `$?` finds a run of them. A Char past `0xFF` is no byte:
+`write_bytes` refuses it with a `##Range` and leaves the file alone.
+
+```zymbol
+<# std/io => io
+io::write_bytes("bad.txt", "bad " 0xFF 0xFE " utf8")
+>> io::read("bad.txt") ¶                 // → ##IO(stream did not contain valid UTF-8)
+b = io::read_bytes("bad.txt")
+>> b$# " " ##!b[5] " " (b[5] == 0xFF) ¶  // → 11 255 #1
+io::write_bytes("copy.txt", b)
+>> (io::read_bytes("copy.txt") == b) ¶   // → #1 — the same 11 bytes
+io::write("e.txt", "é")
+>> 0x|##!io::read_bytes("e.txt")[1]| ¶   // → 0x00C3 — é is C3 A9 in UTF-8
+@ f:["bad.txt", "copy.txt", "e.txt"] { io::delete(f) }
+```
 
 **Error convention.** Type/arity mistakes raise a hard `RuntimeError` (the program is
 malformed). Recoverable environmental failures — file not found, network timeout, malformed

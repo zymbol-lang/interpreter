@@ -672,6 +672,8 @@ pub mod builtins {
     pub const IO_DELETE:     u16 = 304;
     pub const IO_LIST:       u16 = 305;
     pub const IO_MKDIR:      u16 = 306;
+    pub const IO_READ_BYTES:  u16 = 307;
+    pub const IO_WRITE_BYTES: u16 = 308;
     // std/net functions
     pub const NET_GET:       u16 = 400;
     pub const NET_POST:      u16 = 401;

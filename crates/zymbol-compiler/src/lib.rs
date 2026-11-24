@@ -6199,6 +6199,8 @@ pub fn stdlib_builtin_entries(module_key: &str) -> Option<Vec<(&'static str, u16
             ("delete", B::IO_DELETE),
             ("list",   B::IO_LIST),
             ("mkdir",  B::IO_MKDIR),
+            ("read_bytes",  B::IO_READ_BYTES),
+            ("write_bytes", B::IO_WRITE_BYTES),
         ]),
         "std/time" => Some(vec![
             ("now",    B::TIME_NOW),

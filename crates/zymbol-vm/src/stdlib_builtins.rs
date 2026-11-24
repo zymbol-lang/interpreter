@@ -417,6 +417,34 @@ fn io_append(args: Vec<Value>) -> Result<Value, String> {
     }
 }
 
+/// `read_bytes(path)`: one Char 0x00–0xFF per byte (D-22).
+fn io_read_bytes(args: Vec<Value>) -> Result<Value, String> {
+    match args.into_iter().next() {
+        Some(Value::String(path)) => match std::fs::read(path.as_str()) {
+            Ok(bytes) => Ok(Value::String(ZyStr::new(zymbol_intrinsics::bytes::text_of(&bytes)))),
+            Err(e) => Ok(io_err(e)),
+        },
+        _ => Err("io::read_bytes: expected String path".into()),
+    }
+}
+
+/// `write_bytes(path, bytes)`: each Char as one byte; one past 0xFF is a
+/// `##Range` and the file is not touched (D-22).
+fn io_write_bytes(args: Vec<Value>) -> Result<Value, String> {
+    let mut it = args.into_iter();
+    match (it.next(), it.next()) {
+        (Some(Value::String(path)), Some(Value::String(text))) => {
+            let bytes = zymbol_intrinsics::bytes::bytes_of(text.as_str())
+                .map_err(zymbol_intrinsics::bytes::not_a_byte)?;
+            match std::fs::write(path.as_str(), bytes) {
+                Ok(_) => Ok(Value::Unit),
+                Err(e) => Ok(io_err(e)),
+            }
+        }
+        _ => Err("io::write_bytes: expected (String, String)".into()),
+    }
+}
+
 fn io_exists(args: Vec<Value>) -> Result<Value, String> {
     match args.into_iter().next() {
         Some(Value::String(path)) => Ok(Value::Bool(std::path::Path::new(path.as_str()).exists())),
@@ -888,6 +916,8 @@ pub fn call(builtin_id: u16, args: Vec<Value>, host: &mut dyn Host) -> Result<Va
         B::IO_DELETE     => io_delete(args),
         B::IO_LIST       => io_list(args),
         B::IO_MKDIR      => io_mkdir(args),
+        B::IO_READ_BYTES  => io_read_bytes(args),
+        B::IO_WRITE_BYTES => io_write_bytes(args),
         B::TEXT_UPPER     => text_case(args, "upper"),
         B::TEXT_LOWER     => text_case(args, "lower"),
         B::TEXT_FOLD      => text_case(args, "fold"),

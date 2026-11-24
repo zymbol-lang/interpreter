@@ -31,3 +31,4 @@ pub mod transform;
 pub mod time;
 pub mod random;
 pub mod text;
+pub mod bytes;

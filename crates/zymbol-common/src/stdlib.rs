@@ -107,6 +107,9 @@ pub const MODULES: &[StdModule] = &[
             f("delete", 1),
             f("list", 1),
             f("mkdir", 1),
+            // A file's bytes, one Char 0x00–0xFF each (D-22).
+            f("read_bytes", 1),
+            f("write_bytes", 2),
         ],
         constants: &[],
         feature_gated: false,
