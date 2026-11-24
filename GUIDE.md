@@ -304,6 +304,14 @@ Four edges are decided rather than accidental:
   >> й ¶         // typed U+0439 → 2
   ```
 
+  Names that only *look* alike stay different: the Latin `a` and the Cyrillic
+  `а` are two variables. An editor says so — the language server and the
+  playground's problems panel warn when two names of one file have the same
+  confusable skeleton of Unicode (UTS #39) and are not the same name, as
+  `'а' looks like 'a' (line 1), a different name: it has U+0430 where 'a' has
+  U+0061`. `zymbol check` and `zymbol run` say nothing, so a program that mixes
+  scripts on purpose is never refused or nagged at in a terminal (D-21).
+
 Identifiers must not collide with symbolic operators (e.g., `$>`, `@`, `?` are
 not identifiers). The quotes and `°` are read before a name begins, so they
 do not appear in one either.

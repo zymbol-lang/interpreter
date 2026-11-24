@@ -36,6 +36,17 @@ The first release announced as a **public alpha**. Its theme is the terminal and
 
 ### Added
 
+- **The editor warns about two names that look the same** (D-21; GAP-TET-004). The Latin
+  `a` and the Cyrillic `а` are two valid names and two variables; when two names of one
+  file have the same confusable skeleton (UTS #39) and are not the same name, the language
+  server and the playground's problems panel name the later one with the earlier:
+  `'а' looks like 'a' (line 1), a different name: it has U+0430 where 'a' has U+0061`. A
+  name after `::` or `.` is left out. `zymbol check` and `run` say nothing, as decided for
+  look-alike characters on 2026-09-25. The server uses the `unicode-security` crate
+  (Unicode 18); the playground a table generated from the same `confusables.txt`
+  (`web/src/zymbol/skeleton.js`), held to the server on 3000 names by
+  `web/tests/test_lookalike.mjs`. Both hints now place their warning on a name typed
+  decomposed — since D-20 the server lost it.
 - **Names are read in NFC** (D-20; GAP-TET-003). A name typed composed and the same name
   typed decomposed — `й` as U+0439 and as U+0438 U+0306 — are one name in all four
   engines, in every place a name is read: identifiers, hot names, labels, `{…}` inside a
