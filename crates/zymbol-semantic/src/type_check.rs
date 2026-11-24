@@ -3843,11 +3843,20 @@ impl TypeChecker {
             // without inferring it let a wrong arity, an undefined name or a
             // missing `<~` inside `###`/`##.`/`##!` pass unchecked (GLB-112).
             Expr::NumericCast(op) => {
-                self.infer_expr(&op.expr);
+                let operand = self.infer_expr(&op.expr);
+                // `##!` took a Char until v0.0.11 and answered its code; the
+                // code is `0d|c|` since D-24. Refused before it runs when the
+                // operand is known to be a character.
+                if op.kind == CastKind::ToIntTrunc && operand == ZymbolType::Char {
+                    self.errors.push(
+                        Diagnostic::error("'##!' does not take a Char since v0.0.12: it truncates a Float")
+                            .with_span(op.span)
+                            .with_help("a character becomes its code with 0d|c|, and a code its character with 0d|n|"),
+                    );
+                }
                 match op.kind {
                     CastKind::ToFloat => ZymbolType::Float,
                     CastKind::ToIntRound | CastKind::ToIntTrunc => ZymbolType::Int,
-                    CastKind::ToChar => ZymbolType::Char,
                 }
             }
 
@@ -3881,7 +3890,21 @@ impl TypeChecker {
                 ZymbolType::Tuple(vec![ZymbolType::String, ZymbolType::Int, ZymbolType::Any])
             }
             Expr::Format(_) => ZymbolType::String,
-            Expr::BaseConversion(_) => ZymbolType::String,
+            // A character or a number in `0d` is the other one (D-24); in the
+            // other three bases it is its text. A text in any base is read back
+            // as the character. The operand is inferred like any other, or a
+            // name inside the bars was never checked.
+            Expr::BaseConversion(op) => {
+                let operand = self.infer_expr(&op.expr);
+                let decimal = op.prefix == zymbol_ast::BasePrefix::Decimal;
+                match operand {
+                    ZymbolType::Char if decimal => ZymbolType::Int,
+                    ZymbolType::Int if decimal => ZymbolType::Char,
+                    ZymbolType::Char | ZymbolType::Int => ZymbolType::String,
+                    ZymbolType::String => ZymbolType::Char,
+                    _ => ZymbolType::Any,
+                }
+            }
             Expr::Round(_) | Expr::Trunc(_) => ZymbolType::Float,
 
             // Error handling

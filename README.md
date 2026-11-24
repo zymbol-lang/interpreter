@@ -1282,6 +1282,10 @@ statements on one line (GLB-111). Then the program used what it asked for:
 == '.' => { salida = salida ##'cinta[p] }
 ```
 
+(v0.0.12 removed the cast again, with `##!` on a `Char`: the line is now
+`salida = salida 0d|cinta[p]|`, the base prefix being the one door between a character and its
+code — D-24.)
+
 — 75 lines without the table, the same 13 tests against an independent Python oracle, alike in
 the three engines. That the line needs no intermediate variable came from the same day: a prefix
 operator now opens a juxtaposed operand in an assignment too (GLB-114).

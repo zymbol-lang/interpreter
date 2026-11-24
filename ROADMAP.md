@@ -91,7 +91,7 @@
 | A named function sees only its parameters; a lambda inherits its enclosing scope (MEM-2, MEM-6) | ✅ v0.0.10 |
 | A condition of `?` / `_?` is a Bool and nothing else (static where the type is known, `##Type` at run time) | ✅ v0.0.10 |
 | `##Kind("message")` builds an error; `##Kind(m) =>` reads its message back | ✅ v0.0.10 |
-| `##'expr` — an Int code point to its Char, a sibling of `###` and `##.` | ✅ v0.0.10 |
+| `##'expr` — an Int code point to its Char, a sibling of `###` and `##.` | ✅ v0.0.10 — removed in v0.0.12 for `0d\|n\|` (D-24) |
 | A command's exit status is a soft `##IO` that carries it | ✅ v0.0.10 |
 | A subscript takes its own arguments: `</ app.zy -L es --list />` | ✅ v0.0.10 |
 | A slice written high-to-low builds backwards: `a$[3..1]` → `[30, 20, 10]` | ✅ v0.0.10 |

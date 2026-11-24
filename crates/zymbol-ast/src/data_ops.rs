@@ -223,12 +223,11 @@ pub enum CastKind {
     ToIntRound,
     /// ##! — cast to Int truncating (Float 3.7 → 3)
     ToIntTrunc,
-    /// ##' — cast to Char: an Int becomes the character with that code point,
-    /// a Char stays itself. The pair of `##!` on a Char (GLB-109).
-    ToChar,
+    // `##'` (to Char) was removed in v0.0.12 (D-24): a code and its character
+    // cross through `0d|…|`, and `##!` no longer takes a Char.
 }
 
-/// Cast expression: ##.expr / ###expr / ##!expr / ##'expr
+/// Cast expression: ##.expr / ###expr / ##!expr
 /// Explicit type conversion between numeric types, and between an Int code
 /// point and its Char.
 #[derive(Debug, Clone)]

@@ -26,8 +26,8 @@ more than 10 000 active calls is a catchable `##Depth` ([§16](#16-error-handlin
 operation costs, measured and brought down, without changing what a program means.
 
 **New in v0.0.10**: `##Kind("…")` builds an error value and `##Kind(m) =>` reads its message
-back ([§7](#error-patterns--kindm), [§16](#16-error-handling)); `##'expr` turns an Int code point
-into its Char ([§2](#2-data-types)); a subscript takes its own arguments, and `zymbol run --keys`
+back ([§7](#error-patterns--kindm), [§16](#16-error-handling)); `##'expr` turned an Int code point
+into its Char, until v0.0.12 replaced it with `0d|n|` ([Base Literals](#base-literals-and-conversions)); a subscript takes its own arguments, and `zymbol run --keys`
 tests a full-screen program without a terminal ([§3b](#testing-a-full-screen-program--zymbol-run---keys));
 a named function sees only its parameters ([§9](#function-scope)); an output parameter is the
 caller's variable, lent ([§9](#output-parameters-)); a condition is a Bool and nothing else
@@ -48,7 +48,7 @@ a count or a condition and never a truthy value ([§8](#8-loops)); and `#|c|` re
 the 69 supported scripts, while `#,` and `#^` write theirs in the active one ([§18b](#18b-numeral-modes)).
 
 **New in v0.0.8**: `std/term` (terminal display metrics — column-accurate `width`, padding
-and truncation), `##!` on a `Char` (its Unicode code point), match or-patterns
+and truncation), `##!` on a `Char` (its Unicode code point — `0d|c|` since v0.0.12), match or-patterns
 (`'p' || 'P' => …`, alternatives in one arm), `.zyp` packages
 ([§ Distributing a Multi-File Program](#distributing-a-multi-file-program-zyp)), and
 automatic destruction at last use (auto-free — unobservable; it only lowers peak memory).
@@ -1005,7 +1005,7 @@ point:
 <<| k
 ? k == 0d19 { guardar() }              // Ctrl+S
 ? k == 0d17 { salir() }                // Ctrl+Q
-es_control(t) { <~ (##!t < 32) || (##!t == 127) }
+es_control(t) { <~ (0d|t| < 32) || (0d|t| == 127) }
 ```
 
 > Until v0.0.9 this was not so: Ctrl+A arrived as the letter `a`, so no program
@@ -4233,7 +4233,7 @@ r6 = 7 |> (x -> x * factor)
 | `##Div` | Division by zero |
 | `##Index` | Index out of bounds |
 | `##Key` | Key not in a dictionary |
-| `##Range` | Outside the safe integer range — or a code that is no character, given to `##'` or read by `0x\|…\|` |
+| `##Range` | Outside the safe integer range — or a code that is no character, given to `0d\|n\|` or read by `0x\|…\|` |
 | `##Type` | Type mismatch |
 | `##Parse` | Data parsing failure — also a text read as a number that it is not: compared with one (`"a" < 10`), rounded, truncated or converted by base |
 | `##IO` | File / system operations |
@@ -4755,7 +4755,7 @@ array, the third is `[3]`, and an editor moves and deletes over its elements.
 
 ```zymbol
 <# std/text => tx
-bandera = ##'127466 ##'127480                       // 🇪🇸, two code points
+bandera = "" 0d|127466| 0d|127480|                  // 🇪🇸, two code points
 texto = "a" bandera "b"
 g = tx::graphemes(texto)
 >> texto$# " " g$# ¶                               // → 4 3
@@ -4861,8 +4861,8 @@ UTF-8: `##IO(stream did not contain valid UTF-8)`. `read_bytes(path)` reads any 
 a String with **one Char per byte**, from `0x00` to `0xFF`, and `write_bytes(path, bytes)`
 writes each Char back as that byte, so the round trip returns the file as it was (v0.0.12,
 D-22). There is no bytes type because none is needed: a byte is the Char of its code, the way
-the language already writes one — `0x01` is the byte Ctrl+A sends, `##'n` builds one from a
-number and `##!c` reads it back. Everything a text does works on it: `$#` counts bytes, `b[i]`
+the language already writes one — `0x01` is the byte Ctrl+A sends, `0d|n|` builds one from a
+number and `0d|c|` reads it back. Everything a text does works on it: `$#` counts bytes, `b[i]`
 is one, `b[i] == 0xFF` compares it, `$?` finds a run of them. A Char past `0xFF` is no byte:
 `write_bytes` refuses it with a `##Range` and leaves the file alone.
 
@@ -4871,7 +4871,7 @@ is one, `b[i] == 0xFF` compares it, `$?` finds a run of them. A Char past `0xFF`
 io::write_bytes("bad.txt", "bad " 0xFF 0xFE " utf8")
 >> io::read("bad.txt") ¶                 // → ##IO(stream did not contain valid UTF-8)
 b = io::read_bytes("bad.txt")
->> b$# " " ##!b[5] " " (b[5] == 0xFF) ¶  // → 11 255 #1
+>> b$# " " 0d|b[5]| " " (b[5] == 0xFF) ¶  // → 11 255 #1
 io::write_bytes("copy.txt", b)
 >> (io::read_bytes("copy.txt") == b) ¶   // → #1 — the same 11 bytes
 io::write("e.txt", "é")
@@ -5228,51 +5228,23 @@ t0 = #!0|19.9|
 
 ### Type Conversion Casts
 
-Three prefix operators convert between Int and Float, and a fourth turns a
-code point into its character:
+Three prefix operators convert between Int and Float:
 
 | Operator | Name | Behaviour |
 |----------|------|-----------|
 | `##.expr` | ToFloat | Converts Int or Float to Float |
 | `###expr` | ToIntRound | Converts Float to Int, rounding (half away from zero) |
-| `##!expr` | ToIntTrunc | Converts Float to Int truncating toward zero; a `Char` to its code point |
-| `##'expr` | ToChar | Converts an Int code point to its `Char`; a `Char` stays itself |
+| `##!expr` | ToIntTrunc | Converts Float to Int truncating toward zero |
 
 > **Convention**: `##.` mirrors `#.N` (round/decimal), `##!` mirrors `#!N` (truncate).
 > `###` is a dedicated rounding cast with no decimal-precision argument.
 
-`##!` also accepts a `Char`, giving its Unicode code point — the only direct Char→Int
-route, and the way to classify a character by range (`Char` is otherwise neither
-comparable nor castable):
+A character is not a number, and none of the three takes one. A character and its
+code cross through `0d|…|` ([Base Literals and Conversions](#base-literals-and-conversions)):
+`0d|'A'|` is `65` and `0d|65|` is `'A'`.
 
-```zymbol
->> ##!'A' ¶      // → 65
->> ##!'あ' ¶     // → 12354
-c = 'M'
-p = ##!c
-? p >= 65 && p <= 90 { >> "upper" ¶ }   // → upper
-```
-
-`##'` is the way back: an Int code point becomes the character with that code,
-computed at run time where a base literal (`0x41`) can only be written. Only an
-Int is a code — a Float, even a whole one, is a `##Type` error (write `##'###f`
-to round first) — and a code with no character, past `0x10FFFF`, a surrogate
-(`0xD800`–`0xDFFF`) or below 0, is a `##Range` error. Like its siblings it fails
-when it runs, and its operand is a postfix expression: `##'n#?` is `##'(n#?)`.
-
-```zymbol
->> ##'65 ¶               // → A
->> ##'(##!'a' + 1) ¶     // → b
-n = 12354
-c = ##'n
->> c ¶                   // → あ
->> ##!c ¶                // → 12354
-!? {
-    >> ##'1114112 ¶
-} :! ##Range {
-    >> "no character" ¶  // → no character
-}
-```
+> **Removed in v0.0.12** (D-24): `##'n`, the cast from a code to its character, and `##!`
+> on a `Char`. Both are refused before the program runs, with a line that names `0d|…|`.
 
 ```zymbol
 i = 42
@@ -5391,29 +5363,45 @@ c = 0o101       // octal → 'A'
 d = 0d65        // explicit decimal → 'A'
 e = 0xFF        // beyond ASCII, still a Char: 'ÿ'
 
->> a ¶    // → A
->> b ¶    // → A
->> e ¶    // → ÿ
->> ##!e ¶ // → 255
+>> a ¶       // → A
+>> b ¶       // → A
+>> e ¶       // → ÿ
+>> 0d|e| ¶   // → 255
 
-// Convert expression to base string
+// 0d|…| is the door between a character and its code, both ways
+caracter_numero = 65
+letra_A = 0d|caracter_numero|
+>> letra_A " " 0d|letra_A| ¶                       // → A 65
+>> 0d|0d|'a'| + 1| ¶                               // → b
+!? {
+    >> 0d|1114112| ¶
+} :! ##Range {
+    >> "no character" ¶                           // → no character
+}
+
+// 0x|…|, 0o|…|, 0b|…| write a code as text in that base, and read it back
+>> 0x|'A'| " " 0o|'A'| " " 0b|'A'| ¶              // → 0x41 0o101 0b01000001
+>> 0x|"0x41"| " " 0b|"01000001"| " " 0o|"101"| ¶   // → A A A
 hex = 0x|255|    // Int → hex string → "0xFF"
-bin = 0b|65|     // Int → binary string → "0b01000001"
 oct = 0o|8|      // Int → octal string → "0o010"
-dec = 0d|255|    // Int → decimal string → "0d255"
 neg = 0x|(0 - 255)|  // a negative one: the sign in front → "-0xFF" (v0.0.11)
-
->> 0x|'A'| " " 0o|'A'| " " 0b|'A'| " " 0d|'A'| ¶  // → 0x41 0o101 0b01000001 0d65
 >> 0x|0| " " 0x|'€'| " " 0b|256| ¶                 // → 0x00 0x20AC 0b100000000
 ```
 
-**Never fewer digits than a byte** (v0.0.12). A Char or an Int read back in hexadecimal,
-octal or binary takes at least the digits of `0xFF` in that base — `0x00`…`0xFF`,
-`0o000`…`0o377`, `0b00000000`…`0b11111111` — so the 256 bytes line up in a column; a larger
-value takes the digits it needs. The decimal is written as it is read: `0d0`…`0d255`. These
-are the forms a byte's literal already takes, and `0x|t|` reads any of them back as the
-Char. Until v0.0.11 `0x` and `0d` were padded to four, the width of a code point, and `0b`
-and `0o` not at all.
+**A character and its code: `0d|…|`** (v0.0.12, D-24). Each prefix converts between a
+character and *its element in that base*. The element in decimal is the number, because
+Zymbol writes its numbers in decimal: `0d|'A'|` is the Int `65` and `0d|65|` is the Char `'A'`.
+Only an Int is a code — a Float, even a whole one, is a `##Type` error — and a code with no
+character, past `0x10FFFF`, a surrogate (`0xD800`–`0xDFFF`) or below 0, is a `##Range` error.
+A text of digits is read as a code in any of the four: `0d|"65"|` and `0x|"41"|` are `'A'`.
+It replaced `##'n` and `##!c`, removed in v0.0.12.
+
+**Never fewer digits than a byte** (v0.0.12, D-23). The elements in hexadecimal, octal and
+binary are texts, and a Char or an Int written in them takes at least the digits of `0xFF`
+in that base — `0x00`…`0xFF`, `0o000`…`0o377`, `0b00000000`…`0b11111111` — so the 256 bytes
+line up in a column; a larger value takes the digits it needs. These are the forms a byte's
+literal already takes, and `0x|t|` reads any of them back as the Char. Until v0.0.11 `0x`
+and `0d` were padded to four, the width of a code point, and `0b` and `0o` not at all.
 
 ---
 

@@ -62,7 +62,10 @@ pub enum Instruction {
     FloatToIntRound(Reg, Reg),
     /// dst = (src as Float).trunc() as Int  — ##!expr
     FloatToIntTrunc(Reg, Reg),
-    /// dst = the Char whose code point is src (an Int), or src if a Char  — ##'expr
+    /// Retired in v0.0.12 (D-24) with the cast `##'`, and never emitted. The
+    /// slot stays so every later instruction keeps its number: an opcode is
+    /// the variant's position, which bincode writes and `web/src/zymbol/vm/`
+    /// dispatches on.
     IntToChar(Reg, Reg),
 
     // ── String ops ────────────────────────────────────────────────────────

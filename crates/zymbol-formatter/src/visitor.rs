@@ -1011,7 +1011,6 @@ impl<'a> FormatVisitor<'a> {
                     zymbol_ast::CastKind::ToFloat    => "##.",
                     zymbol_ast::CastKind::ToIntRound => "###",
                     zymbol_ast::CastKind::ToIntTrunc => "##!",
-                    zymbol_ast::CastKind::ToChar     => "##'",
                 };
                 self.output.write(prefix);
                 let needs_parens = matches!(op.expr.as_ref(), Expr::Binary(_));

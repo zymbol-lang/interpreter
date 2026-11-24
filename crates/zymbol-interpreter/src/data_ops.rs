@@ -120,7 +120,6 @@ impl<W: Write> Interpreter<W> {
     /// ##.  → Float (lossless from Int, identity from Float)
     /// ###  → Int rounding  (Float 3.7 → 4, Int identity)
     /// ##!  → Int truncating (Float 3.7 → 3, Int identity)
-    /// ##'  → Char (Int code point → its character, Char identity)
     pub(crate) fn eval_numeric_cast(&mut self, op: &NumericCastExpr) -> Result<Value> {
         let value = self.eval_expr(&op.expr)?;
         match op.kind {
@@ -148,34 +147,16 @@ impl<W: Write> Interpreter<W> {
             CastKind::ToIntTrunc => match value {
                 Value::Int(_) => Ok(value),
                 Value::Float(f) => cast_to_int(f.trunc(), "##!", op.span),
-                // A Char casts to its Unicode code point. This is the only
-                // direct Char→Int route (the alternative was inverting a base
-                // literal and stripping its prefix), and it makes characters
-                // classifiable by range.
-                Value::Char(c) => Ok(Value::Int(c as u32 as i64)),
-                other => Err(RuntimeError::kinded(
+                // A Char is not a number: its code is `0d|c|` (D-24, v0.0.12).
+                // `##!` answered it from v0.0.8 to v0.0.11.
+                Value::Char(_) => Err(RuntimeError::kinded(
                     "Type",
-                    format!("##! requires a numeric value or Char, got {}", value_type(other)),
+                    "##! requires a numeric value, got Char: a character's code is 0d|c|".to_string(),
                     op.span,
                 )),
-            },
-            // The pair of `##!` on a Char (GLB-109). Only an Int is a code: a
-            // Float is not one even when it is whole — `##'###f` writes the
-            // rounding — and a code with no character (past 0x10FFFF, or a
-            // surrogate) is `##Range`, like a float no Int can hold.
-            CastKind::ToChar => match value {
-                Value::Char(_) => Ok(value),
-                Value::Int(n) => match u32::try_from(n).ok().and_then(char::from_u32) {
-                    Some(c) => Ok(Value::Char(c)),
-                    None => Err(RuntimeError::kinded(
-                        "Range",
-                        "character out of range: ##' cannot represent this Int".to_string(),
-                        op.span,
-                    )),
-                },
                 other => Err(RuntimeError::kinded(
                     "Type",
-                    format!("##' requires an Int or Char, got {}", value_type(other)),
+                    format!("##! requires a numeric value, got {}", value_type(other)),
                     op.span,
                 )),
             },
@@ -337,9 +318,25 @@ impl<W: Write> Interpreter<W> {
         let value = self.eval_expr(&op.expr)?;
 
         match value {
-            // Case 1 and 2: char or int → text, one spelling (D-23): never
-            // fewer digits than a byte takes, the decimal as it is read. The
-            // sign in front of a negative one (GLB-136).
+            // `0d` is the door between a character and its code (D-24): the
+            // element of a character in decimal is the number, because Zymbol
+            // writes its numbers in decimal. A code with no character — below
+            // 0, past 0x10FFFF, a surrogate — is `##Range`.
+            Value::Char(ch) if op.prefix == BasePrefix::Decimal => Ok(Value::Int(ch as i64)),
+            Value::Int(n) if op.prefix == BasePrefix::Decimal => {
+                match u32::try_from(n).ok().and_then(char::from_u32) {
+                    Some(c) => Ok(Value::Char(c)),
+                    None => Err(RuntimeError::kinded(
+                        "Range",
+                        "character out of range: 0d|…| cannot represent this code".to_string(),
+                        op.span,
+                    )),
+                }
+            }
+
+            // Case 1 and 2: char or int → its text in that base, one spelling
+            // (D-23): never fewer digits than a byte takes. The sign in front
+            // of a negative one (GLB-136).
             Value::Char(_) | Value::Int(_) => {
                 let n = match value { Value::Char(ch) => ch as i64, Value::Int(n) => n, _ => unreachable!() };
                 let radix = match op.prefix {
@@ -388,9 +385,8 @@ impl<W: Write> Interpreter<W> {
                 ))?;
 
                 // A code with no character — past 0x10FFFF, or a surrogate — is
-                // the `##Range` that `##'` raises for the same Int, worded for
-                // this operator and without the value (GLB-113, decided
-                // 2026-10-09). It was `##_`, and quoted the code.
+                // `##Range`, worded for this operator and without the value
+                // (GLB-113, decided 2026-10-09). It was `##_`, and quoted the code.
                 let ch = char::from_u32(code).ok_or_else(|| RuntimeError::kinded(
                     "Range",
                     format!(

@@ -581,9 +581,6 @@ pub enum VmError {
     /// `###`/`##!` on a float with no integer form in range.
     #[error("integer overflow: {op} cannot represent this float")]
     CastOverflow { op: &'static str },
-    /// `##'` on an Int that is no character: past 0x10FFFF, or a surrogate.
-    #[error("character out of range: ##' cannot represent this Int")]
-    CharOutOfRange,
     /// `0x|"…"|` and its siblings reading a code that is no character (GLB-113).
     #[error("character out of range: {prefix}|…| cannot represent this code")]
     CodeOutOfRange { prefix: &'static str },
@@ -1172,7 +1169,7 @@ fn vm_error_kind(e: &VmError) -> &'static str {
         VmError::TypeError { .. } | VmError::TypeMsg(_) => "Type",
         VmError::DivisionByZero | VmError::ModuloByZero => "Div",
         VmError::IntOverflow { .. } | VmError::CastOverflow { .. }
-            | VmError::CharOutOfRange | VmError::CodeOutOfRange { .. } => "Range",
+            | VmError::CodeOutOfRange { .. } => "Range",
         VmError::IndexOutOfBounds { .. } | VmError::IndexZero | VmError::IndexMsg(_) => "Index",
         VmError::ParseMsg(_) => "Parse",
         VmError::KeyMsg(_) => "Key",
@@ -2245,6 +2242,11 @@ impl<W: Write> VM<W> {
                     };
                     wreg!(dst, Value::Int(v));
                 }
+                // Retired with `##'` (D-24): the compiler never emits it, and
+                // the slot only keeps the numbering of the opcodes after it.
+                &Instruction::IntToChar(..) => {
+                    raise!(VmError::TypeMsg("IntToChar is retired: a code becomes its character with 0d|n|".to_string()))
+                }
                 &Instruction::FloatToIntTrunc(dst, src) => {
                     let v = match rreg!(src) {
                         Value::Float(f) => match num::from_f64(f.trunc()) {
@@ -2252,29 +2254,13 @@ impl<W: Write> VM<W> {
                             None => raise!(VmError::CastOverflow { op: "##!" }),
                         },
                         Value::Int(n)   => *n,
-                        // Char → its Unicode code point (matches the tree-walker).
-                        Value::Char(c)  => *c as u32 as i64,
-                        // `##!` takes a Char (it answers its code point), so
-                        // its sentence says so. `##.` and `###` do not, and
-                        // keep the shorter one.
+                        // A Char is not a number: its code is `0d|c|` (D-24).
+                        Value::Char(_)  => raise!(VmError::TypeMsg(
+                            "##! requires a numeric value, got Char: a character's code is 0d|c|".to_string())),
                         other => raise!(VmError::TypeMsg(format!(
-                            "##! requires a numeric value or Char, got {}", other.type_name()))),
+                            "##! requires a numeric value, got {}", other.type_name()))),
                     };
                     wreg!(dst, Value::Int(v));
-                }
-                // `##'`, the pair of `##!` on a Char (GLB-109): only an Int is a
-                // code, and one with no character is `##Range`.
-                &Instruction::IntToChar(dst, src) => {
-                    let c = match rreg!(src) {
-                        Value::Char(c) => *c,
-                        Value::Int(n) => match u32::try_from(*n).ok().and_then(char::from_u32) {
-                            Some(c) => c,
-                            None => raise!(VmError::CharOutOfRange),
-                        },
-                        other => raise!(VmError::TypeMsg(format!(
-                            "##' requires an Int or Char, got {}", other.type_name()))),
-                    };
-                    wreg!(dst, Value::Char(c));
                 }
 
                 // ── String ops ──────────────────────────────────────────────
@@ -4559,6 +4545,13 @@ impl<W: Write> VM<W> {
                     let val = rreg!(src).clone();
                     let result = match val {
                         // Char → string representation (display code in given base)
+                        // `0d` is the door between a character and its code
+                        // (D-24): its element in decimal is the number.
+                        Value::Char(ch) if radix == 10 => Value::Int(ch as i64),
+                        Value::Int(n) if radix == 10 => match u32::try_from(n).ok().and_then(char::from_u32) {
+                            Some(c) => Value::Char(c),
+                            None => raise!(VmError::CodeOutOfRange { prefix: "0d" }),
+                        },
                         // Char → its code, written as an Int's is (D-23).
                         Value::Char(ch) => Value::String(ZyStr::new(
                             zymbol_common::num::base_string(ch as i64, radix as u32))),
@@ -4581,7 +4574,7 @@ impl<W: Write> VM<W> {
                             };
                             match code_res {
                                 // A code with no character — past 0x10FFFF, or a
-                                // surrogate — is `##Range`, as `##'` raises it,
+                                // surrogate — is `##Range`, as `0d|n|` raises it,
                                 // without the value (GLB-113).
                                 Ok(code) => match char::from_u32(code) {
                                     Some(ch) => Value::Char(ch),

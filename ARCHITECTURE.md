@@ -592,7 +592,7 @@ embeds the interpreter, `package` produces a `.zyp` archive of source that still
 | Native stdlib (`std/*`, incl. `std/term`) | ✓ | ✓ |
 | Auto-free (destruction at last use) | ✓ | ✓ (see note) |
 | Error values (`##Kind("…")`, `##Kind(m) =>`) | ✓ | ✓ |
-| Int → Char cast (`##'expr`) | ✓ | ✓ |
+| A character and its code, `0d\|…\|` both ways (the cast `##'expr` until v0.0.11) | ✓ | ✓ |
 | Virtual screen (`--keys`) and counters (`--count`) | ✓ | ✓ |
 
 Measured 2026-10-25 on the v0.0.11 branch: `zyq consensus --engines zytw,zyvm` (what

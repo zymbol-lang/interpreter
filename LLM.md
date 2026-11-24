@@ -51,7 +51,7 @@ retired on 2026-08-17; it appears in this document only as history.
 | Int | `42` | `###` | safe integer ±(2⁵³−1); `/` on two Ints is integer division |
 | Float | `3.14`, `1.0e10` | `##.` | IEEE-754 double; overflow → `inf` (a value, not an error); `==` exact; NaN false in every direction; prints as digits, never exponent |
 | String | `"hi"`, `"Hi {name}"` | `##"` | interpolation works everywhere; `\{`/`\}` escape braces |
-| Char | `'A'`, `'↑'`, `0x41`, `0b1010`, `0o17`, `0d99` | `##'` | a base-prefixed literal is a character code, in any range: `0x41` is `'A'`, `0xFF` is `'ÿ'`; its Int is `##!0x41` |
+| Char | `'A'`, `'↑'`, `0x41`, `0b1010`, `0o17`, `0d99` | `##'` | a base-prefixed literal is a character code, in any range: `0x41` is `'A'`, `0xFF` is `'ÿ'`; its Int is `0d|0x41|` |
 | Bool | `#1` / `#0` | `##?` | `#0 < #1` |
 | Array | `[1,2,3]` | `##]` | homogeneous by design |
 | List | `#[1,"dos"]` | `##[` | an array holding >1 type. NOT a second type — `#?` reads it from the contents, so `json::decode` answers `##[` with no mark written |
@@ -64,8 +64,9 @@ retired on 2026-08-17; it appears in this document only as history.
 Not values: ranges (`1..5`, loop headers only) and module aliases.
 `x#?` → `(type_symbol, count, display)`. `#|"४२"|` → `42` (69 digit scripts, fail-safe:
 returns the input unchanged on failure). Casts: `##.x` Float, `###x` Int (round),
-`##!x` Int (truncate; `Char`→code point), `##'x` Char (an Int code point → its character;
-a Float or a code with no character is an error). Format: `#.2|x|` round, `#!2|x|` truncate,
+`##!x` Int (truncate). A character and its code cross through `0d|…|` only: `0d|'A'|` is `65`,
+`0d|65|` is `'A'`, and a code with no character is an error; `0x|c|`, `0o|c|`, `0b|c|` write
+its code as text (`"0x41"`), and `0x|"41"|` reads it back. Format: `#.2|x|` round, `#!2|x|` truncate,
 `#,|x|` commas, `#^|x|` scientific.
 
 ---

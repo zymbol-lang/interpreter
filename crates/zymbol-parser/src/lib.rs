@@ -1705,14 +1705,17 @@ impl Parser {
                 Ok(Expr::NumericCast(NumericCastExpr::new(CastKind::ToIntTrunc, Box::new(expr), span)))
             }
             TokenKind::HashHashApos => {
-                // Cast to Char: ##'expr — an Int code point becomes its
-                // character. `<< ##' "msg" c` never reaches here: the input
-                // statement reads its typespec before any expression (GLB-109).
-                let start = self.peek().span;
-                self.advance(); // consume ##'
-                let expr = self.parse_postfix()?;
-                let span = start.to(&expr.span());
-                Ok(Expr::NumericCast(NumericCastExpr::new(CastKind::ToChar, Box::new(expr), span)))
+                // `##'expr` was the cast from a code to its character (GLB-109,
+                // v0.0.10) and was removed in v0.0.12 (D-24): the base family
+                // is the one door between a character and its code, `0d|n|`
+                // and `0d|c|`. `<< ##' "msg" c` never reaches here: the input
+                // statement reads its typespec — the type symbol — first.
+                let span = self.peek().span;
+                Err(Diagnostic::error(
+                    "the cast '##'' does not exist: it was removed in v0.0.12",
+                )
+                .with_span(span)
+                .with_help("a code becomes its character with 0d|n|, and a character its code with 0d|c|"))
             }
             TokenKind::HashDot => {
                 // Parse round expression: #.N|expr|

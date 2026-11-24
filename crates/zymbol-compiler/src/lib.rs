@@ -3019,10 +3019,6 @@ impl Compiler {
                         ctx.emit(Instruction::FloatToIntTrunc(dst, r_src));
                         ctx.set_reg_type(dst, StaticType::Int);
                     }
-                    CastKind::ToChar => {
-                        ctx.emit(Instruction::IntToChar(dst, r_src));
-                        ctx.set_reg_type(dst, StaticType::Char);
-                    }
                 }
                 Ok(dst)
             }
