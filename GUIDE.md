@@ -4875,7 +4875,7 @@ b = io::read_bytes("bad.txt")
 io::write_bytes("copy.txt", b)
 >> (io::read_bytes("copy.txt") == b) ¶   // → #1 — the same 11 bytes
 io::write("e.txt", "é")
->> 0x|##!io::read_bytes("e.txt")[1]| ¶   // → 0x00C3 — é is C3 A9 in UTF-8
+>> 0x|io::read_bytes("e.txt")[1]| ¶      // → 0xC3 — é is C3 A9 in UTF-8
 @ f:["bad.txt", "copy.txt", "e.txt"] { io::delete(f) }
 ```
 
@@ -5397,12 +5397,23 @@ e = 0xFF        // beyond ASCII, still a Char: 'ÿ'
 >> ##!e ¶ // → 255
 
 // Convert expression to base string
-hex = 0x|255|    // Int → hex string → "0x00FF"
-bin = 0b|65|     // Int → binary string → "0b1000001"
-oct = 0o|8|      // Int → octal string → "0o10"
-dec = 0d|255|    // Int → decimal string → "0d0255"
-neg = 0x|(0 - 255)|  // a negative one: the sign in front → "-0x00FF" (v0.0.11)
+hex = 0x|255|    // Int → hex string → "0xFF"
+bin = 0b|65|     // Int → binary string → "0b01000001"
+oct = 0o|8|      // Int → octal string → "0o010"
+dec = 0d|255|    // Int → decimal string → "0d255"
+neg = 0x|(0 - 255)|  // a negative one: the sign in front → "-0xFF" (v0.0.11)
+
+>> 0x|'A'| " " 0o|'A'| " " 0b|'A'| " " 0d|'A'| ¶  // → 0x41 0o101 0b01000001 0d65
+>> 0x|0| " " 0x|'€'| " " 0b|256| ¶                 // → 0x00 0x20AC 0b100000000
 ```
+
+**Never fewer digits than a byte** (v0.0.12). A Char or an Int read back in hexadecimal,
+octal or binary takes at least the digits of `0xFF` in that base — `0x00`…`0xFF`,
+`0o000`…`0o377`, `0b00000000`…`0b11111111` — so the 256 bytes line up in a column; a larger
+value takes the digits it needs. The decimal is written as it is read: `0d0`…`0d255`. These
+are the forms a byte's literal already takes, and `0x|t|` reads any of them back as the
+Char. Until v0.0.11 `0x` and `0d` were padded to four, the width of a code point, and `0b`
+and `0o` not at all.
 
 ---
 

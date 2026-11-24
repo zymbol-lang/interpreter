@@ -4559,16 +4559,9 @@ impl<W: Write> VM<W> {
                     let val = rreg!(src).clone();
                     let result = match val {
                         // Char → string representation (display code in given base)
-                        Value::Char(ch) => {
-                            let code = ch as u32;
-                            let s = match radix {
-                                2  => format!("0b{:b}", code),
-                                8  => format!("0o{:o}", code),
-                                10 => format!("0d{:04}", code),
-                                _  => format!("0x{:04X}", code),
-                            };
-                            Value::String(ZyStr::new(s))
-                        }
+                        // Char → its code, written as an Int's is (D-23).
+                        Value::Char(ch) => Value::String(ZyStr::new(
+                            zymbol_common::num::base_string(ch as i64, radix as u32))),
                         // Int → String (format integer in specified base)
                         // The sign in front of a negative one (GLB-136).
                         Value::Int(n) => Value::String(ZyStr::new(

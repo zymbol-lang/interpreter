@@ -282,9 +282,15 @@ mod tests {
     }
 }
 
-/// `0x|n|`, `0b|n|`, `0o|n|`, `0d|n|` on an integer: the prefix and the digits
-/// of the value, `0x` and `0d` padded to four. A negative one carries its sign
-/// in front — `-0x00FF`, as Python's `hex(-255)` is `-0xff` (GLB-136, decided
+/// `0x|n|`, `0b|n|`, `0o|n|`, `0d|n|` on an integer or a character: the prefix
+/// and the digits of the value, never fewer than one byte takes in that base —
+/// `0x41`, `0o101`, `0b01000001` — and the decimal as it is read, `0d65` (D-23,
+/// decided by the author 2026-11-24). A byte is a Char from 0x00 to 0xFF, so
+/// the 256 of them line up in a column in hexadecimal, octal and binary; a
+/// larger value takes the digits it needs, `0x20AC`. Until v0.0.12 `0x` and
+/// `0d` were padded to four, the width of a code point, and `0b` and `0o` were
+/// not padded at all. A negative one carries its sign
+/// in front — `-0xFF`, as Python's `hex(-255)` is `-0xff` (GLB-136, decided
 /// by the author 2026-10-16). The two Rust engines printed the two's complement
 /// of an `i64`, a width this model does not have, and zyjs put the sign inside
 /// the padding (`0x0-FF`).
@@ -292,10 +298,10 @@ pub fn base_string(n: i64, radix: u32) -> String {
     let sign = if n < 0 { "-" } else { "" };
     let m = n.unsigned_abs();
     match radix {
-        2 => format!("{sign}0b{m:b}"),
-        8 => format!("{sign}0o{m:o}"),
-        10 => format!("{sign}0d{m:04}"),
-        _ => format!("{sign}0x{m:04X}"),
+        2 => format!("{sign}0b{m:08b}"),
+        8 => format!("{sign}0o{m:03o}"),
+        10 => format!("{sign}0d{m}"),
+        _ => format!("{sign}0x{m:02X}"),
     }
 }
 
@@ -305,11 +311,27 @@ mod base_string_tests {
 
     #[test]
     fn signed_and_padded() {
-        assert_eq!(base_string(255, 16), "0x00FF");
-        assert_eq!(base_string(-255, 16), "-0x00FF");
-        assert_eq!(base_string(-1, 10), "-0d0001");
-        assert_eq!(base_string(-5, 2), "-0b101");
-        assert_eq!(base_string(8, 8), "0o10");
-        assert_eq!(base_string(0, 16), "0x0000");
+        assert_eq!(base_string(255, 16), "0xFF");
+        assert_eq!(base_string(-255, 16), "-0xFF");
+        assert_eq!(base_string(-1, 10), "-0d1");
+        assert_eq!(base_string(-5, 2), "-0b00000101");
+        assert_eq!(base_string(8, 8), "0o010");
+        assert_eq!(base_string(0, 16), "0x00");
+    }
+
+    #[test]
+    fn never_less_than_a_byte() {
+        for (n, x, d, o, b) in [
+            (0, "0x00", "0d0", "0o000", "0b00000000"),
+            (65, "0x41", "0d65", "0o101", "0b01000001"),
+            (255, "0xFF", "0d255", "0o377", "0b11111111"),
+            (256, "0x100", "0d256", "0o400", "0b100000000"),
+            (0x20AC, "0x20AC", "0d8364", "0o20254", "0b10000010101100"),
+        ] {
+            assert_eq!(base_string(n, 16), x);
+            assert_eq!(base_string(n, 10), d);
+            assert_eq!(base_string(n, 8), o);
+            assert_eq!(base_string(n, 2), b);
+        }
     }
 }

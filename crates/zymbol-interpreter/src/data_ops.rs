@@ -337,21 +337,11 @@ impl<W: Write> Interpreter<W> {
         let value = self.eval_expr(&op.expr)?;
 
         match value {
-            // Case 1: char → text (display character code)
-            Value::Char(ch) => {
-                let code = ch as u32;
-                let formatted = match op.prefix {
-                    BasePrefix::Binary => format!("0b{:b}", code),
-                    BasePrefix::Octal => format!("0o{:o}", code),
-                    BasePrefix::Decimal => format!("0d{:04}", code),
-                    BasePrefix::Hex => format!("0x{:04X}", code),
-                };
-                Ok(Value::String(formatted.into()))
-            }
-
-            // Case 2: int → string (format integer in specified base)
-            // The sign in front of a negative one (GLB-136).
-            Value::Int(n) => {
+            // Case 1 and 2: char or int → text, one spelling (D-23): never
+            // fewer digits than a byte takes, the decimal as it is read. The
+            // sign in front of a negative one (GLB-136).
+            Value::Char(_) | Value::Int(_) => {
+                let n = match value { Value::Char(ch) => ch as i64, Value::Int(n) => n, _ => unreachable!() };
                 let radix = match op.prefix {
                     BasePrefix::Binary => 2,
                     BasePrefix::Octal => 8,

@@ -30,6 +30,14 @@ The first release announced as a **public alpha**. Its theme is the terminal and
   before their engines think. In all four engines: the playground draws on an offscreen
   canvas, because the browser painted the visible one every 16 ms while a program was still
   computing (D-09; GAP-ZYE-015).
+- **`0x|…|`, `0o|…|` and `0b|…|` never write fewer digits than a byte** (D-23). A byte is
+  a Char from `0x00` to `0xFF`, and its literal already takes that form in every base; the
+  conversion back now takes it too: `0x|'A'|` is `0x41`, `0o|'A'|` `0o101`, `0b|'A'|`
+  `0b01000001`, so the 256 bytes line up in a column. A larger value takes the digits it
+  needs (`0x|'€'|` is `0x20AC`). The decimal is written as it is read: `0d|'A'|` is `0d65`.
+  It was `0x0041` and `0d0065`, the width of a code point, with `0b1000001` and `0o101`
+  not padded at all — and the bytes of `é` printed as `0x00C3 0x00A9`. The same for a
+  Char and an Int, and the sign stays in front: `0x|(0 - 1)|` is `-0x01`.
 - `$^+`/`$^-` do not read a numeric text as a number: `["10", "9", "100"]$^+` is
   `[10, 100, 9]`. The numeric reading of `<` is not a total order mixed with other texts
   (`"2" < "10"`, `"10" < "1a"`, `"1a" < "2"`). Convert first to sort numbers (D-07).

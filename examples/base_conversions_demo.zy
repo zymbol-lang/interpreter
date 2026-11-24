@@ -1,7 +1,7 @@
 // ===== BASE CONVERSION EXPRESSIONS DEMONSTRATION =====
 // The base operators 0b|x| 0o|x| 0d|x| 0x|x| take a number or char and
 // return its TEXT representation in that base (a String). For example
-// 0x|65| → "0x0041". They are one-directional: value → base-string.
+// 0x|65| → "0x41". They are one-directional: value → base-string.
 
 >> "=== 1. CHAR → BASE STRINGS (character codes) ===" ¶
 letra = 'A'
