@@ -36,6 +36,16 @@ The first release announced as a **public alpha**. Its theme is the terminal and
 
 ### Added
 
+- **Names are read in NFC** (D-20; GAP-TET-003). A name typed composed and the same name
+  typed decomposed — `й` as U+0439 and as U+0438 U+0306 — are one name in all four
+  engines, in every place a name is read: identifiers, hot names, labels, `{…}` inside a
+  string, error kinds, module aliases. `zymbol check` used to report the first as unused
+  and the second as undefined. Canonical equivalence only: `ﬁ` and `fi` stay different.
+  Strings and module paths keep what was written. `zymbol fmt` writes each name the way
+  the source spells it. Rust uses the `unicode-normalization` crate (Unicode 18); the
+  browser engines a table generated from the same version (`web/src/zymbol/normalize.js`),
+  which passes all of `NormalizationTest.txt` and is held to the Rust lexer on 4 000 names
+  by `web/tests/test_normalize.mjs`.
 - **`std/text`: `graphemes(s)`** cuts a text into its extended grapheme clusters (UAX #29)
   and gives an Array of Strings, one each: what a reader takes for one letter, `e` + U+0301,
   a flag, a family joined by U+200D. A Char stays one code point. The browser engines use

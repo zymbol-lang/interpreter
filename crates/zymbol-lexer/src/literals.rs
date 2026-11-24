@@ -198,7 +198,9 @@ impl Lexer {
                     return Token::new(TokenKind::Error("empty interpolation".to_string()), span);
                 }
 
-                parts.push(StringPart::Variable(var_name));
+                // The name read, in NFC like every other (D-20); the text
+                // around it is data and stays as written.
+                parts.push(StringPart::Variable(crate::name_form(&var_name).into_owned()));
             } else if ch == '}' {
                 // A `}` that closes nothing. The escape is symmetric: `\{` and
                 // `\}` are the literal braces, and a bare one is an error on

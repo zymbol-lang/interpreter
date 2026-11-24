@@ -441,6 +441,10 @@ impl ModuleAnalyzer {
             None => file_stem.to_string(),
         };
 
+        // The declared name is in NFC like every name (D-20); the file's is
+        // compared in the same form, so a file whose name is spelled
+        // decomposed on disk still matches the module it holds.
+        let expected = zymbol_lexer::name_form(&expected).into_owned();
         let declared = module_decl.name.strip_prefix('.').unwrap_or(&module_decl.name);
 
         if declared != expected {

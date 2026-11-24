@@ -9,3 +9,4 @@ description = "Lexical analysis for Zymbol-Lang"
 zymbol-span.workspace = true
 zymbol-common.workspace = true
 zymbol-error.workspace = true
+unicode-normalization.workspace = true

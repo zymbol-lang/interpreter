@@ -115,6 +115,69 @@ fn significant_tokens(src: &str) -> Result<(Vec<TokenKind>, usize), String> {
     Ok((significant, comment_count))
 }
 
+/// Put back every name the way the source spells it.
+///
+/// A name is known by its NFC (D-20), and the AST the formatter prints from
+/// holds that form, so a name the source spells decomposed — `и` + U+0306 for
+/// `й` — would come out composed. The two spell one name and the program is
+/// the same either way, but the formatter does not rewrite what was written
+/// (the rule L47 set for literals, decided again for names on 2026-11-23).
+///
+/// Run after `verify`, so the two token streams are known to be equal: the
+/// significant tokens pair up one to one, and each name token whose text in the
+/// output differs from its text in the source gets the source's back. Nothing
+/// else is touched, and a source with nothing at or above U+0300 has nothing
+/// to put back.
+pub(crate) fn restore_spellings(original_src: &str, formatted: String) -> String {
+    if original_src.chars().all(|c| (c as u32) < 0x300) {
+        return formatted;
+    }
+    let names = |src: &str| -> Vec<(usize, usize)> {
+        let (tokens, _) = Lexer::new(src, FileId(0)).tokenize();
+        tokens
+            .into_iter()
+            .filter(|t| {
+                !matches!(
+                    t.kind,
+                    TokenKind::LineComment(_) | TokenKind::BlockComment(_) | TokenKind::Semicolon | TokenKind::Eof
+                )
+            })
+            .map(|t| {
+                let named = matches!(
+                    t.kind,
+                    TokenKind::Ident(_)
+                        | TokenKind::HotIdent(_)
+                        | TokenKind::PreHotIdent(_)
+                        | TokenKind::AtLabel(_)
+                        | TokenKind::AtColonLabel(_)
+                        | TokenKind::AtColonLabelBreak(_)
+                        | TokenKind::AtColonLabelContinue(_)
+                );
+                if named { (t.span.start.byte_offset as usize, t.span.end.byte_offset as usize) } else { (0, 0) }
+            })
+            .collect()
+    };
+    let (from, to) = (names(original_src), names(&formatted));
+    if from.len() != to.len() {
+        return formatted;
+    }
+    let mut out = String::with_capacity(formatted.len());
+    let mut at = 0;
+    for (&(a, b), &(c, d)) in from.iter().zip(&to) {
+        if a == b || c < at {
+            continue;
+        }
+        let (written, printed) = (&original_src[a..b], &formatted[c..d]);
+        if written != printed {
+            out.push_str(&formatted[at..c]);
+            out.push_str(written);
+            at = d;
+        }
+    }
+    out.push_str(&formatted[at..]);
+    out
+}
+
 fn describe(kind: &TokenKind) -> String {
     format!("{kind:?}")
 }
@@ -179,6 +242,15 @@ fn collect_statement(
 mod tests {
     use crate::format;
     use crate::FormatError;
+
+    #[test]
+    fn names_keep_their_spelling() {
+        // D-20: the AST holds `й` composed; the formatter writes each name the
+        // way the source spells it, decomposed or not, label and hot name too.
+        let src = "\u{438}\u{306} = 2\n>> \u{439} \u{b6}\n@:\u{435}\u{308} i:1..2 {\n    \u{451}\u{b0} = i\n    @:\u{451}!\n}\n";
+        let out = format(src).expect("formats");
+        assert_eq!(out, src);
+    }
 
     /// Until the corresponding fidelity fixes land, each known mutation bug
     /// class must FAIL CLOSED (SafetyGate error) instead of corrupting output.

@@ -43,6 +43,8 @@ impl Lexer {
                 label.push(self.current_char());
                 self.advance();
             }
+            // A label is a name, in NFC like every other (D-20).
+            let label = crate::name_form(&label).into_owned();
             // Check for trailing ! or > to distinguish break/continue from declaration
             if !self.is_at_end() && self.current_char() == '!' {
                 self.advance(); // consume !

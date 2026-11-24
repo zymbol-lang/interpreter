@@ -55,6 +55,7 @@ zymbol-host = { path = "crates/zymbol-host", default-features = false }
 
 # Unicode handling
 unicode-segmentation = "1.12"
+unicode-normalization = "0.1.26"
 unicode-width = "0.2"
 
 # Error handling

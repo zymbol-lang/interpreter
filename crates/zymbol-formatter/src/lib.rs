@@ -158,7 +158,8 @@ pub fn format_with_config(source: &str, config: FormatterConfig) -> Result<Strin
     // Safety gate: never return output that is not equivalent to the source.
     gate::verify(source, &program, &result).map_err(FormatError::SafetyGate)?;
 
-    Ok(result)
+    // Names as they were written (D-20): the AST holds each name in NFC.
+    Ok(gate::restore_spellings(source, result))
 }
 
 /// Check if source code is already formatted according to the configuration

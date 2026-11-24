@@ -1227,7 +1227,9 @@ impl Analyzer {
             return None;
         }
 
+        // Read from the text, so put in NFC like the names it is matched with (D-20).
         let alias: String = chars[start..end].iter().collect();
+        let alias = zymbol_lexer::name_form(&alias).into_owned();
         Some((alias, is_function_call))
     }
 
@@ -1590,6 +1592,8 @@ fn find_function_call_context(content: &str, offset: usize) -> Option<(String, u
         return None;
     }
 
+    // Read from the text, so put in NFC like the names it is matched with (D-20).
+    let func_name = zymbol_lexer::name_form(&func_name).into_owned();
     Some((func_name, comma_count))
 }
 

@@ -542,7 +542,9 @@ impl Parser {
             let token = self.peek().clone();
             match &token.kind {
                 TokenKind::Ident(name) => {
-                    components.push(name.clone());
+                    // A path names a file, and a file is found by its bytes:
+                    // the spelling written, not the name's NFC (D-20).
+                    components.push(token.written.clone().unwrap_or_else(|| name.clone()));
                     end_span = token.span;
                     self.advance();
                     if matches!(self.peek().kind, TokenKind::Slash) {

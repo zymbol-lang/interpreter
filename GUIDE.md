@@ -277,7 +277,7 @@ All scripts are allowed: `camelCase`, `snake_case`, `PascalCase`, `café`, `αβ
 `変数`, `متغير` are all valid identifiers, and so is any visible symbol the
 language has no token for — `€precio`, `a±b`, `§total`, `_🔑`.
 
-Three edges are decided rather than accidental:
+Four edges are decided rather than accidental:
 
 - **An invisible character is not a letter.** A zero-width space or a soft
   hyphen inside a name is refused, and the diagnostic names it by code point
@@ -289,6 +289,20 @@ Three edges are decided rather than accidental:
 - **A byte order mark is skipped when it is the first character of the file**,
   as editors on Windows write it. Anywhere else it is an ordinary invisible
   character, and therefore an error.
+- **A name is read in NFC**, Unicode's canonical composition. `й` can be typed
+  as one code point (U+0439) or as `и` followed by a combining breve
+  (U+0438 U+0306), and `ệ` with its two marks in either order; each is one
+  letter, so each spelling names the same variable, function, parameter, label,
+  module alias or error kind. Only canonical equivalence counts: `ﬁ` and `fi`,
+  or `x²` and `x2`, look different and are different names. Strings are data
+  and keep what was written — `"й"` typed decomposed has length 2 — and so does
+  a module path, which names a file: `<# ./ёж => m` looks for the file spelled
+  the way the path is (D-20).
+
+  ```zymbol
+  й = 2          // typed и + U+0306
+  >> й ¶         // typed U+0439 → 2
+  ```
 
 Identifiers must not collide with symbolic operators (e.g., `$>`, `@`, `?` are
 not identifiers). The quotes and `°` are read before a name begins, so they

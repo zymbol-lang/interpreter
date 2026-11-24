@@ -117,9 +117,11 @@ its own and not a copy in each engine:
 #### `zymbol-lexer`
 Tokenizes source text into 100+ token types. Handles string interpolation
 (`StringInterpolated(Vec<StringPart>)`), all symbolic operators (`>>`, `<<`, `?`, `@`,
-`??`, `$#`, `$+`, `!?`, etc.), and Unicode identifiers.
+`??`, `$#`, `$+`, `!?`, etc.), and Unicode identifiers. Every name is put in NFC where it
+is read (`name_form`, D-20); a token keeps the spelling in `Token::written` when it differs,
+for a module path, which names a file.
 
-**Dependencies**: `zymbol-span`, `zymbol-common`, `zymbol-error`
+**Dependencies**: `zymbol-span`, `zymbol-common`, `zymbol-error`, `unicode-normalization`
 
 #### `zymbol-ast`
 Complete AST node definitions. Key types:
