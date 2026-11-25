@@ -1921,12 +1921,9 @@ impl<'a> FormatVisitor<'a> {
 
     /// Format base conversion expression
     fn format_base_conversion(&mut self, op: &zymbol_ast::BaseConversionExpr) {
-        match op.prefix {
-            BasePrefix::Binary => self.output.write("0b|"),
-            BasePrefix::Octal => self.output.write("0o|"),
-            BasePrefix::Decimal => self.output.write("0d|"),
-            BasePrefix::Hex => self.output.write("0x|"),
-        }
+        // The bare bars `|…|` (D-25) are `BasePrefix::Char`, spelled "".
+        self.output.write(op.prefix.spelling());
+        self.output.write("|");
         self.format_expr(&op.expr);
         self.output.write("|");
     }

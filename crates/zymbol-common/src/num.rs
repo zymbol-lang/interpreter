@@ -305,6 +305,93 @@ pub fn base_string(n: i64, radix: u32) -> String {
     }
 }
 
+/// The name of a radix as a reader writes it: `hexadecimal`, not `base-16`.
+pub fn radix_name(radix: u32) -> &'static str {
+    match radix {
+        2 => "binary",
+        8 => "octal",
+        10 => "decimal",
+        _ => "hexadecimal",
+    }
+}
+
+/// The base a text names by its prefix — `0x`, `0d`, `0o`, `0b`, either case —
+/// and the digits after it.
+fn strip_base_prefix(text: &str) -> Option<(u32, &str)> {
+    let b = text.as_bytes();
+    if b.len() < 2 || b[0] != b'0' {
+        return None;
+    }
+    let radix = match b[1] {
+        b'x' | b'X' => 16,
+        b'd' | b'D' => 10,
+        b'o' | b'O' => 8,
+        b'b' | b'B' => 2,
+        _ => return None,
+    };
+    Some((radix, &text[2..]))
+}
+
+/// What reading a text in a base failed on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaseTextError {
+    /// No digits, or a digit that is not one of this radix. `digits` is the
+    /// text after its sign and its prefix.
+    Parse { radix: u32, digits: String },
+    /// The digits name a number past ±(2⁵³ − 1).
+    Range { digits: String },
+}
+
+impl BaseTextError {
+    /// The error family and the message — one wording for every engine.
+    pub fn family_and_message(&self) -> (&'static str, String) {
+        match self {
+            BaseTextError::Parse { radix, digits } => (
+                "Parse",
+                format!("failed to parse '{}' as {} number", digits, radix_name(*radix)),
+            ),
+            BaseTextError::Range { digits } => (
+                "Range",
+                format!("integer overflow: '{}' is past the integer range", digits),
+            ),
+        }
+    }
+}
+
+/// Read a text written in a base (D-25, decided by the author 2026-11-24).
+///
+/// The text may carry a sign and any of the four prefixes, so it reads back
+/// what `base_string` writes: `"0x41"`, `"-0x01"`, `"0b01000001"`, `"0d65"`.
+/// Without a prefix the digits are read in `default_radix` — the base of the
+/// door that reads them: `0x|"41"|` is `"0x41"`, `|"65"|` is `'A'`. Blanks
+/// around the text are ignored, as `#|…|` ignores them.
+pub fn parse_base_text(text: &str, default_radix: u32) -> Result<i64, BaseTextError> {
+    let t = text.trim();
+    let (negative, rest) = match t.as_bytes().first() {
+        Some(b'-') => (true, &t[1..]),
+        Some(b'+') => (false, &t[1..]),
+        _ => (false, t),
+    };
+    let (radix, digits) = strip_base_prefix(rest).unwrap_or((default_radix, rest));
+    if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+        return Err(BaseTextError::Parse { radix, digits: digits.to_string() });
+    }
+    let range = || BaseTextError::Range { digits: digits.to_string() };
+    let m = i64::from_str_radix(digits, radix).map_err(|_| range())?;
+    let n = if negative { -m } else { m };
+    if in_int_range(n) { Ok(n) } else { Err(range()) }
+}
+
+/// `#|…|` on a text that names its base by a prefix: `#|"0x41"|` is 65 (D-25).
+/// `None` when the text has no prefix or its digits do not read, so the
+/// caller goes on to the decimal reading and, failing that, hands the text back.
+pub fn parse_prefixed(text: &str) -> Option<i64> {
+    let t = text.trim();
+    let unsigned = t.strip_prefix(['+', '-']).unwrap_or(t);
+    strip_base_prefix(unsigned)?;
+    parse_base_text(t, 10).ok()
+}
+
 #[cfg(test)]
 mod base_string_tests {
     use super::base_string;
@@ -317,6 +404,31 @@ mod base_string_tests {
         assert_eq!(base_string(-5, 2), "-0b00000101");
         assert_eq!(base_string(8, 8), "0o010");
         assert_eq!(base_string(0, 16), "0x00");
+    }
+
+    #[test]
+    fn a_text_in_a_base_reads_back_what_base_string_writes() {
+        use super::{parse_base_text, parse_prefixed, BaseTextError};
+        for n in [0i64, 1, 65, 255, 256, 0x20AC, -1, -255] {
+            for radix in [2, 8, 10, 16] {
+                assert_eq!(parse_base_text(&base_string(n, radix), 16), Ok(n));
+            }
+        }
+        assert_eq!(parse_base_text("41", 16), Ok(65));
+        assert_eq!(parse_base_text("65", 10), Ok(65));
+        assert_eq!(parse_base_text("0b01000001", 10), Ok(65));
+        assert_eq!(parse_base_text(" 0X41 ", 2), Ok(65));
+        assert_eq!(
+            parse_base_text("0b012", 16),
+            Err(BaseTextError::Parse { radix: 2, digits: "012".into() })
+        );
+        assert_eq!(parse_base_text("", 16), Err(BaseTextError::Parse { radix: 16, digits: "".into() }));
+        assert!(matches!(parse_base_text("0xFFFFFFFFFFFFFFFFFF", 10), Err(BaseTextError::Range { .. })));
+        assert!(matches!(parse_base_text("0x20000000000000", 10), Err(BaseTextError::Range { .. })));
+        assert_eq!(parse_prefixed("0x1F0000"), Some(0x1F0000));
+        assert_eq!(parse_prefixed("-0b101"), Some(-5));
+        assert_eq!(parse_prefixed("65"), None);
+        assert_eq!(parse_prefixed("0xZZ"), None);
     }
 
     #[test]

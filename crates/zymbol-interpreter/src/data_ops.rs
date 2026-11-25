@@ -98,20 +98,16 @@ impl<W: Write> Interpreter<W> {
     pub(crate) fn eval_numeric_eval(&mut self, op: &NumericEvalExpr) -> Result<Value> {
         let value = self.eval_expr(&op.expr)?;
         match value {
-            Value::String(s) => Ok(parse_numeric_string(s.to_string())),
-            // GAP-ZYB-012: a Char reads like the one-character string it is.
-            //
-            // `#|"७"|` gave 7 and `#|'७'|` gave back the glyph — the same
-            // operator, the same character, two answers depending on which of
-            // the two ways it had been written. `#|'7'|` did not convert
-            // either. `parse_numeric_string` already knows all 69 digit
-            // scripts, so this is the same reading applied to the same
-            // character, and a Char that is not a digit comes back untouched,
-            // which is what "safe conversion" means for a string too.
-            Value::Char(c) => Ok(match parse_numeric_string(c.to_string()) {
-                Value::String(_) => Value::Char(c),
-                converted => converted,
+            // A text that names its base reads in it: `#|"0x41"|` is 65 (D-25).
+            Value::String(s) => Ok(match num::parse_prefixed(&s) {
+                Some(n) => Value::Int(n),
+                None => parse_numeric_string(s.to_string()),
             }),
+            // A character is a number: its code (D-25, decided by the author
+            // 2026-11-24). `#|'A'|` is 65 and `#|'7'|` is 55. Until then a
+            // Char read like the one-character text it is (GAP-ZYB-012), so
+            // `#|'7'|` was 7; that reading is the text's: `#|"{c}"|`.
+            Value::Char(c) => Ok(Value::Int(c as i64)),
             other => Ok(other),
         }
     }
@@ -147,11 +143,11 @@ impl<W: Write> Interpreter<W> {
             CastKind::ToIntTrunc => match value {
                 Value::Int(_) => Ok(value),
                 Value::Float(f) => cast_to_int(f.trunc(), "##!", op.span),
-                // A Char is not a number: its code is `0d|c|` (D-24, v0.0.12).
+                // `##!` does not take a Char: its code is `#|c|` (D-25, v0.0.12).
                 // `##!` answered it from v0.0.8 to v0.0.11.
                 Value::Char(_) => Err(RuntimeError::kinded(
                     "Type",
-                    "##! requires a numeric value, got Char: a character's code is 0d|c|".to_string(),
+                    "##! requires a numeric value, got Char: a character's code is #|c|".to_string(),
                     op.span,
                 )),
                 other => Err(RuntimeError::kinded(
@@ -307,111 +303,55 @@ impl<W: Write> Interpreter<W> {
         ).into()))
     }
 
-    /// Evaluate base conversion expression: 0x|expr| or 0b|expr| or 0o|expr| or 0d|expr|
-    /// Tridirectional conversion:
-    /// - char → text: displays character code in specified base
-    /// - int → char: creates char from numeric code
-    /// - text → char: parses string as number in base, creates char
+    /// Evaluate base conversion: 0x|expr|, 0b|expr|, 0o|expr|, 0d|expr|, |expr|
+    ///
+    /// Three doors, one per kind of result (D-25, decided by the author
+    /// 2026-11-24): a base gives the value's text in that base, the bare bars
+    /// give its character, and `#|…|` gives its number. Each takes a Char, an
+    /// Int, or a text in any base — `0d|'A'|`, `0d|65|`, `0d|"0b01000001"|` and
+    /// `0d|0o101|` are all `"0d65"`; `|65|`, `|"0d65"|` and `|0x41|` are `'A'`.
+    /// D-24 had made `0d` the one base whose result was not text, which is
+    /// what this replaces.
     pub(crate) fn eval_base_conversion(&mut self, op: &BaseConversionExpr) -> Result<Value> {
         use zymbol_ast::BasePrefix;
 
         let value = self.eval_expr(&op.expr)?;
-
-        match value {
-            // `0d` is the door between a character and its code (D-24): the
-            // element of a character in decimal is the number, because Zymbol
-            // writes its numbers in decimal. A code with no character — below
-            // 0, past 0x10FFFF, a surrogate — is `##Range`.
-            Value::Char(ch) if op.prefix == BasePrefix::Decimal => Ok(Value::Int(ch as i64)),
-            Value::Int(n) if op.prefix == BasePrefix::Decimal => {
-                match u32::try_from(n).ok().and_then(char::from_u32) {
-                    Some(c) => Ok(Value::Char(c)),
-                    None => Err(RuntimeError::kinded(
-                        "Range",
-                        "character out of range: 0d|…| cannot represent this code".to_string(),
-                        op.span,
-                    )),
+        let n = match value {
+            Value::Char(ch) => ch as i64,
+            Value::Int(n) => n,
+            // A text in any base, read by the prefix it carries; without one,
+            // in the base of this door, or in decimal for the bare bars.
+            Value::String(ref s) => {
+                match num::parse_base_text(s, op.prefix.radix().unwrap_or(10)) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        let (family, message) = e.family_and_message();
+                        return Err(RuntimeError::kinded(family, message, op.span));
+                    }
                 }
             }
-
-            // Case 1 and 2: char or int → its text in that base, one spelling
-            // (D-23): never fewer digits than a byte takes. The sign in front
-            // of a negative one (GLB-136).
-            Value::Char(_) | Value::Int(_) => {
-                let n = match value { Value::Char(ch) => ch as i64, Value::Int(n) => n, _ => unreachable!() };
-                let radix = match op.prefix {
-                    BasePrefix::Binary => 2,
-                    BasePrefix::Octal => 8,
-                    BasePrefix::Decimal => 10,
-                    BasePrefix::Hex => 16,
+            _ => {
+                let message = if op.prefix == BasePrefix::Char {
+                    format!("|…| works with char, int, or string, got {}", value.type_label())
+                } else {
+                    format!("base conversion expressions work with char, int, or string, got {}", value.type_label())
                 };
-                Ok(Value::String(zymbol_common::num::base_string(n, radix).into()))
+                return Err(RuntimeError::kinded("Type", message, op.span));
             }
-
-            // Case 3: text → char (parse string as number in base, create char)
-            Value::String(s) => {
-                // Remove base prefix if present
-                let s = s.trim_start_matches("0b")
-                    .trim_start_matches("0o")
-                    .trim_start_matches("0d")
-                    .trim_start_matches("0x")
-                    .trim_start_matches("0B")
-                    .trim_start_matches("0O")
-                    .trim_start_matches("0D")
-                    .trim_start_matches("0X");
-
-                // Parse based on prefix
-                let code = match op.prefix {
-                    BasePrefix::Binary => u32::from_str_radix(s, 2),
-                    BasePrefix::Octal => u32::from_str_radix(s, 8),
-                    BasePrefix::Decimal => s.parse::<u32>(),
-                    BasePrefix::Hex => u32::from_str_radix(s, 16),
-                }
-                // A `##Parse`, declared: the message carries the text, and its
-                // words chose the family — `0d|"type"|` was a `##Type` (GLB-097).
-                .map_err(|_| RuntimeError::kinded(
-                    "Parse",
-                    format!(
-                        "failed to parse '{}' as {} number",
-                        s,
-                        match op.prefix {
-                            BasePrefix::Binary => "binary",
-                            BasePrefix::Octal => "octal",
-                            BasePrefix::Decimal => "decimal",
-                            BasePrefix::Hex => "hexadecimal",
-                        }
-                    ),
-                    op.span,
-                ))?;
-
-                // A code with no character — past 0x10FFFF, or a surrogate — is
-                // `##Range`, worded for this operator and without the value
-                // (GLB-113, decided 2026-10-09). It was `##_`, and quoted the code.
-                let ch = char::from_u32(code).ok_or_else(|| RuntimeError::kinded(
+        };
+        match op.prefix.radix() {
+            // Never fewer digits than a byte takes, the sign in front (D-23).
+            Some(radix) => Ok(Value::String(num::base_string(n, radix).into())),
+            // A code with no character — below 0, past 0x10FFFF, a surrogate —
+            // is `##Range`, without the value (GLB-113).
+            None => match u32::try_from(n).ok().and_then(char::from_u32) {
+                Some(c) => Ok(Value::Char(c)),
+                None => Err(RuntimeError::kinded(
                     "Range",
-                    format!(
-                        "character out of range: {}|…| cannot represent this code",
-                        match op.prefix {
-                            BasePrefix::Binary => "0b",
-                            BasePrefix::Octal => "0o",
-                            BasePrefix::Decimal => "0d",
-                            BasePrefix::Hex => "0x",
-                        }
-                    ),
+                    "character out of range: |…| cannot represent this code".to_string(),
                     op.span,
-                ))?;
-
-                Ok(Value::Char(ch))
-            }
-
-            _ => Err(RuntimeError::kinded(
-                "Type",
-                format!(
-                    "base conversion expressions work with char, int, or string, got {}",
-                    value.type_label()
-                ),
-                op.span,
-            )),
+                )),
+            },
         }
     }
 

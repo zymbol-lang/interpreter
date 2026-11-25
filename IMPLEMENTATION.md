@@ -1194,8 +1194,9 @@ data_prefix =
 
 (*
   ##'expr  (GLB-109, v0.0.10) turned an Int code point into its Char.  REMOVED
-  in v0.0.12 (D-24), with  ##!  on a Char: a character and its code cross
-  through  0d|…|  (base_conversion below).  Both are refused before the program
+  in v0.0.12 (D-24), with  ##!  on a Char: a code becomes its character with
+  |n|  and a character its code with  #|c|  (D-25, base_conversion below).
+  Both are refused before the program
   runs, with a help line that names it.  The mark after  <<  is still the
   typed-input form — one character read from the keyboard.
   Probe:  >> ##'65 ¶   → error: the cast '##'' does not exist  (four engines, 2026-11-24)
@@ -1225,9 +1226,12 @@ data_postfix =
   is NOT a maximum value.  They are the two number FORMATS.
 
     #|expr|          numeric eval / cast — parses text to Int/Float.  Reads a
-                     digit in ANY of the 69 supported scripts, and a Char too
-                     (v0.0.9): #|'७'| is 7.  Fail-safe: returns its input
-                     unchanged when it cannot convert.
+                     digit in ANY of the 69 supported scripts, and a text with a
+                     base prefix: #|"0x41"| is 65.  A Char is its code (D-25,
+                     v0.0.12): #|'A'| is 65 and #|'7'| is 55 — the digit's value
+                     is the text's, #|"{c}"| (from v0.0.9 to D-25 #|'७'| was 7).
+                     Fail-safe: returns its input unchanged when it cannot
+                     convert.
     #,|12345.678|    → 12,345.678     thousands separators
     #^|12345.678|    → 1.2345678e4    scientific notation
     #.2|x|           → round to 2 decimals
@@ -1248,22 +1252,31 @@ data_wrapped_expr =
 
 (*
   Base conversion — no rule in this file until 2026-11-24, though every engine
-  has parsed it since v0.0.4.  Each prefix converts between a character and its
-  element in that base (D-24, v0.0.12):
+  has parsed it since v0.0.4.  Three doors, one per result (D-25, decided by
+  the author 2026-11-24): a base gives the TEXT in that base, the bare bars
+  give the CHARACTER, and  #|…|  (above) gives the NUMBER.
 
-    operand        0d|…|        0x|…|  0o|…|  0b|…|
-    Char 'A'       65 (Int)     "0x41"  "0o101"  "0b01000001"
-    Int 65         'A'          "0x41"  "0o101"  "0b01000001"
-    Text "41"      —            'A' (the text read as a code in that base)
+    operand            0x|…|    0d|…|    0o|…|    0b|…|          |…|
+    Char 'A'           "0x41"   "0d65"   "0o101"  "0b01000001"    'A'
+    Int 65             "0x41"   "0d65"   "0o101"  "0b01000001"    'A'
+    Text "0b01000001"  "0x41"   "0d65"   "0o101"  "0b01000001"    'A'
+    Text "41"          "0x41"   "0d41"   "0o041"  ##Parse         ')'
 
-  The decimal element is the number, because Zymbol writes numbers in decimal.
-  A code with no character is ##Range; a Float or a Bool is ##Type; a text
-  that is not digits of the base is ##Parse.  The texts never have fewer digits
-  than a byte takes in that base (D-23): 0x00, 0o000, 0b00000000.
-  Two closing bars together lex as  ||  — write  0x|(0d|65|)|.
-  Probe:  >> 0d|65| 0d|'A'| 0x|'A'| ¶   → A650x41  (four engines, 2026-11-24)
+  A text may carry a sign and any of the four prefixes; without one it is read
+  in the base of the door, or in decimal for the bare bars.  The texts never
+  have fewer digits than a byte takes in that base (D-23): 0x00, 0o000,
+  0b00000000; the decimal is unpadded, and a negative one has its sign in front.
+  A code with no character is ##Range; a text past the integer range is
+  ##Range; digits not of the base are ##Parse; a Float or a Bool is ##Type.
+  Two bars together lex as  ||  — write  |(#|c| + 1)|.  Outside every other
+  pair of bars,  |…|  opens an operand after a value on the same line, so
+  s = "a" |66|  is "aB"; inside one, a  |  closes it.
+  Probe:  >> 0d|'A'| |65| #|'A'| ¶   → 0d65A65  (four engines, 2026-11-24)
 *)
-base_conversion = ( "0x" | "0o" | "0b" | "0d" ) , "|" , expr , "|" ;
+base_conversion =
+    ( "0x" | "0o" | "0b" | "0d" ) , "|" , expr , "|"   (* the text in that base *)
+  | "|" , expr , "|"                                    (* the character (D-25) *)
+  ;
 
 (*
   Base conversion: integer literals with explicit radix prefix.
@@ -1280,7 +1293,7 @@ base_literal =
   A base literal in the ASCII range is a CHARACTER literal, not an Int:
   0d65 == 'A'  is #1  and  0d65 == 65  is #0 .  All four bases spell the same
   character — 0d27, 0x1b, 0o33, 0b11011 are ESC.  This is the written form of
-  what  0d|'c'|  reads back (a Char's code point).
+  what  |n|  builds from a code, and  #|c|  reads back (D-25).
 *)
 
 (*

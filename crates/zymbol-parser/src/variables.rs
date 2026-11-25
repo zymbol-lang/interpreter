@@ -265,7 +265,8 @@ impl Parser {
         loop {
             let next_tok = self.peek();
             let same_line = next_tok.span.start.line == acc.span().end.line;
-            let can_juxt = Self::can_juxtapose(&next_tok.kind)
+            let can_juxt = (Self::can_juxtapose(&next_tok.kind)
+                || (matches!(next_tok.kind, TokenKind::Pipe) && self.pipe_opens()))
                 || (allow_lparen
                     && matches!(next_tok.kind, TokenKind::LParen)
                     && matches!(acc.unwrap_group(), Expr::Literal(_) | Expr::Binary(_)));

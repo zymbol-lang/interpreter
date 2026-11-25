@@ -2837,6 +2837,7 @@ impl Compiler {
                     BasePrefix::Octal   => 8,
                     BasePrefix::Decimal => 10,
                     BasePrefix::Hex     => 16,
+                    BasePrefix::Char    => 0, // the bare bars: the character (D-25)
                 };
                 ctx.emit(Instruction::BaseConvert(dst, r, radix));
                 Ok(dst)

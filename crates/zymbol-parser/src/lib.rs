@@ -37,6 +37,10 @@ pub struct Parser {
     tokens: Vec<Token>,
     current: usize,
     diagnostics: Vec<Diagnostic>,
+    /// How many `…|expr|` forms enclose the expression being parsed. Inside
+    /// one, a `|` closes it; outside, a `|` opens the bare bars `|expr|` (D-25)
+    /// and can follow a value on the same line: `s = "a" |n|`.
+    bar_depth: u32,
 }
 
 impl Parser {
@@ -45,6 +49,7 @@ impl Parser {
             tokens,
             current: 0,
             diagnostics: Vec::new(),
+            bar_depth: 0,
         }
     }
 
@@ -1707,15 +1712,15 @@ impl Parser {
             TokenKind::HashHashApos => {
                 // `##'expr` was the cast from a code to its character (GLB-109,
                 // v0.0.10) and was removed in v0.0.12 (D-24): the base family
-                // is the one door between a character and its code, `0d|n|`
-                // and `0d|c|`. `<< ##' "msg" c` never reaches here: the input
+                // is the one door between a character and its code, `|n|`
+                // and `#|c|` (D-25). `<< ##' "msg" c` never reaches here: the input
                 // statement reads its typespec — the type symbol — first.
                 let span = self.peek().span;
                 Err(Diagnostic::error(
                     "the cast '##'' does not exist: it was removed in v0.0.12",
                 )
                 .with_span(span)
-                .with_help("a code becomes its character with 0d|n|, and a character its code with 0d|c|"))
+                .with_help("a code becomes its character with |n|, and a character its code with #|c|"))
             }
             TokenKind::HashDot => {
                 // Parse round expression: #.N|expr|
@@ -1748,6 +1753,10 @@ impl Parser {
             TokenKind::BaseHex => {
                 // Parse hexadecimal base conversion: 0x|expr|
                 self.parse_base_conversion(BasePrefix::Hex)
+            }
+            TokenKind::Pipe => {
+                // The bare bars: |expr| is the character (D-25)
+                self.parse_base_conversion(BasePrefix::Char)
             }
             TokenKind::ExecuteCommand(_) => {
                 // Parse execute expression: </ file.zy />

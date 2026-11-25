@@ -1283,8 +1283,8 @@ statements on one line (GLB-111). Then the program used what it asked for:
 ```
 
 (v0.0.12 removed the cast again, with `##!` on a `Char`: the line is now
-`salida = salida 0d|cinta[p]|`, the base prefix being the one door between a character and its
-code — D-24.)
+`salida = salida |cinta[p]|`: the bare bars give a code's character and `#|c|` a character's
+code — D-24 and D-25.)
 
 — 75 lines without the table, the same 13 tests against an independent Python oracle, alike in
 the three engines. That the line needs no intermediate variable came from the same day: a prefix

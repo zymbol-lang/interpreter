@@ -45,7 +45,8 @@ impl Parser {
         loop {
             let next_tok = self.peek();
             let same_line = next_tok.span.start.line == op_token.span.start.line;
-            let can_start = Self::can_juxtapose(&next_tok.kind)
+            let can_start = (Self::can_juxtapose(&next_tok.kind)
+                || (matches!(next_tok.kind, TokenKind::Pipe) && self.pipe_opens()))
                 || matches!(next_tok.kind, TokenKind::LParen);
             if same_line && can_start {
                 let item = self.parse_postfix()?;

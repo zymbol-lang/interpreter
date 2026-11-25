@@ -118,8 +118,10 @@ impl ResolvedPrecision {
     }
 }
 
-/// Base conversion expression: 0x|expr| or 0b|expr| or 0o|expr| or 0d|expr|
-/// Tridirectional conversion: char→text, int→char, text→char
+/// Base conversion expression: 0x|expr|, 0b|expr|, 0o|expr|, 0d|expr|, and the
+/// bare bars |expr| (D-25). A base gives the text of the value in that base —
+/// `0d|'A'|` is `"0d65"` — and the bare bars give the character — `|65|` and
+/// `|"0x41"|` are `'A'`. The operand is a Char, an Int, or a text in any base.
 #[derive(Debug, Clone)]
 pub struct BaseConversionExpr {
     pub prefix: BasePrefix,
@@ -138,6 +140,34 @@ pub enum BasePrefix {
     Decimal,
     /// 0x - hexadecimal/Unicode (base 16, full Unicode range)
     Hex,
+    /// The bare bars `|expr|`: no base — the character itself (D-25)
+    Char,
+}
+
+impl BasePrefix {
+    /// The radix the result is written in; `None` for the bare bars, whose
+    /// result is a Char. A text with no prefix is read in this radix, or in
+    /// decimal for the bare bars.
+    pub fn radix(self) -> Option<u32> {
+        match self {
+            BasePrefix::Binary => Some(2),
+            BasePrefix::Octal => Some(8),
+            BasePrefix::Decimal => Some(10),
+            BasePrefix::Hex => Some(16),
+            BasePrefix::Char => None,
+        }
+    }
+
+    /// The operator as it is written, before the operand: `0x`, … or nothing.
+    pub fn spelling(self) -> &'static str {
+        match self {
+            BasePrefix::Binary => "0b",
+            BasePrefix::Octal => "0o",
+            BasePrefix::Decimal => "0d",
+            BasePrefix::Hex => "0x",
+            BasePrefix::Char => "",
+        }
+    }
 }
 
 /// Round expression: #.N|expr|
@@ -224,7 +254,7 @@ pub enum CastKind {
     /// ##! — cast to Int truncating (Float 3.7 → 3)
     ToIntTrunc,
     // `##'` (to Char) was removed in v0.0.12 (D-24): a code and its character
-    // cross through `0d|…|`, and `##!` no longer takes a Char.
+    // cross through `|n|` and `#|c|` (D-25), and `##!` no longer takes a Char.
 }
 
 /// Cast expression: ##.expr / ###expr / ##!expr

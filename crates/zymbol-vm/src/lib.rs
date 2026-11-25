@@ -621,6 +621,11 @@ pub enum VmError {
     #[error("{0}")]
     ParseMsg(String),
 
+    /// A message whose family is `##Range`: a text in a base whose digits name
+    /// a number past the integer range (D-25). The message carries the digits.
+    #[error("{0}")]
+    RangeMsg(String),
+
     /// A message whose family is `##Key`: a key that is not in the dictionary.
     /// The message carries the key and the keys there are, so their words could
     /// not be left to decide the family: a key called `overflow` was a
@@ -747,24 +752,6 @@ fn vm_number_from(v: &Value) -> Result<f64, VmError> {
                 expected: "number",
                 got: other.type_name().to_string(),
             }),
-    }
-}
-
-/// A Char read as the one-character string it is, for `#|c|` (GAP-ZYB-012).
-///
-/// Mirrors the String arm above, including the 69 digit scripts, and returns
-/// the character unchanged when it is not a number — which is what "safe
-/// conversion" means for a string too.
-fn vm_char_as_number(c: char) -> Value {
-    let s = c.to_string();
-    match num::parse(&s) {
-        num::Num::Int(i) => Value::Int(i),
-        num::Num::Float(f) => Value::Float(f),
-        num::Num::None => match normalize_unicode_digits(&s).map(|n| num::parse(&n)) {
-            Some(num::Num::Int(i)) => Value::Int(i),
-            Some(num::Num::Float(f)) => Value::Float(f),
-            _ => Value::Char(c),
-        },
     }
 }
 
@@ -1169,7 +1156,7 @@ fn vm_error_kind(e: &VmError) -> &'static str {
         VmError::TypeError { .. } | VmError::TypeMsg(_) => "Type",
         VmError::DivisionByZero | VmError::ModuloByZero => "Div",
         VmError::IntOverflow { .. } | VmError::CastOverflow { .. }
-            | VmError::CodeOutOfRange { .. } => "Range",
+            | VmError::CodeOutOfRange { .. } | VmError::RangeMsg(_) => "Range",
         VmError::IndexOutOfBounds { .. } | VmError::IndexZero | VmError::IndexMsg(_) => "Index",
         VmError::ParseMsg(_) => "Parse",
         VmError::KeyMsg(_) => "Key",
@@ -2245,7 +2232,7 @@ impl<W: Write> VM<W> {
                 // Retired with `##'` (D-24): the compiler never emits it, and
                 // the slot only keeps the numbering of the opcodes after it.
                 &Instruction::IntToChar(..) => {
-                    raise!(VmError::TypeMsg("IntToChar is retired: a code becomes its character with 0d|n|".to_string()))
+                    raise!(VmError::TypeMsg("IntToChar is retired: a code becomes its character with |n|".to_string()))
                 }
                 &Instruction::FloatToIntTrunc(dst, src) => {
                     let v = match rreg!(src) {
@@ -2254,9 +2241,9 @@ impl<W: Write> VM<W> {
                             None => raise!(VmError::CastOverflow { op: "##!" }),
                         },
                         Value::Int(n)   => *n,
-                        // A Char is not a number: its code is `0d|c|` (D-24).
+                        // `##!` does not take a Char: its code is `#|c|` (D-25).
                         Value::Char(_)  => raise!(VmError::TypeMsg(
-                            "##! requires a numeric value, got Char: a character's code is 0d|c|".to_string())),
+                            "##! requires a numeric value, got Char: a character's code is #|c|".to_string())),
                         other => raise!(VmError::TypeMsg(format!(
                             "##! requires a numeric value, got {}", other.type_name()))),
                     };
@@ -4489,6 +4476,10 @@ impl<W: Write> VM<W> {
                 // ── Data ops ─────────────────────────────────────────────────
                 &Instruction::NumericEval(dst, src) => {
                     let result = match rreg!(src) {
+                        Value::String(s) if num::parse_prefixed(s.as_ref()).is_some() => {
+                            // A text that names its base reads in it (D-25).
+                            Value::Int(num::parse_prefixed(s.as_ref()).unwrap_or(0))
+                        }
                         Value::String(s) => {
                             let s_rc = s.clone();
                             let trimmed = s_rc.as_ref().trim();
@@ -4510,10 +4501,9 @@ impl<W: Write> VM<W> {
                         }
                         Value::Int(n) => Value::Int(*n),
                         Value::Float(f) => Value::Float(*f),
-                        // GAP-ZYB-012: a Char reads like the one-character
-                        // string it is — `#|'७'|` is 7, as `#|"७"|` already
-                        // was. A Char that is not a digit comes back untouched.
-                        Value::Char(c) => vm_char_as_number(*c),
+                        // A character is a number: its code (D-25). The
+                        // digit's value is the text's reading, `#|"{c}"|`.
+                        Value::Char(c) => Value::Int(*c as i64),
                         other => other.clone(),
                     };
                     wreg!(dst, result);
@@ -4542,62 +4532,36 @@ impl<W: Write> VM<W> {
                 }
 
                 &Instruction::BaseConvert(dst, src, radix) => {
-                    let val = rreg!(src).clone();
-                    let result = match val {
-                        // Char → string representation (display code in given base)
-                        // `0d` is the door between a character and its code
-                        // (D-24): its element in decimal is the number.
-                        Value::Char(ch) if radix == 10 => Value::Int(ch as i64),
-                        Value::Int(n) if radix == 10 => match u32::try_from(n).ok().and_then(char::from_u32) {
-                            Some(c) => Value::Char(c),
-                            None => raise!(VmError::CodeOutOfRange { prefix: "0d" }),
-                        },
-                        // Char → its code, written as an Int's is (D-23).
-                        Value::Char(ch) => Value::String(ZyStr::new(
-                            zymbol_common::num::base_string(ch as i64, radix as u32))),
-                        // Int → String (format integer in specified base)
-                        // The sign in front of a negative one (GLB-136).
-                        Value::Int(n) => Value::String(ZyStr::new(
-                            zymbol_common::num::base_string(n, radix as u32))),
-                        // String → Char (parse in given base, then create char)
+                    // Three doors (D-25): a base gives the text in that base,
+                    // radix 0 — the bare bars `|…|` — gives the character.
+                    // Each takes a Char, an Int, or a text in any base.
+                    let n = match rreg!(src) {
+                        Value::Char(ch) => *ch as i64,
+                        Value::Int(n) => *n,
                         Value::String(s) => {
-                            let stripped = s.as_ref()
-                                .trim_start_matches("0b").trim_start_matches("0B")
-                                .trim_start_matches("0o").trim_start_matches("0O")
-                                .trim_start_matches("0d").trim_start_matches("0D")
-                                .trim_start_matches("0x").trim_start_matches("0X");
-                            let code_res = match radix {
-                                2  => u32::from_str_radix(stripped, 2),
-                                8  => u32::from_str_radix(stripped, 8),
-                                10 => stripped.parse::<u32>(),
-                                _  => u32::from_str_radix(stripped, 16),
-                            };
-                            match code_res {
-                                // A code with no character — past 0x10FFFF, or a
-                                // surrogate — is `##Range`, as `0d|n|` raises it,
-                                // without the value (GLB-113).
-                                Ok(code) => match char::from_u32(code) {
-                                    Some(ch) => Value::Char(ch),
-                                    None => raise!(VmError::CodeOutOfRange {
-                                        prefix: match radix { 2 => "0b", 8 => "0o", 10 => "0d", _ => "0x" },
-                                    }),
+                            let default = if radix == 0 { 10 } else { radix as u32 };
+                            match num::parse_base_text(s.as_ref(), default) {
+                                Ok(n) => n,
+                                Err(e) => match e.family_and_message() {
+                                    ("Range", m) => raise!(VmError::RangeMsg(m)),
+                                    (_, m) => raise!(VmError::ParseMsg(m)),
                                 },
-                                // The base is NAMED, as the tree-walker and
-                                // zyjs name it. `base-16` is the radix this
-                                // engine happens to hold; `hexadecimal` is what
-                                // the reader wrote. One complete literal per
-                                // base, never a template with a hole.
-                                // A `##Parse`, declared: the words of the text
-                                // chose the family (GLB-097).
-                                Err(_) => raise!(VmError::ParseMsg(match radix {
-                                    2 => format!("failed to parse '{}' as binary number", stripped),
-                                    8 => format!("failed to parse '{}' as octal number", stripped),
-                                    16 => format!("failed to parse '{}' as hexadecimal number", stripped),
-                                    _ => format!("failed to parse '{}' as decimal number", stripped),
-                                })),
                             }
                         }
-                        other => raise!(VmError::TypeMsg(format!("base conversion expressions work with char, int, or string, got {}", other.type_label()))),
+                        other if radix == 0 => raise!(VmError::TypeMsg(format!(
+                            "|…| works with char, int, or string, got {}", other.type_label()))),
+                        other => raise!(VmError::TypeMsg(format!(
+                            "base conversion expressions work with char, int, or string, got {}",
+                            other.type_label()))),
+                    };
+                    let result = if radix == 0 {
+                        // A code with no character is `##Range` (GLB-113).
+                        match u32::try_from(n).ok().and_then(char::from_u32) {
+                            Some(c) => Value::Char(c),
+                            None => raise!(VmError::CodeOutOfRange { prefix: "" }),
+                        }
+                    } else {
+                        Value::String(ZyStr::new(num::base_string(n, radix as u32)))
                     };
                     wreg!(dst, result);
                 }

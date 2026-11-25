@@ -3845,13 +3845,13 @@ impl TypeChecker {
             Expr::NumericCast(op) => {
                 let operand = self.infer_expr(&op.expr);
                 // `##!` took a Char until v0.0.11 and answered its code; the
-                // code is `0d|c|` since D-24. Refused before it runs when the
+                // code is `#|c|` since D-25. Refused before it runs when the
                 // operand is known to be a character.
                 if op.kind == CastKind::ToIntTrunc && operand == ZymbolType::Char {
                     self.errors.push(
                         Diagnostic::error("'##!' does not take a Char since v0.0.12: it truncates a Float")
                             .with_span(op.span)
-                            .with_help("a character becomes its code with 0d|c|, and a code its character with 0d|n|"),
+                            .with_help("a character becomes its code with #|c|, and a code its character with |n|"),
                     );
                 }
                 match op.kind {
@@ -3871,8 +3871,12 @@ impl TypeChecker {
             // operand is inferred like any other, or an undefined name inside
             // the bars was never reported.
             Expr::NumericEval(ne) => {
-                self.infer_expr(&ne.expr);
-                ZymbolType::Any
+                // A character is a number, its code (D-25): only that much is
+                // known before the program runs.
+                match self.infer_expr(&ne.expr) {
+                    ZymbolType::Char | ZymbolType::Int => ZymbolType::Int,
+                    _ => ZymbolType::Any,
+                }
             }
             // `x#?` answers a tuple, and the OPERAND is inferred like any other
             // expression — which is how an undefined name in it gets reported.
@@ -3890,19 +3894,15 @@ impl TypeChecker {
                 ZymbolType::Tuple(vec![ZymbolType::String, ZymbolType::Int, ZymbolType::Any])
             }
             Expr::Format(_) => ZymbolType::String,
-            // A character or a number in `0d` is the other one (D-24); in the
-            // other three bases it is its text. A text in any base is read back
-            // as the character. The operand is inferred like any other, or a
-            // name inside the bars was never checked.
+            // Three doors (D-25): a base gives its text, the bare bars `|…|`
+            // the character. The operand is inferred like any other, or a name
+            // inside the bars was never checked.
             Expr::BaseConversion(op) => {
-                let operand = self.infer_expr(&op.expr);
-                let decimal = op.prefix == zymbol_ast::BasePrefix::Decimal;
-                match operand {
-                    ZymbolType::Char if decimal => ZymbolType::Int,
-                    ZymbolType::Int if decimal => ZymbolType::Char,
-                    ZymbolType::Char | ZymbolType::Int => ZymbolType::String,
-                    ZymbolType::String => ZymbolType::Char,
-                    _ => ZymbolType::Any,
+                let _ = self.infer_expr(&op.expr);
+                if op.prefix == zymbol_ast::BasePrefix::Char {
+                    ZymbolType::Char
+                } else {
+                    ZymbolType::String
                 }
             }
             Expr::Round(_) | Expr::Trunc(_) => ZymbolType::Float,

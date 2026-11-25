@@ -31,12 +31,26 @@ impl Parser {
         self.peek().span.start.byte_offset == end
     }
 
+    /// The expression between the bars of `#|…|`, `0x|…|`, `|…|` and the
+    /// formats. A `|` inside it closes the bars rather than opening new ones.
+    pub(crate) fn parse_in_bars(&mut self) -> Result<Expr, Diagnostic> {
+        self.bar_depth += 1;
+        let r = self.parse_expr();
+        self.bar_depth -= 1;
+        r
+    }
+
+    /// Does a `|` here open the bare bars? Only outside every other pair.
+    pub(crate) fn pipe_opens(&self) -> bool {
+        self.bar_depth == 0
+    }
+
     /// Parse numeric evaluation expression: #|expr|
     pub(crate) fn parse_numeric_eval(&mut self) -> Result<Expr, Diagnostic> {
         let start_token = self.advance(); // consume #|
 
         // Parse the expression inside
-        let expr = Box::new(self.parse_expr()?);
+        let expr = Box::new(self.parse_in_bars()?);
 
         // Expect closing |
         let pipe_token = self.peek().clone();
@@ -99,7 +113,7 @@ impl Parser {
         self.advance(); // consume |
 
         // Parse the expression inside
-        let expr = Box::new(self.parse_expr()?);
+        let expr = Box::new(self.parse_in_bars()?);
 
         // Expect closing |
         let close_pipe_token = self.peek().clone();
@@ -183,41 +197,41 @@ impl Parser {
         }
     }
 
-    /// Parse base conversion expression: 0b|expr| or 0o|expr| or 0d|expr| or 0x|expr|
-    /// Tridirectional conversion: char→text, int→char, text→char
+    /// Parse base conversion expression: 0b|expr|, 0o|expr|, 0d|expr|, 0x|expr|,
+    /// or the bare bars |expr| (D-25). A base gives the text in that base, the
+    /// bare bars give the character.
     pub(crate) fn parse_base_conversion(&mut self, prefix: BasePrefix) -> Result<Expr, Diagnostic> {
-        let start_token = self.advance(); // consume base prefix (0b, 0o, 0d, 0x)
-
-        // Expect opening |
-        let pipe_token = self.peek().clone();
-        if !matches!(pipe_token.kind, TokenKind::Pipe) {
-            let prefix_str = match prefix {
-                BasePrefix::Binary => "0b",
-                BasePrefix::Octal => "0o",
-                BasePrefix::Decimal => "0d",
-                BasePrefix::Hex => "0x",
-            };
-            return Err(Diagnostic::error(format!("expected '|' after base prefix '{}'", prefix_str))
-                .with_span(pipe_token.span)
-                .with_help(format!("base conversion syntax: {}|expr|", prefix_str)));
-        }
+        let start_token = if prefix == BasePrefix::Char {
+            self.peek().clone() // the opening | is the operator itself
+        } else {
+            let t = self.advance(); // consume base prefix (0b, 0o, 0d, 0x)
+            // Expect opening |
+            let pipe_token = self.peek().clone();
+            if !matches!(pipe_token.kind, TokenKind::Pipe) {
+                let p = prefix.spelling();
+                return Err(Diagnostic::error(format!("expected '|' after base prefix '{}'", p))
+                    .with_span(pipe_token.span)
+                    .with_help(format!("base conversion syntax: {}|expr|", p)));
+            }
+            t
+        };
         self.advance(); // consume |
 
         // Parse the expression inside
-        let expr = Box::new(self.parse_expr()?);
+        let expr = Box::new(self.parse_in_bars()?);
 
         // Expect closing |
         let close_pipe_token = self.peek().clone();
         if !matches!(close_pipe_token.kind, TokenKind::Pipe) {
-            let prefix_str = match prefix {
-                BasePrefix::Binary => "0b",
-                BasePrefix::Octal => "0o",
-                BasePrefix::Decimal => "0d",
-                BasePrefix::Hex => "0x",
-            };
+            // One complete literal per message, as the inventory reads them.
+            if prefix == BasePrefix::Char {
+                return Err(Diagnostic::error("expected '|' to close character conversion")
+                    .with_span(close_pipe_token.span)
+                    .with_help("character conversion syntax: |expr|"));
+            }
             return Err(Diagnostic::error("expected '|' to close base conversion expression")
                 .with_span(close_pipe_token.span)
-                .with_help(format!("base conversion syntax: {}|expr|", prefix_str)));
+                .with_help(format!("base conversion syntax: {}|expr|", prefix.spelling())));
         }
         let end_token = self.advance(); // consume |
 
@@ -245,7 +259,7 @@ impl Parser {
         self.advance(); // consume |
 
         // Parse the expression inside
-        let expr = Box::new(self.parse_expr()?);
+        let expr = Box::new(self.parse_in_bars()?);
 
         // Expect closing |
         let close_pipe_token = self.peek().clone();
@@ -280,7 +294,7 @@ impl Parser {
         self.advance(); // consume |
 
         // Parse the expression inside
-        let expr = Box::new(self.parse_expr()?);
+        let expr = Box::new(self.parse_in_bars()?);
 
         // Expect closing |
         let close_pipe_token = self.peek().clone();

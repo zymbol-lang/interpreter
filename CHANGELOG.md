@@ -30,15 +30,22 @@ The first release announced as a **public alpha**. Its theme is the terminal and
   before their engines think. In all four engines: the playground draws on an offscreen
   canvas, because the browser painted the visible one every 16 ms while a program was still
   computing (D-09; GAP-ZYE-015).
-- **A character and its code cross through `0d|…|`, both ways** (D-24). `0d|65|` is `'A'`
-  and `0d|'A'|` is `65`: each base prefix converts between a character and its element in
-  that base, and the element in decimal is the number. A code with no character is
-  `##Range`, a Float `##Type`. It replaces two operators that did the same job and looked
-  nothing like the base forms beside them.
+- **Three doors, one per result** (D-25). The four base prefixes give the text in that base,
+  `0d` like its siblings: `0d|'A'|` is `"0d65"`. The bare bars give the character:
+  `|65|`, `|"0d65"|` and `|"0x41"|` are `'A'`. `#|…|` gives the number, and a character is
+  its code: `#|'A'|` is `65`, `#|"0x41"|` is `65`. Each takes a Char, an Int, or a text in any
+  base — the text may carry a sign and any of the four prefixes, so `0d|"0b01000001"|` is
+  `"0d65"`. A code with no character is `##Range`, a text past the integer range `##Range`,
+  digits not of the base `##Parse`, a Float `##Type`. They replace `##'n` and `##!c`, which
+  did the same job and looked nothing like the base forms beside them, and D-24, which had
+  made `0d` alone give a number. **`#|c|` on a digit changed meaning**: `#|'7'|` was `7`
+  (GAP-ZYB-012) and is `55`; the digit's value is the text's, `#|"{c}"|`. A base door also
+  reads a text with another base's prefix right, where it used to strip it and read the
+  digits in its own: `0x|"0d65"|` was `'e'`.
 - **`0x|…|`, `0o|…|` and `0b|…|` never write fewer digits than a byte** (D-23). A byte is
   a Char from `0x00` to `0xFF`, and its literal already takes that form in every base; the
   conversion back now takes it too: `0x|'A'|` is `0x41`, `0o|'A'|` `0o101`, `0b|'A'|`
-  `0b01000001`, so the 256 bytes line up in a column. A larger value takes the digits it
+  `0b01000001`, so the 256 bytes line up in a column; `0d|'A'|` writes `0d65`, unpadded. A larger value takes the digits it
   needs (`0x|'€'|` is `0x20AC`). It was `0x0041` and `0d0065`, the width of a code point,
   with `0b1000001` and `0o101` not padded at all — and the bytes of `é` printed as
   `0x00C3 0x00A9`. The same for a Char and an Int, and the sign stays in front:
@@ -51,10 +58,10 @@ The first release announced as a **public alpha**. Its theme is the terminal and
 
 - **`##'n` and `##!` on a `Char`** (D-24). The cast from a code to its character (GLB-109,
   v0.0.10) and the code of a character through the truncating cast (v0.0.8) are refused
-  before a program runs, with a help line: *a code becomes its character with `0d|n|`, and a
-  character its code with `0d|c|`*. `##!` keeps truncating a Float, and `<< ##' "…" c` still
+  before a program runs, with a help line: *a code becomes its character with `|n|`, and a
+  character its code with `#|c|`*. `##!` keeps truncating a Float, and `<< ##' "…" c` still
   reads one character. Every use in the corpus, ZyDDT, ZyBF, ZyEdit, ZyTetris, ZyBank, GoL,
-  GO and Zofía was moved to `0d|…|`.
+  GO and Zofía was moved to `|n|` and `#|c|` (D-25).
 
 ### Added
 

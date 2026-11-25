@@ -1691,8 +1691,9 @@ kept verbatim although `zyml` has since been retired:
 | `+`, `-`, `*`, `^` | `9007199254740991 + 1` → `integer overflow: 9007199254740991 + 1` |
 | An integer literal | `9223372036854775807` → `integer literal out of range` (lexical, not runtime) |
 | `###` / `##!` on a float | `###1.0e300` → `integer overflow: ### cannot represent this float` |
-| `0d\|n\|` on an Int that is no character | `0d\|1114112\|`, `0d\|55296\|`, `0d\|(0 - 1)\|` → `character out of range: 0d\|…\| cannot represent this code` |
-| `0x\|…\|` and its siblings reading a code that is no character | `0x\|"110000"\|`, `0d\|"55296"\|` → `character out of range: 0x\|…\| cannot represent this code` |
+| `\|n\|` on an Int that is no character | `\|1114112\|`, `\|55296\|`, `\|(0 - 1)\|` → `character out of range: \|…\| cannot represent this code` |
+| `\|…\|` reading a text whose code is no character | `\|"0x110000"\|`, `\|"55296"\|` → `character out of range: \|…\| cannot represent this code` |
+| a text in a base past the integer range | `0x\|"0x20000000000000"\|` → `integer overflow: '20000000000000' is past the integer range` |
 
 Operations that **cannot** raise it: unary `-` (the range is symmetric), `/` and
 `%` on integers (a quotient or remainder of in-range operands is in range), and
@@ -1946,18 +1947,18 @@ them will hunt for a bug that is not there (verified 2026-08-17, both engines).
 | `:>` | Finally | `:> { }` |
 | `$!` | Is error | `val$!` |
 | `$!!` | Propagate error | `val$!!` |
-| `#\|x\|` | Numeric eval (ASCII + 69 Unicode scripts) | `#\|"42"\|`, `#\|"๔๒"\|` |
+| `#\|x\|` | Numeric eval: a text (ASCII, 69 Unicode scripts, or a base prefix) or a character's code (v0.0.12) | `#\|"42"\|`, `#\|"๔๒"\|`, `#\|"0x41"\|` → `65`, `#\|'A'\|` → `65` |
 | `x#?` | Type metadata | `42#?` |
 | `#.N\|x\|` | Round N decimals | `#.2\|3.14159\|` |
 | `#!N\|x\|` | Truncate N decimals | `#!2\|3.14159\|` |
 | `##.expr` | Cast to Float | `##.42` → `42` (Float) |
 | `###expr` | Cast to Int (rounding) | `###3.7` → `4` |
-| `##!expr` | Cast to Int (truncating); not a `Char` since v0.0.12 — its code is `0d\|c\|` | `##!3.7` → `3` |
+| `##!expr` | Cast to Int (truncating); not a `Char` since v0.0.12 — its code is `#\|c\|` | `##!3.7` → `3` |
 | `#,\|x\|` | Comma format | `#,\|1234567\|` |
 | `#^\|x\|` | Scientific notation | `#^\|12345.0\|` |
 | `0x`, `0b`, `0o`, `0d` | Base literals: a character by its code | `0x41` → `'A'` |
-| `0d\|x\|` | A character and its code, both ways (v0.0.12; it was `##'` and `##!`) | `0d\|65\|` → `'A'`, `0d\|'A'\|` → `65` |
-| `0x\|x\|`, `0o\|x\|`, `0b\|x\|` | A code as text in that base, or a text in that base back to its character | `0x\|'A'\|` → `"0x41"`, `0x\|"41"\|` → `'A'` |
+| `0x\|x\|`, `0d\|x\|`, `0o\|x\|`, `0b\|x\|` | The text of a character, a code or a text in any base, written in that base (v0.0.12) | `0x\|'A'\|` → `"0x41"`, `0d\|'A'\|` → `"0d65"`, `0d\|"0b01000001"\|` → `"0d65"` |
+| `\|x\|` | The character of a code, or of a text in any base (v0.0.12; it was `##'`) | `\|65\|` → `'A'`, `\|"0x41"\|` → `'A'` |
 | `#` | Module declaration | `# name` |
 | `#>` | Module export | `#> { fn, CONST }` |
 | `<#` | Module import | `<# ./mod => alias` |
