@@ -200,6 +200,42 @@ impl ZyStr {
         zymbol_common::text::byte_from_crumb(s, crumbs, i)
     }
 
+    /// Character `i` (0-based, `i < char_len()`) becomes `c`, where the text
+    /// is, when this is its sole owner and `c` takes the bytes the old one did
+    /// in UTF-8 (B-2, decided by the author 2026-11-25). No byte moves, so the
+    /// count and the crumbs stay right. `false` when it cannot, and nothing is
+    /// written: a shared text or a different width is the caller's copy.
+    pub fn set_char_in_place(&mut self, i: usize, c: char) -> bool {
+        let at = self.char_byte(i);
+        let Some(old) = self.as_str()[at..].chars().next() else { return false };
+        let width = old.len_utf8();
+        if c.len_utf8() != width {
+            return false;
+        }
+        let mut buf = [0u8; 4];
+        let new = c.encode_utf8(&mut buf).as_bytes();
+        if self.is_inline() {
+            // An inline text is this value's own bytes.
+            self.0[at..at + width].copy_from_slice(new);
+            return true;
+        }
+        let ptr = self.heap_ptr();
+        // SAFETY: pointer from Rc::into_raw, alive while self is alive; the
+        // strong count is read without building a second owner.
+        let sole = unsafe { Rc::strong_count(&*ManuallyDrop::new(Rc::from_raw(ptr))) == 1 };
+        if !sole {
+            return false;
+        }
+        // SAFETY: the sole owner, borrowed mutably through `&mut self`; one
+        // whole character replaced by one of the same width keeps the bytes
+        // valid UTF-8 and every other character where it was.
+        unsafe {
+            let heap = &mut *(ptr as *mut Heap);
+            heap.s.as_bytes_mut()[at..at + width].copy_from_slice(new);
+        }
+        true
+    }
+
     /// Whether the two hold the same heap buffer — `Rc::ptr_eq` for a string.
     /// Two inline strings share nothing, so they never do.
     #[inline]
@@ -338,6 +374,25 @@ impl AsRef<str> for ZyStr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sole_owner_is_written_where_it_is() {
+        let mut s = ZyStr::new("aé€b".repeat(40));
+        assert!(s.set_char_in_place(1, 'ÿ'));
+        assert!(s.set_char_in_place(158, '₹'));
+        assert_eq!(s.as_str().chars().nth(1), Some('ÿ'));
+        assert_eq!(s.as_str().chars().nth(158), Some('₹'));
+        assert_eq!(s.char_len(), 160);
+        assert_eq!(s.char_byte(158), s.as_str().char_indices().nth(158).unwrap().0);
+        let shared = s.clone();
+        assert!(!s.set_char_in_place(0, 'z'));
+        assert_eq!(shared.as_str().chars().next(), Some('a'));
+        drop(shared);
+        assert!(!s.set_char_in_place(0, 'é'));
+        let mut small = ZyStr::new("abc".to_string());
+        assert!(small.set_char_in_place(2, 'z'));
+        assert_eq!(small.as_str(), "abz");
+    }
 
     #[test]
     fn the_crumbs_of_a_text_nobody_indexes_cost_one_word() {

@@ -155,6 +155,28 @@ impl Text {
         &self.0.s[self.char_byte(a)..self.char_byte(b)]
     }
 
+    /// Character `i` (0-based, `i < char_len()`) becomes `c`, where the text
+    /// is, when this is its sole owner and `c` takes the bytes the old one did
+    /// in UTF-8 — ASCII for ASCII, `0x80`–`0xFF` for one of them (B-2, decided
+    /// by the author 2026-11-25). The count and the crumbs stay right, because
+    /// no byte moves. `false` when it cannot, and nothing is written: a shared
+    /// text or a different width is the caller's copy.
+    pub fn set_char_in_place(&mut self, i: usize, c: char) -> bool {
+        let at = self.char_byte(i);
+        let Some(old) = self.0.s[at..].chars().next() else { return false };
+        let width = old.len_utf8();
+        if c.len_utf8() != width {
+            return false;
+        }
+        let Some(inner) = std::rc::Rc::get_mut(&mut self.0) else { return false };
+        let mut buf = [0u8; 4];
+        let new = c.encode_utf8(&mut buf).as_bytes();
+        // SAFETY: one whole character is replaced by one of the same width, so
+        // the bytes stay valid UTF-8 and every other character keeps its place.
+        unsafe { inner.s.as_bytes_mut()[at..at + width].copy_from_slice(new) };
+        true
+    }
+
     /// The `String` to write into: the same one when this is its sole owner,
     /// a copy otherwise. The count and the crumbs are forgotten either way.
     pub fn edit(&mut self) -> &mut String {
@@ -369,5 +391,37 @@ mod tests {
         sole.edit().push('x');
         assert_eq!(sole.char_len(), 8);
         assert_eq!(sole.char_at(7), Some('x'));
+    }
+}
+
+#[cfg(test)]
+mod set_char_tests {
+    use super::Text;
+
+    #[test]
+    fn a_sole_owner_is_written_where_it_is() {
+        let mut t = Text::new("aé€b".repeat(40));
+        assert_eq!(t.char_len(), 160);
+        let before = t.as_str().as_ptr();
+        assert!(t.set_char_in_place(1, 'ÿ'));       // é → ÿ, two bytes each
+        assert!(t.set_char_in_place(3, 'c'));       // b → c
+        assert!(t.set_char_in_place(158, '₹'));     // € → ₹, three bytes each
+        assert_eq!(t.as_str().as_ptr(), before);
+        assert_eq!(t.char_at(1), Some('ÿ'));
+        assert_eq!(t.char_at(3), Some('c'));
+        assert_eq!(t.char_len(), 160);
+        assert_eq!(t.char_at(158), Some('₹'));
+        assert_eq!(t.char_at(157), Some('é'));
+    }
+
+    #[test]
+    fn a_shared_text_or_another_width_is_left_to_the_copy() {
+        let mut t = Text::new("abcdefghij".to_string());
+        let other = t.clone();
+        assert!(!t.set_char_in_place(0, 'z'));
+        assert_eq!(other.as_str(), "abcdefghij");
+        drop(other);
+        assert!(!t.set_char_in_place(0, 'é'));
+        assert_eq!(t.as_str(), "abcdefghij");
     }
 }

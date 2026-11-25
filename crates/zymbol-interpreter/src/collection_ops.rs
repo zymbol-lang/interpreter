@@ -587,17 +587,21 @@ impl<W: Write> Interpreter<W> {
                         span,
                     )),
                 };
-                let mut chars: Vec<char> = st.chars().collect();
-                let len = chars.len();
-                let i = resolve_int(index, len, span, "string")?;
+                let i = resolve_int(index, st.char_len(), span, "string")?;
+                // One character for one of the same width is written where the
+                // text is, when nothing else holds it (B-2): a byte loop over a
+                // buffer was quadratic, copying the whole text for each byte.
+                let mut one = piece.chars();
+                if let (Some(c), None) = (one.next(), one.next()) {
+                    if st.set_char_in_place(i, c) {
+                        return Ok(());
+                    }
+                }
                 // A multi-character value takes the place of the one character,
                 // the way replacing an element of an array puts one value where
                 // one value was — the element just happens to be longer.
-                let mut out = String::new();
-                for (n, c) in chars.drain(..).enumerate() {
-                    if n == i { out.push_str(&piece); } else { out.push(c); }
-                }
-                *st = out.into();
+                let (from, to) = (st.char_byte(i), st.char_byte(i + 1));
+                st.edit().replace_range(from..to, &piece);
                 Ok(())
             }
             Value::NamedTuple(fields) => {

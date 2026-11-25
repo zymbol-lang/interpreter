@@ -2268,6 +2268,15 @@ impl<W: Write> VM<W> {
                                 s.push_str(&r_str);
                                 s
                             }
+                            // A character too, or a byte loop that builds a
+                            // buffer — `b = b 0x80` — copied the whole text on
+                            // every append through the arm below (ZYVM-034).
+                            (Value::String(l), Value::Char(c)) => {
+                                let c = *c;
+                                let mut s = l.try_into_string();
+                                s.push(c);
+                                s
+                            }
                             (Value::String(l), Value::Int(n)) => {
                                 let n = *n;
                                 let mut s = l.try_into_string();
@@ -5673,8 +5682,7 @@ fn vm_deep_set_in(col: &mut Value, path: &[Value], new_val: Value, single: bool)
         // same rule `$+ on string requires char or string element` states.
         // It is a LEAF: there is nothing inside a character to descend into.
         Value::String(st) => {
-            let chars: Vec<char> = st.chars().collect();
-            let i = resolve(int_step_of(step, single, "string")?, chars.len(), "string")?;
+            let i = resolve(int_step_of(step, single, "string")?, st.char_len(), "string")?;
             if !rest.is_empty() {
                 // The step landed on a character, and there is nothing inside
                 // one to descend into — the read path's sentence.
@@ -5687,10 +5695,20 @@ fn vm_deep_set_in(col: &mut Value, path: &[Value], new_val: Value, single: bool)
                 other => return Err(VmError::TypeMsg(format!(
                     "$~ on string requires char or string value, got {}", other.type_label()))),
             };
-            let mut out = String::new();
-            for (n, c) in chars.into_iter().enumerate() {
-                if n == i { out.push_str(&piece); } else { out.push(c); }
+            // One character for one of the same width is written where the
+            // text is, when nothing else holds it (B-2): a byte loop over a
+            // buffer was quadratic, copying the whole text for each byte.
+            let mut one = piece.chars();
+            if let (Some(c), None) = (one.next(), one.next()) {
+                if st.set_char_in_place(i, c) {
+                    return Ok(());
+                }
             }
+            let (from, to) = (st.char_byte(i), st.char_byte(i + 1));
+            let mut out = String::with_capacity(st.len() + piece.len());
+            out.push_str(&st.as_str()[..from]);
+            out.push_str(&piece);
+            out.push_str(&st.as_str()[to..]);
             *col = Value::String(ZyStr::new(out));
             Ok(())
         }

@@ -3,7 +3,7 @@
 //! Walks the AST and emits formatted code.
 
 use zymbol_ast::{
-    ArrayLiteralExpr, Assignment, BasePrefix, BinaryExpr, Block, Break, CatchClause,
+    ArrayLiteralExpr, Assignment, BinaryExpr, Block, Break, CatchClause,
     CollectionAppendExpr, CollectionContainsExpr, CollectionFilterExpr, CollectionLengthExpr,
     CollectionFindAllExpr, CollectionInsertExpr, CollectionMapExpr, CollectionReduceExpr, CollectionSortExpr,
     CollectionRemoveAllExpr, CollectionRemoveAtExpr, CollectionRemoveRangeExpr,
