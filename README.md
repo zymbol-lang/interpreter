@@ -119,7 +119,7 @@ kind is a memorisation cost, so the design keeps counting it instead of assuming
 - **LSP server** — diagnostics, go-to-definition, hover (VS Code extension available)
 - **Formatter** — built-in code formatter (`zymbol fmt`)
 - **Shell integration** — `<\ cmd \>` bash execution, `</ script.zy />` sub-script
-- **Standard library** — `std/math`, `std/random`, `std/io`, `std/json`, `std/net`, `std/db` (ODBC), `std/term` (display width)
+- **Standard library** — `std/math`, `std/random`, `std/io`, `std/json`, `std/net`, `std/db` (ODBC), `std/term` (display width), `std/time`, `std/text` (case, graphemes), `std/bits` (bits and words of bytes)
 - **Packages** — `.zyp` archives bundle a multi-file program into one portable file (`zymbol package` / `zymbol run pkg.zyp`)
 - **Auto-free** — memory is released at a variable's last use, not at scope end; unobservable, lowers peak memory
 

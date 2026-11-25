@@ -304,7 +304,10 @@ append exists delete list mkdir read_bytes write_bytes` — bytes are a String o
 most emoji are 2 columns, so lay TUI out with `t::width`, never `$#`) · `std/time`
 (`now today parts of format add diff`) · `std/text` (`upper lower fold` — Unicode case with no
 locale; `upper`/`lower` may change the length, `ß` → `SS`; `fold` keeps it, for comparing ·
-`graphemes(s)` — an Array of the grapheme clusters: `$#` counts code points, not letters).
+`graphemes(s)` — an Array of the grapheme clusters: `$#` counts code points, not letters) ·
+`std/bits` (`and or xor shl shr not to_le to_be from_le from_be signed` — the bits of a
+non-negative Int up to 2⁵³ − 1, a Char taken as its code; `not(n, w)` and `signed(n, w)` take
+a width; `to_le(n, k)` writes `k` bytes, 1 to 6).
 
 `std/time`: an instant is **milliseconds** since the epoch, always UTC; a date is a
 *reading* of one, so every function takes an optional trailing zone — `"UTC"` (default),

@@ -718,6 +718,18 @@ pub mod builtins {
     pub const TEXT_LOWER:  u16 = 801;
     pub const TEXT_FOLD:   u16 = 802;
     pub const TEXT_GRAPHEMES: u16 = 803;
+    // std/bits functions (the bits of an integer, words of bytes, D-28)
+    pub const BITS_AND:     u16 = 900;
+    pub const BITS_OR:      u16 = 901;
+    pub const BITS_XOR:     u16 = 902;
+    pub const BITS_SHL:     u16 = 903;
+    pub const BITS_SHR:     u16 = 904;
+    pub const BITS_NOT:     u16 = 905;
+    pub const BITS_TO_LE:   u16 = 906;
+    pub const BITS_TO_BE:   u16 = 907;
+    pub const BITS_FROM_LE: u16 = 908;
+    pub const BITS_FROM_BE: u16 = 909;
+    pub const BITS_SIGNED:  u16 = 910;
 }
 
 #[derive(Debug, Serialize, Deserialize)]

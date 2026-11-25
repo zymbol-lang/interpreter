@@ -4685,6 +4685,7 @@ the i18n pattern with no special handling:
 | `std/term` | `width` `pad_left` `pad_right` `center` `truncate` | v0.0.8 |
 | `std/time` | `now` `today` `parts` `of` `format` `add` `diff` | v0.0.9 |
 | `std/text` | `upper` `lower` `fold` `graphemes` | v0.0.12 |
+| `std/bits` | `and` `or` `xor` `shl` `shr` `not` · `to_le` `to_be` `from_le` `from_be` `signed` | v0.0.12 |
 
 **`std/random` — a seed repeats a run.** `entero(lo, hi)` is an Int in `[lo, hi]`,
 `rango(n)` one in `[0, n)`, `peso_f64()` a Float in `[-0.1, 0.1]`. Unseeded, a run draws a
@@ -4768,6 +4769,37 @@ A Char gives an array of one. The clusters follow the same Unicode version as `s
 > Since v0.0.12 (D-18). Before that, a program converted case by adding 32 to code
 > points one script at a time (GAP-ZYE-010 in `ZyEdit/HALLAZGOS.md`, GAP-TET-005 in
 > `ZyTetris/HALLAZGOS.md`).
+
+**`std/bits` — the bits of an integer, and words of several bytes.** An integer of Zymbol
+has no width: it goes from −(2⁵³ − 1) to 2⁵³ − 1, and an overflow is an error, not a wrap.
+So the bits are those of a **non-negative** integer, up to 2⁵³ − 1, and the two operations
+that need a width take one. A Char is its code, as `#|c|` reads it, so the byte literals
+go in as they are written.
+
+- `and(a, b)`, `or(a, b)`, `xor(a, b)` work bit by bit.
+- `shl(n, k)` and `shr(n, k)` shift by `k` places, `k` from 0. A `shl` past the range is
+  an overflow, as `*` past it is; a `shr` runs out to 0.
+- `not(n, w)` inverts the `w` low bits, `w` from 1 to 53: `not(0x0F, 8)` is 240.
+- `to_le(n, k)` and `to_be(n, k)` write `n` in `k` bytes, little or big end first: a
+  String of `k` Chars from `0x00` to `0xFF`, the form a buffer takes. `k` goes from 1 to 6.
+- `from_le(s)` and `from_be(s)` read the number those 1 to 6 bytes write.
+- `signed(n, w)` reads a `w`-bit word in two's complement: `signed(0xFF, 8)` is −1.
+
+```zymbol
+<# std/bits => b
+>> b::and(0xA5, 0x0F) " " b::or(0xA0, 0x05) " " b::xor(0xFF, 0x0F) ¶   // → 5 165 240
+>> b::shl(1, 4) " " b::shr(0xF0, 4) " " b::not(0x0F, 8) ¶              // → 16 15 240
+w = b::to_le(4660, 2)
+>> 0x|w[1]| " " 0x|w[2]| " " b::from_le(w) ¶                          // → 0x34 0x12 4660
+>> b::signed(0xFF, 8) " " b::signed(0x7F, 8) ¶                        // → -1 127
+```
+
+A negative operand, a width or a size outside its range, a number that does not fit, and
+a Char past `0xFF` in a word are `##Range`; an argument of the wrong type is a `##Type`.
+Six bytes is the widest word: seven could name a number past 2⁵³.
+
+> Since v0.0.12 (D-28; `zymbol-design/BYTES.md`, B-4 and B-5). Before that, bits were
+> arithmetic — `n / 2 ^ k % 2` — and `and` was a loop over eight of them.
 
 **`std/time` — the clock and the civil calendar.** Before v0.0.9 the only way to learn the
 date was to leave the language, `<\ "date +%F" \>`, which is absent on Windows, absent in a

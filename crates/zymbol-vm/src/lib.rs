@@ -2391,7 +2391,7 @@ impl<W: Write> VM<W> {
                         let s = match &self.value_stack[base + str_reg as usize] {
                             Value::String(s) => s.as_str().to_owned(),
                             Value::Char(c)   => c.to_string(),
-                            other => raise!(VmError::TypeMsg(format!("$* requires a string, got {}", other.type_label()))),
+                            other => raise!(VmError::TypeMsg(format!("$* requires a string or char, got {}", other.type_label()))),
                         };
                         let n = match &self.value_stack[base + n_reg as usize] {
                             Value::Int(n) if *n >= 0 => *n as usize,

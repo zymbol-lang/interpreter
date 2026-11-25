@@ -32,3 +32,4 @@ pub mod time;
 pub mod random;
 pub mod text;
 pub mod bytes;
+pub mod bits;

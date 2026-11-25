@@ -96,6 +96,8 @@ fn every_engine_module_is_in_the_table() {
         "std/io",
         "std/net",
         "std/term",
+        "std/text",
+        "std/bits",
         "std/db",
     ] {
         let in_engine = zymbol_compiler::stdlib_builtin_entries(path).is_some();

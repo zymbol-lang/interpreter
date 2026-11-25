@@ -72,6 +72,16 @@ The first release announced as a **public alpha**. Its theme is the terminal and
 
 ### Added
 
+- **`std/bits`** (D-28; BYTES.md B-4 and B-5). `and`, `or`, `xor`, `shl`, `shr` and
+  `not(n, width)` on the bits of a non-negative Int up to 2⁵³ − 1 — a Char is its code — and
+  words of 1 to 6 bytes: `to_le(n, k)` and `to_be(n, k)` write a String of `k` Chars
+  `0x00`–`0xFF`, `from_le(s)` and `from_be(s)` read it back, and `signed(n, width)` reads two's
+  complement. A `shl` past the range is an overflow; every other refusal is `##Range`, or
+  `##Type` for an argument of the wrong type. Python's `int` is the oracle, in ZyDDT.
+- **`Char $* n`** in every engine (D-27; B-3): a Char repeats as the one-character text it
+  is, so `0x00 $* n` is a buffer of `n` bytes. zyjs refused it; the other three took it. The
+  refusal of anything else says `$* requires a string or char` and is a `##Type` in every
+  engine — the tree-walker answered `##_`.
 - **`std/io`: `read_bytes` and `write_bytes`** (D-22; GAP-ZYE-006). A file that is not UTF-8
   — a Latin-1 text, a binary, a log with a broken line — can be read and written back as it
   was. `read_bytes(path)` gives a String with one Char per byte, `0x00`–`0xFF`, and

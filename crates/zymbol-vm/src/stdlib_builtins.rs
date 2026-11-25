@@ -792,6 +792,29 @@ fn text_graphemes(args: Vec<Value>) -> Result<Value, String> {
     Ok(Value::Array(Rc::new(parts)))
 }
 
+// ── std/bits ───────────────────────────────────────────────────────────────────
+//
+// The bits of an integer and words of several bytes (D-28). The rules and the
+// messages are `zymbol_intrinsics::bits`, shared with the tree-walker's
+// `stdlib/bits.rs`; a message's words choose its family (errkind).
+
+fn bits_call(f: &str, args: Vec<Value>) -> Result<Value, String> {
+    use zymbol_intrinsics::bits::{call, Arg, Out};
+    let held: Vec<Arg> = args
+        .iter()
+        .map(|v| match v {
+            Value::Int(n) => Arg::Int(*n),
+            Value::Char(c) => Arg::Char(*c),
+            Value::String(s) => Arg::Text(s.as_str()),
+            other => Arg::Other(other.type_label()),
+        })
+        .collect();
+    match call(f, &held)? {
+        Out::Int(n) => Ok(Value::Int(n)),
+        Out::Bytes(s) => Ok(Value::String(ZyStr::new(s))),
+    }
+}
+
 // ── std/term ───────────────────────────────────────────────────────────────────
 //
 // Terminal display metrics. Mirrors zymbol-interpreter/src/stdlib/term.rs.
@@ -922,6 +945,17 @@ pub fn call(builtin_id: u16, args: Vec<Value>, host: &mut dyn Host) -> Result<Va
         B::TEXT_LOWER     => text_case(args, "lower"),
         B::TEXT_FOLD      => text_case(args, "fold"),
         B::TEXT_GRAPHEMES => text_graphemes(args),
+        B::BITS_AND       => bits_call("and", args),
+        B::BITS_OR        => bits_call("or", args),
+        B::BITS_XOR       => bits_call("xor", args),
+        B::BITS_SHL       => bits_call("shl", args),
+        B::BITS_SHR       => bits_call("shr", args),
+        B::BITS_NOT       => bits_call("not", args),
+        B::BITS_TO_LE     => bits_call("to_le", args),
+        B::BITS_TO_BE     => bits_call("to_be", args),
+        B::BITS_FROM_LE   => bits_call("from_le", args),
+        B::BITS_FROM_BE   => bits_call("from_be", args),
+        B::BITS_SIGNED    => bits_call("signed", args),
         B::TERM_WIDTH     => term_width(args),
         B::TERM_PAD_LEFT  => term_pad_left(args),
         B::TERM_PAD_RIGHT => term_pad_right(args),

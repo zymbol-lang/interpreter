@@ -133,6 +133,26 @@ pub const MODULES: &[StdModule] = &[
         feature_gated: false,
     },
     StdModule {
+        path: "std/bits",
+        // The bits of an integer and words of several bytes (D-28). The arities
+        // are `zymbol_intrinsics::bits::FUNCTIONS`'.
+        functions: &[
+            f("and", 2),
+            f("or", 2),
+            f("xor", 2),
+            f("shl", 2),
+            f("shr", 2),
+            f("not", 2),
+            f("to_le", 2),
+            f("to_be", 2),
+            f("from_le", 1),
+            f("from_be", 1),
+            f("signed", 2),
+        ],
+        constants: &[],
+        feature_gated: false,
+    },
+    StdModule {
         path: "std/text",
         // Upper case, lower case and case folding (D-18).
         functions: &[f("upper", 1), f("lower", 1), f("fold", 1), f("graphemes", 1)],

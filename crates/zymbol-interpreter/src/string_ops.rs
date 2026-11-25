@@ -19,10 +19,14 @@ impl<W: Write> Interpreter<W> {
         let s = match &string_val {
             Value::String(s) => s.clone(),
             Value::Char(c)   => c.to_string().into(),
-            _ => return Err(RuntimeError::Generic {
-                message: format!("$* requires a string, got {}", string_val.type_label()),
-                span: op.span,
-            }),
+            // `##Type`, declared: the words of the message name no type, so the
+            // word-based classifier answered `##_` and `:! ##Type` caught it in
+            // the VM and not here (found with D-27).
+            _ => return Err(RuntimeError::kinded(
+                "Type",
+                format!("$* requires a string or char, got {}", string_val.type_label()),
+                op.span,
+            )),
         };
         let n = match count_val {
             Value::Int(n) if n >= 0 => n as usize,
