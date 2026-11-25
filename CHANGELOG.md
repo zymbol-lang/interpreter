@@ -34,9 +34,13 @@ The first release announced as a **public alpha**. Its theme is the terminal and
   String copied the whole text for each byte — 16 000 bytes took 0.6 s and allocated 2.59 GB.
   When nothing else holds the text and the new character has the old one's width in UTF-8,
   both engines now write it where it is: 25 ms and 46 ms. A write that changes the width
-  still copies. The browser engines still copy every time (ZYJS-076). Building the buffer
-  a character at a time, `b = b 0x80`, was quadratic in the VM too: appending a `Char`
-  copied the text where appending a `String` did not (ZYVM-034).
+  still copies. The browser engines copied every time too, and are linear since the same
+  day (ZYJS-076): zyjs writes the characters its variable owns, and the browser VM keeps a
+  text being written as a tree of pieces whose root is the text — 1 000 000 bytes written
+  and read in 0.86 s; reading `b[i]` there walked the text from the start, and no longer
+  does. Building the buffer a character at a time, `b = b 0x80`, was quadratic in the VM
+  (ZYVM-034: appending a `Char` copied the text) and in zyjs (ZYJS-077: juxtaposition
+  joined its parts with a copy of the whole text).
 - **Three doors, one per result** (D-25). The four base prefixes give the text in that base,
   `0d` like its siblings: `0d|'A'|` is `"0d65"`. The bare bars give the character:
   `|65|`, `|"0d65"|` and `|"0x41"|` are `'A'`. `#|…|` gives the number, and a character is
